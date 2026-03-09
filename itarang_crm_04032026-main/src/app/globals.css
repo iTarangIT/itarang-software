@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-50: #F0FDFA;
+  --color-brand-100: #CCFBF1;
+  --color-brand-500: #14B8A6;
+  --color-brand-600: #0D9488;
+  --color-brand-700: #0F766E;
+
+  --color-surface-peach: #FFF7ED;
+  --color-surface-purple: #FAF5FF;
+  --color-surface-teal: #F0FDFA;
+  --color-surface-gray: #F9FAFB;
+
+  --shadow-soft: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1);
+
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --radius-3xl: 1.5rem;
+}
+
+
+@layer base {
+  body {
+    @apply bg-[#F8F9FB] text-gray-800 antialiased;
+  }
+}
+
+@layer components {
+  .card-parcel {
+    @apply bg-white rounded-2xl border border-gray-100 shadow-card p-6;
+  }
+
+  .input-parcel {
+    @apply w-full px-4 py-3 bg-gray-50 border-none rounded-xl text-sm text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-brand-100 focus:bg-white transition-all outline-none;
+  }
+
+  .btn-primary {
+    @apply px-4 py-2.5 bg-brand-600 text-white rounded-xl hover:bg-brand-700 font-medium shadow-lg shadow-brand-500/20 transition-all active:scale-95 flex items-center gap-2 justify-center;
+  }
+
+  .table-row-parcel {
+    @apply border-b border-gray-50 hover:bg-gray-50/50 transition-colors last:border-none;
+  }
+
+  .status-pill {
+    @apply px-3 py-1 rounded-full text-xs font-medium inline-block;
+  }
+}
