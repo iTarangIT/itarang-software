@@ -1,134 +1,88 @@
 "use client"
 
-import { useState } from "react"
+import {useState,useEffect} from "react"
 
-export default function DealerOnboardingPage() {
+import Stepper from "@/components/onboarding/Stepper"
+import CompanyStep from "@/components/onboarding/steps/CompanyStep"
+import ComplianceStep from "@/components/onboarding/steps/ComplianceStep"
+import OwnershipStep from "@/components/onboarding/steps/OwnershipStep"
+import FinanceStep from "@/components/onboarding/steps/FinanceStep"
+import AgreementStep from "@/components/onboarding/steps/AgreementStep"
+import ReviewStep from "@/components/onboarding/steps/ReviewStep"
 
-    const [form, setForm] = useState({
-        business_name: "",
-        owner_name: "",
-        email: "",
-        phone: "",
-        gstin: "",
-        pan: "",
-        address: ""
-    })
+import SummaryPanel from "@/components/onboarding/SummaryPanel"
+import {autosaveDraft} from "@/lib/onboarding/autosave"
 
-    const [loading, setLoading] = useState(false)
+export default function Page(){
 
-    async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-        e.preventDefault()
-        setLoading(true)
+const [step,setStep]=useState(0)
 
-        try {
+const [form,setForm]=useState({})
 
-            const res = await fetch("/api/dealer-onboarding", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify(form)
-            })
+useEffect(()=>{
 
-            if (!res.ok) {
-                throw new Error("API failed")
-            }
+const interval=setInterval(()=>{
 
-            const data = await res.json()
+autosaveDraft(form)
 
-            if (data.signUrl) {
-                window.location.href = data.signUrl
-            }
+},4000)
 
-        } catch (error) {
-            console.error(error)
-            alert("Dealer onboarding failed")
-        }
+return()=>clearInterval(interval)
 
-        setLoading(false)
-    }
+},[form])
 
-    return (
+const steps=[
+<CompanyStep form={form} setForm={setForm}/>,
+<ComplianceStep form={form} setForm={setForm}/>,
+<OwnershipStep form={form} setForm={setForm}/>,
+<FinanceStep form={form} setForm={setForm}/>,
+<AgreementStep form={form}/>,
+<ReviewStep form={form}/>
+]
 
-        <div className="min-h-screen flex items-center justify-center bg-gray-100">
+return(
 
-            <div className="bg-white p-8 rounded-lg shadow w-full max-w-xl">
+<div className="max-w-7xl mx-auto px-8 py-10">
 
-                <h1 className="text-2xl font-bold mb-6 text-center">
-                    Dealer Onboarding
-                </h1>
+<Stepper step={step}/>
 
-                <form onSubmit={handleSubmit} className="space-y-4">
+<div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
 
-                    <input
-                        type="text"
-                        placeholder="Business Name"
-                        className="border p-2 w-full rounded"
-                        required
-                        onChange={(e) => setForm({ ...form, business_name: e.target.value })}
-                    />
+<div className="lg:col-span-2 card">
 
-                    <input
-                        type="text"
-                        placeholder="Owner Name"
-                        className="border p-2 w-full rounded"
-                        required
-                        onChange={(e) => setForm({ ...form, owner_name: e.target.value })}
-                    />
+{steps[step]}
 
-                    <input
-                        type="email"
-                        placeholder="Email"
-                        className="border p-2 w-full rounded"
-                        required
-                        onChange={(e) => setForm({ ...form, email: e.target.value })}
-                    />
+<div className="flex justify-between mt-10">
 
-                    <input
-                        type="tel"
-                        placeholder="Phone"
-                        className="border p-2 w-full rounded"
-                        required
-                        onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                    />
+<button
+onClick={()=>setStep(step-1)}
+disabled={step===0}
+className="border px-4 py-2 rounded"
+>
 
-                    <input
-                        type="text"
-                        placeholder="GSTIN"
-                        className="border p-2 w-full rounded"
-                        required
-                        onChange={(e) => setForm({ ...form, gstin: e.target.value })}
-                    />
+Back
 
-                    <input
-                        type="text"
-                        placeholder="PAN"
-                        className="border p-2 w-full rounded"
-                        required
-                        onChange={(e) => setForm({ ...form, pan: e.target.value })}
-                    />
+</button>
 
-                    <textarea
-                        placeholder="Business Address"
-                        className="border p-2 w-full rounded"
-                        required
-                        onChange={(e) => setForm({ ...form, address: e.target.value })}
-                    />
+<button
+onClick={()=>setStep(step+1)}
+className="button-primary"
+>
 
-                    <button
-                        className="w-full bg-blue-600 text-white p-3 rounded"
-                        type="submit"
-                        disabled={loading}
-                    >
-                        {loading ? "Generating Agreement..." : "Generate Agreement"}
-                    </button>
+Next
 
-                </form>
+</button>
 
-            </div>
+</div>
 
-        </div>
+</div>
 
-    )
+<SummaryPanel form={form}/>
+
+</div>
+
+</div>
+
+)
 
 }

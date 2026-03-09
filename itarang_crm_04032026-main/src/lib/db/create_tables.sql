@@ -23,3 +23,19 @@ CREATE TABLE IF NOT EXISTS product_catalog (
     created_at timestamp DEFAULT now() NOT NULL,
     updated_at timestamp DEFAULT now() NOT NULL
 );
+--Create dealer_onboarding
+CREATE TABLE dealer_onboardings (
+  id TEXT PRIMARY KEY,
+  business_name TEXT,
+  owner_name TEXT,
+  email TEXT,
+  phone TEXT,
+  gstin TEXT,
+  pan TEXT,
+  address TEXT,
+  signzy_document_url TEXT,
+  signzy_status TEXT,
+  account_id TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);

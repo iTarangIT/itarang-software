@@ -1,0 +1,41 @@
+:root {
+
+--primary:#1F5C8F;
+--primary-dark:#173F63;
+
+--background:#F5F7FA;
+--card:#FFFFFF;
+
+--border:#E3E8EF;
+
+--success:#16A34A;
+--warning:#F59E0B;
+--danger:#EF4444;
+
+--text-primary:#0F172A;
+--text-secondary:#64748B;
+
+}
+
+.card{
+background:var(--card);
+border:1px solid var(--border);
+border-radius:12px;
+padding:24px;
+box-shadow:0 2px 8px rgba(0,0,0,0.04);
+}
+
+.input{
+width:100%;
+border:1px solid var(--border);
+padding:12px;
+border-radius:8px;
+font-size:14px;
+}
+
+.button-primary{
+background:var(--primary);
+color:white;
+padding:10px 20px;
+border-radius:8px;
+}
