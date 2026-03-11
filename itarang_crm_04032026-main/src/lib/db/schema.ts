@@ -848,41 +848,9 @@ export const kycVerifications = pgTable('kyc_verifications', {
     };
 });
 
-export const consentRecords = pgTable('consent_records', {
-    id: varchar('id', { length: 255 }).primaryKey(), // CONSENT-YYYYMMDD-SEQ
-    lead_id: varchar('lead_id', { length: 255 }).references(() => leads.id, { onDelete: 'cascade' }).notNull(),
-    consent_for: varchar('consent_for', { length: 20 }).default('primary').notNull(), // primary, co_borrower
-    consent_type: varchar('consent_type', { length: 30 }), // digital, manual, sms, whatsapp
-    consent_status: varchar('consent_status', { length: 30 }).default('awaiting_signature').notNull(), // awaiting_signature, link_sent, digitally_signed, manual_uploaded, verified
-    consent_token: varchar('consent_token', { length: 255 }),
-    consent_link_url: text('consent_link_url'),
-    consent_link_sent_at: timestamp('consent_link_sent_at', { withTimezone: true }),
-    signed_consent_url: text('signed_consent_url'),
-    generated_pdf_url: text('generated_pdf_url'),
-    signed_at: timestamp('signed_at', { withTimezone: true }),
-    verified_by: uuid('verified_by').references(() => users.id),
-    verified_at: timestamp('verified_at', { withTimezone: true }),
-    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-});
 
-export const couponCodes = pgTable('coupon_codes', {
-    id: varchar('id', { length: 255 }).primaryKey(), // COUPON-SEQ
-    code: varchar('code', { length: 20 }).notNull().unique(),
-    dealer_id: varchar('dealer_id', { length: 255 }).references(() => accounts.id).notNull(),
-    status: varchar('status', { length: 20 }).default('available').notNull(), // available, validated, used, expired
-    credits_available: integer('credits_available').default(1),
-    discount_type: varchar('discount_type', { length: 20 }).default('flat'), // flat, percentage
-    discount_value: decimal('discount_value', { precision: 10, scale: 2 }).default('0'),
-    max_discount_cap: decimal('max_discount_cap', { precision: 10, scale: 2 }),
-    min_amount: decimal('min_amount', { precision: 10, scale: 2 }),
-    used_by_lead_id: varchar('used_by_lead_id', { length: 255 }).references(() => leads.id),
-    used_by: uuid('used_by').references(() => users.id),
-    validated_at: timestamp('validated_at', { withTimezone: true }),
-    used_at: timestamp('used_at', { withTimezone: true }),
-    expires_at: timestamp('expires_at', { withTimezone: true }),
-    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+
+
 
 // --- FACILITATION PAYMENTS ---
 
@@ -1226,10 +1194,7 @@ export const kycVerificationsRelations = relations(kycVerifications, ({ one }) =
     lead: one(leads, { fields: [kycVerifications.lead_id], references: [leads.id] }),
 }));
 
-export const consentRecordsRelations = relations(consentRecords, ({ one }) => ({
-    lead: one(leads, { fields: [consentRecords.lead_id], references: [leads.id] }),
-    verifier: one(users, { fields: [consentRecords.verified_by], references: [users.id] }),
-}));
+
 
 export const coBorrowersRelations = relations(coBorrowers, ({ one, many }) => ({
     lead: one(leads, { fields: [coBorrowers.lead_id], references: [leads.id] }),
@@ -1318,3 +1283,231 @@ export const appSettings = pgTable('app_settings', {
     value: jsonb('value').notNull(),
     updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
+
+// ----------------------------------Rushikesh Works
+/* -------------------------------------------------
+   Updated consent_records table
+   ------------------------------------------------- */
+export const consentRecords = pgTable('consent_records', {
+  id: varchar('id', { length: 255 }).primaryKey(), // CONSENT-YYYYMMDD-SEQ
+  lead_id: varchar('lead_id', { length: 255 })
+    .references(() => leads.id, { onDelete: 'cascade' })
+    .notNull(),
+  consent_for: varchar('consent_for', { length: 20 })
+    .default('primary')
+    .notNull(), // primary, co_borrower
+  consent_type: varchar('consent_type', { length: 30 }), // digital, manual, sms, whatsapp
+  consent_status: varchar('consent_status', { length: 50 }),
+  sign_method: varchar('sign_method', { length: 30 }), // aadhaar_esign, manual
+
+  // Verification / admin review
+  verified_by: uuid('verified_by').references(() => users.id),
+  verified_at: timestamp('verified_at', { withTimezone: true }),
+  verification_notes: text('verification_notes'),
+  rejection_reason: text('rejection_reason'),
+  rejection_notes: text('rejection_notes'),
+
+  created_at: timestamp('created_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updated_at: timestamp('updated_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+/* -------------------------------------------------
+   New coupon tables
+   ------------------------------------------------- */
+export const couponBatches = pgTable('coupon_batches', {
+  id: varchar('id', { length: 255 }).primaryKey(), // BATCH-YYYYMMDD-SEQ
+  batch_name: varchar('batch_name', { length: 200 }).notNull(),
+  dealer_id: varchar('dealer_id', { length: 255 })
+    .references(() => accounts.id)
+    .notNull(),
+  coupon_value: decimal('coupon_value', { precision: 10, scale: 2 }).notNull(),
+  total_quantity: integer('total_quantity').notNull(),
+  prefix: varchar('prefix', { length: 20 }).notNull(),
+  expiry_date: timestamp('expiry_date', { withTimezone: true }),
+  status: varchar('status', { length: 20 })
+    .default('active')
+    .notNull(), // active, expired, revoked
+  created_by: uuid('created_by')
+    .references(() => users.id)
+    .notNull(),
+  created_at: timestamp('created_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const couponCodes = pgTable('coupon_codes', {
+  id: varchar('id', { length: 255 }).primaryKey(), // COUPON-SEQ
+  code: varchar('code', { length: 50 }).notNull().unique(),
+  batch_id: varchar('batch_id', { length: 255 })
+    .references(() => couponBatches.id)
+    .notNull(),
+  dealer_id: varchar('dealer_id', { length: 255 })
+    .references(() => accounts.id)
+    .notNull(),
+  value: decimal('value', { precision: 10, scale: 2 }).notNull(),
+  status: varchar('status', { length: 20 })
+    .default('available')
+    .notNull(), // created, available, reserved, used, expired, revoked, released
+
+  // ---- Reservations ----
+  reserved_at: timestamp('reserved_at', { withTimezone: true }),
+  reserved_by: uuid('reserved_by').references(() => users.id),
+  reserved_for_lead_id: varchar('reserved_for_lead_id', { length: 255 })
+    .references(() => leads.id),
+
+  // ---- Usage ----
+  used_at: timestamp('used_at', { withTimezone: true }),
+  used_by: uuid('used_by')
+    .references(() => users.id), // admin who performed verification
+  used_for_lead_id: varchar('used_for_lead_id', { length: 255 })
+    .references(() => leads.id),
+  verification_job_id: varchar('verification_job_id', { length: 50 }),
+
+  // ---- Lifecycle ----
+  expiry_date: timestamp('expiry_date', { withTimezone: true }),
+  revoked_at: timestamp('revoked_at', { withTimezone: true }),
+  revoked_by: uuid('revoked_by')
+    .references(() => users.id),
+  revoked_reason: text('revoked_reason'),
+
+  created_at: timestamp('created_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const couponAuditLogs = pgTable('coupon_audit_logs', {
+  id: varchar('id', { length: 255 }).primaryKey(),
+  coupon_id: varchar('coupon_id', { length: 255 })
+    .references(() => couponCodes.id)
+    .notNull(),
+  action: varchar('action', { length: 50 }).notNull(), // created, allocated, reserved, released, used, expired, revoked
+  old_status: varchar('old_status', { length: 20 }),
+  new_status: varchar('new_status', { length: 20 }),
+  lead_id: varchar('lead_id', { length: 255 })
+    .references(() => leads.id),
+  performed_by: uuid('performed_by')
+    .references(() => users.id),
+  ip_address: varchar('ip_address', { length: 45 }),
+  timestamp: timestamp('timestamp', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  notes: text('notes'),
+});
+
+/* -------------------------------------------------
+   Dealer onboarding table
+   ------------------------------------------------- */
+export const dealerOnboardings = pgTable('dealer_onboardings', {
+  id: varchar('id', { length: 255 }).primaryKey(), // REG-YYYYMMDD-SEQ
+  business_name: text('business_name').notNull(),
+  owner_name: text('owner_name').notNull(),
+  email: text('email').notNull(),
+  phone: varchar('phone', { length: 20 }).notNull(),
+  gstin: varchar('gstin', { length: 15 }).notNull(),
+  pan: varchar('pan', { length: 10 }).notNull(),
+  address: text('address').notNull(),
+  signzy_document_url: text('signzy_document_url'),
+  signzy_status: varchar('signzy_status', { length: 50 })
+    .default('pending')
+    .notNull(), // pending, generated, sent, signed, failed
+  account_id: varchar('account_id', { length: 255 })
+    .references(() => accounts.id), // becomes an account after approval
+  created_at: timestamp('created_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updated_at: timestamp('updated_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+/* -------------------------------------------------
+   Relation helpers for the new tables
+   ------------------------------------------------- */
+export const consentRecordsRelations = relations(consentRecords, ({ one }) => ({
+  lead: one(leads, {
+    fields: [consentRecords.lead_id],
+    references: [leads.id],
+  }),
+  verifier: one(users, {
+    fields: [consentRecords.verified_by],
+    references: [users.id],
+  }),
+}));
+
+export const couponBatchesRelations = relations(couponBatches, ({ one, many }) => ({
+  dealer: one(accounts, {
+    fields: [couponBatches.dealer_id],
+    references: [accounts.id],
+  }),
+  creator: one(users, {
+    fields: [couponBatches.created_by],
+    references: [users.id],
+  }),
+  coupons: many(couponCodes),
+}));
+
+export const couponCodesRelations = relations(couponCodes, ({ one, many }) => ({
+  batch: one(couponBatches, {
+    fields: [couponCodes.batch_id],
+    references: [couponBatches.id],
+  }),
+  dealer: one(accounts, {
+    fields: [couponCodes.dealer_id],
+    references: [accounts.id],
+  }),
+  reservedForLead: one(leads, {
+    fields: [couponCodes.reserved_for_lead_id],
+    references: [leads.id],
+    relationName: 'reserved_coupon',
+  }),
+  usedForLead: one(leads, {
+    fields: [couponCodes.used_for_lead_id],
+    references: [leads.id],
+    relationName: 'used_coupon',
+  }),
+  reservedBy: one(users, {
+    fields: [couponCodes.reserved_by],
+    references: [users.id],
+    relationName: 'reserved_by_user',
+  }),
+  usedBy: one(users, {
+    fields: [couponCodes.used_by],
+    references: [users.id],
+    relationName: 'used_by_user',
+  }),
+  revokedBy: one(users, {
+    fields: [couponCodes.revoked_by],
+    references: [users.id],
+    relationName: 'revoked_by_user',
+  }),
+  auditLogs: many(couponAuditLogs),
+}));
+
+export const couponAuditLogsRelations = relations(couponAuditLogs, ({ one }) => ({
+  coupon: one(couponCodes, {
+    fields: [couponAuditLogs.coupon_id],
+    references: [couponCodes.id],
+  }),
+  lead: one(leads, {
+    fields: [couponAuditLogs.lead_id],
+    references: [leads.id],
+  }),
+  performer: one(users, {
+    fields: [couponAuditLogs.performed_by],
+    references: [users.id],
+  }),
+}));
+
+export const dealerOnboardingsRelations = relations(dealerOnboardings, ({
+  one,
+}) => ({
+  account: one(accounts, {
+    fields: [dealerOnboardings.account_id],
+    references: [accounts.id],
+  }),
+}));
+
