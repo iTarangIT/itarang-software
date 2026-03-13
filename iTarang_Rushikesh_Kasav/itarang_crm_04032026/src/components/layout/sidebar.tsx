@@ -3,8 +3,30 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, ShoppingCart, Users, FileText, LogOut, Phone, PieChart, Package, FileCheck, Landmark, Briefcase, Building, Receipt, ClipboardCheck, Car, Battery, Wrench, CreditCard, Megaphone, Shield, Search } from 'lucide-react';
+import {
+    LayoutDashboard,
+    ShoppingCart,
+    Users,
+    FileText,
+    Phone,
+    PieChart,
+    Package,
+    FileCheck,
+    Landmark,
+    Briefcase,
+    Building,
+    Receipt,
+    ClipboardCheck,
+    Car,
+    Battery,
+    Wrench,
+    CreditCard,
+    Megaphone,
+    Shield,
+    Search
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/components/auth/AuthProvider';
 
 const roleNavigation: Record<string, any[]> = {
     ceo: [
@@ -27,9 +49,11 @@ const roleNavigation: Record<string, any[]> = {
         {
             section: 'ADMIN', items: [
                 { id: 'kyc-review', label: 'KYC Review', icon: Shield, href: '/admin/kyc-review' },
+                { id: 'dealer-validation', label: 'Dealer Validation', icon: ClipboardCheck, href: '/admin/dealer-verification' },
             ]
         },
     ],
+
     sales_head: [
         { section: 'OVERVIEW', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/sales-head' }] },
         {
@@ -47,9 +71,11 @@ const roleNavigation: Record<string, any[]> = {
         {
             section: 'ADMIN', items: [
                 { id: 'kyc-review', label: 'KYC Review', icon: Shield, href: '/admin/kyc-review' },
+                { id: 'dealer-validation', label: 'Dealer Validation', icon: ClipboardCheck, href: '/admin/dealer-verification' },
             ]
         },
     ],
+
     sales_manager: [
         { section: 'OVERVIEW', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/sales-manager' }] },
         {
@@ -65,6 +91,7 @@ const roleNavigation: Record<string, any[]> = {
             ]
         },
     ],
+
     inventory_manager: [
         { section: 'OVERVIEW', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/inventory-manager' }] },
         {
@@ -75,6 +102,7 @@ const roleNavigation: Record<string, any[]> = {
             ]
         },
     ],
+
     service_engineer: [
         { section: 'OVERVIEW', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/service-engineer' }] },
         {
@@ -83,6 +111,7 @@ const roleNavigation: Record<string, any[]> = {
             ]
         },
     ],
+
     business_head: [
         { section: 'OVERVIEW', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/business-head' }] },
         {
@@ -94,9 +123,11 @@ const roleNavigation: Record<string, any[]> = {
         {
             section: 'ADMIN', items: [
                 { id: 'kyc-review', label: 'KYC Review', icon: Shield, href: '/admin/kyc-review' },
+                { id: 'dealer-validation', label: 'Dealer Validation', icon: ClipboardCheck, href: '/admin/dealer-verification' },
             ]
         },
     ],
+
     finance_controller: [
         { section: 'OVERVIEW', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/finance-controller' }] },
         {
@@ -107,6 +138,7 @@ const roleNavigation: Record<string, any[]> = {
             ]
         },
     ],
+
     sales_order_manager: [
         { section: 'OVERVIEW', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/sales-order-manager' }] },
         {
@@ -118,6 +150,7 @@ const roleNavigation: Record<string, any[]> = {
             ]
         },
     ],
+
     sales_executive: [
         { section: 'OVERVIEW', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/sales-executive' }] },
         {
@@ -127,6 +160,7 @@ const roleNavigation: Record<string, any[]> = {
             ]
         },
     ],
+
     dealer: [
         {
             section: 'OVERVIEW',
@@ -154,12 +188,11 @@ const roleNavigation: Record<string, any[]> = {
             ]
         }
     ],
+
     user: [
         { section: 'OVERVIEW', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/' }] }
     ]
 };
-
-import { useAuth } from '@/components/auth/AuthProvider';
 
 export function Sidebar() {
     const pathname = usePathname();
@@ -212,7 +245,6 @@ export function Sidebar() {
                 ))}
             </div>
 
-            {/* User Profile Section Placeholder */}
             <div className="p-4 border-t border-gray-100/50 space-y-2">
                 <div className="flex items-center gap-3 p-3 rounded-xl hover:bg-white hover:shadow-sm transition-all group cursor-default">
                     <div className="w-9 h-9 bg-brand-600 rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm uppercase">
