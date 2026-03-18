@@ -20,8 +20,36 @@ import {
   Lock,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/components/auth/AuthProvider';
+
+type DealerApiData = {
+  id: string | null;
+  companyName: string;
+  dealerCode: string | null;
+  onboardingStatus: string;
+  reviewStatus: string;
+  dealerAccountStatus: string;
+  approvedAt: string | null;
+  submittedAt: string | null;
+  financeEnabled: boolean;
+  isApproved: boolean;
+};
+
+type DealerStatsResponse = {
+  dealer: DealerApiData | null;
+  metrics: {
+    totalLeads: number;
+    convertedLeads: number;
+    conversionRate: number;
+    commission: number;
+    inventoryCount: number;
+    totalPayments: number;
+    loanCount: number;
+    rewards: number;
+  };
+  recentLeads: any[];
+};
 
 type DealerDashboardData = {
   dealerId: string;
@@ -33,10 +61,114 @@ type DealerDashboardData = {
   submittedAt: string;
 };
 
+function DealerApprovalModal({
+  open,
+  onClose,
+  companyName,
+  dealerCode,
+  approvedAt,
+}: {
+  open: boolean;
+  onClose: () => void;
+  companyName?: string;
+  dealerCode?: string | null;
+  approvedAt?: string | null;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 p-4">
+      <div className="w-full max-w-2xl rounded-[32px] border border-slate-200 bg-white shadow-2xl">
+        <div className="px-8 pt-8 pb-6">
+          <div className="flex justify-center">
+            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-50 ring-8 ring-emerald-50/60">
+              <CheckCircle2 className="h-10 w-10 text-emerald-600" />
+            </div>
+          </div>
+
+          <div className="mt-6 text-center">
+            <p className="text-sm font-semibold uppercase tracking-[0.22em] text-emerald-600">
+              Account Approved
+            </p>
+            <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-900">
+              Congratulations, your iTarang dealer account is now active
+            </h2>
+            <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-slate-600">
+              Your onboarding review has been completed successfully. Full dashboard
+              access has been enabled, and you can now manage leads, orders,
+              inventory, service operations, and finance workflows from your
+              iTarang dealer workspace.
+            </p>
+          </div>
+
+          <div className="mt-8 grid grid-cols-1 gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-5 md:grid-cols-3">
+            <div className="rounded-2xl bg-white p-4">
+              <div className="flex items-center gap-2 text-slate-500">
+                <Building2 className="h-4 w-4" />
+                <span className="text-xs font-semibold uppercase tracking-[0.16em]">
+                  Company
+                </span>
+              </div>
+              <p className="mt-2 text-sm font-semibold text-slate-900">
+                {companyName || 'Dealer Account'}
+              </p>
+            </div>
+
+            <div className="rounded-2xl bg-white p-4">
+              <div className="flex items-center gap-2 text-slate-500">
+                <BadgeCheck className="h-4 w-4" />
+                <span className="text-xs font-semibold uppercase tracking-[0.16em]">
+                  Dealer ID
+                </span>
+              </div>
+              <p className="mt-2 text-sm font-semibold text-slate-900">
+                {dealerCode || 'Not available'}
+              </p>
+            </div>
+
+            <div className="rounded-2xl bg-white p-4">
+              <div className="flex items-center gap-2 text-slate-500">
+                <ShieldCheck className="h-4 w-4" />
+                <span className="text-xs font-semibold uppercase tracking-[0.16em]">
+                  Activated On
+                </span>
+              </div>
+              <p className="mt-2 text-sm font-semibold text-slate-900">
+                {approvedAt ? new Date(approvedAt).toLocaleString() : 'Just now'}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-6 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+            Your account has been activated securely and no further action is required at this time.
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3 border-t border-slate-200 px-8 py-6 sm:flex-row sm:justify-center">
+          <button
+            onClick={onClose}
+            className="inline-flex items-center justify-center rounded-2xl bg-[#1F5C8F] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[#173F63]"
+          >
+            Go to Dashboard
+          </button>
+
+          <button
+            onClick={onClose}
+            className="inline-flex items-center justify-center rounded-2xl border border-slate-200 bg-white px-6 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            View Account Details
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function DealerDashboard() {
   const { user, loading: authLoading } = useAuth();
 
-  const [stats, setStats] = useState<any>({
+  const [stats, setStats] = useState<DealerStatsResponse>({
+    dealer: null,
     metrics: {
       totalLeads: 0,
       convertedLeads: 0,
@@ -52,6 +184,7 @@ export default function DealerDashboard() {
 
   const [loading, setLoading] = useState(true);
   const [dealerData, setDealerData] = useState<DealerDashboardData | null>(null);
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
 
   useEffect(() => {
     const savedDealerData = localStorage.getItem('dealerDashboardData');
@@ -67,10 +200,11 @@ export default function DealerDashboard() {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const res = await fetch('/api/dealer/stats');
-        const data = await res.json();
-        if (data.success) {
-          setStats(data.data);
+        const res = await fetch('/api/dealer/stats', { cache: 'no-store' });
+        const json = await res.json();
+
+        if (json.success) {
+          setStats(json.data);
         }
       } catch (error) {
         console.error('Failed to load stats', error);
@@ -82,24 +216,62 @@ export default function DealerDashboard() {
     fetchStats();
   }, []);
 
+  const dealer = stats?.dealer;
+  const metricsData = stats.metrics;
+
+  const isApproved = !!dealer?.isApproved;
+
+  useEffect(() => {
+    if (!dealer?.id || !isApproved) return;
+
+    const seenKey = `dealerApprovalSeen-${dealer.id}`;
+    const alreadySeen = localStorage.getItem(seenKey) === 'true';
+
+    if (!alreadySeen) {
+      setShowApprovalModal(true);
+    }
+  }, [dealer?.id, isApproved]);
+
+  const handleCloseApprovalModal = () => {
+    if (dealer?.id) {
+      localStorage.setItem(`dealerApprovalSeen-${dealer.id}`, 'true');
+    }
+    setShowApprovalModal(false);
+  };
+
   if (authLoading) {
     return <div className="p-8 text-sm text-slate-500">Loading dashboard...</div>;
   }
 
-  const onboardingStatus = user?.onboarding_status || 'under_review';
-  const isApproved = onboardingStatus === 'succeed';
-
   const currentDealerName =
+    dealer?.companyName ||
     user?.full_name ||
     dealerData?.dealerDisplayName ||
     dealerData?.companyName ||
     'Dealer';
 
-  const currentDealerId = user?.dealer_id || dealerData?.dealerId || 'Pending Approval';
-  const currentCompanyType = user?.company_type || dealerData?.companyType || 'Not available';
-  const currentGst = user?.gst_number || dealerData?.gstNumber || 'Not available';
+  const currentDealerId =
+    dealer?.dealerCode ||
+    user?.dealer_id ||
+    dealerData?.dealerId ||
+    'Pending Approval';
+
+  const currentCompanyType =
+    user?.company_type ||
+    dealerData?.companyType ||
+    'Not available';
+
+  const currentGst =
+    user?.gst_number ||
+    dealerData?.gstNumber ||
+    'Not available';
+
   const financeEnabledValue =
-    typeof user?.finance_enabled === 'boolean'
+    typeof dealer?.financeEnabled === 'boolean'
+      ? dealer.financeEnabled
+        ? 'Yes'
+        : 'No'
+      : typeof user?.finance_enabled === 'boolean'
       ? user.finance_enabled
         ? 'Yes'
         : 'No'
@@ -107,9 +279,12 @@ export default function DealerDashboard() {
       ? 'Yes'
       : 'No';
 
-  const submittedAtValue = user?.submitted_at || dealerData?.submittedAt;
+  const submittedAtValue =
+    dealer?.submittedAt ||
+    user?.submitted_at ||
+    dealerData?.submittedAt;
 
-  const metricsData = stats.metrics;
+  const approvalStatusLabel = isApproved ? 'Approved' : 'Under Review';
 
   const metrics = [
     {
@@ -191,13 +366,21 @@ export default function DealerDashboard() {
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 pb-10">
+      <DealerApprovalModal
+        open={showApprovalModal}
+        onClose={handleCloseApprovalModal}
+        companyName={dealer?.companyName || currentDealerName}
+        dealerCode={dealer?.dealerCode || currentDealerId}
+        approvedAt={dealer?.approvedAt || null}
+      />
+
       <div>
         <h1 className="text-2xl font-bold text-gray-900">
           Dealer Dashboard - {currentDealerName}
         </h1>
         <p className="text-gray-500 mt-1">
           {isApproved
-            ? 'Overview of your solar & EV business'
+            ? 'Overview of your iTarang dealer business'
             : 'Your onboarding is under review. Full dashboard access will unlock after approval.'}
         </p>
       </div>
@@ -214,8 +397,26 @@ export default function DealerDashboard() {
               </h2>
               <p className="mt-1 text-sm text-amber-800">
                 Your onboarding has been submitted successfully. Once iTarang approves your
-                documents and the status changes to <span className="font-semibold">Approved</span>,
-                your full dealer dashboard will be unlocked.
+                documents and activates your dealer account, your full dealer dashboard will be unlocked.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isApproved && (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 rounded-xl bg-emerald-100 p-2">
+              <CheckCircle2 className="h-5 w-5 text-emerald-700" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-emerald-900">
+                Account active
+              </h2>
+              <p className="mt-1 text-sm text-emerald-800">
+                Your dealer workspace is fully enabled. You can now manage leads, loan workflows,
+                orders, inventory, and support operations from this dashboard.
               </p>
             </div>
           </div>
@@ -233,7 +434,7 @@ export default function DealerDashboard() {
                 {currentDealerName}
               </h2>
               <p className="mt-2 text-sm text-gray-500">
-                This unique dealer ID is generated once onboarding is completed successfully.
+                This dealer profile reflects the latest approved onboarding status from iTarang.
               </p>
             </div>
 
@@ -304,7 +505,7 @@ export default function DealerDashboard() {
                   isApproved ? 'text-emerald-800' : 'text-amber-800'
                 }`}
               >
-                {isApproved ? 'Approved' : 'Under Review'}
+                {approvalStatusLabel}
               </p>
             </div>
 
@@ -321,6 +522,15 @@ export default function DealerDashboard() {
                 {submittedAtValue ? new Date(submittedAtValue).toLocaleString() : 'Not available'}
               </p>
             </div>
+
+            {dealer?.approvedAt && (
+              <div className="rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
+                <p className="text-xs uppercase tracking-wide text-gray-500">Approved At</p>
+                <p className="mt-1 text-sm font-semibold text-gray-900">
+                  {new Date(dealer.approvedAt).toLocaleString()}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -653,7 +863,7 @@ function MockLeadRow({ name, status, color, initial }: any) {
 
 function LeadRow({ lead }: { lead: any }) {
   const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
+    switch ((status || '').toLowerCase()) {
       case 'hot':
         return 'bg-red-50 text-red-600';
       case 'warm':

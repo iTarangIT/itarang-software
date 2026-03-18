@@ -21,6 +21,42 @@ function ReviewCard({
   );
 }
 
+type UploadItemLike = {
+  file?: File | null;
+  uploadedUrl?: string | null;
+  storagePath?: string | null;
+  bucketName?: string | null;
+} | null | undefined;
+
+type DealerDocumentPayload = {
+  documentType: string;
+  bucketName: string;
+  storagePath: string;
+  fileName: string;
+  fileUrl: string | null;
+  mimeType: string | null;
+  fileSize: number | null;
+};
+
+function buildDocument(
+  documentType: string,
+  item: UploadItemLike
+): DealerDocumentPayload | null {
+  if (!item?.file || !item?.storagePath) {
+    return null;
+  }
+
+  return {
+    documentType,
+    bucketName: item.bucketName || "dealer-documents",
+    storagePath: item.storagePath,
+    fileName: item.file.name,
+    fileUrl: item.uploadedUrl || null,
+    mimeType: item.file.type || null,
+    fileSize: typeof item.file.size === "number" ? item.file.size : null,
+  };
+}
+
 export default function StepReview() {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -47,6 +83,20 @@ export default function StepReview() {
       submitErrors.agreeTerms = "Please agree to iTarang onboarding and dealer terms";
     }
 
+    const documents = [
+      buildDocument("itr_3_years", state.compliance?.itr3Years),
+      buildDocument("bank_statement_3_months", state.compliance?.bankStatement3Months),
+      buildDocument("undated_cheques", state.compliance?.undatedCheques),
+      buildDocument("passport_photo", state.compliance?.passportPhoto),
+      buildDocument("udyam_certificate", state.compliance?.udyamCertificate),
+      buildDocument("gst_certificate", state.company?.gstCertificate),
+      buildDocument("pan_card", state.company?.companyPanFile),
+    ].filter((doc): doc is DealerDocumentPayload => doc !== null);
+
+    if (documents.length === 0) {
+      submitErrors.documents = "Please upload at least one valid document before submitting";
+    }
+
     if (Object.keys(submitErrors).length > 0) {
       setErrors(submitErrors);
       return;
@@ -56,27 +106,27 @@ export default function StepReview() {
       setIsSubmitting(true);
 
       const payload = {
-        dealerUserId: state.dealerId || null, // replace later with real logged-in user id
-        companyName: state.company.companyName || "",
-        companyType: state.company.companyType || "",
-        gstNumber: state.company.gstNumber || "",
-        panNumber: state.company.companyPanNumber || "",
-        // cinNumber: state.company.cinNumber || "",
+        dealerUserId: state.dealerId || null,
+        companyName: state.company?.companyName || "",
+        companyType: state.company?.companyType || "",
+        gstNumber: state.company?.gstNumber || "",
+        panNumber: state.company?.companyPanNumber || "",
         businessAddress: {
-          address: state.company.companyAddress || "",
+          address: state.company?.companyAddress || "",
         },
         registeredAddress: {
-          address: state.company.companyAddress || "",
+          address: state.company?.companyAddress || "",
         },
-        financeEnabled: state.finance.enableFinance === "yes",
+        financeEnabled: state.finance?.enableFinance === "yes",
         onboardingStatus: "submitted",
         ownerName: state.ownership?.ownerName || "",
-ownerPhone: state.ownership?.ownerPhone || "",
-ownerEmail: state.ownership?.ownerEmail || "",
-bankName: state.ownership?.bankName || "",
-accountNumber: state.ownership?.accountNumber || "",
-beneficiaryName: state.ownership?.beneficiaryName || "",
-ifscCode: state.ownership?.ifsc || "",
+        ownerPhone: state.ownership?.ownerPhone || "",
+        ownerEmail: state.ownership?.ownerEmail || "",
+        bankName: state.ownership?.bankName || "",
+        accountNumber: state.ownership?.accountNumber || "",
+        beneficiaryName: state.ownership?.beneficiaryName || "",
+        ifscCode: state.ownership?.ifsc || "",
+        documents,
       };
 
       const response = await fetch("/api/dealer-onboarding/save", {
@@ -105,7 +155,10 @@ ifscCode: state.ownership?.ifsc || "",
     } catch (error) {
       console.error("Dealer onboarding submission error:", error);
       setErrors({
-        api: error instanceof Error ? error.message : "Something went wrong while submitting",
+        api:
+          error instanceof Error
+            ? error.message
+            : "Something went wrong while submitting",
       });
     } finally {
       setIsSubmitting(false);
@@ -123,45 +176,62 @@ ifscCode: state.ownership?.ifsc || "",
 
       <ReviewCard title="Company Details">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-slate-700">
-          <p>Company Name: {state.company.companyName || "—"}</p>
-          <p>Company Type: {state.company.companyType || "—"}</p>
-          <p>GST: {state.company.gstNumber || "—"}</p>
-          <p>PAN: {state.company.companyPanNumber || "—"}</p>
-          {/* <p>CIN: {state.company.cinNumber || "—"}</p> */}
-          <p className="md:col-span-2">Address: {state.company.companyAddress || "—"}</p>
+          <p>Company Name: {state.company?.companyName || "—"}</p>
+          <p>Company Type: {state.company?.companyType || "—"}</p>
+          <p>GST: {state.company?.gstNumber || "—"}</p>
+          <p>PAN: {state.company?.companyPanNumber || "—"}</p>
+          <p className="md:col-span-2">Address: {state.company?.companyAddress || "—"}</p>
         </div>
       </ReviewCard>
 
       <ReviewCard title="Compliance Documents">
         <div className="space-y-2 text-sm text-slate-700">
-          <p>ITR: {state.compliance.itr3Years?.file?.name || "Not uploaded"}</p>
-          <p>Bank Statement: {state.compliance.bankStatement3Months?.file?.name || "Not uploaded"}</p>
-          <p>Undated Cheques: {state.compliance.undatedCheques?.file?.name || "Not uploaded"}</p>
-          <p>Passport Photo: {state.compliance.passportPhoto?.file?.name || "Not uploaded"}</p>
-          <p>Udyam Certificate: {state.compliance.udyamCertificate?.file?.name || "Not uploaded"}</p>
+          <p>ITR: {state.compliance?.itr3Years?.file?.name || "Not uploaded"}</p>
+          <p>
+            Bank Statement:{" "}
+            {state.compliance?.bankStatement3Months?.file?.name || "Not uploaded"}
+          </p>
+          <p>
+            Undated Cheques:{" "}
+            {state.compliance?.undatedCheques?.file?.name || "Not uploaded"}
+          </p>
+          <p>
+            Passport Photo:{" "}
+            {state.compliance?.passportPhoto?.file?.name || "Not uploaded"}
+          </p>
+          <p>
+            Udyam Certificate:{" "}
+            {state.compliance?.udyamCertificate?.file?.name || "Not uploaded"}
+          </p>
+          <p>
+            GST Certificate: {state.company?.gstCertificate?.file?.name || "Not uploaded"}
+          </p>
+          <p>
+            Company PAN File: {state.company?.companyPanFile?.file?.name || "Not uploaded"}
+          </p>
         </div>
       </ReviewCard>
 
       <ReviewCard title="Ownership Details">
         <div className="space-y-2 text-sm text-slate-700">
-          <p>Bank Name: {state.ownership.bankName || "—"}</p>
-          <p>Account Number: {state.ownership.accountNumber || "—"}</p>
-          <p>IFSC: {state.ownership.ifsc || "—"}</p>
-          <p>Beneficiary Name: {state.ownership.beneficiaryName || "—"}</p>
+          <p>Bank Name: {state.ownership?.bankName || "—"}</p>
+          <p>Account Number: {state.ownership?.accountNumber || "—"}</p>
+          <p>IFSC: {state.ownership?.ifsc || "—"}</p>
+          <p>Beneficiary Name: {state.ownership?.beneficiaryName || "—"}</p>
         </div>
       </ReviewCard>
 
       <ReviewCard title="Finance Enablement Selection">
         <p className="text-sm text-slate-700">
-          Finance Enabled: {state.finance.enableFinance === "yes" ? "Yes" : "No"}
+          Finance Enabled: {state.finance?.enableFinance === "yes" ? "Yes" : "No"}
         </p>
       </ReviewCard>
 
       <ReviewCard title="Dealer Agreement Status">
         <div className="space-y-2 text-sm text-slate-700">
-          <p>Agreement required: {state.finance.enableFinance === "yes" ? "Yes" : "No"}</p>
-          <p>Agreement status: {state.agreement.agreementStatus}</p>
-          <p>Signer details: {state.agreement.dealerSignerName || "Pending"}</p>
+          <p>Agreement required: {state.finance?.enableFinance === "yes" ? "Yes" : "No"}</p>
+          <p>Agreement status: {state.agreement?.agreementStatus || "Pending"}</p>
+          <p>Signer details: {state.agreement?.dealerSignerName || "Pending"}</p>
         </div>
       </ReviewCard>
 
@@ -205,12 +275,14 @@ ifscCode: state.ownership?.ifsc || "",
           <p className="text-sm text-red-600">{errors.agreeTerms}</p>
         )}
 
-        {errors.api && (
-          <p className="text-sm text-red-600">{errors.api}</p>
+        {errors.documents && (
+          <p className="text-sm text-red-600">{errors.documents}</p>
         )}
 
+        {errors.api && <p className="text-sm text-red-600">{errors.api}</p>}
+
         {Object.entries(errors)
-          .filter(([key]) => !["confirmInfo", "confirmDocs", "agreeTerms", "api"].includes(key))
+          .filter(([key]) => !["confirmInfo", "confirmDocs", "agreeTerms", "documents", "api"].includes(key))
           .map(([key, error]) => (
             <p key={key} className="text-sm text-red-600">
               {error}

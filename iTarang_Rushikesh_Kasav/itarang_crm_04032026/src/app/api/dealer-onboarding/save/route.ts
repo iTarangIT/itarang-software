@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db/index";
-import { dealerOnboardingApplications } from "@/lib/db/schema";
+import {
+  dealerOnboardingApplications,
+  dealerOnboardingDocuments,
+} from "@/lib/db/schema";
 
 export async function POST(req: NextRequest) {
   try {
@@ -18,12 +21,13 @@ export async function POST(req: NextRequest) {
       financeEnabled,
       onboardingStatus,
       ownerName,
-  ownerPhone,
-  ownerEmail,
-  bankName,
-  accountNumber,
-  beneficiaryName,
-  ifscCode,
+      ownerPhone,
+      ownerEmail,
+      bankName,
+      accountNumber,
+      beneficiaryName,
+      ifscCode,
+      documents,
     } = body;
 
     if (!companyName) {
@@ -33,7 +37,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const inserted = await db
+    const insertedApplications = await db
       .insert(dealerOnboardingApplications)
       .values({
         dealerUserId: dealerUserId ?? null,
@@ -48,18 +52,49 @@ export async function POST(req: NextRequest) {
         onboardingStatus: onboardingStatus ?? "draft",
         submittedAt: onboardingStatus === "submitted" ? new Date() : null,
         ownerName: ownerName ?? null,
-ownerPhone: ownerPhone ?? null,
-ownerEmail: ownerEmail ?? null,
-bankName: bankName ?? null,
-accountNumber: accountNumber ?? null,
-beneficiaryName: beneficiaryName ?? null,
-ifscCode: ifscCode ?? null,
+        ownerPhone: ownerPhone ?? null,
+        ownerEmail: ownerEmail ?? null,
+        bankName: bankName ?? null,
+        accountNumber: accountNumber ?? null,
+        beneficiaryName: beneficiaryName ?? null,
+        ifscCode: ifscCode ?? null,
       })
       .returning();
 
+    const application = insertedApplications[0];
+
+    if (Array.isArray(documents) && documents.length > 0) {
+      const validDocuments = documents
+        .filter(
+          (doc: any) =>
+            doc?.documentType &&
+            doc?.bucketName &&
+            doc?.storagePath &&
+            doc?.fileName
+        )
+        .map((doc: any) => ({
+          applicationId: application.id,
+          documentType: doc.documentType,
+          bucketName: doc.bucketName,
+          storagePath: doc.storagePath,
+          fileName: doc.fileName,
+          fileUrl: doc.fileUrl ?? null,
+          mimeType: doc.mimeType ?? null,
+          fileSize: typeof doc.fileSize === "number" ? doc.fileSize : null,
+          uploadedBy: dealerUserId ?? null,
+          docStatus: doc.docStatus ?? "uploaded",
+          verificationStatus: doc.verificationStatus ?? "pending",
+          metadata: doc.metadata ?? {},
+        }));
+
+      if (validDocuments.length > 0) {
+        await db.insert(dealerOnboardingDocuments).values(validDocuments);
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      application: inserted[0],
+      application,
     });
   } catch (error: any) {
     console.error("SAVE ONBOARDING ERROR FULL:", error);

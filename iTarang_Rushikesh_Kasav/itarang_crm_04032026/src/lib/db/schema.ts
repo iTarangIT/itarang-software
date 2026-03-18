@@ -9,10 +9,15 @@ export const users = pgTable('users', {
     id: uuid('id').primaryKey(),
     email: text('email').notNull().unique(),
     name: text('name').notNull(),
-    role: varchar('role', { length: 50 }).notNull(), // ceo, business_head, sales_head, sales_manager, sales_executive, finance_controller, inventory_manager, service_engineer, dealer
-    dealer_id: varchar('dealer_id', { length: 255 }), // Manually link to accounts.id
+    role: varchar('role', { length: 50 }).notNull(),
+    dealer_id: varchar('dealer_id', { length: 255 }),
     phone: text('phone'),
     avatar_url: text('avatar_url'),
+
+    // ADD THESE 2 FIELDS
+    password_hash: text('password_hash'),
+    must_change_password: boolean('must_change_password').notNull().default(false),
+
     is_active: boolean('is_active').notNull().default(true),
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),

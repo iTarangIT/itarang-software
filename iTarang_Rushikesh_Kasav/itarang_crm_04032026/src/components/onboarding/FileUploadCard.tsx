@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileText, UploadCloud, RefreshCcw, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import {
+  FileText,
+  UploadCloud,
+  RefreshCcw,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+} from "lucide-react";
 
 type VerificationState =
   | "idle"
@@ -16,6 +23,9 @@ export type UploadCardValue = {
   label: string;
   file: File | null;
   previewUrl: string | null;
+  uploadedUrl?: string | null;
+  storagePath?: string | null;
+  bucketName?: string | null;
   verificationState: VerificationState;
   progress: number;
   uploadedAt?: string;
@@ -78,7 +88,22 @@ function getBadgeIcon(status: VerificationState) {
   }
 }
 
-export default function FileUploadCard({ label, hint, value, onChange, error }: Props) {
+function makeFolderName(label: string) {
+  return label
+    .toLowerCase()
+    .trim()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+export default function FileUploadCard({
+  label,
+  hint,
+  value,
+  onChange,
+  error,
+}: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [dragActive, setDragActive] = useState(false);
 
@@ -89,14 +114,41 @@ export default function FileUploadCard({ label, hint, value, onChange, error }: 
         label,
         file: null,
         previewUrl: null,
+        uploadedUrl: null,
+        storagePath: null,
+        bucketName: null,
         verificationState: "idle",
         progress: 0,
       },
     [label, value]
   );
 
-  const handleFile = (file: File | null) => {
+  const handleFile = async (file: File | null) => {
     if (!file) return;
+
+    const allowedTypes = [
+      "application/pdf",
+      "image/jpeg",
+      "image/jpg",
+      "image/png",
+      "image/webp",
+    ];
+
+    if (!allowedTypes.includes(file.type)) {
+      onChange({
+        id: crypto.randomUUID(),
+        label,
+        file,
+        previewUrl: null,
+        uploadedUrl: null,
+        storagePath: null,
+        bucketName: null,
+        verificationState: "reupload",
+        progress: 0,
+        uploadedAt: new Date().toISOString(),
+      });
+      return;
+    }
 
     const previewUrl = URL.createObjectURL(file);
 
@@ -105,28 +157,72 @@ export default function FileUploadCard({ label, hint, value, onChange, error }: 
       label,
       file,
       previewUrl,
+      uploadedUrl: null,
+      storagePath: null,
+      bucketName: null,
       verificationState: "uploading",
-      progress: 20,
+      progress: 15,
       uploadedAt: new Date().toISOString(),
     };
 
     onChange(baseItem);
 
-    setTimeout(() => {
+    try {
+      onChange({
+        ...baseItem,
+        verificationState: "uploading",
+        progress: 35,
+      });
+
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("folder", makeFolderName(label));
+
+      const response = await fetch("/api/uploads/dealer-documents", {
+        method: "POST",
+        body: formData,
+      });
+
       onChange({
         ...baseItem,
         verificationState: "processing",
-        progress: 65,
+        progress: 70,
       });
-    }, 700);
 
-    setTimeout(() => {
+      const result = await response.json();
+
+      if (!response.ok || !result?.success) {
+        onChange({
+          ...baseItem,
+          verificationState: "reupload",
+          progress: 0,
+          uploadedUrl: null,
+          storagePath: null,
+          bucketName: null,
+        });
+        return;
+      }
+
       onChange({
         ...baseItem,
+        uploadedUrl: result.file?.url ?? null,
+        storagePath: result.file?.path ?? null,
+        bucketName: result.file?.bucketName ?? "dealer-documents",
         verificationState: "verified",
         progress: 100,
       });
-    }, 1600);
+    } catch (uploadError) {
+      console.error("File upload failed:", uploadError);
+
+      onChange({
+        ...baseItem,
+        verificationState: "reupload",
+        progress: 0,
+        uploadedUrl: null,
+        storagePath: null,
+        bucketName: null,
+      });
+    }
   };
 
   useEffect(() => {
@@ -141,7 +237,9 @@ export default function FileUploadCard({ label, hint, value, onChange, error }: 
     <div className="space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <label className="block text-sm font-semibold text-[#173F63]">{label}</label>
+          <label className="block text-sm font-semibold text-[#173F63]">
+            {label}
+          </label>
           {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
         </div>
 
@@ -178,8 +276,12 @@ export default function FileUploadCard({ label, hint, value, onChange, error }: 
             <UploadCloud className="h-6 w-6 text-[#1F5C8F]" />
           </div>
 
-          <p className="text-sm font-semibold text-slate-700">Drag file or click to upload</p>
-          <p className="mt-1 text-xs text-slate-500">Secure upload for dealer onboarding</p>
+          <p className="text-sm font-semibold text-slate-700">
+            Drag file or click to upload
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            PDF, JPG, JPEG, PNG, WEBP supported
+          </p>
 
           {currentValue.file ? (
             <div className="mt-5 w-full max-w-md">
@@ -215,21 +317,39 @@ export default function FileUploadCard({ label, hint, value, onChange, error }: 
               </div>
 
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-800">{currentValue.file.name}</p>
+                <p className="truncate text-sm font-semibold text-slate-800">
+                  {currentValue.file.name}
+                </p>
                 <p className="mt-1 text-xs text-slate-500">
                   {(currentValue.file.size / 1024).toFixed(1)} KB
                 </p>
+
                 {currentValue.uploadedAt ? (
                   <p className="mt-1 text-xs text-slate-400">
                     Uploaded {new Date(currentValue.uploadedAt).toLocaleString()}
                   </p>
+                ) : null}
+
+                {currentValue.uploadedUrl ? (
+                  <a
+                    href={currentValue.uploadedUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-flex text-xs font-medium text-[#1F5C8F] hover:underline"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    View uploaded file
+                  </a>
                 ) : null}
               </div>
             </div>
 
             <button
               type="button"
-              onClick={() => inputRef.current?.click()}
+              onClick={(e) => {
+                e.stopPropagation();
+                inputRef.current?.click();
+              }}
               className="inline-flex items-center gap-2 rounded-xl border border-[#E3E8EF] px-3 py-2 text-xs font-semibold text-[#1F5C8F] hover:bg-[#F4F8FC]"
             >
               <RefreshCcw className="h-3.5 w-3.5" />

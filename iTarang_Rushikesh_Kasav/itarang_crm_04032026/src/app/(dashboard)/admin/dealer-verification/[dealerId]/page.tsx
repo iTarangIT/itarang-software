@@ -19,9 +19,19 @@ import {
 } from "lucide-react";
 
 type DocumentItem = {
+  id?: string;
   name: string;
   url?: string | null;
   status?: string;
+  documentType?: string;
+  verificationStatus?: string | null;
+  docStatus?: string | null;
+  mimeType?: string | null;
+  fileSize?: number | null;
+  uploadedAt?: string | null;
+  rejectionReason?: string | null;
+  storagePath?: string | null;
+  bucketName?: string | null;
 };
 
 type AgreementData = {
@@ -258,17 +268,23 @@ export default function DealerReviewPage() {
       try {
         const res = await fetch(`/api/admin/dealer-verifications/${dealerId}`);
         const json = await res.json();
+
         if (json.success) {
           setData(json.data);
+        } else {
+          setData(null);
         }
       } catch (error) {
         console.error("Failed to load dealer review data", error);
+        setData(null);
       } finally {
         setLoading(false);
       }
     };
 
-    if (dealerId) loadDealer();
+    if (dealerId) {
+      loadDealer();
+    }
   }, [dealerId]);
 
   const documentCountLabel = useMemo(() => {
@@ -358,7 +374,8 @@ export default function DealerReviewPage() {
               {data.companyName || "Dealer Application"}
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-500">
-              Validate company data, uploaded documents, and agreement workflow before final activation.
+              Validate company data, uploaded documents, and agreement workflow before final
+              activation.
             </p>
           </div>
 
@@ -435,23 +452,41 @@ export default function DealerReviewPage() {
               <div className="space-y-3">
                 {data.documents.map((doc, index) => (
                   <motion.div
-                    key={`${doc.name}-${index}`}
+                    key={doc.id || `${doc.name}-${index}`}
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.22, delay: index * 0.04 }}
                     className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-4 md:flex-row md:items-center md:justify-between"
                   >
-                    <div>
+                    <div className="min-w-0">
                       <p className="font-semibold text-slate-900">{doc.name}</p>
+
                       <p className="mt-1 text-sm text-slate-500">
-                        {doc.status || "Uploaded"}
+                        {(doc.verificationStatus ||
+                          doc.docStatus ||
+                          doc.status ||
+                          "Uploaded"
+                        ).replaceAll("_", " ")}
                       </p>
+
+                      {doc.documentType ? (
+                        <p className="mt-1 text-xs text-slate-400">
+                          Type: {doc.documentType.replaceAll("_", " ")}
+                        </p>
+                      ) : null}
+
+                      {doc.rejectionReason ? (
+                        <p className="mt-1 text-xs text-rose-500">
+                          Reason: {doc.rejectionReason}
+                        </p>
+                      ) : null}
                     </div>
 
                     {doc.url ? (
                       <a
                         href={doc.url}
                         target="_blank"
+                        rel="noopener noreferrer"
                         className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                       >
                         <ExternalLink className="h-4 w-4" />
@@ -487,13 +522,17 @@ export default function DealerReviewPage() {
                   </div>
                 </div>
                 <InfoField label="Signer Name" value={data.agreement?.signerName || undefined} />
-                <InfoField label="Signer Email" value={data.agreement?.signerEmail || undefined} />
+                <InfoField
+                  label="Signer Email"
+                  value={data.agreement?.signerEmail || undefined}
+                />
               </div>
 
               {data.agreement?.copyUrl ? (
                 <Link
                   href={data.agreement.copyUrl}
                   target="_blank"
+                  rel="noopener noreferrer"
                   className="mt-5 inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                 >
                   <Download className="h-4 w-4" />

@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db/index";
-import { dealerOnboardingApplications } from "@/lib/db/schema";
+import {
+  dealerOnboardingApplications,
+  dealerOnboardingDocuments,
+} from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
 type RouteContext = {
@@ -28,12 +31,32 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       );
     }
 
+    const uploadedDocuments = await db
+      .select()
+      .from(dealerOnboardingDocuments)
+      .where(eq(dealerOnboardingDocuments.applicationId, row.id));
+
     const companyAddress =
       typeof row.businessAddress === "object" &&
       row.businessAddress &&
       "address" in row.businessAddress
         ? String((row.businessAddress as any).address || "")
         : "";
+
+    const documents = uploadedDocuments.map((doc) => ({
+      id: doc.id,
+      name: doc.fileName || doc.documentType,
+      documentType: doc.documentType,
+      url: doc.fileUrl || "",
+      storagePath: doc.storagePath,
+      bucketName: doc.bucketName,
+      mimeType: doc.mimeType,
+      fileSize: doc.fileSize,
+      docStatus: doc.docStatus,
+      verificationStatus: doc.verificationStatus,
+      uploadedAt: doc.uploadedAt,
+      rejectionReason: doc.rejectionReason,
+    }));
 
     return NextResponse.json({
       success: true,
@@ -54,10 +77,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         onboardingStatus: row.onboardingStatus,
         reviewStatus: row.reviewStatus,
         submittedAt: row.submittedAt,
-        documents: [
-            { name: "GST Certificate", url: "..." },
-            { name: "PAN", url: "..." },
-        ],
+        documents,
         agreement: row.financeEnabled
           ? {
               agreementId: null,
@@ -67,9 +87,9 @@ export async function GET(_req: NextRequest, context: RouteContext) {
               copyUrl: null,
             }
           : null,
-          ownerName: row.ownerName || "Not available",
-          ownerPhone: row.ownerPhone || "Not available",
-          ownerEmail: row.ownerEmail || "Not available",
+        ownerName: row.ownerName || "Not available",
+        ownerPhone: row.ownerPhone || "Not available",
+        ownerEmail: row.ownerEmail || "Not available",
       },
     });
   } catch (error: any) {
