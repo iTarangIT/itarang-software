@@ -1,141 +1,155 @@
+import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { withErrorHandler, successResponse, errorResponse } from "@/lib/api-utils";
-import { db } from "@/lib/db/index";
-import { dealerOnboardingApplications } from "@/lib/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import {
+  users,
+  dealerOnboardingApplications,
+  leads,
+  inventory,
+  loanApplications,
+} from "@/lib/db/schema";
+import { eq, desc, sql } from "drizzle-orm";
 
-type OrderAmountRow = {
-  total_amount: string | number | null;
-};
+export async function GET() {
+  try {
+    const supabase = await createClient();
 
-export const GET = withErrorHandler(async (_req: Request) => {
-  const supabase = await createClient();
+    const {
+      data: { user: authUser },
+      error: authError,
+    } = await supabase.auth.getUser();
 
-  // 1. Authenticate
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    if (authError || !authUser?.email) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Unauthorized",
+        },
+        { status: 401 }
+      );
+    }
 
-  if (!user) return errorResponse("Unauthorized", 401);
+    const matchedUsers = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, authUser.email));
 
-  const { data: profile, error: profileError } = await supabase
-    .from("users")
-    .select("role, dealer_id, name, email")
-    .eq("id", user.id)
-    .single();
+    const appUser = matchedUsers[0];
 
-  if (profileError || !profile) {
-    return errorResponse("Dealer profile not found", 404);
+    if (!appUser) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "User record not found",
+        },
+        { status: 404 }
+      );
+    }
+
+    const applications = await db
+      .select()
+      .from(dealerOnboardingApplications)
+      .where(eq(dealerOnboardingApplications.ownerEmail, authUser.email))
+      .orderBy(desc(dealerOnboardingApplications.createdAt));
+
+    const dealerApp = applications[0] || null;
+
+    // Safe defaults so dashboard always loads
+    let totalLeads = 0;
+    let convertedLeads = 0;
+    let inventoryCount = 0;
+    let loanCount = 0;
+    let totalPayments = 0;
+    let recentLeads: any[] = [];
+
+    try {
+      const totalLeadsResult = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(leads);
+
+      totalLeads = Number(totalLeadsResult[0]?.count || 0);
+    } catch {}
+
+    try {
+      const convertedLeadsResult = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(leads)
+        .where(eq(leads.lead_status, "converted"));
+
+      convertedLeads = Number(convertedLeadsResult[0]?.count || 0);
+    } catch {}
+
+    try {
+      const inventoryResult = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(inventory);
+
+      inventoryCount = Number(inventoryResult[0]?.count || 0);
+    } catch {}
+
+    try {
+      const loanResult = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(loanApplications);
+
+      loanCount = Number(loanResult[0]?.count || 0);
+    } catch {}
+
+    try {
+      recentLeads = await db
+        .select()
+        .from(leads)
+        .orderBy(desc(leads.created_at))
+        .limit(5);
+    } catch {
+      recentLeads = [];
+    }
+
+    const conversionRate =
+      totalLeads > 0 ? Number(((convertedLeads / totalLeads) * 100).toFixed(2)) : 0;
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        dealer: dealerApp
+          ? {
+              id: dealerApp.id,
+              companyName: dealerApp.companyName,
+              dealerCode: dealerApp.dealerCode,
+              onboardingStatus: dealerApp.onboardingStatus,
+              reviewStatus: dealerApp.reviewStatus,
+              dealerAccountStatus: dealerApp.dealerAccountStatus,
+              approvedAt: dealerApp.approvedAt,
+              submittedAt: dealerApp.submittedAt,
+              financeEnabled: dealerApp.financeEnabled ?? false,
+              isApproved:
+                dealerApp.onboardingStatus === "approved" ||
+                dealerApp.reviewStatus === "approved" ||
+                dealerApp.dealerAccountStatus === "active",
+            }
+          : null,
+        metrics: {
+          totalLeads,
+          convertedLeads,
+          conversionRate,
+          commission: 0,
+          inventoryCount,
+          totalPayments,
+          loanCount,
+          rewards: 0,
+        },
+        recentLeads,
+      },
+    });
+  } catch (error: any) {
+    console.error("DEALER STATS API ERROR:", error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: error?.message || "Failed to load dealer stats",
+      },
+      { status: 500 }
+    );
   }
-
-  if (profile.role !== "dealer") {
-    return errorResponse("Access denied", 403);
-  }
-
-  // 2. Get latest onboarding application for this dealer user
-  const onboardingRows = await db
-    .select()
-    .from(dealerOnboardingApplications)
-    .where(eq(dealerOnboardingApplications.dealerUserId, user.id))
-    .orderBy(desc(dealerOnboardingApplications.createdAt));
-
-  const onboarding = onboardingRows[0] || null;
-
-  const isApproved =
-    onboarding?.reviewStatus === "approved" &&
-    onboarding?.onboardingStatus === "approved" &&
-    onboarding?.dealerAccountStatus === "active";
-
-  // 3. Query KPI data in parallel
-  const dealerAccountId = profile.dealer_id || null;
-
-  const [
-    totalLeadsResult,
-    convertedLeadsResult,
-    recentLeadsResult,
-    inventoryCountResult,
-    ordersResult,
-    loanCountResult,
-  ] = await Promise.all([
-    dealerAccountId
-      ? supabase
-          .from("leads")
-          .select("*", { count: "exact", head: true })
-          .eq("dealer_id", dealerAccountId)
-      : Promise.resolve({ count: 0 }),
-
-    dealerAccountId
-      ? supabase
-          .from("leads")
-          .select("*", { count: "exact", head: true })
-          .eq("dealer_id", dealerAccountId)
-          .eq("lead_status", "converted")
-      : Promise.resolve({ count: 0 }),
-
-    dealerAccountId
-      ? supabase
-          .from("leads")
-          .select("*")
-          .eq("dealer_id", dealerAccountId)
-          .order("created_at", { ascending: false })
-          .limit(5)
-      : Promise.resolve({ data: [] }),
-
-    supabase
-      .from("inventory")
-      .select("*", { count: "exact", head: true })
-      .eq("created_by", user.id),
-
-    dealerAccountId
-      ? supabase
-          .from("orders")
-          .select("total_amount")
-          .eq("account_id", dealerAccountId)
-      : Promise.resolve({ data: [] as OrderAmountRow[] }),
-
-    supabase
-      .from("loan_applications")
-      .select("*", { count: "exact", head: true })
-      .eq("created_by", user.id),
-  ]);
-
-  const totalLeads = totalLeadsResult.count || 0;
-  const convertedLeads = convertedLeadsResult.count || 0;
-  const recentLeads = recentLeadsResult.data || [];
-  const inventoryCount = inventoryCountResult.count || 0;
-  const orders = (ordersResult.data || []) as OrderAmountRow[];
-  const loanCount = loanCountResult.count || 0;
-
-  const conversionRate =
-    totalLeads > 0 ? Math.round((convertedLeads / totalLeads) * 100) : 0;
-
-  const totalPayments = orders.reduce((sum: number, order: OrderAmountRow) => {
-    return sum + Number(order.total_amount || 0);
-  }, 0);
-
-  return successResponse({
-    dealer: {
-      id: onboarding?.id || null,
-      companyName: onboarding?.companyName || profile.name || "Dealer",
-      dealerCode: onboarding?.dealerCode || profile.dealer_id || null,
-      onboardingStatus: onboarding?.onboardingStatus || "draft",
-      reviewStatus: onboarding?.reviewStatus || "pending",
-      dealerAccountStatus: onboarding?.dealerAccountStatus || "inactive",
-      approvedAt: onboarding?.approvedAt || null,
-      submittedAt: onboarding?.submittedAt || null,
-      financeEnabled: onboarding?.financeEnabled || false,
-      isApproved,
-    },
-    metrics: {
-      totalLeads,
-      convertedLeads,
-      conversionRate,
-      commission: 0,
-      inventoryCount,
-      totalPayments,
-      loanCount,
-      rewards: 0,
-    },
-    recentLeads,
-  });
-});
+}
