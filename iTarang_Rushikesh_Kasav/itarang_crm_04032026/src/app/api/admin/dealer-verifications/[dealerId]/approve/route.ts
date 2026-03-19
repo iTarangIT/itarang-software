@@ -17,6 +17,7 @@ function generateDealerCode() {
   const mm = String(now.getMonth() + 1).padStart(2, "0");
   const dd = String(now.getDate()).padStart(2, "0");
   const random = Math.floor(100 + Math.random() * 900);
+
   return `ACC-ITARANG-${yyyy}${mm}${dd}-${random}`;
 }
 
@@ -48,8 +49,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     const dealerCode = application.dealerCode || generateDealerCode();
     const dealerLoginEmail = resolveDealerLoginEmail(application);
 
-    console.log("APPROVE EMAIL WILL GO TO:", dealerLoginEmail);
-
     if (!dealerLoginEmail) {
       return NextResponse.json(
         {
@@ -79,28 +78,36 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
 
-    // Create or update Supabase Auth user
+    // 1) Create or update Supabase Auth user
     const { data: authUsers, error: listError } = await supabaseAdmin.auth.admin.listUsers();
+
     if (listError) {
       console.error("SUPABASE AUTH LIST USERS ERROR:", listError);
+      return NextResponse.json(
+        {
+          success: false,
+          message: `Failed to list auth users: ${listError.message}`,
+        },
+        { status: 500 }
+      );
     }
 
     const existingAuthUser = authUsers?.users?.find(
       (u) => u.email?.toLowerCase() === dealerLoginEmail.toLowerCase()
     );
 
+    let authUserId: string;
+
     if (existingAuthUser) {
-      const { error: updateAuthError } = await supabaseAdmin.auth.admin.updateUserById(
-        existingAuthUser.id,
-        {
+      const { data: updatedAuthUser, error: updateAuthError } =
+        await supabaseAdmin.auth.admin.updateUserById(existingAuthUser.id, {
           password: temporaryPassword,
           email_confirm: true,
           user_metadata: {
             role: "dealer",
             dealer_code: dealerCode,
           },
-        }
-      );
+        });
 
       if (updateAuthError) {
         console.error("SUPABASE AUTH UPDATE ERROR:", updateAuthError);
@@ -112,16 +119,19 @@ export async function POST(_req: NextRequest, context: RouteContext) {
           { status: 500 }
         );
       }
+
+      authUserId = updatedAuthUser.user.id;
     } else {
-      const { error: createAuthError } = await supabaseAdmin.auth.admin.createUser({
-        email: dealerLoginEmail,
-        password: temporaryPassword,
-        email_confirm: true,
-        user_metadata: {
-          role: "dealer",
-          dealer_code: dealerCode,
-        },
-      });
+      const { data: createdAuthUser, error: createAuthError } =
+        await supabaseAdmin.auth.admin.createUser({
+          email: dealerLoginEmail,
+          password: temporaryPassword,
+          email_confirm: true,
+          user_metadata: {
+            role: "dealer",
+            dealer_code: dealerCode,
+          },
+        });
 
       if (createAuthError) {
         console.error("SUPABASE AUTH CREATE ERROR:", createAuthError);
@@ -133,8 +143,11 @@ export async function POST(_req: NextRequest, context: RouteContext) {
           { status: 500 }
         );
       }
+
+      authUserId = createdAuthUser.user.id;
     }
 
+    // 2) Create or update local app user using THE SAME auth user id
     const existingUserRows = await db
       .select()
       .from(users)
@@ -146,7 +159,8 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       await db
         .update(users)
         .set({
-          name: application.ownerName || application.companyName,
+          id: authUserId,
+          name: application.ownerName || application.companyName || "Dealer",
           role: "dealer",
           dealer_id: dealerCode,
           phone: application.ownerPhone || null,
@@ -155,12 +169,12 @@ export async function POST(_req: NextRequest, context: RouteContext) {
           must_change_password: true,
           updated_at: new Date(),
         })
-        .where(eq(users.id, existingUser.id));
+        .where(eq(users.email, dealerLoginEmail));
     } else {
       await db.insert(users).values({
-        id: crypto.randomUUID(),
+        id: authUserId,
         email: dealerLoginEmail,
-        name: application.ownerName || application.companyName,
+        name: application.ownerName || application.companyName || "Dealer",
         role: "dealer",
         dealer_id: dealerCode,
         phone: application.ownerPhone || null,
@@ -173,6 +187,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       });
     }
 
+    // 3) Send welcome email
     let emailSent = false;
     let emailError: string | null = null;
 
@@ -202,6 +217,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         ? "Dealer approved successfully and welcome email sent"
         : "Dealer approved successfully, but welcome email failed",
       dealerCode,
+      authUserId,
       emailSent,
       emailTarget: dealerLoginEmail,
       emailError,

@@ -27,6 +27,20 @@ function generateDealerId() {
   return `ITD-${yyyy}${mm}${dd}-${random}`;
 }
 
+type ExtendedContactRow = {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  age?: string;
+  photo?: UploadFileItem | null;
+  addressLine1?: string;
+  city?: string;
+  district?: string;
+  state?: string;
+  pinCode?: string;
+};
+
 type StoreActions = {
   setStep: (step: number) => void;
   nextStep: () => boolean;
@@ -41,18 +55,10 @@ type StoreActions = {
   saveDraft: () => void;
   setUpload: (path: string, fileItem: UploadFileItem) => void;
   addPartner: () => void;
-  updatePartner: (
-    id: string,
-    field: "name" | "phone" | "email",
-    value: string
-  ) => void;
+  updatePartner: (id: string, field: string, value: any) => void;
   removePartner: (id: string) => void;
   addDirector: () => void;
-  updateDirector: (
-    id: string,
-    field: "name" | "phone" | "email",
-    value: string
-  ) => void;
+  updateDirector: (id: string, field: string, value: any) => void;
   removeDirector: (id: string) => void;
   completeOnboarding: () => string;
 };
@@ -70,6 +76,7 @@ const initialState: DealerOnboardingState = {
     companyType: "",
     gstNumber: "",
     companyPanNumber: "",
+    businessSummary: "",
     gstCertificate: makeUploadItem("GST Certificate"),
     companyPanFile: makeUploadItem("Company PAN"),
   },
@@ -86,15 +93,27 @@ const initialState: DealerOnboardingState = {
     ownerName: "",
     ownerPhone: "",
     ownerEmail: "",
+    ownerAge: "",
+    ownerPhoto: makeUploadItem("Owner Photograph"),
+    ownerAddressLine1: "",
+    ownerCity: "",
+    ownerDistrict: "",
+    ownerState: "",
+    ownerPinCode: "",
+
     partnershipDeed: makeUploadItem("Partnership Deed"),
     mouDocument: makeUploadItem("MoU"),
     aoaDocument: makeUploadItem("AoA"),
+
     partners: [],
     directors: [],
+
     bankName: "",
     accountNumber: "",
     ifsc: "",
     beneficiaryName: "",
+    branch: "",
+    accountType: "",
   },
 
   finance: {
@@ -151,7 +170,7 @@ const initialState: DealerOnboardingState = {
   },
 
   errors: {},
-};
+} as DealerOnboardingState;
 
 function removeStaleSubmitErrors(errors: Record<string, string>) {
   const nextErrors = { ...errors };
@@ -247,12 +266,23 @@ export const useOnboardingStore = create<
   setUpload: (path, fileItem) =>
     set((state) => {
       const nextState: any = { ...state };
-      const [section, field] = path.split(".");
+      const parts = path.split(".");
 
-      nextState[section] = {
-        ...nextState[section],
-        [field]: fileItem,
-      };
+      if (parts.length === 2) {
+        const [section, field] = parts;
+        nextState[section] = {
+          ...nextState[section],
+          [field]: fileItem,
+        };
+      } else if (parts.length === 4) {
+        const [section, listKey, itemId, field] = parts;
+        nextState[section] = {
+          ...nextState[section],
+          [listKey]: (nextState[section][listKey] || []).map((item: any) =>
+            item.id === itemId ? { ...item, [field]: fileItem } : item
+          ),
+        };
+      }
 
       nextState.errors = removeStaleSubmitErrors(state.errors);
       nextState.lastSavedAt = new Date().toISOString();
@@ -264,12 +294,19 @@ export const useOnboardingStore = create<
       ownership: {
         ...state.ownership,
         partners: [
-          ...state.ownership.partners,
+          ...(state.ownership.partners as ExtendedContactRow[]),
           {
             id: crypto.randomUUID(),
             name: "",
             phone: "",
             email: "",
+            age: "",
+            photo: makeUploadItem("Partner Photograph"),
+            addressLine1: "",
+            city: "",
+            district: "",
+            state: "",
+            pinCode: "",
           },
         ],
       },
@@ -280,8 +317,8 @@ export const useOnboardingStore = create<
     set((state) => ({
       ownership: {
         ...state.ownership,
-        partners: state.ownership.partners.map((partner) =>
-          partner.id === id ? { ...partner, [field]: value } : partner
+        partners: (state.ownership.partners as ExtendedContactRow[]).map(
+          (partner) => (partner.id === id ? { ...partner, [field]: value } : partner)
         ),
       },
       errors: {},
@@ -291,7 +328,7 @@ export const useOnboardingStore = create<
     set((state) => ({
       ownership: {
         ...state.ownership,
-        partners: state.ownership.partners.filter(
+        partners: (state.ownership.partners as ExtendedContactRow[]).filter(
           (partner) => partner.id !== id
         ),
       },
@@ -303,12 +340,19 @@ export const useOnboardingStore = create<
       ownership: {
         ...state.ownership,
         directors: [
-          ...state.ownership.directors,
+          ...(state.ownership.directors as ExtendedContactRow[]),
           {
             id: crypto.randomUUID(),
             name: "",
             phone: "",
             email: "",
+            age: "",
+            photo: makeUploadItem("Director Photograph"),
+            addressLine1: "",
+            city: "",
+            district: "",
+            state: "",
+            pinCode: "",
           },
         ],
       },
@@ -319,8 +363,8 @@ export const useOnboardingStore = create<
     set((state) => ({
       ownership: {
         ...state.ownership,
-        directors: state.ownership.directors.map((director) =>
-          director.id === id ? { ...director, [field]: value } : director
+        directors: (state.ownership.directors as ExtendedContactRow[]).map(
+          (director) => (director.id === id ? { ...director, [field]: value } : director)
         ),
       },
       errors: {},
@@ -330,7 +374,7 @@ export const useOnboardingStore = create<
     set((state) => ({
       ownership: {
         ...state.ownership,
-        directors: state.ownership.directors.filter(
+        directors: (state.ownership.directors as ExtendedContactRow[]).filter(
           (director) => director.id !== id
         ),
       },

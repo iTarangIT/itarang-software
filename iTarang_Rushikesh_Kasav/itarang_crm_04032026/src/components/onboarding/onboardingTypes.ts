@@ -19,6 +19,9 @@ export type UploadFileItem = {
   label: string;
   file: File | null;
   previewUrl: string | null;
+  uploadedUrl?: string | null;
+  storagePath?: string | null;
+  bucketName?: string | null;
   verificationState: VerificationState;
   progress: number;
   uploadedAt?: string;
@@ -29,6 +32,13 @@ export type ContactCard = {
   name: string;
   phone: string;
   email: string;
+  age?: string;
+  photo?: UploadFileItem | null;
+  addressLine1?: string;
+  city?: string;
+  district?: string;
+  state?: string;
+  pinCode?: string;
 };
 
 export type CompanyStepData = {
@@ -37,6 +47,7 @@ export type CompanyStepData = {
   companyType: CompanyType;
   gstNumber: string;
   companyPanNumber: string;
+  businessSummary?: string;
   gstCertificate?: UploadFileItem | null;
   companyPanFile?: UploadFileItem | null;
 };
@@ -53,15 +64,27 @@ export type OwnershipBankingData = {
   ownerName: string;
   ownerPhone: string;
   ownerEmail: string;
+  ownerAge?: string;
+  ownerPhoto?: UploadFileItem | null;
+  ownerAddressLine1?: string;
+  ownerCity?: string;
+  ownerDistrict?: string;
+  ownerState?: string;
+  ownerPinCode?: string;
+
   partnershipDeed: UploadFileItem | null;
   mouDocument: UploadFileItem | null;
   aoaDocument: UploadFileItem | null;
+
   partners: ContactCard[];
   directors: ContactCard[];
+
   bankName: string;
   accountNumber: string;
   ifsc: string;
   beneficiaryName: string;
+  branch?: string;
+  accountType?: "current" | "savings" | "od" | "";
 };
 
 export type FinanceData = {
@@ -140,5 +163,4 @@ export type DealerOnboardingState = {
   agreement: AgreementData;
   reviewChecks: ReviewChecks;
   errors: Record<string, string>;
-
 };

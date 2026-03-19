@@ -1,51 +1,167 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
-import { db } from '@/lib/db';
-import { deployedAssets } from '@/lib/db/schema';
-import { eq, and, or, ilike, sql } from 'drizzle-orm';
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import {
+  users,
+  dealerOnboardingApplications,
+  leads,
+  inventory,
+  loanApplications,
+} from "@/lib/db/schema";
+import { desc, eq, or, sql } from "drizzle-orm";
 
-export async function GET(req: NextRequest) {
-    try {
-        const supabase = await createClient();
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-        if (authError || !user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+export async function GET() {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user: authUser },
+      error: authError,
+    } = await supabase.auth.getUser();
 
-        const { data: profile } = await supabase.from('users').select('role, dealer_id').eq('id', user.id).single();
-        if (profile?.role !== 'dealer' || !profile?.dealer_id) {
-            return NextResponse.json({ success: false, error: 'Access denied' }, { status: 403 });
-        }
-
-        const { searchParams } = new URL(req.url);
-        const status = searchParams.get('status') || 'all';
-        const payment = searchParams.get('payment') || 'all';
-        const category = searchParams.get('category') || 'all';
-        const search = searchParams.get('search') || '';
-
-        const conditions = [eq(deployedAssets.dealer_id, profile.dealer_id)];
-
-        if (status !== 'all') conditions.push(eq(deployedAssets.status, status));
-        if (payment !== 'all') conditions.push(eq(deployedAssets.payment_type, payment));
-        if (category !== 'all') conditions.push(eq(deployedAssets.asset_category, category));
-
-        if (search) {
-            conditions.push(
-                or(
-                    ilike(deployedAssets.serial_number, `%${search}%`),
-                    ilike(deployedAssets.customer_name, `%${search}%`),
-                    ilike(deployedAssets.customer_phone, `%${search}%`)
-                )!
-            );
-        }
-
-        const assets = await db
-            .select()
-            .from(deployedAssets)
-            .where(and(...conditions))
-            .orderBy(sql`${deployedAssets.deployment_date} DESC`);
-
-        return NextResponse.json({ success: true, data: assets });
-    } catch (error) {
-        console.error('Assets fetch error:', error);
-        return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 });
+    if (authError || !authUser?.email) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Unauthorized",
+        },
+        { status: 401 }
+      );
     }
+
+    const matchedUsers = await db
+      .select()
+      .from(users)
+      .where(
+        or(eq(users.id, authUser.id), eq(users.email, authUser.email))
+      )
+      .limit(1);
+
+    const appUser = matchedUsers[0];
+
+    if (!appUser) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "User record not found",
+        },
+        { status: 404 }
+      );
+    }
+
+    const applications = await db
+      .select()
+      .from(dealerOnboardingApplications)
+      .where(eq(dealerOnboardingApplications.ownerEmail, authUser.email))
+      .orderBy(desc(dealerOnboardingApplications.createdAt));
+
+    const dealerApp = applications[0] || null;
+
+    let totalLeads = 0;
+    let convertedLeads = 0;
+    let inventoryCount = 0;
+    let loanCount = 0;
+    let totalPayments = 0;
+    let recentLeads: any[] = [];
+
+    try {
+      const totalLeadsResult = await db
+        .select({ count: sql`count(*)` })
+        .from(leads);
+
+      totalLeads = Number(totalLeadsResult[0]?.count || 0);
+    } catch (error) {
+      console.error("[Dealer Stats] totalLeads failed:", error);
+    }
+
+    try {
+      const convertedLeadsResult = await db
+        .select({ count: sql`count(*)` })
+        .from(leads)
+        .where(eq(leads.lead_status, "converted"));
+
+      convertedLeads = Number(convertedLeadsResult[0]?.count || 0);
+    } catch (error) {
+      console.error("[Dealer Stats] convertedLeads failed:", error);
+    }
+
+    try {
+      const inventoryResult = await db
+        .select({ count: sql`count(*)` })
+        .from(inventory);
+
+      inventoryCount = Number(inventoryResult[0]?.count || 0);
+    } catch (error) {
+      console.error("[Dealer Stats] inventoryCount failed:", error);
+    }
+
+    try {
+      const loanResult = await db
+        .select({ count: sql`count(*)` })
+        .from(loanApplications);
+
+      loanCount = Number(loanResult[0]?.count || 0);
+    } catch (error) {
+      console.error("[Dealer Stats] loanCount failed:", error);
+    }
+
+    try {
+      recentLeads = await db
+        .select()
+        .from(leads)
+        .orderBy(desc(leads.created_at))
+        .limit(5);
+    } catch (error) {
+      console.error("[Dealer Stats] recentLeads failed:", error);
+      recentLeads = [];
+    }
+
+    const conversionRate =
+      totalLeads > 0
+        ? Number(((convertedLeads / totalLeads) * 100).toFixed(2))
+        : 0;
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        dealer: dealerApp
+          ? {
+              id: dealerApp.id,
+              companyName: dealerApp.companyName,
+              dealerCode: dealerApp.dealerCode,
+              onboardingStatus: dealerApp.onboardingStatus,
+              reviewStatus: dealerApp.reviewStatus,
+              dealerAccountStatus: dealerApp.dealerAccountStatus,
+              approvedAt: dealerApp.approvedAt,
+              submittedAt: dealerApp.submittedAt,
+              financeEnabled: dealerApp.financeEnabled ?? false,
+              isApproved:
+                dealerApp.onboardingStatus === "approved" ||
+                dealerApp.reviewStatus === "approved" ||
+                dealerApp.dealerAccountStatus === "active",
+            }
+          : null,
+        metrics: {
+          totalLeads,
+          convertedLeads,
+          conversionRate,
+          commission: 0,
+          inventoryCount,
+          totalPayments,
+          loanCount,
+          rewards: 0,
+        },
+        recentLeads,
+      },
+    });
+  } catch (error: any) {
+    console.error("DEALER STATS API ERROR:", error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: error?.message || "Failed to load dealer stats",
+      },
+      { status: 500 }
+    );
+  }
 }

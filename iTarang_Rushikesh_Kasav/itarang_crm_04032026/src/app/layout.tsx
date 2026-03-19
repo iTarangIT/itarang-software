@@ -1,12 +1,16 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+
+import Providers from "@/components/Providers";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 
 const inter = Inter({ subsets: ["latin"] });
-// ... (metadata unchanged)
 
-import Providers from "@/components/Providers";
+export const metadata: Metadata = {
+  title: "iTarang CRM",
+  description: "iTarang dealer and admin CRM",
+};
 
 export default function RootLayout({
   children,
@@ -15,12 +19,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${inter.className} min-h-screen`}>
-        <AuthProvider>
-          <Providers>
-            {children}
-          </Providers>
-        </AuthProvider>
+      <body className={inter.className}>
+        <Providers>
+          <AuthProvider>{children}</AuthProvider>
+        </Providers>
       </body>
     </html>
   );

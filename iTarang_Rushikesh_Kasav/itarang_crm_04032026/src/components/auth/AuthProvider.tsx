@@ -1,79 +1,114 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
+type AppUser = {
+  id: string;
+  email: string;
+  role: string;
+  name?: string | null;
+  dealer_id?: string | null;
+  phone?: string | null;
+  avatar_url?: string | null;
+  must_change_password?: boolean;
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
 interface AuthContextType {
-  user: any | null;
+  user: AppUser | null;
   loading: boolean;
+  refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
+  refreshUser: async () => {},
   logout: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<any | null>(null);
+  const supabase = useMemo(() => createClient(), []);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
-  const supabase = createClient();
 
-  useEffect(() => {
-    const fetchUser = async () => {
+  const fetchUser = async () => {
+    try {
+      setLoading(true);
+
       const {
         data: { user: authUser },
       } = await supabase.auth.getUser();
 
-      if (authUser) {
-        const response = await fetch("/api/user/profile");
-
-        if (response.ok) {
-          const dbUser = await response.json();
-          setUser(dbUser.data);
-        } else {
-          setUser({
-            id: authUser.id,
-            email: authUser.email,
-            role: "user",
-          });
-        }
-      } else {
+      if (!authUser) {
         setUser(null);
+        return;
       }
 
-      setLoading(false);
-    };
+      const response = await fetch("/api/user/profile", {
+        method: "GET",
+        cache: "no-store",
+        credentials: "include",
+      });
 
+      if (response.ok) {
+        const json = await response.json();
+        setUser(json?.data ?? null);
+        return;
+      }
+
+      setUser({
+        id: authUser.id,
+        email: authUser.email || "",
+        role: "user",
+      });
+    } catch (error) {
+      console.error("[AuthProvider] Failed to fetch user profile:", error);
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchUser();
 
-    const { data: authListener } = supabase.auth.onAuthStateChange(
-      async (_event: string, session: any) => {
-        if (session?.user) {
-          fetchUser();
-        } else {
-          setUser(null);
-          setLoading(false);
-        }
-      }
-    );
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async () => {
+      await fetchUser();
+    });
 
     return () => {
-      authListener.subscription.unsubscribe();
+      subscription.unsubscribe();
     };
   }, [supabase]);
 
   const logout = async () => {
-    setLoading(true);
-    await supabase.auth.signOut();
-    setUser(null);
-    setLoading(false);
-    window.location.href = "/login";
+    try {
+      setLoading(true);
+      await supabase.auth.signOut();
+      setUser(null);
+      window.location.href = "/login";
+    } catch (error) {
+      console.error("[AuthProvider] Logout failed:", error);
+      setLoading(false);
+    }
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, logout }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        refreshUser: fetchUser,
+        logout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

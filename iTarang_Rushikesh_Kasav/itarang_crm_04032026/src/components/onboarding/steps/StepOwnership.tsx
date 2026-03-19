@@ -3,51 +3,155 @@
 import FileUploadCard from "../FileUploadCard";
 import { useOnboardingStore } from "@/store/onboardingStore";
 
-function ContactInputCard({
+type ContactRow = {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  age?: string;
+  photo?: any;
+  addressLine1?: string;
+  city?: string;
+  district?: string;
+  state?: string;
+  pinCode?: string;
+};
+
+function TextInput({
+  value,
+  onChange,
+  placeholder,
+  className = "",
+}: {
+  value?: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  className?: string;
+}) {
+  return (
+    <input
+      value={value || ""}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className={`w-full rounded-xl border border-[#E3E8EF] px-4 py-3 focus:border-[#1F5C8F] focus:outline-none focus:ring-2 focus:ring-blue-100 ${className}`}
+    />
+  );
+}
+
+function ContactDetailCard({
   title,
   rows,
   update,
   remove,
+  uploadPathPrefix,
 }: {
   title: string;
-  rows: { id: string; name: string; phone: string; email: string }[];
-  update: (id: string, field: "name" | "phone" | "email", value: string) => void;
+  rows: ContactRow[];
+  update: (id: string, field: string, value: string) => void;
   remove: (id: string) => void;
+  uploadPathPrefix: "ownership.partners" | "ownership.directors";
 }) {
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {rows.map((row, index) => (
-        <div key={row.id} className="rounded-2xl border border-[#E3E8EF] p-4 bg-[#FBFDFF]">
-          <div className="flex items-center justify-between mb-4">
-            <h4 className="font-semibold text-[#173F63]">{title} {index + 1}</h4>
-            <button
-              type="button"
-              onClick={() => remove(row.id)}
-              className="text-sm text-red-600 font-medium"
-            >
-              Remove
-            </button>
+        <div
+          key={row.id}
+          className="rounded-2xl border border-[#E3E8EF] bg-[#FBFDFF] p-5"
+        >
+          <div className="mb-4 flex items-center justify-between">
+            <h4 className="font-semibold text-[#173F63]">
+              {title} {index + 1}
+            </h4>
+            {rows.length > 1 ? (
+              <button
+                type="button"
+                onClick={() => remove(row.id)}
+                className="text-sm font-medium text-red-600"
+              >
+                Remove
+              </button>
+            ) : null}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <input
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <TextInput
               value={row.name}
-              onChange={(e) => update(row.id, "name", e.target.value)}
+              onChange={(value) => update(row.id, "name", value)}
               placeholder={`${title} Name`}
-              className="w-full rounded-xl border border-[#E3E8EF] px-4 py-3"
             />
-            <input
+
+            <TextInput
               value={row.phone}
-              onChange={(e) => update(row.id, "phone", e.target.value)}
+              onChange={(value) =>
+                update(row.id, "phone", value.replace(/[^0-9]/g, ""))
+              }
               placeholder={`${title} Phone Number`}
-              className="w-full rounded-xl border border-[#E3E8EF] px-4 py-3"
             />
-            <input
+
+            <TextInput
               value={row.email}
-              onChange={(e) => update(row.id, "email", e.target.value)}
+              onChange={(value) => update(row.id, "email", value)}
               placeholder={`${title} Email ID`}
-              className="w-full rounded-xl border border-[#E3E8EF] px-4 py-3"
             />
+
+            <TextInput
+              value={row.age || ""}
+              onChange={(value) =>
+                update(row.id, "age", value.replace(/[^0-9]/g, ""))
+              }
+              placeholder={`${title} Age`}
+            />
+          </div>
+
+          <div className="mt-5">
+            <FileUploadCard
+              label={`${title} Photograph`}
+              hint="Drag image or click to upload"
+              value={(row as any).photo || null}
+              onChange={(item) => update(row.id, "photo", item as any)}
+            />
+          </div>
+
+          <div className="mt-5">
+            <p className="mb-3 text-sm font-semibold text-[#173F63]">
+              {title} Residential Address
+            </p>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <TextInput
+                  value={row.addressLine1 || ""}
+                  onChange={(value) => update(row.id, "addressLine1", value)}
+                  placeholder="Address Line 1"
+                />
+              </div>
+
+              <TextInput
+                value={row.city || ""}
+                onChange={(value) => update(row.id, "city", value)}
+                placeholder="City"
+              />
+
+              <TextInput
+                value={row.district || ""}
+                onChange={(value) => update(row.id, "district", value)}
+                placeholder="District"
+              />
+
+              <TextInput
+                value={row.state || ""}
+                onChange={(value) => update(row.id, "state", value)}
+                placeholder="State"
+              />
+
+              <TextInput
+                value={row.pinCode || ""}
+                onChange={(value) =>
+                  update(row.id, "pinCode", value.replace(/[^0-9]/g, ""))
+                }
+                placeholder="Pin Code"
+              />
+            </div>
           </div>
         </div>
       ))}
@@ -71,35 +175,124 @@ export default function StepOwnership() {
   const updateDirector = useOnboardingStore((s) => s.updateDirector);
   const removeDirector = useOnboardingStore((s) => s.removeDirector);
 
+  const partners = (ownership.partners || []) as ContactRow[];
+  const directors = (ownership.directors || []) as ContactRow[];
+
   return (
-    <div className="rounded-3xl border border-[#E3E8EF] bg-white p-6 md:p-8 shadow-sm space-y-8">
+    <div className="space-y-8 rounded-3xl border border-[#E3E8EF] bg-white p-6 shadow-sm md:p-8">
       <div>
-        <h2 className="text-2xl font-bold text-[#173F63]">Ownership & Banking Details</h2>
-        <p className="text-slate-500 mt-1">
-          This section changes based on the selected company type.
+        <h2 className="text-2xl font-bold text-[#173F63]">
+          Ownership & Banking Details
+        </h2>
+        <p className="mt-1 text-slate-500">
+          This section changes dynamically based on the selected company type.
         </p>
       </div>
 
       {companyType === "sole_proprietorship" && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <input
-            value={ownership.ownerName}
-            onChange={(e) => setField("ownership", "ownerName", e.target.value)}
-            placeholder="Owner Name"
-            className="w-full rounded-xl border border-[#E3E8EF] px-4 py-3"
-          />
-          <input
-            value={ownership.ownerPhone}
-            onChange={(e) => setField("ownership", "ownerPhone", e.target.value)}
-            placeholder="Owner Phone Number"
-            className="w-full rounded-xl border border-[#E3E8EF] px-4 py-3"
-          />
-          <input
-            value={ownership.ownerEmail}
-            onChange={(e) => setField("ownership", "ownerEmail", e.target.value)}
-            placeholder="Owner Email ID"
-            className="w-full rounded-xl border border-[#E3E8EF] px-4 py-3"
-          />
+        <div className="space-y-6">
+          <div className="rounded-2xl border border-[#E3E8EF] bg-[#FBFDFF] p-5">
+            <h3 className="mb-4 text-lg font-semibold text-[#173F63]">
+              Owner Details
+            </h3>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <TextInput
+                value={ownership.ownerName}
+                onChange={(value) => setField("ownership", "ownerName", value)}
+                placeholder="Owner Name"
+              />
+
+              <TextInput
+                value={ownership.ownerPhone}
+                onChange={(value) =>
+                  setField(
+                    "ownership",
+                    "ownerPhone",
+                    value.replace(/[^0-9]/g, "")
+                  )
+                }
+                placeholder="Owner Phone Number"
+              />
+
+              <TextInput
+                value={ownership.ownerEmail}
+                onChange={(value) => setField("ownership", "ownerEmail", value)}
+                placeholder="Owner Email ID"
+              />
+
+              <TextInput
+                value={(ownership as any).ownerAge || ""}
+                onChange={(value) =>
+                  setField(
+                    "ownership",
+                    "ownerAge",
+                    value.replace(/[^0-9]/g, "")
+                  )
+                }
+                placeholder="Owner Age"
+              />
+            </div>
+
+            <div className="mt-5">
+              <FileUploadCard
+                label="Owner Photograph"
+                hint="Drag image or click to upload"
+                value={(ownership as any).ownerPhoto || null}
+                onChange={(item) => setUpload("ownership.ownerPhoto", item)}
+              />
+            </div>
+
+            <div className="mt-5">
+              <p className="mb-3 text-sm font-semibold text-[#173F63]">
+                Owner Residential Address
+              </p>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <TextInput
+                    value={(ownership as any).ownerAddressLine1 || ""}
+                    onChange={(value) =>
+                      setField("ownership", "ownerAddressLine1", value)
+                    }
+                    placeholder="Address Line 1"
+                  />
+                </div>
+
+                <TextInput
+                  value={(ownership as any).ownerCity || ""}
+                  onChange={(value) => setField("ownership", "ownerCity", value)}
+                  placeholder="City"
+                />
+
+                <TextInput
+                  value={(ownership as any).ownerDistrict || ""}
+                  onChange={(value) =>
+                    setField("ownership", "ownerDistrict", value)
+                  }
+                  placeholder="District"
+                />
+
+                <TextInput
+                  value={(ownership as any).ownerState || ""}
+                  onChange={(value) => setField("ownership", "ownerState", value)}
+                  placeholder="State"
+                />
+
+                <TextInput
+                  value={(ownership as any).ownerPinCode || ""}
+                  onChange={(value) =>
+                    setField(
+                      "ownership",
+                      "ownerPinCode",
+                      value.replace(/[^0-9]/g, "")
+                    )
+                  }
+                  placeholder="Pin Code"
+                />
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -107,102 +300,162 @@ export default function StepOwnership() {
         <>
           <FileUploadCard
             label="Upload Partnership Deed Copy"
-            hint="PDF preferred"
+            hint="Drag file or click to upload"
             value={ownership.partnershipDeed}
             onChange={(item) => setUpload("ownership.partnershipDeed", item)}
           />
 
           <div className="flex items-center justify-between">
-            <h3 className="text-xl font-semibold text-[#173F63]">Partner Details</h3>
+            <h3 className="text-xl font-semibold text-[#173F63]">
+              Partner Details
+            </h3>
             <button
               type="button"
               onClick={addPartner}
-              className="px-4 py-2 rounded-xl border border-[#E3E8EF] text-[#1F5C8F] font-semibold"
+              className="rounded-xl border border-[#E3E8EF] px-4 py-2 font-semibold text-[#1F5C8F]"
             >
               + Add Another Partner
             </button>
           </div>
 
-          <ContactInputCard
+          <ContactDetailCard
             title="Partner"
-            rows={ownership.partners}
+            rows={partners}
             update={updatePartner}
             remove={removePartner}
+            uploadPathPrefix="ownership.partners"
           />
         </>
       )}
 
       {companyType === "private_limited_firm" && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             <FileUploadCard
-              label="Upload MoU (Memorandum of Understanding)"
-              hint="PDF preferred"
+              label="MoU (Memorandum of Understanding)"
+              hint="Drag file or click to upload"
               value={ownership.mouDocument}
               onChange={(item) => setUpload("ownership.mouDocument", item)}
             />
             <FileUploadCard
-              label="Upload AoA (Articles of Association)"
-              hint="PDF preferred"
+              label="AoA (Articles of Association)"
+              hint="Drag file or click to upload"
               value={ownership.aoaDocument}
               onChange={(item) => setUpload("ownership.aoaDocument", item)}
             />
           </div>
 
           <div className="flex items-center justify-between">
-            <h3 className="text-xl font-semibold text-[#173F63]">Director Details</h3>
+            <h3 className="text-xl font-semibold text-[#173F63]">
+              Director Details
+            </h3>
             <button
               type="button"
               onClick={addDirector}
-              className="px-4 py-2 rounded-xl border border-[#E3E8EF] text-[#1F5C8F] font-semibold"
+              className="rounded-xl border border-[#E3E8EF] px-4 py-2 font-semibold text-[#1F5C8F]"
             >
               + Add Director
             </button>
           </div>
 
-          <ContactInputCard
+          <ContactDetailCard
             title="Director"
-            rows={ownership.directors}
+            rows={directors}
             update={updateDirector}
             remove={removeDirector}
+            uploadPathPrefix="ownership.directors"
           />
         </>
       )}
 
       <div>
-        <h3 className="text-xl font-semibold text-[#173F63] mb-4">Bank Account Information</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <input
+        <h3 className="mb-4 text-xl font-semibold text-[#173F63]">
+          Bank Account Information
+        </h3>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <TextInput
             value={ownership.bankName}
-            onChange={(e) => setField("ownership", "bankName", e.target.value)}
+            onChange={(value) =>
+              setField(
+                "ownership",
+                "bankName",
+                value.replace(/[^a-zA-Z\s]/g, "")
+              )
+            }
             placeholder="Bank Name"
-            className="w-full rounded-xl border border-[#E3E8EF] px-4 py-3"
           />
-          <input
+
+          <TextInput
             value={ownership.accountNumber}
-            onChange={(e) => setField("ownership", "accountNumber", e.target.value)}
+            onChange={(value) =>
+              setField(
+                "ownership",
+                "accountNumber",
+                value.replace(/[^0-9]/g, "")
+              )
+            }
             placeholder="Account Number"
-            className="w-full rounded-xl border border-[#E3E8EF] px-4 py-3"
           />
-          <input
+
+          <TextInput
             value={ownership.ifsc}
-            onChange={(e) => setField("ownership", "ifsc", e.target.value.toUpperCase())}
+            onChange={(value) =>
+              setField(
+                "ownership",
+                "ifsc",
+                value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 11)
+              )
+            }
             placeholder="IFSC"
-            className="w-full rounded-xl border border-[#E3E8EF] px-4 py-3 uppercase"
+            className="uppercase"
           />
-          <input
+
+          <TextInput
             value={ownership.beneficiaryName}
-            onChange={(e) => setField("ownership", "beneficiaryName", e.target.value)}
+            onChange={(value) =>
+              setField(
+                "ownership",
+                "beneficiaryName",
+                value.replace(/[^a-zA-Z0-9\s]/g, "")
+              )
+            }
             placeholder="Beneficiary Name"
-            className="w-full rounded-xl border border-[#E3E8EF] px-4 py-3"
           />
+
+          <TextInput
+            value={(ownership as any).branch || ""}
+            onChange={(value) =>
+              setField(
+                "ownership",
+                "branch",
+                value.replace(/[^a-zA-Z0-9\s]/g, "")
+              )
+            }
+            placeholder="Branch"
+          />
+
+          <select
+            value={(ownership as any).accountType || ""}
+            onChange={(e) =>
+              setField("ownership", "accountType", e.target.value)
+            }
+            className="w-full rounded-xl border border-[#E3E8EF] bg-white px-4 py-3 focus:border-[#1F5C8F] focus:outline-none focus:ring-2 focus:ring-blue-100"
+          >
+            <option value="">Account Type</option>
+            <option value="current">Current</option>
+            <option value="savings">Savings</option>
+            <option value="od">OD</option>
+          </select>
         </div>
       </div>
 
       {Object.values(errors).length > 0 && (
         <div className="space-y-2">
           {Object.values(errors).map((error, index) => (
-            <p key={index} className="text-sm text-red-600">{error}</p>
+            <p key={index} className="text-sm text-red-600">
+              {String(error)}
+            </p>
           ))}
         </div>
       )}
@@ -211,14 +464,14 @@ export default function StepOwnership() {
         <button
           type="button"
           onClick={prevStep}
-          className="px-6 py-3 rounded-2xl border border-[#E3E8EF] text-slate-700 font-semibold"
+          className="rounded-2xl border border-[#E3E8EF] px-6 py-3 font-semibold text-slate-700"
         >
           ← Back
         </button>
         <button
           type="button"
           onClick={nextStep}
-          className="px-6 py-3 rounded-2xl bg-[#1F5C8F] text-white font-semibold hover:bg-[#173F63]"
+          className="rounded-2xl bg-[#1F5C8F] px-6 py-3 font-semibold text-white hover:bg-[#173F63]"
         >
           Next →
         </button>

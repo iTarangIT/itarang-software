@@ -20,7 +20,7 @@ import {
   Lock,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useAuth } from '@/components/auth/AuthProvider';
 
 type DealerApiData = {
@@ -48,7 +48,7 @@ type DealerStatsResponse = {
     loanCount: number;
     rewards: number;
   };
-  recentLeads: any[];
+  recentLeads: LeadItem[];
 };
 
 type DealerDashboardData = {
@@ -59,6 +59,25 @@ type DealerDashboardData = {
   gstNumber: string;
   financeEnabled: string;
   submittedAt: string;
+};
+
+type LeadItem = {
+  id: string;
+  owner_name?: string | null;
+  interest_level?: string | null;
+};
+
+type ExtendedAuthUser = {
+  id?: string;
+  email?: string;
+  role?: string;
+  name?: string | null;
+  full_name?: string | null;
+  dealer_id?: string | null;
+  company_type?: string | null;
+  gst_number?: string | null;
+  finance_enabled?: boolean | null;
+  submitted_at?: string | null;
 };
 
 function DealerApprovalModal({
@@ -166,6 +185,7 @@ function DealerApprovalModal({
 
 export default function DealerDashboard() {
   const { user, loading: authLoading } = useAuth();
+  const currentUser = (user ?? null) as ExtendedAuthUser | null;
 
   const [stats, setStats] = useState<DealerStatsResponse>({
     dealer: null,
@@ -190,7 +210,7 @@ export default function DealerDashboard() {
     const savedDealerData = localStorage.getItem('dealerDashboardData');
     if (savedDealerData) {
       try {
-        setDealerData(JSON.parse(savedDealerData));
+        setDealerData(JSON.parse(savedDealerData) as DealerDashboardData);
       } catch (error) {
         console.error('Failed to parse dealer dashboard data', error);
       }
@@ -201,9 +221,9 @@ export default function DealerDashboard() {
     const fetchStats = async () => {
       try {
         const res = await fetch('/api/dealer/stats', { cache: 'no-store' });
-        const json = await res.json();
+        const json: { success?: boolean; data?: DealerStatsResponse } = await res.json();
 
-        if (json.success) {
+        if (json.success && json.data) {
           setStats(json.data);
         }
       } catch (error) {
@@ -216,9 +236,8 @@ export default function DealerDashboard() {
     fetchStats();
   }, []);
 
-  const dealer = stats?.dealer;
+  const dealer = stats.dealer;
   const metricsData = stats.metrics;
-
   const isApproved = !!dealer?.isApproved;
 
   useEffect(() => {
@@ -245,24 +264,25 @@ export default function DealerDashboard() {
 
   const currentDealerName =
     dealer?.companyName ||
-    user?.full_name ||
+    currentUser?.full_name ||
+    currentUser?.name ||
     dealerData?.dealerDisplayName ||
     dealerData?.companyName ||
     'Dealer';
 
   const currentDealerId =
     dealer?.dealerCode ||
-    user?.dealer_id ||
+    currentUser?.dealer_id ||
     dealerData?.dealerId ||
     'Pending Approval';
 
   const currentCompanyType =
-    user?.company_type ||
+    currentUser?.company_type ||
     dealerData?.companyType ||
     'Not available';
 
   const currentGst =
-    user?.gst_number ||
+    currentUser?.gst_number ||
     dealerData?.gstNumber ||
     'Not available';
 
@@ -271,17 +291,17 @@ export default function DealerDashboard() {
       ? dealer.financeEnabled
         ? 'Yes'
         : 'No'
-      : typeof user?.finance_enabled === 'boolean'
-      ? user.finance_enabled
+      : typeof currentUser?.finance_enabled === 'boolean'
+      ? currentUser.finance_enabled
         ? 'Yes'
         : 'No'
-      : dealerData?.financeEnabled === 'yes'
+      : dealerData?.financeEnabled?.toLowerCase() === 'yes'
       ? 'Yes'
       : 'No';
 
   const submittedAtValue =
     dealer?.submittedAt ||
-    user?.submitted_at ||
+    currentUser?.submitted_at ||
     dealerData?.submittedAt;
 
   const approvalStatusLabel = isApproved ? 'Approved' : 'Under Review';
@@ -365,7 +385,7 @@ export default function DealerDashboard() {
   ];
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500 pb-10">
+    <div className="animate-in space-y-8 fade-in duration-500 pb-10">
       <DealerApprovalModal
         open={showApprovalModal}
         onClose={handleCloseApprovalModal}
@@ -378,7 +398,7 @@ export default function DealerDashboard() {
         <h1 className="text-2xl font-bold text-gray-900">
           Dealer Dashboard - {currentDealerName}
         </h1>
-        <p className="text-gray-500 mt-1">
+        <p className="mt-1 text-gray-500">
           {isApproved
             ? 'Overview of your iTarang dealer business'
             : 'Your onboarding is under review. Full dashboard access will unlock after approval.'}
@@ -423,8 +443,8 @@ export default function DealerDashboard() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 rounded-2xl border border-[#E3E8EF] bg-white p-6 shadow-sm">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="rounded-2xl border border-[#E3E8EF] bg-white p-6 shadow-sm lg:col-span-2">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-sm font-semibold uppercase tracking-wide text-[#1F5C8F]">
@@ -438,12 +458,12 @@ export default function DealerDashboard() {
               </p>
             </div>
 
-            <div className="hidden sm:flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-[#1F5C8F]">
+            <div className="hidden h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-[#1F5C8F] sm:flex">
               <BadgeCheck className="h-6 w-6" />
             </div>
           </div>
 
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
               <p className="text-xs uppercase tracking-wide text-gray-500">Dealer Name</p>
               <p className="mt-2 text-base font-semibold text-gray-900">
@@ -487,10 +507,10 @@ export default function DealerDashboard() {
 
           <div className="mt-6 space-y-4">
             <div
-              className={`rounded-xl px-4 py-3 border ${
+              className={`rounded-xl border px-4 py-3 ${
                 isApproved
-                  ? 'bg-emerald-50 border-emerald-100'
-                  : 'bg-amber-50 border-amber-100'
+                  ? 'border-emerald-100 bg-emerald-50'
+                  : 'border-amber-100 bg-amber-50'
               }`}
             >
               <p
@@ -509,14 +529,14 @@ export default function DealerDashboard() {
               </p>
             </div>
 
-            <div className="rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
+            <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
               <p className="text-xs uppercase tracking-wide text-gray-500">Finance Enabled</p>
               <p className="mt-1 text-sm font-semibold text-gray-900">
                 {financeEnabledValue}
               </p>
             </div>
 
-            <div className="rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
+            <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
               <p className="text-xs uppercase tracking-wide text-gray-500">Submitted At</p>
               <p className="mt-1 text-sm font-semibold text-gray-900">
                 {submittedAtValue ? new Date(submittedAtValue).toLocaleString() : 'Not available'}
@@ -524,7 +544,7 @@ export default function DealerDashboard() {
             </div>
 
             {dealer?.approvedAt && (
-              <div className="rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
+              <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
                 <p className="text-xs uppercase tracking-wide text-gray-500">Approved At</p>
                 <p className="mt-1 text-sm font-semibold text-gray-900">
                   {new Date(dealer.approvedAt).toLocaleString()}
@@ -536,23 +556,23 @@ export default function DealerDashboard() {
       </div>
 
       {!isApproved ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
           <ReviewTimelineCard />
 
           <LockedActionCard
-            icon={<Plus className="w-6 h-6" />}
+            icon={<Plus className="h-6 w-6" />}
             title="New Lead"
             description="Lead creation will unlock after dealer verification is completed."
           />
 
           <LockedActionCard
-            icon={<FileCheck className="w-6 h-6" />}
+            icon={<FileCheck className="h-6 w-6" />}
             title="Process Loan"
             description="Loan processing will unlock after iTarang approves your documents."
           />
 
           <LockedActionCard
-            icon={<Battery className="w-6 h-6" />}
+            icon={<Battery className="h-6 w-6" />}
             title="Add Asset"
             description="Asset registration will unlock after your dealer account is activated."
           />
@@ -561,70 +581,70 @@ export default function DealerDashboard() {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
             <Link
               href="/dealer-portal/leads/new"
               className="group relative overflow-hidden rounded-2xl bg-[#005596] p-6 text-white shadow-lg transition-transform hover:-translate-y-1 hover:shadow-xl"
             >
-              <div className="relative z-10 flex flex-col h-full justify-between min-h-[140px]">
-                <div className="p-3 bg-white/10 w-fit rounded-xl backdrop-blur-sm group-hover:bg-white/20 transition-colors">
-                  <Plus className="w-6 h-6" />
+              <div className="relative z-10 flex min-h-[140px] flex-col justify-between">
+                <div className="w-fit rounded-xl bg-white/10 p-3 backdrop-blur-sm transition-colors group-hover:bg-white/20">
+                  <Plus className="h-6 w-6" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-xl mb-1">New Lead</h3>
-                  <p className="text-blue-100 text-sm opacity-90">
+                  <h3 className="mb-1 text-xl font-bold">New Lead</h3>
+                  <p className="text-sm text-blue-100 opacity-90">
                     Create a new customer lead
                   </p>
                 </div>
               </div>
-              <div className="absolute -right-4 -bottom-4 bg-white/5 w-32 h-32 rounded-full blur-2xl group-hover:bg-white/10 transition-colors"></div>
+              <div className="absolute -right-4 -bottom-4 h-32 w-32 rounded-full bg-white/5 blur-2xl transition-colors group-hover:bg-white/10" />
             </Link>
 
             <Link
               href="/dealer-portal/loans/facilitation"
-              className="group relative rounded-2xl bg-white border border-gray-100 p-6 shadow-card hover:shadow-lg transition-transform hover:-translate-y-1"
+              className="group relative rounded-2xl border border-gray-100 bg-white p-6 shadow-card transition-transform hover:-translate-y-1 hover:shadow-lg"
             >
-              <div className="flex flex-col h-full justify-between min-h-[140px]">
-                <div className="p-3 bg-indigo-50 w-fit rounded-xl text-indigo-600">
-                  <FileCheck className="w-6 h-6" />
+              <div className="flex min-h-[140px] flex-col justify-between">
+                <div className="w-fit rounded-xl bg-indigo-50 p-3 text-indigo-600">
+                  <FileCheck className="h-6 w-6" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-gray-900 text-xl mb-1">Process Loan</h3>
-                  <p className="text-gray-500 text-sm">Upload docs for financing</p>
+                  <h3 className="mb-1 text-xl font-bold text-gray-900">Process Loan</h3>
+                  <p className="text-sm text-gray-500">Upload docs for financing</p>
                 </div>
               </div>
             </Link>
 
             <Link
               href="/dealer-portal/assets"
-              className="group relative rounded-2xl bg-white border border-gray-100 p-6 shadow-card hover:shadow-lg transition-transform hover:-translate-y-1"
+              className="group relative rounded-2xl border border-gray-100 bg-white p-6 shadow-card transition-transform hover:-translate-y-1 hover:shadow-lg"
             >
-              <div className="flex flex-col h-full justify-between min-h-[140px]">
-                <div className="p-3 bg-teal-50 w-fit rounded-xl text-teal-600">
-                  <Battery className="w-6 h-6" />
+              <div className="flex min-h-[140px] flex-col justify-between">
+                <div className="w-fit rounded-xl bg-teal-50 p-3 text-teal-600">
+                  <Battery className="h-6 w-6" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-gray-900 text-xl mb-1">Add Asset</h3>
-                  <p className="text-gray-500 text-sm">Register new vehicle/battery</p>
+                  <h3 className="mb-1 text-xl font-bold text-gray-900">Add Asset</h3>
+                  <p className="text-sm text-gray-500">Register new vehicle/battery</p>
                 </div>
               </div>
             </Link>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {metrics.map((metric, index) => (
               <div
                 key={index}
-                className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow"
+                className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
               >
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-gray-500 text-sm font-medium">{metric.title}</span>
-                  <metric.icon className={`w-4 h-4 ${metric.color}`} />
+                <div className="mb-3 flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-500">{metric.title}</span>
+                  <metric.icon className={`h-4 w-4 ${metric.color}`} />
                 </div>
-                <div className="flex items-end gap-2 mb-2">
+                <div className="mb-2 flex items-end gap-2">
                   <span className="text-2xl font-bold text-gray-900">{metric.value}</span>
                   <span
-                    className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
+                    className={`rounded px-1.5 py-0.5 text-xs font-semibold ${
                       metric.trendColor.includes('green')
                         ? 'bg-green-50 text-green-700'
                         : 'bg-gray-100 text-gray-500'
@@ -638,13 +658,13 @@ export default function DealerDashboard() {
             ))}
           </div>
 
-          <div className="group relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#004e92] to-[#000428] text-white p-8 shadow-lg">
-            <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+          <div className="group relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#004e92] to-[#000428] p-8 text-white shadow-lg">
+            <div className="relative z-10 flex flex-col items-start justify-between gap-6 md:flex-row md:items-center">
               <div>
-                <h3 className="text-xl font-bold mb-2">
+                <h3 className="mb-2 text-xl font-bold">
                   Boost your sales! Send SMS/WhatsApp updates
                 </h3>
-                <p className="text-blue-100 max-w-xl">
+                <p className="max-w-xl text-blue-100">
                   Reach all your customers instantly for just{' '}
                   <span className="font-semibold text-white">₹99/- per month</span>. Drive
                   engagement with targeted campaigns.
@@ -652,41 +672,41 @@ export default function DealerDashboard() {
               </div>
               <Link
                 href="/dealer-portal/campaigns/new"
-                className="whitespace-nowrap bg-white text-blue-900 hover:bg-blue-50 px-6 py-2.5 rounded-full font-semibold shadow-md transition-colors flex items-center gap-2"
+                className="flex items-center gap-2 whitespace-nowrap rounded-full bg-white px-6 py-2.5 font-semibold text-blue-900 shadow-md transition-colors hover:bg-blue-50"
               >
-                <Megaphone className="w-4 h-4" />
+                <Megaphone className="h-4 w-4" />
                 Start Campaign
               </Link>
             </div>
-            <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
-            <div className="absolute bottom-0 left-0 w-48 h-48 bg-blue-500/20 rounded-full blur-2xl translate-y-1/3 -translate-x-1/4"></div>
+            <div className="absolute top-0 right-0 h-64 w-64 translate-x-1/2 -translate-y-1/2 rounded-full bg-white/5 blur-3xl" />
+            <div className="absolute bottom-0 left-0 h-48 w-48 -translate-x-1/4 translate-y-1/3 rounded-full bg-blue-500/20 blur-2xl" />
           </div>
 
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+          <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-gray-100 p-6">
               <div>
                 <h3 className="font-bold text-gray-900">Recent Leads</h3>
                 <p className="text-sm text-gray-500">Latest potential customers added</p>
               </div>
               <Link
                 href="/dealer-portal/leads"
-                className="text-sm font-medium text-brand-600 hover:text-brand-700 flex items-center gap-1"
+                className="flex items-center gap-1 text-sm font-medium text-brand-600 hover:text-brand-700"
               >
-                View All Leads <ChevronRight className="w-4 h-4" />
+                View All Leads <ChevronRight className="h-4 w-4" />
               </Link>
             </div>
 
             <div className="p-2">
               {loading ? (
-                <div className="p-8 space-y-4">
+                <div className="space-y-4 p-8">
                   {[1, 2, 3].map((i) => (
-                    <div key={i} className="h-16 bg-gray-50 rounded-xl animate-pulse" />
+                    <div key={i} className="h-16 animate-pulse rounded-xl bg-gray-50" />
                   ))}
                 </div>
               ) : (
                 <div className="space-y-1">
                   {stats.recentLeads.length > 0 ? (
-                    stats.recentLeads.map((lead: any) => <LeadRow key={lead.id} lead={lead} />)
+                    stats.recentLeads.map((lead) => <LeadRow key={lead.id} lead={lead} />)
                   ) : (
                     <>
                       <MockLeadRow
@@ -751,20 +771,20 @@ function LockedActionCard({
   title,
   description,
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   title: string;
   description: string;
 }) {
   return (
     <div className="rounded-2xl border border-gray-200 bg-gray-50 p-6 opacity-95">
       <div className="flex items-start justify-between">
-        <div className="p-3 bg-gray-200 w-fit rounded-xl text-gray-500">{icon}</div>
+        <div className="w-fit rounded-xl bg-gray-200 p-3 text-gray-500">{icon}</div>
         <div className="rounded-xl bg-white p-2 text-gray-400">
           <Lock className="h-5 w-5" />
         </div>
       </div>
 
-      <h3 className="mt-10 font-bold text-xl text-gray-500">{title}</h3>
+      <h3 className="mt-10 text-xl font-bold text-gray-500">{title}</h3>
       <p className="mt-2 text-sm text-gray-400">{description}</p>
       <p className="mt-5 text-sm font-medium text-gray-500">
         Available after account approval
@@ -847,21 +867,31 @@ function SupportCard() {
   );
 }
 
-function MockLeadRow({ name, status, color, initial }: any) {
+function MockLeadRow({
+  name,
+  status,
+  color,
+  initial,
+}: {
+  name: string;
+  status: string;
+  color: string;
+  initial: string;
+}) {
   return (
-    <div className="flex items-center justify-between p-4 hover:bg-gray-50 rounded-xl transition-colors cursor-pointer group">
+    <div className="group flex cursor-pointer items-center justify-between rounded-xl p-4 transition-colors hover:bg-gray-50">
       <div className="flex items-center gap-4">
-        <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 font-bold">
+        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 font-bold text-gray-600">
           {initial}
         </div>
         <span className="font-medium text-gray-900">{name}</span>
       </div>
-      <span className={`px-3 py-1 rounded-full text-xs font-medium ${color}`}>{status}</span>
+      <span className={`rounded-full px-3 py-1 text-xs font-medium ${color}`}>{status}</span>
     </div>
   );
 }
 
-function LeadRow({ lead }: { lead: any }) {
+function LeadRow({ lead }: { lead: LeadItem }) {
   const getStatusColor = (status: string) => {
     switch ((status || '').toLowerCase()) {
       case 'hot':
@@ -878,18 +908,18 @@ function LeadRow({ lead }: { lead: any }) {
   return (
     <Link
       href={`/dealer-portal/leads?new=${lead.id}`}
-      className="flex items-center justify-between p-4 hover:bg-gray-50 rounded-xl transition-colors cursor-pointer group"
+      className="group flex cursor-pointer items-center justify-between rounded-xl p-4 transition-colors hover:bg-gray-50"
     >
       <div className="flex items-center gap-4">
-        <div className="w-10 h-10 rounded-full bg-brand-50 flex items-center justify-center text-brand-600 font-bold text-sm uppercase">
+        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-50 text-sm font-bold uppercase text-brand-600">
           {lead.owner_name?.[0] || 'U'}
         </div>
         <div>
-          <p className="font-medium text-gray-900">{lead.owner_name}</p>
+          <p className="font-medium text-gray-900">{lead.owner_name || 'Unnamed Lead'}</p>
         </div>
       </div>
       <span
-        className={`px-3 py-1 rounded-full text-xs font-medium capitalize ${getStatusColor(
+        className={`rounded-full px-3 py-1 text-xs font-medium capitalize ${getStatusColor(
           lead.interest_level || 'new'
         )}`}
       >
