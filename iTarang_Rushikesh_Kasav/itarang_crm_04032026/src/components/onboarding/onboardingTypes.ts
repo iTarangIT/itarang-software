@@ -30,6 +30,7 @@ export type UploadFileItem = {
 export type ContactCard = {
   id: string;
   name: string;
+  designation?: string;
   phone: string;
   email: string;
   age?: string;
@@ -102,7 +103,23 @@ export type AgreementStatus =
   | "viewed_by_dealer"
   | "signed_by_dealer"
   | "completed"
+  | "expired"
   | "failed";
+
+export type SigningMethod =
+  | ""
+  | "aadhaar_esign"
+  | "electronic_signature"
+  | "dsc_signature";
+
+export type AgreementParty = {
+  name: string;
+  designation: string;
+  email: string;
+  mobile: string;
+  address: string;
+  signingMethod: SigningMethod;
+};
 
 export type AgreementData = {
   agreementName: string;
@@ -111,8 +128,12 @@ export type AgreementData = {
   agreementVersion: string;
   generatedDate: string;
   agreementStatus: AgreementStatus;
-
   selectedTemplate: string;
+
+  dateOfSigning: string;
+  expiryDays: number;
+  sequenceMode: "sequential" | "parallel";
+
   dealerLegalEntityName: string;
   authorizedSignatoryName: string;
   authorizedSignatoryEmail: string;
@@ -120,21 +141,32 @@ export type AgreementData = {
   stampDutyState: string;
 
   dealerSignerName: string;
+  dealerSignerDesignation: string;
   dealerSignerEmail: string;
   dealerSignerPhone: string;
-  dealerSigningMethod: string;
+  dealerSigningMethod: SigningMethod;
 
-  salesManagerName: string;
-  salesManagerEmail: string;
-  salesManagerPhone: string;
-  salesManagerSigningMethod: string;
+  financierName: string;
+  mouDate: string;
 
-  businessHeadName: string;
-  businessHeadEmail: string;
-  businessHeadPhone: string;
-  businessHeadSigningMethod: string;
+  isOemFinancing: boolean;
+  vehicleType: string;
+  manufacturer: string;
+  brand: string;
+  statePresence: string;
+
+  itarangSignatory1: AgreementParty;
+  itarangSignatory2: AgreementParty;
+  financierSignatory: AgreementParty;
+
+  includeWitnessesInSigning: boolean;
+  witness1: AgreementParty;
+  witness2: AgreementParty;
 
   requestId: string;
+  providerDocumentId: string;
+  providerSigningUrl: string;
+  providerRawResponse: string;
   lastActionTimestamp: string;
   signedAt: string;
   stampStatus: string;

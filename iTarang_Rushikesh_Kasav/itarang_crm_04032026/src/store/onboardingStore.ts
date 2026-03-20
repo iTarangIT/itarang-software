@@ -30,6 +30,7 @@ function generateDealerId() {
 type ExtendedContactRow = {
   id: string;
   name: string;
+  designation?: string;
   phone: string;
   email: string;
   age?: string;
@@ -126,13 +127,17 @@ const initialState: DealerOnboardingState = {
 
   agreement: {
     agreementName: "Dealer Finance Enablement Agreement",
-    templateSource: "iTarang approved template",
-    provider: "Signzy Contract 360",
+    templateSource: "Digio Template",
+    provider: "Digio",
     agreementVersion: "v1.0",
     generatedDate: "",
     agreementStatus: "not_generated",
-
     selectedTemplate: "Tarang Dealer Agreement Template",
+
+    dateOfSigning: "",
+    expiryDays: 7,
+    sequenceMode: "sequential",
+
     dealerLegalEntityName: "",
     authorizedSignatoryName: "",
     authorizedSignatoryEmail: "",
@@ -140,20 +145,71 @@ const initialState: DealerOnboardingState = {
     stampDutyState: "",
 
     dealerSignerName: "",
+    dealerSignerDesignation: "",
     dealerSignerEmail: "",
     dealerSignerPhone: "",
-    dealerSigningMethod: "Aadhaar eSign",
+    dealerSigningMethod: "",
 
-    salesManagerName: "Amit Verma",
-    salesManagerEmail: "amit.verma@itarang.com",
-    salesManagerPhone: "9876543210",
-    salesManagerSigningMethod: "OTP-based signing",
+    financierName: "",
+    mouDate: "",
 
-    businessHeadName: "Sanjay Mehta",
-    businessHeadEmail: "sanjay.mehta@itarang.com",
-    businessHeadPhone: "9123456780",
-    businessHeadSigningMethod: "Digital signature workflow",
+    isOemFinancing: false,
+    vehicleType: "",
+    manufacturer: "",
+    brand: "",
+    statePresence: "",
+
+    itarangSignatory1: {
+      name: "",
+      designation: "",
+      email: "",
+      mobile: "",
+      address: "",
+      signingMethod: "",
+    },
+
+    itarangSignatory2: {
+      name: "",
+      designation: "",
+      email: "",
+      mobile: "",
+      address: "",
+      signingMethod: "",
+    },
+
+    financierSignatory: {
+      name: "",
+      designation: "",
+      email: "",
+      mobile: "",
+      address: "",
+      signingMethod: "",
+    },
+
+    includeWitnessesInSigning: false,
+
+    witness1: {
+      name: "",
+      designation: "",
+      email: "",
+      mobile: "",
+      address: "",
+      signingMethod: "",
+    },
+
+    witness2: {
+      name: "",
+      designation: "",
+      email: "",
+      mobile: "",
+      address: "",
+      signingMethod: "",
+    },
+
     requestId: "",
+    providerDocumentId: "",
+    providerSigningUrl: "",
+    providerRawResponse: "",
     lastActionTimestamp: "",
     signedAt: "",
     stampStatus: "Pending",
@@ -298,6 +354,7 @@ export const useOnboardingStore = create<
           {
             id: crypto.randomUUID(),
             name: "",
+            designation: "",
             phone: "",
             email: "",
             age: "",
@@ -344,6 +401,7 @@ export const useOnboardingStore = create<
           {
             id: crypto.randomUUID(),
             name: "",
+            designation: "",
             phone: "",
             email: "",
             age: "",
