@@ -196,9 +196,19 @@ async function decideNextAction(state: State): Promise<Partial<State>> {
 
 async function writeBackToDB(state: State): Promise<Partial<State>> {
     try {
+        const intentBand = state.intentScore >= 70 ? 'high' : state.intentScore >= 40 ? 'medium' : 'low';
+
         await db.update(leads).set({
             intent_score: state.intentScore,
             intent_reason: state.intentReason,
+            intent_band: intentBand,
+            intent_scored_at: new Date(),
+            intent_details: {
+                score: state.intentScore,
+                reason: state.intentReason,
+                objections: state.objections,
+                suggested_pitch: state.suggestedPitch,
+            },
             conversation_summary: state.conversationSummary,
             call_priority: state.callPriority,
             next_call_at: state.nextCallAt ? new Date(state.nextCallAt) : null,
@@ -230,6 +240,13 @@ async function placeCallWithBolna(state: State): Promise<Partial<State>> {
         leadName: String(lead.full_name || lead.owner_name || 'Customer'),
         leadContext: `Intent score: ${state.intentScore}. ${state.suggestedPitch}. ${state.conversationSummary}`,
         callbackUrl,
+        leadId: state.leadId,
+        businessName: String(lead.business_name || ''),
+        city: String(lead.city || ''),
+        state: String(lead.state || ''),
+        source: String(lead.lead_source || ''),
+        priorSummary: state.conversationSummary,
+        intentScore: state.intentScore,
     });
 
     if (result.success && result.callId) {

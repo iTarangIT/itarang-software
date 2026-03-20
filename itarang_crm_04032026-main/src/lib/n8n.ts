@@ -21,7 +21,9 @@ export type WebhookType =
     | 'sla-breach-notification'
     | 'sla-breach-detected'
     | 'system-critical-error'
-    | 'daily-summary';
+    | 'daily-summary'
+    | 'lead-scraped'
+    | 'ai-call-completed';
 
 /**
  * Triggers an n8n webhook with a standardized payload and robust error handling.

@@ -4,7 +4,7 @@ import { requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
 
 const leadUpdateSchema = z.object({
-    lead_source: z.enum(['call_center', 'ground_sales', 'digital_marketing', 'database_upload', 'dealer_referral']).optional(),
+    lead_source: z.enum(['call_center', 'ground_sales', 'digital_marketing', 'database_upload', 'dealer_referral', 'google_maps']).optional(),
     owner_name: z.string().min(1).optional(),
     owner_contact: z.string().regex(/^\+91[0-9]{10}$/, "Must be +91 followed by 10 digits").optional(),
     state: z.string().min(1).optional(),

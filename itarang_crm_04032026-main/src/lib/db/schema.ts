@@ -208,6 +208,28 @@ export const leads = pgTable('leads', {
     conversation_summary: text('conversation_summary'),
     last_call_status: text('last_call_status'),
 
+    // Google Maps Discovery
+    google_place_id: varchar('google_place_id', { length: 255 }),
+    website: text('website'),
+    google_maps_uri: text('google_maps_uri'),
+    google_rating: decimal('google_rating', { precision: 3, scale: 1 }),
+    google_ratings_count: integer('google_ratings_count'),
+    google_business_status: varchar('google_business_status', { length: 50 }),
+    google_business_types: jsonb('google_business_types'), // string[]
+    raw_source_payload: jsonb('raw_source_payload'),
+    scrape_query: text('scrape_query'),
+    scrape_batch_id: varchar('scrape_batch_id', { length: 255 }),
+    scraped_at: timestamp('scraped_at', { withTimezone: true }),
+
+    // Phone Quality & Dedup
+    phone_quality: varchar('phone_quality', { length: 20 }).default('valid'),
+    normalized_phone: varchar('normalized_phone', { length: 20 }),
+
+    // Intent Band (computed from intent_score)
+    intent_band: varchar('intent_band', { length: 20 }), // high, medium, low
+    intent_scored_at: timestamp('intent_scored_at', { withTimezone: true }),
+    intent_details: jsonb('intent_details'), // { score, reason, objections, suggested_pitch }
+
     // V2 Workflow
     status: varchar('status', { length: 50 }).default('INCOMPLETE').notNull(), // INCOMPLETE, ACTIVE, CONVERTED, ABANDONED
     workflow_step: integer('workflow_step').default(1).notNull(),
@@ -234,6 +256,11 @@ export const leads = pgTable('leads', {
         leadsSourceIdx: index('leads_source_idx').on(table.lead_source),
         leadsInterestIdx: index('leads_interest_idx').on(table.interest_level),
         leadsStatusIdx: index('leads_status_idx').on(table.lead_status),
+        leadsNormalizedPhoneIdx: index('leads_normalized_phone_idx').on(table.normalized_phone),
+        leadsGooglePlaceIdIdx: index('leads_google_place_id_idx').on(table.google_place_id),
+        leadsIntentBandIdx: index('leads_intent_band_idx').on(table.intent_band),
+        leadsScrapeBatchIdx: index('leads_scrape_batch_id_idx').on(table.scrape_batch_id),
+        leadsAiManagedIdx: index('leads_ai_managed_idx').on(table.ai_managed),
     };
 });
 
@@ -581,6 +608,16 @@ export const aiCallLogs = pgTable('ai_call_logs', {
     recording_url: text('recording_url'),
     call_duration: integer('call_duration'), // in seconds
     status: varchar('status', { length: 50 }),
+
+    // LangGraph alignment fields
+    provider: varchar('provider', { length: 50 }),
+    started_at: timestamp('started_at', { withTimezone: true }),
+    ended_at: timestamp('ended_at', { withTimezone: true }),
+    model_used: varchar('model_used', { length: 50 }),
+    intent_score: integer('intent_score'),
+    intent_reason: text('intent_reason'),
+    next_action: varchar('next_action', { length: 50 }),
+
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => {
@@ -1509,5 +1546,37 @@ export const dealerOnboardingsRelations = relations(dealerOnboardings, ({
     fields: [dealerOnboardings.account_id],
     references: [accounts.id],
   }),
+}));
+
+// --- LEAD DISCOVERY (Google Maps Scraping) ---
+
+export const scrapeBatches = pgTable('scrape_batches', {
+    id: varchar('id', { length: 255 }).primaryKey(), // SCRAPE-YYYYMMDD-SEQ
+    query: text('query').notNull(),
+    city: varchar('city', { length: 100 }),
+    state: varchar('state', { length: 100 }),
+    radius_meters: integer('radius_meters'),
+    latitude: decimal('latitude', { precision: 10, scale: 8 }),
+    longitude: decimal('longitude', { precision: 11, scale: 8 }),
+
+    total_results: integer('total_results').default(0),
+    new_leads_created: integer('new_leads_created').default(0),
+    duplicates_found: integer('duplicates_found').default(0),
+    enriched_existing: integer('enriched_existing').default(0),
+    no_phone_count: integer('no_phone_count').default(0),
+
+    status: varchar('status', { length: 20 }).default('pending').notNull(), // pending, processing, completed, failed
+    error_message: text('error_message'),
+
+    initiated_by: uuid('initiated_by').references(() => users.id).notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    completed_at: timestamp('completed_at', { withTimezone: true }),
+});
+
+export const scrapeBatchesRelations = relations(scrapeBatches, ({ one }) => ({
+    initiator: one(users, {
+        fields: [scrapeBatches.initiated_by],
+        references: [users.id],
+    }),
 }));
 

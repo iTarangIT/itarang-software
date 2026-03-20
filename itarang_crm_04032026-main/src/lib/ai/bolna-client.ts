@@ -7,6 +7,15 @@ interface BolnaCallParams {
     leadName: string;
     leadContext: string;
     callbackUrl?: string;
+    // Enriched context for better AI conversations
+    leadId?: string;
+    businessName?: string;
+    city?: string;
+    state?: string;
+    source?: string;
+    priorSummary?: string;
+    intentScore?: number;
+    assignedManager?: string;
 }
 
 interface BolnaCallResponse {
@@ -34,6 +43,17 @@ export async function triggerCall(params: BolnaCallParams): Promise<BolnaCallRes
                 user_data: {
                     lead_name: params.leadName,
                     context: params.leadContext,
+                    ...(params.leadId && { lead_id: params.leadId }),
+                    ...(params.businessName && { business_name: params.businessName }),
+                    ...(params.city && { city: params.city }),
+                    ...(params.state && { state: params.state }),
+                    ...(params.source && { source: params.source }),
+                    ...(params.priorSummary && { prior_summary: params.priorSummary }),
+                    ...(params.intentScore !== undefined && { intent_score: params.intentScore }),
+                    ...(params.assignedManager && { assigned_manager: params.assignedManager }),
+                },
+                metadata: {
+                    lead_id: params.leadId || '',
                 },
                 ...(params.callbackUrl ? { callback_url: params.callbackUrl } : {}),
             }),

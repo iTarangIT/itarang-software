@@ -49,5 +49,9 @@ export type NewAiCallLog = InferInsertModel<typeof schema.aiCallLogs>;
 export type DeviceBatteryMap = InferSelectModel<typeof schema.deviceBatteryMap>;
 export type BatteryAlert = InferSelectModel<typeof schema.batteryAlerts>;
 
+// Lead Discovery
+export type ScrapeBatch = InferSelectModel<typeof schema.scrapeBatches>;
+export type NewScrapeBatch = InferInsertModel<typeof schema.scrapeBatches>;
+
 // Settings
 export type AppSetting = InferSelectModel<typeof schema.appSettings>;

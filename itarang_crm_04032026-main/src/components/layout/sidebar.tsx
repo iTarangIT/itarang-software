@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, ShoppingCart, Users, FileText, LogOut, Phone, PieChart, Package, FileCheck, Landmark, Briefcase, Building, Receipt, ClipboardCheck, Car, Battery, Wrench, CreditCard, Megaphone, Shield } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Users, FileText, LogOut, Phone, PieChart, Package, FileCheck, Landmark, Briefcase, Building, Receipt, ClipboardCheck, Car, Battery, Wrench, CreditCard, Megaphone, Shield, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const roleNavigation: Record<string, any[]> = {
@@ -34,6 +34,7 @@ const roleNavigation: Record<string, any[]> = {
         { section: 'OVERVIEW', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/sales-head' }] },
         {
             section: 'SALES', items: [
+                { id: 'lead-discovery', label: 'Lead Discovery', icon: Search, href: '/sales-head/leads' },
                 { id: 'leads', label: 'Leads', icon: Users, href: '/leads' },
                 { id: 'deals', label: 'Deals', icon: FileCheck, href: '/deals' },
                 { id: 'approvals', label: 'Approvals', icon: FileText, href: '/sales-head/approvals' },
@@ -49,6 +50,7 @@ const roleNavigation: Record<string, any[]> = {
         { section: 'OVERVIEW', items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, href: '/sales-manager' }] },
         {
             section: 'SALES', items: [
+                { id: 'assigned-leads', label: 'Assigned Leads', icon: Users, href: '/sales-manager/leads' },
                 { id: 'leads', label: 'My Leads', icon: Users, href: '/leads' },
                 { id: 'deals', label: 'My Deals', icon: FileCheck, href: '/deals' },
                 { id: 'ai-calls', label: 'AI Calls', icon: Phone, href: '/sales-manager/ai-calls' },

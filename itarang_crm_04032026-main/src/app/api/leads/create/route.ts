@@ -52,13 +52,7 @@ async function generateLeadReference() {
     return `${prefix}-${sequenceNum.toString().padStart(7, '0')}`;
 }
 
-const normalizePhone = (phone?: string | null) => {
-    if (!phone) return null;
-    let clean = phone.replace(/[^0-9]/g, '');
-    if (clean.length === 12 && clean.startsWith('91')) clean = clean.substring(2);
-    if (clean.length === 10) return `+91${clean}`;
-    return phone.startsWith('+') ? phone : `+91${clean}`;
-};
+import { normalizePhone } from '@/lib/utils/phone';
 
 export const POST = withErrorHandler(async (req: Request) => {
     const user = await requireRole(['dealer']);

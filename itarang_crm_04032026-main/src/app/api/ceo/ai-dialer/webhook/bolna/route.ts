@@ -45,11 +45,21 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        // Update lead status
+        // Update lead status + intent band after re-scoring
         if (callLog?.lead_id) {
+            // Re-fetch the lead to get the updated intent_score from runPostCallUpdate
+            const [updatedLead] = await db.select({
+                intent_score: leads.intent_score,
+            }).from(leads).where(eq(leads.id, callLog.lead_id)).limit(1);
+
+            const intentBand = updatedLead?.intent_score != null
+                ? (updatedLead.intent_score >= 70 ? 'high' : updatedLead.intent_score >= 40 ? 'medium' : 'low')
+                : undefined;
+
             await db.update(leads).set({
                 last_call_status: status || 'completed',
                 last_call_outcome: transcript ? 'conversation_completed' : 'no_answer',
+                ...(intentBand && { intent_band: intentBand, intent_scored_at: new Date() }),
                 updated_at: new Date(),
             }).where(eq(leads.id, callLog.lead_id));
         }

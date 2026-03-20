@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
                     sql`(${leads.last_ai_action_at} IS NULL OR ${leads.last_ai_action_at} < ${oneHourAgo.toISOString()})`
                 )
             )
-            .limit(10); // Process max 10 per cron run to avoid timeouts
+            .limit(20); // Process max 20 per cron run
 
         const results: { leadId: string; success: boolean; error?: string }[] = [];
 

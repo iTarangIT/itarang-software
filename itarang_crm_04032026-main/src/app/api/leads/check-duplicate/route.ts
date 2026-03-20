@@ -2,6 +2,7 @@ import { db } from '@/lib/db';
 import { leads } from '@/lib/db/schema';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
+import { normalizePhone } from '@/lib/utils/phone';
 import { eq, or, and } from 'drizzle-orm';
 
 export const GET = withErrorHandler(async (req: Request) => {
@@ -14,11 +15,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         return errorResponse('Phone number required', 400);
     }
 
-    // Normalize for lookup
-    let clean = phone.replace(/[^0-9]/g, '');
-    if (clean.length === 12 && clean.startsWith('91')) clean = clean.substring(2);
-    if (clean.length === 10) clean = `+91${clean}`;
-    else if (!clean.startsWith('+')) clean = `+91${clean}`;
+    const clean = normalizePhone(phone) || phone;
 
     // Scope to current dealer as per standard CRM rules
     const matches = await db.select({
