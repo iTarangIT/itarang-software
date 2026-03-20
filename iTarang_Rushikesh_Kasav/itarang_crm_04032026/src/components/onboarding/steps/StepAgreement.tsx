@@ -6,6 +6,7 @@ import {
   Clock3,
   ExternalLink,
   ShieldCheck,
+  RefreshCw,
 } from "lucide-react";
 import { useOnboardingStore } from "@/store/onboardingStore";
 
@@ -24,6 +25,14 @@ type AgreementStatusType =
   | "completed"
   | "failed"
   | "expired";
+
+type SignerUrlItem = {
+  name: string;
+  reason: string;
+  identifier: string;
+  authenticationUrl: string;
+  status: string;
+};
 
 const SIGNING_METHOD_OPTIONS: { value: SigningMethod; label: string }[] = [
   { value: "", label: "Select signing method" },
@@ -52,9 +61,8 @@ function InputField({
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
       readOnly={readOnly}
-      className={`w-full rounded-2xl border border-[#E3E8EF] px-4 py-3.5 focus:border-[#1F5C8F] focus:outline-none focus:ring-2 focus:ring-blue-100 ${
-        readOnly ? "bg-slate-50 text-slate-500" : "bg-white"
-      }`}
+      className={`w-full rounded-2xl border border-[#E3E8EF] px-4 py-3.5 focus:border-[#1F5C8F] focus:outline-none focus:ring-2 focus:ring-blue-100 ${readOnly ? "bg-slate-50 text-slate-500" : "bg-white"
+        }`}
     />
   );
 }
@@ -132,9 +140,8 @@ function StatusBadge({ status }: { status: string | undefined }) {
 
   return (
     <span
-      className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${
-        map[safeStatus] || map.not_generated
-      }`}
+      className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${map[safeStatus] || map.not_generated
+        }`}
     >
       {safeStatus.replaceAll("_", " ")}
     </span>
@@ -151,6 +158,7 @@ export default function StepAgreement() {
   const prevStep = useOnboardingStore((s) => s.prevStep);
   const nextStep = useOnboardingStore((s) => s.nextStep);
   const setField = useOnboardingStore((s) => s.setField);
+  const resetAgreementState = useOnboardingStore((s) => s.resetAgreementState);
 
   const dealerSignatoryOptions = useMemo(() => {
     if (company.companyType === "sole_proprietorship") {
@@ -187,6 +195,33 @@ export default function StepAgreement() {
 
     return [];
   }, [company.companyType, ownership]);
+
+  const signerLinks: SignerUrlItem[] = useMemo(() => {
+    if (!agreement.providerRawResponse) return [];
+
+    try {
+      const parsed = JSON.parse(agreement.providerRawResponse);
+
+      const items: any[] = Array.isArray(parsed?.signerUrls)
+        ? parsed.signerUrls
+        : Array.isArray(parsed?.signing_parties)
+          ? parsed.signing_parties
+          : [];
+
+      return items
+        .map((party: any): SignerUrlItem => ({
+          name: party?.name || "",
+          reason: party?.reason || "",
+          identifier: party?.identifier || "",
+          authenticationUrl:
+            party?.authenticationUrl || party?.authentication_url || "",
+          status: party?.status || "",
+        }))
+        .filter((item: SignerUrlItem) => !!item.authenticationUrl);
+    } catch {
+      return [];
+    }
+  }, [agreement.providerRawResponse]);
 
   const onDealerSignatoryChange = (selectedName: string) => {
     const selected = dealerSignatoryOptions.find(
@@ -256,7 +291,6 @@ export default function StepAgreement() {
       setCreating(true);
 
       const currentState = useOnboardingStore.getState();
-      console.log("DIGIO FRONTEND -> SENDING STATE:", currentState);
 
       const response = await fetch("/api/integrations/digio/create-agreement", {
         method: "POST",
@@ -285,8 +319,12 @@ export default function StepAgreement() {
         return;
       }
 
+      const signerUrls = Array.isArray(json?.data?.signerUrls)
+        ? json.data.signerUrls
+        : [];
+
       setField("agreement", "provider", "Digio");
-      setField("agreement", "templateSource", "Digio Template");
+      setField("agreement", "templateSource", "Server Generated Agreement");
       setField(
         "agreement",
         "providerDocumentId",
@@ -301,7 +339,14 @@ export default function StepAgreement() {
       setField(
         "agreement",
         "providerRawResponse",
-        json?.data?.rawResponse || ""
+        JSON.stringify(
+          {
+            signerUrls,
+            rawResponse: json?.data?.rawResponse || "",
+          },
+          null,
+          2
+        )
       );
       setField(
         "agreement",
@@ -312,11 +357,7 @@ export default function StepAgreement() {
       setField("agreement", "lastActionTimestamp", new Date().toISOString());
       setField("agreement", "completionStatus", "Sent for Signature");
 
-      if (json?.data?.signingUrl) {
-        alert("Digio agreement created successfully.");
-      } else {
-        alert("Digio agreement created, but signing URL was not returned.");
-      }
+      alert("Digio agreement created successfully.");
     } catch (error) {
       console.error("DIGIO GENERATE ERROR:", error);
       alert("Failed to create Digio agreement");
@@ -339,8 +380,9 @@ export default function StepAgreement() {
               Digio Agreement
             </h2>
             <p className="mt-2 max-w-3xl text-sm text-slate-500 md:text-base">
-              Fill agreement data, create the Digio request, then send dealer to
-              the signing link.
+              Review the signatory details, generate the agreement from your
+              onboarding data, and share the signing links with the required
+              parties.
             </p>
           </div>
 
@@ -354,7 +396,7 @@ export default function StepAgreement() {
                 <span className="font-semibold text-slate-800">
                   Template Source:
                 </span>{" "}
-                {agreement.templateSource || "Digio Template"}
+                {agreement.templateSource || "Server Generated Agreement"}
               </p>
               <p>
                 <span className="font-semibold text-slate-800">
@@ -372,7 +414,10 @@ export default function StepAgreement() {
         </div>
       </div>
 
-      <SectionCard title="Agreement Meta">
+      <SectionCard
+        title="Agreement Meta"
+        subtitle="These values will be used while generating the agreement PDF on the server."
+      >
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <InputField
             type="date"
@@ -645,7 +690,7 @@ export default function StepAgreement() {
 
       <SectionCard
         title="Witnesses"
-        subtitle="Enable only if your Digio template requires witness signing"
+        subtitle="Enable only if your Digio workflow requires witness signing."
       >
         <label className="mb-4 flex items-center gap-3 text-sm font-medium text-[#173F63]">
           <input
@@ -717,7 +762,9 @@ export default function StepAgreement() {
               />
               <div className="md:col-span-2">
                 <SelectField
-                  value={(agreement.witness1?.signingMethod || "") as SigningMethod}
+                  value={
+                    (agreement.witness1?.signingMethod || "") as SigningMethod
+                  }
                   onChange={(value) =>
                     setField("agreement", "witness1", {
                       ...agreement.witness1,
@@ -781,7 +828,9 @@ export default function StepAgreement() {
               />
               <div className="md:col-span-2">
                 <SelectField
-                  value={(agreement.witness2?.signingMethod || "") as SigningMethod}
+                  value={
+                    (agreement.witness2?.signingMethod || "") as SigningMethod
+                  }
                   onChange={(value) =>
                     setField("agreement", "witness2", {
                       ...agreement.witness2,
@@ -793,6 +842,16 @@ export default function StepAgreement() {
             </PartyCard>
           </div>
         ) : null}
+      </SectionCard>
+
+      <SectionCard
+        title="Agreement Generation"
+        subtitle="The agreement PDF will be generated automatically from the onboarding data. No manual upload is required."
+      >
+        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
+          The system will generate the agreement using the data entered in the
+          onboarding form and send it to Digio for eSign.
+        </div>
       </SectionCard>
 
       <SectionCard title="Digio Request Status">
@@ -827,6 +886,15 @@ export default function StepAgreement() {
             {creating ? "Generating..." : "Generate via Digio"}
           </button>
 
+          <button
+            type="button"
+            onClick={resetAgreementState}
+            className="inline-flex items-center gap-2 rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Reset Agreement State
+          </button>
+
           {agreement.providerSigningUrl ? (
             <a
               href={agreement.providerSigningUrl}
@@ -835,10 +903,49 @@ export default function StepAgreement() {
               className="inline-flex items-center gap-2 rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
             >
               <ExternalLink className="h-4 w-4" />
-              Open Signing Link
+              Open Primary Signing Link
             </a>
           ) : null}
         </div>
+
+        {signerLinks.length > 0 ? (
+          <div className="mt-6 space-y-3">
+            <h4 className="text-sm font-semibold text-slate-800">
+              All Signing Links
+            </h4>
+
+            {signerLinks.map((item: SignerUrlItem, index: number) => (
+              <div
+                key={`${item.identifier}-${index}`}
+                className="rounded-2xl border border-slate-200 p-4"
+              >
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">
+                      {item.name || "Signer"}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {item.reason} • {item.identifier}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Status: {item.status || "requested"}
+                    </p>
+                  </div>
+
+                  <a
+                    href={item.authenticationUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    Open Link
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </SectionCard>
 
       <div className="flex items-center justify-between rounded-3xl border border-[#E3E8EF] bg-white p-5 shadow-sm">

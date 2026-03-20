@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import {
+import type {
   DealerOnboardingState,
   UploadFileItem,
 } from "@/components/onboarding/onboardingTypes";
@@ -42,6 +42,19 @@ type ExtendedContactRow = {
   pinCode?: string;
 };
 
+type AgreementStatusUpdatePayload = {
+  agreementStatus?: DealerOnboardingState["agreement"]["agreementStatus"];
+  providerDocumentId?: DealerOnboardingState["agreement"]["providerDocumentId"];
+  providerSigningUrl?: DealerOnboardingState["agreement"]["providerSigningUrl"];
+  providerRawResponse?: DealerOnboardingState["agreement"]["providerRawResponse"];
+  signedAt?: DealerOnboardingState["agreement"]["signedAt"];
+  lastActionTimestamp?: DealerOnboardingState["agreement"]["lastActionTimestamp"];
+  completionStatus?: DealerOnboardingState["agreement"]["completionStatus"];
+  stampStatus?: DealerOnboardingState["agreement"]["stampStatus"];
+  requestId?: DealerOnboardingState["agreement"]["requestId"];
+  signedAgreementFile?: DealerOnboardingState["agreement"]["signedAgreementFile"];
+};
+
 type StoreActions = {
   setStep: (step: number) => void;
   nextStep: () => boolean;
@@ -62,72 +75,14 @@ type StoreActions = {
   updateDirector: (id: string, field: string, value: any) => void;
   removeDirector: (id: string) => void;
   completeOnboarding: () => string;
+  resetAgreementState: () => void;
+  updateAgreementStatus: (payload: AgreementStatusUpdatePayload) => void;
 };
 
-const initialState: DealerOnboardingState = {
-  step: 1,
-  status: "draft",
-  lastSavedAt: null,
-  dealerId: "",
-  dealerDisplayName: "",
-
-  company: {
-    companyName: "",
-    companyAddress: "",
-    companyType: "",
-    gstNumber: "",
-    companyPanNumber: "",
-    businessSummary: "",
-    gstCertificate: makeUploadItem("GST Certificate"),
-    companyPanFile: makeUploadItem("Company PAN"),
-  },
-
-  compliance: {
-    itr3Years: makeUploadItem("Last 3 Years Company Income Tax Returns"),
-    bankStatement3Months: makeUploadItem("Last 3 Months Company Bank Statement"),
-    undatedCheques: makeUploadItem("4 Undated Cheques"),
-    passportPhoto: makeUploadItem("Passport Size Photograph"),
-    udyamCertificate: makeUploadItem("Udyam Registration Certificate"),
-  },
-
-  ownership: {
-    ownerName: "",
-    ownerPhone: "",
-    ownerEmail: "",
-    ownerAge: "",
-    ownerPhoto: makeUploadItem("Owner Photograph"),
-    ownerAddressLine1: "",
-    ownerCity: "",
-    ownerDistrict: "",
-    ownerState: "",
-    ownerPinCode: "",
-
-    partnershipDeed: makeUploadItem("Partnership Deed"),
-    mouDocument: makeUploadItem("MoU"),
-    aoaDocument: makeUploadItem("AoA"),
-
-    partners: [],
-    directors: [],
-
-    bankName: "",
-    accountNumber: "",
-    ifsc: "",
-    beneficiaryName: "",
-    branch: "",
-    accountType: "",
-  },
-
-  finance: {
-    enableFinance: "",
-    financeContactPerson: "",
-    financeContactPhone: "",
-    financeContactEmail: "",
-    financeRemarks: "",
-  },
-
-  agreement: {
+function createInitialAgreementState(): DealerOnboardingState["agreement"] {
+  return {
     agreementName: "Dealer Finance Enablement Agreement",
-    templateSource: "Digio Template",
+    templateSource: "Server Generated Agreement",
     provider: "Digio",
     agreementVersion: "v1.0",
     generatedDate: "",
@@ -217,7 +172,71 @@ const initialState: DealerOnboardingState = {
 
     agreementTemplateFile: null,
     signedAgreementFile: null,
+  };
+}
+
+const initialState: DealerOnboardingState = {
+  step: 1,
+  status: "draft",
+  lastSavedAt: null,
+  dealerId: "",
+  dealerDisplayName: "",
+
+  company: {
+    companyName: "",
+    companyAddress: "",
+    companyType: "",
+    gstNumber: "",
+    companyPanNumber: "",
+    businessSummary: "",
+    gstCertificate: makeUploadItem("GST Certificate"),
+    companyPanFile: makeUploadItem("Company PAN"),
   },
+
+  compliance: {
+    itr3Years: makeUploadItem("Last 3 Years Company Income Tax Returns"),
+    bankStatement3Months: makeUploadItem("Last 3 Months Company Bank Statement"),
+    undatedCheques: makeUploadItem("4 Undated Cheques"),
+    passportPhoto: makeUploadItem("Passport Size Photograph"),
+    udyamCertificate: makeUploadItem("Udyam Registration Certificate"),
+  },
+
+  ownership: {
+    ownerName: "",
+    ownerPhone: "",
+    ownerEmail: "",
+    ownerAge: "",
+    ownerPhoto: makeUploadItem("Owner Photograph"),
+    ownerAddressLine1: "",
+    ownerCity: "",
+    ownerDistrict: "",
+    ownerState: "",
+    ownerPinCode: "",
+
+    partnershipDeed: makeUploadItem("Partnership Deed"),
+    mouDocument: makeUploadItem("MoU"),
+    aoaDocument: makeUploadItem("AoA"),
+
+    partners: [],
+    directors: [],
+
+    bankName: "",
+    accountNumber: "",
+    ifsc: "",
+    beneficiaryName: "",
+    branch: "",
+    accountType: "",
+  },
+
+  finance: {
+    enableFinance: "",
+    financeContactPerson: "",
+    financeContactPhone: "",
+    financeContactEmail: "",
+    financeRemarks: "",
+  },
+
+  agreement: createInitialAgreementState(),
 
   reviewChecks: {
     confirmInfo: false,
@@ -226,7 +245,7 @@ const initialState: DealerOnboardingState = {
   },
 
   errors: {},
-} as DealerOnboardingState;
+};
 
 function removeStaleSubmitErrors(errors: Record<string, string>) {
   const nextErrors = { ...errors };
@@ -375,7 +394,8 @@ export const useOnboardingStore = create<
       ownership: {
         ...state.ownership,
         partners: (state.ownership.partners as ExtendedContactRow[]).map(
-          (partner) => (partner.id === id ? { ...partner, [field]: value } : partner)
+          (partner) =>
+            partner.id === id ? { ...partner, [field]: value } : partner
         ),
       },
       errors: {},
@@ -422,7 +442,8 @@ export const useOnboardingStore = create<
       ownership: {
         ...state.ownership,
         directors: (state.ownership.directors as ExtendedContactRow[]).map(
-          (director) => (director.id === id ? { ...director, [field]: value } : director)
+          (director) =>
+            director.id === id ? { ...director, [field]: value } : director
         ),
       },
       errors: {},
@@ -439,6 +460,54 @@ export const useOnboardingStore = create<
       errors: {},
     })),
 
+  resetAgreementState: () =>
+    set((state) => ({
+      agreement: {
+        ...createInitialAgreementState(),
+        dateOfSigning: state.agreement.dateOfSigning,
+        expiryDays: state.agreement.expiryDays,
+        sequenceMode: state.agreement.sequenceMode,
+        dealerSignerName: state.agreement.dealerSignerName,
+        dealerSignerDesignation: state.agreement.dealerSignerDesignation,
+        dealerSignerEmail: state.agreement.dealerSignerEmail,
+        dealerSignerPhone: state.agreement.dealerSignerPhone,
+        dealerSigningMethod: state.agreement.dealerSigningMethod,
+        financierName: state.agreement.financierName,
+        itarangSignatory1: { ...state.agreement.itarangSignatory1 },
+        itarangSignatory2: { ...state.agreement.itarangSignatory2 },
+        financierSignatory: { ...state.agreement.financierSignatory },
+        includeWitnessesInSigning: state.agreement.includeWitnessesInSigning,
+        witness1: { ...state.agreement.witness1 },
+        witness2: { ...state.agreement.witness2 },
+      },
+      lastSavedAt: new Date().toISOString(),
+    })),
+
+  updateAgreementStatus: (payload) =>
+    set((state) => ({
+      agreement: {
+        ...state.agreement,
+        agreementStatus:
+          payload.agreementStatus ?? state.agreement.agreementStatus,
+        providerDocumentId:
+          payload.providerDocumentId ?? state.agreement.providerDocumentId,
+        providerSigningUrl:
+          payload.providerSigningUrl ?? state.agreement.providerSigningUrl,
+        providerRawResponse:
+          payload.providerRawResponse ?? state.agreement.providerRawResponse,
+        signedAt: payload.signedAt ?? state.agreement.signedAt,
+        lastActionTimestamp:
+          payload.lastActionTimestamp ?? new Date().toISOString(),
+        completionStatus:
+          payload.completionStatus ?? state.agreement.completionStatus,
+        stampStatus: payload.stampStatus ?? state.agreement.stampStatus,
+        requestId: payload.requestId ?? state.agreement.requestId,
+        signedAgreementFile:
+          payload.signedAgreementFile ?? state.agreement.signedAgreementFile,
+      },
+      lastSavedAt: new Date().toISOString(),
+    })),
+
   completeOnboarding: () => {
     const state = get();
 
@@ -452,6 +521,9 @@ export const useOnboardingStore = create<
       companyType: state.company.companyType,
       gstNumber: state.company.gstNumber,
       financeEnabled: state.finance.enableFinance,
+      agreementStatus: state.agreement.agreementStatus,
+      providerDocumentId: state.agreement.providerDocumentId,
+      requestId: state.agreement.requestId,
       submittedAt: new Date().toISOString(),
     };
 

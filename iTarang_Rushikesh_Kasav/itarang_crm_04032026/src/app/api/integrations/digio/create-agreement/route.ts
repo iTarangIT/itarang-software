@@ -1,29 +1,71 @@
 import { NextRequest, NextResponse } from "next/server";
+import puppeteer from "puppeteer";
+import { buildTarangDealerAgreementHtml } from "@/lib/agreement/tarangDealerAgreementTemplate";
 
 type AgreementPayload = {
+  company?: {
+    companyName?: string;
+    companyAddress?: string;
+    companyType?: string;
+    gstNumber?: string;
+    companyPanNumber?: string;
+    companyCity?: string;
+    companyDistrict?: string;
+    companyState?: string;
+    companyPinCode?: string;
+  };
+  ownership?: {
+    ownerName?: string;
+    ownerPhone?: string;
+    ownerEmail?: string;
+    ownerAge?: string;
+    ownerAddressLine1?: string;
+    ownerCity?: string;
+    ownerDistrict?: string;
+    ownerState?: string;
+    ownerPinCode?: string;
+    bankName?: string;
+    accountNumber?: string;
+    ifsc?: string;
+    beneficiaryName?: string;
+    branch?: string;
+    accountType?: string;
+  };
   agreement?: {
     dateOfSigning?: string;
     expiryDays?: number;
+    executionPlace?: string;
     dealerSignerName?: string;
     dealerSignerEmail?: string;
     dealerSignerPhone?: string;
+    dealerSignerDesignation?: string;
     dealerSigningMethod?: string;
     financierName?: string;
+    financerLegalEntityName?: string;
     sequenceMode?: "sequential" | "parallel";
+    vehicleType?: string;
+    manufacturer?: string;
+    brand?: string;
+    statePresence?: string;
     itarangSignatory1?: {
       name?: string;
+      designation?: string;
       email?: string;
       mobile?: string;
+      address?: string;
       signingMethod?: string;
     };
     itarangSignatory2?: {
       name?: string;
+      designation?: string;
       email?: string;
       mobile?: string;
+      address?: string;
       signingMethod?: string;
     };
     financierSignatory?: {
       name?: string;
+      designation?: string;
       email?: string;
       mobile?: string;
       address?: string;
@@ -32,6 +74,7 @@ type AgreementPayload = {
     includeWitnessesInSigning?: boolean;
     witness1?: {
       name?: string;
+      designation?: string;
       email?: string;
       mobile?: string;
       address?: string;
@@ -39,14 +82,12 @@ type AgreementPayload = {
     };
     witness2?: {
       name?: string;
+      designation?: string;
       email?: string;
       mobile?: string;
       address?: string;
       signingMethod?: string;
     };
-  };
-  company?: {
-    companyName?: string;
   };
 };
 
@@ -58,7 +99,7 @@ type SignerItem = {
 };
 
 function cleanEnv(value?: string) {
-  return value?.trim().replace(/^["']|["']$/g, "");
+  return value?.trim().replace(/^[\"']|[\"']$/g, "");
 }
 
 function cleanString(value?: string) {
@@ -109,8 +150,8 @@ function buildSigner(
   const identifier = isValidEmail(cleanedEmail)
     ? cleanedEmail
     : isValidPhone(cleanedMobile)
-    ? cleanedMobile
-    : "";
+      ? cleanedMobile
+      : "";
 
   if (!identifier) return null;
 
@@ -136,32 +177,48 @@ function findDuplicateIdentifiers(signers: SignerItem[]) {
   return Array.from(duplicates);
 }
 
+async function renderPdfFromHtml(html: string) {
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: "networkidle0" });
+
+    const pdf = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      margin: {
+        top: "14mm",
+        right: "12mm",
+        bottom: "14mm",
+        left: "12mm",
+      },
+    });
+
+    return Buffer.from(pdf);
+  } finally {
+    await browser.close();
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as AgreementPayload;
 
     const clientId = cleanEnv(process.env.DIGIO_CLIENT_ID);
     const clientSecret = cleanEnv(process.env.DIGIO_CLIENT_SECRET);
-    const templateId =
-      cleanEnv(process.env.DIGIO_TEMPLATE_ID) ||
-      cleanEnv(process.env.DIGIO_TEMPLATE_ID_DEALER_FINANCE);
     const baseUrl =
       cleanEnv(process.env.DIGIO_BASE_URL) || "https://ext.digio.in:444";
 
-    console.log("DIGIO DEBUG -> BASE_URL:", baseUrl);
-    console.log("DIGIO DEBUG -> CLIENT_ID:", clientId || "MISSING");
-    console.log(
-      "DIGIO DEBUG -> CLIENT_SECRET:",
-      clientSecret ? "PRESENT" : "MISSING"
-    );
-    console.log("DIGIO DEBUG -> TEMPLATE_ID:", templateId || "MISSING");
-
-    if (!clientId || !clientSecret || !templateId) {
+    if (!clientId || !clientSecret) {
       return NextResponse.json(
         {
           success: false,
           message:
-            "Missing Digio configuration. Set DIGIO_CLIENT_ID, DIGIO_CLIENT_SECRET, and DIGIO_TEMPLATE_ID.",
+            "Missing Digio configuration. Set DIGIO_CLIENT_ID and DIGIO_CLIENT_SECRET.",
         },
         { status: 500 }
       );
@@ -169,13 +226,11 @@ export async function POST(req: NextRequest) {
 
     const agreement = body.agreement;
     const company = body.company;
+    const ownership = body.ownership;
 
     if (!agreement) {
       return NextResponse.json(
-        {
-          success: false,
-          message: "Agreement payload is missing.",
-        },
+        { success: false, message: "Agreement payload is missing." },
         { status: 400 }
       );
     }
@@ -184,7 +239,7 @@ export async function POST(req: NextRequest) {
       agreement.dealerSignerEmail,
       agreement.dealerSignerPhone,
       agreement.dealerSignerName,
-      "Dealer Signatory",
+      "dealer signer",
       agreement.dealerSigningMethod
     );
 
@@ -192,7 +247,7 @@ export async function POST(req: NextRequest) {
       agreement.financierSignatory?.email,
       agreement.financierSignatory?.mobile,
       agreement.financierSignatory?.name,
-      "Financier Signatory",
+      "financier signer",
       agreement.financierSignatory?.signingMethod
     );
 
@@ -200,7 +255,7 @@ export async function POST(req: NextRequest) {
       agreement.itarangSignatory1?.email,
       agreement.itarangSignatory1?.mobile,
       agreement.itarangSignatory1?.name,
-      "iTarang Signatory 1",
+      "iTarang signer 1",
       agreement.itarangSignatory1?.signingMethod
     );
 
@@ -208,31 +263,29 @@ export async function POST(req: NextRequest) {
       agreement.itarangSignatory2?.email,
       agreement.itarangSignatory2?.mobile,
       agreement.itarangSignatory2?.name,
-      "iTarang Signatory 2",
+      "iTarang signer 2",
       agreement.itarangSignatory2?.signingMethod
     );
 
-    const witnessSigner1 =
-      agreement.includeWitnessesInSigning
-        ? buildSigner(
-            agreement.witness1?.email,
-            agreement.witness1?.mobile,
-            agreement.witness1?.name,
-            "Witness 1",
-            agreement.witness1?.signingMethod
-          )
-        : null;
+    const witnessSigner1 = agreement.includeWitnessesInSigning
+      ? buildSigner(
+          agreement.witness1?.email,
+          agreement.witness1?.mobile,
+          agreement.witness1?.name,
+          "witness 1",
+          agreement.witness1?.signingMethod
+        )
+      : null;
 
-    const witnessSigner2 =
-      agreement.includeWitnessesInSigning
-        ? buildSigner(
-            agreement.witness2?.email,
-            agreement.witness2?.mobile,
-            agreement.witness2?.name,
-            "Witness 2",
-            agreement.witness2?.signingMethod
-          )
-        : null;
+    const witnessSigner2 = agreement.includeWitnessesInSigning
+      ? buildSigner(
+          agreement.witness2?.email,
+          agreement.witness2?.mobile,
+          agreement.witness2?.name,
+          "witness 2",
+          agreement.witness2?.signingMethod
+        )
+      : null;
 
     const signers = [
       dealerSigner,
@@ -242,9 +295,6 @@ export async function POST(req: NextRequest) {
       witnessSigner1,
       witnessSigner2,
     ].filter(Boolean) as SignerItem[];
-
-    console.log("DIGIO DEBUG -> AGREEMENT:", agreement);
-    console.log("DIGIO DEBUG -> SIGNERS:", signers);
 
     if (!dealerSigner) {
       return NextResponse.json(
@@ -279,7 +329,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (agreement.includeWitnessesInSigning && (!witnessSigner1 || !witnessSigner2)) {
+    if (
+      agreement.includeWitnessesInSigning &&
+      (!witnessSigner1 || !witnessSigner2)
+    ) {
       return NextResponse.json(
         {
           success: false,
@@ -304,31 +357,78 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const payload = {
-      file_name: `${cleanString(company?.companyName) || "dealer"}-agreement`,
-      template_id: templateId,
-      expire_in_days: agreement.expiryDays || 7,
-      send_sign_link: true,
-      notify_signers: true,
-      signers,
-      template_values: {
-        dealer_company_name: cleanString(company?.companyName),
-        dealer_signer_name: cleanString(agreement.dealerSignerName),
-        dealer_signer_email: cleanString(agreement.dealerSignerEmail),
-        dealer_signer_phone: cleanPhone(agreement.dealerSignerPhone),
-        financier_name: cleanString(agreement.financierName),
-        agreement_date: cleanString(agreement.dateOfSigning),
+    const html = buildTarangDealerAgreementHtml({
+      company: {
+        companyName: company?.companyName,
+        companyAddress: company?.companyAddress,
+        companyType: company?.companyType,
+        gstNumber: company?.gstNumber,
+        companyPanNumber: company?.companyPanNumber,
+        companyCity: company?.companyCity,
+        companyDistrict: company?.companyDistrict,
+        companyState: company?.companyState,
+        companyPinCode: company?.companyPinCode,
       },
+      ownership: {
+        ownerName: ownership?.ownerName,
+        ownerPhone: ownership?.ownerPhone,
+        ownerEmail: ownership?.ownerEmail,
+        ownerAge: ownership?.ownerAge,
+        ownerAddressLine1: ownership?.ownerAddressLine1,
+        ownerCity: ownership?.ownerCity,
+        ownerDistrict: ownership?.ownerDistrict,
+        ownerState: ownership?.ownerState,
+        ownerPinCode: ownership?.ownerPinCode,
+        bankName: ownership?.bankName,
+        accountNumber: ownership?.accountNumber,
+        ifsc: ownership?.ifsc,
+        beneficiaryName: ownership?.beneficiaryName,
+        branch: ownership?.branch,
+        accountType: ownership?.accountType,
+      },
+      agreement: {
+        dateOfSigning: agreement.dateOfSigning,
+        executionPlace: agreement.executionPlace,
+        dealerSignerName: agreement.dealerSignerName,
+        dealerSignerDesignation: agreement.dealerSignerDesignation,
+        dealerSignerEmail: agreement.dealerSignerEmail,
+        dealerSignerPhone: agreement.dealerSignerPhone,
+        financierName: agreement.financierName,
+        financerLegalEntityName: agreement.financerLegalEntityName,
+        vehicleType: agreement.vehicleType,
+        manufacturer: agreement.manufacturer,
+        brand: agreement.brand,
+        statePresence: agreement.statePresence,
+        itarangSignatory1: agreement.itarangSignatory1,
+        itarangSignatory2: agreement.itarangSignatory2,
+        financierSignatory: agreement.financierSignatory,
+        includeWitnessesInSigning: agreement.includeWitnessesInSigning,
+        witness1: agreement.witness1,
+        witness2: agreement.witness2,
+      },
+    });
+
+    const pdfBuffer = await renderPdfFromHtml(html);
+    const agreementBase64 = pdfBuffer.toString("base64");
+
+    const payload = {
+      file_name: `${cleanString(company?.companyName) || "dealer"}-agreement.pdf`,
+      file_data: agreementBase64,
+      expire_in_days: agreement.expiryDays || 7,
+      notify_signers: true,
+      send_sign_link: true,
+      include_authentication_url: true,
+      signers,
     };
 
     console.log(
       "DIGIO DEBUG -> REQUEST URL:",
-      `${baseUrl}/v2/client/template/create_sign_request`
+      `${baseUrl}/v2/client/document/uploadpdf`
     );
-    console.log("DIGIO DEBUG -> PAYLOAD:", JSON.stringify(payload, null, 2));
+    console.log("DIGIO DEBUG -> SIGNERS:", signers);
 
     const digioResponse = await fetch(
-      `${baseUrl}/v2/client/template/create_sign_request`,
+      `${baseUrl}/v2/client/document/uploadpdf`,
       {
         method: "POST",
         headers: {
@@ -368,6 +468,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const signingParties = Array.isArray(parsed?.signing_parties)
+      ? parsed.signing_parties
+      : [];
+
+    const dealerParty =
+      signingParties.find(
+        (party: any) =>
+          String(party?.reason || "").toLowerCase() === "dealer signer"
+      ) || signingParties[0];
+
+    const signingUrl =
+      dealerParty?.authentication_url ||
+      parsed?.signing_url ||
+      parsed?.sign_url ||
+      parsed?.redirect_url ||
+      parsed?.authentication_url ||
+      "";
+
     return NextResponse.json({
       success: true,
       data: {
@@ -382,13 +500,16 @@ export async function POST(req: NextRequest) {
           parsed?.documentId ||
           parsed?.id ||
           "",
-        signingUrl:
-          parsed?.signing_url ||
-          parsed?.sign_url ||
-          parsed?.redirect_url ||
-          parsed?.signers?.[0]?.sign_url ||
-          "",
+        signingUrl,
+        signerUrls: signingParties.map((party: any) => ({
+          name: party?.name || "",
+          reason: party?.reason || "",
+          identifier: party?.identifier || "",
+          authenticationUrl: party?.authentication_url || "",
+          status: party?.status || "",
+        })),
         status:
+          parsed?.agreement_status?.toLowerCase?.() === "completed" ||
           parsed?.status?.toLowerCase?.() === "completed"
             ? "completed"
             : "sent_for_signature",
