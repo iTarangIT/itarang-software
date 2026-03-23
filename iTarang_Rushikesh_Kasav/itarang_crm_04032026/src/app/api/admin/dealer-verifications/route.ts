@@ -38,7 +38,7 @@ export async function GET() {
       applications: formatted,
     });
   } catch (error: any) {
-    console.error("ADMIN DEALER VERIFICATIONS LIST ERROR:", error);
+    console.error("ADMIN to DEALER VERIFICATIONS LIST ERROR:", error);
 
     return NextResponse.json(
       {
