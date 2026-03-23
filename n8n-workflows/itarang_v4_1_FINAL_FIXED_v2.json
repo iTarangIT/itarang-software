@@ -1,0 +1,555 @@
+{
+    "name": "itarang_v4_1_bolna_webhook_receiver",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "bolna/itarang-v4",
+                "responseMode": "responseNode",
+                "options": {}
+            },
+            "id": "92fb500c-717f-4f97-a27a-99b8ae583770",
+            "name": "Bolna Webhook",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                400,
+                1584
+            ],
+            "webhookId": "bolna-itarang-v4"
+        },
+        {
+            "parameters": {
+                "rules": {
+                    "values": [
+                        {
+                            "conditions": {
+                                "options": {
+                                    "caseSensitive": true,
+                                    "leftValue": "",
+                                    "typeValidation": "strict"
+                                },
+                                "conditions": [
+                                    {
+                                        "leftValue": "={{ $json.body.event_type }}",
+                                        "rightValue": "call_initiated",
+                                        "operator": {
+                                            "type": "string",
+                                            "operation": "equals"
+                                        }
+                                    }
+                                ],
+                                "combinator": "and"
+                            }
+                        },
+                        {
+                            "conditions": {
+                                "options": {
+                                    "caseSensitive": true,
+                                    "leftValue": "",
+                                    "typeValidation": "strict"
+                                },
+                                "conditions": [
+                                    {
+                                        "leftValue": "={{ $json.body.event_type }}",
+                                        "rightValue": "phase_changed",
+                                        "operator": {
+                                            "type": "string",
+                                            "operation": "equals"
+                                        }
+                                    }
+                                ],
+                                "combinator": "and"
+                            }
+                        },
+                        {
+                            "conditions": {
+                                "options": {
+                                    "caseSensitive": true,
+                                    "leftValue": "",
+                                    "typeValidation": "strict"
+                                },
+                                "conditions": [
+                                    {
+                                        "leftValue": "={{ $json.body.event_type }}",
+                                        "rightValue": "call_paused",
+                                        "operator": {
+                                            "type": "string",
+                                            "operation": "equals"
+                                        }
+                                    }
+                                ],
+                                "combinator": "and"
+                            }
+                        },
+                        {
+                            "conditions": {
+                                "options": {
+                                    "caseSensitive": true,
+                                    "leftValue": "",
+                                    "typeValidation": "strict"
+                                },
+                                "conditions": [
+                                    {
+                                        "leftValue": "={{ $json.body.event_type }}",
+                                        "rightValue": "call_resumed",
+                                        "operator": {
+                                            "type": "string",
+                                            "operation": "equals"
+                                        }
+                                    }
+                                ],
+                                "combinator": "and"
+                            }
+                        },
+                        {
+                            "conditions": {
+                                "options": {
+                                    "caseSensitive": true,
+                                    "leftValue": "",
+                                    "typeValidation": "strict"
+                                },
+                                "conditions": [
+                                    {
+                                        "leftValue": "={{ $json.body.event_type }}",
+                                        "rightValue": "call_ended",
+                                        "operator": {
+                                            "type": "string",
+                                            "operation": "equals"
+                                        }
+                                    }
+                                ],
+                                "combinator": "and"
+                            }
+                        },
+                        {
+                            "conditions": {
+                                "options": {
+                                    "caseSensitive": true,
+                                    "leftValue": "",
+                                    "typeValidation": "strict"
+                                },
+                                "conditions": [
+                                    {
+                                        "leftValue": "={{ $json.body.event_type }}",
+                                        "rightValue": "transcript_chunk",
+                                        "operator": {
+                                            "type": "string",
+                                            "operation": "equals"
+                                        }
+                                    }
+                                ],
+                                "combinator": "and"
+                            }
+                        },
+                        {
+                            "conditions": {
+                                "options": {
+                                    "caseSensitive": true,
+                                    "leftValue": "",
+                                    "typeValidation": "strict"
+                                },
+                                "conditions": [
+                                    {
+                                        "leftValue": "={{ $json.body.event_type }}",
+                                        "rightValue": "conversation_ended",
+                                        "operator": {
+                                            "type": "string",
+                                            "operation": "equals"
+                                        }
+                                    }
+                                ],
+                                "combinator": "and"
+                            }
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "id": "0d98a6cb-e66d-475c-8622-461df863037d",
+            "name": "Route by Event Type",
+            "type": "n8n-nodes-base.switch",
+            "typeVersion": 3,
+            "position": [
+                624,
+                1584
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "UPDATE bolna_calls SET status = 'initiated', started_at = NOW(), updated_at = NOW() WHERE bolna_call_id = '{{ $json.body.call_id }}' RETURNING *;",
+                "options": {}
+            },
+            "id": "777e3d7f-c7dd-450c-a434-6b04a04b0f0d",
+            "name": "Update Call Initiated",
+            "type": "n8n-nodes-base.postgres",
+            "typeVersion": 2.4,
+            "position": [
+                832,
+                1376
+            ],
+            "credentials": {
+                "postgres": {
+                    "id": "NnMWnm5cZMnvLDvK",
+                    "name": "Postgres account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "UPDATE bolna_calls SET current_phase = '{{ $json.body.phase }}', updated_at = NOW() WHERE bolna_call_id = '{{ $json.body.call_id }}' RETURNING *;",
+                "options": {}
+            },
+            "id": "4a432313-6605-4e1a-96e0-287413998268",
+            "name": "Update Phase Changed",
+            "type": "n8n-nodes-base.postgres",
+            "typeVersion": 2.4,
+            "position": [
+                832,
+                1488
+            ],
+            "credentials": {
+                "postgres": {
+                    "id": "NnMWnm5cZMnvLDvK",
+                    "name": "Postgres account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "UPDATE bolna_calls SET status = 'paused', updated_at = NOW() WHERE bolna_call_id = '{{ $json.body.call_id }}' RETURNING *;",
+                "options": {}
+            },
+            "id": "0365d2ea-b2d5-47ba-b365-b6cf4ccf4767",
+            "name": "Update Call Paused",
+            "type": "n8n-nodes-base.postgres",
+            "typeVersion": 2.4,
+            "position": [
+                832,
+                1584
+            ],
+            "credentials": {
+                "postgres": {
+                    "id": "NnMWnm5cZMnvLDvK",
+                    "name": "Postgres account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "UPDATE bolna_calls SET status = 'resumed', updated_at = NOW() WHERE bolna_call_id = '{{ $json.body.call_id }}' RETURNING *;",
+                "options": {}
+            },
+            "id": "9c7fde06-0a55-440f-9645-60e1eecc4540",
+            "name": "Update Call Resumed",
+            "type": "n8n-nodes-base.postgres",
+            "typeVersion": 2.4,
+            "position": [
+                832,
+                1680
+            ],
+            "credentials": {
+                "postgres": {
+                    "id": "NnMWnm5cZMnvLDvK",
+                    "name": "Postgres account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "UPDATE bolna_calls SET status = 'completed', ended_at = NOW(), updated_at = NOW() WHERE bolna_call_id = '{{ $json.body.call_id }}' RETURNING *;",
+                "options": {}
+            },
+            "id": "f40cb2de-1b57-4532-8196-39669ad62e6e",
+            "name": "Update Call Ended",
+            "type": "n8n-nodes-base.postgres",
+            "typeVersion": 2.4,
+            "position": [
+                832,
+                1776
+            ],
+            "credentials": {
+                "postgres": {
+                    "id": "NnMWnm5cZMnvLDvK",
+                    "name": "Postgres account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "UPDATE bolna_calls SET full_transcript = COALESCE(full_transcript, '') || ' ' || '{{ $json.body.transcript }}', updated_at = NOW() WHERE bolna_call_id = '{{ $json.body.call_id }}' RETURNING *;",
+                "options": {}
+            },
+            "id": "68775730-cf68-4934-8481-3ff766bad5c0",
+            "name": "Append Transcript Chunk",
+            "type": "n8n-nodes-base.postgres",
+            "typeVersion": 2.4,
+            "position": [
+                832,
+                1888
+            ],
+            "credentials": {
+                "postgres": {
+                    "id": "NnMWnm5cZMnvLDvK",
+                    "name": "Postgres account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "url": "=https://api.bolna.dev/v1/calls/{{ $json.body.call_id }}/transcript",
+                "authentication": "predefinedCredentialType",
+                "nodeCredentialType": "bolnaApi",
+                "options": {}
+            },
+            "id": "9cbb524c-05b5-4fb1-8883-6b0beb2741ef",
+            "name": "Fetch Full Transcript",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                832,
+                1984
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "UPDATE bolna_calls SET full_transcript = '{{ $json.transcript }}', transcript_fetched_at = NOW(), updated_at = NOW() WHERE bolna_call_id = '{{ $json.body.call_id }}' RETURNING *;",
+                "options": {}
+            },
+            "id": "9a3ae355-e0f4-4a0b-b039-7d262a56dcc6",
+            "name": "Store Full Transcript",
+            "type": "n8n-nodes-base.postgres",
+            "typeVersion": 2.4,
+            "position": [
+                1024,
+                1984
+            ],
+            "credentials": {
+                "postgres": {
+                    "id": "NnMWnm5cZMnvLDvK",
+                    "name": "Postgres account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://n8n.srv1128060.hstgr.cloud/webhook/analyze-transcript",
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={\n  \"call_id\": \"{{ $json.id }}\",\n  \"lead_id\": \"{{ $json.lead_id }}\"\n}",
+                "options": {}
+            },
+            "id": "032117bc-25bb-4c58-940b-fc9ebf2ba404",
+            "name": "Trigger Transcript Analysis",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                1232,
+                1888
+            ]
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={ \"success\": true, \"event_type\": \"{{ $json.body.event_type }}\", \"processed_at\": \"{{ $now.toISO() }}\" }",
+                "options": {}
+            },
+            "id": "a0614233-b06f-4516-b677-a48f8eb6764e",
+            "name": "Webhook Response",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1.1,
+            "position": [
+                1424,
+                1632
+            ]
+        }
+    ],
+    "pinData": {},
+    "connections": {
+        "Bolna Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "Route by Event Type",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Route by Event Type": {
+            "main": [
+                [
+                    {
+                        "node": "Update Call Initiated",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Update Phase Changed",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Update Call Paused",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Update Call Resumed",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Update Call Ended",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Append Transcript Chunk",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Fetch Full Transcript",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Update Call Initiated": {
+            "main": [
+                [
+                    {
+                        "node": "Webhook Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Update Phase Changed": {
+            "main": [
+                [
+                    {
+                        "node": "Webhook Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Update Call Paused": {
+            "main": [
+                [
+                    {
+                        "node": "Webhook Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Update Call Resumed": {
+            "main": [
+                [
+                    {
+                        "node": "Webhook Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Update Call Ended": {
+            "main": [
+                [
+                    {
+                        "node": "Trigger Transcript Analysis",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Append Transcript Chunk": {
+            "main": [
+                [
+                    {
+                        "node": "Webhook Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch Full Transcript": {
+            "main": [
+                [
+                    {
+                        "node": "Store Full Transcript",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Store Full Transcript": {
+            "main": [
+                [
+                    {
+                        "node": "Trigger Transcript Analysis",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Trigger Transcript Analysis": {
+            "main": [
+                [
+                    {
+                        "node": "Webhook Response",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "active": true,
+    "settings": {
+        "executionOrder": "v1",
+        "callerPolicy": "workflowsFromSameOwner",
+        "availableInMCP": true,
+        "timeSavedMode": "fixed"
+    },
+    "versionId": "dcf630f7-0d1c-44df-8492-35b321b2558e",
+    "meta": {
+        "templateCredsSetupCompleted": true,
+        "instanceId": "557b051a37f59a9c05cd507a1367447a3873a9fd90a0001b2b202f9810e32272"
+    },
+    "id": "Fhx2rnmEdJdOCdzb",
+    "tags": []
+}
