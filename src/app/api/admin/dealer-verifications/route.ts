@@ -40,8 +40,6 @@ export async function GET() {
   } catch (error: any) {
     console.error("ADMIN to DEALER VERIFICATIONS LIST ERROR:", error);
 
-    // demo
-
     return NextResponse.json(
       {
         success: false,
