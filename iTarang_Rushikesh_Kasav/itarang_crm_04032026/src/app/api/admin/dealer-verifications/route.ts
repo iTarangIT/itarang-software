@@ -46,6 +46,8 @@ export async function GET() {
         message: error?.message || "Failed to fetch dealer verifications",
       },
       { status: 500 }
-    );
+   
+   
+    );  
   }
-}
+}  
