@@ -33,24 +33,24 @@ export const POST = withErrorHandler(async () => {
 
   const runId = await generateId("SCRAPE", scrapeRuns);
 
-  // ✅ Insert run
+  // Insert run
   await db.insert(scrapeRuns).values({
     id: runId,
-    query: "EV battery dealers", // replace with dynamic later
+    searchQueries: "EV battery dealers", 
     status: "running",
     triggeredBy: user.id,
     startedAt: new Date(),
   });
 
-  // 🔥 Background execution
+  // Background execution
   runDealerScraper(runId).catch((err) => {
     console.error(`[SCRAPER][${runId}] failed:`, err);
   });
 
   return successResponse(
     {
-      runId,
-      status: "running",
+      run_id: runId,
+      message: "Scraper started",
     },
     202,
   );

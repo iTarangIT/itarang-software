@@ -20,14 +20,13 @@ export const GET = withErrorHandler(async (req: Request) => {
   const runs = await db
     .select({
       id: scrapeRuns.id,
-      query: scrapeRuns.query,
       status: scrapeRuns.status,
       startedAt: scrapeRuns.startedAt,
       completedAt: scrapeRuns.completedAt,
       totalFound: scrapeRuns.totalFound,
-      newLeads: scrapeRuns.newLeads,
-      duplicates: scrapeRuns.duplicates,
-      error: scrapeRuns.error,
+      newLeadsSaved: scrapeRuns.newLeadsSaved,
+      duplicatesSkipped: scrapeRuns.duplicatesSkipped,
+      errorMessage: scrapeRuns.errorMessage,
     })
     .from(scrapeRuns)
     .orderBy(desc(scrapeRuns.startedAt))

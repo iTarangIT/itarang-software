@@ -10,6 +10,7 @@ import {
   uuid,
   index,
   bigint,
+  json,
 } from "drizzle-orm/pg-core";
 // import { pgTable, uuid, text, varchar, boolean, timestamp, jsonb, bigint } from "drizzle-orm/pg-core";
 
@@ -2389,16 +2390,21 @@ export const dealerOnboardingDocuments = pgTable(
 
 export const scrapeRuns = pgTable("scraper_runs", {
   id: text("id").primaryKey(),
-  query: text("query"),
-  status: text("status"), // running | completed | failed
+
+  status: text("status"),
 
   triggeredBy: text("triggered_by"),
+
   startedAt: timestamp("started_at").defaultNow(),
   completedAt: timestamp("completed_at"),
 
   totalFound: integer("total_found"),
-  newLeads: integer("new_leads"),
-  duplicates: integer("duplicates"),
+  newLeadsSaved: integer("new_leads_saved"),
+  duplicatesSkipped: integer("duplicates_skipped"),
 
-  error: text("error"),
+  errorMessage: text("error_message"),
+
+  searchQueries: json("search_queries"),
+
+  createdAt: timestamp("created_at").defaultNow(),
 });
