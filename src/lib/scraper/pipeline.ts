@@ -1,60 +1,57 @@
-// lib/scraper/pipeline.ts
-
-import { db } from "@/lib/db";
-import { scrapeRuns } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
-
 import { generateQueries } from "./query/generateQueries";
-import { expandQueries } from "./query/expandQueries";
 import { getCachedQueries, setCachedQueries } from "./query/queryCache";
 
-export async function runDealerScraper(runId: string) {
+import { fetchLeadsFromSources } from "./query/sources";
+import { processLeads } from "./processing";
+
+import { saveRawLeads } from "./storage/rawStore";
+import { saveCleanLeads } from "./storage/leadStore";
+import { markRunCompleted, markRunFailed } from "./storage/runStore";
+
+export async function runDealerScraper(runId: string, baseQuery: string) {
   try {
     console.log(`[SCRAPER][${runId}] started`);
-
-    const baseQuery = "EV battery dealers";
 
     let queries = getCachedQueries(baseQuery);
 
     if (!queries) {
-      const baseQueries = await generateQueries(baseQuery);
-      queries = expandQueries(baseQueries);
-
+      const aiQueries = await generateQueries(baseQuery);
+      queries = aiQueries;
       setCachedQueries(baseQuery, queries);
     }
+    queries = queries.map((q) =>
+      q
+        .replace(/\b3w\b/gi, "e rickshaw")
+        .replace(/\b3 wheeler\b/gi, "e rickshaw"),
+    );
 
-    console.log(`[SCRAPER][${runId}] queries:`, queries);
+    const finalQueries = queries
+      .map((q) => q.trim())
+      .filter(Boolean)
+      .slice(0, 5);
 
-    const leads = queries.map((q, i) => ({
-      name: `Dealer ${i + 1}`,
-      phone: `99999999${i}`,
-      query: q,
-    }));
+    console.log(`[SCRAPER][${runId}] final queries:`, finalQueries);
 
-    const totalFound = leads.length;
+    const leads = await fetchLeadsFromSources(finalQueries);
 
-    await db
-      .update(scrapeRuns)
-      .set({
-        status: "completed",
-        completedAt: new Date(),
-        totalFound,
-        newLeadsSaved: totalFound,
-        duplicatesSkipped: 0,
-      })
-      .where(eq(scrapeRuns.id, runId));
+    console.log(`[SCRAPER][${runId}] leads fetched:`, leads.length);
+
+    await saveRawLeads(runId, leads);
+
+    const result = await processLeads(leads);
+
+    await saveCleanLeads(result.cleaned);
+
+    await markRunCompleted(runId, {
+      total: result.total,
+      saved: result.saved,
+      duplicates: result.duplicates,
+    });
 
     console.log(`[SCRAPER][${runId}] completed`);
   } catch (err: any) {
     console.error(`[SCRAPER][${runId}] failed`, err);
 
-    await db
-      .update(scrapeRuns)
-      .set({
-        status: "failed",
-        errorMessage: err.message,
-        completedAt: new Date(),
-      })
-      .where(eq(scrapeRuns.id, runId));
+    await markRunFailed(runId, err.message);
   }
 }

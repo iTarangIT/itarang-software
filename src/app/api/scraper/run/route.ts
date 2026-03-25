@@ -1,8 +1,3 @@
-/**
- * POST /api/scraper/run
- * Trigger scraper (fire-and-forget)
- */
-
 import { db } from "@/lib/db";
 import { scrapeRuns } from "@/lib/db/schema";
 import {
@@ -12,13 +7,20 @@ import {
   errorResponse,
 } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
-import { runDealerScraper } from "@/lib/dealer-scraper-service";
+import { runDealerScraper } from "@/lib/scraper/pipeline";
 import { eq } from "drizzle-orm";
 
 export const maxDuration = 300;
 
-export const POST = withErrorHandler(async () => {
+export const POST = withErrorHandler(async (req: Request) => {
   const user = await requireRole(["sales_head", "ceo", "business_head"]);
+
+  const body = await req.json();
+  const baseQuery = body.query?.trim().toLowerCase();
+
+  if (!baseQuery) {
+    return errorResponse("Query is required", 400);
+  }
 
   const running = await db
     .select({ id: scrapeRuns.id })
@@ -33,25 +35,15 @@ export const POST = withErrorHandler(async () => {
 
   const runId = await generateId("SCRAPE", scrapeRuns);
 
-  // Insert run
   await db.insert(scrapeRuns).values({
     id: runId,
-    searchQueries: "EV battery dealers", 
+    searchQueries: baseQuery,
     status: "running",
     triggeredBy: user.id,
     startedAt: new Date(),
   });
 
-  // Background execution
-  runDealerScraper(runId).catch((err) => {
-    console.error(`[SCRAPER][${runId}] failed:`, err);
-  });
+  runDealerScraper(runId, baseQuery).catch(console.error);
 
-  return successResponse(
-    {
-      run_id: runId,
-      message: "Scraper started",
-    },
-    202,
-  );
+  return successResponse({ run_id: runId }, 202);
 });

@@ -9,16 +9,18 @@ export async function generateQueries(baseQuery: string): Promise<string[]> {
     });
 
     const prompt = `
-Expand this business search query into 20 high-quality variations.
+    Expand this business search query into 15 high-quality Google Maps search queries.
 
-Rules:
-- Focus on business intent (dealer, supplier, distributor)
-- Include EV, lithium, e-rickshaw context
-- Keep it relevant to Indian market
-- Return ONLY JSON array
+    Rules:
+    - Make queries suitable for Google Maps (real business searches)
+    - Replace vague terms with real-world terms
+    - Example: "3w battery" → "e rickshaw battery"
+    - Include: dealer, shop, supplier, distributor
+    - Keep original location (do not change city)
+    - Return ONLY JSON array
 
-Query: "${baseQuery}"
-`;
+    Query: "${baseQuery}"
+    `;
 
     const result = await model.generateContent(prompt);
     const text = result.response.text();
@@ -28,9 +30,12 @@ Query: "${baseQuery}"
     const queries = JSON.parse(clean);
 
     return queries.slice(0, 20);
-  } catch (err) {
-    console.error("AI failed, fallback used:", err);
-
-    return [baseQuery, `${baseQuery} supplier`, `${baseQuery} distributor`];
+  } catch {
+    return [
+      baseQuery,
+      `${baseQuery} dealer`,
+      `${baseQuery} supplier`,
+      `${baseQuery} distributor`,
+    ];
   }
 }
