@@ -2408,3 +2408,30 @@ export const scrapeRuns = pgTable("scraper_runs", {
 
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+export const scraperLeads = pgTable("scraper_leads", {
+  id: text("id").primaryKey(),
+
+  name: text("name"),
+  phone: text("phone"),
+  email: text("email"),
+  website: text("website"),
+
+  city: text("city"),
+  address: text("address"),
+
+  source: text("source"),
+  status: text("status"),
+
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const scraperRaw = pgTable("scraper_raw", {
+  id: text("id").primaryKey(),
+
+  runId: text("run_id"),
+
+  rawData: text("raw_data"),
+
+  createdAt: timestamp("created_at").defaultNow(),
+});

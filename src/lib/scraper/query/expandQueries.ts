@@ -1,13 +1,34 @@
-const cities = ["Delhi", "Mumbai", "Pune", "Nashik"];
+const INDIAN_CITIES = [
+  "Delhi",
+  "Mumbai",
+  "Bangalore",
+  "Hyderabad",
+  "Chennai",
+  "Pune",
+  "Kolkata",
+  "Ahmedabad",
+  "Jaipur",
+  "Surat",
+  "Lucknow",
+  "Nagpur",
+  "Indore",
+  "Bhopal",
+  "Patna",
+  "Chandigarh",
+  "Nashik",
+  "Vadodara",
+  "Coimbatore",
+  "Visakhapatnam",
+];
 
-export function expandQueries(baseQueries: string[]): string[] {
+export function expandQueries(baseQueries: string[]) {
   const expanded: string[] = [];
 
-  for (const q of baseQueries) {
-    for (const city of cities) {
-      expanded.push(`${q} ${city}`);
+  for (const query of baseQueries) {
+    for (const city of INDIAN_CITIES) {
+      expanded.push(`${query} ${city}`);
     }
   }
 
-  return expanded.slice(0, 10);
+  return expanded;
 }
