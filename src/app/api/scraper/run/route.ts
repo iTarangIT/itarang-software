@@ -8,7 +8,7 @@ import {
 } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 import { runDealerScraper } from "@/lib/scraper/pipeline";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 
 export const maxDuration = 300;
 
@@ -46,4 +46,24 @@ export const POST = withErrorHandler(async (req: Request) => {
   runDealerScraper(runId, baseQuery).catch(console.error);
 
   return successResponse({ run_id: runId }, 202);
+});
+
+export const GET = withErrorHandler(async (req: Request) => {
+  const { searchParams } = new URL(req.url);
+
+  const page = Number(searchParams.get("page") || 1);
+  const limit = 10;
+  const offset = (page - 1) * limit;
+
+  const runs = await db
+    .select()
+    .from(scrapeRuns)
+    .orderBy(desc(scrapeRuns.startedAt))
+    .limit(limit)
+    .offset(offset);
+
+  return successResponse({
+    data: runs,
+    page,
+  });
 });
