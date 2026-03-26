@@ -385,6 +385,11 @@ export default function DealerReviewPage() {
     };
   }, [data]);
 
+  const signedAgreementReady =
+    (data?.agreement?.status || "").toLowerCase() === "completed";
+
+  const signedAgreementDownloadUrl = `/api/admin/dealer-verifications/${dealerId}/download-signed-agreement`;
+
   const reloadDealer = async () => {
     try {
       const res = await fetch(`/api/admin/dealer-verifications/${dealerId}`, {
@@ -409,32 +414,34 @@ export default function DealerReviewPage() {
       const payload =
         action === "initiate" || action === "reinitiate"
           ? {
-            agreementConfig: {
-              agreementName: data?.agreement?.agreementName || "Dealer Finance Enablement Agreement",
-              agreementVersion: "v1.0",
-              dateOfSigning: data?.agreement?.dateOfSigning || "",
-              mouDate: data?.agreement?.mouDate || "",
-              financierName: data?.agreement?.financierName || "",
+              agreementConfig: {
+                agreementName:
+                  data?.agreement?.agreementName || "Dealer Finance Enablement Agreement",
+                agreementVersion: "v1.0",
+                dateOfSigning: data?.agreement?.dateOfSigning || "",
+                mouDate: data?.agreement?.mouDate || "",
+                financierName: data?.agreement?.financierName || "",
 
-              dealerSignerName: data?.agreement?.dealerSignerName || "",
-              dealerSignerDesignation: data?.agreement?.dealerSignerDesignation || "",
-              dealerSignerEmail: data?.agreement?.dealerSignerEmail || "",
-              dealerSignerPhone: data?.agreement?.dealerSignerPhone || "",
-              dealerSigningMethod: data?.agreement?.dealerSigningMethod || "",
+                dealerSignerName: data?.agreement?.dealerSignerName || "",
+                dealerSignerDesignation:
+                  data?.agreement?.dealerSignerDesignation || "",
+                dealerSignerEmail: data?.agreement?.dealerSignerEmail || "",
+                dealerSignerPhone: data?.agreement?.dealerSignerPhone || "",
+                dealerSigningMethod: data?.agreement?.dealerSigningMethod || "",
 
-              financierSignatory: data?.agreement?.financierSignatory || null,
-              itarangSignatory1: data?.agreement?.itarangSignatory1 || null,
-              itarangSignatory2: data?.agreement?.itarangSignatory2 || null,
+                financierSignatory: data?.agreement?.financierSignatory || null,
+                itarangSignatory1: data?.agreement?.itarangSignatory1 || null,
+                itarangSignatory2: data?.agreement?.itarangSignatory2 || null,
 
-              signingOrder: ["dealer", "financier", "itarang_1", "itarang_2"],
+                signingOrder: ["dealer", "financier", "itarang_1", "itarang_2"],
 
-              isOemFinancing: !!data?.agreement?.isOemFinancing,
-              vehicleType: data?.agreement?.vehicleType || "",
-              manufacturer: data?.agreement?.manufacturer || "",
-              brand: data?.agreement?.brand || "",
-              statePresence: data?.agreement?.statePresence || "",
-            },
-          }
+                isOemFinancing: !!data?.agreement?.isOemFinancing,
+                vehicleType: data?.agreement?.vehicleType || "",
+                manufacturer: data?.agreement?.manufacturer || "",
+                brand: data?.agreement?.brand || "",
+                statePresence: data?.agreement?.statePresence || "",
+              },
+            }
           : {};
 
       const res = await fetch(
@@ -685,7 +692,8 @@ export default function DealerReviewPage() {
                       <p className="font-semibold text-slate-900">{doc.name}</p>
 
                       <p className="mt-1 text-sm text-slate-500">
-                        {(doc.verificationStatus ||
+                        {(
+                          doc.verificationStatus ||
                           doc.docStatus ||
                           doc.status ||
                           "Uploaded"
@@ -758,38 +766,43 @@ export default function DealerReviewPage() {
               </div>
 
               <div className="mt-5 flex flex-wrap gap-3">
-                {/* Show draft/provider agreement only before final signed copy is available */}
-                {data.agreement?.copyUrl &&
-                  !(
-                    data.agreement?.signedAgreementUrl &&
-                    (data.agreement?.status || "").toLowerCase() === "completed"
-                  ) && (
-                    <Link
-                      href={data.agreement.copyUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                    >
-                      <Download className="h-4 w-4" />
-                      View / Download Agreement
-                    </Link>
-                  )}
+                {data.agreement?.copyUrl && !signedAgreementReady && (
+                  <Link
+                    href={data.agreement.copyUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    View / Download Agreement
+                  </Link>
+                )}
 
-                {/* Show final signed agreement only after completion */}
-                {data.agreement?.signedAgreementUrl &&
-                  (data.agreement?.status || "").toLowerCase() === "completed" && (
-                    <Link
-                      href={data.agreement.signedAgreementUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                {signedAgreementReady && (
+                  <>
+                    {data.agreement?.copyUrl && (
+                      <Link
+                        href={data.agreement.copyUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        <Download className="h-4 w-4" />
+                        View / Download Agreement
+                      </Link>
+                    )}
+
+                    <a
+                      href={signedAgreementDownloadUrl}
                       className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
                     >
                       <Download className="h-4 w-4" />
                       Signed Agreement
-                    </Link>
-                  )}
+                    </a>
+                  </>
+                )}
 
-                {!data.agreement?.copyUrl && !data.agreement?.signedAgreementUrl && (
+                {!data.agreement?.copyUrl && !data.agreement?.agreementId && (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                     Agreement copy is not available yet.
                   </div>
@@ -825,17 +838,17 @@ export default function DealerReviewPage() {
 
                 {(data.agreement?.status === "failed" ||
                   data.agreement?.status === "expired") && (
-                    <button
-                      onClick={() => handleAgreementAction("reinitiate")}
-                      disabled={agreementActionLoading !== null}
-                      className="inline-flex items-center gap-2 rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
-                    >
-                      <RefreshCw className="h-4 w-4" />
-                      {agreementActionLoading === "reinitiate"
-                        ? "Re-initiating..."
-                        : "Re-initiate Agreement"}
-                    </button>
-                  )}
+                  <button
+                    onClick={() => handleAgreementAction("reinitiate")}
+                    disabled={agreementActionLoading !== null}
+                    className="inline-flex items-center gap-2 rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    {agreementActionLoading === "reinitiate"
+                      ? "Re-initiating..."
+                      : "Re-initiate Agreement"}
+                  </button>
+                )}
 
                 {data.agreement?.status === "signed" && !data.agreement?.copyUrl && (
                   <button
