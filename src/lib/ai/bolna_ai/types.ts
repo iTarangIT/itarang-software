@@ -1,7 +1,9 @@
 export interface BolnaCallPayload {
+  leadId: string;
   phone: string;
   name?: string;
   context?: string;
+  scheduledAt?: string;
 }
 
 export interface BolnaCallResponse {
