@@ -1,6 +1,7 @@
 import { analyzeTranscript } from "@/lib/ai/analysis";
 import { triggerBolnaCall } from "./triggerCall";
 import { saveCallAttempt } from "../storage/callStore";
+import { decideNextAction } from "../decision/engine";
 
 function getValidDate(input: any): Date | null {
   if (!input) return null;
@@ -66,7 +67,10 @@ export async function handleBolnaWebhook(body: any) {
       console.log("Invalid or no callback time, skipping scheduling");
     }
 
-    console.log("✅ WEBHOOK HANDLER DONE");
+    const decision = decideNextAction(analysis.intent_score);
+    console.log("Decision" + decision);
+
+    console.log("WEBHOOK HANDLER DONE");
   } catch (err) {
     console.error("Webhook handler error:", err);
   }
