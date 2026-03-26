@@ -3,55 +3,75 @@ import { db } from "@/lib/db";
 import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
-export async function POST(
-  _req: NextRequest,
-  { params }: { params: { dealerId: string } }
-) {
-  try {
-    const dealerId = params.dealerId;
+type RouteContext = {
+  params: Promise<{ dealerId: string }>;
+};
 
-    const application = await db
+export async function POST(_req: NextRequest, context: RouteContext) {
+  try {
+    const { dealerId } = await context.params;
+
+    const applicationRows = await db
       .select()
       .from(dealerOnboardingApplications)
-      .where(eq(dealerOnboardingApplications.id, dealerId));
+      .where(eq(dealerOnboardingApplications.id, dealerId))
+      .limit(1);
 
-    const app = application[0];
+    const application = applicationRows[0];
 
-    if (!app) {
+    if (!application) {
       return NextResponse.json(
-        { success: false, message: "Application not found" },
+        {
+          success: false,
+          message: "Application not found",
+        },
         { status: 404 }
       );
     }
 
-    // TODO: Call Digio API here
-    // For now we simulate Digio response
-    const fakeDigioResponse = {
-      document_id: "DOC_" + Date.now(),
-      request_id: "REQ_" + Date.now(),
-      signing_url: "https://digio.in/sign/" + dealerId,
-      status: "sent",
-    };
+    if (!application.financeEnabled) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Agreement refresh is only available for finance-enabled applications.",
+        },
+        { status: 400 }
+      );
+    }
 
-    await db
-      .update(dealerOnboardingApplications)
-      .set({
-        agreementStatus: "sent_for_signature",
-        providerDocumentId: fakeDigioResponse.document_id,
-        requestId: fakeDigioResponse.request_id,
-        providerSigningUrl: fakeDigioResponse.signing_url,
-        lastActionTimestamp: new Date(),
-      })
-      .where(eq(dealerOnboardingApplications.id, dealerId));
+    if (!application.providerDocumentId) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Agreement has not been initiated yet. Please initiate agreement first.",
+        },
+        { status: 400 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
-      signingUrl: fakeDigioResponse.signing_url,
+      message: "Current agreement status fetched successfully",
+      data: {
+        agreementStatus: application.agreementStatus || "not_generated",
+        reviewStatus: application.reviewStatus || "pending_sales_head",
+        requestId: application.requestId || null,
+        providerDocumentId: application.providerDocumentId || null,
+        providerSigningUrl: application.providerSigningUrl || null,
+        stampStatus: application.stampStatus || "pending",
+        completionStatus: application.completionStatus || "pending",
+        signedAt: application.signedAt || null,
+        lastActionTimestamp: application.lastActionTimestamp || null,
+      },
     });
   } catch (error: any) {
-    console.error("INITIATE AGREEMENT ERROR:", error);
+    console.error("REFRESH AGREEMENT ERROR:", error);
+
     return NextResponse.json(
-      { success: false, message: error.message },
+      {
+        success: false,
+        message: error?.message || "Failed to refresh agreement status",
+      },
       { status: 500 }
     );
   }

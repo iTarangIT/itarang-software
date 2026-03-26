@@ -168,9 +168,8 @@ export default function StepReview() {
   const primaryContact = getPrimaryContact(state);
 
   const agreementRequired = state.finance?.enableFinance === "yes";
-  const agreementCompleted =
+  const agreementAlreadyCompleted =
     !agreementRequired || state.agreement?.agreementStatus === "completed";
-
   const signerFlow = useMemo(
     () => [
       {
@@ -285,8 +284,7 @@ export default function StepReview() {
             provider: state.agreement?.provider || "Digio",
             agreementName: state.agreement?.agreementName || "",
             agreementVersion: state.agreement?.agreementVersion || "",
-            agreementStatus: state.agreement?.agreementStatus || "",
-            requestId: state.agreement?.requestId || "",
+            agreementStatus: state.agreement?.agreementStatus || "not_generated", requestId: state.agreement?.requestId || "",
             providerDocumentId: state.agreement?.providerDocumentId || "",
             providerSigningUrl: state.agreement?.providerSigningUrl || "",
             generatedDate: state.agreement?.generatedDate || "",
@@ -395,7 +393,7 @@ export default function StepReview() {
         </div>
       </div>
 
-      {agreementRequired && !agreementCompleted && (
+      {agreementRequired && !agreementAlreadyCompleted  && (
         <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -807,7 +805,7 @@ export default function StepReview() {
           disabled={isSubmitting}
           className="rounded-2xl bg-[#1F5C8F] px-6 py-3 font-semibold text-white hover:bg-[#173F63] disabled:opacity-50"
         >
-          {isSubmitting ? "Initiating..." : "Confirm & Initiate Onboarding"}
+          {isSubmitting ? "Submitting..." : "Submit for Admin Review"}
         </button>
       </div>
     </div>

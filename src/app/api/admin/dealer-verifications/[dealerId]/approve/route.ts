@@ -43,10 +43,21 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    // 🚫 Prevent double approval
+    // Prevent double approval
     if (application.onboardingStatus === "approved") {
       return NextResponse.json(
         { success: false, message: "Dealer already approved" },
+        { status: 400 }
+      );
+    }
+
+    // Onboarding must be submitted before approval
+    if (application.onboardingStatus !== "submitted") {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Dealer onboarding must be submitted before approval.",
+        },
         { status: 400 }
       );
     }
@@ -64,10 +75,11 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    // 🚫 Finance-enabled dealers must complete agreement
+    // Finance-enabled dealers must complete agreement first
     if (application.financeEnabled) {
       if (
         application.agreementStatus !== "completed" ||
+        application.reviewStatus !== "agreement_completed" ||
         !application.providerDocumentId
       ) {
         return NextResponse.json(
@@ -84,31 +96,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     const temporaryPassword = generateTemporaryPassword();
     const passwordHash = await hashPassword(temporaryPassword);
 
-    // ✅ Update onboarding status
-    await db
-      .update(dealerOnboardingApplications)
-      .set({
-        onboardingStatus: "approved",
-        reviewStatus: "approved",
-        dealerAccountStatus: "active",
-        completionStatus: application.financeEnabled
-          ? "agreement_completed"
-          : "onboarding_completed",
-        approvedAt: new Date(),
-        signedAt:
-          application.agreementStatus === "completed"
-            ? new Date()
-            : application.signedAt || null,
-        rejectedAt: null,
-        rejectionReason: null,
-        correctionRemarks: null,
-        rejectionRemarks: null,
-        dealerCode,
-        updatedAt: new Date(),
-      })
-      .where(eq(dealerOnboardingApplications.id, dealerId));
-
-    // 1️⃣ Create or update Supabase Auth user
+    // 1. Create or update Supabase Auth user
     const { data: authUsers, error: listError } =
       await supabaseAdmin.auth.admin.listUsers();
 
@@ -178,7 +166,30 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       authUserId = createdAuthUser.user.id;
     }
 
-    // 2️⃣ Create or update local user
+    // 2. Update onboarding application with final approval state
+    await db
+      .update(dealerOnboardingApplications)
+      .set({
+        dealerUserId: authUserId,
+        onboardingStatus: "approved",
+        reviewStatus: "approved",
+        dealerAccountStatus: "active",
+        completionStatus: "completed",
+        approvedAt: new Date(),
+        signedAt:
+          application.agreementStatus === "completed"
+            ? application.signedAt || new Date()
+            : application.signedAt || null,
+        rejectedAt: null,
+        rejectionReason: null,
+        correctionRemarks: null,
+        rejectionRemarks: null,
+        dealerCode,
+        updatedAt: new Date(),
+      })
+      .where(eq(dealerOnboardingApplications.id, dealerId));
+
+    // 3. Create or update local user
     const existingUserRows = await db
       .select()
       .from(users)
@@ -218,7 +229,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       });
     }
 
-    // 3️⃣ Send welcome email
+    // 4. Send welcome email
     let emailSent = false;
     let emailError: string | null = null;
 
@@ -230,8 +241,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         dealerId: dealerCode,
         userId: dealerLoginEmail,
         password: temporaryPassword,
-        loginUrl:
-          process.env.DEALER_LOGIN_URL || "http://localhost:3000/login",
+        loginUrl: process.env.DEALER_LOGIN_URL || "http://localhost:3000/login",
         supportEmail:
           process.env.DEALER_SUPPORT_EMAIL || "support@itarang.com",
         supportPhone:
@@ -244,6 +254,15 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       emailError = mailError?.message || "Unknown email error";
       console.error("DEALER WELCOME EMAIL ERROR:", mailError);
     }
+
+    // 5. Approval audit log
+    console.log("DEALER APPROVED:", {
+      dealerId,
+      dealerCode,
+      authUserId,
+      email: dealerLoginEmail,
+      approvedAt: new Date().toISOString(),
+    });
 
     return NextResponse.json({
       success: true,

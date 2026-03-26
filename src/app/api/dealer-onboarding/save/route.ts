@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
       body.onboardingStatus === "submitted" ? "submitted" : "draft";
 
     const reviewStatus =
-      onboardingStatus === "submitted" ? "pending" : null;
+      onboardingStatus === "submitted" ? "pending_sales_head" : null;
 
     const ownerName = cleanString(body.ownerName);
     const ownerPhone = cleanString(body.ownerPhone);
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     const ifscCode = cleanString(body.ifscCode);
 
     const documents = Array.isArray(body.documents) ? body.documents : [];
-
+    const agreementConfig = body.agreement ?? {};
     if (!companyName) {
       return NextResponse.json(
         { success: false, message: "Company name is required" },
@@ -118,13 +118,23 @@ export async function POST(req: NextRequest) {
             beneficiaryName,
             ifscCode,
             updatedAt: new Date(),
-            agreementStatus: body.agreement?.status || null,
-            providerSigningUrl: body.agreement?.signingUrl || null,
-            providerDocumentId: body.agreement?.documentId || null,
-            requestId: body.agreement?.requestId || null,
-            providerRawResponse: body.agreement || {},
-            stampStatus: body.agreement?.stampStatus || null,
-            completionStatus: body.agreement?.completionStatus || null,
+
+            agreementStatus:
+              onboardingStatus === "submitted"
+                ? "not_generated"
+                : agreementConfig?.agreementStatus || "not_generated",
+
+            providerSigningUrl: null,
+            providerDocumentId: null,
+            requestId: null,
+
+            // SAVE STEP 5 AGREEMENT DATA HERE
+            providerRawResponse: {
+              agreement: agreementConfig,
+            },
+
+            stampStatus: "pending",
+            completionStatus: "pending",
             lastActionTimestamp: new Date(),
           })
           .where(eq(dealerOnboardingApplications.id, existing[0].id))
@@ -158,6 +168,15 @@ export async function POST(req: NextRequest) {
           accountNumber,
           beneficiaryName,
           ifscCode,
+        
+          // SAVE AGREEMENT CONFIG
+          providerRawResponse: {
+            agreement: agreementConfig,
+          },
+
+          agreementStatus: "not_generated",
+          stampStatus: "pending",
+          completionStatus: "pending",
         })
         .returning();
 

@@ -1490,8 +1490,7 @@ export const dealerOnboardingApplications = pgTable("dealer_onboarding_applicati
     registeredAddress: jsonb("registered_address").default({}),
     financeEnabled: boolean("finance_enabled").default(false),
     onboardingStatus: varchar("onboarding_status", { length: 30 }).default("draft").notNull(),
-    reviewStatus: varchar("review_status", { length: 30 }).default("pending"),
-    submittedAt: timestamp("submitted_at"),
+    reviewStatus: varchar("review_status", { length: 30 }).default("pending_sales_head"), submittedAt: timestamp("submitted_at"),
     approvedAt: timestamp("approved_at"),
     rejectedAt: timestamp("rejected_at"),
     rejectionReason: text("rejection_reason"),
@@ -1513,15 +1512,17 @@ export const dealerOnboardingApplications = pgTable("dealer_onboarding_applicati
     dealerAccountStatus: varchar("dealer_account_status", { length: 30 }).default("inactive"),
     dealerCode: text("dealer_code"),
 
-    agreementStatus: varchar("agreement_status", { length: 50 }),
-    requestId: text("request_id"),
+    agreementStatus: varchar("agreement_status", { length: 50 }).default("not_generated"), requestId: text("request_id"),
     providerDocumentId: text("provider_document_id"),
+
     providerSigningUrl: text("provider_signing_url"),
+    signedAgreementUrl: text("signed_agreement_url"),
+    agreementAuditTrailUrl: text("agreement_audit_trail_url"),
     providerRawResponse: jsonb("provider_raw_response").default({}),
     signedAt: timestamp("signed_at"),
     lastActionTimestamp: timestamp("last_action_timestamp"),
     stampStatus: varchar("stamp_status", { length: 50 }),
-    completionStatus: varchar("completion_status", { length: 50 }),
+    completionStatus: varchar("completion_status", { length: 50 }).default("pending"),
 });
 
 export const dealerOnboardingDocuments = pgTable("dealer_onboarding_documents", {

@@ -12,23 +12,52 @@ export async function POST(req: NextRequest, context: RouteContext) {
     const { dealerId } = await context.params;
     const body = await req.json();
 
+    const remarks =
+      typeof body?.remarks === "string" ? body.remarks.trim() : "";
+
+    if (!remarks) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Rejection remarks are required",
+        },
+        { status: 400 }
+      );
+    }
+
     await db
       .update(dealerOnboardingApplications)
       .set({
         onboardingStatus: "rejected",
         reviewStatus: "rejected",
-        dealerAccountStatus: "rejected",
+        dealerAccountStatus: "inactive",
+        completionStatus: "pending",
         rejectedAt: new Date(),
-        rejectionRemarks: body.remarks || null,
+        rejectionReason: remarks,
+        rejectionRemarks: remarks,
+        correctionRemarks: null,
         updatedAt: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
 
-    return NextResponse.json({ success: true });
+    console.log("DEALER REJECTED:", {
+      dealerId,
+      remarks,
+      rejectedAt: new Date().toISOString(),
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: "Dealer application rejected successfully",
+    });
   } catch (error: any) {
     console.error("REJECT DEALER ERROR:", error);
+
     return NextResponse.json(
-      { success: false, message: error?.message || "Reject failed" },
+      {
+        success: false,
+        message: error?.message || "Reject failed",
+      },
       { status: 500 }
     );
   }

@@ -71,23 +71,6 @@ type AgreementPayload = {
       address?: string;
       signingMethod?: string;
     };
-    includeWitnessesInSigning?: boolean;
-    witness1?: {
-      name?: string;
-      designation?: string;
-      email?: string;
-      mobile?: string;
-      address?: string;
-      signingMethod?: string;
-    };
-    witness2?: {
-      name?: string;
-      designation?: string;
-      email?: string;
-      mobile?: string;
-      address?: string;
-      signingMethod?: string;
-    };
   };
 };
 
@@ -204,6 +187,24 @@ async function renderPdfFromHtml(html: string) {
   }
 }
 
+function normalizeDigioAgreementStatus(parsed: any) {
+  const digioStatus = String(
+    parsed?.agreement_status || parsed?.status || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  if (digioStatus === "completed" || digioStatus === "signed") {
+    return "completed";
+  }
+
+  if (digioStatus === "partially_signed" || digioStatus === "partial") {
+    return "partially_signed";
+  }
+
+  return "sent_for_signature";
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as AgreementPayload;
@@ -267,26 +268,6 @@ export async function POST(req: NextRequest) {
       agreement.itarangSignatory2?.signingMethod
     );
 
-    const witnessSigner1 = agreement.includeWitnessesInSigning
-      ? buildSigner(
-        agreement.witness1?.email,
-        agreement.witness1?.mobile,
-        agreement.witness1?.name,
-        "witness 1",
-        agreement.witness1?.signingMethod
-      )
-      : null;
-
-    const witnessSigner2 = agreement.includeWitnessesInSigning
-      ? buildSigner(
-        agreement.witness2?.email,
-        agreement.witness2?.mobile,
-        agreement.witness2?.name,
-        "witness 2",
-        agreement.witness2?.signingMethod
-      )
-      : null;
-
     const signers = [
       dealerSigner,
       financierSigner,
@@ -326,7 +307,6 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-
 
     const duplicateIdentifiers = findDuplicateIdentifiers(signers);
 
@@ -387,14 +367,16 @@ export async function POST(req: NextRequest) {
         itarangSignatory1: agreement.itarangSignatory1,
         itarangSignatory2: agreement.itarangSignatory2,
         financierSignatory: agreement.financierSignatory,
-        includeWitnessesInSigning: agreement.includeWitnessesInSigning,
-        witness1: agreement.witness1,
-        witness2: agreement.witness2,
       },
     });
 
     const pdfBuffer = await renderPdfFromHtml(html);
     const agreementBase64 = pdfBuffer.toString("base64");
+
+    const appBaseUrl =
+      cleanEnv(process.env.APP_URL) ||
+      cleanEnv(process.env.NEXT_PUBLIC_APP_URL) ||
+      "http://localhost:3000";
 
     const payload = {
       file_name: `${cleanString(company?.companyName) || "dealer"}-agreement.pdf`,
@@ -405,6 +387,7 @@ export async function POST(req: NextRequest) {
       include_authentication_url: true,
       sequential: true,
       signers,
+      
     };
 
     console.log(
@@ -472,6 +455,8 @@ export async function POST(req: NextRequest) {
       parsed?.authentication_url ||
       "";
 
+    const normalizedStatus = normalizeDigioAgreementStatus(parsed);
+
     return NextResponse.json({
       success: true,
       data: {
@@ -494,11 +479,7 @@ export async function POST(req: NextRequest) {
           authenticationUrl: party?.authentication_url || "",
           status: party?.status || "",
         })),
-        status:
-          parsed?.agreement_status?.toLowerCase?.() === "completed" ||
-            parsed?.status?.toLowerCase?.() === "completed"
-            ? "completed"
-            : "sent_for_signature",
+        status: normalizedStatus,
         rawResponse: rawText,
       },
     });

@@ -148,9 +148,8 @@ function createInitialAgreementState(): DealerOnboardingState["agreement"] {
     providerRawResponse: "",
     lastActionTimestamp: "",
     signedAt: "",
-    stampStatus: "Pending",
-    completionStatus: "Not Started",
-
+    stampStatus: "pending",
+    completionStatus: "pending",
     signedAgreementFile: null,
   };
 }
@@ -441,29 +440,29 @@ export const useOnboardingStore = create<
     })),
 
   resetAgreementState: () =>
-  set((state) => ({
-    agreement: {
-      ...createInitialAgreementState(),
-      dateOfSigning: state.agreement.dateOfSigning,
-      expiryDays: state.agreement.expiryDays,
-      dealerSignerName: state.agreement.dealerSignerName,
-      dealerSignerDesignation: state.agreement.dealerSignerDesignation,
-      dealerSignerEmail: state.agreement.dealerSignerEmail,
-      dealerSignerPhone: state.agreement.dealerSignerPhone,
-      dealerSigningMethod: state.agreement.dealerSigningMethod,
-      financierName: state.agreement.financierName,
-      mouDate: state.agreement.mouDate,
-      isOemFinancing: state.agreement.isOemFinancing,
-      vehicleType: state.agreement.vehicleType,
-      manufacturer: state.agreement.manufacturer,
-      brand: state.agreement.brand,
-      statePresence: state.agreement.statePresence,
-      itarangSignatory1: { ...state.agreement.itarangSignatory1 },
-      itarangSignatory2: { ...state.agreement.itarangSignatory2 },
-      financierSignatory: { ...state.agreement.financierSignatory },
-    },
-    lastSavedAt: new Date().toISOString(),
-  })),
+    set((state) => ({
+      agreement: {
+        ...createInitialAgreementState(),
+        dateOfSigning: state.agreement.dateOfSigning,
+        expiryDays: state.agreement.expiryDays,
+        dealerSignerName: state.agreement.dealerSignerName,
+        dealerSignerDesignation: state.agreement.dealerSignerDesignation,
+        dealerSignerEmail: state.agreement.dealerSignerEmail,
+        dealerSignerPhone: state.agreement.dealerSignerPhone,
+        dealerSigningMethod: state.agreement.dealerSigningMethod,
+        financierName: state.agreement.financierName,
+        mouDate: state.agreement.mouDate,
+        isOemFinancing: state.agreement.isOemFinancing,
+        vehicleType: state.agreement.vehicleType,
+        manufacturer: state.agreement.manufacturer,
+        brand: state.agreement.brand,
+        statePresence: state.agreement.statePresence,
+        itarangSignatory1: { ...state.agreement.itarangSignatory1 },
+        itarangSignatory2: { ...state.agreement.itarangSignatory2 },
+        financierSignatory: { ...state.agreement.financierSignatory },
+      },
+      lastSavedAt: new Date().toISOString(),
+    })),
 
   updateAgreementStatus: (payload) =>
     set((state) => ({
@@ -519,7 +518,7 @@ export const useOnboardingStore = create<
     set({
       dealerId: generatedDealerId,
       dealerDisplayName,
-      status: "under_review",
+      status: "submitted",
       lastSavedAt: new Date().toISOString(),
       errors: {},
     });

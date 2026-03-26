@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { users } from "./db/schema";
-import { eq } from "drizzle-orm";
+import { users, dealerOnboardingApplications } from "./db/schema";
+import { eq, desc } from "drizzle-orm";
 import { createClient } from "./supabase/server";
 import { redirect } from "next/navigation";
 
@@ -37,17 +37,53 @@ export async function requireAuth() {
     }
 
     if (!dbUser) {
-      console.log(`[Auth] No DB user found for auth user: ${user.id} / ${user.email}`);
+      console.log(
+        `[Auth] No DB user found for auth user: ${user.id} / ${user.email}`
+      );
+
       return {
         id: user.id,
         name: user.email?.split("@")[0] || "User",
         email: user.email || "",
         role: "user",
         dealer_id: null,
+        onboarding_status: null,
+        review_status: null,
+        dealer_account_status: null,
       };
     }
 
-    return dbUser;
+    // For dealer users, also return onboarding/account status
+    if (dbUser.role === "dealer") {
+      const onboarding =
+        (
+          await db
+            .select({
+              onboarding_status: dealerOnboardingApplications.onboardingStatus,
+              review_status: dealerOnboardingApplications.reviewStatus,
+              dealer_account_status:
+                dealerOnboardingApplications.dealerAccountStatus,
+            })
+            .from(dealerOnboardingApplications)
+            .where(eq(dealerOnboardingApplications.dealerUserId, dbUser.id))
+            .orderBy(desc(dealerOnboardingApplications.updatedAt))
+            .limit(1)
+        )[0] ?? null;
+
+      return {
+        ...dbUser,
+        onboarding_status: onboarding?.onboarding_status || null,
+        review_status: onboarding?.review_status || null,
+        dealer_account_status: onboarding?.dealer_account_status || null,
+      };
+    }
+
+    return {
+      ...dbUser,
+      onboarding_status: null,
+      review_status: null,
+      dealer_account_status: null,
+    };
   } catch (dbErr) {
     console.error("[Auth] Database error in requireAuth:", dbErr);
     throw dbErr;

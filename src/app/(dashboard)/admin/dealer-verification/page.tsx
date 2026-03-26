@@ -86,15 +86,31 @@ function StatusBadge({ status }: { status: string }) {
 function AgreementBadge({ value }: { value: string }) {
   const normalized = value?.toLowerCase();
 
-  if (normalized === "required") {
+  if (normalized === "not_generated") {
     return (
-      <span className="inline-flex rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-        Required
+      <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+        Pending
       </span>
     );
   }
 
-  if (normalized === "signed") {
+  if (normalized === "sent_for_signature") {
+    return (
+      <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
+        Sent for Signing
+      </span>
+    );
+  }
+
+  if (normalized === "partially_signed") {
+    return (
+      <span className="inline-flex rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+        Partially Signed
+      </span>
+    );
+  }
+
+  if (normalized === "completed") {
     return (
       <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
         Signed
@@ -115,8 +131,8 @@ function DocumentBadge({ value }: { value: string }) {
   const classes = lower.includes("pending")
     ? "border-amber-200 bg-amber-50 text-amber-700"
     : lower.includes("/")
-    ? "border-blue-200 bg-blue-50 text-blue-700"
-    : "border-slate-200 bg-slate-50 text-slate-700";
+      ? "border-blue-200 bg-blue-50 text-blue-700"
+      : "border-slate-200 bg-slate-50 text-slate-700";
 
   return (
     <span
@@ -172,7 +188,7 @@ export default function DealerVerificationPage() {
   const stats = useMemo(() => {
     const total = applications.length;
     const pending = applications.filter((a) =>
-      ["submitted", "pending_admin_review", "under_review"].includes(a.status)
+      ["submitted", "pending_sales_head", "under_review", "agreement_in_progress"].includes(a.status)
     ).length;
     const approved = applications.filter((a) =>
       ["approved", "completed", "succeed"].includes(a.status)

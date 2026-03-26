@@ -10,6 +10,24 @@ type RouteContext = {
   params: Promise<{ dealerId: string }>;
 };
 
+function parseProviderRawResponse(value: unknown) {
+  if (!value) return {};
+
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+
+  if (typeof value === "object") {
+    return value as Record<string, any>;
+  }
+
+  return {};
+}
+
 export async function GET(_req: NextRequest, context: RouteContext) {
   try {
     const { dealerId } = await context.params;
@@ -36,27 +54,19 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       .from(dealerOnboardingDocuments)
       .where(eq(dealerOnboardingDocuments.applicationId, row.id));
 
-    const companyAddress =
-      typeof row.businessAddress === "object" &&
-      row.businessAddress &&
-      "address" in row.businessAddress
-        ? String((row.businessAddress as any).address || "")
-        : "";
-
     const documents = uploadedDocuments.map((doc) => ({
       id: doc.id,
       name: doc.fileName || doc.documentType,
       documentType: doc.documentType,
       url: doc.fileUrl || "",
-      storagePath: doc.storagePath,
-      bucketName: doc.bucketName,
-      mimeType: doc.mimeType,
-      fileSize: doc.fileSize,
       docStatus: doc.docStatus,
       verificationStatus: doc.verificationStatus,
       uploadedAt: doc.uploadedAt,
       rejectionReason: doc.rejectionReason,
     }));
+
+    const providerData = parseProviderRawResponse(row.providerRawResponse);
+    const agreementData = providerData?.agreement || {};
 
     return NextResponse.json({
       success: true,
@@ -64,36 +74,74 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         id: row.id,
         dealerId: row.id,
         companyName: row.companyName,
-        companyAddress,
         gstNumber: row.gstNumber,
         panNumber: row.panNumber,
-        cinNumber: row.cinNumber,
         companyType: row.companyType,
-        bankName: row.bankName || "Not available",
-        accountNumber: row.accountNumber || "Not available",
-        beneficiaryName: row.beneficiaryName || "Not available",
-        ifscCode: row.ifscCode || "Not available",
         financeEnabled: row.financeEnabled,
         onboardingStatus: row.onboardingStatus,
         reviewStatus: row.reviewStatus,
         submittedAt: row.submittedAt,
+        ownerName: row.ownerName,
+        ownerPhone: row.ownerPhone,
+        ownerEmail: row.ownerEmail,
         documents,
+
         agreement: row.financeEnabled
           ? {
-              agreementId: row.providerDocumentId || null,
-              signerName: row.ownerName || null,
-              signerEmail: row.ownerEmail || null,
-              status: row.agreementStatus || "pending",
-              copyUrl: row.providerSigningUrl || null,
-            }
+            agreementId: row.providerDocumentId || null,
+            status: row.agreementStatus || "not_generated",
+            copyUrl: row.providerSigningUrl || null,
+            signedAgreementUrl: row.signedAgreementUrl || null,
+            requestId: row.requestId || null,
+            stampStatus: row.stampStatus || "pending",
+            completionStatus: row.completionStatus || "pending",
+            signedAt: row.signedAt || null,
+            lastActionTimestamp: row.lastActionTimestamp || null,
+
+            // IMPORTANT — STEP 5 DATA
+            agreementName: agreementData.agreementName || "",
+            agreementVersion: agreementData.agreementVersion || "",
+            dateOfSigning: agreementData.dateOfSigning || "",
+            mouDate: agreementData.mouDate || "",
+            financierName: agreementData.financierName || "",
+
+            dealerSignerName: agreementData.dealerSignerName || "",
+            dealerSignerDesignation:
+              agreementData.dealerSignerDesignation || "",
+            dealerSignerEmail: agreementData.dealerSignerEmail || "",
+            dealerSignerPhone: agreementData.dealerSignerPhone || "",
+            dealerSigningMethod:
+              agreementData.dealerSigningMethod || "",
+
+            financierSignatory:
+              agreementData.financierSignatory || null,
+            itarangSignatory1:
+              agreementData.itarangSignatory1 || null,
+            itarangSignatory2:
+              agreementData.itarangSignatory2 || null,
+
+            signingOrder:
+              agreementData.signingOrder || [
+                "dealer",
+                "financier",
+                "itarang_1",
+                "itarang_2",
+              ],
+
+            isOemFinancing: !!agreementData.isOemFinancing,
+            vehicleType: agreementData.vehicleType || "",
+            manufacturer: agreementData.manufacturer || "",
+            brand: agreementData.brand || "",
+            statePresence: agreementData.statePresence || "",
+          }
           : null,
-        ownerName: row.ownerName || "Not available",
-        ownerPhone: row.ownerPhone || "Not available",
-        ownerEmail: row.ownerEmail || "Not available",
       },
     });
   } catch (error: any) {
-    console.error("ADMIN DEALER VERIFICATION DETAIL ERROR:", error);
+    console.error("ADMIN DEALER VERIFICATION DETAIL ERROR FULL:", error);
+    console.error("ADMIN DEALER VERIFICATION DETAIL ERROR MESSAGE:", error?.message);
+    console.error("ADMIN DEALER VERIFICATION DETAIL ERROR CAUSE:", error?.cause);
+    console.error("ADMIN DEALER VERIFICATION DETAIL ERROR DETAIL:", error?.cause?.detail);
 
     return NextResponse.json(
       {

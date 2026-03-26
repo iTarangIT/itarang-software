@@ -1,6 +1,17 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
+type UserProfile = {
+  role?: string | null;
+  email?: string | null;
+  id?: string | null;
+};
+
+type DealerOnboardingProfile = {
+  onboarding_status?: string | null;
+  dealer_account_status?: string | null;
+};
+
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
     request: {
@@ -17,7 +28,9 @@ export async function middleware(request: NextRequest) {
           return request.cookies.getAll();
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+          cookiesToSet.forEach(({ name, value }) =>
+            request.cookies.set(name, value)
+          );
 
           response = NextResponse.next({
             request,
@@ -59,7 +72,9 @@ export async function middleware(request: NextRequest) {
     path === "/favicon.ico";
 
   const isProtectedRoute =
-    Object.values(roleDashboards).some((dashboardPath) => path.startsWith(dashboardPath)) ||
+    Object.values(roleDashboards).some((dashboardPath) =>
+      path.startsWith(dashboardPath)
+    ) ||
     path.startsWith("/inventory") ||
     path.startsWith("/product-catalog") ||
     path.startsWith("/oem-onboarding") ||
@@ -84,7 +99,7 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
-  let profile: { role?: string | null } | null = null;
+  let profile: UserProfile | null = null;
 
   const { data: profileById } = await supabase
     .from("users")
@@ -130,8 +145,8 @@ export async function middleware(request: NextRequest) {
     "/admin/dealer-verification": ["admin", "sales_head", "business_head", "ceo"],
   };
 
-  const allowedSharedRoles = Object.entries(sharedRouteAccess).find(([routePrefix]) =>
-    path.startsWith(routePrefix)
+  const allowedSharedRoles = Object.entries(sharedRouteAccess).find(
+    ([routePrefix]) => path.startsWith(routePrefix)
   )?.[1];
 
   if (allowedSharedRoles && allowedSharedRoles.includes(role)) {
@@ -144,6 +159,73 @@ export async function middleware(request: NextRequest) {
 
   if (matchedRole && matchedRole !== role && role !== "ceo") {
     return NextResponse.redirect(new URL(myDashboard, request.url));
+  }
+
+  // Dealer-specific gating
+  if (role === "dealer") {
+    const { data: onboarding } = await supabase
+      .from("dealer_onboarding_applications")
+      .select("onboarding_status,dealer_account_status")
+      .eq("dealer_user_id", user.id)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const dealerProfile = onboarding as DealerOnboardingProfile | null;
+
+    const onboardingStatus = (
+      dealerProfile?.onboarding_status || "draft"
+    ).toLowerCase();
+
+    const dealerAccountStatus = (
+      dealerProfile?.dealer_account_status || ""
+    ).toLowerCase();
+
+    const isDealerPortalRoute = path.startsWith("/dealer-portal");
+    const isDealerOnboardingRoute =
+      path.startsWith("/dealer-onboarding") ||
+      path.startsWith("/dealer-portal/onboarding-status");
+
+    if (isDealerPortalRoute) {
+      const isApprovedAndActive =
+        onboardingStatus === "approved" && dealerAccountStatus === "active";
+
+      if (isApprovedAndActive) {
+        return response;
+      }
+
+      const url = request.nextUrl.clone();
+
+      if (
+        onboardingStatus === "draft" ||
+        onboardingStatus === "in_progress" ||
+        onboardingStatus === ""
+      ) {
+        url.pathname = "/dealer-onboarding";
+        return NextResponse.redirect(url);
+      }
+
+      if (
+        onboardingStatus === "submitted" ||
+        onboardingStatus === "pending_sales_head" ||
+        onboardingStatus === "under_review" ||
+        onboardingStatus === "agreement_in_progress" ||
+        onboardingStatus === "agreement_completed" ||
+        onboardingStatus === "correction_requested" ||
+        onboardingStatus === "action_needed" ||
+        onboardingStatus === "rejected"
+      ) {
+        url.pathname = "/dealer-portal/onboarding-status";
+        return NextResponse.redirect(url);
+      }
+
+      url.pathname = "/dealer-onboarding";
+      return NextResponse.redirect(url);
+    }
+
+    if (isDealerOnboardingRoute) {
+      return response;
+    }
   }
 
   return response;

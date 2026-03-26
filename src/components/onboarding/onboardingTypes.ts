@@ -186,11 +186,16 @@ export type ReviewChecks = {
 export type DealerOnboardingState = {
   step: number;
   status:
-    | "draft"
-    | "in_progress"
-    | "under_review"
-    | "action_needed"
-    | "approved";
+  | "draft"
+  | "in_progress"
+  | "submitted"
+  | "pending_sales_head"
+  | "under_review"
+  | "agreement_in_progress"
+  | "agreement_completed"
+  | "correction_requested"
+  | "rejected"
+  | "approved";
   lastSavedAt: string | null;
   dealerId: string;
   dealerDisplayName: string;

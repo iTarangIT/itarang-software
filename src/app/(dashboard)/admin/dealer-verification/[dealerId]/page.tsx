@@ -36,12 +36,45 @@ type DocumentItem = {
   bucketName?: string | null;
 };
 
+type AgreementParty = {
+  name?: string | null;
+  designation?: string | null;
+  email?: string | null;
+  mobile?: string | null;
+  address?: string | null;
+  signingMethod?: string | null;
+};
+
 type AgreementData = {
   agreementId?: string | null;
   signerName?: string | null;
   signerEmail?: string | null;
   status?: string | null;
   copyUrl?: string | null;
+  signedAgreementUrl?: string | null;
+
+  agreementName?: string | null;
+  agreementVersion?: string | null;
+  dateOfSigning?: string | null;
+  mouDate?: string | null;
+  financierName?: string | null;
+
+  dealerSignerName?: string | null;
+  dealerSignerDesignation?: string | null;
+  dealerSignerEmail?: string | null;
+  dealerSignerPhone?: string | null;
+  dealerSigningMethod?: string | null;
+
+  financierSignatory?: AgreementParty | null;
+  itarangSignatory1?: AgreementParty | null;
+  itarangSignatory2?: AgreementParty | null;
+
+  signingOrder?: string[] | null;
+  isOemFinancing?: boolean;
+  vehicleType?: string | null;
+  manufacturer?: string | null;
+  brand?: string | null;
+  statePresence?: string | null;
 };
 
 type DealerReviewData = {
@@ -124,14 +157,14 @@ function StatusBadge({ value }: { value?: string | null }) {
     status === "completed" || status === "approved" || status === "succeed"
       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
       : status === "submitted" ||
-          status === "pending_admin_review" ||
-          status === "pending_sales_head"
+        status === "pending_admin_review" ||
+        status === "pending_sales_head"
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : status === "under_review"
           ? "border-blue-200 bg-blue-50 text-blue-700"
           : status === "under_correction" ||
-              status === "correction_requested" ||
-              status === "action_needed"
+            status === "correction_requested" ||
+            status === "action_needed"
             ? "border-orange-200 bg-orange-50 text-orange-700"
             : status === "rejected"
               ? "border-rose-200 bg-rose-50 text-rose-700"
@@ -373,13 +406,67 @@ export default function DealerReviewPage() {
     setAgreementActionLoading(action);
 
     try {
-      // Placeholder for future API integration
-      // Example:
-      // await fetch(`/api/admin/dealer-verifications/${dealerId}/${action}-agreement`, { method: "POST" });
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      const payload =
+        action === "initiate" || action === "reinitiate"
+          ? {
+            agreementConfig: {
+              agreementName: data?.agreement?.agreementName || "Dealer Finance Enablement Agreement",
+              agreementVersion: "v1.0",
+              dateOfSigning: data?.agreement?.dateOfSigning || "",
+              mouDate: data?.agreement?.mouDate || "",
+              financierName: data?.agreement?.financierName || "",
+
+              dealerSignerName: data?.agreement?.dealerSignerName || "",
+              dealerSignerDesignation: data?.agreement?.dealerSignerDesignation || "",
+              dealerSignerEmail: data?.agreement?.dealerSignerEmail || "",
+              dealerSignerPhone: data?.agreement?.dealerSignerPhone || "",
+              dealerSigningMethod: data?.agreement?.dealerSigningMethod || "",
+
+              financierSignatory: data?.agreement?.financierSignatory || null,
+              itarangSignatory1: data?.agreement?.itarangSignatory1 || null,
+              itarangSignatory2: data?.agreement?.itarangSignatory2 || null,
+
+              signingOrder: ["dealer", "financier", "itarang_1", "itarang_2"],
+
+              isOemFinancing: !!data?.agreement?.isOemFinancing,
+              vehicleType: data?.agreement?.vehicleType || "",
+              manufacturer: data?.agreement?.manufacturer || "",
+              brand: data?.agreement?.brand || "",
+              statePresence: data?.agreement?.statePresence || "",
+            },
+          }
+          : {};
+
+      const res = await fetch(
+        `/api/admin/dealer-verifications/${dealerId}/${action}-agreement`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body:
+            action === "initiate" || action === "reinitiate"
+              ? JSON.stringify(payload)
+              : JSON.stringify({}),
+        }
+      );
+
+      let json: any = null;
+      try {
+        json = await res.json();
+      } catch {
+        json = null;
+      }
+
+      if (!res.ok || !json?.success) {
+        alert(json?.message || "Agreement action failed");
+        return;
+      }
+
       await reloadDealer();
     } catch (error) {
       console.error(`Failed to ${action} agreement`, error);
+      alert("Something went wrong while processing agreement action");
     } finally {
       setAgreementActionLoading(null);
     }
@@ -670,21 +757,44 @@ export default function DealerReviewPage() {
                 />
               </div>
 
-              {data.agreement?.copyUrl ? (
-                <Link
-                  href={data.agreement.copyUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-5 inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  <Download className="h-4 w-4" />
-                  View / Download Agreement
-                </Link>
-              ) : (
-                <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                  Agreement copy is not available yet.
-                </div>
-              )}
+              <div className="mt-5 flex flex-wrap gap-3">
+                {/* Show draft/provider agreement only before final signed copy is available */}
+                {data.agreement?.copyUrl &&
+                  !(
+                    data.agreement?.signedAgreementUrl &&
+                    (data.agreement?.status || "").toLowerCase() === "completed"
+                  ) && (
+                    <Link
+                      href={data.agreement.copyUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      <Download className="h-4 w-4" />
+                      View / Download Agreement
+                    </Link>
+                  )}
+
+                {/* Show final signed agreement only after completion */}
+                {data.agreement?.signedAgreementUrl &&
+                  (data.agreement?.status || "").toLowerCase() === "completed" && (
+                    <Link
+                      href={data.agreement.signedAgreementUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                    >
+                      <Download className="h-4 w-4" />
+                      Signed Agreement
+                    </Link>
+                  )}
+
+                {!data.agreement?.copyUrl && !data.agreement?.signedAgreementUrl && (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                    Agreement copy is not available yet.
+                  </div>
+                )}
+              </div>
 
               <div className="mt-5 flex flex-wrap gap-3">
                 {!data.agreement?.agreementId && (
@@ -715,17 +825,17 @@ export default function DealerReviewPage() {
 
                 {(data.agreement?.status === "failed" ||
                   data.agreement?.status === "expired") && (
-                  <button
-                    onClick={() => handleAgreementAction("reinitiate")}
-                    disabled={agreementActionLoading !== null}
-                    className="inline-flex items-center gap-2 rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
-                  >
-                    <RefreshCw className="h-4 w-4" />
-                    {agreementActionLoading === "reinitiate"
-                      ? "Re-initiating..."
-                      : "Re-initiate Agreement"}
-                  </button>
-                )}
+                    <button
+                      onClick={() => handleAgreementAction("reinitiate")}
+                      disabled={agreementActionLoading !== null}
+                      className="inline-flex items-center gap-2 rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      {agreementActionLoading === "reinitiate"
+                        ? "Re-initiating..."
+                        : "Re-initiate Agreement"}
+                    </button>
+                  )}
 
                 {data.agreement?.status === "signed" && !data.agreement?.copyUrl && (
                   <button

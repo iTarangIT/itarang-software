@@ -1,6 +1,12 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { createClient } from "@/lib/supabase/client";
 
 type AppUser = {
@@ -15,6 +21,11 @@ type AppUser = {
   is_active?: boolean;
   created_at?: string;
   updated_at?: string;
+
+  // Dealer onboarding/account fields
+  onboarding_status?: string | null;
+  review_status?: string | null;
+  dealer_account_status?: string | null;
 };
 
 interface AuthContextType {

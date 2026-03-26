@@ -100,7 +100,13 @@ export async function POST(
 ) {
   try {
     const { dealerId } = await params;
-    const body = (await req.json()) as RequestBody;
+
+    let body: RequestBody = {};
+    try {
+      body = (await req.json()) as RequestBody;
+    } catch {
+      body = {};
+    }
 
     const applicationRows = await db
       .select()
@@ -129,10 +135,18 @@ export async function POST(
     }
 
     // Prevent duplicate active initiation
-    if (
-      application.agreementStatus &&
-      !["failed", "expired", ""].includes(application.agreementStatus)
-    ) {
+    const currentAgreementStatus = String(
+      application.agreementStatus || ""
+    ).toLowerCase();
+
+    const canInitiateStatuses = [
+      "",
+      "not_generated",
+      "failed",
+      "expired",
+    ];
+
+    if (!canInitiateStatuses.includes(currentAgreementStatus)) {
       return NextResponse.json(
         {
           success: false,
@@ -195,12 +209,24 @@ export async function POST(
       itarangSigner2,
     ].filter(Boolean);
 
+    console.log("Dealer Signer:", dealerSigner);
+    console.log("Financier Signer:", financierSigner);
+    console.log("iTarang Signer 1:", itarangSigner1);
+    console.log("iTarang Signer 2:", itarangSigner2);
+    console.log("Final Signers:", signers);
+
     if (signers.length !== 4) {
       return NextResponse.json(
         {
           success: false,
           message:
             "Incomplete agreement signatory data. Dealer, financier, and both iTarang signers must have valid name, email, and phone.",
+          debug: {
+            dealerSigner,
+            financierSigner,
+            itarangSigner1,
+            itarangSigner2,
+          },
         },
         { status: 400 }
       );
@@ -281,8 +307,7 @@ export async function POST(
       return NextResponse.json(
         {
           success: false,
-          message:
-            digioJson?.message || "Failed to initiate Digio agreement",
+          message: digioJson?.message || "Failed to initiate Digio agreement",
           raw: digioJson || null,
         },
         { status: 500 }
@@ -292,14 +317,14 @@ export async function POST(
     await db
       .update(dealerOnboardingApplications)
       .set({
-        agreementStatus:
-          digioJson?.data?.status || "sent_for_signature",
-        completionStatus: "Sent for Signature",
+        agreementStatus: digioJson?.data?.status || "sent_for_signature",
+        reviewStatus: "agreement_in_progress",
+        completionStatus: "pending",
         providerDocumentId: digioJson?.data?.providerDocumentId || null,
         requestId: digioJson?.data?.requestId || null,
         providerSigningUrl: digioJson?.data?.signingUrl || null,
         providerRawResponse: digioJson?.data || {},
-        stampStatus: digioJson?.data?.stampStatus || "Pending",
+        stampStatus: digioJson?.data?.stampStatus || "pending",
         lastActionTimestamp: new Date(),
         updatedAt: new Date(),
       })

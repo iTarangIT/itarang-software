@@ -1,13 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, Clock, AlertTriangle, ShieldCheck } from "lucide-react";
+import {
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  ShieldCheck,
+  FileSignature,
+} from "lucide-react";
 
 type StatusType =
   | "draft"
   | "submitted"
   | "pending_sales_head"
   | "under_review"
+  | "agreement_in_progress"
   | "action_needed"
   | "approved";
 
@@ -53,7 +60,8 @@ export default function OnboardingStatusPage() {
       title: "Application Not Submitted Yet",
       message:
         "Your dealer onboarding is still in draft mode. Please complete all required steps and submit your application.",
-      helper: "Complete the pending sections to move your application forward.",
+      helper:
+        "Complete the pending sections and submit your onboarding so the internal review process can begin.",
       icon: <Clock className="h-12 w-12 text-slate-600" />,
       tone: "border-slate-200 bg-slate-50",
     },
@@ -63,7 +71,7 @@ export default function OnboardingStatusPage() {
       message:
         "Your dealer onboarding application has been submitted successfully and is waiting for internal verification.",
       helper:
-        "Our team will review your submitted details, compliance documents, and agreement configuration.",
+        "Our team will review your business details, submitted documents, and signer information before moving the agreement forward.",
       icon: <Clock className="h-12 w-12 text-blue-600" />,
       tone: "border-blue-200 bg-blue-50",
     },
@@ -71,9 +79,9 @@ export default function OnboardingStatusPage() {
       eyebrow: "Sales Head Verification",
       title: "Pending Sales Head Review",
       message:
-        "Your onboarding request has been forwarded to the Sales Head for verification before further processing.",
+        "Your onboarding request has been forwarded to the Sales Head for verification before agreement initiation.",
       helper:
-        "This review helps prevent wrong signer emails, incorrect GST/PAN mapping, and legal mistakes.",
+        "This review helps prevent incorrect business details, wrong signer mapping, and agreement errors before sending it for signing.",
       icon: <ShieldCheck className="h-12 w-12 text-indigo-600" />,
       tone: "border-indigo-200 bg-indigo-50",
     },
@@ -81,19 +89,29 @@ export default function OnboardingStatusPage() {
       eyebrow: "Under Review",
       title: "Application Under Review",
       message:
-        "Your application is currently under review by the iTarang team. We will notify you once verification is complete.",
+        "Your application is currently being reviewed by the iTarang team.",
       helper:
-        "Please wait while the submitted details and onboarding configuration are being reviewed.",
+        "We are checking your business details, uploaded documents, finance setup, and agreement information before the agreement is initiated.",
       icon: <Clock className="h-12 w-12 text-amber-600" />,
       tone: "border-amber-200 bg-amber-50",
+    },
+    agreement_in_progress: {
+      eyebrow: "Agreement Signing",
+      title: "Agreement Signing In Progress",
+      message:
+        "Your agreement has been initiated by the admin team and sent to all required signers for digital signing.",
+      helper:
+        "Once all parties sign successfully and the final signed agreement is received, the admin team will complete the final approval.",
+      icon: <FileSignature className="h-12 w-12 text-violet-600" />,
+      tone: "border-violet-200 bg-violet-50",
     },
     action_needed: {
       eyebrow: "Action Required",
       title: "Corrections Required",
       message:
-        "Some documents or details need correction before your onboarding can proceed.",
+        "Some details or documents need correction before your onboarding can proceed further.",
       helper:
-        "Please go back to the onboarding flow, update the requested details, and submit again.",
+        "Please go back to the onboarding flow, update the requested information, and submit again for review.",
       icon: <AlertTriangle className="h-12 w-12 text-red-600" />,
       tone: "border-red-200 bg-red-50",
     },
@@ -101,9 +119,9 @@ export default function OnboardingStatusPage() {
       eyebrow: "Onboarding Approved",
       title: "Dealer Onboarding Approved",
       message:
-        "Congratulations. Your dealership is now approved and finance-enabled on the iTarang platform.",
+        "Congratulations. Your dealership onboarding has been approved and your account is now activated on the iTarang platform.",
       helper:
-        "You can now access the full dealer dashboard and continue with normal dealer operations.",
+        "You can now log in using the credentials shared with you and access the full dealer dashboard.",
       icon: <CheckCircle2 className="h-12 w-12 text-emerald-600" />,
       tone: "border-emerald-200 bg-emerald-50",
     },
@@ -135,7 +153,7 @@ export default function OnboardingStatusPage() {
           </h1>
           <p className="mt-3 max-w-2xl text-sm text-slate-500 md:text-base">
             This page shows the current onboarding stage for your dealership and
-            what happens next in the verification workflow.
+            what happens next in the approval and agreement workflow.
           </p>
         </div>
 
@@ -181,15 +199,26 @@ export default function OnboardingStatusPage() {
           <h3 className="text-lg font-semibold text-[#173F63]">
             What happens next
           </h3>
+
           <div className="mt-4 space-y-3">
             <div className="rounded-2xl border border-[#E3E8EF] bg-[#FAFBFC] px-4 py-3 text-sm text-slate-700">
-              1. Application data is reviewed by the internal verification team.
+              1. Your submitted onboarding data and documents are reviewed by the
+              internal verification team.
             </div>
+
             <div className="rounded-2xl border border-[#E3E8EF] bg-[#FAFBFC] px-4 py-3 text-sm text-slate-700">
-              2. Sales Head verifies business, compliance, and agreement setup.
+              2. After review, the admin team initiates the agreement and Digio
+              sends signing emails to all required signers.
             </div>
+
             <div className="rounded-2xl border border-[#E3E8EF] bg-[#FAFBFC] px-4 py-3 text-sm text-slate-700">
-              3. Once approved, your dealer account is activated for dashboard access.
+              3. Once all signers complete signing and the signed agreement is
+              received, the admin team gives final approval.
+            </div>
+
+            <div className="rounded-2xl border border-[#E3E8EF] bg-[#FAFBFC] px-4 py-3 text-sm text-slate-700">
+              4. After final approval, you will receive your login credentials by
+              email and your dealer dashboard will be unlocked.
             </div>
           </div>
         </div>
