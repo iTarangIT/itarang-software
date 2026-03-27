@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword";
 import { hashPassword } from "@/lib/auth/hashPassword";
 import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
+import { sendDealerApprovalNotificationEmail } from "@/lib/email/sendDealerApprovalNotificationEmail";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 type RouteContext = {
@@ -25,6 +26,20 @@ function resolveDealerLoginEmail(application: any) {
   return application?.ownerEmail?.trim?.() || null;
 }
 
+function cleanEmail(value: unknown) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function getNotificationRecipients(application: any) {
+  const recipients = [
+    cleanEmail(application?.salesManagerEmail),
+    cleanEmail(application?.itarangSignatory1Email),
+    cleanEmail(application?.itarangSignatory2Email),
+  ].filter(Boolean);
+
+  return Array.from(new Set(recipients));
+}
+
 export async function POST(_req: NextRequest, context: RouteContext) {
   try {
     const { dealerId } = await context.params;
@@ -43,7 +58,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    // Prevent double approval
     if (application.onboardingStatus === "approved") {
       return NextResponse.json(
         { success: false, message: "Dealer already approved" },
@@ -51,7 +65,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    // Onboarding must be submitted before approval
     if (application.onboardingStatus !== "submitted") {
       return NextResponse.json(
         {
@@ -75,7 +88,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    // Finance-enabled dealers must complete agreement first
     if (application.financeEnabled) {
       if (
         application.agreementStatus !== "completed" ||
@@ -96,7 +108,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     const temporaryPassword = generateTemporaryPassword();
     const passwordHash = await hashPassword(temporaryPassword);
 
-    // 1. Create or update Supabase Auth user
     const { data: authUsers, error: listError } =
       await supabaseAdmin.auth.admin.listUsers();
 
@@ -166,7 +177,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       authUserId = createdAuthUser.user.id;
     }
 
-    // 2. Update onboarding application with final approval state
     await db
       .update(dealerOnboardingApplications)
       .set({
@@ -189,7 +199,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
 
-    // 3. Create or update local user
     const existingUserRows = await db
       .select()
       .from(users)
@@ -229,9 +238,40 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       });
     }
 
-    // 4. Send welcome email
     let emailSent = false;
     let emailError: string | null = null;
+
+    const notificationRecipients = getNotificationRecipients(application);
+
+    let internalNotificationResults: Array<{
+      email: string;
+      success: boolean;
+      error?: string;
+    }> = [];
+
+    for (const email of notificationRecipients) {
+      try {
+        await sendDealerApprovalNotificationEmail({
+          toEmail: email,
+          companyName: application.companyName || "Unknown Company",
+          dealerCode,
+          dealerName:
+            application.ownerName || application.companyName || "Dealer",
+          approvedAt: new Date().toISOString(),
+        });
+
+        internalNotificationResults.push({
+          email,
+          success: true,
+        });
+      } catch (error: any) {
+        internalNotificationResults.push({
+          email,
+          success: false,
+          error: error?.message || "Unknown email error",
+        });
+      }
+    }
 
     try {
       const mailResult = await sendDealerWelcomeEmail({
@@ -255,13 +295,13 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       console.error("DEALER WELCOME EMAIL ERROR:", mailError);
     }
 
-    // 5. Approval audit log
     console.log("DEALER APPROVED:", {
       dealerId,
       dealerCode,
       authUserId,
       email: dealerLoginEmail,
       approvedAt: new Date().toISOString(),
+      notificationRecipients,
     });
 
     return NextResponse.json({
@@ -274,6 +314,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       emailSent,
       emailTarget: dealerLoginEmail,
       emailError,
+      internalNotificationResults,
     });
   } catch (error: any) {
     console.error("APPROVE DEALER ERROR:", error);

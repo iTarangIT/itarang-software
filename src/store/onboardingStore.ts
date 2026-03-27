@@ -103,6 +103,11 @@ function createInitialAgreementState(): DealerOnboardingState["agreement"] {
     dealerSignerPhone: "",
     dealerSigningMethod: "",
 
+    salesManager: {
+      name: "",
+      email: "",
+      mobile: "",
+    },
     financierName: "",
 
     isOemFinancing: false,
@@ -450,6 +455,11 @@ export const useOnboardingStore = create<
         dealerSignerEmail: state.agreement.dealerSignerEmail,
         dealerSignerPhone: state.agreement.dealerSignerPhone,
         dealerSigningMethod: state.agreement.dealerSigningMethod,
+        salesManager: {
+          name: "",
+          email: "",
+          mobile: "",
+        },
         financierName: state.agreement.financierName,
         mouDate: state.agreement.mouDate,
         isOemFinancing: state.agreement.isOemFinancing,

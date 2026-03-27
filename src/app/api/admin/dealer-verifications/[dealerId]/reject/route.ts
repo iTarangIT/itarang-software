@@ -13,6 +13,20 @@ function cleanString(value: unknown) {
   return value.trim();
 }
 
+function cleanEmail(value: unknown) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function getNotificationRecipients(application: any) {
+  const recipients = [
+    cleanEmail(application?.salesManagerEmail),
+    cleanEmail(application?.itarangSignatory1Email),
+    cleanEmail(application?.itarangSignatory2Email),
+  ].filter(Boolean);
+
+  return Array.from(new Set(recipients));
+}
+
 function getMailer() {
   const host = process.env.SMTP_HOST;
   const port = Number(process.env.SMTP_PORT || 587);
@@ -35,11 +49,17 @@ function getMailer() {
 }
 
 async function sendRejectionEmail(params: {
+  to: string[];
   companyName: string;
   applicationId: string;
   rejectionRemarks: string;
 }) {
   try {
+    if (!params.to.length) {
+      console.warn("No rejection email recipients provided");
+      return { success: false };
+    }
+
     const transporter = getMailer();
 
     const subject = `Dealer Onboarding Rejected — ${params.applicationId}`;
@@ -52,17 +72,13 @@ async function sendRejectionEmail(params: {
         <div style="margin-top: 16px; padding: 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px;">
           <p><strong>Dealer / Company:</strong> ${params.companyName}</p>
           <p><strong>Application ID:</strong> ${params.applicationId}</p>
-          <p><strong>Current Status:</strong> Rejected</p>
+          <p><strong>Status:</strong> Rejected</p>
         </div>
 
         <div style="margin-top: 16px; padding: 16px; background: #fef2f2; border: 1px solid #fca5a5; border-radius: 12px;">
           <p style="margin: 0 0 8px 0;"><strong>Rejection Reason</strong></p>
           <p style="white-space: pre-line; margin: 0;">${params.rejectionRemarks}</p>
         </div>
-
-        <p style="margin-top: 16px;">
-          This application is now locked and is no longer editable.
-        </p>
 
         <p style="margin-top: 16px;">
           Please review the rejection details and take the required business follow-up action.
@@ -72,19 +88,17 @@ async function sendRejectionEmail(params: {
       </div>
     `;
 
-    const to = ["rushikeshkasav306@gmail.com"];
-
     const info = await transporter.sendMail({
       from: process.env.MAIL_FROM || process.env.SMTP_USER,
-      to: to.join(","),
+      to: params.to.join(","),
       subject,
       html,
     });
 
     console.log("REJECTION EMAIL SENT:", {
       messageId: info.messageId,
-      to,
-      subject,
+      recipients: params.to,
+      applicationId: params.applicationId,
     });
 
     return { success: true };
@@ -144,7 +158,17 @@ export async function POST(req: NextRequest, context: RouteContext) {
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
 
+    const notificationRecipients = getNotificationRecipients(application);
+
+    if (notificationRecipients.length === 0) {
+      console.warn("No rejection notification recipients found for application:", {
+        dealerId,
+        applicationId: application.id,
+      });
+    }
+
     const emailResult = await sendRejectionEmail({
+      to: notificationRecipients,
       companyName: application.companyName || "Unknown Company",
       applicationId: String(application.id),
       rejectionRemarks: remarks,
@@ -156,6 +180,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       remarks,
       rejectedAt: new Date().toISOString(),
       emailSent: emailResult.success,
+      notificationRecipients,
     });
 
     return NextResponse.json({
@@ -170,6 +195,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
         rejectionRemarks: remarks,
         formEditable: false,
         emailSent: emailResult.success,
+        notificationRecipients,
       },
     });
   } catch (error: any) {

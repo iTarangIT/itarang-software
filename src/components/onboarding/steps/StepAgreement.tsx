@@ -37,9 +37,8 @@ function InputField({
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
       readOnly={readOnly}
-      className={`w-full rounded-2xl border border-[#E3E8EF] px-4 py-3.5 focus:border-[#1F5C8F] focus:outline-none focus:ring-2 focus:ring-blue-100 ${
-        readOnly ? "bg-slate-50 text-slate-500" : "bg-white"
-      }`}
+      className={`w-full rounded-2xl border border-[#E3E8EF] px-4 py-3.5 focus:border-[#1F5C8F] focus:outline-none focus:ring-2 focus:ring-blue-100 ${readOnly ? "bg-slate-50 text-slate-500" : "bg-white"
+        }`}
     />
   );
 }
@@ -134,9 +133,8 @@ export default function StepAgreement() {
 
     if (company.companyType === "partnership_firm") {
       return (ownership.partners || []).map((partner) => ({
-        label: `${partner?.name || "Partner"} - ${
-          partner?.designation || "Partner"
-        }`,
+        label: `${partner?.name || "Partner"} - ${partner?.designation || "Partner"
+          }`,
         name: partner?.name || "",
         designation: partner?.designation || "Partner",
         email: partner?.email || "",
@@ -146,9 +144,8 @@ export default function StepAgreement() {
 
     if (company.companyType === "private_limited_firm") {
       return (ownership.directors || []).map((director) => ({
-        label: `${director?.name || "Director"} - ${
-          director?.designation || "Director"
-        }`,
+        label: `${director?.name || "Director"} - ${director?.designation || "Director"
+          }`,
         name: director?.name || "",
         designation: director?.designation || "Director",
         email: director?.email || "",
@@ -257,6 +254,47 @@ export default function StepAgreement() {
         </div>
       </SectionCard>
 
+      <SectionCard
+        title="Sales Manager Information"
+        subtitle="Details of the sales manager handling this dealer relationship"
+      >
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <InputField
+            value={agreement.salesManager?.name || ""}
+            onChange={(value) =>
+              setField("agreement", "salesManager", {
+                ...(agreement.salesManager || {}),
+                name: value,
+              })
+            }
+            placeholder="Sales Manager Name"
+          />
+
+          <InputField
+            value={agreement.salesManager?.email || ""}
+            onChange={(value) =>
+              setField("agreement", "salesManager", {
+                ...(agreement.salesManager || {}),
+                email: value,
+              })
+            }
+            placeholder="Sales Manager Email"
+            type="email"
+          />
+
+          <InputField
+            value={agreement.salesManager?.mobile || ""}
+            onChange={(value) =>
+              setField("agreement", "salesManager", {
+                ...(agreement.salesManager || {}),
+                mobile: value.replace(/[^0-9]/g, ""),
+              })
+            }
+            placeholder="Sales Manager Contact Number"
+          />
+        </div>
+      </SectionCard>
+      
       <SectionCard
         title="Financier Details"
         subtitle="Keep financier company name separate from financier signatory details"

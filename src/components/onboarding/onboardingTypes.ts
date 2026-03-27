@@ -150,6 +150,12 @@ export type AgreementData = {
   dealerSignerPhone: string;
   dealerSigningMethod: SigningMethod;
 
+  salesManager: {
+    name: string;
+    email: string;
+    mobile: string;
+  };
+
   financierName: string;
 
   isOemFinancing: boolean;

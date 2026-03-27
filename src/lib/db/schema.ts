@@ -700,10 +700,9 @@ export const leadAssignmentsRelations = relations(leadAssignments, ({ one }) => 
     actorAssigner: one(users, { fields: [leadAssignments.actor_assigned_by], references: [users.id], relationName: 'actor_assigned_by_user' }),
 }));
 
-export const dealsRelations = relations(deals, ({ one, many }) => ({
+export const dealsRelations = relations(deals, ({ one }) => ({
     lead: one(leads, { fields: [deals.lead_id], references: [leads.id] }),
     creator: one(users, { fields: [deals.created_by], references: [users.id], relationName: 'deal_creator' }),
-    approvals: many(approvals),
 }));
 
 export const approvalsRelations = relations(approvals, ({ one }) => ({
@@ -1479,50 +1478,71 @@ export const scraperDedupLogsRelations = relations(scraperDedupLogs, ({ one }) =
 }));
 
 export const dealerOnboardingApplications = pgTable("dealer_onboarding_applications", {
-    id: uuid("id").defaultRandom().primaryKey(),
-    dealerUserId: uuid("dealer_user_id"),
-    companyName: text("company_name").notNull(),
-    companyType: text("company_type"),
-    gstNumber: text("gst_number"),
-    panNumber: text("pan_number"),
-    cinNumber: text("cin_number"),
-    businessAddress: jsonb("business_address").default({}),
-    registeredAddress: jsonb("registered_address").default({}),
-    financeEnabled: boolean("finance_enabled").default(false),
-    onboardingStatus: varchar("onboarding_status", { length: 30 }).default("draft").notNull(),
-    reviewStatus: varchar("review_status", { length: 30 }).default("pending_sales_head"), submittedAt: timestamp("submitted_at"),
-    approvedAt: timestamp("approved_at"),
-    rejectedAt: timestamp("rejected_at"),
-    rejectionReason: text("rejection_reason"),
-    adminNotes: text("admin_notes"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at").defaultNow().notNull(),
-    ownerName: text("owner_name"),
-    ownerPhone: text("owner_phone"),
-    ownerEmail: text("owner_email"),
+  id: uuid("id").defaultRandom().primaryKey(),
 
-    bankName: text("bank_name"),
-    accountNumber: text("account_number"),
-    beneficiaryName: text("beneficiary_name"),
-    ifscCode: text("ifsc_code"),
+  dealerUserId: uuid("dealer_user_id"),
 
-    correctionRemarks: text("correction_remarks"),
-    rejectionRemarks: text("rejection_remarks"),
+  companyName: text("company_name"),
+  companyType: varchar("company_type", { length: 50 }),
+  gstNumber: varchar("gst_number", { length: 20 }),
+  panNumber: varchar("pan_number", { length: 20 }),
 
-    dealerAccountStatus: varchar("dealer_account_status", { length: 30 }).default("inactive"),
-    dealerCode: text("dealer_code"),
+  businessAddress: jsonb("business_address"),
+  registeredAddress: jsonb("registered_address"),
 
-    agreementStatus: varchar("agreement_status", { length: 50 }).default("not_generated"), requestId: text("request_id"),
-    providerDocumentId: text("provider_document_id"),
+  ownerName: text("owner_name"),
+  ownerPhone: varchar("owner_phone", { length: 20 }),
+  ownerEmail: text("owner_email"),
 
-    providerSigningUrl: text("provider_signing_url"),
-    signedAgreementUrl: text("signed_agreement_url"),
-    agreementAuditTrailUrl: text("agreement_audit_trail_url"),
-    providerRawResponse: jsonb("provider_raw_response").default({}),
-    signedAt: timestamp("signed_at"),
-    lastActionTimestamp: timestamp("last_action_timestamp"),
-    stampStatus: varchar("stamp_status", { length: 50 }),
-    completionStatus: varchar("completion_status", { length: 50 }).default("pending"),
+  // NEW — SALES MANAGER
+  salesManagerName: text("sales_manager_name"),
+  salesManagerEmail: text("sales_manager_email"),
+  salesManagerMobile: text("sales_manager_mobile"),
+
+  // NEW — ITARANG SIGNER 1
+  itarangSignatory1Name: text("itarang_signatory_1_name"),
+  itarangSignatory1Email: text("itarang_signatory_1_email"),
+  itarangSignatory1Mobile: text("itarang_signatory_1_mobile"),
+
+  // NEW — ITARANG SIGNER 2
+  itarangSignatory2Name: text("itarang_signatory_2_name"),
+  itarangSignatory2Email: text("itarang_signatory_2_email"),
+  itarangSignatory2Mobile: text("itarang_signatory_2_mobile"),
+
+  bankName: text("bank_name"),
+  accountNumber: text("account_number"),
+  ifscCode: text("ifsc_code"),
+  beneficiaryName: text("beneficiary_name"),
+
+  financeEnabled: boolean("finance_enabled").default(false),
+
+  onboardingStatus: varchar("onboarding_status", { length: 50 }).default("draft"),
+  reviewStatus: varchar("review_status", { length: 50 }).default("draft"),
+
+  agreementStatus: varchar("agreement_status", { length: 50 }).default("not_generated"),
+
+  // DIGIO
+  requestId: text("request_id"),
+  providerDocumentId: text("provider_document_id"),
+  providerSigningUrl: text("provider_signing_url"),
+  providerRawResponse: jsonb("provider_raw_response"),
+
+  signedAt: timestamp("signed_at"),
+  lastActionTimestamp: timestamp("last_action_timestamp"),
+  stampStatus: varchar("stamp_status", { length: 50 }),
+  completionStatus: varchar("completion_status", { length: 50 }),
+
+  correctionRemarks: text("correction_remarks"),
+  rejectionRemarks: text("rejection_remarks"),
+  rejectionReason: text("rejection_reason"),
+  rejectedAt: timestamp("rejected_at"),
+  approvedAt: timestamp("approved_at"),
+
+  dealerAccountStatus: varchar("dealer_account_status", { length: 50 }).default("inactive"),
+
+  submittedAt: timestamp("submitted_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 export const dealerOnboardingDocuments = pgTable("dealer_onboarding_documents", {

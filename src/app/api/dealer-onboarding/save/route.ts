@@ -1,49 +1,98 @@
 import { NextRequest, NextResponse } from "next/server";
+import { eq } from "drizzle-orm";
 import { db } from "@/lib/db/index";
 import {
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
 
-function cleanString(value: unknown) {
+type NullableString = string | null;
+
+function cleanString(value: unknown): NullableString {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function cleanEmail(value: unknown): NullableString {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function cleanPhone(value: unknown): NullableString {
+  if (typeof value !== "string") return null;
+  const digits = value.replace(/\D/g, "");
+  return digits.length > 0 ? digits : null;
+}
+
+function cleanBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "yes";
+  }
+  return false;
+}
+
+function cleanObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    const dealerUserId = body.dealerUserId ?? null;
+    const dealerUserId: string | null =
+      typeof body.dealerUserId === "string" && body.dealerUserId.trim()
+        ? body.dealerUserId.trim()
+        : null;
+
     const companyName = cleanString(body.companyName);
     const companyType = cleanString(body.companyType);
     const gstNumber = cleanString(body.gstNumber);
     const panNumber = cleanString(body.panNumber);
     const cinNumber = cleanString(body.cinNumber);
-    const businessAddress = body.businessAddress ?? {};
-    const registeredAddress = body.registeredAddress ?? {};
-    const financeEnabled = body.financeEnabled ?? false;
 
-    // Final submit from StepReview should send "submitted"
+    const businessAddress = cleanObject(body.businessAddress);
+    const registeredAddress = cleanObject(body.registeredAddress);
+    const financeEnabled = cleanBoolean(body.financeEnabled);
+
     const onboardingStatus =
       body.onboardingStatus === "submitted" ? "submitted" : "draft";
 
-    const reviewStatus =
-      onboardingStatus === "submitted" ? "pending_sales_head" : null;
+    const reviewStatus = onboardingStatus === "submitted" ? "pending_sales_head" : null;
 
     const ownerName = cleanString(body.ownerName);
-    const ownerPhone = cleanString(body.ownerPhone);
-    const ownerEmail = cleanString(body.ownerEmail);
+    const ownerPhone = cleanPhone(body.ownerPhone);
+    const ownerEmail = cleanEmail(body.ownerEmail);
 
     const bankName = cleanString(body.bankName);
     const accountNumber = cleanString(body.accountNumber);
     const beneficiaryName = cleanString(body.beneficiaryName);
     const ifscCode = cleanString(body.ifscCode);
 
-    const documents = Array.isArray(body.documents) ? body.documents : [];
-    const agreementConfig = body.agreement ?? {};
+    const documents: any[] = Array.isArray(body.documents) ? body.documents : [];
+    const agreementConfig = cleanObject(body.agreement);
+
+    const salesManager = cleanObject(agreementConfig.salesManager);
+    const itarangSignatory1 = cleanObject(agreementConfig.itarangSignatory1);
+    const itarangSignatory2 = cleanObject(agreementConfig.itarangSignatory2);
+
+    const salesManagerName = cleanString(salesManager.name);
+    const salesManagerEmail = cleanEmail(salesManager.email);
+    const salesManagerMobile = cleanPhone(salesManager.mobile);
+
+    const itarangSignatory1Name = cleanString(itarangSignatory1.name);
+    const itarangSignatory1Email = cleanEmail(itarangSignatory1.email);
+    const itarangSignatory1Mobile = cleanPhone(itarangSignatory1.mobile);
+
+    const itarangSignatory2Name = cleanString(itarangSignatory2.name);
+    const itarangSignatory2Email = cleanEmail(itarangSignatory2.email);
+    const itarangSignatory2Mobile = cleanPhone(itarangSignatory2.mobile);
+
     if (!companyName) {
       return NextResponse.json(
         { success: false, message: "Company name is required" },
@@ -85,9 +134,8 @@ export async function POST(req: NextRequest) {
 
     let application:
       | typeof dealerOnboardingApplications.$inferSelect
-      | undefined;
+      | null = null;
 
-    // Update existing application if dealer already has one
     if (dealerUserId) {
       const existing = await db
         .select()
@@ -119,16 +167,29 @@ export async function POST(req: NextRequest) {
             ifscCode,
             updatedAt: new Date(),
 
+            salesManagerName,
+            salesManagerEmail,
+            salesManagerMobile,
+
+            itarangSignatory1Name,
+            itarangSignatory1Email,
+            itarangSignatory1Mobile,
+
+            itarangSignatory2Name,
+            itarangSignatory2Email,
+            itarangSignatory2Mobile,
+
             agreementStatus:
               onboardingStatus === "submitted"
                 ? "not_generated"
-                : agreementConfig?.agreementStatus || "not_generated",
+                : (typeof agreementConfig.agreementStatus === "string" &&
+                    agreementConfig.agreementStatus) ||
+                  "not_generated",
 
             providerSigningUrl: null,
             providerDocumentId: null,
             requestId: null,
 
-            // SAVE STEP 5 AGREEMENT DATA HERE
             providerRawResponse: {
               agreement: agreementConfig,
             },
@@ -140,11 +201,10 @@ export async function POST(req: NextRequest) {
           .where(eq(dealerOnboardingApplications.id, existing[0].id))
           .returning();
 
-        application = updatedApplications[0];
+        application = updatedApplications[0] ?? null;
       }
     }
 
-    // Create new application only if no existing one was found
     if (!application) {
       const insertedApplications = await db
         .insert(dealerOnboardingApplications)
@@ -168,8 +228,19 @@ export async function POST(req: NextRequest) {
           accountNumber,
           beneficiaryName,
           ifscCode,
-        
-          // SAVE AGREEMENT CONFIG
+
+          salesManagerName,
+          salesManagerEmail,
+          salesManagerMobile,
+
+          itarangSignatory1Name,
+          itarangSignatory1Email,
+          itarangSignatory1Mobile,
+
+          itarangSignatory2Name,
+          itarangSignatory2Email,
+          itarangSignatory2Mobile,
+
           providerRawResponse: {
             agreement: agreementConfig,
           },
@@ -180,10 +251,19 @@ export async function POST(req: NextRequest) {
         })
         .returning();
 
-      application = insertedApplications[0];
+      application = insertedApplications[0] ?? null;
     }
 
-    // Replace old documents for this application to avoid duplicates
+    if (!application) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Failed to create or update onboarding application",
+        },
+        { status: 500 }
+      );
+    }
+
     await db
       .delete(dealerOnboardingDocuments)
       .where(eq(dealerOnboardingDocuments.applicationId, application.id));
@@ -198,7 +278,7 @@ export async function POST(req: NextRequest) {
             doc?.fileName
         )
         .map((doc: any) => ({
-          applicationId: application.id,
+          applicationId: application!.id,
           documentType: doc.documentType,
           bucketName: doc.bucketName,
           storagePath: doc.storagePath,
@@ -209,7 +289,10 @@ export async function POST(req: NextRequest) {
           uploadedBy: dealerUserId,
           docStatus: doc.docStatus ?? "uploaded",
           verificationStatus: doc.verificationStatus ?? "pending",
-          metadata: doc.metadata ?? {},
+          metadata:
+            doc.metadata && typeof doc.metadata === "object" && !Array.isArray(doc.metadata)
+              ? doc.metadata
+              : {},
         }));
 
       if (validDocuments.length > 0) {

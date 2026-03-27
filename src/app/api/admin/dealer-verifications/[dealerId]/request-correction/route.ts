@@ -13,6 +13,20 @@ function cleanString(value: unknown) {
   return value.trim();
 }
 
+function cleanEmail(value: unknown) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function getNotificationRecipients(application: any) {
+  const recipients = [
+    cleanEmail(application?.salesManagerEmail),
+    cleanEmail(application?.itarangSignatory1Email),
+    cleanEmail(application?.itarangSignatory2Email),
+  ].filter(Boolean);
+
+  return Array.from(new Set(recipients));
+}
+
 function getMailer() {
   const host = process.env.SMTP_HOST;
   const port = Number(process.env.SMTP_PORT || 587);
@@ -35,11 +49,17 @@ function getMailer() {
 }
 
 async function sendCorrectionEmail(params: {
+  to: string[];
   companyName: string;
   applicationId: string;
   correctionRemarks: string;
 }) {
   try {
+    if (!params.to.length) {
+      console.warn("No correction email recipients provided");
+      return { success: false };
+    }
+
     const transporter = getMailer();
 
     const subject = `Correction Required — Dealer Onboarding Application ${params.applicationId}`;
@@ -51,24 +71,29 @@ async function sendCorrectionEmail(params: {
 
         <p><strong>Dealer:</strong> ${params.companyName}</p>
         <p><strong>Application ID:</strong> ${params.applicationId}</p>
+        <p><strong>Status:</strong> Correction Requested</p>
 
         <p><strong>Correction Remarks:</strong></p>
         <p>${params.correctionRemarks}</p>
+
+        <p>Please coordinate internally and take the necessary corrective action.</p>
 
         <p>Regards,<br/>iTarang Compliance Team</p>
       </div>
     `;
 
-    const to = ["rushikeshkasav306@gmail.com"];
-
     const info = await transporter.sendMail({
       from: process.env.MAIL_FROM || process.env.SMTP_USER,
-      to: to.join(","),
+      to: params.to.join(","),
       subject,
       html,
     });
 
-    console.log("CORRECTION EMAIL SENT:", info.messageId);
+    console.log("CORRECTION EMAIL SENT:", {
+      messageId: info.messageId,
+      recipients: params.to,
+      applicationId: params.applicationId,
+    });
 
     return { success: true };
   } catch (error) {
@@ -118,7 +143,17 @@ export async function POST(req: NextRequest, context: RouteContext) {
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
 
+    const notificationRecipients = getNotificationRecipients(application);
+
+    if (notificationRecipients.length === 0) {
+      console.warn("No correction notification recipients found for application:", {
+        dealerId,
+        applicationId: application.id,
+      });
+    }
+
     const emailResult = await sendCorrectionEmail({
+      to: notificationRecipients,
       companyName: application.companyName || "Unknown Company",
       applicationId: String(application.id),
       correctionRemarks: remarks,
@@ -129,6 +164,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       message: emailResult.success
         ? "Correction request sent"
         : "Correction saved but email failed",
+      notificationRecipients,
     });
   } catch (error: any) {
     console.error("REQUEST CORRECTION ERROR:", error);
