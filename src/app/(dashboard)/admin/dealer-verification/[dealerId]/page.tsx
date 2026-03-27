@@ -97,6 +97,8 @@ type DealerReviewData = {
   onboardingStatus?: string;
   reviewStatus?: string;
   submittedAt?: string | null;
+  correctionRemarks?: string | null;
+  rejectionRemarks?: string | null;
   documents?: DocumentItem[];
   agreement?: AgreementData | null;
 };
@@ -157,14 +159,14 @@ function StatusBadge({ value }: { value?: string | null }) {
     status === "completed" || status === "approved" || status === "succeed"
       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
       : status === "submitted" ||
-        status === "pending_admin_review" ||
-        status === "pending_sales_head"
+          status === "pending_admin_review" ||
+          status === "pending_sales_head"
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : status === "under_review"
           ? "border-blue-200 bg-blue-50 text-blue-700"
           : status === "under_correction" ||
-            status === "correction_requested" ||
-            status === "action_needed"
+              status === "correction_requested" ||
+              status === "action_needed"
             ? "border-orange-200 bg-orange-50 text-orange-700"
             : status === "rejected"
               ? "border-rose-200 bg-rose-50 text-rose-700"
@@ -388,6 +390,8 @@ export default function DealerReviewPage() {
   const signedAgreementReady =
     (data?.agreement?.status || "").toLowerCase() === "completed";
 
+  const isRejected = (data?.onboardingStatus || "").toLowerCase() === "rejected";
+
   const signedAgreementDownloadUrl = `/api/admin/dealer-verifications/${dealerId}/download-signed-agreement`;
 
   const reloadDealer = async () => {
@@ -408,6 +412,11 @@ export default function DealerReviewPage() {
   const handleAgreementAction = async (
     action: "initiate" | "refresh" | "reinitiate" | "retry"
   ) => {
+    if (data?.onboardingStatus === "rejected") {
+      alert("This application is rejected and locked.");
+      return;
+    }
+
     setAgreementActionLoading(action);
 
     try {
@@ -573,6 +582,45 @@ export default function DealerReviewPage() {
             <StatusBadge value={data.reviewStatus} />
           </div>
         </div>
+
+        {data.onboardingStatus === "correction_requested" && (
+          <div className="mt-6 rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
+            <div className="flex items-start gap-3">
+              <CircleAlert className="mt-0.5 h-4 w-4" />
+              <div>
+                <p className="font-semibold">Correction Requested</p>
+                <p className="mt-1">
+                  Admin has requested corrections for this application. Update the required
+                  details and save the form for re-validation.
+                </p>
+                {data?.correctionRemarks && (
+                  <p className="mt-2 text-xs">
+                    <strong>Remarks:</strong> {data.correctionRemarks}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {data.onboardingStatus === "rejected" && (
+          <div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+            <div className="flex items-start gap-3">
+              <XCircle className="mt-0.5 h-4 w-4" />
+              <div>
+                <p className="font-semibold">Application Rejected</p>
+                <p className="mt-1">
+                  This onboarding application has been rejected and is now locked.
+                </p>
+                {data?.rejectionRemarks && (
+                  <p className="mt-2 text-xs">
+                    <strong>Reason:</strong> {data.rejectionRemarks}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
           <div className="rounded-2xl bg-slate-50 p-4">
@@ -813,7 +861,7 @@ export default function DealerReviewPage() {
                 {!data.agreement?.agreementId && (
                   <button
                     onClick={() => handleAgreementAction("initiate")}
-                    disabled={agreementActionLoading !== null}
+                    disabled={agreementActionLoading !== null || isRejected}
                     className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
                   >
                     <FileSignature className="h-4 w-4" />
@@ -826,7 +874,7 @@ export default function DealerReviewPage() {
                 {data.agreement?.status && data.agreement.status !== "completed" && (
                   <button
                     onClick={() => handleAgreementAction("refresh")}
-                    disabled={agreementActionLoading !== null}
+                    disabled={agreementActionLoading !== null || isRejected}
                     className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                   >
                     <RefreshCw className="h-4 w-4" />
@@ -840,7 +888,7 @@ export default function DealerReviewPage() {
                   data.agreement?.status === "expired") && (
                   <button
                     onClick={() => handleAgreementAction("reinitiate")}
-                    disabled={agreementActionLoading !== null}
+                    disabled={agreementActionLoading !== null || isRejected}
                     className="inline-flex items-center gap-2 rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
                   >
                     <RefreshCw className="h-4 w-4" />
@@ -853,7 +901,7 @@ export default function DealerReviewPage() {
                 {data.agreement?.status === "signed" && !data.agreement?.copyUrl && (
                   <button
                     onClick={() => handleAgreementAction("retry")}
-                    disabled={agreementActionLoading !== null}
+                    disabled={agreementActionLoading !== null || isRejected}
                     className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                   >
                     <Download className="h-4 w-4" />
@@ -870,7 +918,7 @@ export default function DealerReviewPage() {
         <ActionCard
           remarks={remarks}
           setRemarks={setRemarks}
-          submitting={submitting}
+          submitting={submitting || isRejected}
           onApprove={handleApprove}
           onCorrection={handleCorrection}
           onReject={handleReject}

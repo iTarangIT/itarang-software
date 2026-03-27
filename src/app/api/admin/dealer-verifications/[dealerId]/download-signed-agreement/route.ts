@@ -46,12 +46,22 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     const baseUrl =
       cleanEnv(process.env.DIGIO_BASE_URL) || "https://ext.digio.in:444";
 
+    if (!clientId || !clientSecret) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Missing Digio credentials",
+        },
+        { status: 500 }
+      );
+    }
+
     const downloadUrl = `${baseUrl}/v2/client/document/download?document_id=${application.providerDocumentId}`;
 
     const digioResponse = await fetch(downloadUrl, {
       method: "GET",
       headers: {
-        Authorization: basicAuthHeader(clientId!, clientSecret!),
+        Authorization: basicAuthHeader(clientId, clientSecret),
       },
       cache: "no-store",
     });
@@ -64,7 +74,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
           message: "Failed to download signed agreement from Digio",
           raw: errorText,
         },
-        { status: 500 }
+        { status: digioResponse.status }
       );
     }
 
@@ -75,6 +85,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="signed-agreement-${dealerId}.pdf"`,
+        "Cache-Control": "no-store",
       },
     });
   } catch (error: any) {

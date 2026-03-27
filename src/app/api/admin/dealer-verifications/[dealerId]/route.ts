@@ -28,6 +28,26 @@ function parseProviderRawResponse(value: unknown) {
   return {};
 }
 
+function extractAddress(value: unknown) {
+  if (!value) return "";
+
+  if (typeof value === "string") return value;
+
+  if (typeof value === "object" && value !== null) {
+    const obj = value as Record<string, any>;
+
+    return (
+      obj.address ||
+      obj.fullAddress ||
+      [obj.line1, obj.line2, obj.city, obj.state, obj.pincode]
+        .filter(Boolean)
+        .join(", ")
+    );
+  }
+
+  return "";
+}
+
 export async function GET(_req: NextRequest, context: RouteContext) {
   try {
     const { dealerId } = await context.params;
@@ -73,75 +93,94 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       data: {
         id: row.id,
         dealerId: row.id,
+
         companyName: row.companyName,
+        companyAddress: extractAddress(row.businessAddress),
         gstNumber: row.gstNumber,
         panNumber: row.panNumber,
+        cinNumber: row.cinNumber,
         companyType: row.companyType,
+
+        ownerName: row.ownerName,
+        ownerPhone: row.ownerPhone,
+        ownerEmail: row.ownerEmail,
+
+        bankName: row.bankName,
+        accountNumber: row.accountNumber,
+        beneficiaryName: row.beneficiaryName,
+        ifscCode: row.ifscCode,
+
         financeEnabled: row.financeEnabled,
         onboardingStatus: row.onboardingStatus,
         reviewStatus: row.reviewStatus,
         submittedAt: row.submittedAt,
-        ownerName: row.ownerName,
-        ownerPhone: row.ownerPhone,
-        ownerEmail: row.ownerEmail,
+
+        correctionRemarks: row.correctionRemarks || null,
+        rejectionRemarks: row.rejectionRemarks || row.rejectionReason || null,
+
         documents,
 
         agreement: row.financeEnabled
           ? {
-            agreementId: row.providerDocumentId || null,
-            status: row.agreementStatus || "not_generated",
-            copyUrl: row.providerSigningUrl || null,
-            signedAgreementUrl: row.signedAgreementUrl || null,
-            requestId: row.requestId || null,
-            stampStatus: row.stampStatus || "pending",
-            completionStatus: row.completionStatus || "pending",
-            signedAt: row.signedAt || null,
-            lastActionTimestamp: row.lastActionTimestamp || null,
+              agreementId: row.providerDocumentId || null,
+              status: row.agreementStatus || "not_generated",
+              copyUrl: row.providerSigningUrl || null,
+              signedAgreementUrl: row.signedAgreementUrl || null,
+              requestId: row.requestId || null,
+              stampStatus: row.stampStatus || "pending",
+              completionStatus: row.completionStatus || "pending",
+              signedAt: row.signedAt || null,
+              lastActionTimestamp: row.lastActionTimestamp || null,
 
-            // IMPORTANT — STEP 5 DATA
-            agreementName: agreementData.agreementName || "",
-            agreementVersion: agreementData.agreementVersion || "",
-            dateOfSigning: agreementData.dateOfSigning || "",
-            mouDate: agreementData.mouDate || "",
-            financierName: agreementData.financierName || "",
+              agreementName: agreementData.agreementName || "",
+              agreementVersion: agreementData.agreementVersion || "",
+              dateOfSigning: agreementData.dateOfSigning || "",
+              mouDate: agreementData.mouDate || "",
+              financierName: agreementData.financierName || "",
 
-            dealerSignerName: agreementData.dealerSignerName || "",
-            dealerSignerDesignation:
-              agreementData.dealerSignerDesignation || "",
-            dealerSignerEmail: agreementData.dealerSignerEmail || "",
-            dealerSignerPhone: agreementData.dealerSignerPhone || "",
-            dealerSigningMethod:
-              agreementData.dealerSigningMethod || "",
+              dealerSignerName: agreementData.dealerSignerName || "",
+              dealerSignerDesignation:
+                agreementData.dealerSignerDesignation || "",
+              dealerSignerEmail: agreementData.dealerSignerEmail || "",
+              dealerSignerPhone: agreementData.dealerSignerPhone || "",
+              dealerSigningMethod:
+                agreementData.dealerSigningMethod || "",
 
-            financierSignatory:
-              agreementData.financierSignatory || null,
-            itarangSignatory1:
-              agreementData.itarangSignatory1 || null,
-            itarangSignatory2:
-              agreementData.itarangSignatory2 || null,
+              financierSignatory:
+                agreementData.financierSignatory || null,
+              itarangSignatory1:
+                agreementData.itarangSignatory1 || null,
+              itarangSignatory2:
+                agreementData.itarangSignatory2 || null,
 
-            signingOrder:
-              agreementData.signingOrder || [
-                "dealer",
-                "financier",
-                "itarang_1",
-                "itarang_2",
-              ],
+              signingOrder:
+                agreementData.signingOrder || [
+                  "dealer",
+                  "financier",
+                  "itarang_1",
+                  "itarang_2",
+                ],
 
-            isOemFinancing: !!agreementData.isOemFinancing,
-            vehicleType: agreementData.vehicleType || "",
-            manufacturer: agreementData.manufacturer || "",
-            brand: agreementData.brand || "",
-            statePresence: agreementData.statePresence || "",
-          }
+              isOemFinancing: !!agreementData.isOemFinancing,
+              vehicleType: agreementData.vehicleType || "",
+              manufacturer: agreementData.manufacturer || "",
+              brand: agreementData.brand || "",
+              statePresence: agreementData.statePresence || "",
+            }
           : null,
       },
     });
   } catch (error: any) {
     console.error("ADMIN DEALER VERIFICATION DETAIL ERROR FULL:", error);
-    console.error("ADMIN DEALER VERIFICATION DETAIL ERROR MESSAGE:", error?.message);
+    console.error(
+      "ADMIN DEALER VERIFICATION DETAIL ERROR MESSAGE:",
+      error?.message
+    );
     console.error("ADMIN DEALER VERIFICATION DETAIL ERROR CAUSE:", error?.cause);
-    console.error("ADMIN DEALER VERIFICATION DETAIL ERROR DETAIL:", error?.cause?.detail);
+    console.error(
+      "ADMIN DEALER VERIFICATION DETAIL ERROR DETAIL:",
+      error?.cause?.detail
+    );
 
     return NextResponse.json(
       {
