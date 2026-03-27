@@ -1,6 +1,6 @@
 export async function saveCallAttempt(data: any) {
   try {
-    console.log("💾 SAVING CALL ATTEMPT");
+    console.log("SAVING CALL ATTEMPT");
 
     console.log({
       leadId: data.leadId,
@@ -12,6 +12,6 @@ export async function saveCallAttempt(data: any) {
 
     // todo: replace with DB insert
   } catch (err) {
-    console.error("❌ Failed to save call attempt:", err);
+    console.error("Failed to save call attempt:", err);
   }
 }
