@@ -196,153 +196,156 @@ export const inventory = pgTable("inventory", {
 
 // --- DEALER SALES ---
 
-export const leads = pgTable(
-  "leads",
-  {
-    id: varchar("id", { length: 255 }).primaryKey(), // LEAD-YYYYMMDD-SEQ
-    lead_source: varchar("lead_source", { length: 50 }).notNull(), // call_center, ground_sales, digital_marketing, database_upload, dealer_referral
-    interest_level: varchar("interest_level", { length: 20 })
-      .default("cold")
-      .notNull(), // cold, warm, hot
-    lead_status: varchar("lead_status", { length: 50 })
-      .default("new")
-      .notNull(), // new, assigned, contacted, qualified, converted, lost
-    dealer_id: varchar("dealer_id", { length: 255 }).references(
-      () => accounts.id,
-    ), // Scoped to dealer org
+// export const leads = pgTable(
+//   "leads",
+//   {
+//     id: varchar("id", { length: 255 }).primaryKey(), // LEAD-YYYYMMDD-SEQ
+//     lead_source: varchar("lead_source", { length: 50 }).notNull(), // call_center, ground_sales, digital_marketing, database_upload, dealer_referral
+//     interest_level: varchar("interest_level", { length: 20 })
+//       .default("cold")
+//       .notNull(), // cold, warm, hot
+//     lead_status: varchar("lead_status", { length: 50 })
+//       .default("new")
+//       .notNull(), // new, assigned, contacted, qualified, converted, lost
+//     dealer_id: varchar("dealer_id", { length: 255 }).references(
+//       () => accounts.id,
+//     ), // Scoped to dealer org
 
-    // Dealer Info
-    owner_name: text("owner_name").notNull(),
-    owner_contact: varchar("owner_contact", { length: 20 }).notNull(),
-    business_name: text("business_name"),
-    owner_email: text("owner_email"),
+//     // Dealer Info
+//     owner_name: text("owner_name").notNull(),
+//     owner_contact: varchar("owner_contact", { length: 20 }).notNull(),
+//     business_name: text("business_name"),
+//     owner_email: text("owner_email"),
 
-    // Location
-    state: varchar("state", { length: 100 }), // can be nullable now if not always provided
-    city: varchar("city", { length: 100 }), // can be nullable
-    shop_address: text("shop_address"),
+//     // Location
+//     state: varchar("state", { length: 100 }), // can be nullable now if not always provided
+//     city: varchar("city", { length: 100 }), // can be nullable
+//     shop_address: text("shop_address"),
 
-    // Extended Attributes (Dealer Portal)
-    mobile: varchar("mobile", { length: 20 }),
-    permanent_address: text("permanent_address"),
-    vehicle_ownership: varchar("vehicle_ownership", { length: 50 }),
-    battery_type: varchar("battery_type", { length: 50 }),
-    asset_model: text("asset_model"),
-    asset_price: decimal("asset_price", { precision: 12, scale: 2 }),
-    family_members: integer("family_members"),
-    driving_experience: integer("driving_experience"),
-    lead_type: varchar("lead_type", { length: 20 }), // hot, warm, cold
-    vehicle_rc: varchar("vehicle_rc", { length: 50 }),
+//     // Extended Attributes (Dealer Portal)
+//     mobile: varchar("mobile", { length: 20 }),
+//     permanent_address: text("permanent_address"),
+//     vehicle_ownership: varchar("vehicle_ownership", { length: 50 }),
+//     battery_type: varchar("battery_type", { length: 50 }),
+//     asset_model: text("asset_model"),
+//     asset_price: decimal("asset_price", { precision: 12, scale: 2 }),
+//     family_members: integer("family_members"),
+//     driving_experience: integer("driving_experience"),
+//     lead_type: varchar("lead_type", { length: 20 }), // hot, warm, cold
+//     vehicle_rc: varchar("vehicle_rc", { length: 50 }),
 
-    // V2 Step 1 Mapping (Additive)
-    full_name: text("full_name"),
-    father_or_husband_name: text("father_or_husband_name"),
-    dob: timestamp("dob", { withTimezone: true }),
-    phone: varchar("phone", { length: 20 }),
-    current_address: text("current_address"),
-    is_current_same: boolean("is_current_same").notNull().default(false),
-    product_category_id: varchar("product_category_id", { length: 255 }), // Changed from uuid to match catalog
-    product_type_id: varchar("product_type_id", { length: 255 }), // Added for Step 1 selection
-    vehicle_owner_name: text("vehicle_owner_name"),
-    vehicle_owner_phone: varchar("vehicle_owner_phone", { length: 20 }),
-    auto_filled: boolean("auto_filled").default(false).notNull(),
-    ocr_status: varchar("ocr_status", { length: 20 }), // success, partial, failed
-    ocr_error: text("ocr_error"),
-    reference_id: varchar("reference_id", { length: 255 }).unique(),
+//     // V2 Step 1 Mapping (Additive)
+//     full_name: text("full_name"),
+//     father_or_husband_name: text("father_or_husband_name"),
+//     dob: timestamp("dob", { withTimezone: true }),
+//     phone: varchar("phone", { length: 20 }),
+//     current_address: text("current_address"),
+//     is_current_same: boolean("is_current_same").notNull().default(false),
+//     product_category_id: varchar("product_category_id", { length: 255 }), // Changed from uuid to match catalog
+//     product_type_id: varchar("product_type_id", { length: 255 }), // Added for Step 1 selection
+//     vehicle_owner_name: text("vehicle_owner_name"),
+//     vehicle_owner_phone: varchar("vehicle_owner_phone", { length: 20 }),
+//     auto_filled: boolean("auto_filled").default(false).notNull(),
+//     ocr_status: varchar("ocr_status", { length: 20 }), // success, partial, failed
+//     ocr_error: text("ocr_error"),
+//     reference_id: varchar("reference_id", { length: 255 }).unique(),
 
-    // Business Details
-    interested_in: jsonb("interested_in"), // Array of product IDs
-    battery_order_expected: integer("battery_order_expected"),
-    investment_capacity: decimal("investment_capacity", {
-      precision: 12,
-      scale: 2,
-    }),
-    business_type: varchar("business_type", { length: 50 }), // retail, wholesale, distributor
+//     // Business Details
+//     interested_in: jsonb("interested_in"), // Array of product IDs
+//     battery_order_expected: integer("battery_order_expected"),
+//     investment_capacity: decimal("investment_capacity", {
+//       precision: 12,
+//       scale: 2,
+//     }),
+//     business_type: varchar("business_type", { length: 50 }), // retail, wholesale, distributor
 
-    // Qualification
-    qualified_by: uuid("qualified_by").references(() => users.id),
-    qualified_at: timestamp("qualified_at", { withTimezone: true }),
-    qualification_notes: text("qualification_notes"),
+//     // Qualification
+//     qualified_by: uuid("qualified_by").references(() => users.id),
+//     qualified_at: timestamp("qualified_at", { withTimezone: true }),
+//     qualification_notes: text("qualification_notes"),
 
-    // Conversion
-    converted_deal_id: varchar("converted_deal_id", { length: 255 }),
-    converted_at: timestamp("converted_at", { withTimezone: true }),
+//     // Conversion
+//     converted_deal_id: varchar("converted_deal_id", { length: 255 }),
+//     converted_at: timestamp("converted_at", { withTimezone: true }),
 
-    // AI Call tracking
-    total_ai_calls: integer("total_ai_calls").default(0),
-    last_ai_call_at: timestamp("last_ai_call_at", { withTimezone: true }),
-    last_call_outcome: text("last_call_outcome"),
-    ai_priority_score: decimal("ai_priority_score", { precision: 5, scale: 2 }),
-    next_call_after: timestamp("next_call_after", { withTimezone: true }),
-    do_not_call: boolean("do_not_call").default(false),
+//     // AI Call tracking
+//     total_ai_calls: integer("total_ai_calls").default(0),
+//     last_ai_call_at: timestamp("last_ai_call_at", { withTimezone: true }),
+//     last_call_outcome: text("last_call_outcome"),
+//     ai_priority_score: decimal("ai_priority_score", { precision: 5, scale: 2 }),
+//     next_call_after: timestamp("next_call_after", { withTimezone: true }),
+//     do_not_call: boolean("do_not_call").default(false),
 
-    // AI Dialer (Bolna)
-    ai_managed: boolean("ai_managed").default(false),
-    ai_owner: text("ai_owner"),
-    manual_takeover: boolean("manual_takeover").default(false),
-    last_ai_action_at: timestamp("last_ai_action_at", { withTimezone: true }),
-    intent_score: integer("intent_score"),
-    intent_reason: text("intent_reason"),
-    next_call_at: timestamp("next_call_at", { withTimezone: true }),
-    call_priority: integer("call_priority").default(0),
-    conversation_summary: text("conversation_summary"),
-    last_call_status: text("last_call_status"),
+//     // AI Dialer (Bolna)
+//     ai_managed: boolean("ai_managed").default(false),
+//     ai_owner: text("ai_owner"),
+//     manual_takeover: boolean("manual_takeover").default(false),
+//     last_ai_action_at: timestamp("last_ai_action_at", { withTimezone: true }),
+//     intent_score: integer("intent_score"),
+//     intent_reason: text("intent_reason"),
+//     next_call_at: timestamp("next_call_at", { withTimezone: true }),
+//     call_priority: integer("call_priority").default(0),
+//     conversation_summary: text("conversation_summary"),
+//     last_call_status: text("last_call_status"),
 
-    // V2 Workflow
-    status: varchar("status", { length: 50 }).default("INCOMPLETE").notNull(), // INCOMPLETE, ACTIVE, CONVERTED, ABANDONED
-    workflow_step: integer("workflow_step").default(1).notNull(),
-    primary_product_id: uuid("primary_product_id").references(
-      () => products.id,
-    ),
-    lead_score: integer("lead_score"), // hot=90, warm=60, cold=30
+//     // V2 Workflow
+//     status: varchar("status", { length: 50 }).default("INCOMPLETE").notNull(), // INCOMPLETE, ACTIVE, CONVERTED, ABANDONED
+//     workflow_step: integer("workflow_step").default(1).notNull(),
+//     primary_product_id: uuid("primary_product_id").references(
+//       () => products.id,
+//     ),
+//     lead_score: integer("lead_score"), // hot=90, warm=60, cold=30
 
-    // KYC Fields
-    kyc_status: varchar("kyc_status", { length: 30 }).default("not_started"), // not_started, draft, in_progress, completed, failed
-    kyc_score: integer("kyc_score"), // 0-100 calculated score
-    kyc_completed_at: timestamp("kyc_completed_at", { withTimezone: true }),
-    payment_method: varchar("payment_method", { length: 20 }), // upfront, finance
-    consent_status: varchar("consent_status", { length: 30 }).default(
-      "awaiting_signature",
-    ), // awaiting_signature, link_sent, digitally_signed, manual_uploaded, verified
-    has_co_borrower: boolean("has_co_borrower").default(false),
-    has_additional_docs_required: boolean(
-      "has_additional_docs_required",
-    ).default(false),
-    interim_step_status: varchar("interim_step_status", { length: 20 }), // pending, completed
-    kyc_draft_data: jsonb("kyc_draft_data"), // Stores draft KYC form data
+//     // KYC Fields
+//     kyc_status: varchar("kyc_status", { length: 30 }).default("not_started"), // not_started, draft, in_progress, completed, failed
+//     kyc_score: integer("kyc_score"), // 0-100 calculated score
+//     kyc_completed_at: timestamp("kyc_completed_at", { withTimezone: true }),
+//     payment_method: varchar("payment_method", { length: 20 }), // upfront, finance
+//     consent_status: varchar("consent_status", { length: 30 }).default(
+//       "awaiting_signature",
+//     ), // awaiting_signature, link_sent, digitally_signed, manual_uploaded, verified
+//     has_co_borrower: boolean("has_co_borrower").default(false),
+//     has_additional_docs_required: boolean(
+//       "has_additional_docs_required",
+//     ).default(false),
+//     interim_step_status: varchar("interim_step_status", { length: 20 }), // pending, completed
+//     kyc_draft_data: jsonb("kyc_draft_data"), // Stores draft KYC form data
 
-    // SM Workflow
-    sm_review_status: varchar("sm_review_status", { length: 30 }).default(
-      "not_submitted",
-    ), // not_submitted, pending_sm_review, under_review, docs_verified, options_ready, option_booked
-    submitted_to_sm_at: timestamp("submitted_to_sm_at", { withTimezone: true }),
-    sm_assigned_to: uuid("sm_assigned_to").references(() => users.id),
+//     // SM Workflow
+//     sm_review_status: varchar("sm_review_status", { length: 30 }).default(
+//       "not_submitted",
+//     ), // not_submitted, pending_sm_review, under_review, docs_verified, options_ready, option_booked
+//     submitted_to_sm_at: timestamp("submitted_to_sm_at", { withTimezone: true }),
+//     sm_assigned_to: uuid("sm_assigned_to").references(() => users.id),
 
-    // Metadata
-    uploader_id: uuid("uploader_id")
-      .references(() => users.id)
-      .notNull(),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => {
-    return {
-      leadsSourceIdx: index("leads_source_idx").on(table.lead_source),
-      leadsInterestIdx: index("leads_interest_idx").on(table.interest_level),
-      leadsStatusIdx: index("leads_status_idx").on(table.lead_status),
-    };
-  },
-);
+//     // Metadata
+//     uploader_id: uuid("uploader_id")
+//       .references(() => users.id)
+//       .notNull(),
+//     created_at: timestamp("created_at", { withTimezone: true })
+//       .defaultNow()
+//       .notNull(),
+//     updated_at: timestamp("updated_at", { withTimezone: true })
+//       .defaultNow()
+//       .notNull(),
+//   },
+//   (table) => {
+//     return {
+//       leadsSourceIdx: index("leads_source_idx").on(table.lead_source),
+//       leadsInterestIdx: index("leads_interest_idx").on(table.interest_level),
+//       leadsStatusIdx: index("leads_status_idx").on(table.lead_status),
+//     };
+//   },
+// );
 
 export const loanDetails = pgTable("loan_details", {
   id: uuid("id").defaultRandom().primaryKey(),
-  lead_id: varchar("lead_id", { length: 255 }).references(() => leads.id, {
-    onDelete: "cascade",
-  }),
+  lead_id: varchar("lead_id", { length: 255 }).references(
+    () => dealerLeads.id,
+    {
+      onDelete: "cascade",
+    },
+  ),
   loan_required: boolean("loan_required").default(false),
   loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }),
   interest_rate: decimal("interest_rate", { precision: 5, scale: 2 }),
@@ -357,9 +360,12 @@ export const loanDetails = pgTable("loan_details", {
 
 export const personalDetails = pgTable("personal_details", {
   id: uuid("id").defaultRandom().primaryKey(),
-  lead_id: varchar("lead_id", { length: 255 }).references(() => leads.id, {
-    onDelete: "cascade",
-  }),
+  lead_id: varchar("lead_id", { length: 255 }).references(
+    () => dealerLeads.id,
+    {
+      onDelete: "cascade",
+    },
+  ),
   aadhaar_no: varchar("aadhaar_no", { length: 20 }),
   pan_no: varchar("pan_no", { length: 20 }),
   dob: timestamp("dob", { withTimezone: true }), // Using timestamp for date
@@ -388,9 +394,12 @@ export const personalDetails = pgTable("personal_details", {
 
 export const documents = pgTable("documents", {
   id: uuid("id").defaultRandom().primaryKey(),
-  lead_id: varchar("lead_id", { length: 255 }).references(() => leads.id, {
-    onDelete: "cascade",
-  }),
+  lead_id: varchar("lead_id", { length: 255 }).references(
+    () => dealerLeads.id,
+    {
+      onDelete: "cascade",
+    },
+  ),
   document_type: varchar("document_type", { length: 50 }).notNull(),
   file_url: text("file_url").notNull(),
   uploaded_at: timestamp("uploaded_at", { withTimezone: true })
@@ -400,9 +409,12 @@ export const documents = pgTable("documents", {
 
 export const leadDocuments = pgTable("lead_documents", {
   id: varchar("id", { length: 255 }).primaryKey(),
-  lead_id: varchar("lead_id", { length: 255 }).references(() => leads.id, {
-    onDelete: "cascade",
-  }),
+  lead_id: varchar("lead_id", { length: 255 }).references(
+    () => dealerLeads.id,
+    {
+      onDelete: "cascade",
+    },
+  ),
   dealer_id: varchar("dealer_id", { length: 255 }).references(
     () => accounts.id,
   ),
@@ -417,7 +429,7 @@ export const leadDocuments = pgTable("lead_documents", {
 export const leadAssignments = pgTable("lead_assignments", {
   id: varchar("id", { length: 255 }).primaryKey(),
   lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id)
+    .references(() => dealerLeads.id)
     .notNull(),
   lead_owner: uuid("lead_owner")
     .references(() => users.id)
@@ -442,7 +454,7 @@ export const leadAssignments = pgTable("lead_assignments", {
 export const assignmentChangeLogs = pgTable("assignment_change_logs", {
   id: varchar("id", { length: 255 }).primaryKey(),
   lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id)
+    .references(() => dealerLeads.id)
     .notNull(),
   change_type: varchar("change_type", { length: 50 }).notNull(), // owner_assigned, owner_changed, actor_assigned, actor_changed, actor_removed
   old_user_id: uuid("old_user_id").references(() => users.id),
@@ -459,7 +471,7 @@ export const assignmentChangeLogs = pgTable("assignment_change_logs", {
 export const deals = pgTable("deals", {
   id: varchar("id", { length: 255 }).primaryKey(), // DEAL-YYYYMMDD-XXX
   lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id)
+    .references(() => dealerLeads.id)
     .notNull(),
 
   // Products & Pricing
@@ -788,7 +800,9 @@ export const bolnaCalls = pgTable(
   {
     id: varchar("id", { length: 255 }).primaryKey(),
     bolna_call_id: varchar("bolna_call_id", { length: 255 }).notNull().unique(),
-    lead_id: varchar("lead_id", { length: 255 }).references(() => leads.id),
+    lead_id: varchar("lead_id", { length: 255 }).references(
+      () => dealerLeads.id,
+    ),
     status: varchar("status", { length: 20 }).default("initiated").notNull(),
     current_phase: varchar("current_phase", { length: 100 }),
     started_at: timestamp("started_at", { withTimezone: true }),
@@ -823,7 +837,7 @@ export const aiCallLogs = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     lead_id: varchar("lead_id", { length: 255 })
-      .references(() => leads.id)
+      .references(() => dealerLeads.id)
       .notNull(),
     call_id: varchar("call_id", { length: 255 }).notNull().unique(),
     agent_id: varchar("agent_id", { length: 255 }),
@@ -861,7 +875,7 @@ export const callSessions = pgTable("call_sessions", {
 export const callRecords = pgTable("call_records", {
   id: varchar("id", { length: 255 }).primaryKey(),
   session_id: text("session_id").references(() => callSessions.session_id),
-  lead_id: varchar("lead_id", { length: 255 }).references(() => leads.id),
+  lead_id: varchar("lead_id", { length: 255 }).references(() => dealerLeads.id),
   bolna_call_id: varchar("bolna_call_id", { length: 255 }).unique(),
   status: text("status").default("queued"), // queued, ringing, completed, failed
   duration_seconds: integer("duration_seconds"),
@@ -902,7 +916,7 @@ export const productsRelations = relations(products, ({ one, many }) => ({
 export const usersRelations = relations(users, ({ many }) => ({
   oemsCreated: many(oems, { relationName: "oem_creator" }),
   inventoryCreated: many(inventory, { relationName: "inventory_creator" }),
-  leadsUploaded: many(leads, { relationName: "lead_uploader" }),
+  leadsUploaded: many(dealerLeads, { relationName: "lead_uploader" }),
   assignmentsReceived: many(leadAssignments, {
     relationName: "assigned_to_user",
   }),
@@ -911,7 +925,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   approvalsHandled: many(approvals, { relationName: "approver_user" }),
   slasAssigned: many(slas, { relationName: "sla_assigned" }),
   slasEscalatedTo: many(slas, { relationName: "sla_escalated" }),
-  leadsQualified: many(leads, { relationName: "qualified_by_user" }),
+  leadsQualified: many(dealerLeads, { relationName: "qualified_by_user" }),
   pdiInspections: many(pdiRecords, { relationName: "pdi_service_engineer" }),
   campaigns: many(campaigns),
   loanApplications: many(loanApplications),
@@ -942,36 +956,36 @@ export const inventoryRelations = relations(inventory, ({ one }) => ({
   }),
 }));
 
-export const leadsRelations = relations(leads, ({ one, many }) => ({
-  uploader: one(users, {
-    fields: [leads.uploader_id],
-    references: [users.id],
-    relationName: "lead_uploader",
-  }),
-  qualifiedBy: one(users, {
-    fields: [leads.qualified_by],
-    references: [users.id],
-    relationName: "qualified_by_user",
-  }),
-  assignments: many(leadAssignments),
-  deals: many(deals),
-  bolnaCalls: many(bolnaCalls),
-  aiCallLogs: many(aiCallLogs),
-  loanApplications: many(loanApplications),
-  kycDocuments: many(kycDocuments),
-  kycVerifications: many(kycVerifications),
-  consentRecords: many(consentRecords),
-  coBorrowers: many(coBorrowers),
-  deployedAssets: many(deployedAssets),
-  loanFiles: many(loanFiles),
-}));
+// export const leadsRelations = relations(leads, ({ one, many }) => ({
+//   uploader: one(users, {
+//     fields: [leads.uploader_id],
+//     references: [users.id],
+//     relationName: "lead_uploader",
+//   }),
+//   qualifiedBy: one(users, {
+//     fields: [leads.qualified_by],
+//     references: [users.id],
+//     relationName: "qualified_by_user",
+//   }),
+//   assignments: many(leadAssignments),
+//   deals: many(deals),
+//   bolnaCalls: many(bolnaCalls),
+//   aiCallLogs: many(aiCallLogs),
+//   loanApplications: many(loanApplications),
+//   kycDocuments: many(kycDocuments),
+//   kycVerifications: many(kycVerifications),
+//   consentRecords: many(consentRecords),
+//   coBorrowers: many(coBorrowers),
+//   deployedAssets: many(deployedAssets),
+//   loanFiles: many(loanFiles),
+// }));
 
 export const leadAssignmentsRelations = relations(
   leadAssignments,
   ({ one }) => ({
-    lead: one(leads, {
+    lead: one(dealerLeads, {
       fields: [leadAssignments.lead_id],
-      references: [leads.id],
+      references: [dealerLeads.id],
     }),
     owner: one(users, {
       fields: [leadAssignments.lead_owner],
@@ -997,7 +1011,10 @@ export const leadAssignmentsRelations = relations(
 );
 
 export const dealsRelations = relations(deals, ({ one, many }) => ({
-  lead: one(leads, { fields: [deals.lead_id], references: [leads.id] }),
+  lead: one(dealerLeads, {
+    fields: [deals.lead_id],
+    references: [dealerLeads.id],
+  }),
   creator: one(users, {
     fields: [deals.created_by],
     references: [users.id],
@@ -1082,9 +1099,9 @@ export const pdiRecordsRelations = relations(pdiRecords, ({ one }) => ({
 export const assignmentChangeLogsRelations = relations(
   assignmentChangeLogs,
   ({ one }) => ({
-    lead: one(leads, {
+    lead: one(dealerLeads, {
       fields: [assignmentChangeLogs.lead_id],
-      references: [leads.id],
+      references: [dealerLeads.id],
     }),
     oldUser: one(users, {
       fields: [assignmentChangeLogs.old_user_id],
@@ -1121,11 +1138,17 @@ export const accountsRelations = relations(accounts, ({ many }) => ({
 }));
 
 export const bolnaCallsRelations = relations(bolnaCalls, ({ one }) => ({
-  lead: one(leads, { fields: [bolnaCalls.lead_id], references: [leads.id] }),
+  lead: one(dealerLeads, {
+    fields: [bolnaCalls.lead_id],
+    references: [dealerLeads.id],
+  }),
 }));
 
 export const aiCallLogsRelations = relations(aiCallLogs, ({ one }) => ({
-  lead: one(leads, { fields: [aiCallLogs.lead_id], references: [leads.id] }),
+  lead: one(dealerLeads, {
+    fields: [aiCallLogs.lead_id],
+    references: [dealerLeads.id],
+  }),
 }));
 export const callSessionsRelations = relations(callSessions, ({ many }) => ({
   records: many(callRecords),
@@ -1136,7 +1159,10 @@ export const callRecordsRelations = relations(callRecords, ({ one, many }) => ({
     fields: [callRecords.session_id],
     references: [callSessions.session_id],
   }),
-  lead: one(leads, { fields: [callRecords.lead_id], references: [leads.id] }),
+  lead: one(dealerLeads, {
+    fields: [callRecords.lead_id],
+    references: [dealerLeads.id],
+  }),
   messages: many(conversationMessages),
 }));
 
@@ -1174,7 +1200,7 @@ export const campaigns = pgTable("campaigns", {
 export const loanApplications = pgTable("loan_applications", {
   id: varchar("id", { length: 255 }).primaryKey(), // LOAN-APP-XXX
   lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id)
+    .references(() => dealerLeads.id)
     .notNull(),
   applicant_name: text("applicant_name"), // De-normalized for list views
   loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }),
@@ -1214,7 +1240,7 @@ export const kycDocuments = pgTable(
   {
     id: varchar("id", { length: 255 }).primaryKey(), // KYCDOC-YYYYMMDD-SEQ
     lead_id: varchar("lead_id", { length: 255 })
-      .references(() => leads.id, { onDelete: "cascade" })
+      .references(() => dealerLeads.id, { onDelete: "cascade" })
       .notNull(),
     doc_type: varchar("doc_type", { length: 50 }).notNull(), // aadhaar_front, aadhaar_back, pan_card, passport_photo, address_proof, rc_copy, bank_statement, cheque_1, cheque_2, cheque_3, cheque_4
     file_url: text("file_url").notNull(),
@@ -1247,7 +1273,7 @@ export const kycVerifications = pgTable(
   {
     id: varchar("id", { length: 255 }).primaryKey(), // KYCVER-YYYYMMDD-SEQ
     lead_id: varchar("lead_id", { length: 255 })
-      .references(() => leads.id, { onDelete: "cascade" })
+      .references(() => dealerLeads.id, { onDelete: "cascade" })
       .notNull(),
     verification_type: varchar("verification_type", { length: 50 }).notNull(), // aadhaar, pan, bank, address, rc, mobile, cibil, photo
     status: varchar("status", { length: 30 }).default("pending").notNull(), // pending, initiating, awaiting_action, in_progress, success, failed
@@ -1279,7 +1305,7 @@ export const kycVerifications = pgTable(
 export const consentRecords = pgTable("consent_records", {
   id: varchar("id", { length: 255 }).primaryKey(), // CONSENT-YYYYMMDD-SEQ
   lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id, { onDelete: "cascade" })
+    .references(() => dealerLeads.id, { onDelete: "cascade" })
     .notNull(),
   consent_for: varchar("consent_for", { length: 20 })
     .default("primary")
@@ -1322,7 +1348,7 @@ export const couponCodes = pgTable("coupon_codes", {
   max_discount_cap: decimal("max_discount_cap", { precision: 10, scale: 2 }),
   min_amount: decimal("min_amount", { precision: 10, scale: 2 }),
   used_by_lead_id: varchar("used_by_lead_id", { length: 255 }).references(
-    () => leads.id,
+    () => dealerLeads.id,
   ),
   used_by: uuid("used_by").references(() => users.id),
   validated_at: timestamp("validated_at", { withTimezone: true }),
@@ -1340,7 +1366,7 @@ export const facilitationPayments = pgTable(
   {
     id: varchar("id", { length: 255 }).primaryKey(),
     lead_id: varchar("lead_id", { length: 255 })
-      .references(() => leads.id, { onDelete: "cascade" })
+      .references(() => dealerLeads.id, { onDelete: "cascade" })
       .notNull(),
     payment_method: varchar("payment_method", { length: 30 }),
 
@@ -1413,9 +1439,9 @@ export const facilitationPayments = pgTable(
 export const facilitationPaymentsRelations = relations(
   facilitationPayments,
   ({ one }) => ({
-    lead: one(leads, {
+    lead: one(dealerLeads, {
       fields: [facilitationPayments.lead_id],
-      references: [leads.id],
+      references: [dealerLeads.id],
     }),
     creator: one(users, {
       fields: [facilitationPayments.created_by],
@@ -1431,7 +1457,7 @@ export const coBorrowers = pgTable(
   {
     id: varchar("id", { length: 255 }).primaryKey(), // COBOR-YYYYMMDD-SEQ
     lead_id: varchar("lead_id", { length: 255 })
-      .references(() => leads.id, { onDelete: "cascade" })
+      .references(() => dealerLeads.id, { onDelete: "cascade" })
       .notNull(),
     full_name: text("full_name").notNull(),
     father_or_husband_name: text("father_or_husband_name"),
@@ -1470,7 +1496,7 @@ export const coBorrowerDocuments = pgTable("co_borrower_documents", {
     .references(() => coBorrowers.id, { onDelete: "cascade" })
     .notNull(),
   lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id, { onDelete: "cascade" })
+    .references(() => dealerLeads.id, { onDelete: "cascade" })
     .notNull(),
   doc_type: varchar("doc_type", { length: 50 }).notNull(), // aadhaar_front, aadhaar_back, pan_card, passport_photo, address_proof, rc_copy, bank_statement, cheque_1-4
   file_url: text("file_url").notNull(),
@@ -1494,7 +1520,7 @@ export const coBorrowerDocuments = pgTable("co_borrower_documents", {
 export const otherDocumentRequests = pgTable("other_document_requests", {
   id: varchar("id", { length: 255 }).primaryKey(), // OTHERDOC-SEQ
   lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id, { onDelete: "cascade" })
+    .references(() => dealerLeads.id, { onDelete: "cascade" })
     .notNull(),
   doc_for: varchar("doc_for", { length: 20 }).default("primary").notNull(), // primary, co_borrower
   doc_label: text("doc_label").notNull(), // e.g., "Rent Agreement", "Owner Verification"
@@ -1525,7 +1551,7 @@ export const loanOffers = pgTable(
   {
     id: varchar("id", { length: 255 }).primaryKey(), // OFFER-YYYYMMDD-SEQ
     lead_id: varchar("lead_id", { length: 255 })
-      .references(() => leads.id, { onDelete: "cascade" })
+      .references(() => dealerLeads.id, { onDelete: "cascade" })
       .notNull(),
     financier_name: text("financier_name").notNull(),
     loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }).notNull(),
@@ -1554,7 +1580,10 @@ export const loanOffers = pgTable(
 );
 
 export const loanOffersRelations = relations(loanOffers, ({ one }) => ({
-  lead: one(leads, { fields: [loanOffers.lead_id], references: [leads.id] }),
+  lead: one(dealerLeads, {
+    fields: [loanOffers.lead_id],
+    references: [dealerLeads.id],
+  }),
   creator: one(users, {
     fields: [loanOffers.created_by],
     references: [users.id],
@@ -1566,7 +1595,7 @@ export const loanOffersRelations = relations(loanOffers, ({ one }) => ({
 export const adminKycReviews = pgTable("admin_kyc_reviews", {
   id: varchar("id", { length: 255 }).primaryKey(), // REVIEW-YYYYMMDD-SEQ
   lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id, { onDelete: "cascade" })
+    .references(() => dealerLeads.id, { onDelete: "cascade" })
     .notNull(),
   review_for: varchar("review_for", { length: 20 })
     .default("primary")
@@ -1597,7 +1626,9 @@ export const deployedAssets = pgTable(
     inventory_id: varchar("inventory_id", { length: 255 })
       .references(() => inventory.id)
       .notNull(),
-    lead_id: varchar("lead_id", { length: 255 }).references(() => leads.id),
+    lead_id: varchar("lead_id", { length: 255 }).references(
+      () => dealerLeads.id,
+    ),
     deal_id: varchar("deal_id", { length: 255 }).references(() => deals.id),
     dealer_id: varchar("dealer_id", { length: 255 }).references(
       () => accounts.id,
@@ -1764,7 +1795,7 @@ export const loanFiles = pgTable(
   {
     id: varchar("id", { length: 255 }).primaryKey(), // LOANF-YYYYMMDD-SEQ
     lead_id: varchar("lead_id", { length: 255 })
-      .references(() => leads.id)
+      .references(() => dealerLeads.id)
       .notNull(),
     loan_application_id: varchar("loan_application_id", {
       length: 255,
@@ -1897,9 +1928,9 @@ export const campaignsRelations = relations(campaigns, ({ one }) => ({
 export const loanApplicationsRelations = relations(
   loanApplications,
   ({ one }) => ({
-    lead: one(leads, {
+    lead: one(dealerLeads, {
       fields: [loanApplications.lead_id],
-      references: [leads.id],
+      references: [dealerLeads.id],
     }),
     creator: one(users, {
       fields: [loanApplications.created_by],
@@ -1909,23 +1940,26 @@ export const loanApplicationsRelations = relations(
 );
 
 export const kycDocumentsRelations = relations(kycDocuments, ({ one }) => ({
-  lead: one(leads, { fields: [kycDocuments.lead_id], references: [leads.id] }),
+  lead: one(dealerLeads, {
+    fields: [kycDocuments.lead_id],
+    references: [dealerLeads.id],
+  }),
 }));
 
 export const kycVerificationsRelations = relations(
   kycVerifications,
   ({ one }) => ({
-    lead: one(leads, {
+    lead: one(dealerLeads, {
       fields: [kycVerifications.lead_id],
-      references: [leads.id],
+      references: [dealerLeads.id],
     }),
   }),
 );
 
 export const consentRecordsRelations = relations(consentRecords, ({ one }) => ({
-  lead: one(leads, {
+  lead: one(dealerLeads, {
     fields: [consentRecords.lead_id],
-    references: [leads.id],
+    references: [dealerLeads.id],
   }),
   verifier: one(users, {
     fields: [consentRecords.verified_by],
@@ -1934,7 +1968,10 @@ export const consentRecordsRelations = relations(consentRecords, ({ one }) => ({
 }));
 
 export const coBorrowersRelations = relations(coBorrowers, ({ one, many }) => ({
-  lead: one(leads, { fields: [coBorrowers.lead_id], references: [leads.id] }),
+  lead: one(dealerLeads, {
+    fields: [coBorrowers.lead_id],
+    references: [dealerLeads.id],
+  }),
   documents: many(coBorrowerDocuments),
 }));
 
@@ -1945,9 +1982,9 @@ export const coBorrowerDocumentsRelations = relations(
       fields: [coBorrowerDocuments.co_borrower_id],
       references: [coBorrowers.id],
     }),
-    lead: one(leads, {
+    lead: one(dealerLeads, {
       fields: [coBorrowerDocuments.lead_id],
-      references: [leads.id],
+      references: [dealerLeads.id],
     }),
   }),
 );
@@ -1959,9 +1996,9 @@ export const deployedAssetsRelations = relations(
       fields: [deployedAssets.inventory_id],
       references: [inventory.id],
     }),
-    lead: one(leads, {
+    lead: one(dealerLeads, {
       fields: [deployedAssets.lead_id],
-      references: [leads.id],
+      references: [dealerLeads.id],
     }),
     deal: one(deals, {
       fields: [deployedAssets.deal_id],
@@ -2018,7 +2055,10 @@ export const serviceTicketsRelations = relations(serviceTickets, ({ one }) => ({
 }));
 
 export const loanFilesRelations = relations(loanFiles, ({ one, many }) => ({
-  lead: one(leads, { fields: [loanFiles.lead_id], references: [leads.id] }),
+  lead: one(dealerLeads, {
+    fields: [loanFiles.lead_id],
+    references: [dealerLeads.id],
+  }),
   loanApplication: one(loanApplications, {
     fields: [loanFiles.loan_application_id],
     references: [loanApplications.id],
@@ -2154,7 +2194,7 @@ export const scrapedDealerLeads = pgTable(
     explored_at: timestamp("explored_at", { withTimezone: true }),
     // Promotion to full CRM lead (optional)
     converted_lead_id: varchar("converted_lead_id", { length: 255 }).references(
-      () => leads.id,
+      () => dealerLeads.id,
     ),
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -2282,9 +2322,9 @@ export const scrapedDealerLeadsRelations = relations(
       fields: [scrapedDealerLeads.assigned_by],
       references: [users.id],
     }),
-    convertedLead: one(leads, {
+    convertedLead: one(dealerLeads, {
       fields: [scrapedDealerLeads.converted_lead_id],
-      references: [leads.id],
+      references: [dealerLeads.id],
     }),
   }),
 );
@@ -2434,4 +2474,25 @@ export const scraperRaw = pgTable("scraper_raw", {
   rawData: text("raw_data"),
 
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const dealerLeads = pgTable("dealer_leads", {
+  id: text("id").primaryKey(),
+
+  dealer_name: text("dealer_name"),
+  phone: text("phone").unique(),
+  language: text("language"),
+
+  location: text("location"),
+
+  follow_up_history: jsonb("follow_up_history"),
+
+  current_status: text("current_status"),
+  total_attempts: integer("total_attempts"),
+  final_intent_score: integer("final_intent_score"),
+
+  memory: jsonb("memory"),
+
+  created_at: timestamp("created_at").defaultNow(),
+  next_call_at: timestamp("next_call_at", { withTimezone: true }),
 });
