@@ -1,23 +1,8 @@
 import { ParsedData } from "./types";
 
 function cleanJSON(text: string) {
-  return text
-    .replace(/```json|```/g, "")
-    .replace(/^[^{]*/, "")
-    .trim();
-}
-
-function extractMemoryFromText(transcript: string) {
-  const lower = transcript.toLowerCase();
-  const quantityMatch = transcript.match(/\d+/);
-
-  return {
-    requirement: lower.includes("battery") ? "battery" : null,
-    product_interest: "EV batteries",
-    quantity: quantityMatch ? quantityMatch[0] : null,
-    intent_summary: transcript,
-    followup_reason: lower.includes("call") ? "callback requested" : null,
-  };
+  const match = text.match(/\{[\s\S]*\}/);
+  return match ? match[0] : "";
 }
 
 function fallback(transcript: string): ParsedData {
@@ -34,7 +19,13 @@ function fallback(transcript: string): ParsedData {
       engagement_depth: 0,
       intent_score: 0,
     },
-    memory: extractMemoryFromText(transcript),
+    memory: {
+      requirement: null,
+      product_interest: null,
+      quantity: null,
+      intent_summary: transcript,
+      followup_reason: null,
+    },
   };
 }
 
@@ -44,20 +35,18 @@ export async function parseTranscript(transcript: string): Promise<ParsedData> {
   });
 
   const prompt = `
-You are a highly accurate AI sales intelligence engine.
+You are a deterministic AI sales intelligence engine used in production.
 
-Your job is to deeply analyze a conversation between a sales agent and a dealer and produce structured output.
-
-You MUST behave like a deterministic system, not a casual chatbot.
+You MUST behave like a reliable system, not a chatbot.
 
 ---
 
-CURRENT TIME (Asia/Kolkata IST):
+CURRENT TIME (Asia/Kolkata):
 ${now}
 
 Timezone: Asia/Kolkata
 
-All time calculations MUST follow this timezone.
+All time calculations MUST use this timezone.
 
 ---
 
@@ -68,57 +57,69 @@ ${transcript}
 
 ---
 
-CORE OBJECTIVE:
+OBJECTIVE:
 
-Understand the dealer’s REAL intent, even if:
-- language is Hindi, Hinglish, or mixed
-- sentences are incomplete or messy
-- user corrects themselves
-- conversation is long or noisy
+Analyze the dealer conversation and return:
 
-Focus on MEANING, not wording.
+1. Intent (accurate)
+2. Intent score (0–100)
+3. Callback time (if any)
+4. Structured memory
 
----
-
-CRITICAL INTERPRETATION RULES (VERY STRICT):
-
-1. If dealer expresses need (e.g., "mujhe 15 battery chahiye")
-   → product_interest = present
-   → product_curiosity ≥ 7
-
-2. If dealer asks to call later (examples):
-   - "baad me call karo"
-   - "2 minute baad call karo"
-   - "later call karo"
-   - "dobara call karo"
-   → outcome MUST be "callback_requested"
-
-3. If dealer shows BOTH:
-   - requirement (quantity / product)
-   - callback request
-   → intent_score MUST be ≥ 70
-
-4. If dealer is talking meaningfully
-   → intent_score MUST NOT be 0
-
-5. "unknown" outcome is ONLY allowed if:
-   - no meaningful user intent exists
-   - or conversation is empty / irrelevant
+You must handle:
+- Hindi, Hinglish, English
+- broken sentences
+- corrections (e.g., "15 minute nahi 15 unit")
+- interruptions
+- real spoken language
 
 ---
 
-CALLBACK TIME EXTRACTION:
+STEP 1 — UNDERSTAND FACTS
 
-- "2 minute baad" → current time + 2 minutes
-- "kal" → next day
+Extract clearly:
+
+- Product mentioned? (what)
+- Quantity mentioned? (number)
+- Callback requested? (yes/no)
+- Urgency? (urgent / later / normal)
+
+---
+
+STEP 2 — DETERMINE OUTCOME
+
+STRICT RULES:
+
+- If dealer asks to call later (any form):
+  → outcome = "callback_requested"
+
+- If dealer clearly wants product:
+  → outcome = "interested"
+
+- If dealer refuses:
+  → outcome = "not_interested"
+
+- Only use "unknown" if NOTHING meaningful is present
+
+---
+
+STEP 3 — CALLBACK TIME PARSING
+
+Convert natural language into ISO datetime.
+
+Examples:
+- "2 minute baad" → now + 2 min
+- "5 min baad" → +5 min
+- "1 ghante baad" → +1 hour
+- "kal" → next day (10 AM default)
 - vague → "unspecified"
 - none → null
 
-Return ISO datetime.
+Return ISO format.
 
 ---
 
-SIGNALS (0–10):
+STEP 4 — SIGNAL SCORING (0–10)
 
 - next_step_commitment
 - urgency_signals
@@ -127,23 +128,32 @@ SIGNALS (0–10):
 - objection_quality
 - engagement_depth
 
----
-
-INTENT SCORE CALCULATION:
-
-Use reasoning, not guessing.
-
-- 80–100 → strong buying intent
-- 60–79 → clear interest + follow-up
-- 40–59 → moderate interest
-- 20–39 → weak interest
-- 0–19 → no intent
+Rules:
+- Quantity → product_curiosity ≥ 7
+- Callback → urgency_signals ≥ 5
 
 ---
 
-MEMORY EXTRACTION (MANDATORY):
+STEP 5 — INTENT SCORE
 
-Extract ONLY if clearly present:
+Rules:
+
+- Quantity + callback → 70–90
+- Only quantity → 60–80
+- Only callback → 40–65
+- Strong buying → 85–100
+
+CRITICAL:
+
+- If meaningful conversation exists → NOT 0
+- If quantity exists → ≥ 50
+- If callback exists → ≥ 40
+
+---
+
+STEP 6 — MEMORY
+
+Extract:
 
 "memory": {
   "requirement": string | null,
@@ -153,26 +163,21 @@ Extract ONLY if clearly present:
   "followup_reason": string | null
 }
 
-Rules:
-- Do not guess
-- Keep intent_summary natural and short
+---
+
+STEP 7 — VALIDATION
+
+Before returning:
+
+- quantity exists → must not be null
+- callback → outcome must be callback_requested
+- meaningful conversation → intent_score > 0
+
+Fix before output.
 
 ---
 
-SELF-CONSISTENCY CHECK (VERY IMPORTANT):
-
-Before returning output, VERIFY:
-
-- If memory.quantity exists → product_curiosity ≥ 5
-- If callback detected → outcome = callback_requested
-- If callback exists → intent_score ≥ 50
-- If quantity + callback → intent_score ≥ 70
-
-If any rule is violated → FIX the output.
-
----
-
-FINAL OUTPUT (STRICT JSON ONLY):
+FINAL OUTPUT (STRICT JSON):
 
 {
   "outcome": "interested | callback_requested | not_interested | unknown",
@@ -198,15 +203,7 @@ FINAL OUTPUT (STRICT JSON ONLY):
   }
 }
 
----
-
-DO NOT:
-- return partial JSON
-- ignore rules
-- output explanation
-- return invalid or inconsistent data
-
-Return ONLY valid JSON.
+Return ONLY JSON.
 `;
 
   try {
@@ -217,7 +214,7 @@ Return ONLY valid JSON.
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.2 },
+          generationConfig: { temperature: 0.1 },
         }),
       },
     );
@@ -225,51 +222,30 @@ Return ONLY valid JSON.
     const data = await res.json();
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
+    console.log("RAW GEMINI RESPONSE:", JSON.stringify(data, null, 2));
+    console.log("RAW TEXT:", text);
+
     if (!text) return fallback(transcript);
 
-    const parsed = JSON.parse(cleanJSON(text));
+    let parsed;
 
-    const hasQuantity = !!parsed.memory?.quantity;
-    const hasCallback =
-      parsed.outcome === "callback_requested" ||
-      parsed.memory?.followup_reason?.includes("callback");
+    try {
+      const cleaned = cleanJSON(text);
 
-    let final: ParsedData = {
-      outcome: parsed.outcome || "unknown",
-      callback_time: parsed.callback_time || null,
-      language: parsed.language || "unknown",
-      analysis: parsed.analysis || {
-        next_step_commitment: 0,
-        urgency_signals: 0,
-        product_curiosity: 0,
-        need_acknowledgment: 0,
-        objection_quality: 0,
-        engagement_depth: 0,
-        intent_score: 0,
-      },
-      memory:
-        parsed.memory &&
-        (parsed.memory.quantity ||
-          parsed.memory.requirement ||
-          parsed.memory.intent_summary)
-          ? parsed.memory
-          : extractMemoryFromText(transcript),
-    };
+      if (!cleaned) {
+        console.error("NO JSON FOUND:", text);
+        return fallback(transcript);
+      }
 
-    if (hasCallback && final.outcome !== "callback_requested") {
-      final.outcome = "callback_requested";
+      parsed = JSON.parse(cleaned);
+    } catch (err) {
+      console.error("JSON PARSE FAILED:", text);
+      return fallback(transcript);
     }
 
-    if (hasQuantity && final.analysis.product_curiosity < 5) {
-      final.analysis.product_curiosity = 7;
-    }
-
-    if (hasQuantity && hasCallback && final.analysis.intent_score < 60) {
-      final.analysis.intent_score = 70;
-    }
-
-    return final;
-  } catch {
+    return parsed;
+  } catch (err) {
+    console.error("API ERROR:", err);
     return fallback(transcript);
   }
 }

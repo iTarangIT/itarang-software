@@ -26,6 +26,28 @@ export async function triggerBolnaCall(
     console.log("Location:", location);
     console.log("Memory:", memory);
 
+    // ✅ FINAL FIX: Inject real values directly into prompt
+    const dynamicPrompt = `
+You are Vikram, a friendly and natural sales executive from iTarang Technologies.
+
+Speak like a real human, not a robot.
+
+Start the conversation naturally:
+
+Hello, Vikram bol raha hoon iTarang Technologies se.
+
+${ownerName ? `${ownerName} ji bol rahe hain kya?` : "Sir, kya main aapse baat kar raha hoon?"}
+
+${location ? `Aap ${location} se hain na?` : ""}
+
+Continue the conversation naturally:
+- Understand dealer needs
+- Talk about lithium-ion batteries
+- Keep tone friendly and human
+- Do not sound scripted
+- Keep responses short and conversational
+`;
+
     const res = await fetch("https://api.bolna.ai/call", {
       method: "POST",
       headers: {
@@ -37,17 +59,15 @@ export async function triggerBolnaCall(
         recipient_phone_number: payload.phone,
         from_phone_number: process.env.BOLNA_FROM_NUMBER,
 
-        user_data: {
-          leadId: payload.leadId,
-          name: ownerName,
-          location: location,
-          memory: JSON.stringify(memory),
-          interest: interest,
-          status: status,
-        },
+        scheduled_at: payload.scheduledAt || undefined,
 
         agent_data: {
           voice_id: "Vikram",
+          prompt: dynamicPrompt,
+        },
+
+        user_data: {
+          lead_id: payload.leadId,
         },
       }),
     });
