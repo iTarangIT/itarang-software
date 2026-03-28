@@ -1,18 +1,20 @@
 import { normalizeLeads } from "./normalize";
 import { filterLeads } from "./filter";
-import { dedupeLeads } from "./dedupe";
+import { markDuplicates } from "./dedupe";
 
 export async function processLeads(rawLeads: any[]) {
-  const normalized = normalizeLeads(rawLeads);
+  const normalized = normalizeLeads(rawLeads, "google_places");
 
   const filtered = filterLeads(normalized);
 
-  const deduped = dedupeLeads(filtered);
+  const deduped = markDuplicates(filtered);
+
+  const duplicateCount = deduped.filter((lead) => lead.duplicate_of).length;
 
   return {
     total: rawLeads.length,
     cleaned: deduped,
     saved: deduped.length,
-    duplicates: rawLeads.length - deduped.length,
+    duplicates: duplicateCount,
   };
 }

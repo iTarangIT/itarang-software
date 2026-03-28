@@ -26,7 +26,6 @@ export async function triggerBolnaCall(
     console.log("Location:", location);
     console.log("Memory:", memory);
 
-    // ✅ FINAL FIX: Inject real values directly into prompt
     const dynamicPrompt = `
 You are Vikram, a friendly and natural sales executive from iTarang Technologies.
 
