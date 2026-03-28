@@ -1478,69 +1478,136 @@ export const scraperDedupLogsRelations = relations(scraperDedupLogs, ({ one }) =
 }));
 
 export const dealerOnboardingApplications = pgTable("dealer_onboarding_applications", {
-  id: uuid("id").defaultRandom().primaryKey(),
+    id: uuid("id").defaultRandom().primaryKey(),
 
-  dealerUserId: uuid("dealer_user_id"),
+    dealerUserId: uuid("dealer_user_id"),
 
-  companyName: text("company_name"),
-  companyType: varchar("company_type", { length: 50 }),
-  gstNumber: varchar("gst_number", { length: 20 }),
-  panNumber: varchar("pan_number", { length: 20 }),
+    companyName: text("company_name"),
+    companyType: varchar("company_type", { length: 50 }),
+    gstNumber: varchar("gst_number", { length: 20 }),
+    panNumber: varchar("pan_number", { length: 20 }),
 
-  businessAddress: jsonb("business_address"),
-  registeredAddress: jsonb("registered_address"),
+    businessAddress: jsonb("business_address"),
+    registeredAddress: jsonb("registered_address"),
 
-  ownerName: text("owner_name"),
-  ownerPhone: varchar("owner_phone", { length: 20 }),
-  ownerEmail: text("owner_email"),
+    ownerName: text("owner_name"),
+    ownerPhone: varchar("owner_phone", { length: 20 }),
+    ownerEmail: text("owner_email"),
 
-  salesManagerName: text("sales_manager_name"),
-  salesManagerEmail: text("sales_manager_email"),
-  salesManagerMobile: text("sales_manager_mobile"),
+    salesManagerName: text("sales_manager_name"),
+    salesManagerEmail: text("sales_manager_email"),
+    salesManagerMobile: text("sales_manager_mobile"),
 
-  itarangSignatory1Name: text("itarang_signatory_1_name"),
-  itarangSignatory1Email: text("itarang_signatory_1_email"),
-  itarangSignatory1Mobile: text("itarang_signatory_1_mobile"),
+    itarangSignatory1Name: text("itarang_signatory_1_name"),
+    itarangSignatory1Email: text("itarang_signatory_1_email"),
+    itarangSignatory1Mobile: text("itarang_signatory_1_mobile"),
 
-  itarangSignatory2Name: text("itarang_signatory_2_name"),
-  itarangSignatory2Email: text("itarang_signatory_2_email"),
-  itarangSignatory2Mobile: text("itarang_signatory_2_mobile"),
+    itarangSignatory2Name: text("itarang_signatory_2_name"),
+    itarangSignatory2Email: text("itarang_signatory_2_email"),
+    itarangSignatory2Mobile: text("itarang_signatory_2_mobile"),
 
-  bankName: text("bank_name"),
-  accountNumber: text("account_number"),
-  ifscCode: text("ifsc_code"),
-  beneficiaryName: text("beneficiary_name"),
+    bankName: text("bank_name"),
+    accountNumber: text("account_number"),
+    ifscCode: text("ifsc_code"),
+    beneficiaryName: text("beneficiary_name"),
 
-  financeEnabled: boolean("finance_enabled").default(false),
+    financeEnabled: boolean("finance_enabled").default(false),
 
-  onboardingStatus: varchar("onboarding_status", { length: 50 }).default("draft"),
-  reviewStatus: varchar("review_status", { length: 50 }).default("draft"),
+    onboardingStatus: varchar("onboarding_status", { length: 50 }).default("draft"),
+    reviewStatus: varchar("review_status", { length: 50 }).default("draft"),
 
-  agreementStatus: varchar("agreement_status", { length: 50 }).default("not_generated"),
+    agreementStatus: varchar("agreement_status", { length: 50 }).default("not_generated"),
 
-  requestId: text("request_id"),
-  providerDocumentId: text("provider_document_id"),
-  providerSigningUrl: text("provider_signing_url"),
-  providerRawResponse: jsonb("provider_raw_response"),
+    requestId: text("request_id"),
+    providerDocumentId: text("provider_document_id"),
+    providerSigningUrl: text("provider_signing_url"),
+    providerRawResponse: jsonb("provider_raw_response"),
 
-  signedAt: timestamp("signed_at"),
-  lastActionTimestamp: timestamp("last_action_timestamp"),
-  stampStatus: varchar("stamp_status", { length: 50 }),
-  completionStatus: varchar("completion_status", { length: 50 }),
+    signedAt: timestamp("signed_at"),
+    lastActionTimestamp: timestamp("last_action_timestamp"),
+    stampStatus: varchar("stamp_status", { length: 50 }),
+    completionStatus: varchar("completion_status", { length: 50 }),
 
-  correctionRemarks: text("correction_remarks"),
-  rejectionRemarks: text("rejection_remarks"),
-  rejectionReason: text("rejection_reason"),
-  rejectedAt: timestamp("rejected_at"),
-  approvedAt: timestamp("approved_at"),
+    correctionRemarks: text("correction_remarks"),
+    rejectionRemarks: text("rejection_remarks"),
+    rejectionReason: text("rejection_reason"),
+    rejectedAt: timestamp("rejected_at"),
+    approvedAt: timestamp("approved_at"),
 
-  dealerAccountStatus: varchar("dealer_account_status", { length: 50 }).default("inactive"),
-  dealerCode: text("dealer_code"),
+    dealerAccountStatus: varchar("dealer_account_status", { length: 50 }).default("inactive"),
+    dealerCode: text("dealer_code"),
 
-  submittedAt: timestamp("submitted_at"),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
+    submittedAt: timestamp("submitted_at"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+    ///////
+    signedAgreementUrl: text("signed_agreement_url"),
+    auditTrailUrl: text("audit_trail_url"),
+
+    agreementLastInitiatedAt: timestamp("agreement_last_initiated_at"),
+    agreementExpiredAt: timestamp("agreement_expired_at"),
+    agreementFailedAt: timestamp("agreement_failed_at"),
+    agreementFailureReason: text("agreement_failure_reason"),
+    agreementCompletedAt: timestamp("agreement_completed_at"),
+
 });
+
+export const dealerAgreementSigners = pgTable("dealer_agreement_signers", {
+    id: uuid("id").defaultRandom().primaryKey(),
+
+    applicationId: uuid("application_id")
+        .notNull()
+        .references(() => dealerOnboardingApplications.id, { onDelete: "cascade" }),
+
+    providerDocumentId: text("provider_document_id"),
+    requestId: text("request_id"),
+
+    signerRole: varchar("signer_role", { length: 50 }).notNull(),
+    signerName: text("signer_name").notNull(),
+    signerEmail: text("signer_email"),
+    signerMobile: text("signer_mobile"),
+    signingMethod: varchar("signing_method", { length: 50 }),
+
+    providerSignerIdentifier: text("provider_signer_identifier"),
+    providerSigningUrl: text("provider_signing_url"),
+
+    signerStatus: varchar("signer_status", { length: 50 }).default("pending").notNull(),
+
+    signedAt: timestamp("signed_at"),
+    lastEventAt: timestamp("last_event_at"),
+
+    providerRawResponse: jsonb("provider_raw_response").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+    appIdx: index("dealer_agreement_signers_application_id_idx").on(table.applicationId),
+    docIdx: index("dealer_agreement_signers_provider_document_id_idx").on(table.providerDocumentId),
+    statusIdx: index("dealer_agreement_signers_signer_status_idx").on(table.signerStatus),
+}));
+
+
+export const dealerAgreementEvents = pgTable("dealer_agreement_events", {
+    id: uuid("id").defaultRandom().primaryKey(),
+
+    applicationId: uuid("application_id")
+        .notNull()
+        .references(() => dealerOnboardingApplications.id, { onDelete: "cascade" }),
+
+    providerDocumentId: text("provider_document_id"),
+    requestId: text("request_id"),
+
+    eventType: varchar("event_type", { length: 100 }).notNull(),
+    signerRole: varchar("signer_role", { length: 50 }),
+    eventStatus: varchar("event_status", { length: 50 }),
+    eventPayload: jsonb("event_payload").default({}),
+
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+    appIdx: index("dealer_agreement_events_application_id_idx").on(table.applicationId),
+    docIdx: index("dealer_agreement_events_provider_document_id_idx").on(table.providerDocumentId),
+    createdIdx: index("dealer_agreement_events_created_at_idx").on(table.createdAt),
+}));
+
 export const dealerOnboardingDocuments = pgTable("dealer_onboarding_documents", {
     id: uuid("id").defaultRandom().primaryKey(),
 
@@ -1577,3 +1644,76 @@ export const dealerOnboardingDocuments = pgTable("dealer_onboarding_documents", 
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+export const dealerOnboardingApplicationsRelations = relations(
+    dealerOnboardingApplications,
+    ({ many }) => ({
+        documents: many(dealerOnboardingDocuments),
+        agreementSigners: many(dealerAgreementSigners),
+        agreementEvents: many(dealerAgreementEvents),
+    })
+);
+
+export const dealerOnboardingDocumentsRelations = relations(
+    dealerOnboardingDocuments,
+    ({ one }) => ({
+        application: one(dealerOnboardingApplications, {
+            fields: [dealerOnboardingDocuments.applicationId],
+            references: [dealerOnboardingApplications.id],
+        }),
+    })
+);
+
+export const dealerAgreementSignersRelations = relations(
+    dealerAgreementSigners,
+    ({ one }) => ({
+        application: one(dealerOnboardingApplications, {
+            fields: [dealerAgreementSigners.applicationId],
+            references: [dealerOnboardingApplications.id],
+        }),
+    })
+);
+
+export const dealerAgreementEventsRelations = relations(
+    dealerAgreementEvents,
+    ({ one }) => ({
+        application: one(dealerOnboardingApplications, {
+            fields: [dealerAgreementEvents.applicationId],
+            references: [dealerOnboardingApplications.id],
+        }),
+    })
+);
+
+// export const dealerOnboardingApplicationsRelations = relations(
+//     dealerOnboardingApplications,
+//     ({ many }) => ({
+//         documents: many(dealerOnboardingDocuments),
+//         agreementSigners: many(dealerAgreementSigners),
+//         agreementEvents: many(dealerAgreementEvents),
+//     })
+// );
+
+// export const dealerAgreementSignersRelations = relations(
+//     dealerAgreementSigners,
+//     ({ one }) => ({
+//         application: one(dealerOnboardingApplications, {
+//             fields: [dealerAgreementSigners.applicationId],
+//             references: [dealerOnboardingApplications.id],
+//         }),
+//     })
+// );
+
+// export const dealerAgreementEventsRelations = relations(
+//     dealerAgreementEvents,
+//     ({ one }) => ({
+//         application: one(dealerOnboardingApplications, {
+//             fields: [dealerAgreementEvents.applicationId],
+//             references: [dealerOnboardingApplications.id],
+//         }),
+//     })
+// );
+
+
+
+
+

@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import {
+  dealerAgreementSigners,
+  dealerOnboardingApplications,
+} from "@/lib/db/schema";
+import {
+  insertAgreementEvent,
+  insertAgreementSigners,
+} from "@/lib/agreement/tracking";
 
 type AgreementParty = {
   name?: string | null;
@@ -134,17 +141,11 @@ export async function POST(
       );
     }
 
-    // Prevent duplicate active initiation
     const currentAgreementStatus = String(
       application.agreementStatus || ""
     ).toLowerCase();
 
-    const canInitiateStatuses = [
-      "",
-      "not_generated",
-      "failed",
-      "expired",
-    ];
+    const canInitiateStatuses = ["", "not_generated", "failed", "expired"];
 
     if (!canInitiateStatuses.includes(currentAgreementStatus)) {
       return NextResponse.json(
@@ -314,21 +315,129 @@ export async function POST(
       );
     }
 
+    const providerDocumentId = digioJson?.data?.providerDocumentId || null;
+    const requestId = digioJson?.data?.requestId || null;
+    const signingUrl = digioJson?.data?.signingUrl || null;
+
     await db
       .update(dealerOnboardingApplications)
       .set({
-        agreementStatus: digioJson?.data?.status || "sent_for_signature",
-        reviewStatus: "agreement_in_progress",
+        agreementStatus: "sent_to_external_party",
+        reviewStatus: "pending_admin_review",
         completionStatus: "pending",
-        providerDocumentId: digioJson?.data?.providerDocumentId || null,
-        requestId: digioJson?.data?.requestId || null,
-        providerSigningUrl: digioJson?.data?.signingUrl || null,
+        providerDocumentId,
+        requestId,
+        providerSigningUrl: signingUrl,
         providerRawResponse: digioJson?.data || {},
         stampStatus: digioJson?.data?.stampStatus || "pending",
+        agreementLastInitiatedAt: new Date(),
         lastActionTimestamp: new Date(),
         updatedAt: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
+
+    await db
+      .delete(dealerAgreementSigners)
+      .where(eq(dealerAgreementSigners.applicationId, dealerId));
+
+    const signerUrls = Array.isArray(digioJson?.data?.signerUrls)
+      ? digioJson.data.signerUrls
+      : [];
+
+    const findSignerUrlByEmail = (email: string | null) => {
+      if (!email) return null;
+
+      return signerUrls.find(
+        (item: any) =>
+          String(item?.email || "")
+            .trim()
+            .toLowerCase() === email.trim().toLowerCase()
+      );
+    };
+
+    await insertAgreementSigners([
+      {
+        applicationId: dealerId,
+        providerDocumentId,
+        requestId,
+        signerRole: "dealer",
+        signerName: dealerSigner?.name || "",
+        signerEmail: dealerSigner?.email || null,
+        signerMobile: dealerSigner?.mobile || null,
+        signingMethod: dealerSigner?.signingMethod || null,
+        providerSignerIdentifier:
+          dealerSigner?.email || dealerSigner?.mobile || null,
+        providerSigningUrl:
+          findSignerUrlByEmail(dealerSigner?.email || null)?.authenticationUrl ||
+          null,
+        signerStatus: "sent",
+        providerRawResponse:
+          findSignerUrlByEmail(dealerSigner?.email || null) || {},
+      },
+      {
+        applicationId: dealerId,
+        providerDocumentId,
+        requestId,
+        signerRole: "financier",
+        signerName: financierSigner?.name || "",
+        signerEmail: financierSigner?.email || null,
+        signerMobile: financierSigner?.mobile || null,
+        signingMethod: financierSigner?.signingMethod || null,
+        providerSignerIdentifier:
+          financierSigner?.email || financierSigner?.mobile || null,
+        providerSigningUrl:
+          findSignerUrlByEmail(financierSigner?.email || null)
+            ?.authenticationUrl || null,
+        signerStatus: "sent",
+        providerRawResponse:
+          findSignerUrlByEmail(financierSigner?.email || null) || {},
+      },
+      {
+        applicationId: dealerId,
+        providerDocumentId,
+        requestId,
+        signerRole: "itarang_signatory_1",
+        signerName: itarangSigner1?.name || "",
+        signerEmail: itarangSigner1?.email || null,
+        signerMobile: itarangSigner1?.mobile || null,
+        signingMethod: itarangSigner1?.signingMethod || null,
+        providerSignerIdentifier:
+          itarangSigner1?.email || itarangSigner1?.mobile || null,
+        providerSigningUrl:
+          findSignerUrlByEmail(itarangSigner1?.email || null)
+            ?.authenticationUrl || null,
+        signerStatus: "sent",
+        providerRawResponse:
+          findSignerUrlByEmail(itarangSigner1?.email || null) || {},
+      },
+      {
+        applicationId: dealerId,
+        providerDocumentId,
+        requestId,
+        signerRole: "itarang_signatory_2",
+        signerName: itarangSigner2?.name || "",
+        signerEmail: itarangSigner2?.email || null,
+        signerMobile: itarangSigner2?.mobile || null,
+        signingMethod: itarangSigner2?.signingMethod || null,
+        providerSignerIdentifier:
+          itarangSigner2?.email || itarangSigner2?.mobile || null,
+        providerSigningUrl:
+          findSignerUrlByEmail(itarangSigner2?.email || null)
+            ?.authenticationUrl || null,
+        signerStatus: "sent",
+        providerRawResponse:
+          findSignerUrlByEmail(itarangSigner2?.email || null) || {},
+      },
+    ]);
+
+    await insertAgreementEvent({
+      applicationId: dealerId,
+      providerDocumentId,
+      requestId,
+      eventType: "initiated",
+      eventStatus: "sent_to_external_party",
+      eventPayload: digioJson?.data || {},
+    });
 
     return NextResponse.json({
       success: true,

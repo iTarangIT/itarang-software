@@ -103,6 +103,43 @@ type DealerReviewData = {
   agreement?: AgreementData | null;
 };
 
+type AgreementSignerRow = {
+  id: string;
+  signerRole: string;
+  signerName: string;
+  signerEmail?: string | null;
+  signerMobile?: string | null;
+  signingMethod?: string | null;
+  signerStatus: string;
+  signedAt?: string | null;
+  providerSigningUrl?: string | null;
+};
+
+type AgreementTimelineItem = {
+  id: string;
+  eventType: string;
+  signerRole?: string | null;
+  eventStatus?: string | null;
+  createdAt?: string | null;
+};
+
+type AgreementTrackingResponse = {
+  applicationId: string;
+  agreementId?: string | null;
+  requestId?: string | null;
+  agreementStatus?: string | null;
+  reviewStatus?: string | null;
+  signedAgreementUrl?: string | null;
+  auditTrailUrl?: string | null;
+  completionStatus?: string | null;
+  stampStatus?: string | null;
+  failureReason?: string | null;
+  lastActionTimestamp?: string | null;
+  canReInitiate?: boolean;
+  signers: AgreementSignerRow[];
+  timeline: AgreementTimelineItem[];
+};
+
 function SectionCard({
   title,
   subtitle,
@@ -191,17 +228,47 @@ function AgreementBadge({ value }: { value?: string | null }) {
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : status === "failed" || status === "expired"
           ? "border-rose-200 bg-rose-50 text-rose-700"
-          : status === "viewed" || status === "sent_for_signature"
+          : status === "viewed" ||
+              status === "sign_pending" ||
+              status === "sent_for_signature" ||
+              status === "sent_to_external_party"
             ? "border-blue-200 bg-blue-50 text-blue-700"
-            : status === "not available" || status === ""
-              ? "border-slate-200 bg-slate-50 text-slate-700"
-              : "border-indigo-200 bg-indigo-50 text-indigo-700";
+            : status === "partially_signed"
+              ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+              : status === "not available" || status === ""
+                ? "border-slate-200 bg-slate-50 text-slate-700"
+                : "border-indigo-200 bg-indigo-50 text-indigo-700";
 
   return (
     <span
       className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold capitalize ${classes}`}
     >
       {(value || "Not available").replaceAll("_", " ")}
+    </span>
+  );
+}
+
+function SignerStatusBadge({ value }: { value?: string | null }) {
+  const status = (value || "").toLowerCase();
+
+  const classes =
+    status === "signed"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : status === "viewed"
+        ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+        : status === "sent"
+          ? "border-blue-200 bg-blue-50 text-blue-700"
+          : status === "failed"
+            ? "border-rose-200 bg-rose-50 text-rose-700"
+            : status === "expired"
+              ? "border-amber-200 bg-amber-50 text-amber-700"
+              : "border-slate-200 bg-slate-50 text-slate-700";
+
+  return (
+    <span
+      className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold capitalize ${classes}`}
+    >
+      {(value || "pending").replaceAll("_", " ")}
     </span>
   );
 }
@@ -328,6 +395,34 @@ export default function DealerReviewPage() {
   const [agreementActionLoading, setAgreementActionLoading] = useState<
     "initiate" | "refresh" | "reinitiate" | "retry" | null
   >(null);
+  const [tracking, setTracking] = useState<AgreementTrackingResponse | null>(null);
+  const [trackingLoading, setTrackingLoading] = useState(false);
+
+  const loadAgreementTracking = async () => {
+    try {
+      setTrackingLoading(true);
+
+      const res = await fetch(
+        `/api/admin/dealer-verifications/${dealerId}/agreement-tracking`,
+        {
+          cache: "no-store",
+        }
+      );
+
+      const json = await res.json();
+
+      if (json.success) {
+        setTracking(json.data);
+      } else {
+        setTracking(null);
+      }
+    } catch (error) {
+      console.error("Failed to load agreement tracking", error);
+      setTracking(null);
+    } finally {
+      setTrackingLoading(false);
+    }
+  };
 
   useEffect(() => {
     const loadDealer = async () => {
@@ -340,9 +435,12 @@ export default function DealerReviewPage() {
         } else {
           setData(null);
         }
+
+        await loadAgreementTracking();
       } catch (error) {
         console.error("Failed to load dealer review data", error);
         setData(null);
+        setTracking(null);
       } finally {
         setLoading(false);
       }
@@ -357,6 +455,8 @@ export default function DealerReviewPage() {
     const count = data?.documents?.length || 0;
     return count > 0 ? `${count} uploaded` : "No documents uploaded";
   }, [data?.documents]);
+
+  const agreementStatusForUi = tracking?.agreementStatus || data?.agreement?.status || null;
 
   const verificationChecklist = useMemo(() => {
     const companyReady = !!(
@@ -376,7 +476,7 @@ export default function DealerReviewPage() {
     );
 
     const agreementReady = data?.financeEnabled
-      ? (data?.agreement?.status || "").toLowerCase() === "completed"
+      ? (agreementStatusForUi || "").toLowerCase() === "completed"
       : true;
 
     return {
@@ -385,24 +485,38 @@ export default function DealerReviewPage() {
       bankReady,
       agreementReady,
     };
-  }, [data]);
+  }, [data, agreementStatusForUi]);
 
   const signedAgreementReady =
-    (data?.agreement?.status || "").toLowerCase() === "completed";
+    (agreementStatusForUi || "").toLowerCase() === "completed";
 
   const isRejected = (data?.onboardingStatus || "").toLowerCase() === "rejected";
 
-  const signedAgreementDownloadUrl = `/api/admin/dealer-verifications/${dealerId}/download-signed-agreement`;
+  const signedAgreementDownloadUrl =
+    tracking?.signedAgreementUrl ||
+    data?.agreement?.signedAgreementUrl ||
+    `/api/admin/dealer-verifications/${dealerId}/download-signed-agreement`;
 
   const reloadDealer = async () => {
     try {
-      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}`, {
-        cache: "no-store",
-      });
-      const json = await res.json();
+      const [dealerRes, trackingRes] = await Promise.all([
+        fetch(`/api/admin/dealer-verifications/${dealerId}`, {
+          cache: "no-store",
+        }),
+        fetch(`/api/admin/dealer-verifications/${dealerId}/agreement-tracking`, {
+          cache: "no-store",
+        }),
+      ]);
 
-      if (json.success) {
-        setData(json.data);
+      const dealerJson = await dealerRes.json();
+      const trackingJson = await trackingRes.json();
+
+      if (dealerJson.success) {
+        setData(dealerJson.data);
+      }
+
+      if (trackingJson.success) {
+        setTracking(trackingJson.data);
       }
     } catch (error) {
       console.error("Failed to refresh dealer review data", error);
@@ -580,6 +694,7 @@ export default function DealerReviewPage() {
           <div className="flex flex-wrap items-center gap-3">
             <StatusBadge value={data.onboardingStatus} />
             <StatusBadge value={data.reviewStatus} />
+            {data.financeEnabled ? <AgreementBadge value={agreementStatusForUi} /> : null}
           </div>
         </div>
 
@@ -793,23 +908,23 @@ export default function DealerReviewPage() {
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <InfoField
                   label="Agreement ID"
-                  value={data.agreement?.agreementId || undefined}
+                  value={tracking?.agreementId || data.agreement?.agreementId || undefined}
                 />
                 <div className="rounded-2xl bg-slate-50 px-4 py-4">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                     Agreement Status
                   </p>
                   <div className="mt-2">
-                    <AgreementBadge value={data.agreement?.status || undefined} />
+                    <AgreementBadge value={agreementStatusForUi || undefined} />
                   </div>
                 </div>
                 <InfoField
-                  label="Signer Name"
-                  value={data.agreement?.signerName || undefined}
+                  label="Primary Signer Name"
+                  value={data.agreement?.signerName || data.agreement?.dealerSignerName || undefined}
                 />
                 <InfoField
-                  label="Signer Email"
-                  value={data.agreement?.signerEmail || undefined}
+                  label="Primary Signer Email"
+                  value={data.agreement?.signerEmail || data.agreement?.dealerSignerEmail || undefined}
                 />
               </div>
 
@@ -842,6 +957,8 @@ export default function DealerReviewPage() {
 
                     <a
                       href={signedAgreementDownloadUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
                     >
                       <Download className="h-4 w-4" />
@@ -850,7 +967,7 @@ export default function DealerReviewPage() {
                   </>
                 )}
 
-                {!data.agreement?.copyUrl && !data.agreement?.agreementId && (
+                {!data.agreement?.copyUrl && !tracking?.agreementId && !data.agreement?.agreementId && (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                     Agreement copy is not available yet.
                   </div>
@@ -858,7 +975,7 @@ export default function DealerReviewPage() {
               </div>
 
               <div className="mt-5 flex flex-wrap gap-3">
-                {!data.agreement?.agreementId && (
+                {!tracking?.agreementId && !data.agreement?.agreementId && (
                   <button
                     onClick={() => handleAgreementAction("initiate")}
                     disabled={agreementActionLoading !== null || isRejected}
@@ -871,7 +988,7 @@ export default function DealerReviewPage() {
                   </button>
                 )}
 
-                {data.agreement?.status && data.agreement.status !== "completed" && (
+                {agreementStatusForUi && agreementStatusForUi !== "completed" && (
                   <button
                     onClick={() => handleAgreementAction("refresh")}
                     disabled={agreementActionLoading !== null || isRejected}
@@ -884,8 +1001,7 @@ export default function DealerReviewPage() {
                   </button>
                 )}
 
-                {(data.agreement?.status === "failed" ||
-                  data.agreement?.status === "expired") && (
+                {tracking?.canReInitiate && (
                   <button
                     onClick={() => handleAgreementAction("reinitiate")}
                     disabled={agreementActionLoading !== null || isRejected}
@@ -898,18 +1014,213 @@ export default function DealerReviewPage() {
                   </button>
                 )}
 
-                {data.agreement?.status === "signed" && !data.agreement?.copyUrl && (
-                  <button
-                    onClick={() => handleAgreementAction("retry")}
-                    disabled={agreementActionLoading !== null || isRejected}
-                    className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-                  >
-                    <Download className="h-4 w-4" />
-                    {agreementActionLoading === "retry"
-                      ? "Retrying..."
-                      : "Retry Download Signed Copy"}
-                  </button>
-                )}
+                {(agreementStatusForUi || "").toLowerCase() === "signed" &&
+                  !data.agreement?.copyUrl && (
+                    <button
+                      onClick={() => handleAgreementAction("retry")}
+                      disabled={agreementActionLoading !== null || isRejected}
+                      className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      <Download className="h-4 w-4" />
+                      {agreementActionLoading === "retry"
+                        ? "Retrying..."
+                        : "Retry Download Signed Copy"}
+                    </button>
+                  )}
+              </div>
+
+              <div className="mt-8 rounded-[24px] border border-slate-200 bg-white shadow-sm">
+                <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-900">
+                      Agreement Tracking Table
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Signer-wise agreement progress, agreement copy, audit trail, and actions.
+                    </p>
+                  </div>
+
+                  {tracking?.failureReason ? (
+                    <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+                      {tracking.failureReason}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-full">
+                    <thead className="bg-slate-50">
+                      <tr className="text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                        <th className="px-6 py-4">Agreement ID</th>
+                        <th className="px-6 py-4">Signer Name</th>
+                        <th className="px-6 py-4">Signer Email</th>
+                        <th className="px-6 py-4">Signer Status</th>
+                        <th className="px-6 py-4">Agreement Copy</th>
+                        <th className="px-6 py-4">Audit Trail</th>
+                        <th className="px-6 py-4">Actions</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {trackingLoading ? (
+                        <tr>
+                          <td colSpan={7} className="px-6 py-8 text-sm text-slate-500">
+                            Loading agreement tracking...
+                          </td>
+                        </tr>
+                      ) : tracking?.signers?.length ? (
+                        tracking.signers.map((signer) => (
+                          <tr
+                            key={signer.id}
+                            className="border-t border-slate-200 text-sm text-slate-700"
+                          >
+                            <td className="px-6 py-4 font-medium text-slate-900">
+                              {tracking.agreementId || "Not available"}
+                            </td>
+
+                            <td className="px-6 py-4">
+                              <div className="font-medium text-slate-900">
+                                {signer.signerName || "Not available"}
+                              </div>
+                              <div className="mt-1 text-xs uppercase tracking-[0.12em] text-slate-400">
+                                {signer.signerRole?.replaceAll("_", " ")}
+                              </div>
+                            </td>
+
+                            <td className="px-6 py-4">
+                              <div>{signer.signerEmail || "Not available"}</div>
+                              {signer.signerMobile ? (
+                                <div className="mt-1 text-xs text-slate-500">{signer.signerMobile}</div>
+                              ) : null}
+                            </td>
+
+                            <td className="px-6 py-4">
+                              <SignerStatusBadge value={signer.signerStatus} />
+                            </td>
+
+                            <td className="px-6 py-4">
+                              {tracking?.signedAgreementUrl ? (
+                                <a
+                                  href={tracking.signedAgreementUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-2 text-sm font-semibold text-blue-600 hover:text-blue-700"
+                                >
+                                  <Download className="h-4 w-4" />
+                                  View / Download
+                                </a>
+                              ) : (
+                                <span className="text-slate-400">Not available</span>
+                              )}
+                            </td>
+
+                            <td className="px-6 py-4">
+                              {tracking?.auditTrailUrl ? (
+                                <a
+                                  href={tracking.auditTrailUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-2 text-sm font-semibold text-blue-600 hover:text-blue-700"
+                                >
+                                  <Download className="h-4 w-4" />
+                                  View / Download
+                                </a>
+                              ) : (
+                                <span className="text-slate-400">Not available</span>
+                              )}
+                            </td>
+
+                            <td className="px-6 py-4">
+                              {tracking?.canReInitiate ? (
+                                <button
+                                  onClick={() => handleAgreementAction("reinitiate")}
+                                  disabled={agreementActionLoading !== null || isRejected}
+                                  className="inline-flex items-center gap-2 rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
+                                >
+                                  <RefreshCw className="h-4 w-4" />
+                                  {agreementActionLoading === "reinitiate"
+                                    ? "Re-initiating..."
+                                    : "Re-initiate Agreement"}
+                                </button>
+                              ) : signer.providerSigningUrl ? (
+                                <a
+                                  href={signer.providerSigningUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-2 text-sm font-semibold text-blue-600 hover:text-blue-700"
+                                >
+                                  <ExternalLink className="h-4 w-4" />
+                                  Open Link
+                                </a>
+                              ) : (
+                                <span className="text-slate-400">No action</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={7} className="px-6 py-8 text-sm text-slate-500">
+                            No agreement tracking rows available yet.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="mt-6 rounded-[24px] border border-slate-200 bg-slate-50 p-5">
+                <div className="flex items-center gap-3">
+                  <div className="rounded-2xl bg-white p-3 text-slate-700 shadow-sm">
+                    <Clock3 className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-900">
+                      Agreement Activity Timeline
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Latest Digio agreement events and signer progress history.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-5 space-y-3">
+                  {tracking?.timeline?.length ? (
+                    tracking.timeline.map((event) => (
+                      <div
+                        key={event.id}
+                        className="rounded-2xl border border-slate-200 bg-white px-4 py-4"
+                      >
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">
+                              {(event.eventType || "event").replaceAll("_", " ")}
+                            </p>
+                            <p className="mt-1 text-xs uppercase tracking-[0.12em] text-slate-400">
+                              {event.signerRole
+                                ? event.signerRole.replaceAll("_", " ")
+                                : "system"}
+                            </p>
+                          </div>
+
+                          <div className="flex flex-col items-start gap-2 md:items-end">
+                            <AgreementBadge value={event.eventStatus || undefined} />
+                            <p className="text-xs text-slate-500">
+                              {event.createdAt
+                                ? new Date(event.createdAt).toLocaleString()
+                                : "Not available"}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4 text-sm text-slate-500">
+                      No timeline events available yet.
+                    </div>
+                  )}
+                </div>
               </div>
             </SectionCard>
           )}
@@ -924,7 +1235,7 @@ export default function DealerReviewPage() {
           onReject={handleReject}
           onBack={() => router.push("/admin/dealer-verification")}
           financeEnabled={data.financeEnabled}
-          agreementStatus={data.agreement?.status}
+          agreementStatus={agreementStatusForUi}
         />
       </div>
     </div>
