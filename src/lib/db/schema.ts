@@ -2442,6 +2442,9 @@ export const scrapeRuns = pgTable("scraper_runs", {
   newLeadsSaved: integer("new_leads_saved"),
   duplicatesSkipped: integer("duplicates_skipped"),
 
+  cleanedLeads: integer("cleaned_leads"),
+  durationMs: integer("duration_ms"),
+
   errorMessage: text("error_message"),
 
   searchQueries: json("search_queries"),
@@ -2495,4 +2498,23 @@ export const dealerLeads = pgTable("dealer_leads", {
 
   created_at: timestamp("created_at").defaultNow(),
   next_call_at: timestamp("next_call_at", { withTimezone: true }),
+});
+
+export const scraperLeadsDuplicates = pgTable("scraper_leads_duplicates", {
+  id: text("id").primaryKey(),
+
+  originalLeadId: text("original_lead_id"),
+
+  name: text("name"),
+  phone: text("phone"),
+  email: text("email"),
+  website: text("website"),
+
+  city: text("city"),
+  address: text("address"),
+
+  source: text("source"),
+  status: text("status"),
+
+  createdAt: timestamp("created_at").defaultNow(),
 });

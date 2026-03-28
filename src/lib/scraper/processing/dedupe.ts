@@ -1,15 +1,26 @@
-export function dedupeLeads(leads: any[]) {
-  const map = new Map<string, any>();
+export function markDuplicates(leads: any[]) {
+  const seen = new Map();
+  const result = [];
 
   for (const lead of leads) {
-    const key = lead.phone || lead.website || lead.name?.toLowerCase();
+    const name = (lead.name || "").trim().toLowerCase();
+    const address = (lead.address || "").trim().toLowerCase();
 
-    if (!key) continue;
+    const key = `${name}-${address}`;
 
-    if (!map.has(key)) {
-      map.set(key, lead);
+    if (seen.has(key)) {
+      result.push({
+        ...lead,
+        duplicate_of: seen.get(key),
+      });
+    } else {
+      seen.set(key, lead.id || key);
+      result.push({
+        ...lead,
+        duplicate_of: null,
+      });
     }
   }
 
-  return Array.from(map.values());
+  return result;
 }
