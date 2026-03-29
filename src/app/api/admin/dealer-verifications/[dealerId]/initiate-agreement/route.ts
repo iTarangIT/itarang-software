@@ -115,11 +115,10 @@ function extractProviderDocumentId(data: any) {
     data?.provider_document_id,
     data?.documentId,
     data?.document_id,
-    data?.id,
+    data?.agreement?.documentId,
     data?.agreement?.document_id,
-    data?.agreement?.id,
-    data?.raw?.document_id,
-    data?.raw?.id
+    data?.raw?.documentId,
+    data?.raw?.document_id
   );
 }
 
@@ -127,10 +126,13 @@ function extractRequestId(data: any) {
   return pickFirstString(
     data?.requestId,
     data?.request_id,
-    data?.agreement?.request_id,
+    data?.id,
     data?.agreement?.requestId,
+    data?.agreement?.request_id,
+    data?.agreement?.id,
+    data?.raw?.requestId,
     data?.raw?.request_id,
-    data?.raw?.requestId
+    data?.raw?.id
   );
 }
 
@@ -140,9 +142,21 @@ function extractSigningUrl(data: any) {
     data?.signing_url,
     data?.providerSigningUrl,
     data?.provider_signing_url,
+    data?.authentication_url,
+    data?.authenticationUrl,
     data?.agreement?.signing_url,
     data?.agreement?.provider_signing_url,
-    data?.raw?.signing_url
+    data?.agreement?.authentication_url,
+    data?.raw?.signing_url,
+    data?.raw?.authentication_url,
+    data?.signing_parties?.[0]?.authentication_url,
+    data?.signing_parties?.[0]?.authenticationUrl,
+    data?.signing_parties?.[0]?.sign_url,
+    data?.signing_parties?.[0]?.signUrl,
+    data?.raw?.signing_parties?.[0]?.authentication_url,
+    data?.raw?.signing_parties?.[0]?.authenticationUrl,
+    data?.raw?.signing_parties?.[0]?.sign_url,
+    data?.raw?.signing_parties?.[0]?.signUrl
   );
 }
 
@@ -155,13 +169,54 @@ function extractStampStatus(data: any) {
   );
 }
 
+function extractAgreementStatus(data: any) {
+  return (
+    pickFirstString(
+      data?.agreementStatus,
+      data?.agreement_status,
+      data?.status,
+      data?.agreement?.agreement_status,
+      data?.agreement?.status,
+      data?.raw?.agreement_status,
+      data?.raw?.status
+    ) || "requested"
+  );
+}
+
 function extractSignerUrls(data: any) {
   if (Array.isArray(data?.signerUrls)) return data.signerUrls;
   if (Array.isArray(data?.signer_urls)) return data.signer_urls;
   if (Array.isArray(data?.signers)) return data.signers;
+  if (Array.isArray(data?.signing_parties)) return data.signing_parties;
   if (Array.isArray(data?.raw?.signerUrls)) return data.raw.signerUrls;
   if (Array.isArray(data?.raw?.signer_urls)) return data.raw.signer_urls;
+  if (Array.isArray(data?.raw?.signers)) return data.raw.signers;
+  if (Array.isArray(data?.raw?.signing_parties)) return data.raw.signing_parties;
   return [];
+}
+
+function normalizeSignerStatus(value: unknown) {
+  const safe = cleanString(value).toLowerCase();
+
+  if (!safe) return "sent";
+  if (safe === "requested") return "sent";
+  if (safe === "sequenced") return "sent";
+
+  return safe;
+}
+
+function getSignerUrl(item: any) {
+  return (
+    pickFirstString(
+      item?.authenticationUrl,
+      item?.authentication_url,
+      item?.providerSigningUrl,
+      item?.provider_signing_url,
+      item?.signUrl,
+      item?.sign_url,
+      item?.url
+    ) || null
+  );
 }
 
 export async function POST(
@@ -305,8 +360,8 @@ export async function POST(
         companyType: application.companyType || "",
         companyAddress:
           typeof application.businessAddress === "object" &&
-          application.businessAddress &&
-          "address" in application.businessAddress
+            application.businessAddress &&
+            "address" in application.businessAddress
             ? String((application.businessAddress as any).address || "")
             : "",
         gstNumber: application.gstNumber || "",
@@ -397,18 +452,28 @@ export async function POST(
     const requestId = extractRequestId(responseData);
     const signingUrl = extractSigningUrl(responseData);
     const stampStatus = extractStampStatus(responseData) || "pending";
+    const agreementStatus = extractAgreementStatus(responseData);
+    const signerUrls = extractSignerUrls(responseData);
 
-    console.log("[DIGIO INITIATE] extracted providerDocumentId:", providerDocumentId);
+    console.log(
+      "[DIGIO INITIATE] extracted providerDocumentId:",
+      providerDocumentId
+    );
     console.log("[DIGIO INITIATE] extracted requestId:", requestId);
     console.log("[DIGIO INITIATE] extracted signingUrl:", signingUrl);
     console.log("[DIGIO INITIATE] extracted stampStatus:", stampStatus);
+    console.log("[DIGIO INITIATE] extracted agreementStatus:", agreementStatus);
+    console.log(
+      "[DIGIO INITIATE] extracted signerUrls:",
+      JSON.stringify(signerUrls, null, 2)
+    );
 
-    if (!providerDocumentId) {
+    if (!requestId) {
       return NextResponse.json(
         {
           success: false,
           message:
-            "Digio agreement was created but providerDocumentId could not be extracted.",
+            "Digio agreement was created but requestId could not be extracted.",
           raw: responseData,
         },
         { status: 500 }
@@ -418,12 +483,15 @@ export async function POST(
     await db
       .update(dealerOnboardingApplications)
       .set({
-        agreementStatus: "sent_to_external_party",
+        agreementStatus:
+          agreementStatus === "requested"
+            ? "sent_to_external_party"
+            : agreementStatus,
         reviewStatus: "pending_admin_review",
         completionStatus: "pending",
-        providerDocumentId,
+        providerDocumentId: providerDocumentId || null,
         requestId,
-        providerSigningUrl: signingUrl,
+        providerSigningUrl: signingUrl || null,
         providerRawResponse: responseData,
         stampStatus,
         agreementLastInitiatedAt: new Date(),
@@ -436,23 +504,33 @@ export async function POST(
       .delete(dealerAgreementSigners)
       .where(eq(dealerAgreementSigners.applicationId, dealerId));
 
-    const signerUrls = extractSignerUrls(responseData);
-
-    const findSignerUrlByEmail = (email: string | null) => {
+    const findSignerByEmail = (email: string | null) => {
       if (!email) return null;
 
       return signerUrls.find((item: any) => {
-        const itemEmail = String(item?.email || item?.signer_email || "")
+        const itemEmail = String(
+          item?.email ||
+          item?.signer_email ||
+          item?.identifier ||
+          item?.signerIdentifier ||
+          ""
+        )
           .trim()
           .toLowerCase();
+
         return itemEmail === email.trim().toLowerCase();
       });
     };
 
+    const dealerSignerRaw = findSignerByEmail(dealerSigner?.email || null);
+    const financierSignerRaw = findSignerByEmail(financierSigner?.email || null);
+    const itarangSigner1Raw = findSignerByEmail(itarangSigner1?.email || null);
+    const itarangSigner2Raw = findSignerByEmail(itarangSigner2?.email || null);
+
     await insertAgreementSigners([
       {
         applicationId: dealerId,
-        providerDocumentId,
+        providerDocumentId: providerDocumentId || null,
         requestId,
         signerRole: "dealer",
         signerName: dealerSigner?.name || "",
@@ -461,17 +539,13 @@ export async function POST(
         signingMethod: dealerSigner?.signingMethod || null,
         providerSignerIdentifier:
           dealerSigner?.email || dealerSigner?.mobile || null,
-        providerSigningUrl:
-          findSignerUrlByEmail(dealerSigner?.email || null)?.authenticationUrl ||
-          findSignerUrlByEmail(dealerSigner?.email || null)?.authentication_url ||
-          null,
-        signerStatus: "sent",
-        providerRawResponse:
-          findSignerUrlByEmail(dealerSigner?.email || null) || {},
+        providerSigningUrl: getSignerUrl(dealerSignerRaw) || signingUrl || null,
+        signerStatus: normalizeSignerStatus(dealerSignerRaw?.status),
+        providerRawResponse: dealerSignerRaw || {},
       },
       {
         applicationId: dealerId,
-        providerDocumentId,
+        providerDocumentId: providerDocumentId || null,
         requestId,
         signerRole: "financier",
         signerName: financierSigner?.name || "",
@@ -480,19 +554,13 @@ export async function POST(
         signingMethod: financierSigner?.signingMethod || null,
         providerSignerIdentifier:
           financierSigner?.email || financierSigner?.mobile || null,
-        providerSigningUrl:
-          findSignerUrlByEmail(financierSigner?.email || null)
-            ?.authenticationUrl ||
-          findSignerUrlByEmail(financierSigner?.email || null)
-            ?.authentication_url ||
-          null,
-        signerStatus: "sent",
-        providerRawResponse:
-          findSignerUrlByEmail(financierSigner?.email || null) || {},
+        providerSigningUrl: getSignerUrl(financierSignerRaw),
+        signerStatus: normalizeSignerStatus(financierSignerRaw?.status),
+        providerRawResponse: financierSignerRaw || {},
       },
       {
         applicationId: dealerId,
-        providerDocumentId,
+        providerDocumentId: providerDocumentId || null,
         requestId,
         signerRole: "itarang_signatory_1",
         signerName: itarangSigner1?.name || "",
@@ -501,19 +569,13 @@ export async function POST(
         signingMethod: itarangSigner1?.signingMethod || null,
         providerSignerIdentifier:
           itarangSigner1?.email || itarangSigner1?.mobile || null,
-        providerSigningUrl:
-          findSignerUrlByEmail(itarangSigner1?.email || null)
-            ?.authenticationUrl ||
-          findSignerUrlByEmail(itarangSigner1?.email || null)
-            ?.authentication_url ||
-          null,
-        signerStatus: "sent",
-        providerRawResponse:
-          findSignerUrlByEmail(itarangSigner1?.email || null) || {},
+        providerSigningUrl: getSignerUrl(itarangSigner1Raw),
+        signerStatus: normalizeSignerStatus(itarangSigner1Raw?.status),
+        providerRawResponse: itarangSigner1Raw || {},
       },
       {
         applicationId: dealerId,
-        providerDocumentId,
+        providerDocumentId: providerDocumentId || null,
         requestId,
         signerRole: "itarang_signatory_2",
         signerName: itarangSigner2?.name || "",
@@ -522,31 +584,34 @@ export async function POST(
         signingMethod: itarangSigner2?.signingMethod || null,
         providerSignerIdentifier:
           itarangSigner2?.email || itarangSigner2?.mobile || null,
-        providerSigningUrl:
-          findSignerUrlByEmail(itarangSigner2?.email || null)
-            ?.authenticationUrl ||
-          findSignerUrlByEmail(itarangSigner2?.email || null)
-            ?.authentication_url ||
-          null,
-        signerStatus: "sent",
-        providerRawResponse:
-          findSignerUrlByEmail(itarangSigner2?.email || null) || {},
+        providerSigningUrl: getSignerUrl(itarangSigner2Raw),
+        signerStatus: normalizeSignerStatus(itarangSigner2Raw?.status),
+        providerRawResponse: itarangSigner2Raw || {},
       },
     ]);
 
     await insertAgreementEvent({
       applicationId: dealerId,
-      providerDocumentId,
+      providerDocumentId: providerDocumentId || null,
       requestId,
       eventType: "initiated",
-      eventStatus: "sent_to_external_party",
+      eventStatus:
+        agreementStatus === "requested"
+          ? "sent_to_external_party"
+          : agreementStatus,
       eventPayload: responseData,
     });
 
     return NextResponse.json({
       success: true,
       message: "Agreement initiated successfully",
-      data: responseData,
+      data: {
+        ...responseData,
+        requestId,
+        providerDocumentId: providerDocumentId || null,
+        providerSigningUrl: signingUrl || null,
+        agreementStatus,
+      },
     });
   } catch (error: any) {
     console.error("INITIATE AGREEMENT ERROR:", error);

@@ -197,14 +197,14 @@ function StatusBadge({ value }: { value?: string | null }) {
     status === "completed" || status === "approved" || status === "succeed"
       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
       : status === "submitted" ||
-          status === "pending_admin_review" ||
-          status === "pending_sales_head"
+        status === "pending_admin_review" ||
+        status === "pending_sales_head"
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : status === "under_review"
           ? "border-blue-200 bg-blue-50 text-blue-700"
           : status === "under_correction" ||
-              status === "correction_requested" ||
-              status === "action_needed"
+            status === "correction_requested" ||
+            status === "action_needed"
             ? "border-orange-200 bg-orange-50 text-orange-700"
             : status === "rejected"
               ? "border-rose-200 bg-rose-50 text-rose-700"
@@ -230,9 +230,9 @@ function AgreementBadge({ value }: { value?: string | null }) {
         : status === "failed" || status === "expired"
           ? "border-rose-200 bg-rose-50 text-rose-700"
           : status === "viewed" ||
-              status === "sign_pending" ||
-              status === "sent_for_signature" ||
-              status === "sent_to_external_party"
+            status === "sign_pending" ||
+            status === "sent_for_signature" ||
+            status === "sent_to_external_party"
             ? "border-blue-200 bg-blue-50 text-blue-700"
             : status === "partially_signed"
               ? "border-indigo-200 bg-indigo-50 text-indigo-700"
@@ -462,6 +462,23 @@ export default function DealerReviewPage() {
 
   const agreementStatusForUi = tracking?.agreementStatus || data?.agreement?.status || null;
 
+  const normalizedAgreementStatus = (agreementStatusForUi || "").toLowerCase();
+
+  const hasInitiatedAgreement =
+    !!(
+      tracking?.requestId ||
+      tracking?.agreementId ||
+      normalizedAgreementStatus === "sent_for_signature" ||
+      normalizedAgreementStatus === "sent_to_external_party" ||
+      normalizedAgreementStatus === "sign_pending" ||
+      normalizedAgreementStatus === "viewed" ||
+      normalizedAgreementStatus === "partially_signed" ||
+      normalizedAgreementStatus === "signed" ||
+      normalizedAgreementStatus === "completed"
+    );
+
+  const isAgreementCompleted = normalizedAgreementStatus === "completed";
+
   const verificationChecklist = useMemo(() => {
     const companyReady = !!(
       data?.companyName &&
@@ -492,8 +509,9 @@ export default function DealerReviewPage() {
   }, [data, agreementStatusForUi]);
 
   const signedAgreementReady =
-    (agreementStatusForUi || "").toLowerCase() === "completed";
-
+    ["signed", "completed"].includes(
+      (agreementStatusForUi || "").toLowerCase()
+    );
   const isRejected = (data?.onboardingStatus || "").toLowerCase() === "rejected";
 
   const signedAgreementDownloadUrl =
@@ -527,6 +545,31 @@ export default function DealerReviewPage() {
     }
   };
 
+  const handleAuditTrailDownload = async () => {
+    try {
+      const res = await fetch(
+        `/api/admin/dealer-verifications/${dealerId}/audit-trail`,
+        { method: "POST" }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        alert(data.message || "Failed to prepare audit trail");
+        return;
+      }
+
+      // Now download
+      window.open(
+        `/api/admin/dealer-verifications/${dealerId}/fetch-audit-trail`,
+        "_blank"
+      );
+    } catch (err) {
+      console.error("Audit trail error:", err);
+      alert("Something went wrong while downloading audit trail");
+    }
+  };
+
   const handleAgreementAction = async (
     action: "initiate" | "refresh" | "reinitiate" | "retry"
   ) => {
@@ -541,34 +584,34 @@ export default function DealerReviewPage() {
       const payload =
         action === "initiate" || action === "reinitiate"
           ? {
-              agreementConfig: {
-                agreementName:
-                  data?.agreement?.agreementName || "Dealer Finance Enablement Agreement",
-                agreementVersion: "v1.0",
-                dateOfSigning: data?.agreement?.dateOfSigning || "",
-                mouDate: data?.agreement?.mouDate || "",
-                financierName: data?.agreement?.financierName || "",
+            agreementConfig: {
+              agreementName:
+                data?.agreement?.agreementName || "Dealer Finance Enablement Agreement",
+              agreementVersion: "v1.0",
+              dateOfSigning: data?.agreement?.dateOfSigning || "",
+              mouDate: data?.agreement?.mouDate || "",
+              financierName: data?.agreement?.financierName || "",
 
-                dealerSignerName: data?.agreement?.dealerSignerName || "",
-                dealerSignerDesignation:
-                  data?.agreement?.dealerSignerDesignation || "",
-                dealerSignerEmail: data?.agreement?.dealerSignerEmail || "",
-                dealerSignerPhone: data?.agreement?.dealerSignerPhone || "",
-                dealerSigningMethod: data?.agreement?.dealerSigningMethod || "",
+              dealerSignerName: data?.agreement?.dealerSignerName || "",
+              dealerSignerDesignation:
+                data?.agreement?.dealerSignerDesignation || "",
+              dealerSignerEmail: data?.agreement?.dealerSignerEmail || "",
+              dealerSignerPhone: data?.agreement?.dealerSignerPhone || "",
+              dealerSigningMethod: data?.agreement?.dealerSigningMethod || "",
 
-                financierSignatory: data?.agreement?.financierSignatory || null,
-                itarangSignatory1: data?.agreement?.itarangSignatory1 || null,
-                itarangSignatory2: data?.agreement?.itarangSignatory2 || null,
+              financierSignatory: data?.agreement?.financierSignatory || null,
+              itarangSignatory1: data?.agreement?.itarangSignatory1 || null,
+              itarangSignatory2: data?.agreement?.itarangSignatory2 || null,
 
-                signingOrder: ["dealer", "financier", "itarang_1", "itarang_2"],
+              signingOrder: ["dealer", "financier", "itarang_1", "itarang_2"],
 
-                isOemFinancing: !!data?.agreement?.isOemFinancing,
-                vehicleType: data?.agreement?.vehicleType || "",
-                manufacturer: data?.agreement?.manufacturer || "",
-                brand: data?.agreement?.brand || "",
-                statePresence: data?.agreement?.statePresence || "",
-              },
-            }
+              isOemFinancing: !!data?.agreement?.isOemFinancing,
+              vehicleType: data?.agreement?.vehicleType || "",
+              manufacturer: data?.agreement?.manufacturer || "",
+              brand: data?.agreement?.brand || "",
+              statePresence: data?.agreement?.statePresence || "",
+            },
+          }
           : {};
 
       const res = await fetch(
@@ -608,47 +651,26 @@ export default function DealerReviewPage() {
 
   const handleOpenAuditTrail = async () => {
     try {
-      if (!tracking?.agreementId && !data?.agreement?.agreementId) {
-        alert("Agreement is not available yet.");
+      if (!hasInitiatedAgreement) {
+        alert("Agreement has not been initiated yet. Please initiate agreement first.");
         return;
       }
 
-      if (tracking?.auditTrailUrl) {
-        window.open(tracking.auditTrailUrl, "_blank", "noopener,noreferrer");
+      if (!isAgreementCompleted) {
+        alert("Audit trail will be available only after all signers complete signing.");
         return;
       }
 
       setAuditTrailLoading(true);
 
-      const res = await fetch(
-        `/api/admin/dealer-verifications/${dealerId}/fetch-audit-trail`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
+      window.open(
+        `/api/admin/dealer-verifications/${dealerId}/fetch-audit-trail?download=1`,
+        "_blank",
+        "noopener,noreferrer"
       );
-
-      const json = await res.json();
-
-      if (json?.success && json?.data?.auditTrailUrl) {
-        await reloadDealer();
-        window.open(json.data.auditTrailUrl, "_blank", "noopener,noreferrer");
-        return;
-      }
-
-      alert(
-        "Audit trail is not available through Digio API for this agreement yet.\nPlease open Digio dashboard and download it manually."
-      );
-
-      window.open(DIGIO_DASHBOARD_URL, "_blank", "noopener,noreferrer");
     } catch (error) {
       console.error("Failed to open audit trail", error);
-      alert(
-        "Audit trail is not available right now.\nPlease check Digio dashboard."
-      );
-      window.open(DIGIO_DASHBOARD_URL, "_blank", "noopener,noreferrer");
+      alert("Audit trail is not available right now. Please check Digio dashboard.");
     } finally {
       setAuditTrailLoading(false);
     }
@@ -993,7 +1015,7 @@ export default function DealerReviewPage() {
                   </Link>
                 )}
 
-                {signedAgreementReady && (
+                {(signedAgreementReady || !!tracking?.signedAgreementUrl || !!data?.agreement?.signedAgreementUrl) && (
                   <>
                     {data.agreement?.copyUrl && (
                       <Link
@@ -1027,7 +1049,7 @@ export default function DealerReviewPage() {
               </div>
 
               <div className="mt-5 flex flex-wrap gap-3">
-                {!tracking?.agreementId && !data.agreement?.agreementId && (
+                {!hasInitiatedAgreement && (
                   <button
                     onClick={() => handleAgreementAction("initiate")}
                     disabled={agreementActionLoading !== null || isRejected}
@@ -1040,7 +1062,7 @@ export default function DealerReviewPage() {
                   </button>
                 )}
 
-                {agreementStatusForUi && agreementStatusForUi !== "completed" && (
+                {hasInitiatedAgreement && !isAgreementCompleted && (
                   <button
                     onClick={() => handleAgreementAction("refresh")}
                     disabled={agreementActionLoading !== null || isRejected}
@@ -1085,7 +1107,7 @@ export default function DealerReviewPage() {
                   disabled={
                     auditTrailLoading ||
                     isRejected ||
-                    (!tracking?.agreementId && !data?.agreement?.agreementId)
+                    !isAgreementCompleted
                   }
                   className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 >
