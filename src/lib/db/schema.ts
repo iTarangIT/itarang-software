@@ -2485,6 +2485,7 @@ export const dealerLeads = pgTable("dealer_leads", {
   dealer_name: text("dealer_name"),
   phone: text("phone").unique(),
   language: text("language"),
+  shop_name: text("shop_name"),
 
   location: text("location"),
 

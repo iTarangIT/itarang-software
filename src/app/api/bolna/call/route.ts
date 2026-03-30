@@ -7,7 +7,6 @@ export async function POST(req: NextRequest) {
 
     console.log("[BOLNA CALL] Incoming request body:", body);
 
-    // ✅ Validate phone number
     if (!body.phone) {
       return NextResponse.json(
         { success: false, error: "phone is required" },
@@ -15,7 +14,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ✅ Trigger call using triggerBolnaCall (fetches lead from DB automatically)
     const result = await triggerBolnaCall({
       phone: body.phone,
       leadId: body.leadId,
@@ -24,7 +22,6 @@ export async function POST(req: NextRequest) {
 
     console.log("[BOLNA CALL] Result:", result);
 
-    // ✅ Return result
     return NextResponse.json(result);
 
   } catch (err: any) {
