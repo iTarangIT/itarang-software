@@ -1,34 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
+import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    const res = await fetch("https://api.bolna.ai/call", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.BOLNA_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        agent_id: process.env.BOLNA_AGENT_ID,
-        recipient_phone_number: body.phone,
-        from_phone_number: process.env.BOLNA_FROM_NUMBER,
-        agent_data: {
-          voice_id: "Vikram",
-        },
-      }),
+    console.log("[BOLNA CALL] Incoming request body:", body);
+
+    // ✅ Validate phone number
+    if (!body.phone) {
+      return NextResponse.json(
+        { success: false, error: "phone is required" },
+        { status: 400 },
+      );
+    }
+
+    // ✅ Trigger call using triggerBolnaCall (fetches lead from DB automatically)
+    const result = await triggerBolnaCall({
+      phone: body.phone,
+      leadId: body.leadId,
+      scheduledAt: body.scheduledAt,
     });
 
-    const json = await res.json();
+    console.log("[BOLNA CALL] Result:", result);
 
-    return NextResponse.json({
-      success: true,
-      data: json,
-    });
+    // ✅ Return result
+    return NextResponse.json(result);
+
   } catch (err: any) {
-    console.error("Bolna test error:", err);
-
+    console.error("[BOLNA CALL] Error:", err);
     return NextResponse.json(
       { success: false, error: err.message },
       { status: 500 },
