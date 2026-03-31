@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 import {
   Users,
@@ -18,10 +18,10 @@ import {
   ShieldCheck,
   LifeBuoy,
   Lock,
-} from 'lucide-react';
-import Link from 'next/link';
-import { useEffect, useState, type ReactNode } from 'react';
-import { useAuth } from '@/components/auth/AuthProvider';
+} from "lucide-react";
+import Link from "next/link";
+import { useEffect, useState, type ReactNode } from "react";
+import { useAuth } from "@/components/auth/AuthProvider";
 
 type DealerApiData = {
   id: string | null;
@@ -113,10 +113,10 @@ function DealerApprovalModal({
               Congratulations, your iTarang dealer account is now active
             </h2>
             <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-slate-600">
-              Your onboarding review has been completed successfully. Full dashboard
-              access has been enabled, and you can now manage leads, orders,
-              inventory, service operations, and finance workflows from your
-              iTarang dealer workspace.
+              Your onboarding review has been completed successfully. Full
+              dashboard access has been enabled, and you can now manage leads,
+              orders, inventory, service operations, and finance workflows from
+              your iTarang dealer workspace.
             </p>
           </div>
 
@@ -129,7 +129,7 @@ function DealerApprovalModal({
                 </span>
               </div>
               <p className="mt-2 text-sm font-semibold text-slate-900">
-                {companyName || 'Dealer Account'}
+                {companyName || "Dealer Account"}
               </p>
             </div>
 
@@ -141,7 +141,7 @@ function DealerApprovalModal({
                 </span>
               </div>
               <p className="mt-2 text-sm font-semibold text-slate-900">
-                {dealerCode || 'Not available'}
+                {dealerCode || "Not available"}
               </p>
             </div>
 
@@ -153,13 +153,16 @@ function DealerApprovalModal({
                 </span>
               </div>
               <p className="mt-2 text-sm font-semibold text-slate-900">
-                {approvedAt ? new Date(approvedAt).toLocaleString() : 'Just now'}
+                {approvedAt
+                  ? new Date(approvedAt).toLocaleString()
+                  : "Just now"}
               </p>
             </div>
           </div>
 
           <div className="mt-6 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
-            Your account has been activated securely and no further action is required at this time.
+            Your account has been activated securely and no further action is
+            required at this time.
           </div>
         </div>
 
@@ -203,16 +206,18 @@ export default function DealerDashboard() {
   });
 
   const [loading, setLoading] = useState(true);
-  const [dealerData, setDealerData] = useState<DealerDashboardData | null>(null);
+  const [dealerData, setDealerData] = useState<DealerDashboardData | null>(
+    null,
+  );
   const [showApprovalModal, setShowApprovalModal] = useState(false);
 
   useEffect(() => {
-    const savedDealerData = localStorage.getItem('dealerDashboardData');
+    const savedDealerData = localStorage.getItem("dealerDashboardData");
     if (savedDealerData) {
       try {
         setDealerData(JSON.parse(savedDealerData) as DealerDashboardData);
       } catch (error) {
-        console.error('Failed to parse dealer dashboard data', error);
+        console.error("Failed to parse dealer dashboard data", error);
       }
     }
   }, []);
@@ -220,14 +225,15 @@ export default function DealerDashboard() {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const res = await fetch('/api/dealer/stats', { cache: 'no-store' });
-        const json: { success?: boolean; data?: DealerStatsResponse } = await res.json();
+        const res = await fetch("/api/dealer/stats", { cache: "no-store" });
+        const json: { success?: boolean; data?: DealerStatsResponse } =
+          await res.json();
 
         if (json.success && json.data) {
           setStats(json.data);
         }
       } catch (error) {
-        console.error('Failed to load stats', error);
+        console.error("Failed to load stats", error);
       } finally {
         setLoading(false);
       }
@@ -244,7 +250,7 @@ export default function DealerDashboard() {
     if (!dealer?.id || !isApproved) return;
 
     const seenKey = `dealerApprovalSeen-${dealer.id}`;
-    const alreadySeen = localStorage.getItem(seenKey) === 'true';
+    const alreadySeen = localStorage.getItem(seenKey) === "true";
 
     if (!alreadySeen) {
       setShowApprovalModal(true);
@@ -253,13 +259,15 @@ export default function DealerDashboard() {
 
   const handleCloseApprovalModal = () => {
     if (dealer?.id) {
-      localStorage.setItem(`dealerApprovalSeen-${dealer.id}`, 'true');
+      localStorage.setItem(`dealerApprovalSeen-${dealer.id}`, "true");
     }
     setShowApprovalModal(false);
   };
 
   if (authLoading) {
-    return <div className="p-8 text-sm text-slate-500">Loading dashboard...</div>;
+    return (
+      <div className="p-8 text-sm text-slate-500">Loading dashboard...</div>
+    );
   }
 
   const currentDealerName =
@@ -268,119 +276,113 @@ export default function DealerDashboard() {
     currentUser?.name ||
     dealerData?.dealerDisplayName ||
     dealerData?.companyName ||
-    'Dealer';
+    "Dealer";
 
   const currentDealerId =
     dealer?.dealerCode ||
     currentUser?.dealer_id ||
     dealerData?.dealerId ||
-    'Pending Approval';
+    "Pending Approval";
 
   const currentCompanyType =
-    currentUser?.company_type ||
-    dealerData?.companyType ||
-    'Not available';
+    currentUser?.company_type || dealerData?.companyType || "Not available";
 
   const currentGst =
-    currentUser?.gst_number ||
-    dealerData?.gstNumber ||
-    'Not available';
+    currentUser?.gst_number || dealerData?.gstNumber || "Not available";
 
   const financeEnabledValue =
-    typeof dealer?.financeEnabled === 'boolean'
+    typeof dealer?.financeEnabled === "boolean"
       ? dealer.financeEnabled
-        ? 'Yes'
-        : 'No'
-      : typeof currentUser?.finance_enabled === 'boolean'
-      ? currentUser.finance_enabled
-        ? 'Yes'
-        : 'No'
-      : dealerData?.financeEnabled?.toLowerCase() === 'yes'
-      ? 'Yes'
-      : 'No';
+        ? "Yes"
+        : "No"
+      : typeof currentUser?.finance_enabled === "boolean"
+        ? currentUser.finance_enabled
+          ? "Yes"
+          : "No"
+        : dealerData?.financeEnabled?.toLowerCase() === "yes"
+          ? "Yes"
+          : "No";
 
   const submittedAtValue =
-    dealer?.submittedAt ||
-    currentUser?.submitted_at ||
-    dealerData?.submittedAt;
+    dealer?.submittedAt || currentUser?.submitted_at || dealerData?.submittedAt;
 
-  const approvalStatusLabel = isApproved ? 'Approved' : 'Under Review';
+  const approvalStatusLabel = isApproved ? "Approved" : "Under Review";
 
   const metrics = [
     {
-      title: 'Stock Available',
+      title: "Stock Available",
       value: `${metricsData.inventoryCount} Units`,
-      trend: '+0%',
+      trend: "+0%",
       icon: Package,
-      color: 'text-brand-600',
-      subtext: 'in warehouse',
-      trendColor: 'text-gray-400',
+      color: "text-brand-600",
+      subtext: "in warehouse",
+      trendColor: "text-gray-400",
     },
     {
-      title: 'Stock Deployed',
-      value: '0 EVs',
-      trend: '0',
+      title: "Stock Deployed",
+      value: "0 EVs",
+      trend: "0",
       icon: TruckStart,
-      color: 'text-blue-600',
-      subtext: 'on the road',
-      trendColor: 'text-gray-400',
+      color: "text-blue-600",
+      subtext: "on the road",
+      trendColor: "text-gray-400",
     },
     {
-      title: 'Delayed Payment',
-      value: '₹ 0',
-      trend: '0%',
+      title: "Delayed Payment",
+      value: "₹ 0",
+      trend: "0%",
       icon: AlertCircle,
-      color: 'text-red-600',
-      subtext: 'Outstanding',
-      trendColor: 'text-gray-400',
+      color: "text-red-600",
+      subtext: "Outstanding",
+      trendColor: "text-gray-400",
     },
     {
-      title: 'On-time Payment',
+      title: "On-time Payment",
       value:
         metricsData.totalPayments > 1000
           ? `₹ ${(metricsData.totalPayments / 1000).toFixed(1)}K`
           : `₹ ${metricsData.totalPayments}`,
-      trend: '+0%',
+      trend: "+0%",
       icon: CheckCircle2,
-      color: 'text-green-600',
-      subtext: 'Total Collected',
-      trendColor: 'text-gray-400',
+      color: "text-green-600",
+      subtext: "Total Collected",
+      trendColor: "text-gray-400",
     },
     {
-      title: 'Total Customers',
+      title: "Total Customers",
       value: metricsData.totalLeads.toString(),
       trend: `+${metricsData.totalLeads}`,
       icon: Users,
-      color: 'text-indigo-600',
-      subtext: 'total leads',
-      trendColor: 'text-green-600',
+      color: "text-indigo-600",
+      subtext: "total leads",
+      trendColor: "text-green-600",
     },
     {
-      title: 'Loan Applied',
+      title: "Loan Applied",
       value: metricsData.loanCount.toString(),
       trend: `+${metricsData.loanCount}`,
       icon: FileText,
-      color: 'text-orange-600',
-      subtext: 'applications',
-      trendColor: 'text-green-600',
+      color: "text-orange-600",
+      subtext: "applications",
+      trendColor: "text-green-600",
     },
     {
-      title: 'Loan Cleared',
-      value: '0',
-      trend: '0',
+      title: "Loan Cleared",
+      value: "0",
+      trend: "0",
       icon: CheckCircle2,
-      color: 'text-emerald-600',
-      subtext: 'funded',
-      trendColor: 'text-gray-400',
+      color: "text-emerald-600",
+      subtext: "funded",
+      trendColor: "text-gray-400",
     },
     {
-      title: 'KYC Rejected',
-      value: '0',
-      trend: '0',
+      title: "KYC Rejected",
+      value: "0",
+      trend: "0",
       icon: XCircle,
-      color: 'text-red-500',
-      subtext: 'discrepancies',
-      trendColor: 'text-gray-400',
+      color: "text-red-500",
+      subtext: "discrepancies",
+      trendColor: "text-gray-400",
     },
   ];
 
@@ -400,8 +402,8 @@ export default function DealerDashboard() {
         </h1>
         <p className="mt-1 text-gray-500">
           {isApproved
-            ? 'Overview of your iTarang dealer business'
-            : 'Your onboarding is under review. Full dashboard access will unlock after approval.'}
+            ? "Overview of your iTarang dealer business"
+            : "Your onboarding is under review. Full dashboard access will unlock after approval."}
         </p>
       </div>
 
@@ -416,8 +418,9 @@ export default function DealerDashboard() {
                 Account under review
               </h2>
               <p className="mt-1 text-sm text-amber-800">
-                Your onboarding has been submitted successfully. Once iTarang approves your
-                documents and activates your dealer account, your full dealer dashboard will be unlocked.
+                Your onboarding has been submitted successfully. Once iTarang
+                approves your documents and activates your dealer account, your
+                full dealer dashboard will be unlocked.
               </p>
             </div>
           </div>
@@ -435,8 +438,9 @@ export default function DealerDashboard() {
                 Account active
               </h2>
               <p className="mt-1 text-sm text-emerald-800">
-                Your dealer workspace is fully enabled. You can now manage leads, loan workflows,
-                orders, inventory, and support operations from this dashboard.
+                Your dealer workspace is fully enabled. You can now manage
+                leads, loan workflows, orders, inventory, and support operations
+                from this dashboard.
               </p>
             </div>
           </div>
@@ -454,7 +458,8 @@ export default function DealerDashboard() {
                 {currentDealerName}
               </h2>
               <p className="mt-2 text-sm text-gray-500">
-                This dealer profile reflects the latest approved onboarding status from iTarang.
+                This dealer profile reflects the latest approved onboarding
+                status from iTarang.
               </p>
             </div>
 
@@ -465,28 +470,36 @@ export default function DealerDashboard() {
 
           <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-gray-500">Dealer Name</p>
+              <p className="text-xs uppercase tracking-wide text-gray-500">
+                Dealer Name
+              </p>
               <p className="mt-2 text-base font-semibold text-gray-900">
                 {currentDealerName}
               </p>
             </div>
 
             <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-blue-700">Dealer ID</p>
+              <p className="text-xs uppercase tracking-wide text-blue-700">
+                Dealer ID
+              </p>
               <p className="mt-2 inline-flex rounded-full border border-blue-200 bg-white px-3 py-1 text-sm font-bold text-[#1F5C8F]">
                 {currentDealerId}
               </p>
             </div>
 
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-gray-500">Company Type</p>
+              <p className="text-xs uppercase tracking-wide text-gray-500">
+                Company Type
+              </p>
               <p className="mt-2 text-base font-semibold text-gray-900">
                 {currentCompanyType}
               </p>
             </div>
 
             <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
-              <p className="text-xs uppercase tracking-wide text-gray-500">GST Number</p>
+              <p className="text-xs uppercase tracking-wide text-gray-500">
+                GST Number
+              </p>
               <p className="mt-2 text-base font-semibold text-gray-900">
                 {currentGst}
               </p>
@@ -509,20 +522,20 @@ export default function DealerDashboard() {
             <div
               className={`rounded-xl border px-4 py-3 ${
                 isApproved
-                  ? 'border-emerald-100 bg-emerald-50'
-                  : 'border-amber-100 bg-amber-50'
+                  ? "border-emerald-100 bg-emerald-50"
+                  : "border-amber-100 bg-amber-50"
               }`}
             >
               <p
                 className={`text-xs uppercase tracking-wide ${
-                  isApproved ? 'text-emerald-700' : 'text-amber-700'
+                  isApproved ? "text-emerald-700" : "text-amber-700"
                 }`}
               >
                 Current Status
               </p>
               <p
                 className={`mt-1 text-sm font-semibold ${
-                  isApproved ? 'text-emerald-800' : 'text-amber-800'
+                  isApproved ? "text-emerald-800" : "text-amber-800"
                 }`}
               >
                 {approvalStatusLabel}
@@ -530,22 +543,30 @@ export default function DealerDashboard() {
             </div>
 
             <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-wide text-gray-500">Finance Enabled</p>
+              <p className="text-xs uppercase tracking-wide text-gray-500">
+                Finance Enabled
+              </p>
               <p className="mt-1 text-sm font-semibold text-gray-900">
                 {financeEnabledValue}
               </p>
             </div>
 
             <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-wide text-gray-500">Submitted At</p>
+              <p className="text-xs uppercase tracking-wide text-gray-500">
+                Submitted At
+              </p>
               <p className="mt-1 text-sm font-semibold text-gray-900">
-                {submittedAtValue ? new Date(submittedAtValue).toLocaleString() : 'Not available'}
+                {submittedAtValue
+                  ? new Date(submittedAtValue).toLocaleString()
+                  : "Not available"}
               </p>
             </div>
 
             {dealer?.approvedAt && (
               <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-wide text-gray-500">Approved At</p>
+                <p className="text-xs uppercase tracking-wide text-gray-500">
+                  Approved At
+                </p>
                 <p className="mt-1 text-sm font-semibold text-gray-900">
                   {new Date(dealer.approvedAt).toLocaleString()}
                 </p>
@@ -609,8 +630,12 @@ export default function DealerDashboard() {
                   <FileCheck className="h-6 w-6" />
                 </div>
                 <div>
-                  <h3 className="mb-1 text-xl font-bold text-gray-900">Process Loan</h3>
-                  <p className="text-sm text-gray-500">Upload docs for financing</p>
+                  <h3 className="mb-1 text-xl font-bold text-gray-900">
+                    Process Loan
+                  </h3>
+                  <p className="text-sm text-gray-500">
+                    Upload docs for financing
+                  </p>
                 </div>
               </div>
             </Link>
@@ -624,8 +649,12 @@ export default function DealerDashboard() {
                   <Battery className="h-6 w-6" />
                 </div>
                 <div>
-                  <h3 className="mb-1 text-xl font-bold text-gray-900">Add Asset</h3>
-                  <p className="text-sm text-gray-500">Register new vehicle/battery</p>
+                  <h3 className="mb-1 text-xl font-bold text-gray-900">
+                    Add Asset
+                  </h3>
+                  <p className="text-sm text-gray-500">
+                    Register new vehicle/battery
+                  </p>
                 </div>
               </div>
             </Link>
@@ -638,16 +667,20 @@ export default function DealerDashboard() {
                 className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
               >
                 <div className="mb-3 flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-500">{metric.title}</span>
+                  <span className="text-sm font-medium text-gray-500">
+                    {metric.title}
+                  </span>
                   <metric.icon className={`h-4 w-4 ${metric.color}`} />
                 </div>
                 <div className="mb-2 flex items-end gap-2">
-                  <span className="text-2xl font-bold text-gray-900">{metric.value}</span>
+                  <span className="text-2xl font-bold text-gray-900">
+                    {metric.value}
+                  </span>
                   <span
                     className={`rounded px-1.5 py-0.5 text-xs font-semibold ${
-                      metric.trendColor.includes('green')
-                        ? 'bg-green-50 text-green-700'
-                        : 'bg-gray-100 text-gray-500'
+                      metric.trendColor.includes("green")
+                        ? "bg-green-50 text-green-700"
+                        : "bg-gray-100 text-gray-500"
                     }`}
                   >
                     {metric.trend}
@@ -665,9 +698,11 @@ export default function DealerDashboard() {
                   Boost your sales! Send SMS/WhatsApp updates
                 </h3>
                 <p className="max-w-xl text-blue-100">
-                  Reach all your customers instantly for just{' '}
-                  <span className="font-semibold text-white">₹99/- per month</span>. Drive
-                  engagement with targeted campaigns.
+                  Reach all your customers instantly for just{" "}
+                  <span className="font-semibold text-white">
+                    ₹99/- per month
+                  </span>
+                  . Drive engagement with targeted campaigns.
                 </p>
               </div>
               <Link
@@ -686,7 +721,9 @@ export default function DealerDashboard() {
             <div className="flex items-center justify-between border-b border-gray-100 p-6">
               <div>
                 <h3 className="font-bold text-gray-900">Recent Leads</h3>
-                <p className="text-sm text-gray-500">Latest potential customers added</p>
+                <p className="text-sm text-gray-500">
+                  Latest potential customers added
+                </p>
               </div>
               <Link
                 href="/dealer-portal/leads"
@@ -700,13 +737,18 @@ export default function DealerDashboard() {
               {loading ? (
                 <div className="space-y-4 p-8">
                   {[1, 2, 3].map((i) => (
-                    <div key={i} className="h-16 animate-pulse rounded-xl bg-gray-50" />
+                    <div
+                      key={i}
+                      className="h-16 animate-pulse rounded-xl bg-gray-50"
+                    />
                   ))}
                 </div>
               ) : (
                 <div className="space-y-1">
                   {stats.recentLeads.length > 0 ? (
-                    stats.recentLeads.map((lead) => <LeadRow key={lead.id} lead={lead} />)
+                    stats.recentLeads.map((lead) => (
+                      <LeadRow key={lead.id} lead={lead} />
+                    ))
                   ) : (
                     <>
                       <MockLeadRow
@@ -778,7 +820,9 @@ function LockedActionCard({
   return (
     <div className="rounded-2xl border border-gray-200 bg-gray-50 p-6 opacity-95">
       <div className="flex items-start justify-between">
-        <div className="w-fit rounded-xl bg-gray-200 p-3 text-gray-500">{icon}</div>
+        <div className="w-fit rounded-xl bg-gray-200 p-3 text-gray-500">
+          {icon}
+        </div>
         <div className="rounded-xl bg-white p-2 text-gray-400">
           <Lock className="h-5 w-5" />
         </div>
@@ -801,7 +845,9 @@ function ReviewTimelineCard() {
           <ShieldCheck className="h-6 w-6 text-emerald-700" />
         </div>
         <div>
-          <h3 className="text-xl font-bold text-gray-900">Review in progress</h3>
+          <h3 className="text-xl font-bold text-gray-900">
+            Review in progress
+          </h3>
           <p className="text-sm text-gray-500">What happens next</p>
         </div>
       </div>
@@ -828,12 +874,12 @@ function StepRow({
     <div className="flex items-center gap-3 rounded-2xl bg-slate-50 px-4 py-3">
       <div
         className={`h-3 w-3 rounded-full ${
-          done ? 'bg-emerald-500' : active ? 'bg-amber-500' : 'bg-slate-300'
+          done ? "bg-emerald-500" : active ? "bg-amber-500" : "bg-slate-300"
         }`}
       />
       <span
         className={`text-sm font-medium ${
-          done || active ? 'text-slate-800' : 'text-slate-500'
+          done || active ? "text-slate-800" : "text-slate-500"
         }`}
       >
         {label}
@@ -856,8 +902,8 @@ function SupportCard() {
       </div>
 
       <p className="text-sm leading-6 text-slate-600">
-        If your onboarding is taking longer than expected or any document needs correction,
-        contact the support team for assistance.
+        If your onboarding is taking longer than expected or any document needs
+        correction, contact the support team for assistance.
       </p>
 
       <button className="mt-5 rounded-2xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
@@ -886,22 +932,24 @@ function MockLeadRow({
         </div>
         <span className="font-medium text-gray-900">{name}</span>
       </div>
-      <span className={`rounded-full px-3 py-1 text-xs font-medium ${color}`}>{status}</span>
+      <span className={`rounded-full px-3 py-1 text-xs font-medium ${color}`}>
+        {status}
+      </span>
     </div>
   );
 }
 
 function LeadRow({ lead }: { lead: LeadItem }) {
   const getStatusColor = (status: string) => {
-    switch ((status || '').toLowerCase()) {
-      case 'hot':
-        return 'bg-red-50 text-red-600';
-      case 'warm':
-        return 'bg-blue-50 text-blue-600';
-      case 'cold':
-        return 'bg-gray-100 text-gray-700';
+    switch ((status || "").toLowerCase()) {
+      case "hot":
+        return "bg-red-50 text-red-600";
+      case "warm":
+        return "bg-blue-50 text-blue-600";
+      case "cold":
+        return "bg-gray-100 text-gray-700";
       default:
-        return 'bg-gray-100 text-gray-600';
+        return "bg-gray-100 text-gray-600";
     }
   };
 
@@ -912,18 +960,20 @@ function LeadRow({ lead }: { lead: LeadItem }) {
     >
       <div className="flex items-center gap-4">
         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-50 text-sm font-bold uppercase text-brand-600">
-          {lead.owner_name?.[0] || 'U'}
+          {lead.owner_name?.[0] || "U"}
         </div>
         <div>
-          <p className="font-medium text-gray-900">{lead.owner_name || 'Unnamed Lead'}</p>
+          <p className="font-medium text-gray-900">
+            {lead.owner_name || "Unnamed Lead"}
+          </p>
         </div>
       </div>
       <span
         className={`rounded-full px-3 py-1 text-xs font-medium capitalize ${getStatusColor(
-          lead.interest_level || 'new'
+          lead.interest_level || "new",
         )}`}
       >
-        {lead.interest_level || 'New'}
+        {lead.interest_level || "New"}
       </span>
     </Link>
   );
