@@ -7,7 +7,11 @@ import { ScraperRunsTable } from "./ScraperRunsTable";
 import { QueryManager } from "./QueryManager";
 import { ScheduleConfig } from "./ScheduleConfig";
 
-export function ScraperDashboard() {
+interface ScraperDashboardProps {
+  onSelectRun?: (runId: string) => void;
+}
+
+export function ScraperDashboard({ onSelectRun }: ScraperDashboardProps) {
   const queryClient = useQueryClient();
 
   const [toast, setToast] = useState<{
@@ -34,12 +38,8 @@ export function ScraperDashboard() {
 
       const res = await fetch("/api/scraper/run", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          query: activeQuery.query_text,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: activeQuery.query_text }),
       });
 
       const json = await res.json();
@@ -56,9 +56,7 @@ export function ScraperDashboard() {
         type: "success",
         msg: `Scraper started — Run ID: ${data.run_id}`,
       });
-
       queryClient.invalidateQueries({ queryKey: ["scraper-runs"] });
-
       setTimeout(() => setToast(null), 6000);
     },
 
@@ -76,7 +74,6 @@ export function ScraperDashboard() {
           <div className="w-10 h-10 bg-teal-50 rounded-xl flex items-center justify-center shadow-sm">
             <Search className="w-5 h-5 text-teal-600" />
           </div>
-
           <div>
             <h1 className="text-xl font-bold text-gray-900">
               Dealer Lead Scraper
@@ -87,7 +84,6 @@ export function ScraperDashboard() {
           </div>
         </div>
 
-        {/* ✅ MOVED BLACK SEARCH UI HERE */}
         <QueryManager />
       </div>
 
@@ -119,7 +115,6 @@ export function ScraperDashboard() {
             JustDial · IndiaMART · Sulekha · Google
           </p>
         </div>
-
         <div className="bg-teal-50/60 border border-teal-100 rounded-xl p-4">
           <p className="text-xs text-teal-600 font-medium mb-0.5">
             Deduplication
@@ -128,11 +123,8 @@ export function ScraperDashboard() {
             Phone · Name + City · Source URL
           </p>
         </div>
-
         <div className="bg-teal-50/60 border border-teal-100 rounded-xl p-4">
-          <p className="text-xs text-teal-600 font-medium mb-0.5">
-            Assignment
-          </p>
+          <p className="text-xs text-teal-600 font-medium mb-0.5">Assignment</p>
           <p className="text-sm text-gray-700">
             Assign new leads to Sales Managers
           </p>
@@ -154,33 +146,15 @@ export function ScraperDashboard() {
         >
           Run History
         </button>
-
-        {/* <button
-          onClick={() => setTab("queries")}
-          className={`px-4 py-1.5 rounded-md text-sm font-medium ${
-            tab === "queries"
-              ? "bg-white text-gray-900 shadow-sm"
-              : "text-gray-500"
-          }`}
-        >
-          Search Queries
-        </button> */}
       </div>
 
       {/* Tab Content */}
-      {tab === "history" ? (
+      {tab === "history" && (
         <div>
           <h2 className="text-sm font-semibold text-gray-700 mb-3">
             Run History
           </h2>
-          <ScraperRunsTable />
-        </div>
-      ) : (
-        <div>
-          <h2 className="text-sm font-semibold text-gray-700 mb-3">
-            Manage Search Queries
-          </h2>
-          <QueryManager showInput={false} />
+          <ScraperRunsTable onSelectRun={onSelectRun} />
         </div>
       )}
     </div>

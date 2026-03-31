@@ -70,8 +70,6 @@ export function QueryManager({ showInput = true }: { showInput?: boolean }) {
           </Button>
         </div>
       )}
-
-      {/* 👉 later you can add saved queries list here */}
     </div>
   );
 }
