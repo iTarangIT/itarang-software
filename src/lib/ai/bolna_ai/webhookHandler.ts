@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { updateLeadAfterCall } from "../storage/leadStore";
 import { dealerLeads } from "@/lib/db/schema";
 import { callQueue } from "@/lib/queue/callQueue";
+import { dialerSession } from "@/lib/queue/dialerSession";
 
 function getValidDate(input: any): Date | null {
   if (!input) return null;
@@ -150,25 +151,15 @@ export async function handleBolnaWebhook(body: any) {
 
       await callQueue.add(
         "call-lead",
-        {
-          phone,
-          leadId: lead.id,
-        },
+        { phone, leadId: lead.id },
         {
           delay: Math.max(delay, 0),
           attempts: 3,
-          backoff: {
-            type: "exponential",
-            delay: 5000,
-          },
+          backoff: { type: "exponential", delay: 5000 },
         },
       );
 
-      console.log("JOB ADDED:", {
-        phone,
-        leadId: lead.id,
-        delay,
-      });
+      console.log("JOB ADDED:", { phone, leadId: lead.id, delay });
     }
 
     await db
@@ -188,6 +179,59 @@ export async function handleBolnaWebhook(body: any) {
         .update(dealerLeads)
         .set({ current_status: "qualified" })
         .where(eq(dealerLeads.id, lead.id));
+    }
+
+    // ── AI Dialer: auto-call next lead when session is active ──
+    if (dialerSession.isActive()) {
+      const nextLeadId = dialerSession.getNext();
+
+      if (nextLeadId) {
+        const nextLead = await db.query.dealerLeads.findFirst({
+          where: (l, { eq }) => eq(l.id, nextLeadId),
+        });
+
+        if (nextLead?.phone) {
+          console.log("AI DIALER: calling next lead", {
+            id: nextLead.id,
+            phone: nextLead.phone,
+            score: nextLead.final_intent_score,
+          });
+
+          await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/bolna/call`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              phone: nextLead.phone,
+              leadId: nextLead.id,
+            }),
+          });
+        } else {
+          // No phone on this lead — skip and try the next one
+          console.log("AI DIALER: skipping lead with no phone", nextLeadId);
+          const skipToId = dialerSession.getNext();
+          if (skipToId) {
+            const skipLead = await db.query.dealerLeads.findFirst({
+              where: (l, { eq }) => eq(l.id, skipToId),
+            });
+            if (skipLead?.phone) {
+              await fetch(
+                `${process.env.NEXT_PUBLIC_BASE_URL}/api/bolna/call`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    phone: skipLead.phone,
+                    leadId: skipLead.id,
+                  }),
+                },
+              );
+            }
+          }
+        }
+      } else {
+        // Queue exhausted
+        console.log("AI DIALER: queue complete, all leads called");
+      }
     }
   } catch (err) {
     console.error("Webhook handler error:", err);

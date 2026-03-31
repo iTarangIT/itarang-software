@@ -24,7 +24,10 @@ export async function GET(req: NextRequest) {
         .select()
         .from(scraperLeads)
         .where(where)
-        .orderBy(desc(scraperLeads.createdAt))
+        .orderBy(
+          sql`CASE WHEN ${scraperLeads.phone} IS NOT NULL AND ${scraperLeads.phone} != '' THEN 0 ELSE 1 END`,
+          desc(scraperLeads.createdAt),
+        )
         .limit(limit)
         .offset(offset),
       db
