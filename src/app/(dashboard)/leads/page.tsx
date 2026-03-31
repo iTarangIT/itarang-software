@@ -907,11 +907,35 @@ export default function LeadsUnifiedPage() {
                               {intentScore}
                             </span>
                           )}
-                          <Link href={`/leads/${lead.id}`}>
-                            <button className="px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50 transition-all">
-                              View
-                            </button>
-                          </Link>
+                          <button
+                            onClick={async () => {
+                              try {
+                                const res = await fetch("/api/leads/assign", {
+                                  method: "POST",
+                                  headers: {
+                                    "Content-Type": "application/json",
+                                  },
+                                  body: JSON.stringify({
+                                    leadId: lead.id,
+                                  }),
+                                });
+
+                                const data = await res.json();
+
+                                if (data.success) {
+                                  alert("Lead assigned to Sales Head");
+                                } else {
+                                  alert("Failed to assign lead");
+                                }
+                              } catch (err) {
+                                console.error(err);
+                                alert("Something went wrong");
+                              }
+                            }}
+                            className="px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50 transition-all"
+                          >
+                            Assign to Sales Head
+                          </button>
                         </div>
                       </div>
                     </div>
