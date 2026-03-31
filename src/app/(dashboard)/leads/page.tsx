@@ -22,11 +22,12 @@ import {
   PhoneCall,
 } from "lucide-react";
 import { CallButton } from "@/components/leads/call-button";
+import { ScraperDashboard } from "@/components/scraper/ScraperDashboard";
+import { RunDetailView } from "@/components/scraper/RunDetailView";
 
 type Tab = "leads" | "scraper" | "converted";
 type DialerPhase = "idle" | "calling" | "countdown";
 
-// ─── STATUS CONFIGS ───────────────────────────────────────────
 const STATUS_CONFIG: Record<
   string,
   { label: string; bg: string; text: string; dot: string }
@@ -155,8 +156,6 @@ function formatDate(date: string | null) {
     year: "numeric",
   });
 }
-
-// ─── Dialer eligibility helpers ───────────────────────────────
 function isCalledToday(lead: any): boolean {
   const history: any[] = lead.follow_up_history ?? [];
   if (history.length === 0) return false;
@@ -170,7 +169,6 @@ function isCalledToday(lead: any): boolean {
     lastCall.getDate() === today.getDate()
   );
 }
-
 function buildDialerQueue(leads: any[]): any[] {
   return [...leads]
     .filter((l) => {
@@ -182,7 +180,6 @@ function buildDialerQueue(leads: any[]): any[] {
     .sort((a, b) => (b.final_intent_score ?? 0) - (a.final_intent_score ?? 0));
 }
 
-// ─── PAGINATION ───────────────────────────────────────────────
 function Pagination({
   page,
   total,
@@ -223,7 +220,11 @@ function Pagination({
             <button
               key={p}
               onClick={() => onChange(p)}
-              className={`w-8 h-8 rounded-lg text-xs font-medium transition-all ${p === page ? "bg-gray-900 text-white" : "border border-gray-200 text-gray-600 hover:bg-gray-50"}`}
+              className={`w-8 h-8 rounded-lg text-xs font-medium transition-all ${
+                p === page
+                  ? "bg-gray-900 text-white"
+                  : "border border-gray-200 text-gray-600 hover:bg-gray-50"
+              }`}
             >
               {p}
             </button>
@@ -241,7 +242,6 @@ function Pagination({
   );
 }
 
-// ─── AI DIALER BANNER ─────────────────────────────────────────
 function AiDialerBanner({
   phase,
   currentLead,
@@ -263,7 +263,6 @@ function AiDialerBanner({
 }) {
   return (
     <div className="bg-gray-900 border border-gray-700 rounded-xl px-5 py-4 mb-4 flex items-center justify-between gap-4">
-      {/* Status */}
       <div className="flex items-center gap-3 min-w-0 flex-1">
         <div
           className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${phase === "calling" ? "bg-emerald-500" : "bg-amber-500"}`}
@@ -315,8 +314,6 @@ function AiDialerBanner({
           )}
         </div>
       </div>
-
-      {/* Progress bar */}
       <div className="hidden md:flex flex-col items-center gap-1.5 shrink-0">
         <p className="text-xs text-gray-400 tabular-nums">
           {callsMade} / {totalEligible} calls
@@ -333,8 +330,6 @@ function AiDialerBanner({
           />
         </div>
       </div>
-
-      {/* Actions */}
       <div className="flex items-center gap-2 shrink-0">
         {phase === "countdown" && (
           <button
@@ -355,27 +350,21 @@ function AiDialerBanner({
   );
 }
 
-// ─── MAIN PAGE ────────────────────────────────────────────────
 export default function LeadsUnifiedPage() {
   const [tab, setTab] = useState<Tab>("leads");
   const [search, setSearch] = useState("");
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null); // ← NEW
 
   const [leads, setLeads] = useState<any[]>([]);
   const [leadsTotal, setLeadsTotal] = useState(0);
   const [leadsPage, setLeadsPage] = useState(1);
   const [leadsLoading, setLeadsLoading] = useState(false);
 
-  const [scraperLeads, setScraperLeads] = useState<any[]>([]);
-  const [scraperTotal, setScraperTotal] = useState(0);
-  const [scraperPage, setScraperPage] = useState(1);
-  const [scraperLoading, setScraperLoading] = useState(false);
-
   const [convertedLeads, setConvertedLeads] = useState<any[]>([]);
   const [convertedTotal, setConvertedTotal] = useState(0);
   const [convertedPage, setConvertedPage] = useState(1);
   const [convertedLoading, setConvertedLoading] = useState(false);
 
-  // ─── AI Dialer state ─────────────────────────────────────────
   const [dialerOn, setDialerOn] = useState(false);
   const [dialerPhase, setDialerPhase] = useState<DialerPhase>("idle");
   const [dialerQueue, setDialerQueue] = useState<any[]>([]);
@@ -385,13 +374,11 @@ export default function LeadsUnifiedPage() {
 
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
   const stopRef = useRef(false);
-  // keep latest queue/index accessible inside interval callbacks
   const queueRef = useRef<any[]>([]);
   const indexRef = useRef(0);
 
   const LIMIT = 10;
 
-  // ─── Fetch functions ──────────────────────────────────────────
   const fetchLeads = useCallback(async (page: number, q: string) => {
     setLeadsLoading(true);
     try {
@@ -405,22 +392,6 @@ export default function LeadsUnifiedPage() {
       }
     } finally {
       setLeadsLoading(false);
-    }
-  }, []);
-
-  const fetchScraperLeads = useCallback(async (page: number, q: string) => {
-    setScraperLoading(true);
-    try {
-      const res = await fetch(
-        `/api/scraper-leads?page=${page}&limit=${LIMIT}&search=${encodeURIComponent(q)}`,
-      );
-      const data = await res.json();
-      if (data.success) {
-        setScraperLeads(data.leads);
-        setScraperTotal(data.total);
-      }
-    } finally {
-      setScraperLoading(false);
     }
   }, []);
 
@@ -441,19 +412,16 @@ export default function LeadsUnifiedPage() {
   }, []);
 
   useEffect(() => {
-    if (tab === "scraper") fetchScraperLeads(scraperPage, search);
     if (tab === "leads") fetchLeads(leadsPage, search);
     if (tab === "converted") fetchConvertedLeads(convertedPage, search);
-  }, [tab, leadsPage, scraperPage, convertedPage, search]);
+  }, [tab, leadsPage, convertedPage, search]);
 
   const handleSearch = (v: string) => {
     setSearch(v);
     setLeadsPage(1);
-    setScraperPage(1);
     setConvertedPage(1);
   };
 
-  // ─── Dialer core ──────────────────────────────────────────────
   const triggerCall = useCallback(async (lead: any) => {
     setDialerPhase("calling");
     try {
@@ -479,7 +447,6 @@ export default function LeadsUnifiedPage() {
       setDialerIndex(nextIdx);
       indexRef.current = nextIdx;
       setCountdown(COUNTDOWN_SECS);
-
       let secs = COUNTDOWN_SECS;
       if (countdownRef.current) clearInterval(countdownRef.current);
       countdownRef.current = setInterval(() => {
@@ -499,15 +466,12 @@ export default function LeadsUnifiedPage() {
     [triggerCall],
   );
 
-  // ─── Turn ON ──────────────────────────────────────────────────
   const handleDialerOn = useCallback(async () => {
     const res = await fetch(`/api/dealer-leads?page=1&limit=500&search=`);
     const data = await res.json();
     if (!data.success) return;
-
     const queue = buildDialerQueue(data.leads);
     if (queue.length === 0) return;
-
     stopRef.current = false;
     queueRef.current = queue;
     setDialerQueue(queue);
@@ -515,25 +479,19 @@ export default function LeadsUnifiedPage() {
     setDialerCallsMade(0);
     setDialerOn(true);
     setDialerPhase("calling");
-
-    // Start the session on the server with the full queue
     await fetch("/api/ai-dialer/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ queueIds: queue.map((l) => l.id) }),
     });
-
-    // Trigger first call
     await fetch("/api/bolna/call", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ phone: queue[0].phone, leadId: queue[0].id }),
     });
-
     setDialerCallsMade(1);
   }, []);
 
-  // ─── Turn OFF ─────────────────────────────────────────────────
   const handleDialerOff = useCallback(() => {
     stopRef.current = true;
     if (countdownRef.current) clearInterval(countdownRef.current);
@@ -542,11 +500,9 @@ export default function LeadsUnifiedPage() {
     setDialerQueue([]);
     setDialerIndex(0);
     setDialerCallsMade(0);
-    // Stop server session
     fetch("/api/ai-dialer/stop", { method: "POST" });
   }, []);
 
-  // ─── Skip countdown → call immediately ───────────────────────
   const handleSkipCountdown = useCallback(() => {
     if (countdownRef.current) clearInterval(countdownRef.current);
     if (stopRef.current) return;
@@ -558,7 +514,6 @@ export default function LeadsUnifiedPage() {
     });
   }, [triggerCall, startCountdownTo]);
 
-  // cleanup
   useEffect(
     () => () => {
       if (countdownRef.current) clearInterval(countdownRef.current);
@@ -590,13 +545,11 @@ export default function LeadsUnifiedPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {/* AI DIALER TOGGLE — leads tab only */}
           {tab === "leads" && (
             <button
               onClick={dialerOn ? handleDialerOff : handleDialerOn}
               className="flex items-center gap-3 px-4 py-2.5 bg-white border border-gray-200 rounded-xl hover:border-gray-300 transition-all shadow-sm group"
             >
-              {/* Toggle pill */}
               <div
                 className={`relative w-9 h-5 rounded-full transition-colors duration-300 ${dialerOn ? "bg-emerald-500" : "bg-gray-200"}`}
               >
@@ -604,22 +557,14 @@ export default function LeadsUnifiedPage() {
                   className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-300 ${dialerOn ? "translate-x-4" : "translate-x-0"}`}
                 />
               </div>
-
-              {/* Label */}
               <span className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
                 <Zap
                   className={`w-3.5 h-3.5 transition-colors ${dialerOn ? "text-emerald-500" : "text-gray-400"}`}
                 />
                 AI Dialer
               </span>
-
-              {/* Status badge */}
               <span
-                className={`text-xs font-medium px-2 py-0.5 rounded-full transition-colors ${
-                  dialerOn
-                    ? "bg-emerald-50 text-emerald-600"
-                    : "bg-gray-100 text-gray-400"
-                }`}
+                className={`text-xs font-medium px-2 py-0.5 rounded-full transition-colors ${dialerOn ? "bg-emerald-50 text-emerald-600" : "bg-gray-100 text-gray-400"}`}
               >
                 {dialerOn ? "ON" : "OFF"}
               </span>
@@ -667,14 +612,17 @@ export default function LeadsUnifiedPage() {
         <div className="flex items-center bg-white border border-gray-200 rounded-xl p-1 gap-1">
           {(
             [
-              { key: "scraper", label: "Scraper Leads" },
+              { key: "scraper", label: "Scraper" },
               { key: "leads", label: "Leads" },
               { key: "converted", label: "My Converted Leads" },
             ] as { key: Tab; label: string }[]
           ).map(({ key, label }) => (
             <button
               key={key}
-              onClick={() => setTab(key)}
+              onClick={() => {
+                setTab(key);
+                setSelectedRunId(null);
+              }} // ← reset run on tab switch
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                 tab === key
                   ? "bg-gray-900 text-white shadow-sm"
@@ -685,22 +633,38 @@ export default function LeadsUnifiedPage() {
             </button>
           ))}
         </div>
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => handleSearch(e.target.value)}
-            placeholder="Search by name, phone, city..."
-            className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl bg-white outline-none focus:border-gray-400 w-64"
-          />
-        </div>
+        {/* Hide search when in scraper tab — scraper has its own search */}
+        {tab !== "scraper" && (
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => handleSearch(e.target.value)}
+              placeholder="Search by name, phone, city..."
+              className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl bg-white outline-none focus:border-gray-400 w-64"
+            />
+          </div>
+        )}
       </div>
+
+      {/* ── TAB: SCRAPER ── */}
+      {tab === "scraper" && (
+        <div>
+          {selectedRunId ? (
+            <RunDetailView
+              runId={selectedRunId}
+              onBack={() => setSelectedRunId(null)}
+            />
+          ) : (
+            <ScraperDashboard onSelectRun={(id) => setSelectedRunId(id)} />
+          )}
+        </div>
+      )}
 
       {/* ── TAB: DEALER LEADS ── */}
       {tab === "leads" && (
         <div>
-          {/* AI DIALER LIVE BANNER */}
           {dialerOn && dialerPhase !== "idle" && (
             <AiDialerBanner
               phase={dialerPhase}
@@ -713,7 +677,6 @@ export default function LeadsUnifiedPage() {
               onSkipCountdown={handleSkipCountdown}
             />
           )}
-
           {leadsLoading ? (
             <LoadingSkeleton />
           ) : (
@@ -753,7 +716,6 @@ export default function LeadsUnifiedPage() {
                       }`}
                     >
                       <div className="flex items-center justify-between gap-4">
-                        {/* LEFT */}
                         <div className="flex items-center gap-3 min-w-0 flex-1">
                           <div
                             className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${isBeingCalled ? "bg-emerald-50" : isUpNext ? "bg-amber-50" : "bg-gray-100"}`}
@@ -800,8 +762,6 @@ export default function LeadsUnifiedPage() {
                             </div>
                           </div>
                         </div>
-
-                        {/* CENTER */}
                         <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
                           <span
                             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${statusCfg.bg} ${statusCfg.text}`}
@@ -841,8 +801,6 @@ export default function LeadsUnifiedPage() {
                             </span>
                           )}
                         </div>
-
-                        {/* RIGHT */}
                         <div className="flex items-center gap-2 shrink-0">
                           {isDisabled && (
                             <span className="flex items-center gap-1 text-xs text-gray-400">
@@ -878,97 +836,6 @@ export default function LeadsUnifiedPage() {
                 total={leadsTotal}
                 limit={LIMIT}
                 onChange={setLeadsPage}
-              />
-            </>
-          )}
-        </div>
-      )}
-
-      {/* ── TAB: SCRAPER LEADS ── */}
-      {tab === "scraper" && (
-        <div>
-          {scraperLoading ? (
-            <LoadingSkeleton />
-          ) : (
-            <>
-              <div className="space-y-2">
-                {[...scraperLeads]
-                  .sort((a, b) => {
-                    const aHas = !!a.phone && a.phone.trim() !== "";
-                    const bHas = !!b.phone && b.phone.trim() !== "";
-                    if (aHas && !bHas) return -1;
-                    if (!aHas && bHas) return 1;
-                    return 0;
-                  })
-                  .map((lead) => {
-                    const statusCfg = getStatusConfig(lead.status);
-                    return (
-                      <div
-                        key={lead.id}
-                        className="bg-white border border-gray-200 rounded-xl px-5 py-4 hover:border-gray-300 hover:shadow-sm transition-all duration-150"
-                      >
-                        <div className="flex items-center justify-between gap-4">
-                          <div className="flex items-center gap-3 min-w-0 flex-1">
-                            <div className="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
-                              <User className="w-4 h-4 text-gray-500" />
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-gray-900 truncate">
-                                {lead.name || "Unknown"}
-                              </p>
-                              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                <span className="flex items-center gap-1 text-xs text-gray-400">
-                                  <Phone className="w-3 h-3" />
-                                  {lead.phone || "-"}
-                                </span>
-                                <span className="text-gray-300">·</span>
-                                <span className="flex items-center gap-1 text-xs text-gray-400">
-                                  <MapPin className="w-3 h-3" />
-                                  {lead.city || "-"}
-                                </span>
-                                <span className="text-gray-300">·</span>
-                                <span className="flex items-center gap-1 text-xs text-gray-400">
-                                  <Globe className="w-3 h-3" />
-                                  {lead.source || "-"}
-                                </span>
-                                <span className="text-gray-300">·</span>
-                                <span className="flex items-center gap-1 text-xs text-gray-400">
-                                  <Calendar className="w-3 h-3" />
-                                  {formatDate(lead.created_at)}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-3 shrink-0">
-                            <span
-                              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${statusCfg.bg} ${statusCfg.text}`}
-                            >
-                              <span
-                                className={`w-1.5 h-1.5 rounded-full ${statusCfg.dot}`}
-                              />
-                              {statusCfg.label}
-                            </span>
-                            <Link
-                              href={`/leads/new?from_scraped=${lead.id}&name=${encodeURIComponent(lead.name || "")}&phone=${encodeURIComponent(lead.phone || "")}`}
-                            >
-                              <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-all">
-                                <Plus className="w-3 h-3" /> Convert
-                              </button>
-                            </Link>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-              {scraperLeads.length === 0 && (
-                <EmptyState label="No scraper leads found" />
-              )}
-              <Pagination
-                page={scraperPage}
-                total={scraperTotal}
-                limit={LIMIT}
-                onChange={setScraperPage}
               />
             </>
           )}

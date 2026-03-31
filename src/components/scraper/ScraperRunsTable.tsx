@@ -3,7 +3,11 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-export function ScraperRunsTable() {
+interface ScraperRunsTableProps {
+  onSelectRun?: (runId: string) => void;
+}
+
+export function ScraperRunsTable({ onSelectRun }: ScraperRunsTableProps) {
   const [page, setPage] = useState(1);
 
   const { data, isLoading, isError } = useQuery({
@@ -11,9 +15,7 @@ export function ScraperRunsTable() {
     queryFn: async () => {
       const res = await fetch(`/api/scraper/run?page=${page}`);
       const json = await res.json();
-
       if (!json.success) throw new Error("Failed");
-
       return json.data;
     },
   });
@@ -25,19 +27,11 @@ export function ScraperRunsTable() {
   }
 
   if (isError) {
-    return (
-      <p className="text-sm text-red-500">
-        Failed to load run history
-      </p>
-    );
+    return <p className="text-sm text-red-500">Failed to load run history</p>;
   }
 
   if (!runs.length) {
-    return (
-      <p className="text-sm text-gray-500">
-        No runs found
-      </p>
-    );
+    return <p className="text-sm text-gray-500">No runs found</p>;
   }
 
   return (
@@ -53,39 +47,35 @@ export function ScraperRunsTable() {
               <th className="p-3 text-left w-[35%]">Started</th>
             </tr>
           </thead>
-
           <tbody>
             {runs.map((run: any) => (
               <tr
                 key={run.id}
-                className="border-t hover:bg-gray-50 transition"
+                onClick={() => onSelectRun?.(run.id)}
+                className={`border-t transition-colors ${
+                  onSelectRun
+                    ? "hover:bg-teal-50 cursor-pointer"
+                    : "hover:bg-gray-50"
+                }`}
               >
                 <td className="p-3 truncate font-medium text-gray-800">
                   {run.id}
                 </td>
-
                 <td className="p-3">
                   <span
                     className={`px-2 py-1 rounded-full text-xs font-medium ${
                       run.status === "completed"
                         ? "bg-green-100 text-green-700"
                         : run.status === "failed"
-                        ? "bg-red-100 text-red-700"
-                        : "bg-yellow-100 text-yellow-700"
+                          ? "bg-red-100 text-red-700"
+                          : "bg-yellow-100 text-yellow-700"
                     }`}
                   >
                     {run.status}
                   </span>
                 </td>
-
-                <td className="p-3">
-                  {run.totalFound ?? 0}
-                </td>
-
-                <td className="p-3">
-                  {run.newLeadsSaved ?? 0}
-                </td>
-
+                <td className="p-3">{run.totalFound ?? 0}</td>
+                <td className="p-3">{run.newLeadsSaved ?? 0}</td>
                 <td className="p-3 truncate text-gray-500">
                   {run.startedAt
                     ? new Date(run.startedAt).toLocaleString()
@@ -105,11 +95,7 @@ export function ScraperRunsTable() {
         >
           Previous
         </button>
-
-        <span className="text-sm text-gray-600">
-          Page {page}
-        </span>
-
+        <span className="text-sm text-gray-600">Page {page}</span>
         <button
           onClick={() => setPage((p) => p + 1)}
           disabled={runs.length < 10}
