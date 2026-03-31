@@ -1,127 +1,113 @@
-"use client";
+// app/leads/[id]/page.tsx
+import { db } from "@/lib/db";
+import { requireAuth } from "@/lib/auth-utils";
+import Link from "next/link";
+import { ArrowLeft, Phone, MapPin, User } from "lucide-react";
+import { redirect } from "next/navigation";
+import { LeadDetailClient } from "./lead-detail-client";
 
-import React from "react";
+export const dynamic = "force-dynamic";
 
-const OUTCOME_CONFIG: Record<string, any> = {
-  callback_requested: {
-    label: "Callback Requested",
-    color: "text-purple-700",
-    bg: "bg-purple-50",
-  },
-  interested: {
-    label: "Interested",
-    color: "text-emerald-700",
-    bg: "bg-emerald-50",
-  },
-  disqualified: {
-    label: "Not Interested",
-    color: "text-red-600",
-    bg: "bg-red-50",
-  },
-  unknown: { label: "No Outcome", color: "text-gray-500", bg: "bg-gray-100" },
-};
+export default async function LeadDetailPage({ params }: any) {
+  const user = await requireAuth();
+  if (!user) redirect("/login");
 
-function formatDate(d: string | null) {
-  if (!d) return "Not Scheduled";
-  return new Date(d).toLocaleString("en-IN");
-}
+  const { id } = await params;
 
-export function FollowUpUI({ history }: any) {
-  const [expandedGroups, setExpandedGroups] = React.useState<
-    Record<number, boolean>
-  >({});
+  const lead = await db.query.dealerLeads.findFirst({
+    where: (l, { eq }) => eq(l.id, id),
+  });
 
-  const groupedHistory = [];
-  for (let i = 0; i < history.length; i += 10) {
-    groupedHistory.push(history.slice(i, i + 10));
+  if (!lead) {
+    return (
+      <div className="p-10 text-center bg-white rounded-xl border m-8 text-gray-500">
+        Lead not found
+      </div>
+    );
   }
 
-  const toggleGroup = (i: number) => {
-    setExpandedGroups((prev) => ({
-      ...prev,
-      [i]: !prev[i],
-    }));
-  };
+  const history = (lead.follow_up_history as any[]) ?? [];
 
   return (
-    <div className="bg-white border rounded-xl p-6">
-      <h3 className="text-sm font-semibold mb-4">Follow-up History</h3>
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-5xl mx-auto py-8 px-6">
+        {/* BACK */}
+        <Link
+          href="/leads"
+          className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 mb-6"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Back to Leads
+        </Link>
 
-      {groupedHistory.map((group, gi) => (
-        <div key={gi} className="border rounded-xl p-4 mb-4">
-          <div className="flex justify-between mb-3">
-            <p className="text-sm font-semibold">
-              Attempts {gi * 10 + 1}–{gi * 10 + group.length}
-            </p>
-
-            <button
-              onClick={() => toggleGroup(gi)}
-              className="text-xs text-gray-500"
-            >
-              {expandedGroups[gi] ? "Collapse ▲" : "Expand ▼"}
-            </button>
+        {/* HERO */}
+        <div className="bg-gray-900 rounded-2xl p-6 text-white mb-6">
+          <div className="flex items-start justify-between">
+            <div>
+              <h1 className="text-xl font-bold">
+                {lead.shop_name || "Unnamed Shop"}
+              </h1>
+              <p className="text-xs text-gray-400 mt-0.5">{lead.id}</p>
+            </div>
+            <StatusBadge status={lead.current_status} />
           </div>
 
-          {expandedGroups[gi] && (
-            <div className="space-y-3">
-              {group.map((item: any, i: number) => {
-                const outcome =
-                  OUTCOME_CONFIG[item.outcome] || OUTCOME_CONFIG.unknown;
-
-                return (
-                  <div key={i} className="bg-gray-50 border rounded-lg p-4">
-                    <div className="flex justify-between mb-2">
-                      <span className="text-sm font-medium">
-                        Attempt #{item.attempt}
-                      </span>
-                      <span
-                        className={`text-xs px-2 py-1 rounded ${outcome.bg} ${outcome.color}`}
-                      >
-                        {outcome.label}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-4 gap-2 text-center text-sm mb-2">
-                      <div>
-                        <p className="text-gray-400 text-xs">Intent</p>
-                        <p>{item.analysis?.intent_score ?? "-"}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-400 text-xs">Engagement</p>
-                        <p>{item.analysis?.engagement_depth ?? "-"}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-400 text-xs">Urgency</p>
-                        <p>{item.analysis?.urgency_signals ?? "-"}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-400 text-xs">Objection</p>
-                        <p>{item.analysis?.objection_quality ?? "-"}</p>
-                      </div>
-                    </div>
-
-                    {item.transcript && (
-                      <div className="bg-white border rounded p-3 text-xs max-h-40 overflow-y-auto">
-                        {item.transcript
-                          .split("\n")
-                          .map((line: string, idx: number) => (
-                            <p key={idx}>{line}</p>
-                          ))}
-                      </div>
-                    )}
-
-                    {item.next_call_at && (
-                      <p className="text-xs text-blue-600 mt-2">
-                        Next Call: {formatDate(item.next_call_at)}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          <div className="flex flex-wrap gap-5 mt-4 text-sm text-gray-300">
+            <span className="flex items-center gap-1.5">
+              <User className="w-4 h-4 text-gray-500" />
+              {lead.dealer_name || "—"}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <Phone className="w-4 h-4 text-gray-500" />
+              {lead.phone || "—"}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <MapPin className="w-4 h-4 text-gray-500" />
+              {lead.location || "—"}
+            </span>
+          </div>
         </div>
-      ))}
+
+        {/* CLIENT SECTION — summary + history */}
+        <LeadDetailClient history={history} lead={lead} />
+      </div>
     </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string | null }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    hot: { label: "Hot", cls: "bg-red-500/20 text-red-300 border-red-500/30" },
+    warm: {
+      label: "Warm",
+      cls: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+    },
+    cold: {
+      label: "Cold",
+      cls: "bg-blue-500/20 text-blue-300 border-blue-500/30",
+    },
+    qualified: {
+      label: "Qualified",
+      cls: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
+    },
+    disqualified: {
+      label: "Disqualified",
+      cls: "bg-gray-500/20 text-gray-400 border-gray-500/30",
+    },
+    new: {
+      label: "New",
+      cls: "bg-gray-500/20 text-gray-300 border-gray-500/30",
+    },
+  };
+  const s = map[status?.toLowerCase() ?? ""] ?? {
+    label: status ?? "Unknown",
+    cls: "bg-gray-500/20 text-gray-400 border-gray-500/30",
+  };
+  return (
+    <span
+      className={`text-xs px-3 py-1 rounded-full border font-medium ${s.cls}`}
+    >
+      {s.label}
+    </span>
   );
 }
