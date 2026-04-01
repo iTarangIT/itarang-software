@@ -2496,6 +2496,7 @@ export const dealerLeads = pgTable("dealer_leads", {
   final_intent_score: integer("final_intent_score"),
 
   memory: jsonb("memory"),
+  overall_summary: text("overall_summary"),
 
   created_at: timestamp("created_at").defaultNow(),
   next_call_at: timestamp("next_call_at", { withTimezone: true }),
