@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Phone,
   TrendingUp,
@@ -14,7 +14,11 @@ import {
   Target,
   Zap,
   AlertCircle,
+  FileText,
+  Loader2,
 } from "lucide-react";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Analysis {
   intent_score?: number | string;
@@ -39,39 +43,25 @@ interface Props {
   lead: any;
 }
 
-const OUTCOME_CONFIG: Record<
-  string,
-  { label: string; color: string; bg: string }
-> = {
-  callback_requested: {
-    label: "Callback Requested",
-    color: "text-purple-700",
-    bg: "bg-purple-50",
-  },
-  interested: {
-    label: "Interested",
-    color: "text-emerald-700",
-    bg: "bg-emerald-50",
-  },
-  disqualified: {
-    label: "Not Interested",
-    color: "text-red-600",
-    bg: "bg-red-50",
-  },
-  no_answer: { label: "No Answer", color: "text-gray-500", bg: "bg-gray-100" },
-  unknown: { label: "No Outcome", color: "text-gray-500", bg: "bg-gray-100" },
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const OUTCOME_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+  callback_requested: { label: "Callback Requested", color: "text-purple-700", bg: "bg-purple-50" },
+  interested:         { label: "Interested",          color: "text-emerald-700", bg: "bg-emerald-50" },
+  disqualified:       { label: "Not Interested",      color: "text-red-600",    bg: "bg-red-50" },
+  no_answer:          { label: "No Answer",           color: "text-gray-500",   bg: "bg-gray-100" },
+  unknown:            { label: "No Outcome",          color: "text-gray-500",   bg: "bg-gray-100" },
 };
 
 const PAGE_SIZE = 5;
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function formatDate(d: string | null | undefined) {
   if (!d) return "—";
   return new Date(d).toLocaleString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
   });
 }
 
@@ -84,6 +74,101 @@ function getOutcome(key: string) {
   return OUTCOME_CONFIG[key] ?? OUTCOME_CONFIG.unknown;
 }
 
+// ─── Overall Summary ──────────────────────────────────────────────────────────
+
+function OverallSummary({ history, lead }: { history: HistoryItem[]; lead: any }) {
+  const [summary, setSummary] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [source, setSource] = useState<"saved" | "generated">("generated");
+
+  useEffect(() => {
+    // 1. Use saved overall_summary column first
+    if (lead?.overall_summary) {
+      setSummary(lead.overall_summary);
+      setSource("saved");
+      return;
+    }
+
+    // 2. Build transcripts from history
+    const transcripts = history
+      .filter((h) => h.transcript)
+      .map(
+        (h) =>
+          `--- Attempt #${h.attempt} (${formatDate(h.called_at)}) ---\n${h.transcript}`
+      )
+      .join("\n\n");
+
+    if (!transcripts) {
+      setSummary("No transcripts available to generate a summary.");
+      return;
+    }
+
+    // 3. Generate via Gemini API route
+    setLoading(true);
+
+    fetch("/api/leads/summary", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        transcripts,
+        dealerName: lead?.dealer_name,
+        shopName: lead?.shop_name,
+        location: lead?.location,
+      }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        const generated = data.summary;
+        if (!generated) return;
+
+        setSummary(generated);
+        setSource("generated");
+
+        // 4. Save to DB — non-blocking
+        fetch(`/api/leads/${lead.id}/summary`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ summary: generated }),
+        }).catch(() => {
+          console.warn("[summary] failed to save to DB");
+        });
+      })
+      .catch(() => setSummary("Unable to generate summary at this time."))
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <div className="bg-white border rounded-xl p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <div className="w-7 h-7 bg-slate-100 rounded-lg flex items-center justify-center">
+          <FileText className="w-3.5 h-3.5 text-slate-600" />
+        </div>
+        <h3 className="text-sm font-semibold text-gray-800">Overall Summary</h3>
+        {!loading && summary && (
+          <span className="ml-auto text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+            {source === "saved" ? "saved" : "AI generated"}
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 py-4 text-gray-400">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span className="text-sm">
+            Generating summary across {history.filter((h) => h.transcript).length} transcripts...
+          </span>
+        </div>
+      ) : summary ? (
+        <p className="text-sm text-gray-600 leading-relaxed">{summary}</p>
+      ) : (
+        <p className="text-sm text-gray-400">No summary available.</p>
+      )}
+    </div>
+  );
+}
+
+// ─── Summary Stats Block ──────────────────────────────────────────────────────
+
 function SummaryBlock({ history }: { history: HistoryItem[] }) {
   const totalCalls = history.length;
   const intentScores = history
@@ -95,11 +180,12 @@ function SummaryBlock({ history }: { history: HistoryItem[] }) {
     : null;
   const lastCall = history.length ? history[history.length - 1] : null;
   const allInsights: string[] = history.flatMap(
-    (h) => h.analysis?.key_insights ?? [],
+    (h) => h.analysis?.key_insights ?? []
   );
   const uniqueInsights = [...new Set(allInsights)].slice(0, 4);
-  const latestSummary = [...history].reverse().find((h) => h.analysis?.summary)
-    ?.analysis?.summary;
+  const latestSummary = [...history]
+    .reverse()
+    .find((h) => h.analysis?.summary)?.analysis?.summary;
 
   const stats = [
     {
@@ -137,24 +223,22 @@ function SummaryBlock({ history }: { history: HistoryItem[] }) {
   ];
 
   return (
-    <div className="space-y-4 mb-6">
+    <div className="space-y-4">
+      {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {stats.map((s) => (
           <div key={s.label} className="bg-white border rounded-xl p-4">
-            <div
-              className={`w-8 h-8 rounded-lg ${s.bg} flex items-center justify-center mb-3`}
-            >
+            <div className={`w-8 h-8 rounded-lg ${s.bg} flex items-center justify-center mb-3`}>
               <s.icon className={`w-4 h-4 ${s.color}`} />
             </div>
             <p className="text-xs text-gray-400 mb-0.5">{s.label}</p>
-            <p className="text-lg font-bold text-gray-900 leading-tight">
-              {s.value}
-            </p>
+            <p className="text-lg font-bold text-gray-900 leading-tight">{s.value}</p>
             <p className="text-xs text-gray-400 mt-0.5">{s.sub}</p>
           </div>
         ))}
       </div>
 
+      {/* AI Insights — only show if data exists */}
       {(latestSummary || uniqueInsights.length > 0) && (
         <div className="bg-white border rounded-xl p-5">
           <div className="flex items-center gap-2 mb-4">
@@ -173,10 +257,7 @@ function SummaryBlock({ history }: { history: HistoryItem[] }) {
           {uniqueInsights.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {uniqueInsights.map((insight, i) => (
-                <div
-                  key={i}
-                  className="flex items-start gap-2 bg-gray-50 rounded-lg p-3"
-                >
+                <div key={i} className="flex items-start gap-2 bg-gray-50 rounded-lg p-3">
                   <Zap className="w-3.5 h-3.5 text-violet-500 mt-0.5 flex-shrink-0" />
                   <p className="text-xs text-gray-600">{insight}</p>
                 </div>
@@ -188,6 +269,8 @@ function SummaryBlock({ history }: { history: HistoryItem[] }) {
     </div>
   );
 }
+
+// ─── Transcript Viewer ────────────────────────────────────────────────────────
 
 function TranscriptViewer({ transcript }: { transcript: string }) {
   const lines = transcript.split("\n").filter(Boolean);
@@ -208,8 +291,8 @@ function TranscriptViewer({ transcript }: { transcript: string }) {
               isAgent
                 ? "text-blue-700"
                 : isUser
-                  ? "text-gray-800"
-                  : "text-gray-500"
+                ? "text-gray-800"
+                : "text-gray-500"
             }`}
           >
             {line}
@@ -220,39 +303,22 @@ function TranscriptViewer({ transcript }: { transcript: string }) {
   );
 }
 
-function CallCard({ item, index }: { item: HistoryItem; index: number }) {
+// ─── Call Card ────────────────────────────────────────────────────────────────
+
+function CallCard({ item }: { item: HistoryItem }) {
   const [expanded, setExpanded] = useState(false);
   const outcome = getOutcome(item.outcome);
 
   const scores = [
-    {
-      label: "Intent",
-      value: item.analysis?.intent_score,
-      icon: TrendingUp,
-      color: "text-blue-500",
-    },
-    {
-      label: "Engagement",
-      value: item.analysis?.engagement_depth,
-      icon: MessageSquare,
-      color: "text-emerald-500",
-    },
-    {
-      label: "Urgency",
-      value: item.analysis?.urgency_signals,
-      icon: Zap,
-      color: "text-amber-500",
-    },
-    {
-      label: "Objection",
-      value: item.analysis?.objection_quality,
-      icon: AlertCircle,
-      color: "text-red-400",
-    },
+    { label: "Intent",     value: item.analysis?.intent_score,     icon: TrendingUp,    color: "text-blue-500" },
+    { label: "Engagement", value: item.analysis?.engagement_depth,  icon: MessageSquare, color: "text-emerald-500" },
+    { label: "Urgency",    value: item.analysis?.urgency_signals,   icon: Zap,           color: "text-amber-500" },
+    { label: "Objection",  value: item.analysis?.objection_quality, icon: AlertCircle,   color: "text-red-400" },
   ];
 
   return (
     <div className="bg-white border rounded-xl overflow-hidden">
+      {/* Header */}
       <div
         className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors"
         onClick={() => setExpanded((p) => !p)}
@@ -291,14 +357,13 @@ function CallCard({ item, index }: { item: HistoryItem; index: number }) {
         </div>
       </div>
 
+      {/* Expanded */}
       {expanded && (
         <div className="px-4 pb-4 border-t bg-gray-50/50">
+          {/* Score pills */}
           <div className="grid grid-cols-4 gap-2 pt-4 mb-3">
             {scores.map((s) => (
-              <div
-                key={s.label}
-                className="bg-white border rounded-lg p-2.5 text-center"
-              >
+              <div key={s.label} className="bg-white border rounded-lg p-2.5 text-center">
                 <s.icon className={`w-3.5 h-3.5 ${s.color} mx-auto mb-1`} />
                 <p className="text-[10px] text-gray-400">{s.label}</p>
                 <p className="text-sm font-semibold text-gray-800">
@@ -308,6 +373,7 @@ function CallCard({ item, index }: { item: HistoryItem; index: number }) {
             ))}
           </div>
 
+          {/* Per-call AI summary */}
           {item.analysis?.summary && (
             <div className="bg-violet-50 border border-violet-100 rounded-lg p-3 mb-3">
               <p className="text-xs text-violet-700 leading-relaxed">
@@ -316,18 +382,19 @@ function CallCard({ item, index }: { item: HistoryItem; index: number }) {
             </div>
           )}
 
+          {/* Transcript */}
           {item.transcript ? (
             <TranscriptViewer transcript={item.transcript} />
           ) : (
-            <p className="text-xs text-gray-400 py-2">
-              No transcript available.
-            </p>
+            <p className="text-xs text-gray-400 py-2">No transcript available.</p>
           )}
         </div>
       )}
     </div>
   );
 }
+
+// ─── Call History ─────────────────────────────────────────────────────────────
 
 function CallHistory({ history }: { history: HistoryItem[] }) {
   const [page, setPage] = useState(1);
@@ -375,11 +442,12 @@ function CallHistory({ history }: { history: HistoryItem[] }) {
       ) : (
         <div className="space-y-3">
           {pageItems.map((item, i) => (
-            <CallCard key={start + i} item={item} index={start + i} />
+            <CallCard key={start + i} item={item} />
           ))}
         </div>
       )}
 
+      {/* Dot pagination */}
       {totalPages > 1 && (
         <div className="flex justify-center gap-1.5 mt-4">
           {Array.from({ length: totalPages }).map((_, i) => (
@@ -397,10 +465,13 @@ function CallHistory({ history }: { history: HistoryItem[] }) {
   );
 }
 
+// ─── Root Export ──────────────────────────────────────────────────────────────
+
 export function LeadDetailClient({ history, lead }: Props) {
   return (
     <div className="space-y-4">
       <SummaryBlock history={history} />
+      <OverallSummary history={history} lead={lead} />
       <CallHistory history={history} />
     </div>
   );
