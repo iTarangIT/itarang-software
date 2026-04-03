@@ -106,7 +106,7 @@ export function ScraperDashboard({ onSelectRun }: ScraperDashboardProps) {
       )}
 
       {/* Info Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {/* <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-teal-50/60 border border-teal-100 rounded-xl p-4">
           <p className="text-xs text-teal-600 font-medium mb-0.5">
             Data Sources
@@ -129,10 +129,10 @@ export function ScraperDashboard({ onSelectRun }: ScraperDashboardProps) {
             Assign new leads to Sales Managers
           </p>
         </div>
-      </div>
+      </div> */}
 
       {/* Schedule */}
-      <ScheduleConfig />
+      {/* <ScheduleConfig /> */}
 
       {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit">

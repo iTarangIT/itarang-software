@@ -2486,11 +2486,9 @@ export const dealerLeads = pgTable("dealer_leads", {
   phone: text("phone").unique(),
   language: text("language"),
   shop_name: text("shop_name"),
-
   location: text("location"),
 
   follow_up_history: jsonb("follow_up_history"),
-
   current_status: text("current_status"),
   total_attempts: integer("total_attempts"),
   final_intent_score: integer("final_intent_score"),
@@ -2500,6 +2498,10 @@ export const dealerLeads = pgTable("dealer_leads", {
 
   created_at: timestamp("created_at").defaultNow(),
   next_call_at: timestamp("next_call_at", { withTimezone: true }),
+
+  assigned_to: text("assigned_to"), // sales manager name
+  approved_by: text("approved_by"), // admin who approved
+  rejected_by: text("rejected_by"), // admin who rejected
 });
 
 export const scraperLeadsDuplicates = pgTable("scraper_leads_duplicates", {
