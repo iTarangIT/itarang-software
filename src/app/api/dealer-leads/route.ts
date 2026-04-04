@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { dealerLeads } from "@/lib/db/schema";
+import { dealerLeads, scraperLeads } from "@/lib/db/schema";
 import { desc, ilike, or, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { nanoid } from "nanoid";
@@ -37,34 +37,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      leads: rows,
+      leads: rows.map((l) => ({ ...l, _source: "dealer" })),
       total: Number(countResult[0].count),
     });
-  } catch (err: any) {
-    return NextResponse.json(
-      { success: false, error: err.message },
-      { status: 500 },
-    );
-  }
-}
-
-export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json();
-
-    await db.insert(dealerLeads).values({
-      id: `L-${nanoid(8)}`,
-      dealer_name: body.dealer_name,
-      phone: body.phone,
-      shop_name: body.shop_name || null,
-      location: body.location,
-      language: body.language?.toLowerCase() || "hinglish",
-      current_status: body.current_status || "new",
-      total_attempts: 0,
-      follow_up_history: [],
-    });
-
-    return NextResponse.json({ success: true });
   } catch (err: any) {
     return NextResponse.json(
       { success: false, error: err.message },
