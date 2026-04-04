@@ -8,8 +8,16 @@ export function filterLeads(leads: any[]) {
 
     if (isJunkName(name)) return false;
 
+    if (lead.phone && !isValidIndianMobile(lead.phone)) return false;
+
     return true;
   });
+}
+
+function isValidIndianMobile(phone: string): boolean {
+  const cleaned = phone.replace(/[\s\-().]/g, "");
+  const normalized = cleaned.replace(/^(\+91|0091|91|0)/, "");
+  return /^[6-9]\d{9}$/.test(normalized);
 }
 
 function isJunkName(name: string) {
