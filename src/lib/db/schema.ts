@@ -2522,3 +2522,17 @@ export const scraperLeadsDuplicates = pgTable("scraper_leads_duplicates", {
 
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+export const scraperCityQueue = pgTable("scraper_city_queue", {
+  id:          text("id").primaryKey(),
+  base_query:  text("base_query").notNull(),   
+  state:       text("state").notNull(),       
+  city:        text("city").notNull(),          
+  full_query:  text("full_query").notNull(),    
+  status:      text("status").default("pending"), 
+  leads_found: integer("leads_found").default(0),
+  new_leads:   integer("new_leads").default(0),
+  duplicates:  integer("duplicates").default(0),
+  scraped_at:  timestamp("scraped_at"),
+  created_at:  timestamp("created_at").defaultNow(),
+});

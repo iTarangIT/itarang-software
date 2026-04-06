@@ -2,12 +2,10 @@ import { google } from "googleapis";
 
 const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
 
-// Sheet tab names
 export const SHEETS = {
-  CONVERTED: "Converted Leads",
+  CONVERTED: "itarang_leads",
 };
 
-// Column headers — must match appendConvertedLead row order
 const HEADERS = [
   "Lead ID",
   "Dealer Name",
@@ -34,18 +32,68 @@ async function getSheetsClient() {
   return google.sheets({ version: "v4", auth });
 }
 
-// ─── Ensure header row exists ─────────────────────────────────
+async function writeHeaders(sheets: any, spreadsheetId: string, meta: any) {
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${SHEETS.CONVERTED}!A1`,
+    valueInputOption: "RAW",
+    requestBody: { values: [HEADERS] },
+  });
+
+  const sheetId = meta.data.sheets?.find(
+    (s: any) => s.properties?.title === SHEETS.CONVERTED,
+  )?.properties?.sheetId;
+
+  if (sheetId !== undefined) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            repeatCell: {
+              range: { sheetId, startRowIndex: 0, endRowIndex: 1 },
+              cell: {
+                userEnteredFormat: {
+                  backgroundColor: { red: 0.1, green: 0.1, blue: 0.1 },
+                  textFormat: {
+                    bold: true,
+                    foregroundColor: { red: 1, green: 1, blue: 1 },
+                    fontSize: 11,
+                  },
+                  horizontalAlignment: "CENTER",
+                },
+              },
+              fields:
+                "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+            },
+          },
+          {
+            updateSheetProperties: {
+              properties: {
+                sheetId,
+                gridProperties: { frozenRowCount: 1 },
+              },
+              fields: "gridProperties.frozenRowCount",
+            },
+          },
+        ],
+      },
+    });
+  }
+
+  console.log("[SHEETS] Headers written to tab:", SHEETS.CONVERTED);
+}
 
 export async function ensureSheetHeaders() {
   const sheets = await getSheetsClient();
   const spreadsheetId = process.env.GOOGLE_SHEET_ID!;
 
-  // Check if sheet tab exists, create if not
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
   const existingSheets =
-    meta.data.sheets?.map((s) => s.properties?.title) ?? [];
+    meta.data.sheets?.map((s: any) => s.properties?.title) ?? [];
 
   if (!existingSheets.includes(SHEETS.CONVERTED)) {
+    // Tab doesn't exist — create it
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: {
@@ -62,67 +110,20 @@ export async function ensureSheetHeaders() {
       },
     });
 
-    // Write headers
-    await sheets.spreadsheets.values.update({
+    await writeHeaders(sheets, spreadsheetId, meta);
+  } else {
+    // Tab exists — check if header row is empty
+    const existing = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${SHEETS.CONVERTED}!A1`,
-      valueInputOption: "RAW",
-      requestBody: {
-        values: [HEADERS],
-      },
+      range: `${SHEETS.CONVERTED}!A1:J1`,
     });
 
-    // Style header row — bold + dark background
-    const sheetId = meta.data.sheets?.find(
-      (s) => s.properties?.title === SHEETS.CONVERTED,
-    )?.properties?.sheetId;
-
-    if (sheetId !== undefined) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [
-            {
-              repeatCell: {
-                range: {
-                  sheetId,
-                  startRowIndex: 0,
-                  endRowIndex: 1,
-                },
-                cell: {
-                  userEnteredFormat: {
-                    backgroundColor: { red: 0.1, green: 0.1, blue: 0.1 },
-                    textFormat: {
-                      bold: true,
-                      foregroundColor: { red: 1, green: 1, blue: 1 },
-                      fontSize: 11,
-                    },
-                    horizontalAlignment: "CENTER",
-                  },
-                },
-                fields:
-                  "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
-              },
-            },
-            {
-              updateSheetProperties: {
-                properties: {
-                  sheetId,
-                  gridProperties: { frozenRowCount: 1 },
-                },
-                fields: "gridProperties.frozenRowCount",
-              },
-            },
-          ],
-        },
-      });
+    const firstRow = existing.data.values?.[0];
+    if (!firstRow || firstRow.length === 0) {
+      await writeHeaders(sheets, spreadsheetId, meta);
     }
-
-    console.log("[SHEETS] Created 'Converted Leads' tab with headers");
   }
 }
-
-// ─── Append a single converted lead ──────────────────────────
 
 export async function appendConvertedLead(lead: {
   id: string;
@@ -165,7 +166,6 @@ export async function appendConvertedLead(lead: {
 
     console.log(`[SHEETS] Appended converted lead: ${lead.id} — ${lead.name}`);
   } catch (err) {
-    // Never throw — Google Sheets failure must not break the conversion flow
     console.error("[SHEETS] Failed to append lead:", err);
   }
 }

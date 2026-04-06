@@ -14,33 +14,30 @@ export interface PlaceResult {
   source: "google_places";
 }
 
-// Places API (New) — Text Search
-// Docs: https://developers.google.com/maps/documentation/places/web-service/text-search
-export async function fetchFromGooglePlaces(
+async function fetchPage(
   query: string,
-  { fetchDetails = false }: { fetchDetails?: boolean } = {},
-): Promise<PlaceResult[]> {
-  const res = await fetch(
-    "https://places.googleapis.com/v1/places:searchText",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": API_KEY!,
-        // Request only the fields you need — billed by field mask
-        "X-Goog-FieldMask": [
-          "places.id",
-          "places.displayName",
-          "places.formattedAddress",
-          "places.rating",
-          ...(fetchDetails
-            ? ["places.nationalPhoneNumber", "places.websiteUri"]
-            : []),
-        ].join(","),
-      },
-      body: JSON.stringify({ textQuery: query }),
+  pageToken?: string,
+): Promise<{ places: PlaceResult[]; nextPageToken?: string }> {
+  const body: any = { textQuery: query, maxResultCount: 20 };
+  if (pageToken) body.pageToken = pageToken;
+
+  const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": API_KEY!,
+      "X-Goog-FieldMask": [
+        "places.id",
+        "places.displayName",
+        "places.formattedAddress",
+        "places.rating",
+        "places.nationalPhoneNumber",
+        "places.websiteUri",
+        "nextPageToken",
+      ].join(","),
     },
-  );
+    body: JSON.stringify(body),
+  });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -51,7 +48,7 @@ export async function fetchFromGooglePlaces(
 
   const data = await res.json();
 
-  return (data.places ?? []).map((place: any) => ({
+  const places = (data.places ?? []).map((place: any) => ({
     placeId: place.id,
     name: place.displayName?.text ?? place.displayName ?? "",
     address: place.formattedAddress ?? "",
@@ -60,4 +57,28 @@ export async function fetchFromGooglePlaces(
     website: place.websiteUri ?? null,
     source: "google_places" as const,
   }));
+
+  return { places, nextPageToken: data.nextPageToken };
+}
+
+// Fetch all pages for a query (up to maxPages to avoid runaway costs)
+export async function fetchFromGooglePlaces(
+  query: string,
+  { maxPages = 3 }: { maxPages?: number } = {},
+): Promise<PlaceResult[]> {
+  const allPlaces: PlaceResult[] = [];
+  let pageToken: string | undefined;
+  let page = 0;
+
+  do {
+    const { places, nextPageToken } = await fetchPage(query, pageToken);
+    allPlaces.push(...places);
+    pageToken = nextPageToken;
+    page++;
+
+    // Small delay between paginated requests to respect rate limits
+    if (nextPageToken) await new Promise((r) => setTimeout(r, 500));
+  } while (pageToken && page < maxPages);
+
+  return allPlaces;
 }
