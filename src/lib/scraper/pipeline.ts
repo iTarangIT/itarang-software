@@ -1,13 +1,14 @@
-import { generateQueries } from "./query/generateQueries";
+import { generateQueries, generateCitiesForQuery } from "./query/generateQueries";
 import { getCachedQueries, setCachedQueries } from "./query/queryCache";
-
-import { fetchLeadsFromSources } from "./query/sources";
+import { fetchFromGooglePlaces } from "./query/sources/googlePlaces";
 import { processLeads } from "./processing";
-
 import { saveRawLeads } from "./storage/rawStore";
 import { saveCleanLeads } from "./storage/leadStore";
 import { saveDuplicateLeads } from "./storage/duplicateStore";
 import { markRunCompleted, markRunFailed } from "./storage/runStore";
+
+const CONCURRENT_QUERIES = 3;
+const MAX_PAGES_PER_QUERY = 3;
 
 function normalizeQuery(q: string) {
   return q
@@ -16,50 +17,94 @@ function normalizeQuery(q: string) {
     .trim();
 }
 
+async function runInBatches<T>(
+  items: T[],
+  batchSize: number,
+  fn: (item: T) => Promise<any[]>,
+): Promise<any[]> {
+  const results: any[] = [];
+
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+
+    const batchResults = await Promise.allSettled(batch.map(fn));
+
+    for (const r of batchResults) {
+      if (r.status === "fulfilled" && Array.isArray(r.value)) {
+        results.push(...r.value);
+      }
+    }
+
+    if (i + batchSize < items.length) {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+
+  return results;
+}
+
 export async function runDealerScraper(runId: string, baseQuery: string) {
   const startTime = Date.now();
 
   try {
-    console.log(`[SCRAPER][${runId}] started`);
+    console.log(`[SCRAPER][${runId}] started for: "${baseQuery}"`);
 
-    let queries = getCachedQueries(baseQuery);
+    // ── Step 1: Generate query variations (AI, cached) ─────────────────────
+    let queryVariations = getCachedQueries(baseQuery);
 
-    if (!queries) {
-      const aiQueries = await generateQueries(baseQuery);
-      queries = aiQueries;
-      setCachedQueries(baseQuery, queries);
+    if (!queryVariations) {
+      queryVariations = await generateQueries(baseQuery);
+      setCachedQueries(baseQuery, queryVariations);
     }
 
-    queries = queries.map(normalizeQuery).filter(Boolean);
+    queryVariations = [...new Set(queryVariations.map(normalizeQuery))].slice(0, 15);
+    console.log(`[SCRAPER][${runId}] query variations: ${queryVariations.length}`);
 
-    const finalQueries = [...new Set(queries)].slice(0, 5);
+    // ── Step 2: Generate relevant cities dynamically (AI) ──────────────────
+    const cities = await generateCitiesForQuery(baseQuery);
+    console.log(`[SCRAPER][${runId}] cities: ${cities.length}`, cities);
 
-    console.log(`[SCRAPER][${runId}] final queries:`, finalQueries);
+    // ── Step 3: Build all query + city combinations ────────────────────────
+    const allCombinations: string[] = [];
 
-    let allLeads: any[] = [];
+    for (const variation of queryVariations) {
+      for (const city of cities) {
+        allCombinations.push(`${variation} in ${city}`);
+      }
+    }
 
-    await Promise.all(
-      finalQueries.map(async (query) => {
+    console.log(`[SCRAPER][${runId}] total combinations: ${allCombinations.length}`);
+
+    // ── Step 4: Fetch leads for all combinations in batches ────────────────
+    const allLeads: any[] = [];
+
+    await runInBatches(
+      allCombinations,
+      CONCURRENT_QUERIES,
+      async (query): Promise<any[]> => {
         try {
-          const leads = await fetchLeadsFromSources([query]);
+          const leads = await fetchFromGooglePlaces(query, {
+            maxPages: MAX_PAGES_PER_QUERY,
+          });
 
-          const tagged = leads.map((lead: any) => ({
+          const tagged = leads.map((lead) => ({
             ...lead,
             source_query: query,
           }));
 
           allLeads.push(...tagged);
 
-          console.log(
-            `[SCRAPER][${runId}] fetched ${leads.length} leads for: ${query}`,
-          );
+          console.log(`[SCRAPER][${runId}] "${query}" → ${leads.length} leads`);
+
+          return tagged;
         } catch (err) {
-          console.error(`[SCRAPER][${runId}] failed query: ${query}`, err);
+          console.error(`[SCRAPER][${runId}] failed: "${query}"`, err);
+          return [];
         }
-      }),
+      },
     );
 
-    console.log(`[SCRAPER][${runId}] total leads fetched:`, allLeads.length);
+    console.log(`[SCRAPER][${runId}] total raw leads: ${allLeads.length}`);
 
     if (!allLeads.length) {
       await markRunCompleted(runId, {
@@ -72,26 +117,26 @@ export async function runDealerScraper(runId: string, baseQuery: string) {
       return;
     }
 
+    // ── Step 5: Save raw leads ─────────────────────────────────────────────
     await saveRawLeads(runId, allLeads);
 
+    // ── Step 6: Process (normalize + filter + dedupe) ──────────────────────
     const result = await processLeads(allLeads);
 
-    console.log(`[SCRAPER][${runId}] cleaned:`, result.cleaned.length);
-    console.log(`[SCRAPER][${runId}] duplicates:`, result.duplicates);
+    const uniqueLeads = result.cleaned.filter((l) => !l.duplicate_of);
+    const duplicateLeads = result.cleaned.filter((l) => l.duplicate_of);
 
-    const uniqueLeads = result.cleaned.filter((lead) => !lead.duplicate_of);
+    console.log(
+      `[SCRAPER][${runId}] unique: ${uniqueLeads.length}, dupes: ${duplicateLeads.length}`,
+    );
 
-    const duplicateLeads = result.cleaned.filter((lead) => lead.duplicate_of);
+    // ── Step 7: Save to DB ─────────────────────────────────────────────────
+    const savedCount = await saveCleanLeads(uniqueLeads, runId); 
+    await saveDuplicateLeads(duplicateLeads);
 
-    const savedCount = await saveCleanLeads(uniqueLeads);
-    const duplicateSavedCount = await saveDuplicateLeads(duplicateLeads);
+    console.log(`[SCRAPER][${runId}] saved: ${savedCount}`);
 
-    console.log("Saving unique leads:", uniqueLeads.length);
-    console.log("Saving duplicate leads:", duplicateLeads.length);
-
-    console.log("Saved unique leads:", savedCount);
-    console.log("Saved duplicate leads:", duplicateSavedCount);
-
+    // ── Step 8: Mark run completed ─────────────────────────────────────────
     await markRunCompleted(runId, {
       total: allLeads.length,
       cleaned: result.cleaned.length,
@@ -100,10 +145,9 @@ export async function runDealerScraper(runId: string, baseQuery: string) {
       duration_ms: Date.now() - startTime,
     });
 
-    console.log(`[SCRAPER][${runId}] completed in ${Date.now() - startTime}ms`);
+    console.log(`[SCRAPER][${runId}] done in ${Date.now() - startTime}ms`);
   } catch (err: any) {
     console.error(`[SCRAPER][${runId}] failed`, err);
-
     await markRunFailed(runId, err.message);
   }
 }
