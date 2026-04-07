@@ -260,6 +260,7 @@ export async function POST(req: NextRequest) {
             ? String((application.businessAddress as any).city || "")
             : "",
         ownerDistrict: "",
+        // nothings
         ownerState:
           typeof application.businessAddress === "object" &&
             application.businessAddress &&
