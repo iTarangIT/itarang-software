@@ -1,0 +1,18 @@
+.fintech-select {
+
+padding:14px;
+border-radius:8px;
+border:1px solid #E3E8EF;
+background:white;
+font-size:14px;
+width:100%;
+outline:none;
+
+}
+
+.fintech-select:focus {
+
+border-color:#1F5C8F;
+box-shadow:0 0 0 2px rgba(31,92,143,0.1);
+
+}

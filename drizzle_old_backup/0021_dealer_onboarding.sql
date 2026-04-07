@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS dealer_onboarding_applications (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    dealer_user_id uuid,
+    company_name text NOT NULL,
+    company_type text,
+    gst_number text,
+    pan_number text,
+    cin_number text,
+    business_address jsonb DEFAULT '{}'::jsonb,
+    registered_address jsonb DEFAULT '{}'::jsonb,
+    finance_enabled boolean DEFAULT false,
+    onboarding_status varchar(30) NOT NULL DEFAULT 'draft',
+    review_status varchar(30) DEFAULT 'pending',
+    submitted_at timestamp,
+    approved_at timestamp,
+    rejected_at timestamp,
+    rejection_reason text,
+    admin_notes text,
+    created_at timestamp DEFAULT now() NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL
+);
