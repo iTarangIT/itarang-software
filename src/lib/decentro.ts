@@ -215,10 +215,10 @@ export type OcrDocType = 'PAN' | 'AADHAAR' | 'DRIVING_LICENSE' | 'VOTERID';
 export async function extractDocumentOcr(document_type: OcrDocType, documentBlob: Blob, filename: string) {
     const form = new FormData();
     form.append('reference_id', genRefId());
-    form.append('document_type', document_type);
+    form.append('document_type', document_type.toLowerCase());
     form.append('consent', 'Y');
-    form.append('consent_purpose', 'Document OCR extraction for KYC verification');
-    form.append('document_data', documentBlob, filename);
+    form.append('consent_purpose', 'for bank account purpose only');
+    form.append('document', documentBlob, filename);
 
     const headers: Record<string, string> = {
         'client_id': CLIENT_ID,

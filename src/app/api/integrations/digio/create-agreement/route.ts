@@ -230,6 +230,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Use the signing method configured per signer (aadhaar, electronic, or dsc)
+    const digioSigners = signers.map(s => ({
+      identifier: s.identifier,
+      name: s.name,
+      reason: s.reason,
+      sign_type: s.sign_type,
+    }));
+
+    // Generate agreement PDF from HTML template
     const html = buildTarangDealerAgreementHtml({
       company: {
         companyName: company.companyName || "",
@@ -243,40 +252,39 @@ export async function POST(req: NextRequest) {
         companyPinCode: company.companyPinCode || "",
       },
       ownership: {
-        ownerName: application.ownerName || "",
-        ownerPhone: application.ownerPhone || "",
-        ownerEmail: application.ownerEmail || "",
+        ownerName: ownership.ownerName || "",
+        ownerPhone: ownership.ownerPhone || "",
+        ownerEmail: ownership.ownerEmail || "",
         ownerAge: "",
         ownerAddressLine1:
-          typeof application.businessAddress === "object" &&
-            application.businessAddress &&
-            "address" in application.businessAddress
-            ? String((application.businessAddress as any).address || "")
+          typeof ownership.businessAddress === "object" &&
+            ownership.businessAddress &&
+            "address" in ownership.businessAddress
+            ? String((ownership.businessAddress as any).address || "")
             : "",
         ownerCity:
-          typeof application.businessAddress === "object" &&
-            application.businessAddress &&
-            "city" in application.businessAddress
-            ? String((application.businessAddress as any).city || "")
+          typeof ownership.businessAddress === "object" &&
+            ownership.businessAddress &&
+            "city" in ownership.businessAddress
+            ? String((ownership.businessAddress as any).city || "")
             : "",
         ownerDistrict: "",
-        // nothings
         ownerState:
-          typeof application.businessAddress === "object" &&
-            application.businessAddress &&
-            "state" in application.businessAddress
-            ? String((application.businessAddress as any).state || "")
+          typeof ownership.businessAddress === "object" &&
+            ownership.businessAddress &&
+            "state" in ownership.businessAddress
+            ? String((ownership.businessAddress as any).state || "")
             : "",
         ownerPinCode:
-          typeof application.businessAddress === "object" &&
-            application.businessAddress &&
-            "pincode" in application.businessAddress
-            ? String((application.businessAddress as any).pincode || "")
+          typeof ownership.businessAddress === "object" &&
+            ownership.businessAddress &&
+            "pincode" in ownership.businessAddress
+            ? String((ownership.businessAddress as any).pincode || "")
             : "",
-        bankName: application.bankName || "",
-        accountNumber: application.accountNumber || "",
-        ifsc: (application as any).ifscCode || "",
-        beneficiaryName: (application as any).beneficiaryName || "",
+        bankName: ownership.bankName || "",
+        accountNumber: ownership.accountNumber || "",
+        ifsc: ownership.ifscCode || "",
+        beneficiaryName: ownership.beneficiaryName || "",
         branch: "",
         accountType: "",
       },
@@ -298,10 +306,12 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    console.log("DIGIO DEBUG -> Rendering PDF with Puppeteer...");
     const pdfBuffer = await renderPdfFromHtml(html);
     const agreementBase64 = pdfBuffer.toString("base64");
+    console.log("DIGIO DEBUG -> PDF generated, size:", pdfBuffer.length, "bytes");
 
-    const payload = {
+    const digioPayload = {
       file_name: `${cleanString(company.companyName) || "dealer"}-agreement.pdf`,
       file_data: agreementBase64,
       expire_in_days: 5,
@@ -309,28 +319,24 @@ export async function POST(req: NextRequest) {
       send_sign_link: true,
       include_authentication_url: true,
       sequential: true,
-      signers,
+      signers: digioSigners,
     };
 
-    console.log(
-      "DIGIO DEBUG -> REQUEST URL:",
-      `${baseUrl}/v2/client/document/uploadpdf`
-    );
-    console.log("DIGIO DEBUG -> SIGNERS:", signers);
+    const requestUrl = `${baseUrl}/v2/client/document/uploadpdf`;
 
-    const digioResponse = await fetch(
-      `${baseUrl}/v2/client/document/uploadpdf`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: basicAuthHeader(clientId, clientSecret),
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(payload),
-        cache: "no-store",
-      }
-    );
+    console.log("DIGIO DEBUG -> REQUEST URL:", requestUrl);
+    console.log("DIGIO DEBUG -> SIGNERS:", digioSigners);
+
+    const digioResponse = await fetch(requestUrl, {
+      method: "POST",
+      headers: {
+        Authorization: basicAuthHeader(clientId, clientSecret),
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(digioPayload),
+      cache: "no-store",
+    });
 
     const rawText = await digioResponse.text();
 

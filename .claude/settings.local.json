@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ':*)",
+      "Bash(xxd -l 32 docs/lead_creation_brd.docx)",
+      "Bash(npx tsc:*)",
+      "Bash(npx next:*)",
+      "Bash(npm run:*)",
+      "Bash(node -e \"try { require\\('puppeteer'\\); console.log\\('puppeteer OK'\\); } catch\\(e\\) { console.log\\('puppeteer MISSING:', e.message\\); }\")",
+      "Bash(node -e ':*)"
+    ]
+  }
+}

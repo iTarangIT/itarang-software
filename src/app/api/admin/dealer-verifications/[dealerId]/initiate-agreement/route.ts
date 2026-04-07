@@ -74,7 +74,7 @@ function mapSigningMethod(method?: string | null) {
   if (safe === "electronic_signature") return "electronic_signature";
   if (safe === "dsc_signature") return "dsc_signature";
 
-  return "electronic_signature";
+  return "aadhaar_esign";
 }
 
 function buildSigner(params: {
@@ -297,24 +297,24 @@ export async function POST(
       name: agreement.dealerSignerName,
       email: agreement.dealerSignerEmail,
       mobile: agreement.dealerSignerPhone,
-      reason: "Dealer Signatory",
-      signingMethod: agreement.dealerSigningMethod,
+      reason: "dealer signer",
+      signingMethod: agreement.dealerSigningMethod || "aadhaar_esign",
     });
 
     const itarangSigner1 = buildSigner({
       name: agreement.itarangSignatory1?.name,
       email: agreement.itarangSignatory1?.email,
       mobile: agreement.itarangSignatory1?.mobile,
-      reason: "iTarang Signatory 1",
-      signingMethod: agreement.itarangSignatory1?.signingMethod,
+      reason: "iTarang signer 1",
+      signingMethod: agreement.itarangSignatory1?.signingMethod || "aadhaar_esign",
     });
 
     const itarangSigner2 = buildSigner({
       name: agreement.itarangSignatory2?.name,
       email: agreement.itarangSignatory2?.email,
       mobile: agreement.itarangSignatory2?.mobile,
-      reason: "iTarang Signatory 2",
-      signingMethod: agreement.itarangSignatory2?.signingMethod,
+      reason: "iTarang signer 2",
+      signingMethod: agreement.itarangSignatory2?.signingMethod || "aadhaar_esign",
     });
 
     if (!dealerSigner || !itarangSigner1) {
@@ -377,6 +377,16 @@ export async function POST(
         gstNumber: application.gstNumber || "",
         panNumber: application.panNumber || "",
       },
+      ownership: {
+        ownerName: application.ownerName || "",
+        ownerPhone: application.ownerPhone || "",
+        ownerEmail: application.ownerEmail || "",
+        businessAddress: application.businessAddress || {},
+        bankName: application.bankName || "",
+        accountNumber: application.accountNumber || "",
+        ifscCode: application.ifscCode || "",
+        beneficiaryName: application.beneficiaryName || "",
+      },
       agreement: {
         agreementName:
           cleanString(agreement.agreementName) ||
@@ -390,7 +400,7 @@ export async function POST(
         dealerSignerEmail: cleanString(agreement.dealerSignerEmail),
         dealerSignerPhone: normalizePhone(agreement.dealerSignerPhone),
         dealerSigningMethod:
-          cleanString(agreement.dealerSigningMethod) || "electronic_signature",
+          cleanString(agreement.dealerSigningMethod) || "aadhaar_esign",
         financierSignatory: null,
         itarangSignatory1: agreement.itarangSignatory1 || null,
         itarangSignatory2: itarangSigner2 ? agreement.itarangSignatory2 || null : null,
@@ -500,7 +510,6 @@ export async function POST(
         providerSigningUrl: signingUrl || null,
         providerRawResponse: responseData,
         stampStatus,
-        agreementLastInitiatedAt: new Date(),
         lastActionTimestamp: new Date(),
         updatedAt: new Date(),
       })

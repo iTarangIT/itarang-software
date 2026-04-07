@@ -255,7 +255,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
 
         // Audit trail
         if (!application.auditTrailStoragePath) {
-          const auditTrailDigioUrl = `${baseUrl}/v2/client/document/${application.providerDocumentId}/audit_trail`;
+          const auditTrailDigioUrl = `${baseUrl}/v2/client/document/download_audit_trail?document_id=${application.providerDocumentId}`;
           const auditPath = `agreements/${dealerId}/audit-trail.pdf`;
 
           const publicUrl = await uploadFileToSupabase(auditTrailDigioUrl, auditPath);

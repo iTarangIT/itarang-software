@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 
 type RouteContext = {
-  params: { dealerId: string };
+  params: Promise<{ dealerId: string }>;
 };
 
 function cleanEnv(value?: string) {
@@ -20,7 +20,7 @@ function basicAuthHeader(clientId: string, clientSecret: string) {
 
 export async function POST(_req: NextRequest, context: RouteContext) {
   try {
-    const { dealerId } = context.params;
+    const { dealerId } = await context.params;
 
     const applicationRows = await db
       .select()
@@ -73,7 +73,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    const auditUrl = `${baseUrl}/v2/client/document/audit?document_id=${application.providerDocumentId}`;
+    const auditUrl = `${baseUrl}/v2/client/document/download_audit_trail?document_id=${application.providerDocumentId}`;
 
     const digioResponse = await fetch(auditUrl, {
       method: "GET",

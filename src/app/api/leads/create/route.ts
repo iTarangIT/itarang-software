@@ -24,7 +24,7 @@ const step1Schema = z.object({
     vehicle_owner_name: z.string().optional().nullable(),
     vehicle_owner_phone: z.string().optional().nullable(),
     interested_in: z.array(z.string()).optional(),
-    payment_method: z.enum(['upfront', 'finance']).optional().nullable(),
+    payment_method: z.enum(['upfront', 'finance', 'cash', 'other_finance', 'dealer_finance']).optional().nullable(),
     initializeDraft: z.boolean().optional(),
     commitStep: z.boolean().optional(),
     leadId: z.string().optional().nullable(),

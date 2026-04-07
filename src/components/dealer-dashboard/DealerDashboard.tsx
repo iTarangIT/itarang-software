@@ -22,6 +22,7 @@ import {
 import Link from 'next/link';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useAuth } from '@/components/auth/AuthProvider';
+import ProcessLoanCard from './ProcessLoanCard';
 
 type DealerApiData = {
   id: string | null;
@@ -614,20 +615,7 @@ export default function DealerDashboard() {
               <div className="absolute -right-4 -bottom-4 h-32 w-32 rounded-full bg-white/5 blur-2xl transition-colors group-hover:bg-white/10" />
             </Link>
 
-            <Link
-              href="/dealer-portal/loans/facilitation"
-              className="group relative rounded-2xl border border-gray-100 bg-white p-6 shadow-card transition-transform hover:-translate-y-1 hover:shadow-lg"
-            >
-              <div className="flex min-h-[140px] flex-col justify-between">
-                <div className="w-fit rounded-xl bg-indigo-50 p-3 text-indigo-600">
-                  <FileCheck className="h-6 w-6" />
-                </div>
-                <div>
-                  <h3 className="mb-1 text-xl font-bold text-gray-900">Process Loan</h3>
-                  <p className="text-sm text-gray-500">Upload docs for financing</p>
-                </div>
-              </div>
-            </Link>
+            <ProcessLoanCard />
 
             <Link
               href="/dealer-portal/assets"

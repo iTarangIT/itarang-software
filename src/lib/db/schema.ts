@@ -1618,6 +1618,11 @@ export const dealerOnboardingApplications = pgTable(
         providerRawResponse: jsonb("provider_raw_response"),
         signedAt: timestamp("signed_at"),
 
+        signedAgreementUrl: text("signed_agreement_url"),
+        auditTrailUrl: text("audit_trail_url"),
+        signedAgreementStoragePath: text("signed_agreement_storage_path"),
+        auditTrailStoragePath: text("audit_trail_storage_path"),
+
         stampStatus: varchar("stamp_status", { length: 50 }).default("pending"),
         completionStatus: varchar("completion_status", { length: 50 }).default("pending"),
         correctionRemarks: text("correction_remarks"),
@@ -1627,6 +1632,12 @@ export const dealerOnboardingApplications = pgTable(
         approvedAt: timestamp("approved_at"),
         dealerAccountStatus: varchar("dealer_account_status", { length: 50 }).default("inactive"),
         lastActionTimestamp: timestamp("last_action_timestamp"),
+
+        agreementLastInitiatedAt: timestamp("agreement_last_initiated_at"),
+        agreementExpiredAt: timestamp("agreement_expired_at"),
+        agreementFailedAt: timestamp("agreement_failed_at"),
+        agreementFailureReason: text("agreement_failure_reason"),
+        agreementCompletedAt: timestamp("agreement_completed_at"),
     }
 );
 
