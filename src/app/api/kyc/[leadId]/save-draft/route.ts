@@ -2,10 +2,22 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { leads } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
+import {
+    buildDealerEditLockMessage,
+    isDealerKycEditsLocked,
+} from '@/lib/kyc/admin-workflow';
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const { leadId } = await params;
+
+        if (await isDealerKycEditsLocked(leadId)) {
+            return NextResponse.json(
+                { success: false, error: { message: buildDealerEditLockMessage() } },
+                { status: 409 }
+            );
+        }
+
         const { step, data } = await req.json();
 
         await db.update(leads)

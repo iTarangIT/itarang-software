@@ -1,167 +1,431 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
-import { db } from '@/lib/db';
-import { kycDocuments, coBorrowerDocuments, adminKycReviews, leads, accounts } from '@/lib/db/schema';
-import { eq, and, or, ilike, sql, inArray } from 'drizzle-orm';
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import {
+  adminKycReviews,
+  coBorrowerDocuments,
+  coBorrowers,
+  dealerLeads,
+  kycDocuments,
+} from "@/lib/db/schema";
+import { and, desc, eq, inArray } from "drizzle-orm";
 
-const ADMIN_ROLES = ['ceo', 'business_head', 'sales_head'];
+const ADMIN_ROLES = ["ceo", "business_head", "sales_head"] as const;
+const REVIEW_OUTCOMES = ["verified", "rejected", "request_additional"] as const;
 
-async function requireAdmin(supabase: Awaited<ReturnType<typeof createClient>>) {
-    const { data: { user }, error } = await supabase.auth.getUser();
-    if (error || !user) return null;
-    const { data: profile } = await supabase.from('users').select('id, role, name').eq('id', user.id).single();
-    if (!profile || !ADMIN_ROLES.includes(profile.role)) return null;
-    return profile;
+type ReviewFilter = "all" | "pending" | "verified" | "rejected";
+type ReviewOutcome = (typeof REVIEW_OUTCOMES)[number];
+type ReviewFor = "primary" | "co_borrower";
+type ApiDocumentStatus = "pending" | "verified" | "rejected";
+
+type DocumentRow = {
+  id: string;
+  lead_id: string;
+  document_type: string;
+  document_url: string;
+  verification_status: string;
+  uploaded_at: Date;
+  ocr_data: unknown;
+};
+
+async function requireAdmin(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+) {
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
+
+  if (error || !user) return null;
+
+  const { data: profile } = await supabase
+    .from("users")
+    .select("id, role, name")
+    .eq("id", user.id)
+    .single();
+
+  if (!profile || !ADMIN_ROLES.includes(profile.role)) return null;
+
+  return profile;
+}
+
+function parseReviewFilter(value: string | null): ReviewFilter {
+  if (value === "all" || value === "verified" || value === "rejected") {
+    return value;
+  }
+
+  return "pending";
+}
+
+function getDbStatusesForFilter(filter: ReviewFilter): string[] | null {
+  if (filter === "pending") {
+    return ["pending", "in_progress", "awaiting_action"];
+  }
+
+  if (filter === "verified") {
+    return ["success"];
+  }
+
+  if (filter === "rejected") {
+    return ["failed"];
+  }
+
+  return null;
+}
+
+function mapDocumentStatus(status: string | null): ApiDocumentStatus {
+  if (status === "success") return "verified";
+  if (status === "failed") return "rejected";
+  return "pending";
+}
+
+function deriveInterestLevel(status: string | null): string {
+  if (!status) return "cold";
+
+  const normalizedStatus = status.toLowerCase().trim();
+
+  if (["interested", "approved", "hot"].includes(normalizedStatus)) {
+    return "hot";
+  }
+
+  if (["contacted", "warm", "callback_requested"].includes(normalizedStatus)) {
+    return "warm";
+  }
+
+  return "cold";
+}
+
+async function fetchPrimaryDocuments(
+  filter: ReviewFilter,
+): Promise<DocumentRow[]> {
+  const statuses = getDbStatusesForFilter(filter);
+  const query = db
+    .select({
+      id: kycDocuments.id,
+      lead_id: kycDocuments.lead_id,
+      document_type: kycDocuments.doc_type,
+      document_url: kycDocuments.file_url,
+      verification_status: kycDocuments.verification_status,
+      uploaded_at: kycDocuments.uploaded_at,
+      ocr_data: kycDocuments.ocr_data,
+    })
+    .from(kycDocuments);
+
+  return statuses
+    ? query
+        .where(inArray(kycDocuments.verification_status, statuses))
+        .orderBy(desc(kycDocuments.uploaded_at))
+        .limit(200)
+    : query.orderBy(desc(kycDocuments.uploaded_at)).limit(200);
+}
+
+async function fetchCoBorrowerDocuments(
+  filter: ReviewFilter,
+): Promise<DocumentRow[]> {
+  const statuses = getDbStatusesForFilter(filter);
+  const query = db
+    .select({
+      id: coBorrowerDocuments.id,
+      lead_id: coBorrowerDocuments.lead_id,
+      document_type: coBorrowerDocuments.doc_type,
+      document_url: coBorrowerDocuments.file_url,
+      verification_status: coBorrowerDocuments.verification_status,
+      uploaded_at: coBorrowerDocuments.uploaded_at,
+      ocr_data: coBorrowerDocuments.ocr_data,
+    })
+    .from(coBorrowerDocuments);
+
+  return statuses
+    ? query
+        .where(inArray(coBorrowerDocuments.verification_status, statuses))
+        .orderBy(desc(coBorrowerDocuments.uploaded_at))
+        .limit(200)
+    : query.orderBy(desc(coBorrowerDocuments.uploaded_at)).limit(200);
+}
+
+function toReviewDocument(doc: DocumentRow, reviewFor: ReviewFor) {
+  return {
+    id: doc.id,
+    lead_id: doc.lead_id,
+    document_type: doc.document_type,
+    document_url: doc.document_url,
+    status: mapDocumentStatus(doc.verification_status),
+    uploaded_at: doc.uploaded_at,
+    ocr_data: doc.ocr_data,
+    review_for: reviewFor,
+  };
 }
 
 export async function GET(req: NextRequest) {
-    try {
-        const supabase = await createClient();
-        const admin = await requireAdmin(supabase);
-        if (!admin) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 });
+  try {
+    const supabase = await createClient();
+    const admin = await requireAdmin(supabase);
 
-        const { searchParams } = new URL(req.url);
-        const status = searchParams.get('status') || 'pending';
-        const search = searchParams.get('search') || '';
-
-        // Fetch KYC docs with lead info
-        let docConditions: any[] = [];
-        if (status === 'pending') {
-            docConditions.push(
-                or(eq(kycDocuments.status, 'uploaded'), eq(kycDocuments.status, 'pending_review'))
-            );
-        } else if (status === 'verified') {
-            docConditions.push(eq(kycDocuments.status, 'verified'));
-        } else if (status === 'rejected') {
-            docConditions.push(eq(kycDocuments.status, 'rejected'));
-        }
-
-        const primaryDocs = await db
-            .select({
-                id: kycDocuments.id,
-                lead_id: kycDocuments.lead_id,
-                document_type: kycDocuments.document_type,
-                document_url: kycDocuments.document_url,
-                status: kycDocuments.status,
-                uploaded_at: kycDocuments.uploaded_at,
-                ocr_data: kycDocuments.ocr_data,
-            })
-            .from(kycDocuments)
-            .where(docConditions.length > 0 ? and(...docConditions) : undefined)
-            .orderBy(sql`${kycDocuments.uploaded_at} DESC`)
-            .limit(200);
-
-        // Get unique lead IDs
-        const leadIds = [...new Set(primaryDocs.map(d => d.lead_id))];
-        if (leadIds.length === 0) {
-            return NextResponse.json({ success: true, data: [] });
-        }
-
-        // Fetch lead details
-        const leadRows = await db
-            .select({
-                id: leads.id,
-                owner_name: leads.owner_name,
-                dealer_id: leads.dealer_id,
-                kyc_status: leads.kyc_status,
-                interest_level: leads.interest_level,
-                has_co_borrower: leads.has_co_borrower,
-            })
-            .from(leads)
-            .where(inArray(leads.id, leadIds));
-
-        // Fetch dealer names
-        const dealerIds = [...new Set(leadRows.map(l => l.dealer_id).filter(Boolean))] as string[];
-        const dealerRows = dealerIds.length > 0
-            ? await db.select({ id: accounts.id, business_entity_name: accounts.business_entity_name }).from(accounts).where(inArray(accounts.id, dealerIds))
-            : [];
-        const dealerMap = Object.fromEntries(dealerRows.map(d => [d.id, d.business_entity_name]));
-
-        // Search filter
-        let filteredLeads = leadRows;
-        if (search) {
-            const lower = search.toLowerCase();
-            filteredLeads = leadRows.filter(l =>
-                l.owner_name?.toLowerCase().includes(lower) ||
-                l.id.toLowerCase().includes(lower) ||
-                dealerMap[l.dealer_id || '']?.toLowerCase().includes(lower)
-            );
-        }
-
-        // Group docs by lead
-        const result = filteredLeads.map(lead => {
-            const docs = primaryDocs.filter(d => d.lead_id === lead.id).map(d => ({
-                ...d,
-                review_for: 'primary' as const,
-            }));
-            return {
-                lead_id: lead.id,
-                owner_name: lead.owner_name || 'Unknown',
-                dealer_name: dealerMap[lead.dealer_id || ''] || 'Unknown Dealer',
-                kyc_status: lead.kyc_status || 'pending',
-                interest_level: lead.interest_level || 'cold',
-                has_co_borrower: lead.has_co_borrower || false,
-                documents: docs,
-                review_count: docs.length,
-                pending_count: docs.filter(d => d.status === 'uploaded' || d.status === 'pending_review').length,
-            };
-        });
-
-        return NextResponse.json({ success: true, data: result });
-    } catch (error) {
-        console.error('Admin KYC review fetch error:', error);
-        return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 });
+    if (!admin) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized" },
+        { status: 403 },
+      );
     }
+
+    const { searchParams } = new URL(req.url);
+    const filter = parseReviewFilter(searchParams.get("status"));
+    const search = searchParams.get("search")?.trim().toLowerCase() ?? "";
+
+    const [primaryDocumentRows, coBorrowerDocumentRows] = await Promise.all([
+      fetchPrimaryDocuments(filter),
+      fetchCoBorrowerDocuments(filter),
+    ]);
+
+    const allDocuments = [
+      ...primaryDocumentRows.map((doc) => toReviewDocument(doc, "primary")),
+      ...coBorrowerDocumentRows.map((doc) =>
+        toReviewDocument(doc, "co_borrower"),
+      ),
+    ].sort(
+      (left, right) =>
+        new Date(right.uploaded_at).getTime() -
+        new Date(left.uploaded_at).getTime(),
+    );
+
+    const leadIds = [...new Set(allDocuments.map((doc) => doc.lead_id))];
+
+    if (leadIds.length === 0) {
+      return NextResponse.json({ success: true, data: [] });
+    }
+
+    const [leadRows, coBorrowerRows] = await Promise.all([
+      db
+        .select({
+          id: dealerLeads.id,
+          owner_name: dealerLeads.dealer_name,
+          dealer_name: dealerLeads.shop_name,
+          kyc_status: dealerLeads.current_status,
+        })
+        .from(dealerLeads)
+        .where(inArray(dealerLeads.id, leadIds)),
+      db
+        .select({ lead_id: coBorrowers.lead_id })
+        .from(coBorrowers)
+        .where(inArray(coBorrowers.lead_id, leadIds)),
+    ]);
+
+    const documentsByLead = new Map<
+      string,
+      ReturnType<typeof toReviewDocument>[]
+    >();
+    for (const document of allDocuments) {
+      const existing = documentsByLead.get(document.lead_id) ?? [];
+      existing.push(document);
+      documentsByLead.set(document.lead_id, existing);
+    }
+
+    const coBorrowerLeadIds = new Set(coBorrowerRows.map((row) => row.lead_id));
+
+    const result = leadRows
+      .map((lead) => {
+        const documents = documentsByLead.get(lead.id) ?? [];
+        const ownerName = lead.owner_name?.trim() || "Unknown";
+        const dealerName = lead.dealer_name?.trim() || ownerName;
+
+        return {
+          lead_id: lead.id,
+          owner_name: ownerName,
+          dealer_name: dealerName,
+          kyc_status: lead.kyc_status || "pending",
+          interest_level: deriveInterestLevel(lead.kyc_status),
+          has_co_borrower: coBorrowerLeadIds.has(lead.id),
+          documents,
+          review_count: documents.length,
+          pending_count: documents.filter(
+            (document) => document.status === "pending",
+          ).length,
+        };
+      })
+      .filter((lead) => {
+        if (!search) return true;
+
+        return (
+          lead.owner_name.toLowerCase().includes(search) ||
+          lead.dealer_name.toLowerCase().includes(search) ||
+          lead.lead_id.toLowerCase().includes(search)
+        );
+      })
+      .sort((left, right) => {
+        const leftTime = left.documents[0]
+          ? new Date(left.documents[0].uploaded_at).getTime()
+          : 0;
+        const rightTime = right.documents[0]
+          ? new Date(right.documents[0].uploaded_at).getTime()
+          : 0;
+
+        return rightTime - leftTime;
+      });
+
+    return NextResponse.json({ success: true, data: result });
+  } catch (error) {
+    console.error("Admin KYC review fetch error:", error);
+    return NextResponse.json(
+      { success: false, error: "Server error" },
+      { status: 500 },
+    );
+  }
 }
 
 export async function POST(req: NextRequest) {
-    try {
-        const supabase = await createClient();
-        const admin = await requireAdmin(supabase);
-        if (!admin) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 });
+  try {
+    const supabase = await createClient();
+    const admin = await requireAdmin(supabase);
 
-        const body = await req.json();
-        const { document_id, lead_id, outcome, reviewer_notes, rejection_reason, additional_doc_requested } = body;
-
-        if (!document_id || !lead_id || !outcome) {
-            return NextResponse.json({ success: false, error: 'Missing required fields' }, { status: 400 });
-        }
-
-        if (!['verified', 'rejected', 'request_additional'].includes(outcome)) {
-            return NextResponse.json({ success: false, error: 'Invalid outcome' }, { status: 400 });
-        }
-
-        const now = new Date();
-        const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
-        const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-
-        // Create review record
-        await db.insert(adminKycReviews).values({
-            id: `REVIEW-${dateStr}-${seq}`,
-            lead_id,
-            review_for: 'primary',
-            document_id,
-            outcome,
-            rejection_reason: rejection_reason || null,
-            additional_doc_requested: additional_doc_requested || null,
-            reviewer_id: admin.id,
-            reviewer_notes: reviewer_notes || null,
-            reviewed_at: now,
-            created_at: now,
-        });
-
-        // Update document status
-        const newDocStatus = outcome === 'verified' ? 'verified' : outcome === 'rejected' ? 'rejected' : 'additional_requested';
-        await db.update(kycDocuments)
-            .set({ status: newDocStatus, updated_at: now })
-            .where(eq(kycDocuments.id, document_id));
-
-        // If outcome is request_additional, create an otherDocumentRequest
-        // (handled by the admin notification system)
-
-        return NextResponse.json({ success: true, data: { review_id: `REVIEW-${dateStr}-${seq}` } });
-    } catch (error) {
-        console.error('Admin KYC review submit error:', error);
-        return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 });
+    if (!admin) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized" },
+        { status: 403 },
+      );
     }
+
+    const body = await req.json();
+    const documentId =
+      typeof body.document_id === "string" ? body.document_id.trim() : "";
+    const leadId = typeof body.lead_id === "string" ? body.lead_id.trim() : "";
+    const outcome = typeof body.outcome === "string" ? body.outcome.trim() : "";
+    const reviewerNotes =
+      typeof body.reviewer_notes === "string" ? body.reviewer_notes.trim() : "";
+    const rejectionReason =
+      typeof body.rejection_reason === "string"
+        ? body.rejection_reason.trim()
+        : "";
+    const additionalDocRequested =
+      typeof body.additional_doc_requested === "string"
+        ? body.additional_doc_requested.trim()
+        : "";
+
+    if (!documentId || !leadId || !outcome) {
+      return NextResponse.json(
+        { success: false, error: "Missing required fields" },
+        { status: 400 },
+      );
+    }
+
+    if (!REVIEW_OUTCOMES.includes(outcome as ReviewOutcome)) {
+      return NextResponse.json(
+        { success: false, error: "Invalid outcome" },
+        { status: 400 },
+      );
+    }
+
+    if (outcome === "rejected" && !rejectionReason) {
+      return NextResponse.json(
+        { success: false, error: "Rejection reason is required" },
+        { status: 400 },
+      );
+    }
+
+    if (outcome === "request_additional" && !additionalDocRequested) {
+      return NextResponse.json(
+        { success: false, error: "Additional document request is required" },
+        { status: 400 },
+      );
+    }
+
+    const [primaryDocumentRows, coBorrowerDocumentRows] = await Promise.all([
+      db
+        .select({
+          id: kycDocuments.id,
+          document_type: kycDocuments.doc_type,
+        })
+        .from(kycDocuments)
+        .where(
+          and(
+            eq(kycDocuments.id, documentId),
+            eq(kycDocuments.lead_id, leadId),
+          ),
+        )
+        .limit(1),
+      db
+        .select({
+          id: coBorrowerDocuments.id,
+          document_type: coBorrowerDocuments.doc_type,
+        })
+        .from(coBorrowerDocuments)
+        .where(
+          and(
+            eq(coBorrowerDocuments.id, documentId),
+            eq(coBorrowerDocuments.lead_id, leadId),
+          ),
+        )
+        .limit(1),
+    ]);
+
+    const primaryDocument = primaryDocumentRows[0];
+    const coBorrowerDocument = coBorrowerDocumentRows[0];
+    const matchedDocument = primaryDocument ?? coBorrowerDocument;
+
+    if (!matchedDocument) {
+      return NextResponse.json(
+        { success: false, error: "Document not found" },
+        { status: 404 },
+      );
+    }
+
+    const reviewFor: ReviewFor = primaryDocument ? "primary" : "co_borrower";
+    const typedOutcome = outcome as ReviewOutcome;
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10).replace(/-/g, "");
+    const seq = Math.floor(Math.random() * 10000)
+      .toString()
+      .padStart(4, "0");
+    const reviewId = `REVIEW-${dateStr}-${seq}`;
+
+    await db.insert(adminKycReviews).values({
+      id: reviewId,
+      lead_id: leadId,
+      review_for: reviewFor,
+      document_id: documentId,
+      document_type: matchedDocument.document_type,
+      outcome: typedOutcome,
+      rejection_reason: typedOutcome === "rejected" ? rejectionReason : null,
+      additional_doc_requested:
+        typedOutcome === "request_additional" ? additionalDocRequested : null,
+      reviewer_id: admin.id,
+      reviewer_notes: reviewerNotes || null,
+      reviewed_at: now,
+      created_at: now,
+    });
+
+    const documentUpdate = {
+      verification_status:
+        typedOutcome === "verified"
+          ? "success"
+          : typedOutcome === "rejected"
+            ? "failed"
+            : "awaiting_action",
+      failed_reason: typedOutcome === "rejected" ? rejectionReason : null,
+      verified_at: typedOutcome === "verified" ? now : null,
+      updated_at: now,
+    };
+
+    if (reviewFor === "primary") {
+      await db
+        .update(kycDocuments)
+        .set(documentUpdate)
+        .where(eq(kycDocuments.id, documentId));
+    } else {
+      await db
+        .update(coBorrowerDocuments)
+        .set(documentUpdate)
+        .where(eq(coBorrowerDocuments.id, documentId));
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: { review_id: reviewId },
+    });
+  } catch (error) {
+    console.error("Admin KYC review submit error:", error);
+    return NextResponse.json(
+      { success: false, error: "Server error" },
+      { status: 500 },
+    );
+  }
 }

@@ -17,18 +17,20 @@ export async function middleware(request: NextRequest) {
           return request.cookies.getAll();
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+          cookiesToSet.forEach(({ name, value }) =>
+            request.cookies.set(name, value),
+          );
 
           response = NextResponse.next({
             request,
           });
 
           cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
+            response.cookies.set(name, value, options),
           );
         },
       },
-    }
+    },
   );
 
   const {
@@ -59,7 +61,9 @@ export async function middleware(request: NextRequest) {
     path === "/favicon.ico";
 
   const isProtectedRoute =
-    Object.values(roleDashboards).some((dashboardPath) => path.startsWith(dashboardPath)) ||
+    Object.values(roleDashboards).some((dashboardPath) =>
+      path.startsWith(dashboardPath),
+    ) ||
     path.startsWith("/inventory") ||
     path.startsWith("/product-catalog") ||
     path.startsWith("/oem-onboarding") ||
@@ -127,11 +131,17 @@ export async function middleware(request: NextRequest) {
 
   // Shared access routes
   const sharedRouteAccess: Record<string, string[]> = {
-    "/admin/dealer-verification": ["admin", "sales_head", "business_head", "ceo"],
+    "/admin/dealer-verification": [
+      "admin",
+      "sales_head",
+      "business_head",
+      "ceo",
+    ],
+    "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
   };
 
-  const allowedSharedRoles = Object.entries(sharedRouteAccess).find(([routePrefix]) =>
-    path.startsWith(routePrefix)
+  const allowedSharedRoles = Object.entries(sharedRouteAccess).find(
+    ([routePrefix]) => path.startsWith(routePrefix),
   )?.[1];
 
   if (allowedSharedRoles && allowedSharedRoles.includes(role)) {
@@ -139,7 +149,7 @@ export async function middleware(request: NextRequest) {
   }
 
   const matchedRole = Object.entries(roleDashboards).find(([, dashboardPath]) =>
-    path.startsWith(dashboardPath)
+    path.startsWith(dashboardPath),
   )?.[0];
 
   if (matchedRole && matchedRole !== role && role !== "ceo") {

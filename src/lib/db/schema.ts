@@ -12,7 +12,6 @@ import {
   bigint,
   json,
 } from "drizzle-orm/pg-core";
-// import { pgTable, uuid, text, varchar, boolean, timestamp, jsonb, bigint } from "drizzle-orm/pg-core";
 
 import { relations } from "drizzle-orm";
 
@@ -1616,6 +1615,92 @@ export const adminKycReviews = pgTable("admin_kyc_reviews", {
     .defaultNow()
     .notNull(),
 });
+
+export const adminVerificationQueue = pgTable(
+  "admin_verification_queue",
+  {
+    id: varchar("id", { length: 255 }).primaryKey(), // ADMQ-YYYYMMDD-SEQ
+    queue_type: varchar("queue_type", { length: 50 })
+      .default("kyc_verification")
+      .notNull(),
+    lead_id: text("lead_id")
+      .references(() => dealerLeads.id, { onDelete: "cascade" })
+      .notNull(),
+    priority: varchar("priority", { length: 20 }).default("normal").notNull(),
+    assigned_to: uuid("assigned_to").references(() => users.id),
+    submitted_by: uuid("submitted_by").references(() => users.id),
+    status: varchar("status", { length: 50 })
+      .default("pending_itarang_verification")
+      .notNull(),
+    submitted_at: timestamp("submitted_at", { withTimezone: true }),
+    reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    adminVerificationQueueLeadIdx: index("admin_verification_queue_lead_idx").on(
+      table.lead_id,
+    ),
+    adminVerificationQueueStatusIdx: index(
+      "admin_verification_queue_status_idx",
+    ).on(table.status),
+    adminVerificationQueueAssignedIdx: index(
+      "admin_verification_queue_assigned_idx",
+    ).on(table.assigned_to),
+    adminVerificationQueueCreatedIdx: index(
+      "admin_verification_queue_created_idx",
+    ).on(table.created_at),
+  }),
+);
+
+export const kycVerificationMetadata = pgTable(
+  "kyc_verification_metadata",
+  {
+    lead_id: text("lead_id")
+      .primaryKey()
+      .references(() => dealerLeads.id, { onDelete: "cascade" }),
+    submission_timestamp: timestamp("submission_timestamp", {
+      withTimezone: true,
+    }).notNull(),
+    case_type: varchar("case_type", { length: 20 }),
+    coupon_code: varchar("coupon_code", { length: 50 }),
+    coupon_status: varchar("coupon_status", { length: 20 })
+      .default("reserved")
+      .notNull(),
+    documents_count: integer("documents_count").default(0).notNull(),
+    consent_verified: boolean("consent_verified").default(false).notNull(),
+    dealer_edits_locked: boolean("dealer_edits_locked")
+      .default(false)
+      .notNull(),
+    verification_started_at: timestamp("verification_started_at", {
+      withTimezone: true,
+    }),
+    first_api_execution_at: timestamp("first_api_execution_at", {
+      withTimezone: true,
+    }),
+    first_api_type: varchar("first_api_type", { length: 50 }),
+    final_decision: varchar("final_decision", { length: 30 }),
+    final_decision_at: timestamp("final_decision_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    kycVerificationMetadataCouponIdx: index(
+      "kyc_verification_metadata_coupon_idx",
+    ).on(table.coupon_code),
+    kycVerificationMetadataStatusIdx: index(
+      "kyc_verification_metadata_coupon_status_idx",
+    ).on(table.coupon_status),
+  }),
+);
 
 // --- DEPLOYED ASSETS MODULE ---
 

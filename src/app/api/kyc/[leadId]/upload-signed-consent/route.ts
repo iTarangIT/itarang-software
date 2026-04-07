@@ -3,10 +3,22 @@ import { db } from '@/lib/db';
 import { leads, consentRecords } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
+import {
+    buildDealerEditLockMessage,
+    isDealerKycEditsLocked,
+} from '@/lib/kyc/admin-workflow';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const { leadId } = await params;
+
+        if (await isDealerKycEditsLocked(leadId)) {
+            return NextResponse.json(
+                { success: false, error: { message: buildDealerEditLockMessage() } },
+                { status: 409 }
+            );
+        }
+
         const formData = await req.formData();
         const file = formData.get('file') as File;
 

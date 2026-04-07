@@ -11,6 +11,10 @@ import {
     type OcrDocType,
     type OcrComparisonField,
 } from '@/lib/decentro';
+import {
+    buildDealerEditLockMessage,
+    isDealerKycEditsLocked,
+} from '@/lib/kyc/admin-workflow';
 
 // Map doc_type to Decentro OCR document type
 const OCR_DOC_MAP: Record<string, OcrDocType> = {
@@ -21,9 +25,30 @@ const OCR_DOC_MAP: Record<string, OcrDocType> = {
     'rc_copy': 'DRIVING_LICENSE', // closest match for RC OCR
 };
 
+type DecentroOcrResponse = {
+    responseStatus?: string;
+    message?: string;
+    data?: Record<string, unknown>;
+};
+
+type DecentroClassificationResponse = {
+    data?: {
+        documentType?: string;
+        [key: string]: unknown;
+    };
+};
+
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const { leadId } = await params;
+
+        if (await isDealerKycEditsLocked(leadId)) {
+            return NextResponse.json(
+                { success: false, error: { message: buildDealerEditLockMessage() } },
+                { status: 409 }
+            );
+        }
+
         const formData = await req.formData();
         const file = formData.get('file') as File;
         const docType = formData.get('docType') as string;
@@ -42,7 +67,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const fileName = `kyc/${leadId}/${docType}_${Date.now()}.${file.name.split('.').pop()}`;
         const buffer = Buffer.from(await file.arrayBuffer());
 
-        const { data: uploadData, error: uploadError } = await supabase.storage
+        const { error: uploadError } = await supabase.storage
             .from('documents')
             .upload(fileName, buffer, { contentType: file.type, upsert: true });
 
@@ -70,9 +95,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         }).onConflictDoNothing();
 
         // Auto-trigger classification + OCR for supported doc types
-        let ocrData: Record<string, any> | null = null;
+        let ocrData: Record<string, unknown> | null = null;
         let ocrComparison: OcrComparisonField[] | null = null;
-        let classificationResult: any = null;
+        let classificationResult: DecentroClassificationResponse | null = null;
         let ocrFailed = false;
         let ocrError: string | null = null;
 
@@ -81,11 +106,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         // Step 1: Classify document (non-blocking - classification may not be available)
         try {
-            classificationResult = await classifyDocument(blob, file.name);
+            classificationResult = await classifyDocument(blob, file.name) as DecentroClassificationResponse | null;
             const expectedClass = getExpectedDocClass(docType);
+            const detectedTypeRaw = classificationResult?.data?.documentType;
 
-            if (classificationResult?.data?.documentType) {
-                const detectedType = classificationResult.data.documentType.toUpperCase();
+            if (typeof detectedTypeRaw === 'string') {
+                const detectedType = detectedTypeRaw.toUpperCase();
                 if (expectedClass !== 'UNKNOWN' && detectedType !== expectedClass && detectedType !== 'UNKNOWN') {
                     // Document type mismatch - warn but don't block
                     await db.update(kycDocuments)
@@ -118,7 +144,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // Step 2: Run OCR for supported document types
         if (ocrDocType) {
             try {
-                const ocrRes = await extractDocumentOcr(ocrDocType, blob, file.name);
+                const ocrRes = await extractDocumentOcr(ocrDocType, blob, file.name) as DecentroOcrResponse;
 
                 if (ocrRes.responseStatus === 'SUCCESS' && ocrRes.data) {
                     ocrData = ocrRes.data;
@@ -134,7 +160,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
                     if (leadRows.length > 0) {
                         const leadRow = leadRows[0];
-                        ocrComparison = compareOcrWithLead(ocrData!, {
+                        ocrComparison = compareOcrWithLead(ocrData as Record<string, unknown>, {
                             full_name: leadRow.full_name || undefined,
                             father_or_husband_name: leadRow.father_or_husband_name || undefined,
                             dob: leadRow.dob ? leadRow.dob.toISOString() : undefined,
@@ -165,7 +191,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                         })
                         .where(eq(kycDocuments.id, docId));
                 }
-            } catch (err) {
+            } catch {
                 ocrFailed = true;
                 ocrError = 'OCR service unavailable. Please enter details manually.';
 
