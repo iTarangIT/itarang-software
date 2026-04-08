@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
+import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
 import { desc, isNotNull } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
@@ -18,20 +19,16 @@ export async function POST() {
       return NextResponse.json({ error: "No leads found" }, { status: 404 });
     }
 
-    const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/bolna/call`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        phone: lead.phone,
-        leadId: lead.id,
-      }),
+    const result = await triggerBolnaCall({
+      phone: lead.phone!,
+      leadId: lead.id,
     });
 
     return NextResponse.json({
-      success: true,
+      success: result.success,
       lead,
+      call_id: result.call_id,
+      error: result.error,
     });
   } catch (err) {
     console.error(err);

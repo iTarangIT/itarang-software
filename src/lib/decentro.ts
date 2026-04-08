@@ -362,3 +362,116 @@ function normalizeDate(dateStr: string): string {
     } catch { /* ignore */ }
     return dateStr;
 }
+
+// Export helpers for reuse in cross-match module
+export { stringSimilarity, normalizeString, normalizeDate };
+
+// ─── DigiLocker SSO (Aadhaar via DigiLocker) ────────────────────────────────
+
+export interface DigilockerSsoInitParams {
+    reference_id: string;
+    redirect_url: string;
+    purpose_message?: string;
+    requested_documents?: string[];
+    consent_text?: string;
+    expiry_hours?: number;
+}
+
+export async function digilockerSsoInit(params: DigilockerSsoInitParams) {
+    const body = {
+        reference_id: params.reference_id,
+        redirect_url: params.redirect_url,
+        purpose_message: params.purpose_message || 'Aadhaar verification for battery loan application',
+        requested_documents: params.requested_documents || ['aadhaar'],
+        consent_text: params.consent_text || 'I authorize iTarang to fetch my Aadhaar from DigiLocker',
+        expiry_hours: params.expiry_hours || 24,
+    };
+
+    const res = await fetch(`${BASE_URL}/v2/kyc/digilocker/sso/init`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+export async function digilockerCheckStatus(decentroTxnId: string) {
+    const res = await fetch(
+        `${BASE_URL}/v2/kyc/digilocker/sso/status?decentro_txn_id=${encodeURIComponent(decentroTxnId)}&reference_id=${genRefId()}`,
+        {
+            method: 'GET',
+            headers: kycHeaders(),
+        },
+    );
+    return res.json();
+}
+
+// ─── CIBIL Credit Score ─────────────────────────────────────────────────────
+
+export interface CibilParams {
+    name: string;
+    pan: string;
+    dob: string;      // YYYY-MM-DD
+    phone: string;
+    address: string;
+}
+
+export async function fetchCibilScore(params: CibilParams) {
+    const body = {
+        reference_id: genRefId(),
+        consent: 'Y',
+        consent_purpose: 'Credit score check for loan application',
+        name: params.name,
+        pan: params.pan,
+        date_of_birth: params.dob,
+        mobile: params.phone,
+        address: params.address,
+        report_type: 'score',
+    };
+
+    const res = await fetch(`${BASE_URL}/v2/kyc/credit_report/fetch`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+export async function fetchCibilReport(params: CibilParams) {
+    const body = {
+        reference_id: genRefId(),
+        consent: 'Y',
+        consent_purpose: 'Full credit report for loan application',
+        name: params.name,
+        pan: params.pan,
+        date_of_birth: params.dob,
+        mobile: params.phone,
+        address: params.address,
+        report_type: 'full_report',
+    };
+
+    const res = await fetch(`${BASE_URL}/v2/kyc/credit_report/fetch`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+// ─── RC (Registration Certificate) Verification ────────────────────────────
+
+export async function verifyRcNumber(rc_number: string) {
+    const body = {
+        reference_id: genRefId(),
+        id_number: rc_number.toUpperCase().trim(),
+        consent: 'Y',
+        consent_purpose: 'Vehicle registration verification for loan application',
+    };
+
+    const res = await fetch(`${BASE_URL}/v2/kyc/rc/validate`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}

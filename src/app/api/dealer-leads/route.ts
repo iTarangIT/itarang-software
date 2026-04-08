@@ -4,6 +4,57 @@ import { desc, ilike, or, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+
+    const { dealer_name, phone, shop_name, location, language, current_status } = body;
+
+    if (!dealer_name || !phone) {
+      return NextResponse.json(
+        { success: false, error: "dealer_name and phone are required" },
+        { status: 400 },
+      );
+    }
+
+    // Check for duplicate phone
+    const existing = await db
+      .select({ id: dealerLeads.id })
+      .from(dealerLeads)
+      .where(sql`${dealerLeads.phone} = ${phone}`)
+      .limit(1);
+
+    if (existing.length > 0) {
+      return NextResponse.json(
+        { success: false, error: "A lead with this phone number already exists (duplicate)" },
+        { status: 409 },
+      );
+    }
+
+    const id = `DL-${Date.now()}-${nanoid(8)}`;
+
+    await db.execute(
+      sql`INSERT INTO dealer_leads (id, dealer_name, phone, shop_name, location, language, current_status, total_attempts, final_intent_score, follow_up_history, created_at)
+          VALUES (${id}, ${dealer_name}, ${phone}, ${shop_name || null}, ${location || null}, ${language || "hindi"}, ${current_status || "new"}, 0, 0, '[]'::jsonb, NOW())`
+    );
+
+    return NextResponse.json({ success: true, id });
+  } catch (err: any) {
+    // Catch unique constraint violation from DB as a fallback
+    if (err.message?.includes("unique") || err.code === "23505") {
+      return NextResponse.json(
+        { success: false, error: "A lead with this phone number already exists (duplicate)" },
+        { status: 409 },
+      );
+    }
+    console.error("[DEALER-LEADS] Create error:", err);
+    return NextResponse.json(
+      { success: false, error: "Failed to create lead. Please try again." },
+      { status: 500 },
+    );
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);

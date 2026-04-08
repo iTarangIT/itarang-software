@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { db } from '@/lib/db';
-import { kycVerifications, leads } from '@/lib/db/schema';
+import { kycVerifications, leads, personalDetails } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { validateDocument } from '@/lib/decentro';
 
@@ -29,17 +29,35 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             return NextResponse.json({ success: false, error: 'PAN number is required' }, { status: 400 });
         }
 
-        // Fetch lead to compare name
-        const [lead] = await db.select({ full_name: leads.full_name }).from(leads).where(eq(leads.id, leadId)).limit(1);
+        // Fetch lead + personal details to compare fields
+        const [leadRows, pdRows] = await Promise.all([
+            db.select({
+                full_name: leads.full_name,
+                owner_name: leads.owner_name,
+                phone: leads.phone,
+                mobile: leads.mobile,
+                dob: leads.dob,
+                current_address: leads.current_address,
+                local_address: leads.local_address,
+            }).from(leads).where(eq(leads.id, leadId)).limit(1),
+            db.select({
+                pan_no: personalDetails.pan_no,
+                aadhaar_no: personalDetails.aadhaar_no,
+                dob: personalDetails.dob,
+                local_address: personalDetails.local_address,
+                father_husband_name: personalDetails.father_husband_name,
+            }).from(personalDetails).where(eq(personalDetails.lead_id, leadId)).limit(1),
+        ]);
+        const lead = leadRows[0];
+        const pd = pdRows[0];
         if (!lead) {
             return NextResponse.json({ success: false, error: 'Lead not found' }, { status: 404 });
         }
 
-        // Call Decentro API
+        // Call Decentro API (DOB not required for PAN validation)
         const decentroRes = await validateDocument({
             document_type,
             id_number: pan_number.toUpperCase().trim(),
-            dob,
         });
 
         console.log('[Decentro PAN] Response:', JSON.stringify(decentroRes));
@@ -128,6 +146,78 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             message = reasons.join('. ');
         }
 
+        // Build BRD cross-match fields
+        const leadDob = pd?.dob ? new Date(pd.dob).toISOString().slice(0, 10) : (lead.dob ? new Date(lead.dob).toISOString().slice(0, 10) : '');
+        const leadAddress = pd?.local_address || lead.local_address || lead.current_address || '';
+        const leadPhone = lead.phone || lead.mobile || '';
+        const leadGender = ''; // gender from lead if available
+        const leadAadhaar = pd?.aadhaar_no || '';
+
+        const apiGender = kycResult.gender || '';
+        const apiDob = kycResult.dateOfBirth || kycResult.dob || '';
+        const apiAddress = kycResult.address?.full || kycResult.address || '';
+        const apiMobile = kycResult.mobile || kycResult.phone || '';
+        const apiAadhaar = kycResult.maskedAadhaar || kycResult.aadhaar || '';
+
+        const crossMatchFields = [
+            {
+                field: 'PAN Status',
+                leadValue: 'Active',
+                apiValue: kycResult.idStatus || kycResult.panStatus || null,
+                matchScore: (kycResult.idStatus || '').toUpperCase() === 'VALID' ? 100 : 0,
+                pass: isPanValid,
+            },
+            {
+                field: 'PAN Type',
+                leadValue: 'Personal',
+                apiValue: kycResult.category || null,
+                matchScore: (kycResult.category || '').toLowerCase() === 'person' || (kycResult.category || '').toLowerCase() === 'individual' ? 100 : 0,
+                pass: true,
+            },
+            {
+                field: 'Name',
+                leadValue: leadName,
+                apiValue: panName,
+                matchScore: matchScore ?? 0,
+                pass: (matchScore ?? 0) >= 80,
+            },
+            {
+                field: 'Gender',
+                leadValue: leadGender || null,
+                apiValue: apiGender || null,
+                matchScore: !leadGender || !apiGender ? null : (leadGender.charAt(0).toUpperCase() === apiGender.charAt(0).toUpperCase() ? 100 : 0),
+                pass: !leadGender || !apiGender ? true : leadGender.charAt(0).toUpperCase() === apiGender.charAt(0).toUpperCase(),
+            },
+            {
+                field: 'DOB',
+                leadValue: leadDob || null,
+                apiValue: apiDob || null,
+                matchScore: !leadDob || !apiDob ? null : (leadDob === apiDob ? 100 : 0),
+                pass: !leadDob || !apiDob ? true : leadDob === apiDob,
+            },
+            {
+                field: 'Aadhaar',
+                leadValue: leadAadhaar ? `XXXX${leadAadhaar.slice(-4)}` : null,
+                apiValue: apiAadhaar || null,
+                matchScore: !leadAadhaar || !apiAadhaar ? null : (leadAadhaar.slice(-4) === apiAadhaar.slice(-4) ? 100 : 0),
+                pass: true,
+            },
+            {
+                field: 'Address',
+                leadValue: leadAddress || null,
+                apiValue: typeof apiAddress === 'string' ? apiAddress : JSON.stringify(apiAddress) || null,
+                matchScore: !leadAddress || !apiAddress ? null : nameSimilarity(leadAddress, typeof apiAddress === 'string' ? apiAddress : ''),
+                pass: !leadAddress || !apiAddress ? true : nameSimilarity(leadAddress, typeof apiAddress === 'string' ? apiAddress : '') >= 80,
+            },
+            {
+                field: 'Mobile',
+                leadValue: leadPhone || null,
+                apiValue: apiMobile || null,
+                matchScore: !leadPhone || !apiMobile ? null : (leadPhone.slice(-10) === apiMobile.slice(-10) ? 100 : 0),
+                pass: !leadPhone || !apiMobile ? true : leadPhone.slice(-10) === apiMobile.slice(-10),
+            },
+        ];
+
         return NextResponse.json({
             success: overallSuccess,
             message,
@@ -137,6 +227,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 pan_status: kycResult.idStatus || null,
                 pan_category: kycResult.category || null,
                 name_match_score: matchScore,
+                crossMatchFields,
             },
             decentroTxnId: decentroRes.decentroTxnId,
         });

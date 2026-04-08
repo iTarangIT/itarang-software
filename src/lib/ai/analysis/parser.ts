@@ -206,46 +206,78 @@ FINAL OUTPUT (STRICT JSON):
 Return ONLY JSON.
 `;
 
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.1 },
-        }),
-      },
-    );
+  const MAX_RETRIES = 3;
 
-    const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    console.log("RAW GEMINI RESPONSE:", JSON.stringify(data, null, 2));
-    console.log("RAW TEXT:", text);
-
-    if (!text) return fallback(transcript);
-
-    let parsed;
-
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const cleaned = cleanJSON(text);
+      const res = await fetch(
+        "https://api.openai.com/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: "gpt-4o",
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are a deterministic AI sales intelligence engine used in production. Return ONLY valid JSON — no markdown, no explanation, no code fences.",
+              },
+              { role: "user", content: prompt },
+            ],
+            temperature: 0.1,
+            response_format: { type: "json_object" },
+          }),
+        },
+      );
 
-      if (!cleaned) {
-        console.error("NO JSON FOUND:", text);
+      // Handle rate limiting — wait and retry
+      if (res.status === 429) {
+        const waitMs = attempt * 10_000; // 10s, 20s, 30s
+        console.warn(
+          `[OPENAI] Rate limited (attempt ${attempt}/${MAX_RETRIES}), waiting ${waitMs / 1000}s...`,
+        );
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+
+      const data = await res.json();
+      const text = data?.choices?.[0]?.message?.content;
+
+      console.log("RAW OPENAI RESPONSE:", JSON.stringify(data, null, 2));
+      console.log("RAW TEXT:", text);
+
+      if (!text) {
+        console.error("[OPENAI] Empty response on attempt", attempt);
+        if (attempt < MAX_RETRIES) continue;
         return fallback(transcript);
       }
 
-      parsed = JSON.parse(cleaned);
+      try {
+        const cleaned = cleanJSON(text);
+
+        if (!cleaned) {
+          console.error("NO JSON FOUND:", text);
+          return fallback(transcript);
+        }
+
+        return JSON.parse(cleaned);
+      } catch (err) {
+        console.error("JSON PARSE FAILED:", text);
+        return fallback(transcript);
+      }
     } catch (err) {
-      console.error("JSON PARSE FAILED:", text);
+      console.error(`[OPENAI] API error (attempt ${attempt}/${MAX_RETRIES}):`, err);
+      if (attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, attempt * 5000));
+        continue;
+      }
       return fallback(transcript);
     }
-
-    return parsed;
-  } catch (err) {
-    console.error("API ERROR:", err);
-    return fallback(transcript);
   }
+
+  return fallback(transcript);
 }

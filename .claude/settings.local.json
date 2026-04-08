@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -lt \"D:/itarang-software/drizzle/\"*.sql)",
+      "Bash(npx next:*)",
+      "Bash(npx eslint:*)",
+      "Bash(node:*)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}
