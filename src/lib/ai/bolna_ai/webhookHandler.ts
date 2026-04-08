@@ -6,6 +6,8 @@ import { updateLeadAfterCall } from "../storage/leadStore";
 import { dealerLeads } from "@/lib/db/schema";
 import { callQueue } from "@/lib/queue/callQueue";
 import { dialerSession } from "@/lib/queue/dialerSession";
+import { appendSalesCallLog } from "@/lib/google/sheet";
+import { triggerBolnaCall } from "./triggerCall";
 
 function getValidDate(input: any): Date | null {
   if (!input) return null;
@@ -115,11 +117,83 @@ function resolveNextCallAt(
   return new Date(Date.now() + delayMs);
 }
 
+// Track which calls we've already processed to avoid double-advancing
+const processedCalls = new Set<string>();
+
+async function advanceDialerToNextLead() {
+  if (!dialerSession.isActive()) return;
+
+  let nextLead = null;
+  while (dialerSession.isActive()) {
+    const nextLeadId = dialerSession.getNext();
+    if (!nextLeadId) {
+      console.log("AI DIALER: queue complete, all leads called");
+      break;
+    }
+
+    const candidate = await db.query.dealerLeads.findFirst({
+      where: (l, { eq }) => eq(l.id, nextLeadId),
+    });
+
+    if (candidate?.phone) {
+      nextLead = candidate;
+      break;
+    }
+
+    console.log("AI DIALER: skipping lead with no phone", nextLeadId);
+  }
+
+  if (nextLead) {
+    console.log("AI DIALER: calling next lead", {
+      id: nextLead.id,
+      phone: nextLead.phone,
+      remaining: dialerSession.remaining(),
+    });
+
+    await new Promise((r) => setTimeout(r, 5000));
+
+    await triggerBolnaCall({
+      phone: nextLead.phone!,
+      leadId: nextLead.id,
+    });
+  }
+}
+
 export async function handleBolnaWebhook(body: any) {
   try {
     const { transcript, user_number: phone, status } = body;
+    const callId = body.id || body.execution_id || body.run_id || "";
 
-    if (status !== "completed" || !transcript) return;
+    console.log("[WEBHOOK] Received:", { phone, status, callId, hasTranscript: !!transcript });
+
+    // Statuses that mean the call is still in progress — ignore them
+    const IN_PROGRESS = ["initiated", "ringing", "in-progress"];
+
+    if (IN_PROGRESS.includes(status)) {
+      return;
+    }
+
+    // Deduplicate: Bolna sends call-disconnected then completed for the same call
+    // Only process the first terminal event per call
+    if (callId && processedCalls.has(callId)) {
+      console.log("[WEBHOOK] Already processed call, skipping:", callId);
+      return;
+    }
+    if (callId) {
+      processedCalls.add(callId);
+      // Clean up old entries to prevent memory leak (keep last 200)
+      if (processedCalls.size > 200) {
+        const first = processedCalls.values().next().value;
+        if (first) processedCalls.delete(first);
+      }
+    }
+
+    // If no transcript (busy, failed, no-answer), skip to next lead
+    if (!transcript) {
+      console.log("[WEBHOOK] Call ended without conversation, status:", status);
+      await advanceDialerToNextLead();
+      return;
+    }
 
     const rawAnalysis = await analyzeTranscript(transcript);
     const analysis = normalizeAnalysis(rawAnalysis);
@@ -181,58 +255,26 @@ export async function handleBolnaWebhook(body: any) {
         .where(eq(dealerLeads.id, lead.id));
     }
 
+    // ── Log to Google Sheets (fire-and-forget) ──
+    const summary = analysis.memory?.intent_summary
+      ? `${analysis.outcome} — ${analysis.memory.intent_summary}`
+      : `${analysis.outcome} — Intent: ${analysis.intent_score}/100`;
+
+    appendSalesCallLog({
+      leadId: lead.id,
+      timestamp: new Date(),
+      direction: "outbound",
+      toNumber: phone,
+      fromNumber: process.env.BOLNA_FROM_NUMBER ?? "—",
+      transcript: transcript,
+      summary: summary,
+      convId: body.execution_id ?? body.call_id ?? "—",
+    }).catch((err) =>
+      console.error("[SHEETS] Sales call log failed:", err),
+    );
+
     // ── AI Dialer: auto-call next lead when session is active ──
-    if (dialerSession.isActive()) {
-      const nextLeadId = dialerSession.getNext();
-
-      if (nextLeadId) {
-        const nextLead = await db.query.dealerLeads.findFirst({
-          where: (l, { eq }) => eq(l.id, nextLeadId),
-        });
-
-        if (nextLead?.phone) {
-          console.log("AI DIALER: calling next lead", {
-            id: nextLead.id,
-            phone: nextLead.phone,
-            score: nextLead.final_intent_score,
-          });
-
-          await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/bolna/call`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              phone: nextLead.phone,
-              leadId: nextLead.id,
-            }),
-          });
-        } else {
-          // No phone on this lead — skip and try the next one
-          console.log("AI DIALER: skipping lead with no phone", nextLeadId);
-          const skipToId = dialerSession.getNext();
-          if (skipToId) {
-            const skipLead = await db.query.dealerLeads.findFirst({
-              where: (l, { eq }) => eq(l.id, skipToId),
-            });
-            if (skipLead?.phone) {
-              await fetch(
-                `${process.env.NEXT_PUBLIC_BASE_URL}/api/bolna/call`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    phone: skipLead.phone,
-                    leadId: skipLead.id,
-                  }),
-                },
-              );
-            }
-          }
-        }
-      } else {
-        // Queue exhausted
-        console.log("AI DIALER: queue complete, all leads called");
-      }
-    }
+    await advanceDialerToNextLead();
   } catch (err) {
     console.error("Webhook handler error:", err);
   }
