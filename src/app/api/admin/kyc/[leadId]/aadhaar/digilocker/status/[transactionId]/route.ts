@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
-  dealerLeads,
+  leads,
   digilockerTransactions,
   kycVerifications,
   personalDetails,
@@ -55,8 +55,13 @@ export async function GET(
       );
     }
 
-    // If already fetched, return cached data
-    if (txn.status === "document_fetched" && txn.aadhaar_extracted_data) {
+    // If already fetched, return cached data — but only if data is actually populated
+    const cachedData = txn.aadhaar_extracted_data as Record<string, string | null> | null;
+    const cachedCross = txn.cross_match_result as Record<string, unknown> | null;
+    const crossFields = Array.isArray(cachedCross?.fields) ? cachedCross.fields as Record<string, unknown>[] : [];
+    const hasCorrectFormat = crossFields.length > 0 && 'leadValue' in (crossFields[0] || {});
+    const hasRealData = cachedData && (cachedData.name || cachedData.uid) && hasCorrectFormat;
+    if (txn.status === "document_fetched" && hasRealData) {
       return NextResponse.json({
         success: true,
         data: {
@@ -99,12 +104,20 @@ export async function GET(
     }
 
     // Poll Decentro for status if we have a txn ID
+    // IMPORTANT: Only call Decentro API after consent_given stage.
+    // Calling eAadhaar endpoint too early (during link_sent) can invalidate the session.
     let updatedStatus = txn.status;
     let aadhaarData = txn.aadhaar_extracted_data;
     let crossMatchResult = txn.cross_match_result as CrossMatchResult | null;
 
-    if (txn.decentro_txn_id && txn.status !== "failed") {
-      const statusRes = await digilockerCheckStatus(txn.decentro_txn_id);
+    const shouldPollDecentro = txn.decentro_txn_id
+      && txn.status !== "failed"
+      && txn.status !== "link_sent"
+      && (txn.status !== "document_fetched" || !hasRealData);
+
+    if (shouldPollDecentro) {
+      const statusRes = await digilockerCheckStatus(txn.decentro_txn_id!);
+      console.log("[DigiLocker Status] Decentro eAadhaar response:", JSON.stringify(statusRes));
       const remoteData = statusRes?.data || {};
 
       const now = new Date();
@@ -122,25 +135,43 @@ export async function GET(
         updates.customer_authorized_at = now;
       }
 
-      if (remoteData.document_fetched || remoteData.aadhaar_data) {
+      // Check if eAadhaar data is available — Decentro may return it under various keys
+      const hasDocument = remoteData.document_fetched
+        || remoteData.aadhaar_data
+        || remoteData.kycResult
+        || remoteData.name  // eAadhaar fields directly in data
+        || statusRes?.kycResult
+        || (statusRes?.status === "SUCCESS" && statusRes?.responseKey?.includes("eaadhaar"));
+
+      if (hasDocument) {
         updatedStatus = "document_fetched";
         updates.status = "document_fetched";
         updates.digilocker_raw_response = statusRes;
 
-        // Extract Aadhaar fields
-        const raw = remoteData.aadhaar_data || remoteData;
+        // Extract Aadhaar fields — Decentro returns proofOfIdentity + proofOfAddress
+        const poi = remoteData.proofOfIdentity || {};
+        const poa = remoteData.proofOfAddress || {};
+        const raw = remoteData.aadhaar_data || statusRes?.kycResult || remoteData;
+
+        // Build full address from proofOfAddress components
+        const addressParts = [
+          poa.house, poa.street, poa.landmark, poa.locality,
+          poa.vtc, poa.subDistrict, poa.district, poa.state, poa.pincode,
+        ].filter(Boolean);
+        const fullAddress = addressParts.length > 0 ? addressParts.join(", ") : (raw.address || raw.full_address || null);
+
         aadhaarData = {
-          uid: raw.uid || raw.aadhaar_number || null,
-          name: raw.name || null,
-          gender: raw.gender || null,
-          dob: raw.dob || raw.date_of_birth || null,
-          careof: raw.careof || raw.care_of || null,
-          address: raw.address || raw.full_address || null,
-          district: raw.dist || raw.district || null,
-          state: raw.state || null,
-          pincode: raw.pincode || raw.zip || null,
-          photo_base64: raw.photo_base64 || raw.photo || null,
-          mobile: raw.mobile || raw.phone || null,
+          uid: remoteData.aadhaarUid || raw.uid || raw.aadhaar_number || null,
+          name: poi.name || raw.name || null,
+          gender: poi.gender || raw.gender || null,
+          dob: poi.dob || raw.dob || raw.date_of_birth || null,
+          careof: poa.careOf || poa.careof || raw.careof || raw.care_of || null,
+          address: fullAddress,
+          district: poa.district || raw.dist || raw.district || null,
+          state: poa.state || raw.state || null,
+          pincode: poa.pincode || raw.pincode || raw.zip || null,
+          photo_base64: remoteData.image || raw.photo_base64 || raw.photo || null,
+          mobile: poi.hashedMobileNumber || raw.mobile || raw.phone || null,
         };
         updates.aadhaar_extracted_data = aadhaarData;
 
@@ -148,8 +179,8 @@ export async function GET(
         const [leadRows, personalRows] = await Promise.all([
           db
             .select()
-            .from(dealerLeads)
-            .where(eq(dealerLeads.id, leadId))
+            .from(leads)
+            .where(eq(leads.id, leadId))
             .limit(1),
           db
             .select()
@@ -162,7 +193,7 @@ export async function GET(
         const personal = personalRows[0];
 
         if (lead) {
-          crossMatchResult = crossMatchAadhaarData(
+          const rawCrossMatch = crossMatchAadhaarData(
             {
               name: (aadhaarData as Record<string, string>).name,
               dob: (aadhaarData as Record<string, string>).dob,
@@ -172,16 +203,30 @@ export async function GET(
               fatherOrHusbandName: (aadhaarData as Record<string, string>).careof,
             },
             {
-              name: lead.dealer_name,
-              dob: personal?.dob
-                ? new Date(personal.dob).toISOString().slice(0, 10)
-                : null,
-              phone: lead.phone,
-              address: personal?.local_address || lead.location,
+              name: lead.full_name || lead.owner_name,
+              dob: lead.dob
+                ? new Date(lead.dob).toISOString().slice(0, 10)
+                : personal?.dob
+                  ? new Date(personal.dob).toISOString().slice(0, 10)
+                  : null,
+              phone: lead.phone || lead.mobile || lead.owner_contact,
+              address: personal?.local_address || lead.shop_address || lead.city,
               gender: null,
               fatherOrHusbandName: personal?.father_husband_name,
             },
           );
+          // Map to UI-expected format: leadValue/aadhaarValue/pass
+          crossMatchResult = {
+            ...rawCrossMatch,
+            fields: rawCrossMatch.fields.map(f => ({
+              field: f.field,
+              leadValue: f.inputValue,
+              aadhaarValue: f.documentValue,
+              similarity: f.similarity,
+              threshold: f.threshold,
+              pass: f.matchResult === "strong" || f.matchResult === "moderate",
+            })),
+          } as unknown as CrossMatchResult;
           updates.cross_match_result = crossMatchResult;
         }
 

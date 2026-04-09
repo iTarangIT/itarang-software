@@ -22,7 +22,7 @@ const OCR_DOC_MAP: Record<string, OcrDocType> = {
     'aadhaar_back': 'AADHAAR',
     'pan_card': 'PAN',
     'address_proof': 'AADHAAR',
-    'rc_copy': 'DRIVING_LICENSE', // closest match for RC OCR
+    'rc_copy': 'DRIVING_LICENSE',
 };
 
 type DecentroOcrResponse = {

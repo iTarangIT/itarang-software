@@ -3,13 +3,13 @@ import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
-  dealerLeads,
+  leads,
   digilockerTransactions,
   kycVerificationMetadata,
   kycVerifications,
   personalDetails,
 } from "@/lib/db/schema";
-import { digilockerSsoInit } from "@/lib/decentro";
+import { digilockerInitiateSession } from "@/lib/decentro";
 import {
   createWorkflowId,
   requireAdminAppUser,
@@ -47,8 +47,8 @@ export async function POST(
     const [leadRows, personalRows] = await Promise.all([
       db
         .select()
-        .from(dealerLeads)
-        .where(eq(dealerLeads.id, leadId))
+        .from(leads)
+        .where(eq(leads.id, leadId))
         .limit(1),
       db
         .select()
@@ -65,7 +65,7 @@ export async function POST(
       );
     }
 
-    const customerPhone = lead.phone;
+    const customerPhone = lead.phone || lead.mobile || lead.owner_contact;
     if (!customerPhone) {
       return NextResponse.json(
         {
@@ -77,32 +77,38 @@ export async function POST(
     }
 
     const personal = personalRows[0];
-    const customerEmail = personal?.email || null;
+    const customerEmail = personal?.email || lead.owner_email || null;
 
     const now = new Date();
     const digiId = createWorkflowId("DIGI", now);
     const referenceId = `DIGI-${leadId}-${Date.now()}`;
     const callbackUrl = `${DIGILOCKER_CALLBACK_BASE}/api/kyc/digilocker/callback/${encodeURIComponent(digiId)}`;
 
-    // Call Decentro DigiLocker SSO Init
-    const decentroRes = await digilockerSsoInit({
+    // Step 1: Initiate DigiLocker session → get auth URL + transaction ID
+    // Pass customer phone so Decentro sends the DigiLocker link via SMS
+    const decentroRes = await digilockerInitiateSession({
       reference_id: referenceId,
       redirect_url: callbackUrl,
-      purpose_message:
-        "Aadhaar verification for battery loan application",
-      requested_documents: ["aadhaar"],
-      consent_text:
-        "I authorize iTarang to fetch my Aadhaar from DigiLocker",
-      expiry_hours: linkValidityHours,
+      consent_purpose: "Aadhaar verification for battery loan application",
+      mobile_number: customerPhone,
+      email: customerEmail,
+      notification_channel: notificationChannel as 'sms' | 'whatsapp' | 'email' | 'both',
     });
 
-    const sessionId = decentroRes?.data?.session_id || null;
-    const digilockerUrl = decentroRes?.data?.digilocker_url || null;
-    const expiresAt = decentroRes?.data?.expires_at
-      ? new Date(decentroRes.data.expires_at)
+    console.log("[DigiLocker Initiate] Response:", JSON.stringify(decentroRes));
+
+    const resData = decentroRes?.data || {};
+    const sessionId = resData.session_id || null;
+    // initiate_session returns auth URL as authorizationUrl (camelCase from Decentro)
+    const digilockerUrl = resData.authorizationUrl || resData.authorization_url || resData.digilocker_url || resData.url || null;
+    const decentroTxnId = decentroRes?.decentroTxnId || resData.decentroTxnId || resData.decentro_transaction_id || null;
+    const expiresAt = resData.expires_at
+      ? new Date(resData.expires_at)
       : new Date(now.getTime() + linkValidityHours * 60 * 60 * 1000);
 
-    const apiSuccess = decentroRes?.status === "SUCCESS" && digilockerUrl;
+    const apiSuccess =
+      (decentroRes?.status === "SUCCESS" || decentroRes?.responseStatus === "SUCCESS") &&
+      (digilockerUrl || decentroTxnId);
 
     if (!apiSuccess) {
       return NextResponse.json(
@@ -143,7 +149,7 @@ export async function POST(
       lead_id: leadId,
       verification_id: verificationId,
       reference_id: referenceId,
-      decentro_txn_id: decentroRes?.decentroTxnId || null,
+      decentro_txn_id: decentroTxnId,
       session_id: sessionId,
       status: "link_sent",
       customer_phone: customerPhone,
@@ -181,6 +187,7 @@ export async function POST(
         transactionId: digiId,
         sessionId,
         verificationId,
+        digilockerUrl,
         linkSent: true,
         sentTo: {
           mobile: customerPhone,

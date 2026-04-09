@@ -12,8 +12,66 @@ import { crossMatchAadhaarData } from "@/lib/kyc/cross-match";
 
 /**
  * DigiLocker Callback — PUBLIC endpoint (no auth).
- * Called by Decentro after the customer authorizes document fetch.
+ * GET: Browser redirect from DigiLocker after customer consent.
+ * POST: Webhook from Decentro with document data.
  */
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<{ transactionId: string }> },
+) {
+  try {
+    const { transactionId } = await params;
+    const url = new URL(req.url);
+    const status = url.searchParams.get("status");
+    const decentroTxnId = url.searchParams.get("initiation_decentro_transaction_id");
+
+    console.log("[DigiLocker Callback GET]", { transactionId, status, decentroTxnId });
+
+    // Validate transaction exists
+    const txnRows = await db
+      .select()
+      .from(digilockerTransactions)
+      .where(eq(digilockerTransactions.id, transactionId))
+      .limit(1);
+
+    const txn = txnRows[0];
+    if (!txn) {
+      return new NextResponse("Invalid transaction", { status: 400 });
+    }
+
+    const now = new Date();
+
+    if (status === "SUCCESS" && txn.status !== "document_fetched") {
+      // Customer gave consent — update status so polling can pick up and fetch eAadhaar
+      await db
+        .update(digilockerTransactions)
+        .set({
+          status: "consent_given",
+          customer_authorized_at: now,
+          decentro_txn_id: decentroTxnId || txn.decentro_txn_id,
+          updated_at: now,
+        })
+        .where(eq(digilockerTransactions.id, transactionId));
+    } else if (status === "FAILURE" || status === "DENIED") {
+      await db
+        .update(digilockerTransactions)
+        .set({ status: "failed", updated_at: now })
+        .where(eq(digilockerTransactions.id, transactionId));
+    }
+
+    // Redirect customer to a simple success/thank-you page
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://itarang.com";
+    const redirectUrl = status === "SUCCESS"
+      ? `${appUrl}/kyc/digilocker/success`
+      : `${appUrl}/kyc/digilocker/failed`;
+
+    return NextResponse.redirect(redirectUrl);
+  } catch (error) {
+    console.error("[DigiLocker Callback GET] Error:", error);
+    return new NextResponse("Something went wrong. Please close this window.", { status: 200 });
+  }
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ transactionId: string }> },

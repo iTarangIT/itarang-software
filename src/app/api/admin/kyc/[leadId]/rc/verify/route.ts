@@ -56,23 +56,22 @@ export async function POST(
       );
     }
 
-    // Call Decentro RC API
+    // Call Decentro RC to Chassis API
     const decentroRes = await verifyRcNumber(rcNumber);
+
+    console.log("[RC to Chassis] Response:", JSON.stringify(decentroRes));
 
     const now = new Date();
     const responseData = decentroRes?.data || {};
-    const overallSuccess = decentroRes?.status === "SUCCESS";
+    const overallSuccess =
+      decentroRes?.status === "SUCCESS" ||
+      decentroRes?.responseKey === "success" ||
+      !!responseData.chassisNumber ||
+      !!responseData.chassis_number;
 
     const rcDetails = {
-      chassisNumber: responseData.chassis_number ?? responseData.chassisNumber ?? null,
-      engineNumber: responseData.engine_number ?? responseData.engineNumber ?? null,
-      ownerName: responseData.owner_name ?? responseData.ownerName ?? null,
-      registrationDate: responseData.registration_date ?? responseData.registrationDate ?? null,
-      vehicleClass: responseData.vehicle_class ?? responseData.vehicleClass ?? null,
-      fuelType: responseData.fuel_type ?? responseData.fuelType ?? null,
-      makerModel: responseData.maker_model ?? responseData.makerModel ?? null,
-      fitnessUpto: responseData.fitness_upto ?? responseData.fitnessUpto ?? null,
-      insuranceUpto: responseData.insurance_upto ?? responseData.insuranceUpto ?? null,
+      chassisNumber: responseData.chassisNumber ?? responseData.chassis_number ?? null,
+      rcNumber: rcNumber,
     };
 
     // Upsert kycVerifications

@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
-  dealerLeads,
+  leads,
   kycVerificationMetadata,
   kycVerifications,
   personalDetails,
@@ -33,8 +33,8 @@ export async function POST(
     const [leadRows, personalRows] = await Promise.all([
       db
         .select()
-        .from(dealerLeads)
-        .where(eq(dealerLeads.id, leadId))
+        .from(leads)
+        .where(eq(leads.id, leadId))
         .limit(1),
       db
         .select()
@@ -62,12 +62,12 @@ export async function POST(
       );
     }
 
-    const name = lead.dealer_name || "";
+    const name = lead.full_name || lead.owner_name || "";
     const dob = personal.dob
       ? new Date(personal.dob).toISOString().slice(0, 10)
-      : "";
-    const phone = lead.phone || "";
-    const address = personal.local_address || lead.location || "";
+      : (lead.dob ? new Date(lead.dob).toISOString().slice(0, 10) : "");
+    const phone = lead.phone || lead.mobile || lead.owner_contact || "";
+    const address = personal.local_address || lead.local_address || lead.current_address || "";
 
     const decentroRes = await fetchCibilReport({
       name,
@@ -77,24 +77,47 @@ export async function POST(
       address,
     });
 
+    console.log("[CIBIL Report] Response:", JSON.stringify(decentroRes));
+
     const now = new Date();
     const responseData = decentroRes?.data || {};
-    const score =
-      responseData.credit_score ?? responseData.score ?? null;
+
+    // /v2/financial_services/credit_bureau/credit_report/summary
     const overallSuccess =
-      decentroRes?.status === "SUCCESS" && score !== null;
+      decentroRes?.responseKey === "success_credit_report" ||
+      decentroRes?.status === "SUCCESS";
+
+    // Extract score — credit report summary may return score in various locations
+    const scoreDetails = responseData.scoreDetails || responseData.cCRResponse?.scoreDetails;
+    const score =
+      (Array.isArray(scoreDetails) && scoreDetails.length > 0 && scoreDetails[0]?.value) ||
+      (responseData.creditScore?.score ?? responseData.credit_score ?? responseData.score ?? null);
 
     const interpretation = score ? interpretCibilScore(Number(score)) : null;
 
-    // Build summary from report
+    // Build summary from credit report summary response
+    const personalInfo = responseData.personalInfo || {};
+    const accountSummary = responseData.accountSummary || {};
+    const enquirySummary = responseData.enquirySummary || {};
     const summary = {
-      activeLoans: responseData.active_loans ?? null,
-      totalOutstanding: responseData.total_outstanding ?? null,
-      creditUtilization: responseData.credit_utilization ?? null,
-      paymentDefaults: responseData.payment_defaults ?? null,
-      recentEnquiries: responseData.recent_enquiries ?? null,
-      oldestAccountAge: responseData.oldest_account_age ?? null,
-      creditMix: responseData.credit_mix ?? null,
+      fullName: personalInfo.fullName || null,
+      dob: personalInfo.dob || null,
+      gender: personalInfo.gender || null,
+      totalIncome: personalInfo.totalIncome || null,
+      occupation: personalInfo.occupation || null,
+      panNumber: responseData.identityInfo?.panNumber?.[0]?.idNumber || responseData.document_id || null,
+      addresses: responseData.addressInfo || [],
+      phones: responseData.phoneInfo || [],
+      emails: responseData.emailInfo || [],
+      activeLoans: accountSummary.activeAccounts ?? responseData.active_loans ?? null,
+      totalOutstanding: accountSummary.totalOutstanding ?? responseData.total_outstanding ?? null,
+      creditUtilization: accountSummary.creditUtilization ?? responseData.credit_utilization ?? null,
+      paymentDefaults: accountSummary.overdueAccounts ?? responseData.payment_defaults ?? null,
+      recentEnquiries: enquirySummary.last30Days ?? responseData.recent_enquiries ?? null,
+      oldestAccountAge: accountSummary.oldestAccountAge ?? responseData.oldest_account_age ?? null,
+      creditMix: accountSummary.creditMix ?? responseData.credit_mix ?? null,
+      accounts: responseData.accounts || responseData.accountDetails || [],
+      enquiries: responseData.enquiries || responseData.enquiryDetails || [],
     };
 
     // Upsert kycVerifications

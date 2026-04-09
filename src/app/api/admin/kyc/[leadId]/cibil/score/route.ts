@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
-  dealerLeads,
+  leads,
   kycVerificationMetadata,
   kycVerifications,
   personalDetails,
@@ -34,8 +34,8 @@ export async function POST(
     const [leadRows, personalRows] = await Promise.all([
       db
         .select()
-        .from(dealerLeads)
-        .where(eq(dealerLeads.id, leadId))
+        .from(leads)
+        .where(eq(leads.id, leadId))
         .limit(1),
       db
         .select()
@@ -53,39 +53,47 @@ export async function POST(
     }
 
     const personal = personalRows[0];
-    if (!personal?.pan_no) {
+
+    const name = lead.full_name || lead.owner_name || "";
+    const phone = lead.phone || lead.mobile || lead.owner_contact || "";
+
+    if (!name || !phone) {
       return NextResponse.json(
         {
           success: false,
-          error: { message: "PAN number is required for CIBIL check" },
+          error: { message: "Name and phone number are required for credit score" },
         },
         { status: 400 },
       );
     }
 
-    const name = lead.dealer_name || "";
-    const dob = personal.dob
+    const dob = personal?.dob
       ? new Date(personal.dob).toISOString().slice(0, 10)
-      : "";
-    const phone = lead.phone || "";
-    const address = personal.local_address || lead.location || "";
+      : (lead.dob ? new Date(lead.dob).toISOString().slice(0, 10) : "");
+    const address = personal?.local_address || lead.local_address || lead.current_address || "";
 
-    // Call Decentro CIBIL API
+    // Call Decentro Credit Score API (only needs mobile + name)
     const decentroRes = await fetchCibilScore({
       name,
-      pan: personal.pan_no,
+      pan: personal?.pan_no || "",
       dob,
       phone,
       address,
     });
 
+    console.log("[CIBIL Score] Response:", JSON.stringify(decentroRes));
+
     const now = new Date();
+    const responseData = decentroRes?.data || {};
+    // /v2/bytes/credit-score returns score in data.scoreDetails[0].value
+    const scoreDetails = responseData.scoreDetails;
     const score =
-      decentroRes?.data?.credit_score ??
-      decentroRes?.data?.score ??
-      null;
+      (Array.isArray(scoreDetails) && scoreDetails.length > 0 && scoreDetails[0]?.value) ||
+      (responseData.credit_score ?? responseData.score ?? null);
     const overallSuccess =
-      decentroRes?.status === "SUCCESS" && score !== null;
+      (decentroRes?.responseKey === "success_credit_score" ||
+       decentroRes?.status === "SUCCESS") &&
+      score !== null;
 
     const interpretation = score ? interpretCibilScore(Number(score)) : null;
 

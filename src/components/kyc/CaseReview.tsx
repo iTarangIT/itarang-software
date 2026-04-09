@@ -70,6 +70,7 @@ interface VerificationCard {
   adminActionNotes: string | null;
   submittedAt: string | null;
   completedAt: string | null;
+  apiResponse: Record<string, unknown> | null;
 }
 
 interface Consent {
@@ -158,6 +159,11 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const fetchData = useCallback(async () => {
     try {
       const res = await fetch(`/api/admin/kyc/${leadId}/case-review`);
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        setError(`API returned ${res.status} — try restarting the dev server (delete .next and run npm run dev)`);
+        return;
+      }
       const json = await res.json();
       if (json.success) {
         setData(json.data);
@@ -179,24 +185,48 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const latestDigilocker = data?.digilocker?.[0] || null;
 
   // Extract OCR data from uploaded documents to auto-fill card inputs
+  // Handles both flat and nested Decentro OCR response formats (e.g. data.kycResult.*)
   const getOcrField = (docType: string, ...fields: string[]): string | undefined => {
     const doc = data?.documents.find((d) => d.docType === docType);
     if (!doc?.ocrData) return undefined;
     const ocr = doc.ocrData as Record<string, unknown>;
-    for (const f of fields) {
-      const val = ocr[f];
-      if (typeof val === "string" && val.trim()) return val.trim();
+    // Search in top-level, then nested kycResult/extractedData/result
+    const searchTargets: Record<string, unknown>[] = [ocr];
+    for (const nested of ["kycResult", "extractedData", "result", "ocrResult"]) {
+      if (ocr[nested] && typeof ocr[nested] === "object") {
+        searchTargets.push(ocr[nested] as Record<string, unknown>);
+      }
+    }
+    for (const target of searchTargets) {
+      for (const f of fields) {
+        const val = target[f];
+        if (typeof val === "string" && val.trim()) return val.trim();
+      }
     }
     return undefined;
   };
 
-  const ocrPan = getOcrField("pan_card", "pan_number", "panNumber", "id_number", "idNumber");
+  const ocrPan = getOcrField("pan_card", "pan_number", "panNumber", "id_number", "idNumber", "pan", "panNo");
   const ocrDob = getOcrField("pan_card", "dob", "dateOfBirth", "date_of_birth")
     || getOcrField("aadhaar_front", "dob", "dateOfBirth", "date_of_birth");
-  const ocrAccountNumber = getOcrField("bank_statement", "account_number", "accountNumber");
-  const ocrIfsc = getOcrField("bank_statement", "ifsc", "ifsc_code", "ifscCode");
-  const ocrBankName = getOcrField("bank_statement", "bank_name", "bankName");
-  const ocrBranch = getOcrField("bank_statement", "branch", "branchName");
+  // Bank OCR - Decentro doesn't support bank statement/cheque OCR natively,
+  // so these will mostly come from manual entry or personalDetails
+  const ocrAccountNumber = getOcrField("bank_statement", "account_number", "accountNumber")
+    || getOcrField("cheque_1", "account_number", "accountNumber")
+    || getOcrField("cheque_2", "account_number", "accountNumber")
+    || getOcrField("cheque_3", "account_number", "accountNumber")
+    || getOcrField("cheque_4", "account_number", "accountNumber");
+  const ocrIfsc = getOcrField("bank_statement", "ifsc", "ifsc_code", "ifscCode")
+    || getOcrField("cheque_1", "ifsc", "ifsc_code", "ifscCode")
+    || getOcrField("cheque_2", "ifsc", "ifsc_code", "ifscCode")
+    || getOcrField("cheque_3", "ifsc", "ifsc_code", "ifscCode")
+    || getOcrField("cheque_4", "ifsc", "ifsc_code", "ifscCode");
+  const ocrBankName = getOcrField("bank_statement", "bank_name", "bankName")
+    || getOcrField("cheque_1", "bank_name", "bankName")
+    || getOcrField("cheque_2", "bank_name", "bankName");
+  const ocrBranch = getOcrField("bank_statement", "branch", "branchName")
+    || getOcrField("cheque_1", "branch", "branchName")
+    || getOcrField("cheque_2", "branch", "branchName");
   const ocrRcNumber = getOcrField("rc_copy", "rc_number", "rcNumber", "registration_number", "registrationNumber");
 
   const handleFinalDecision = async () => {
@@ -476,6 +506,15 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
             leadName={lead.name}
             panNumber={pd?.panNo || ocrPan || undefined}
             dob={pd?.dob || ocrDob || undefined}
+            existingVerification={getVerification("pan") ? {
+              id: getVerification("pan")!.id,
+              status: getVerification("pan")!.status,
+              adminAction: getVerification("pan")!.adminAction,
+              adminActionNotes: getVerification("pan")!.adminActionNotes,
+              matchScore: getVerification("pan")!.matchScore,
+              apiResponse: getVerification("pan")!.apiResponse,
+            } : null}
+            onActionComplete={fetchData}
           />
 
           {/* Bank */}
@@ -492,6 +531,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               adminAction: getVerification("bank")!.adminAction,
               adminActionNotes: getVerification("bank")!.adminActionNotes,
               matchScore: getVerification("bank")!.matchScore,
+              apiResponse: getVerification("bank")!.apiResponse,
             } : null}
             onActionComplete={fetchData}
           />
@@ -500,13 +540,17 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           <CIBILCard
             leadId={leadId}
             leadName={lead.name}
-            panNumber={pd?.panNo || undefined}
+            panNumber={pd?.panNo || ocrPan || undefined}
+            dob={pd?.dob || ocrDob || undefined}
+            phone={lead.phone}
+            address={pd?.localAddress || undefined}
             existingVerification={getVerification("cibil") ? {
               id: getVerification("cibil")!.id,
               status: getVerification("cibil")!.status,
               matchScore: getVerification("cibil")!.matchScore,
               adminAction: getVerification("cibil")!.adminAction,
               adminActionNotes: getVerification("cibil")!.adminActionNotes,
+              apiResponse: getVerification("cibil")!.apiResponse,
             } : null}
             onActionComplete={fetchData}
           />
@@ -520,6 +564,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               status: getVerification("rc")!.status,
               adminAction: getVerification("rc")!.adminAction,
               adminActionNotes: getVerification("rc")!.adminActionNotes,
+              apiResponse: getVerification("rc")!.apiResponse,
             } : null}
             onActionComplete={fetchData}
           />

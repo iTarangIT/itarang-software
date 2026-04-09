@@ -4,7 +4,7 @@ import { and, desc, eq, gte, lte, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   adminVerificationQueue,
-  dealerLeads,
+  leads,
   kycVerificationMetadata,
 } from "@/lib/db/schema";
 import {
@@ -72,10 +72,11 @@ export async function GET(req: NextRequest) {
         submitted_at: adminVerificationQueue.submitted_at,
         created_at: adminVerificationQueue.created_at,
         updated_at: adminVerificationQueue.updated_at,
-        customerName: dealerLeads.dealer_name,
-        contactNumber: dealerLeads.phone,
-        dealerName: dealerLeads.shop_name,
-        cityName: dealerLeads.location,
+        customerName: leads.full_name,
+        ownerName: leads.owner_name,
+        contactNumber: leads.phone,
+        dealerName: leads.business_name,
+        cityName: leads.city,
         consentVerified: kycVerificationMetadata.consent_verified,
         couponCode: kycVerificationMetadata.coupon_code,
         couponStatus: kycVerificationMetadata.coupon_status,
@@ -83,7 +84,7 @@ export async function GET(req: NextRequest) {
         caseType: kycVerificationMetadata.case_type,
       })
       .from(adminVerificationQueue)
-      .innerJoin(dealerLeads, eq(adminVerificationQueue.lead_id, dealerLeads.id))
+      .innerJoin(leads, eq(adminVerificationQueue.lead_id, leads.id))
       .leftJoin(
         kycVerificationMetadata,
         eq(adminVerificationQueue.lead_id, kycVerificationMetadata.lead_id),
@@ -126,7 +127,7 @@ export async function GET(req: NextRequest) {
       return {
         queueId: row.id,
         leadId: row.lead_id,
-        customer: row.customerName ?? "Unknown",
+        customer: row.customerName ?? row.ownerName ?? "Unknown",
         contactNumber: row.contactNumber ?? null,
         dealer: row.dealerName ?? "Unknown Dealer",
         city: row.cityName ?? null,
