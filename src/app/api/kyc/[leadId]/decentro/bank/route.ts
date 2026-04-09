@@ -26,7 +26,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             validation_type,
         });
 
-        const success = decentroRes.responseStatus === 'SUCCESS';
+        console.log('[Decentro Bank V3] Response:', JSON.stringify(decentroRes));
+
+        // V3 uses api_status, fallback to responseStatus for backward compat
+        const success =
+            decentroRes.api_status === 'Success' ||
+            decentroRes.responseStatus === 'SUCCESS' ||
+            decentroRes.response_key === 'success';
         const now = new Date();
         const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
         const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');

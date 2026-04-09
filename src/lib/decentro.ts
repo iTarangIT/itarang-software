@@ -24,6 +24,7 @@ function kycHeaders(): Record<string, string> {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
         'Content-Type': 'application/json',
+        'accept': 'application/json',
     };
     if (isRealSecret(MODULE_SECRET_KYC)) h['module_secret'] = MODULE_SECRET_KYC!;
     return h;
@@ -62,10 +63,10 @@ export async function validateDocument(params: ValidateDocParams) {
         document_type: params.document_type,
         id_number: params.id_number,
         consent: 'Y',
-        consent_purpose: params.consent_purpose || 'Customer identity verification for loan processing',
-        generate_pdf: params.generate_pdf ?? false,
+        consent_purpose: params.consent_purpose || 'For bank account purpose only',
     };
     if (params.dob) body.dob = params.dob;
+    if (params.generate_pdf) body.generate_pdf = true;
 
     const res = await fetch(`${BASE_URL}/kyc/public_registry/validate`, {
         method: 'POST',
@@ -104,12 +105,16 @@ export async function aadhaarValidateOtp(decentro_txn_id: string, otp: string) {
     return res.json();
 }
 
-// ─── Bank Account Verification ───────────────────────────────────────────────
+// ─── Bank Account Verification (V3) ─────────────────────────────────────────
+// Staging: /v3/banking/money_transfer/validate_bank_account
+
+const CONSUMER_URN = process.env.DECENTRO_CONSUMER_URN || '';
 
 export interface BankVerifyParams {
     account_number: string;
     ifsc: string;
     name?: string;
+    mobile_number?: string;
     perform_name_match?: boolean;
     validation_type?: 'penniless' | 'pennydrop' | 'hybrid';
 }
@@ -118,17 +123,18 @@ export async function verifyBankAccount(params: BankVerifyParams) {
     const body: Record<string, unknown> = {
         reference_id: genRefId(),
         purpose_message: 'Account verification for loan application',
-        transfer_amount: 1,
+        consumer_urn: CONSUMER_URN,
         validation_type: params.validation_type || 'penniless',
         perform_name_match: params.perform_name_match ?? !!params.name,
         beneficiary_details: {
             account_number: params.account_number,
             ifsc: params.ifsc,
             ...(params.name ? { name: params.name } : {}),
+            ...(params.mobile_number ? { mobile_number: params.mobile_number } : {}),
         },
     };
 
-    const res = await fetch(`${BASE_URL}/core_banking/money_transfer/validate_account`, {
+    const res = await fetch(`${BASE_URL}/v3/banking/money_transfer/validate_bank_account`, {
         method: 'POST',
         headers: bankingHeaders(),
         body: JSON.stringify(body),
@@ -210,7 +216,7 @@ export async function classifyDocument(documentBlob: Blob, filename: string) {
 
 // ─── Document OCR ─────────────────────────────────────────────────────────────
 
-export type OcrDocType = 'PAN' | 'AADHAAR' | 'DRIVING_LICENSE' | 'VOTERID';
+export type OcrDocType = 'PAN' | 'AADHAAR' | 'DRIVING_LICENSE' | 'VOTERID' | 'PASSPORT';
 
 export async function extractDocumentOcr(document_type: OcrDocType, documentBlob: Blob, filename: string) {
     const form = new FormData();
@@ -361,4 +367,174 @@ function normalizeDate(dateStr: string): string {
         if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
     } catch { /* ignore */ }
     return dateStr;
+}
+
+// Export helpers for reuse in cross-match module
+export { stringSimilarity, normalizeString, normalizeDate };
+
+// ─── DigiLocker eAadhaar (two-step flow) ────────────────────────────────────
+// Step 1: Initiate Session → get auth URL + decentro_transaction_id
+// Step 2: Get eAadhaar     → fetch Aadhaar data using transaction ID
+
+export interface DigilockerInitSessionParams {
+    reference_id: string;
+    redirect_url: string;
+    consent_purpose?: string;
+    mobile_number?: string;
+    email?: string | null;
+    notification_channel?: 'sms' | 'whatsapp' | 'email' | 'both';
+}
+
+/** Step 1: Initiate DigiLocker session — returns auth URL for customer */
+export async function digilockerInitiateSession(params: DigilockerInitSessionParams) {
+    const body: Record<string, unknown> = {
+        reference_id: params.reference_id,
+        consent: true,
+        consent_purpose: params.consent_purpose || 'Aadhaar verification for loan application',
+        redirect_url: params.redirect_url,
+        redirect_to_signup: false,
+        abstract_access_token: true,
+    };
+
+    // Send notification to customer so they receive the DigiLocker link
+    if (params.mobile_number) {
+        const phone = params.mobile_number.replace(/\D/g, '').slice(-10);
+        const channel = params.notification_channel || 'sms';
+
+        if (channel === 'sms' || channel === 'both') {
+            body.notifications = {
+                ...(body.notifications as object || {}),
+                sms: { mobile_number: phone },
+            };
+        }
+        if (channel === 'whatsapp' || channel === 'both') {
+            body.notifications = {
+                ...(body.notifications as object || {}),
+                whatsapp: { mobile_number: phone },
+            };
+        }
+        if (channel === 'email' && params.email) {
+            body.notifications = {
+                ...(body.notifications as object || {}),
+                email: { email_id: params.email },
+            };
+        }
+    }
+
+    const res = await fetch(`${BASE_URL}/v2/kyc/digilocker/initiate_session`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+// Alias for backward compatibility with existing imports
+export const digilockerSsoInit = digilockerInitiateSession;
+
+export interface DigilockerGetEaadhaarParams {
+    initial_decentro_transaction_id: string;
+    reference_id: string;
+    consent_purpose?: string;
+    generate_xml?: boolean;
+    generate_pdf?: boolean;
+}
+
+/** Step 2: Fetch eAadhaar data using the transaction ID from initiate_session */
+export async function digilockerGetEaadhaar(params: DigilockerGetEaadhaarParams) {
+    const body = {
+        initial_decentro_transaction_id: params.initial_decentro_transaction_id,
+        consent: true,
+        consent_purpose: params.consent_purpose || 'Aadhaar verification for loan application',
+        reference_id: params.reference_id,
+        generate_xml: params.generate_xml ?? false,
+        generate_pdf: params.generate_pdf ?? false,
+    };
+
+    const res = await fetch(`${BASE_URL}/v2/kyc/digilocker/eaadhaar`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+/** Check status / fetch eAadhaar — calls the eAadhaar endpoint with the transaction ID */
+export async function digilockerCheckStatus(decentroTxnId: string) {
+    return digilockerGetEaadhaar({
+        initial_decentro_transaction_id: decentroTxnId,
+        reference_id: genRefId(),
+    });
+}
+
+// ─── Credit Bureau (Equifax via Decentro) ───────────────────────────────────
+// Score:       POST /v2/bytes/credit-score       (lightweight — mobile + name)
+// Data Pull:   POST /v2/financial_services/data/pull  (full report — name, mobile, PAN)
+
+export interface CibilParams {
+    name: string;
+    pan: string;
+    dob: string;      // YYYY-MM-DD
+    phone: string;
+    address: string;
+}
+
+/** Credit score via Bytes module (lightweight — mobile + name only) */
+export async function fetchCibilScore(params: CibilParams) {
+    const body = {
+        mobile: params.phone.replace(/\D/g, '').slice(-10),
+        name: params.name,
+    };
+
+    const res = await fetch(`${BASE_URL}/v2/bytes/credit-score`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+/** Full credit report summary — returns score + accounts + enquiries */
+export async function fetchCibilReport(params: CibilParams) {
+    const body: Record<string, unknown> = {
+        reference_id: genRefId(),
+        consent: true,
+        consent_purpose: 'Credit report for loan application processing',
+        name: params.name,
+        mobile: params.phone.replace(/\D/g, '').slice(-10),
+        inquiry_purpose: 'PL',
+    };
+
+    if (params.pan) {
+        body.document_type = 'PAN';
+        body.document_id = params.pan.toUpperCase().trim();
+    }
+    if (params.dob) body.date_of_birth = params.dob;
+    if (params.address) body.address = params.address;
+
+    const res = await fetch(`${BASE_URL}/v2/financial_services/credit_bureau/credit_report/summary`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+// ─── RC to Chassis (Vehicle) ─────────────────────────────────────────────────
+// Staging: POST /v2/bytes/converter/rc/chassis
+
+export async function verifyRcNumber(rc_number: string) {
+    const body = {
+        reference_id: genRefId(),
+        consent: true,
+        purpose: 'Vehicle registration verification for loan application',
+        id: rc_number.toUpperCase().trim().replace(/[^A-Z0-9]/g, ''),
+    };
+
+    const res = await fetch(`${BASE_URL}/v2/bytes/converter/rc/chassis`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
 }
