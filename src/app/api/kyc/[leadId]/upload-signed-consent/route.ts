@@ -57,7 +57,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             // Update existing consent record
             await db.update(consentRecords)
                 .set({
-                    consent_status: 'consent_uploaded',
+                    consent_status: 'admin_review_pending',
                     signed_consent_url: uploadResult.url,
                     signed_at: now,
                     updated_at: now,
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
                 lead_id: leadId,
                 consent_for: 'primary',
                 consent_type: 'manual',
-                consent_status: 'consent_uploaded',
+                consent_status: 'admin_review_pending',
                 sign_method: 'manual',
                 signed_consent_url: uploadResult.url,
                 signed_at: now,

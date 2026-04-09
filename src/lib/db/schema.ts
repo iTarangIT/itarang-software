@@ -230,6 +230,8 @@ export const leads = pgTable('leads', {
     consent_status: varchar('consent_status', { length: 30 }).default('awaiting_signature'),
     // Digital: awaiting_signature → link_sent → link_opened → esign_in_progress → esign_completed → admin_review_pending → admin_verified | admin_rejected | expired | esign_failed | esign_blocked
     // Manual: awaiting_signature → consent_generated → consent_uploaded → admin_review_pending → manual_verified | admin_rejected
+    coupon_code: varchar('coupon_code', { length: 20 }),
+    coupon_status: varchar('coupon_status', { length: 20 }), // null, reserved, used
     has_co_borrower: boolean('has_co_borrower').default(false),
     has_additional_docs_required: boolean('has_additional_docs_required').default(false),
     interim_step_status: varchar('interim_step_status', { length: 20 }), // pending, completed
@@ -940,23 +942,54 @@ export const consentRecords = pgTable('consent_records', {
     };
 });
 
+// --- COUPON BATCHES ---
+
+export const couponBatches = pgTable('coupon_batches', {
+    id: varchar('id', { length: 255 }).primaryKey(), // BATCH-YYYYMMDD-SEQ
+    name: varchar('name', { length: 200 }).notNull(),
+    dealer_id: varchar('dealer_id', { length: 255 }).references(() => accounts.id).notNull(),
+    prefix: varchar('prefix', { length: 20 }).notNull(),
+    coupon_value: decimal('coupon_value', { precision: 10, scale: 2 }).default('0').notNull(),
+    total_quantity: integer('total_quantity').notNull(),
+    expiry_date: timestamp('expiry_date', { withTimezone: true }),
+    status: varchar('status', { length: 20 }).default('active').notNull(), // active, expired, revoked
+    created_by: uuid('created_by').references(() => users.id),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+    batchDealerIdx: index('coupon_batches_dealer_idx').on(table.dealer_id),
+    batchStatusIdx: index('coupon_batches_status_idx').on(table.status),
+}));
+
+// --- COUPON CODES ---
+
 export const couponCodes = pgTable('coupon_codes', {
     id: varchar('id', { length: 255 }).primaryKey(), // COUPON-SEQ
     code: varchar('code', { length: 20 }).notNull().unique(),
+    batch_id: varchar('batch_id', { length: 255 }).references(() => couponBatches.id),
     dealer_id: varchar('dealer_id', { length: 255 }).references(() => accounts.id).notNull(),
-    status: varchar('status', { length: 20 }).default('available').notNull(), // available, validated, used, expired
+    status: varchar('status', { length: 20 }).default('available').notNull(), // available, reserved, used, expired, revoked
     credits_available: integer('credits_available').default(1),
     discount_type: varchar('discount_type', { length: 20 }).default('flat'), // flat, percentage
     discount_value: decimal('discount_value', { precision: 10, scale: 2 }).default('0'),
     max_discount_cap: decimal('max_discount_cap', { precision: 10, scale: 2 }),
     min_amount: decimal('min_amount', { precision: 10, scale: 2 }),
+    // Reservation tracking
+    reserved_at: timestamp('reserved_at', { withTimezone: true }),
+    reserved_by: uuid('reserved_by').references(() => users.id),
+    reserved_for_lead_id: varchar('reserved_for_lead_id', { length: 255 }).references(() => leads.id),
+    // Usage tracking
     used_by_lead_id: varchar('used_by_lead_id', { length: 255 }).references(() => leads.id),
     used_by: uuid('used_by').references(() => users.id),
     validated_at: timestamp('validated_at', { withTimezone: true }),
     used_at: timestamp('used_at', { withTimezone: true }),
     expires_at: timestamp('expires_at', { withTimezone: true }),
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => ({
+    couponCodeIdx: index('coupon_codes_code_idx').on(table.code),
+    couponDealerIdx: index('coupon_codes_dealer_idx').on(table.dealer_id, table.status),
+    couponLeadIdx: index('coupon_codes_lead_idx').on(table.reserved_for_lead_id),
+}));
 
 // --- FACILITATION PAYMENTS ---
 

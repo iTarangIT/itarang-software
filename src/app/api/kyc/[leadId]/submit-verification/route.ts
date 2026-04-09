@@ -42,22 +42,43 @@ async function upsertVerification(leadId: string, type: string, values: Record<s
     }
 }
 
-export async function POST(req: NextRequest, { params }: { params: { leadId: string } }) {
-    try {
-        const { leadId } = params;
-        const { couponCode, pan_number, account_number, ifsc, account_holder_name } = await req.json();
+import { requireRole } from '@/lib/auth-utils';
 
-        // Use coupon
-        if (couponCode) {
-            await db.update(couponCodes)
-                .set({ status: 'used', used_by_lead_id: leadId, used_at: new Date() })
-                .where(and(eq(couponCodes.code, couponCode), eq(couponCodes.status, 'validated')));
-        }
+type RouteContext = {
+    params: Promise<{ leadId: string }>;
+};
+
+export async function POST(req: NextRequest, context: RouteContext) {
+    try {
+        const user = await requireRole(['dealer']);
+        const { leadId } = await context.params;
+        const { pan_number, account_number, ifsc, account_holder_name } = await req.json();
 
         const lead = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
         if (!lead.length) {
             return NextResponse.json({ success: false, error: { message: 'Lead not found' } }, { status: 404 });
         }
+
+        // Require reserved coupon before submission
+        const leadCouponCode = lead[0].coupon_code;
+        const leadCouponStatus = lead[0].coupon_status;
+
+        if (!leadCouponCode || leadCouponStatus !== 'reserved') {
+            return NextResponse.json({
+                success: false,
+                error: { message: 'A coupon must be validated and reserved before submitting for verification.' },
+            }, { status: 400 });
+        }
+
+        // Consume coupon: reserved → used
+        await db.update(couponCodes)
+            .set({ status: 'used', used_by_lead_id: leadId, used_by: user.id, used_at: new Date() })
+            .where(and(eq(couponCodes.code, leadCouponCode), eq(couponCodes.status, 'reserved')));
+
+        // Update lead coupon status
+        await db.update(leads)
+            .set({ coupon_status: 'used', updated_at: new Date() })
+            .where(eq(leads.id, leadId));
 
         const vehicleSlugs = ['2w', '3w', '4w', 'commercial'];
         const assetModel = (lead[0].asset_model || '').toLowerCase();

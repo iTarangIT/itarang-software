@@ -435,14 +435,16 @@ export default function AdminKYCReviewPage() {
                                                 <select value={consentRejectionReason} onChange={e => setConsentRejectionReason(e.target.value)}
                                                     className="w-full mb-3 h-11 px-4 border-2 border-[#EBEBEB] rounded-xl text-sm outline-none focus:border-[#1D4ED8]">
                                                     <option value="">Select rejection reason *</option>
+                                                    <option value="Signature missing">Signature missing</option>
                                                     <option value="Signature mismatch">Signature mismatch</option>
+                                                    <option value="Thumb impression missing">Thumb impression missing</option>
+                                                    <option value="Witness signature missing">Witness signature missing</option>
+                                                    <option value="PDF not legible">PDF not legible</option>
+                                                    <option value="Date missing or invalid">Date missing or invalid</option>
                                                     <option value="Name mismatch with Aadhaar">Name mismatch with Aadhaar</option>
                                                     <option value="Incomplete consent text">Incomplete consent text</option>
                                                     <option value="Expired certificate">Expired certificate</option>
-                                                    <option value="Fraudulent document suspected">Fraudulent document suspected</option>
-                                                    <option value="PDF not legible">PDF not legible</option>
-                                                    <option value="Thumb impression missing">Thumb impression missing</option>
-                                                    <option value="Witness signature missing">Witness signature missing</option>
+                                                    <option value="Suspected forgery">Suspected forgery</option>
                                                     <option value="Other">Other</option>
                                                 </select>
                                             )}

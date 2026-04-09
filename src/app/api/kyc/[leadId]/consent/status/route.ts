@@ -30,6 +30,7 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
                 id: record.id,
                 consent_status: record.consent_status,
                 consent_type: record.consent_type,
+                consent_for: record.consent_for,
                 sign_method: record.sign_method,
                 signed_at: record.signed_at,
                 signed_consent_url: record.signed_consent_url,
@@ -40,6 +41,10 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
                 consent_link_expires_at: record.consent_link_expires_at,
                 consent_delivery_channel: record.consent_delivery_channel,
                 esign_error_message: record.esign_error_message,
+                rejection_reason: record.rejection_reason,
+                reviewer_notes: record.reviewer_notes,
+                verified_at: record.verified_at,
+                rejected_at: record.rejected_at,
                 updated_at: record.updated_at,
             },
         });

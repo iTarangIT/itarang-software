@@ -213,6 +213,7 @@ export default function DealerDashboard() {
   const [dealerData, setDealerData] = useState<DealerDashboardData | null>(null);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [selectedLead, setSelectedLead] = useState<LeadItem | null>(null);
+  const [couponStats, setCouponStats] = useState<{ available: number; reserved: number; used: number; total: number; lowStockAlert: boolean } | null>(null);
 
   useEffect(() => {
     const savedDealerData = localStorage.getItem('dealerDashboardData');
@@ -242,6 +243,12 @@ export default function DealerDashboard() {
     };
 
     fetchStats();
+
+    // Fetch coupon stats
+    fetch('/api/dealer/coupons/summary', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(json => { if (json.success && json.data) setCouponStats(json.data); })
+      .catch(() => {});
   }, []);
 
   const dealer = stats.dealer;
@@ -569,6 +576,37 @@ export default function DealerDashboard() {
           </div>
         </div>
       </div>
+
+      {/* ─── Coupon Credits Widget ──────────────────────────────────────── */}
+      {couponStats && (
+        <div className="rounded-2xl border border-[#E3E8EF] bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-sm font-semibold uppercase tracking-wide text-[#1F5C8F]">
+              Verification Coupons
+            </p>
+            {couponStats.lowStockAlert && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-100 text-amber-700 rounded-full text-[10px] font-bold">
+                Low Stock
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-3 text-center">
+              <p className="text-2xl font-bold text-emerald-700">{couponStats.available}</p>
+              <p className="text-[10px] uppercase tracking-wide text-emerald-600 mt-1">Available</p>
+            </div>
+            <div className="rounded-xl bg-amber-50 border border-amber-100 p-3 text-center">
+              <p className="text-2xl font-bold text-amber-700">{couponStats.reserved}</p>
+              <p className="text-[10px] uppercase tracking-wide text-amber-600 mt-1">Reserved</p>
+            </div>
+            <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-center">
+              <p className="text-2xl font-bold text-gray-600">{couponStats.used}</p>
+              <p className="text-[10px] uppercase tracking-wide text-gray-500 mt-1">Used</p>
+            </div>
+          </div>
+          <p className="mt-3 text-xs text-gray-500 text-center">Total: {couponStats.total} coupons</p>
+        </div>
+      )}
 
       {!isApproved ? (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">

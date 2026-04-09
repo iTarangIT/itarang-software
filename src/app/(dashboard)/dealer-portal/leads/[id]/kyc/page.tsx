@@ -107,6 +107,7 @@ export default function KYCPage() {
     const [couponCode, setCouponCode] = useState('');
     const [couponValidating, setCouponValidating] = useState(false);
     const [couponResult, setCouponResult] = useState<any>(null);
+    const [releasingCoupon, setReleasingCoupon] = useState(false);
     const [submittedForVerification, setSubmittedForVerification] = useState(false);
 
     // ─── Data Loading ───────────────────────────────────────────────────────
@@ -132,6 +133,16 @@ export default function KYCPage() {
             setAccessDenied(false);
             setLead(fetchedLead);
             if (fetchedLead?.consent_status) setConsentStatus(fetchedLead.consent_status);
+
+            // Restore coupon state from lead
+            if (fetchedLead?.coupon_code && fetchedLead?.coupon_status === 'reserved') {
+                setCouponCode(fetchedLead.coupon_code);
+                setCouponResult({ valid: true, success: true, coupon_code: fetchedLead.coupon_code, status: 'reserved', message: 'Coupon reserved' });
+            } else if (fetchedLead?.coupon_code && fetchedLead?.coupon_status === 'used') {
+                setCouponCode(fetchedLead.coupon_code);
+                setCouponResult({ valid: true, success: true, coupon_code: fetchedLead.coupon_code, status: 'used', message: 'Coupon used' });
+                setSubmittedForVerification(true);
+            }
 
             const [docsRes, verificationsRes, consentRes] = await Promise.allSettled([
                 fetch(`/api/kyc/${leadId}/documents`, { cache: 'no-store' }),
@@ -374,6 +385,25 @@ export default function KYCPage() {
         }
     };
 
+    const handleReleaseCoupon = async () => {
+        setReleasingCoupon(true);
+        setApiError(null);
+        try {
+            const res = await fetch(`/api/kyc/${leadId}/release-coupon`, { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                setCouponCode('');
+                setCouponResult(null);
+            } else {
+                setApiError(data.error?.message || 'Failed to release coupon');
+            }
+        } catch {
+            setApiError('Failed to release coupon');
+        } finally {
+            setReleasingCoupon(false);
+        }
+    };
+
     const handleSubmitForVerification = async () => {
         try {
             setApiError(null);
@@ -406,6 +436,10 @@ export default function KYCPage() {
         }
         if (!isFinalConsentStatus(consentStatus)) {
             setApiError('Consent must be verified before proceeding');
+            return;
+        }
+        if (lead?.coupon_status !== 'used' && !submittedForVerification) {
+            setApiError('Verification coupon must be validated and submitted before proceeding');
             return;
         }
 
@@ -590,6 +624,9 @@ export default function KYCPage() {
                                     <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
                                     <div>
                                         <p className="text-sm font-bold text-red-800">Consent Rejected by Admin</p>
+                                        {consentRecord?.rejection_reason && (
+                                            <p className="text-xs text-red-700 mt-1 font-medium">Reason: {consentRecord.rejection_reason}</p>
+                                        )}
                                         <p className="text-xs text-red-600 mt-0.5">Please re-generate and re-upload the consent form, or resend digital consent.</p>
                                     </div>
                                 </div>
@@ -750,41 +787,84 @@ export default function KYCPage() {
                     </SectionCard>
 
                     {/* ─── Verification Action ────────────────────────── */}
-                    <SectionCard title="Verification Action">
-                        <div className="flex items-center gap-3">
-                            <input
-                                type="text"
-                                value={couponCode}
-                                onChange={e => setCouponCode(e.target.value.toUpperCase())}
-                                placeholder="Enter coupon code"
-                                maxLength={20}
-                                className="flex-1 h-11 px-4 bg-white border-2 border-[#EBEBEB] rounded-xl outline-none text-sm focus:border-[#1D4ED8] transition-all"
-                            />
-                            <button
-                                onClick={handleValidateCoupon}
-                                disabled={couponValidating || !couponCode.trim()}
-                                className="px-6 py-2.5 bg-white border-2 border-[#0047AB] rounded-xl text-sm font-bold text-[#0047AB] hover:bg-blue-50 transition-all disabled:opacity-50 flex items-center gap-2"
-                            >
-                                {couponValidating && <Loader2 className="w-4 h-4 animate-spin" />}
-                                Validate
-                            </button>
-                            <button
-                                onClick={handleSubmitForVerification}
-                                disabled={submitting || !(couponResult?.success || couponResult?.valid)}
-                                className="px-6 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2"
-                            >
-                                {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                                Submit for Verification
-                            </button>
-                        </div>
-
-                        {couponResult && (couponResult.success || couponResult.valid) && (
-                            <div className="mt-3 px-4 py-2 bg-green-50 border border-green-200 rounded-xl">
-                                <p className="text-sm font-medium text-green-700">
-                                    <CheckCircle2 className="w-4 h-4 inline mr-1" />
-                                    Coupon validated successfully
-                                    {couponResult.coupon?.value ? ` — ₹${couponResult.coupon.value} off` : ''}
-                                </p>
+                    <SectionCard title="Verification Action" action={
+                        lead?.coupon_status === 'used'
+                            ? <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Submitted</span>
+                            : lead?.coupon_status === 'reserved'
+                                ? <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Shield className="w-3 h-3" />Reserved</span>
+                                : <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-bold">Awaiting Coupon</span>
+                    }>
+                        {lead?.coupon_status === 'used' || submittedForVerification ? (
+                            /* ── Coupon Used / Verification Submitted ──── */
+                            <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                                <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+                                <div>
+                                    <p className="text-sm font-bold text-emerald-800">Verification Submitted</p>
+                                    <p className="text-xs text-emerald-600 mt-0.5">Coupon <span className="font-mono font-bold">{couponCode}</span> consumed. Verification is in progress.</p>
+                                </div>
+                            </div>
+                        ) : (couponResult?.valid || couponResult?.success) && lead?.coupon_status === 'reserved' ? (
+                            /* ── Coupon Reserved ──────────────────────── */
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                                    <Shield className="w-5 h-5 text-blue-600 flex-shrink-0" />
+                                    <div className="flex-1">
+                                        <p className="text-sm font-bold text-blue-800">
+                                            Coupon Reserved: <span className="font-mono">{couponCode}</span>
+                                        </p>
+                                        {couponResult.discount_amount > 0 && (
+                                            <p className="text-xs text-blue-600 mt-0.5">Discount: ₹{couponResult.discount_amount} off (Final: ₹{couponResult.final_amount})</p>
+                                        )}
+                                        <p className="text-xs text-blue-500 mt-0.5">This coupon is locked to this lead. Click Submit to start verification.</p>
+                                    </div>
+                                    <button
+                                        onClick={handleReleaseCoupon}
+                                        disabled={releasingCoupon}
+                                        className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-50 transition-all disabled:opacity-50 flex items-center gap-1.5"
+                                    >
+                                        {releasingCoupon ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                                        Change Coupon
+                                    </button>
+                                </div>
+                                <button
+                                    onClick={handleSubmitForVerification}
+                                    disabled={submitting}
+                                    className="w-full px-6 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                    {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                                    Submit for Verification
+                                </button>
+                            </div>
+                        ) : (
+                            /* ── Enter Coupon Code ────────────────────── */
+                            <div className="space-y-3">
+                                <p className="text-xs text-gray-500">Enter your verification coupon code to proceed. Each coupon allows one KYC verification.</p>
+                                <div className="flex items-center gap-3">
+                                    <input
+                                        type="text"
+                                        value={couponCode}
+                                        onChange={e => setCouponCode(e.target.value.toUpperCase())}
+                                        placeholder="Enter coupon code (e.g., TEST--971-001)"
+                                        maxLength={20}
+                                        className="flex-1 h-11 px-4 bg-white border-2 border-[#EBEBEB] rounded-xl outline-none text-sm font-mono focus:border-[#1D4ED8] transition-all"
+                                    />
+                                    <button
+                                        onClick={handleValidateCoupon}
+                                        disabled={couponValidating || !couponCode.trim()}
+                                        className="px-6 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2"
+                                    >
+                                        {couponValidating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+                                        Validate
+                                    </button>
+                                </div>
+                                {couponResult && !couponResult.valid && !couponResult.success && (
+                                    <div className="px-4 py-2 bg-red-50 border border-red-200 rounded-xl">
+                                        <p className="text-sm font-medium text-red-700">
+                                            <AlertCircle className="w-4 h-4 inline mr-1" />
+                                            {couponResult.message || 'Invalid coupon code'}
+                                        </p>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </SectionCard>
