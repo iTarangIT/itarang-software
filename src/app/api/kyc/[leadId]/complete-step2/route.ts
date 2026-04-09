@@ -167,34 +167,8 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
         }
 
         // ---------------------------
-        // Consent check
+        // Consent check skipped — consent is now handled in Step 3
         // ---------------------------
-        const consentRows = await db
-            .select()
-            .from(consentRecords)
-            .where(eq(consentRecords.lead_id, leadId));
-
-        const latestConsent = consentRows
-            .sort(
-                (a, b) =>
-                    new Date(b.updated_at || b.created_at || 0).getTime() -
-                    new Date(a.updated_at || a.created_at || 0).getTime()
-            )[0];
-
-        const leadConsentStatus = String(lead.consent_status || "");
-        const consentRecordStatus = String(latestConsent?.consent_status || "");
-
-        if (!isConsentVerified(leadConsentStatus) && !isConsentVerified(consentRecordStatus)) {
-            return NextResponse.json(
-                {
-                    success: false,
-                    error: {
-                        message: "Consent is not admin verified yet",
-                    },
-                },
-                { status: 400 }
-            );
-        }
 
         // ---------------------------
         // Complete Step 2

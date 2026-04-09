@@ -3,15 +3,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-    AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Clock,
-    Download, Eye, Loader2, RefreshCw, Send, Shield, Upload, X, FileText,
+    AlertCircle, CheckCircle2, ChevronRight, Clock, Download,
+    FileText, Loader2, RefreshCw, Send, Shield, Upload,
 } from 'lucide-react';
 import {
-    SectionCard, DocumentCard, StatusBadge, ProgressHeader,
+    SectionCard, InputField, DocumentCard, StatusBadge, ProgressHeader,
     StickyBottomBar, ErrorBanner, PrimaryButton, SecondaryButton,
     OutlineButton, FullPageLoader,
 } from '@/components/dealer-portal/lead-wizard/shared';
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
+
+// ─── Types ─────────────────────────────────────────────────────────────────
 
 type UploadedDoc = {
     id?: string;
@@ -26,13 +28,7 @@ type UploadedDoc = {
     failed_reason?: string | null;
 };
 
-type VerificationRow = {
-    type: string;
-    label: string;
-    status: string;
-    last_update?: string | null;
-    failed_reason?: string | null;
-};
+// ─── Consent Helpers ───────────────────────────────────────────────────────
 
 function isFinalConsentStatus(status: string) {
     return ['admin_verified', 'manual_verified', 'verified'].includes((status || '').toLowerCase());
@@ -40,43 +36,34 @@ function isFinalConsentStatus(status: string) {
 
 function ConsentStatusBadge({ status }: { status: string }) {
     const s = (status || '').toLowerCase();
-    if (isFinalConsentStatus(s)) {
+    if (isFinalConsentStatus(s))
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Verified</span>;
-    }
-    if (s === 'admin_review_pending') {
+    if (s === 'admin_review_pending')
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold"><Clock className="w-3 h-3" />Pending Review</span>;
-    }
-    if (s === 'admin_rejected') {
+    if (s === 'admin_rejected')
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold"><AlertCircle className="w-3 h-3" />Rejected</span>;
-    }
-    if (s === 'esign_failed') {
+    if (s === 'esign_failed')
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold"><AlertCircle className="w-3 h-3" />eSign Failed</span>;
-    }
-    if (s === 'esign_blocked') {
+    if (s === 'esign_blocked')
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold"><AlertCircle className="w-3 h-3" />Blocked</span>;
-    }
-    if (s === 'expired') {
+    if (s === 'expired')
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold"><Clock className="w-3 h-3" />Expired</span>;
-    }
-    if (s === 'esign_completed') {
-        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Customer Signed</span>;
-    }
-    if (s === 'esign_in_progress') {
+    if (s === 'esign_completed')
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Borrower Signed</span>;
+    if (s === 'esign_in_progress')
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Loader2 className="w-3 h-3 animate-spin" />Signing in Progress</span>;
-    }
-    if (s === 'link_sent' || s === 'link_opened') {
+    if (s === 'link_sent' || s === 'link_opened')
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Send className="w-3 h-3" />{s === 'link_opened' ? 'Link Opened' : 'Link Sent'}</span>;
-    }
-    if (s === 'consent_generated') {
+    if (s === 'consent_generated')
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-teal-100 text-teal-700 rounded-full text-xs font-bold"><FileText className="w-3 h-3" />PDF Generated</span>;
-    }
-    if (s === 'consent_uploaded') {
+    if (s === 'consent_uploaded')
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Upload className="w-3 h-3" />Uploaded</span>;
-    }
     return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-bold">Awaiting Signature</span>;
 }
 
-export default function KYCPage() {
+// ─── Main Page ─────────────────────────────────────────────────────────────
+
+export default function BorrowerConsentPage() {
     const router = useRouter();
     const params = useParams();
     const leadId = params.id as string;
@@ -87,30 +74,31 @@ export default function KYCPage() {
     const [accessDenied, setAccessDenied] = useState(false);
     const [apiError, setApiError] = useState<string | null>(null);
 
-    const [uploadedDocs, setUploadedDocs] = useState<Record<string, UploadedDoc>>({});
-    const [verifications, setVerifications] = useState<VerificationRow[]>([]);
-    const [consentStatus, setConsentStatus] = useState<string>('awaiting_signature');
+    // Borrower form (editable)
+    const [borrowerForm, setBorrowerForm] = useState({
+        full_name: '', father_or_husband_name: '', dob: '', phone: '',
+        email: '', pan_no: '', aadhaar_no: '',
+        current_address: '', permanent_address: '', is_current_same: false,
+        marital_status: '', income: '',
+    });
 
+    // Documents & Verifications
+    const [uploadedDocs, setUploadedDocs] = useState<Record<string, UploadedDoc>>({});
+    const [verifications, setVerifications] = useState<{ type: string; label: string; status: string; last_update?: string | null; failed_reason?: string | null }[]>([]);
+
+    // Consent
+    const [consentStatus, setConsentStatus] = useState<string>('awaiting_signature');
+    const [consentPath, setConsentPath] = useState<'none' | 'digital' | 'manual'>('none');
+    const [consentLoading, setConsentLoading] = useState(false);
+    const [consentPdfUrl, setConsentPdfUrl] = useState<string | null>(null);
+    const [consentRecord, setConsentRecord] = useState<any>(null);
+
+    // Draft / navigation
     const [savingDraft, setSavingDraft] = useState(false);
     const [lastSaved, setLastSaved] = useState<string | null>(null);
     const [submitting, setSubmitting] = useState(false);
 
-    // Consent flow state
-    const [consentPath, setConsentPath] = useState<'none' | 'digital' | 'manual'>('none'); // mutually exclusive
-    const [consentLoading, setConsentLoading] = useState(false);
-    const [consentPdfUrl, setConsentPdfUrl] = useState<string | null>(null);
-
-    // Consent record details
-    const [consentRecord, setConsentRecord] = useState<any>(null);
-
-    // Coupon state
-    const [couponCode, setCouponCode] = useState('');
-    const [couponValidating, setCouponValidating] = useState(false);
-    const [couponResult, setCouponResult] = useState<any>(null);
-    const [releasingCoupon, setReleasingCoupon] = useState(false);
-    const [submittedForVerification, setSubmittedForVerification] = useState(false);
-
-    // ─── Data Loading ───────────────────────────────────────────────────────
+    // ─── Data Loading ──────────────────────────────────────────────────────
 
     const loadPageData = async (soft = false) => {
         if (soft) setRefreshing(true);
@@ -118,37 +106,58 @@ export default function KYCPage() {
 
         try {
             setApiError(null);
+
             const accessRes = await fetch(`/api/kyc/${leadId}/access-check`, { cache: 'no-store' });
             const accessJson = await accessRes.json();
 
             const canAccess = accessJson?.data?.canAccess ?? accessJson?.allowed ?? false;
             const fetchedLead = accessJson?.data?.lead ?? accessJson?.lead ?? null;
 
-            if (!canAccess) {
-                setAccessDenied(true);
-                setLead(fetchedLead);
-                return;
-            }
+            if (!canAccess) { setAccessDenied(true); setLead(fetchedLead); return; }
 
             setAccessDenied(false);
             setLead(fetchedLead);
             if (fetchedLead?.consent_status) setConsentStatus(fetchedLead.consent_status);
 
-            // Restore coupon state from lead
-            if (fetchedLead?.coupon_code && fetchedLead?.coupon_status === 'reserved') {
-                setCouponCode(fetchedLead.coupon_code);
-                setCouponResult({ valid: true, success: true, coupon_code: fetchedLead.coupon_code, status: 'reserved', message: 'Coupon reserved' });
-            } else if (fetchedLead?.coupon_code && fetchedLead?.coupon_status === 'used') {
-                setCouponCode(fetchedLead.coupon_code);
-                setCouponResult({ valid: true, success: true, coupon_code: fetchedLead.coupon_code, status: 'used', message: 'Coupon used' });
-                setSubmittedForVerification(true);
+            // Populate borrower form from lead data (only on initial load)
+            if (!soft && fetchedLead) {
+                setBorrowerForm(prev => ({
+                    ...prev,
+                    full_name: fetchedLead.full_name || '',
+                    father_or_husband_name: fetchedLead.father_or_husband_name || '',
+                    dob: fetchedLead.dob ? new Date(fetchedLead.dob).toISOString().split('T')[0] : '',
+                    phone: fetchedLead.phone || fetchedLead.contact_phone || '',
+                    email: fetchedLead.email || '',
+                    current_address: fetchedLead.current_address || '',
+                    permanent_address: fetchedLead.permanent_address || '',
+                }));
             }
 
-            const [docsRes, verificationsRes, consentRes] = await Promise.allSettled([
+            const [personalRes, docsRes, verificationsRes, consentRes] = await Promise.allSettled([
+                fetch(`/api/kyc/${leadId}/borrower-details`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/documents`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/verifications`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/consent/status`, { cache: 'no-store' }),
             ]);
+
+            // Merge personal details into form (only on initial load)
+            if (!soft && personalRes.status === 'fulfilled') {
+                const personalJson = await personalRes.value.json();
+                if (personalJson?.success && personalJson.data) {
+                    const pd = personalJson.data;
+                    setBorrowerForm(prev => ({
+                        ...prev,
+                        aadhaar_no: pd.aadhaar_no || prev.aadhaar_no,
+                        pan_no: pd.pan_no || prev.pan_no,
+                        email: pd.email || prev.email,
+                        income: pd.income || prev.income,
+                        marital_status: pd.marital_status || prev.marital_status,
+                        father_or_husband_name: pd.father_husband_name || prev.father_or_husband_name,
+                        current_address: pd.local_address || prev.current_address,
+                        dob: pd.dob ? new Date(pd.dob).toISOString().split('T')[0] : prev.dob,
+                    }));
+                }
+            }
 
             if (docsRes.status === 'fulfilled') {
                 const docsJson = await docsRes.value.json();
@@ -159,21 +168,20 @@ export default function KYCPage() {
                 }
             }
 
-            if (verificationsRes.status === 'fulfilled') {
-                const verJson = await verificationsRes.value.json();
-                if (verJson?.success && Array.isArray(verJson.data)) setVerifications(verJson.data);
-            }
-
             if (consentRes.status === 'fulfilled') {
                 const consentJson = await consentRes.value.json();
                 if (consentJson?.success && consentJson.data) {
                     setConsentRecord(consentJson.data);
-                    // Sync consent status from record (most up-to-date source)
                     if (consentJson.data.consent_status) setConsentStatus(consentJson.data.consent_status);
                 }
             }
+
+            if (verificationsRes.status === 'fulfilled') {
+                const verJson = await verificationsRes.value.json();
+                if (verJson?.success && Array.isArray(verJson.data)) setVerifications(verJson.data);
+            }
         } catch {
-            setApiError('Failed to load KYC data');
+            setApiError('Failed to load data');
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -182,23 +190,42 @@ export default function KYCPage() {
 
     useEffect(() => { loadPageData(); }, [leadId]);
 
-    // Auto-poll consent status when waiting for customer action
+    // Auto-poll consent when waiting
     useEffect(() => {
         const waitingStatuses = ['link_sent', 'link_opened', 'esign_in_progress'];
         if (!waitingStatuses.includes(consentStatus)) return;
-        const interval = setInterval(() => loadPageData(true), 10000); // poll every 10s
+        const interval = setInterval(() => loadPageData(true), 10000);
         return () => clearInterval(interval);
     }, [consentStatus, leadId]);
+
+    // Detect consent path
+    useEffect(() => {
+        const digitalStatuses = ['link_sent', 'link_opened', 'esign_in_progress', 'esign_completed'];
+        const manualStatuses = ['consent_generated', 'consent_uploaded'];
+        if (digitalStatuses.includes(consentStatus)) setConsentPath('digital');
+        else if (manualStatuses.includes(consentStatus)) setConsentPath('manual');
+    }, [consentStatus]);
 
     // Auto-save every 2 minutes
     useEffect(() => {
         const interval = setInterval(() => {
-            if (!loading && !accessDenied && Object.keys(uploadedDocs).length > 0) handleSaveDraft(true);
+            if (!loading && !accessDenied) handleSaveDraft(true);
         }, 120000);
         return () => clearInterval(interval);
-    }, [loading, accessDenied, uploadedDocs, consentStatus]);
+    }, [loading, accessDenied, borrowerForm, consentStatus]);
 
-    // ─── Document Stats ─────────────────────────────────────────────────────
+    // ─── Borrower Form Helpers ─────────────────────────────────────────────
+
+    const updateField = (field: string, value: any) => {
+        setBorrowerForm(prev => {
+            const next = { ...prev, [field]: value };
+            if (field === 'is_current_same' && value) next.current_address = next.permanent_address;
+            if (field === 'permanent_address' && next.is_current_same) next.current_address = value;
+            return next;
+        });
+    };
+
+    // ─── Document Stats ────────────────────────────────────────────────────
 
     const requiredDocs = useMemo(() => {
         const assetModel = String(lead?.asset_model || lead?.asset_category || '').toUpperCase();
@@ -215,7 +242,7 @@ export default function KYCPage() {
         return { total: required.length, uploadedCount: uploaded.length, pending };
     }, [requiredDocs, uploadedDocs]);
 
-    // ─── Document Upload ────────────────────────────────────────────────────
+    // ─── Document Upload ───────────────────────────────────────────────────
 
     const handleDocUpload = async (documentType: string, file: File) => {
         if (!['image/png', 'image/jpeg', 'image/jpg', 'application/pdf'].includes(file.type)) {
@@ -263,7 +290,7 @@ export default function KYCPage() {
         }
     };
 
-    // ─── Save Draft ─────────────────────────────────────────────────────────
+    // ─── Save Draft ────────────────────────────────────────────────────────
 
     const handleSaveDraft = async (auto = false) => {
         try {
@@ -271,7 +298,7 @@ export default function KYCPage() {
             const res = await fetch(`/api/kyc/${leadId}/save-draft`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ step: 2, data: { documents: uploadedDocs, consentStatus } }),
+                body: JSON.stringify({ step: 3, data: { borrowerForm, documents: uploadedDocs, consentStatus } }),
             });
             if (!res.ok) throw new Error('Failed to save draft');
             setLastSaved(`${auto ? 'Auto-saved' : 'Saved'} at ${new Date().toLocaleTimeString()}`);
@@ -282,7 +309,7 @@ export default function KYCPage() {
         }
     };
 
-    // ─── Consent ────────────────────────────────────────────────────────────
+    // ─── Consent Handlers ──────────────────────────────────────────────────
 
     const handleSendConsent = async (channel: 'sms' | 'whatsapp') => {
         try {
@@ -315,7 +342,6 @@ export default function KYCPage() {
             if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Failed to generate consent PDF');
             setConsentStatus('consent_generated');
             setConsentPdfUrl(data.pdfUrl || null);
-            // Auto-download PDF
             if (data.pdfUrl) {
                 const a = document.createElement('a');
                 a.href = data.pdfUrl;
@@ -352,88 +378,13 @@ export default function KYCPage() {
         }
     };
 
-    // Determine which consent path is active based on status
-    useEffect(() => {
-        const digitalStatuses = ['link_sent', 'link_opened', 'esign_in_progress', 'esign_completed'];
-        const manualStatuses = ['consent_generated', 'consent_uploaded'];
-        if (digitalStatuses.includes(consentStatus)) setConsentPath('digital');
-        else if (manualStatuses.includes(consentStatus)) setConsentPath('manual');
-        else if (isFinalConsentStatus(consentStatus) || consentStatus === 'admin_review_pending' || consentStatus === 'admin_rejected') {
-            // Keep whatever path was set, or detect from status
-        }
-    }, [consentStatus]);
-
-    // ─── Coupon Validation ──────────────────────────────────────────────────
-
-    const handleValidateCoupon = async () => {
-        if (!couponCode.trim()) { setApiError('Please enter coupon code'); return; }
-        setCouponValidating(true);
-        setCouponResult(null);
-        try {
-            const res = await fetch(`/api/kyc/${leadId}/validate-coupon`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ couponCode: couponCode.trim() }),
-            });
-            const data = await res.json();
-            setCouponResult(data);
-            if (!data.success && !data.valid) setApiError(data.message || data.error || 'Invalid coupon');
-        } catch {
-            setApiError('Coupon validation failed');
-        } finally {
-            setCouponValidating(false);
-        }
-    };
-
-    const handleReleaseCoupon = async () => {
-        setReleasingCoupon(true);
-        setApiError(null);
-        try {
-            const res = await fetch(`/api/kyc/${leadId}/release-coupon`, { method: 'POST' });
-            const data = await res.json();
-            if (data.success) {
-                setCouponCode('');
-                setCouponResult(null);
-            } else {
-                setApiError(data.error?.message || 'Failed to release coupon');
-            }
-        } catch {
-            setApiError('Failed to release coupon');
-        } finally {
-            setReleasingCoupon(false);
-        }
-    };
-
-    const handleSubmitForVerification = async () => {
-        try {
-            setApiError(null);
-            setSubmitting(true);
-            const res = await fetch(`/api/kyc/${leadId}/submit-verification`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({}),
-            });
-            const data = await res.json();
-            if (data.success) {
-                setSubmittedForVerification(true);
-                await loadPageData(true);
-            } else {
-                setApiError(data.message || data.error?.message || 'Submission failed');
-            }
-        } catch {
-            setApiError('Failed to submit for verification');
-        } finally {
-            setSubmitting(false);
-        }
-    };
-
-    // ─── Save & Next ────────────────────────────────────────────────────────
+    // ─── Save & Next ───────────────────────────────────────────────────────
 
     const handleSaveAndNext = async () => {
         try {
             setSubmitting(true);
             setApiError(null);
-            router.push(`/dealer-portal/leads/${leadId}/borrower-consent`);
+            router.push(`/dealer-portal/leads/${leadId}/kyc/interim`);
         } catch (err: any) {
             setApiError(err?.message || 'Failed to proceed');
         } finally {
@@ -441,7 +392,7 @@ export default function KYCPage() {
         }
     };
 
-    // ─── Render ─────────────────────────────────────────────────────────────
+    // ─── Render ────────────────────────────────────────────────────────────
 
     if (loading) return <FullPageLoader />;
 
@@ -451,7 +402,7 @@ export default function KYCPage() {
                 <div className="text-center max-w-md">
                     <Shield className="w-14 h-14 text-red-400 mx-auto mb-4" />
                     <h2 className="text-2xl font-bold text-gray-900">Access Denied</h2>
-                    <p className="mt-2 text-sm text-gray-500">Step 2 is only available for hot leads with non-cash payment method.</p>
+                    <p className="mt-2 text-sm text-gray-500">Step 3 is only available for hot leads with non-cash payment method.</p>
                     <button onClick={() => router.push('/dealer-portal/leads')} className="mt-6 px-6 py-3 bg-[#0047AB] text-white rounded-xl font-bold">Back to Leads</button>
                 </div>
             </div>
@@ -463,9 +414,9 @@ export default function KYCPage() {
             <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
                 {/* Header */}
                 <ProgressHeader
-                    title="KYC"
+                    title="Borrower & Consent"
                     subtitle={`Reference ID: ${lead?.reference_id || leadId}${lead?.full_name ? ` — ${lead.full_name}` : ''}`}
-                    step={2}
+                    step={3}
                     onBack={() => router.back()}
                     rightAction={
                         <button onClick={() => loadPageData(true)} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold">
@@ -477,21 +428,55 @@ export default function KYCPage() {
                 <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
 
                 <main className="grid grid-cols-1 gap-6">
-                    {/* ─── Customer Consent ───────────────────────────── */}
-                    <SectionCard title="Customer Consent" action={
+                    {/* ─── Borrower Details (Editable) ───────────────── */}
+                    <SectionCard title="Borrower Details">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6">
+                            <InputField label="Full Name" value={borrowerForm.full_name} onChange={v => updateField('full_name', v)} placeholder="John Doe" required />
+                            <InputField label="Father / Husband Name" value={borrowerForm.father_or_husband_name} onChange={v => updateField('father_or_husband_name', v)} placeholder="Richard Doe" required />
+                            <InputField label="Date of Birth" type="date" value={borrowerForm.dob} onChange={v => updateField('dob', v)} required />
+                            <InputField label="Phone" value={borrowerForm.phone} onChange={v => updateField('phone', v)} placeholder="+91 9876543210" required />
+                            <InputField label="Email" value={borrowerForm.email} onChange={v => updateField('email', v)} placeholder="john@email.com" />
+                            <InputField label="PAN Number" value={borrowerForm.pan_no} onChange={v => updateField('pan_no', v.toUpperCase())} placeholder="ABCDE1234F" />
+                            <InputField label="Aadhaar Number" value={borrowerForm.aadhaar_no} onChange={v => updateField('aadhaar_no', v)} placeholder="1234 5678 9012" />
+                            <InputField label="Marital Status" value={borrowerForm.marital_status} onChange={v => updateField('marital_status', v)} placeholder="Single / Married" />
+                            <InputField label="Monthly Income (₹)" value={borrowerForm.income} onChange={v => updateField('income', v)} placeholder="50000" />
+                            <div className="md:col-span-2">
+                                <InputField label="Permanent Address" value={borrowerForm.permanent_address} onChange={v => updateField('permanent_address', v)} placeholder="Full permanent address" />
+                            </div>
+                            <div className="md:col-span-2 space-y-2">
+                                <div className="flex items-center justify-between">
+                                    <label className="text-sm font-bold text-gray-900 px-1">Current Address</label>
+                                    <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-gray-600">
+                                        <input type="checkbox" checked={borrowerForm.is_current_same} onChange={e => updateField('is_current_same', e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-[#0047AB]" />
+                                        Same as permanent
+                                    </label>
+                                </div>
+                                <input
+                                    value={borrowerForm.current_address}
+                                    disabled={borrowerForm.is_current_same}
+                                    onChange={e => updateField('current_address', e.target.value)}
+                                    className={`w-full h-11 px-4 bg-white border-2 rounded-xl outline-none text-sm transition-all ${
+                                        borrowerForm.is_current_same ? 'bg-gray-50 border-gray-100 text-gray-400' : 'border-[#EBEBEB] focus:border-[#1D4ED8]'
+                                    }`}
+                                    placeholder="Current address"
+                                />
+                            </div>
+                        </div>
+                    </SectionCard>
+
+                    {/* ─── Borrower Consent ────────────────────────────── */}
+                    <SectionCard title="Borrower Consent" action={
                         <ConsentStatusBadge status={consentStatus} />
                     }>
                         {isFinalConsentStatus(consentStatus) ? (
-                            /* ── Consent Verified ─────────────────────────── */
                             <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
                                 <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
                                 <div>
                                     <p className="text-sm font-bold text-emerald-800">Consent Verified</p>
-                                    <p className="text-xs text-emerald-600 mt-0.5">Admin has verified the customer consent. You can proceed to the next step.</p>
+                                    <p className="text-xs text-emerald-600 mt-0.5">Admin has verified the borrower consent. You can proceed to the next step.</p>
                                 </div>
                             </div>
                         ) : consentStatus === 'admin_review_pending' ? (
-                            /* ── Awaiting Admin Review ────────────────────── */
                             <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
                                 <Clock className="w-5 h-5 text-amber-600 flex-shrink-0" />
                                 <div>
@@ -500,13 +485,12 @@ export default function KYCPage() {
                                 </div>
                             </div>
                         ) : consentStatus === 'esign_failed' ? (
-                            /* ── eSign Failed — Retry ─────────────────────── */
                             <div className="space-y-4">
                                 <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
                                     <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
                                     <div>
                                         <p className="text-sm font-bold text-red-800">Aadhaar eSign Failed</p>
-                                        <p className="text-xs text-red-600 mt-0.5">Customer eSign was unsuccessful. You can resend the consent link or switch to manual consent.</p>
+                                        <p className="text-xs text-red-600 mt-0.5">Borrower eSign was unsuccessful. You can resend the consent link or switch to manual consent.</p>
                                     </div>
                                 </div>
                                 <div className="flex gap-3">
@@ -521,7 +505,6 @@ export default function KYCPage() {
                                 </div>
                             </div>
                         ) : consentStatus === 'esign_blocked' ? (
-                            /* ── eSign Blocked — Must use manual ──────────── */
                             <div className="space-y-4">
                                 <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
                                     <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
@@ -536,7 +519,6 @@ export default function KYCPage() {
                                 </button>
                             </div>
                         ) : consentStatus === 'expired' ? (
-                            /* ── Link Expired — Resend ────────────────────── */
                             <div className="space-y-4">
                                 <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
                                     <Clock className="w-5 h-5 text-amber-600 flex-shrink-0" />
@@ -557,15 +539,14 @@ export default function KYCPage() {
                                 </div>
                             </div>
                         ) : consentStatus === 'esign_completed' ? (
-                            /* ── Customer Signed Successfully ────────────── */
                             <div className="space-y-3">
                                 <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
                                     <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
                                         <CheckCircle2 className="w-6 h-6 text-emerald-600" />
                                     </div>
                                     <div className="flex-1">
-                                        <p className="text-sm font-bold text-emerald-800">Customer Signed Successfully</p>
-                                        <p className="text-xs text-emerald-600 mt-0.5">The customer has completed Aadhaar eSign. Consent is now pending admin verification.</p>
+                                        <p className="text-sm font-bold text-emerald-800">Borrower Signed Successfully</p>
+                                        <p className="text-xs text-emerald-600 mt-0.5">The borrower has completed Aadhaar eSign. Consent is now pending admin verification.</p>
                                         {consentRecord?.signed_at && (
                                             <p className="text-xs text-emerald-500 mt-1">
                                                 Signed at: {new Date(consentRecord.signed_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
@@ -587,18 +568,16 @@ export default function KYCPage() {
                                 )}
                             </div>
                         ) : consentStatus === 'esign_in_progress' ? (
-                            /* ── eSign In Progress ───────────────────────── */
                             <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
                                 <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
                                     <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
                                 </div>
                                 <div className="flex-1">
-                                    <p className="text-sm font-bold text-blue-800">Customer is Signing...</p>
-                                    <p className="text-xs text-blue-600 mt-0.5">Customer has opened the consent link and is completing the Aadhaar eSign process. This page will update automatically.</p>
+                                    <p className="text-sm font-bold text-blue-800">Borrower is Signing...</p>
+                                    <p className="text-xs text-blue-600 mt-0.5">Borrower has opened the consent link and is completing the Aadhaar eSign process. This page will update automatically.</p>
                                 </div>
                             </div>
                         ) : consentStatus === 'admin_rejected' ? (
-                            /* ── Rejected — Re-consent ────────────────────── */
                             <div className="space-y-4">
                                 <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
                                     <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
@@ -625,7 +604,7 @@ export default function KYCPage() {
                         ) : (
                             /* ── Choose Consent Path ──────────────────────── */
                             <div className="space-y-4">
-                                <p className="text-sm text-gray-500">Choose one method to obtain customer consent. Both options are mutually exclusive.</p>
+                                <p className="text-sm text-gray-500">Choose one method to obtain borrower consent. Both options are mutually exclusive.</p>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {/* Digital Consent Card */}
@@ -642,7 +621,7 @@ export default function KYCPage() {
                                             </div>
                                             <div>
                                                 <h4 className="text-sm font-bold text-gray-900">Digital Consent (Aadhaar eSign)</h4>
-                                                <p className="text-xs text-gray-500 mt-0.5">Send consent link via SMS/WhatsApp. Customer signs digitally with Aadhaar OTP.</p>
+                                                <p className="text-xs text-gray-500 mt-0.5">Send consent link via SMS/WhatsApp. Borrower signs digitally with Aadhaar OTP.</p>
                                             </div>
                                         </div>
                                         {consentPath !== 'manual' && (
@@ -666,7 +645,7 @@ export default function KYCPage() {
                                                     <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
                                                 </span>
                                                 <p className="text-xs font-medium text-amber-700">
-                                                    {consentStatus === 'link_opened' ? 'Customer opened the link. Waiting for signature...' : 'Consent link sent. Waiting for customer to sign...'}
+                                                    {consentStatus === 'link_opened' ? 'Borrower opened the link. Waiting for signature...' : 'Consent link sent. Waiting for borrower to sign...'}
                                                     <span className="text-amber-500 ml-1">(auto-updating)</span>
                                                 </p>
                                             </div>
@@ -687,12 +666,11 @@ export default function KYCPage() {
                                             </div>
                                             <div>
                                                 <h4 className="text-sm font-bold text-gray-900">Manual Consent (Signed PDF)</h4>
-                                                <p className="text-xs text-gray-500 mt-0.5">Generate PDF, print, get customer signature, scan and upload.</p>
+                                                <p className="text-xs text-gray-500 mt-0.5">Generate PDF, print, get borrower signature, scan and upload.</p>
                                             </div>
                                         </div>
                                         {consentPath !== 'digital' && (
                                             <div className="space-y-2">
-                                                {/* Step 1: Generate PDF */}
                                                 <button onClick={handleGenerateConsentPDF}
                                                     disabled={consentLoading || consentStatus === 'consent_generated' || consentStatus === 'consent_uploaded'}
                                                     className="w-full px-3 py-2 bg-teal-600 text-white rounded-lg text-xs font-bold hover:bg-teal-700 transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
@@ -700,7 +678,6 @@ export default function KYCPage() {
                                                     {consentStatus === 'consent_generated' ? 'PDF Generated' : 'Generate Consent PDF'}
                                                 </button>
 
-                                                {/* Step 2: Upload Signed PDF (enabled after generate) */}
                                                 {(consentStatus === 'consent_generated' || consentPdfUrl) && (
                                                     <>
                                                         {consentPdfUrl && (
@@ -723,8 +700,8 @@ export default function KYCPage() {
                         )}
                     </SectionCard>
 
-                    {/* ─── Loan Documents ─────────────────────────────── */}
-                    <SectionCard title="Loan Documents" action={
+                    {/* ─── Borrower Documents ─────────────────────────── */}
+                    <SectionCard title="Borrower Documents" action={
                         <div className="flex items-center gap-2">
                             <span className="text-xs font-bold text-gray-500">Uploaded:</span>
                             <span className={`text-sm font-black ${docStats.uploadedCount === docStats.total ? 'text-emerald-600' : 'text-[#0047AB]'}`}>
@@ -766,92 +743,9 @@ export default function KYCPage() {
                         </div>
                     </SectionCard>
 
-                    {/* ─── Verification Action ────────────────────────── */}
-                    <SectionCard title="Verification Action" action={
-                        lead?.coupon_status === 'used'
-                            ? <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Submitted</span>
-                            : lead?.coupon_status === 'reserved'
-                                ? <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Shield className="w-3 h-3" />Reserved</span>
-                                : <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-bold">Awaiting Coupon</span>
-                    }>
-                        {lead?.coupon_status === 'used' || submittedForVerification ? (
-                            /* ── Coupon Used / Verification Submitted ──── */
-                            <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
-                                <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-                                <div>
-                                    <p className="text-sm font-bold text-emerald-800">Verification Submitted</p>
-                                    <p className="text-xs text-emerald-600 mt-0.5">Coupon <span className="font-mono font-bold">{couponCode}</span> consumed. Verification is in progress.</p>
-                                </div>
-                            </div>
-                        ) : (couponResult?.valid || couponResult?.success) && lead?.coupon_status === 'reserved' ? (
-                            /* ── Coupon Reserved ──────────────────────── */
-                            <div className="space-y-3">
-                                <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
-                                    <Shield className="w-5 h-5 text-blue-600 flex-shrink-0" />
-                                    <div className="flex-1">
-                                        <p className="text-sm font-bold text-blue-800">
-                                            Coupon Reserved: <span className="font-mono">{couponCode}</span>
-                                        </p>
-                                        {couponResult.discount_amount > 0 && (
-                                            <p className="text-xs text-blue-600 mt-0.5">Discount: ₹{couponResult.discount_amount} off (Final: ₹{couponResult.final_amount})</p>
-                                        )}
-                                        <p className="text-xs text-blue-500 mt-0.5">This coupon is locked to this lead. Click Submit to start verification.</p>
-                                    </div>
-                                    <button
-                                        onClick={handleReleaseCoupon}
-                                        disabled={releasingCoupon}
-                                        className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-50 transition-all disabled:opacity-50 flex items-center gap-1.5"
-                                    >
-                                        {releasingCoupon ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
-                                        Change Coupon
-                                    </button>
-                                </div>
-                                <button
-                                    onClick={handleSubmitForVerification}
-                                    disabled={submitting}
-                                    className="w-full px-6 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                                >
-                                    {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                                    Submit for Verification
-                                </button>
-                            </div>
-                        ) : (
-                            /* ── Enter Coupon Code ────────────────────── */
-                            <div className="space-y-3">
-                                <p className="text-xs text-gray-500">Enter your verification coupon code to proceed. Each coupon allows one KYC verification.</p>
-                                <div className="flex items-center gap-3">
-                                    <input
-                                        type="text"
-                                        value={couponCode}
-                                        onChange={e => setCouponCode(e.target.value.toUpperCase())}
-                                        placeholder="Enter coupon code (e.g., TEST--971-001)"
-                                        maxLength={20}
-                                        className="flex-1 h-11 px-4 bg-white border-2 border-[#EBEBEB] rounded-xl outline-none text-sm font-mono focus:border-[#1D4ED8] transition-all"
-                                    />
-                                    <button
-                                        onClick={handleValidateCoupon}
-                                        disabled={couponValidating || !couponCode.trim()}
-                                        className="px-6 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2"
-                                    >
-                                        {couponValidating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
-                                        Validate
-                                    </button>
-                                </div>
-                                {couponResult && !couponResult.valid && !couponResult.success && (
-                                    <div className="px-4 py-2 bg-red-50 border border-red-200 rounded-xl">
-                                        <p className="text-sm font-medium text-red-700">
-                                            <AlertCircle className="w-4 h-4 inline mr-1" />
-                                            {couponResult.message || 'Invalid coupon code'}
-                                        </p>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </SectionCard>
-
                     {/* ─── Verification Status ────────────────────────── */}
                     {verifications.length > 0 && (
-                        <SectionCard title="Verification Status (Customer)">
+                        <SectionCard title="Verification Status (Borrower)">
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead>
@@ -902,7 +796,7 @@ export default function KYCPage() {
 
                 {/* ─── Bottom Bar ────────────────────────────────────── */}
                 <StickyBottomBar lastSaved={lastSaved}>
-                    <OutlineButton onClick={() => router.push('/dealer-portal/leads')}>Back</OutlineButton>
+                    <OutlineButton onClick={() => router.push(`/dealer-portal/leads/${leadId}/kyc`)}>Back</OutlineButton>
                     <SecondaryButton onClick={() => handleSaveDraft(false)} loading={savingDraft}>Save Draft</SecondaryButton>
                     <PrimaryButton onClick={handleSaveAndNext} loading={submitting} disabled={submitting}>
                         Next <ChevronRight className="w-4 h-4" />
