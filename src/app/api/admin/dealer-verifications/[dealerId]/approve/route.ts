@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dealerOnboardingApplications, users } from "@/lib/db/schema";
+import { dealerOnboardingApplications, users, accounts } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword";
 import { hashPassword } from "@/lib/auth/hashPassword";
@@ -198,6 +198,40 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         updatedAt: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
+
+    // Create account row so leads.dealer_id FK is satisfied
+    const existingAccount = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.id, dealerCode))
+      .limit(1);
+
+    if (existingAccount.length === 0) {
+      const addressObj = typeof application.businessAddress === "object" && application.businessAddress
+        ? application.businessAddress as Record<string, any>
+        : null;
+
+      await db.insert(accounts).values({
+        id: dealerCode,
+        business_entity_name: application.companyName || "Dealer Business",
+        gstin: application.gstNumber || "PENDING",
+        pan: application.panNumber || null,
+        dealer_code: dealerCode,
+        contact_name: application.ownerName || application.companyName || "Dealer",
+        contact_email: dealerLoginEmail,
+        contact_phone: application.ownerPhone || null,
+        address_line1: addressObj?.address || addressObj?.line1 || null,
+        city: addressObj?.city || null,
+        state: addressObj?.state || null,
+        pincode: addressObj?.pincode || null,
+        bank_name: application.bankName || null,
+        bank_account_number: application.accountNumber || null,
+        ifsc_code: application.ifscCode || null,
+        status: "active",
+        onboarding_status: "approved",
+        created_by: authUserId,
+      });
+    }
 
     const existingUserRows = await db
       .select()

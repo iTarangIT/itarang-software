@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { PlusCircle, Search, Filter, Loader2 } from 'lucide-react';
+import { PlusCircle, Search, Filter, Loader2, Trash2, X, AlertTriangle } from 'lucide-react';
 import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
@@ -13,6 +13,8 @@ function DealerLeadsContent() {
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('All');
     const [typeFilter, setTypeFilter] = useState('All');
+    const [deleteTarget, setDeleteTarget] = useState<any>(null);
+    const [deleting, setDeleting] = useState(false);
 
     const fetchLeads = async () => {
         setLoading(true);
@@ -31,6 +33,25 @@ function DealerLeadsContent() {
             console.error('Failed to fetch leads', error);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        if (!deleteTarget) return;
+        setDeleting(true);
+        try {
+            const res = await fetch(`/api/dealer/leads/${deleteTarget.id}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (data.success) {
+                setDeleteTarget(null);
+                fetchLeads();
+            } else {
+                alert(data.error || data.message || 'Failed to delete lead');
+            }
+        } catch {
+            alert('Failed to delete lead');
+        } finally {
+            setDeleting(false);
         }
     };
 
@@ -147,9 +168,18 @@ function DealerLeadsContent() {
                                             {new Date(lead.created_at).toLocaleDateString()}
                                         </td>
                                         <td className="px-6 py-4 text-right">
-                                            <button className="text-brand-600 hover:text-brand-800 font-medium text-xs opacity-0 group-hover:opacity-100 transition-opacity">
-                                                View Details
-                                            </button>
+                                            <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <Link href={`/dealer-portal/leads/${lead.id}/kyc`} className="text-brand-600 hover:text-brand-800 font-medium text-xs">
+                                                    View Details
+                                                </Link>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); setDeleteTarget(lead); }}
+                                                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                                                    title="Delete lead"
+                                                >
+                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -158,6 +188,56 @@ function DealerLeadsContent() {
                     </div>
                 )}
             </div>
+
+            {/* Delete Confirmation Modal */}
+            {deleteTarget && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+                        <div className="bg-gradient-to-r from-red-500 to-red-600 px-6 py-5">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                                    <AlertTriangle className="w-5 h-5 text-white" />
+                                </div>
+                                <div>
+                                    <h3 className="text-lg font-bold text-white">Delete Lead</h3>
+                                    <p className="text-red-100 text-xs mt-0.5">This action cannot be undone</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="px-6 py-5 space-y-4">
+                            <div className="bg-red-50 border border-red-100 rounded-xl p-4">
+                                <p className="text-sm text-gray-700">
+                                    Are you sure you want to permanently delete this lead?
+                                </p>
+                                <div className="mt-3 space-y-1.5">
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-gray-500">Customer</span>
+                                        <span className="font-semibold text-gray-900">{deleteTarget.owner_name || deleteTarget.full_name || 'Unknown'}</span>
+                                    </div>
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-gray-500">Lead ID</span>
+                                        <span className="font-semibold text-gray-900">{deleteTarget.id}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <p className="text-xs text-gray-500">
+                                All associated data including KYC documents, verifications, and consent records will be permanently removed.
+                            </p>
+                        </div>
+                        <div className="px-6 pb-5 flex gap-3">
+                            <button onClick={() => setDeleteTarget(null)} disabled={deleting}
+                                className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl font-semibold text-sm text-gray-600 hover:bg-gray-50 transition-all">
+                                Cancel
+                            </button>
+                            <button onClick={handleDelete} disabled={deleting}
+                                className="flex-1 px-4 py-3 bg-red-600 text-white rounded-xl font-semibold text-sm hover:bg-red-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                                {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                                {deleting ? 'Deleting...' : 'Delete Lead'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

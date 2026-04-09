@@ -43,9 +43,18 @@ export async function downloadDigioAuditTrail(documentId: string) {
     );
   }
 
-  const arrayBuffer = await response.arrayBuffer();
   const contentType =
     response.headers.get("content-type") || "application/pdf";
+
+  // If Digio returned JSON instead of PDF, it's an error response
+  if (contentType.includes("json")) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(
+      `Digio returned JSON instead of PDF: ${errorText}`
+    );
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
 
   return {
     buffer: Buffer.from(arrayBuffer),

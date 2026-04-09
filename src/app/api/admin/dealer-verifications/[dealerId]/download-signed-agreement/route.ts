@@ -148,7 +148,34 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         );
       }
 
+      // Validate that Digio returned an actual PDF, not a JSON error
+      const contentType = digioResponse.headers.get("content-type") || "";
+      if (!contentType.includes("pdf") && !contentType.includes("octet-stream")) {
+        const errorText = await digioResponse.text();
+        console.error("[DOWNLOAD SIGNED AGREEMENT] Digio returned non-PDF:", contentType, errorText.slice(0, 300));
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Digio returned invalid response (not a PDF). The document may not be ready yet.",
+            raw: errorText,
+          },
+          { status: 502 }
+        );
+      }
+
       pdfBuffer = await digioResponse.arrayBuffer();
+
+      // Validate the PDF has actual content
+      if (pdfBuffer.byteLength < 100) {
+        console.error("[DOWNLOAD SIGNED AGREEMENT] Digio returned empty/tiny PDF:", pdfBuffer.byteLength, "bytes");
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Digio returned an empty document. Please try again later.",
+          },
+          { status: 502 }
+        );
+      }
 
       // Save to Supabase for future downloads
       const filePath =

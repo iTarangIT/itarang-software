@@ -7,7 +7,11 @@
       "Bash(npx next:*)",
       "Bash(npm run:*)",
       "Bash(node -e \"try { require\\('puppeteer'\\); console.log\\('puppeteer OK'\\); } catch\\(e\\) { console.log\\('puppeteer MISSING:', e.message\\); }\")",
-      "Bash(node -e ':*)"
+      "Bash(node -e ':*)",
+      "Bash(grep -r \"DECENTRO_\" /c/Users/Aniket/OneDrive/Desktop/itarang-software-Rushimain/.env*)",
+      "Bash(xargs grep:*)",
+      "Bash(\"C:/Users/Aniket/Downloads/ngrok-v3-stable-windows-amd64/ngrok.exe\" http:*)",
+      "Bash(node -e \"require\\('dotenv'\\).config\\(\\); console.log\\('DB URL prefix:', process.env.DATABASE_URL?.substring\\(0,50\\)\\)\")"
     ]
   }
 }

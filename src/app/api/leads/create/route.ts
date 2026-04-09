@@ -6,6 +6,7 @@ import { successResponse, errorResponse, withErrorHandler, generateId } from '@/
 import { requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
 import { eq, and, sql, desc } from 'drizzle-orm';
+import { dealerOnboardingApplications } from '@/lib/db/schema';
 
 const step1Schema = z.object({
     full_name: z.string().optional().nullable(),
@@ -64,17 +65,65 @@ export const POST = withErrorHandler(async (req: Request) => {
     const user = await requireRole(['dealer']);
     let dealer_id = user.dealer_id;
 
-    try {
-        if (!dealer_id) {
-            const [acc] = await db.select().from(accounts).limit(1);
-            dealer_id = acc?.id;
+    // Resolve dealer_id: first from user record, then from onboarding application
+    if (!dealer_id) {
+        try {
+            const onboardingRows = await db.select({ dealerCode: dealerOnboardingApplications.dealerCode })
+                .from(dealerOnboardingApplications)
+                .where(eq(dealerOnboardingApplications.dealerUserId, user.id))
+                .orderBy(desc(dealerOnboardingApplications.updatedAt))
+                .limit(1);
+
+            if (onboardingRows[0]?.dealerCode) {
+                dealer_id = onboardingRows[0].dealerCode;
+            }
+        } catch (err) {
+            console.error("[leads/create] Onboarding lookup failed:", err);
         }
-    } catch (err) {
-        console.error("Account lookup failed:", err);
-        return errorResponse("Failed to verify dealer account. Please try again.", 500);
     }
 
-    if (!dealer_id) return errorResponse('User not associated with a dealer', 403);
+    if (!dealer_id) return errorResponse('User not associated with a dealer. Please contact admin.', 403);
+
+    // Ensure the account row exists (auto-create if missing for approved dealers)
+    try {
+        const accRows = await db.select({ id: accounts.id }).from(accounts).where(eq(accounts.id, dealer_id)).limit(1);
+        if (accRows.length === 0) {
+            let bizName = user.name || "Dealer Business";
+            let contactName = user.name || "Dealer";
+            let contactEmail: string | null = user.email || null;
+            let gstin = "PENDING";
+
+            try {
+                const onbRows = await db.select()
+                    .from(dealerOnboardingApplications)
+                    .where(eq(dealerOnboardingApplications.dealerUserId, user.id))
+                    .orderBy(desc(dealerOnboardingApplications.updatedAt))
+                    .limit(1);
+                const onb = onbRows[0];
+                if (onb) {
+                    bizName = onb.companyName || bizName;
+                    contactName = onb.ownerName || contactName;
+                    contactEmail = onb.ownerEmail || contactEmail;
+                    gstin = onb.gstNumber || gstin;
+                }
+            } catch { /* use defaults */ }
+
+            await db.insert(accounts).values({
+                id: dealer_id,
+                business_entity_name: bizName,
+                gstin,
+                dealer_code: dealer_id,
+                contact_name: contactName,
+                contact_email: contactEmail,
+                status: "active",
+                onboarding_status: "approved",
+            });
+            console.log("[leads/create] Auto-created account:", dealer_id);
+        }
+    } catch (err) {
+        console.error("[leads/create] Account auto-create failed:", err);
+        return errorResponse("Failed to verify dealer account. Please try again.", 500);
+    }
 
     const body = await req.json();
     const result = step1Schema.safeParse(body);

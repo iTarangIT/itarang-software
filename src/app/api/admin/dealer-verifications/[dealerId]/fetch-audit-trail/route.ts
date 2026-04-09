@@ -96,7 +96,24 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
+    // Validate Digio returned actual PDF, not a JSON error
+    const resContentType = digioResponse.headers.get("content-type") || "";
+    if (resContentType.includes("json")) {
+      const errorText = await digioResponse.text();
+      return NextResponse.json(
+        { success: false, message: "Digio returned JSON instead of PDF", raw: errorText },
+        { status: 502 }
+      );
+    }
+
     const pdfBuffer = await digioResponse.arrayBuffer();
+
+    if (pdfBuffer.byteLength < 100) {
+      return NextResponse.json(
+        { success: false, message: "Digio returned an empty audit trail document" },
+        { status: 502 }
+      );
+    }
 
     const supabase = createClient(supabaseUrl, serviceRoleKey);
     const bucketName = "dealer-documents";

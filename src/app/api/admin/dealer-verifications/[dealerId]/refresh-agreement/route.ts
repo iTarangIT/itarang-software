@@ -11,9 +11,29 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-async function uploadFileToSupabase(url: string, path: string) {
-  const response = await fetch(url);
+async function uploadFileToSupabase(url: string, path: string, headers?: Record<string, string>) {
+  const response = await fetch(url, {
+    method: "GET",
+    headers: headers || {},
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(`Download failed (${response.status}): ${errorText.slice(0, 200)}`);
+  }
+
+  const contentType = response.headers.get("content-type") || "";
   const buffer = await response.arrayBuffer();
+
+  // Validate we actually got a PDF, not a JSON error
+  if (buffer.byteLength < 100) {
+    throw new Error(`Downloaded file too small (${buffer.byteLength} bytes) — likely an error response`);
+  }
+  if (contentType.includes("json")) {
+    const text = new TextDecoder().decode(buffer);
+    throw new Error(`Expected PDF but got JSON: ${text.slice(0, 200)}`);
+  }
 
   const { error } = await supabase.storage
     .from("dealer-documents")
@@ -191,10 +211,16 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         // First preference: use URL from Digio status response
         const extractedSignedUrl = extractSignedAgreementUrl(parsed);
 
+        const digioAuthHeaders = {
+          Authorization: basicAuthHeader(clientId, clientSecret),
+          Accept: "application/pdf",
+        };
+
         if (extractedSignedUrl && !application.signedAgreementStoragePath) {
           const publicUrl = await uploadFileToSupabase(
             extractedSignedUrl,
-            signedStoragePath
+            signedStoragePath,
+            digioAuthHeaders
           );
 
           signedAgreementUrl = publicUrl;
@@ -258,7 +284,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
           const auditTrailDigioUrl = `${baseUrl}/v2/client/document/download_audit_trail?document_id=${application.providerDocumentId}`;
           const auditPath = `agreements/${dealerId}/audit-trail.pdf`;
 
-          const publicUrl = await uploadFileToSupabase(auditTrailDigioUrl, auditPath);
+          const publicUrl = await uploadFileToSupabase(auditTrailDigioUrl, auditPath, digioAuthHeaders);
 
           auditTrailUrl = publicUrl;
 

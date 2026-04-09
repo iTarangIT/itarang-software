@@ -254,12 +254,12 @@ export const GET = withErrorHandler(async (req: Request, { params }: { params: P
             // Dynamic SQL: Group by substring or just list top accounts by revenue
             const topAccounts = await db
                 .select({
-                    name: accounts.owner_name,
+                    name: accounts.contact_name,
                     Revenue: sql<number>`COALESCE(SUM(${orders.total_amount}), 0)`,
                 })
                 .from(orders)
                 .innerJoin(accounts, eq(orders.account_id, accounts.id))
-                .groupBy(accounts.owner_name)
+                .groupBy(accounts.contact_name)
                 .limit(5);
 
             regionalPerformance = topAccounts.map(a => ({ name: a.name, Revenue: a.Revenue, Target: 1000000 })); // Mock Target

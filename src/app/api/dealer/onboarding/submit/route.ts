@@ -512,14 +512,9 @@ export async function POST(req: NextRequest) {
     }
 
     if (existingApplication?.onboardingStatus === "approved") {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "This application has already been approved and cannot be modified.",
-        },
-        { status: 409 }
-      );
+      // Allow creating a brand-new application even if a previous one was approved.
+      // Reset so the code path below will INSERT instead of UPDATE.
+      existingApplication = null;
     }
 
     const providerRawResponse = {

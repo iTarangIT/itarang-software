@@ -180,13 +180,41 @@ export async function middleware(request: NextRequest) {
         }
       );
 
-    const onboardingStatus = (
+    // If onboarding lookup returned null (e.g. RLS blocking), check if user
+    // already has a dealer_id in the users table — that means they were approved.
+    let onboardingStatus = (
       dealerProfile?.onboarding_status || "draft"
     ).toLowerCase();
 
-    const dealerAccountStatus = (
+    let dealerAccountStatus = (
       dealerProfile?.dealer_account_status || ""
     ).toLowerCase();
+
+    if (!dealerProfile) {
+      // Fallback: check if the users table has dealer_id set (set during approval)
+      const { data: fullProfile } = await supabase
+        .from("users")
+        .select("dealer_id")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (!fullProfile) {
+        // Also try by email
+        const { data: emailProfile } = await supabase
+          .from("users")
+          .select("dealer_id")
+          .eq("email", user.email)
+          .maybeSingle();
+
+        if (emailProfile?.dealer_id) {
+          onboardingStatus = "approved";
+          dealerAccountStatus = "active";
+        }
+      } else if (fullProfile?.dealer_id) {
+        onboardingStatus = "approved";
+        dealerAccountStatus = "active";
+      }
+    }
 
     const isDealerPortalRoute = path.startsWith("/dealer-portal");
     const isDealerOnboardingRoute =

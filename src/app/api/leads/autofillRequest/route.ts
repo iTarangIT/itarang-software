@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractDocumentOcr } from "@/lib/decentro";
 import { parseAadhaarText } from "@/lib/ocr/parseAadhaarText";
+import { extractTextFromImageBuffer } from "@/lib/ocr/tesseractOcr";
 
 function clean(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -40,6 +41,7 @@ function extractStructuredAadhaar(payload: any) {
   return {
     fullName: firstNonEmpty(
       getDeep(payload, [
+        "ocrResult.name",
         "data.full_name",
         "data.name",
         "data.customer_name",
@@ -52,6 +54,9 @@ function extractStructuredAadhaar(payload: any) {
     ),
     fatherName: firstNonEmpty(
       getDeep(payload, [
+        "ocrResult.fatherName",
+        "ocrResult.sonOf",
+        "ocrResult.husbandOf",
         "data.father_name",
         "data.fatherName",
         "data.father_or_husband_name",
@@ -63,6 +68,7 @@ function extractStructuredAadhaar(payload: any) {
     dob: normalizeDate(
       firstNonEmpty(
         getDeep(payload, [
+          "ocrResult.dateInfo",
           "data.dob",
           "data.date_of_birth",
           "data.dateOfBirth",
@@ -82,6 +88,7 @@ function extractStructuredAadhaar(payload: any) {
     ),
     address: firstNonEmpty(
       getDeep(payload, [
+        "ocrResult.address",
         "data.address",
         "data.full_address",
         "data.current_address",
@@ -106,8 +113,105 @@ function extractStructuredAadhaar(payload: any) {
   };
 }
 
+function extractFatherFromAddress(address: string): string {
+  const pattern = /[SDWC]\/[Oo]:?\s+([^,]+)/g;
+  const matches: string[] = [];
+  let m;
+  while ((m = pattern.exec(address)) !== null) {
+    const name = m[1].trim();
+    const latinChars = name.replace(/[^A-Za-z]/g, "").length;
+    const totalChars = name.replace(/[\s]/g, "").length;
+    if (totalChars > 0 && latinChars / totalChars > 0.7) {
+      const cleaned = name.replace(/[^A-Za-z\s]/g, "").trim();
+      // Each word must be 3+ chars to filter garbage
+      const words = cleaned.split(" ").filter((w: string) => w.length >= 3);
+      if (words.length >= 1) {
+        matches.push(words.map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" "));
+      }
+    }
+  }
+  return matches.length > 0 ? matches[matches.length - 1] : "";
+}
+
+function cleanAddress(address: string): string {
+  // Remove S/O, D/O, W/O, C/O prefixes with names (handles both S/O and S/O: formats)
+  let cleaned = address.replace(/[SDWC]\/[Oo]:?\s+[^,]+,\s*/g, "");
+
+  // Remove common OCR garbage
+  cleaned = cleaned
+    .replace(/\b[|]\s*/g, "")
+    .replace(/[™®©]/g, "")
+    .replace(/\bwww\.[^\s,]+/gi, "")
+    .replace(/help@[^\s,]+/gi, "")
+    .replace(/\b\d{4}\s?\d{4}\s?\d{4}\b/g, "")
+    .replace(/,\s*,/g, ",")
+    .replace(/,\s*$/g, "")
+    .replace(/^\s*,\s*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned;
+}
+
 function hasUsefulData(data: Record<string, string>) {
   return Object.values(data).some((v) => clean(v) !== "");
+}
+
+function isDecentroFailure(response: any): boolean {
+  if (!response) return true;
+  if (response.status === "FAILURE" || response.ocrStatus === "FAILURE") return true;
+  if (response.error?.responseCode) return true;
+  // IP not whitelisted or other auth errors (no ocrResult means no useful data)
+  if (response.message && !response.ocrResult && !response.data) return true;
+  return false;
+}
+
+function buildFinalData(
+  frontStructured: ReturnType<typeof extractStructuredAadhaar>,
+  backStructured: ReturnType<typeof extractStructuredAadhaar>,
+  frontParsed: any,
+  backParsed: any
+) {
+  const rawAddress = firstNonEmpty(
+    backStructured.address,
+    frontStructured.address,
+    backParsed?.address,
+    frontParsed?.address
+  );
+  const fatherFromAddress = extractFatherFromAddress(rawAddress);
+  const cleanedAddress = rawAddress ? cleanAddress(rawAddress) : "";
+
+  return {
+    full_name: firstNonEmpty(
+      frontStructured.fullName,
+      backStructured.fullName,
+      frontParsed?.fullName,
+      backParsed?.fullName
+    ),
+    father_or_husband_name: firstNonEmpty(
+      frontStructured.fatherName,
+      backStructured.fatherName,
+      frontParsed?.fatherName,
+      backParsed?.fatherName,
+      fatherFromAddress
+    ),
+    phone: firstNonEmpty(
+      frontStructured.phone,
+      backStructured.phone,
+      frontParsed?.phone,
+      backParsed?.phone
+    ),
+    dob: normalizeDate(
+      firstNonEmpty(
+        frontStructured.dob,
+        backStructured.dob,
+        frontParsed?.dob,
+        backParsed?.dob
+      )
+    ),
+    current_address: cleanedAddress || rawAddress,
+    permanent_address: cleanedAddress || rawAddress,
+  };
 }
 
 export async function POST(req: NextRequest) {
@@ -127,93 +231,76 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const frontBlob = new Blob([await front.arrayBuffer()], {
-      type: front.type || "application/octet-stream",
-    });
-    const backBlob = new Blob([await back.arrayBuffer()], {
-      type: back.type || "application/octet-stream",
-    });
+    const frontBuffer = Buffer.from(await front.arrayBuffer());
+    const backBuffer = Buffer.from(await back.arrayBuffer());
 
-    const [frontOCR, backOCR] = await Promise.all([
-      extractDocumentOcr("AADHAAR", frontBlob, front.name),
-      extractDocumentOcr("AADHAAR", backBlob, back.name),
-    ]);
+    let frontStructured = { fullName: "", fatherName: "", dob: "", phone: "", address: "", rawText: "" };
+    let backStructured = { fullName: "", fatherName: "", dob: "", phone: "", address: "", rawText: "" };
+    let frontParsed: any = {};
+    let backParsed: any = {};
+    let usedFallback = false;
 
-    console.log("frontOCR raw =>", JSON.stringify(frontOCR, null, 2));
-    console.log("backOCR raw =>", JSON.stringify(backOCR, null, 2));
+    // ── Try Decentro first ──────────────────────────────────────────────
+    try {
+      const frontBlob = new Blob([frontBuffer], { type: front.type || "application/octet-stream" });
+      const backBlob = new Blob([backBuffer], { type: back.type || "application/octet-stream" });
 
-    const frontStructured = extractStructuredAadhaar(frontOCR);
-    const backStructured = extractStructuredAadhaar(backOCR);
+      const [frontOCR, backOCR] = await Promise.all([
+        extractDocumentOcr("AADHAAR", frontBlob, front.name),
+        extractDocumentOcr("AADHAAR", backBlob, back.name),
+      ]);
 
-    const frontParsed = frontStructured.rawText
-      ? parseAadhaarText(frontStructured.rawText)
-      : {};
-    const backParsed = backStructured.rawText
-      ? parseAadhaarText(backStructured.rawText)
-      : {};
+      console.log("frontOCR raw =>", JSON.stringify(frontOCR, null, 2));
+      console.log("backOCR raw =>", JSON.stringify(backOCR, null, 2));
 
-    const finalData = {
-      full_name: firstNonEmpty(
-        frontStructured.fullName,
-        backStructured.fullName,
-        (frontParsed as any).fullName,
-        (backParsed as any).fullName
-      ),
-      father_or_husband_name: firstNonEmpty(
-        frontStructured.fatherName,
-        backStructured.fatherName,
-        (frontParsed as any).fatherName,
-        (backParsed as any).fatherName
-      ),
-      phone: firstNonEmpty(
-        frontStructured.phone,
-        backStructured.phone,
-        (frontParsed as any).phone,
-        (backParsed as any).phone
-      ),
-      dob: normalizeDate(
-        firstNonEmpty(
-          frontStructured.dob,
-          backStructured.dob,
-          (frontParsed as any).dob,
-          (backParsed as any).dob
-        )
-      ),
-      current_address: firstNonEmpty(
-        backStructured.address,
-        frontStructured.address,
-        (backParsed as any).address,
-        (frontParsed as any).address
-      ),
-      permanent_address: firstNonEmpty(
-        backStructured.address,
-        frontStructured.address,
-        (backParsed as any).address,
-        (frontParsed as any).address
-      ),
-    };
+      if (isDecentroFailure(frontOCR) || isDecentroFailure(backOCR)) {
+        console.warn("[AutoFill] Decentro failed, falling back to Tesseract OCR...");
+        throw new Error("decentro_failed");
+      }
+
+      frontStructured = extractStructuredAadhaar(frontOCR);
+      backStructured = extractStructuredAadhaar(backOCR);
+
+      frontParsed = frontStructured.rawText ? parseAadhaarText(frontStructured.rawText) : {};
+      backParsed = backStructured.rawText ? parseAadhaarText(backStructured.rawText) : {};
+    } catch (decentroErr) {
+      // ── Fallback: Tesseract.js local OCR ────────────────────────────
+      console.log("[AutoFill] Using Tesseract.js fallback OCR...");
+      usedFallback = true;
+
+      try {
+        const [frontText, backText] = await Promise.all([
+          extractTextFromImageBuffer(frontBuffer),
+          extractTextFromImageBuffer(backBuffer),
+        ]);
+
+        console.log("Tesseract frontText =>", frontText);
+        console.log("Tesseract backText =>", backText);
+
+        frontParsed = frontText ? parseAadhaarText(frontText) : {};
+        backParsed = backText ? parseAadhaarText(backText) : {};
+      } catch (tesseractErr) {
+        console.error("[AutoFill] Tesseract fallback also failed:", tesseractErr);
+      }
+    }
+
+    const finalData = buildFinalData(frontStructured, backStructured, frontParsed, backParsed);
 
     console.log("frontStructured =>", frontStructured);
     console.log("backStructured =>", backStructured);
     console.log("frontParsed =>", frontParsed);
     console.log("backParsed =>", backParsed);
     console.log("finalData =>", finalData);
+    console.log("usedFallback =>", usedFallback);
 
     if (!hasUsefulData(finalData)) {
       return NextResponse.json(
         {
           success: false,
           error: {
-            message:
-              "OCR response came back, but no usable Aadhaar fields were extracted.",
-          },
-          debug: {
-            frontStructured,
-            backStructured,
-            frontParsed,
-            backParsed,
-            frontOCR,
-            backOCR,
+            message: usedFallback
+              ? "Decentro credits exhausted. Fallback OCR could not extract fields — please ensure the Aadhaar images are clear and well-lit."
+              : "OCR response came back, but no usable Aadhaar fields were extracted.",
           },
         },
         { status: 422 }
@@ -223,6 +310,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       data: finalData,
+      fallback: usedFallback,
     });
   } catch (error: any) {
     console.error("autofillRequest POST error =>", error);

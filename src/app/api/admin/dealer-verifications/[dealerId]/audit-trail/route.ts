@@ -89,6 +89,20 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       fileBuffer =
         buffer instanceof ArrayBuffer ? buffer : await new Response(buffer).arrayBuffer();
 
+      // Validate the downloaded content is actually a PDF with real data
+      if (!contentType?.includes("pdf") && !contentType?.includes("octet-stream")) {
+        return NextResponse.json(
+          { success: false, message: "Digio returned invalid response (not a PDF). The audit trail may not be ready yet." },
+          { status: 502 }
+        );
+      }
+      if (fileBuffer.byteLength < 100) {
+        return NextResponse.json(
+          { success: false, message: "Digio returned an empty audit trail document. Please try again later." },
+          { status: 502 }
+        );
+      }
+
       const { error: uploadError } = await supabase.storage
         .from(bucketName)
         .upload(filePath, fileBuffer, {

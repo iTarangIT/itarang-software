@@ -143,6 +143,15 @@ export function TextAreaField({ label, value, onChange, error, placeholder, requ
 export type DocStatus = 'not_uploaded' | 'uploaded' | 'verified' | 'rejected' | 'reupload_requested' | 'pending';
 export type VerificationStatus = 'pending' | 'initiating' | 'awaiting_action' | 'in_progress' | 'success' | 'failed';
 
+// Dealer-facing status labels (simplified from internal statuses)
+function getDealerStatus(uploaded: boolean, status?: string): { label: string; color: string; dotColor: string; icon: 'check' | 'error' | 'clock' | 'upload' | 'reupload' } {
+    if (!uploaded) return { label: 'Not Uploaded', color: 'text-gray-400', dotColor: 'bg-gray-300', icon: 'upload' };
+    const s = (status || '').toLowerCase();
+    if (s === 'success' || s === 'verified') return { label: 'Verified', color: 'text-green-600', dotColor: 'bg-green-500', icon: 'check' };
+    if (s === 'failed' || s === 'rejected' || s === 'reupload_requested') return { label: 'Reupload Required', color: 'text-red-600', dotColor: 'bg-red-500', icon: 'reupload' };
+    return { label: 'Uploaded - Pending Review', color: 'text-blue-600', dotColor: 'bg-amber-500', icon: 'clock' };
+}
+
 export function DocumentCard({ label, required, uploaded, status, failedReason, onUpload, disabled }: {
     label: string;
     required?: boolean;
@@ -152,22 +161,18 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
     onUpload: (file: File) => void;
     disabled?: boolean;
 }) {
-    const statusDot = uploaded
-        ? status === 'failed' || status === 'rejected' ? 'bg-red-500'
-        : status === 'success' || status === 'verified' ? 'bg-green-500'
-        : 'bg-amber-500'
-        : 'bg-gray-300';
+    const dealerStatus = getDealerStatus(uploaded, status);
 
     return (
-        <label className={`relative flex flex-col items-center justify-center p-5 border-2 rounded-2xl transition-all min-h-[120px] ${
+        <label className={`relative flex flex-col items-center justify-center p-5 border-2 rounded-2xl transition-all min-h-[130px] ${
             disabled ? 'opacity-50 cursor-not-allowed' :
-            'cursor-pointer hover:border-[#0047AB] hover:bg-gray-50'
+            'cursor-pointer hover:border-[#0047AB] hover:shadow-md'
         } ${
             uploaded
-                ? status === 'failed' || status === 'rejected' ? 'border-red-200 bg-red-50'
-                : status === 'success' || status === 'verified' ? 'border-green-200 bg-green-50'
+                ? dealerStatus.icon === 'error' || dealerStatus.icon === 'reupload' ? 'border-red-200 bg-red-50'
+                : dealerStatus.icon === 'check' ? 'border-green-200 bg-green-50'
                 : 'border-blue-200 bg-blue-50'
-                : 'border-dashed border-gray-200'
+                : 'border-dashed border-gray-200 bg-white'
         }`}>
             <input
                 type="file"
@@ -177,19 +182,18 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
                 onChange={e => e.target.files?.[0] && onUpload(e.target.files[0])}
             />
             {/* Status dot */}
-            <div className={`absolute top-3 right-3 w-2.5 h-2.5 rounded-full ${statusDot}`} />
+            <div className={`absolute top-3 right-3 w-2.5 h-2.5 rounded-full ${dealerStatus.dotColor}`} />
 
-            {uploaded ? (
-                status === 'success' || status === 'verified' ? <CheckCircle2 className="w-6 h-6 text-green-500 mb-2" /> :
-                status === 'failed' || status === 'rejected' ? <XCircle className="w-6 h-6 text-red-500 mb-2" /> :
-                <Clock className="w-5 h-5 text-blue-500 mb-2" />
-            ) : (
-                <Upload className="w-6 h-6 text-gray-300 mb-2" />
-            )}
+            {dealerStatus.icon === 'check' ? <CheckCircle2 className="w-6 h-6 text-green-500 mb-2" /> :
+             dealerStatus.icon === 'reupload' || dealerStatus.icon === 'error' ? <XCircle className="w-6 h-6 text-red-500 mb-2" /> :
+             dealerStatus.icon === 'clock' ? <Clock className="w-5 h-5 text-blue-500 mb-2" /> :
+             <Upload className="w-6 h-6 text-gray-300 mb-2" />}
+
             <span className="text-xs font-bold text-gray-700 text-center leading-tight">{label}</span>
-            {required && !uploaded && <span className="text-[10px] text-red-400 mt-1">Required</span>}
-            {uploaded && !failedReason && <span className="text-[10px] text-green-600 mt-1">Uploaded</span>}
-            {failedReason && <span className="text-[10px] text-red-500 mt-1 text-center">{failedReason}</span>}
+            <span className={`text-[10px] font-semibold mt-1 text-center ${dealerStatus.color}`}>{dealerStatus.label}</span>
+            {required && !uploaded && <span className="text-[10px] text-red-400 mt-0.5">Required</span>}
+            {failedReason && <span className="text-[10px] text-red-500 mt-0.5 text-center px-1 leading-tight">{failedReason}</span>}
+            {dealerStatus.icon === 'reupload' && <span className="text-[10px] text-[#0047AB] font-bold mt-1">Click to Re-upload</span>}
         </label>
     );
 }
@@ -368,6 +372,7 @@ export function OCRModal({ open, onClose, onResult }: {
     const [aadhaarBack, setAadhaarBack] = useState<File | null>(null);
     const [scanning, setScanning] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [scanStatus, setScanStatus] = useState<string>('');
 
     if (!open) return null;
 
@@ -379,11 +384,14 @@ export function OCRModal({ open, onClose, onResult }: {
 
         setScanning(true);
         setError(null);
+        setScanStatus('Connecting to OCR service...');
 
         try {
             const formData = new FormData();
             formData.append('aadhaarFront', aadhaarFront);
             formData.append('aadhaarBack', aadhaarBack);
+
+            setScanStatus('Extracting details from Aadhaar...');
 
             const res = await fetch('/api/leads/autofillRequest', {
                 method: 'POST',
@@ -401,6 +409,7 @@ export function OCRModal({ open, onClose, onResult }: {
             setError('Scanning failed. Please try again.');
         } finally {
             setScanning(false);
+            setScanStatus('');
         }
     };
 
@@ -442,7 +451,13 @@ export function OCRModal({ open, onClose, onResult }: {
                 </div>
 
                 {scanning && (
-                    <div className="mt-4 text-center text-sm text-gray-500 font-medium">Processing........</div>
+                    <div className="mt-4 flex flex-col items-center gap-2">
+                        <div className="flex items-center gap-2 text-sm text-[#0047AB] font-medium">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            {scanStatus || 'Processing...'}
+                        </div>
+                        <p className="text-xs text-gray-400">This may take up to 30 seconds</p>
+                    </div>
                 )}
 
                 {error && (

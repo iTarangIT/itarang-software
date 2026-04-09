@@ -227,7 +227,9 @@ export const leads = pgTable('leads', {
     kyc_score: integer('kyc_score'), // 0-100 calculated score
     kyc_completed_at: timestamp('kyc_completed_at', { withTimezone: true }),
     payment_method: varchar('payment_method', { length: 20 }), // upfront, finance
-    consent_status: varchar('consent_status', { length: 30 }).default('awaiting_signature'), // awaiting_signature, link_sent, digitally_signed, manual_uploaded, verified
+    consent_status: varchar('consent_status', { length: 30 }).default('awaiting_signature'),
+    // Digital: awaiting_signature → link_sent → link_opened → esign_in_progress → esign_completed → admin_review_pending → admin_verified | admin_rejected | expired | esign_failed | esign_blocked
+    // Manual: awaiting_signature → consent_generated → consent_uploaded → admin_review_pending → manual_verified | admin_rejected
     has_co_borrower: boolean('has_co_borrower').default(false),
     has_additional_docs_required: boolean('has_additional_docs_required').default(false),
     interim_step_status: varchar('interim_step_status', { length: 20 }), // pending, completed
@@ -487,17 +489,28 @@ export const auditLogs = pgTable('audit_logs', {
 // --- ACCOUNTS ---
 
 export const accounts = pgTable('accounts', {
-    id: varchar('id', { length: 255 }).primaryKey(), // ACC-YYYYMMDD-XXX
-    business_name: text('business_name').notNull(),
-    owner_name: text('owner_name').notNull(),
-    email: text('email'),
-    phone: varchar('phone', { length: 20 }),
-    gstin: varchar('gstin', { length: 15 }),
-    billing_address: text('billing_address'),
-    shipping_address: text('shipping_address'),
+    id: varchar('id', { length: 255 }).primaryKey(), // ACC-ITARANG-YYYYMMDD-XXX
+    business_entity_name: text('business_entity_name').notNull(),
+    gstin: varchar('gstin', { length: 15 }).notNull(),
+    pan: varchar('pan', { length: 10 }),
+    address_line1: text('address_line1'),
+    address_line2: text('address_line2'),
+    city: text('city'),
+    state: text('state'),
+    pincode: varchar('pincode', { length: 10 }),
+    bank_name: text('bank_name'),
+    bank_account_number: text('bank_account_number'),
+    ifsc_code: varchar('ifsc_code', { length: 20 }),
+    bank_proof_url: text('bank_proof_url'),
+    dealer_code: varchar('dealer_code', { length: 255 }),
+    contact_name: text('contact_name'),
+    contact_email: text('contact_email'),
+    contact_phone: varchar('contact_phone', { length: 20 }),
     status: varchar('status', { length: 20 }).default('active').notNull(),
+    onboarding_status: varchar('onboarding_status', { length: 50 }).default('pending').notNull(),
+    created_by: uuid('created_by').references(() => users.id),
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-    last_order_fulfilled_at: timestamp('last_order_fulfilled_at', { withTimezone: true }),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 // --- PROCUREMENT ---
@@ -827,19 +840,30 @@ export const kycDocuments = pgTable('kyc_documents', {
     file_url: text('file_url'),
     file_name: text('file_name'),
     file_size: integer('file_size'),
+    file_type: varchar('file_type', { length: 50 }), // image/png, image/jpeg, application/pdf
+
+    // Dealer-facing status (simplified view)
+    doc_status: varchar('doc_status', { length: 30 }).default('not_uploaded').notNull(), // not_uploaded, uploaded, verified, rejected, reupload_requested
+
+    // Internal verification status (admin-side, not shown to dealer)
     verification_status: varchar('verification_status', { length: 30 }).default('pending').notNull(), // pending, in_progress, success, failed, awaiting_action
 
     failed_reason: text('failed_reason'),
+    rejection_reason: text('rejection_reason'), // Admin rejection reason shown to dealer
 
     ocr_data: jsonb('ocr_data'),
     api_response: jsonb('api_response'),
 
+    uploaded_by: uuid('uploaded_by').references(() => users.id),
+    verified_at: timestamp('verified_at', { withTimezone: true }),
+    verified_by: uuid('verified_by').references(() => users.id),
     uploaded_at: timestamp('uploaded_at', { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => {
     return {
         kycDocsLeadIdx: index('kyc_documents_lead_id_idx').on(table.lead_id),
         kycDocsTypeIdx: index('kyc_documents_doc_type_idx').on(table.doc_type),
+        kycDocsStatusIdx: index('kyc_documents_doc_status_idx').on(table.doc_status),
     };
 });
 
@@ -869,18 +893,51 @@ export const consentRecords = pgTable('consent_records', {
     id: varchar('id', { length: 255 }).primaryKey(), // CONSENT-YYYYMMDD-SEQ
     lead_id: varchar('lead_id', { length: 255 }).references(() => leads.id, { onDelete: 'cascade' }).notNull(),
     consent_for: varchar('consent_for', { length: 20 }).default('primary').notNull(), // primary, co_borrower
-    consent_type: varchar('consent_type', { length: 30 }), // digital, manual, sms, whatsapp
-    consent_status: varchar('consent_status', { length: 30 }).default('awaiting_signature').notNull(), // awaiting_signature, link_sent, digitally_signed, manual_uploaded, verified
+    consent_type: varchar('consent_type', { length: 30 }), // digital, manual
+    consent_status: varchar('consent_status', { length: 30 }).default('awaiting_signature').notNull(),
+    // Digital: awaiting_signature → link_sent → link_opened → esign_in_progress → esign_completed → admin_review_pending → admin_verified | admin_rejected | expired | esign_failed | esign_blocked
+    // Manual: awaiting_signature → consent_generated → consent_uploaded → admin_review_pending → manual_verified | admin_rejected
+
+    // Link delivery
     consent_token: varchar('consent_token', { length: 255 }),
     consent_link_url: text('consent_link_url'),
     consent_link_sent_at: timestamp('consent_link_sent_at', { withTimezone: true }),
+    consent_link_expires_at: timestamp('consent_link_expires_at', { withTimezone: true }),
+    consent_delivery_channel: varchar('consent_delivery_channel', { length: 20 }), // sms, whatsapp
+
+    // Signed document
     signed_consent_url: text('signed_consent_url'),
     generated_pdf_url: text('generated_pdf_url'),
     signed_at: timestamp('signed_at', { withTimezone: true }),
+    sign_method: varchar('sign_method', { length: 30 }), // aadhaar_esign, manual
+
+    // eSign provider fields
+    esign_transaction_id: varchar('esign_transaction_id', { length: 255 }),
+    esign_certificate_id: varchar('esign_certificate_id', { length: 255 }),
+    esign_provider: varchar('esign_provider', { length: 50 }), // digio, emudhra, nsdl
+    esign_error_code: varchar('esign_error_code', { length: 50 }),
+    esign_error_message: text('esign_error_message'),
+    signer_aadhaar_masked: varchar('signer_aadhaar_masked', { length: 20 }), // XXXX-XXXX-3456
+
+    // Admin review
     verified_by: uuid('verified_by').references(() => users.id),
     verified_at: timestamp('verified_at', { withTimezone: true }),
+    rejected_by: uuid('rejected_by').references(() => users.id),
+    rejected_at: timestamp('rejected_at', { withTimezone: true }),
+    rejection_reason: varchar('rejection_reason', { length: 255 }),
+    reviewer_notes: text('reviewer_notes'),
+
+    // Retry tracking
+    consent_attempt_count: integer('consent_attempt_count').default(0),
+    esign_retry_count: integer('esign_retry_count').default(0),
+
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => {
+    return {
+        consentLeadIdx: index('consent_records_lead_id_idx').on(table.lead_id),
+        consentStatusIdx: index('consent_records_status_idx').on(table.consent_status),
+    };
 });
 
 export const couponCodes = pgTable('coupon_codes', {
@@ -1264,6 +1321,8 @@ export const loanApplicationsRelations = relations(loanApplications, ({ one }) =
 
 export const kycDocumentsRelations = relations(kycDocuments, ({ one }) => ({
     lead: one(leads, { fields: [kycDocuments.lead_id], references: [leads.id] }),
+    uploader: one(users, { fields: [kycDocuments.uploaded_by], references: [users.id], relationName: 'kycdoc_uploader' }),
+    verifier: one(users, { fields: [kycDocuments.verified_by], references: [users.id], relationName: 'kycdoc_verifier' }),
 }));
 
 export const kycVerificationsRelations = relations(kycVerifications, ({ one }) => ({
@@ -1272,7 +1331,8 @@ export const kycVerificationsRelations = relations(kycVerifications, ({ one }) =
 
 export const consentRecordsRelations = relations(consentRecords, ({ one }) => ({
     lead: one(leads, { fields: [consentRecords.lead_id], references: [leads.id] }),
-    verifier: one(users, { fields: [consentRecords.verified_by], references: [users.id] }),
+    verifier: one(users, { fields: [consentRecords.verified_by], references: [users.id], relationName: 'consent_verifier' }),
+    rejector: one(users, { fields: [consentRecords.rejected_by], references: [users.id], relationName: 'consent_rejector' }),
 }));
 
 export const coBorrowersRelations = relations(coBorrowers, ({ one, many }) => ({

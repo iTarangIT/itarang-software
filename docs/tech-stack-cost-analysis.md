@@ -417,3 +417,220 @@ Assuming 2x growth in dealers, leads, and transaction volumes:
 ---
 
 *Document generated for financial planning purposes. Review with actual vendor contracts before budgeting.*
+
+
+  What This BRD Is About                                                                                                                                           
+                                                                                                                                                                   
+  Your BRD defines two workflows for KYC Step 2, both requiring admin approval before a lead can proceed:
+                                                                                                                                                                   
+  1. Customer Consent (gate before anything else)       
+
+  - Digital path: Send SMS/WhatsApp link → Customer signs with Aadhaar OTP (eSign) → Admin reviews signed PDF → Approves
+  - Manual path: Generate consent PDF → Dealer prints → Customer signs physically → Dealer uploads scan → Admin reviews → Approves
+  - Critical rule: Lead is BLOCKED until admin approves consent
+
+  2. Document Upload (two-stage)
+
+  - Stage 1 (Dealer): Upload 11 documents (finance) — simple upload, no API verification
+  - Stage 2 (Admin): Admin runs OCR + API checks, approves/rejects each doc — dealer cannot proceed until ALL verified
+
+  What Already Exists in Your Codebase
+
+  Good news — about 60% of the infrastructure exists: consentRecords table, consent APIs (send/generate/upload), adminKycReviews table, document upload flow, Digio
+   client library, admin review page, and the consent gating check in complete-step2.
+
+  What Needs to Be Built
+
+  The main gaps are: actual PDF generation, Aadhaar eSign integration for consent (Digio), customer-facing consent page, eSign webhook, SMS/WhatsApp provider
+  integration, link expiry cron, and enhanced admin review UI.
+
+  The plan file has the full breakdown with recommended implementation phases.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Ready to code?                                                                           
+
+ Here is Claude's plan:                                                                                                                                            
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Plan: Customer Consent + Document Upload — KYC Step 2                                                                                                             
+                                                        
+ Context
+
+ The BRD defines a two-part system for KYC Step 2 in lead creation:
+ 1. Customer Consent Workflow — Get legally valid consent before processing KYC
+ 2. Document Upload & Admin Verification — Two-stage document handling (dealer uploads → admin reviews)
+
+ This builds on top of existing infrastructure — the codebase already has partial implementations for consent, document upload, and admin review.
+
+ ---
+ Part 1: CONSENT WORKFLOW — What It Does
+
+ Two mutually exclusive paths for obtaining customer consent:
+
+ Path A: Digital Consent (Aadhaar eSign) — Preferred
+
+ Dealer clicks "Send SMS/WhatsApp Consent"
+   → System generates consent link with token
+   → SMS/WhatsApp sent to customer phone
+   → Customer opens link → Reviews consent text → Signs with Aadhaar OTP
+   → eSign provider (Digio/eMudhra) returns signed PDF via webhook
+   → consent_status = 'admin_review_pending'
+   → Admin reviews signed PDF → Approves or Rejects
+   → consent_status = 'admin_verified' (FINAL — can proceed)
+
+ State machine:
+ awaiting_signature → link_sent → link_opened → esign_in_progress → esign_completed → admin_review_pending → admin_verified
+
+ Failure/edge cases: link expiry (24hrs cron), esign failure (3 retries then blocked), admin rejection (re-consent flow)
+
+ Path B: Manual Consent (Offline Signed PDF) — Fallback
+
+ Dealer clicks "Generate Consent PDF"
+   → System generates pre-filled PDF with consent text
+   → PDF auto-downloads to dealer's device
+   → Dealer prints → Customer signs physically → Dealer scans/photographs
+   → Dealer uploads signed PDF
+   → consent_status = 'manual_review_pending'
+   → Admin reviews (checks signatures, thumb impression, witness, legibility)
+   → consent_status = 'manual_verified' (FINAL — can proceed)
+
+ State machine:
+ awaiting_signature → consent_generated → consent_uploaded → admin_review_pending → admin_verified
+
+
+ Critical Rule
+
+ "Save & Next" button is ONLY enabled when consent_status IN ('admin_verified', 'manual_verified') — no lead proceeds without admin-approved consent.
+
+ ---
+ Part 2: DOCUMENT UPLOAD — What It Does
+
+ Stage 1: Dealer Upload (dealer-facing)
+
+ - Dealer uploads 11 documents (for finance) or 3 (for upfront)
+ - Documents: Aadhaar front/back, PAN, passport photo, address proof, bank statement, 4 cheques, RC copy (conditional)
+ - Simple upload only — NO OCR or API verification at this stage
+ - Status visible to dealer: Not Uploaded → Uploaded - Pending Review → Verified / Reupload Required
+ - Progress counter: "9/11 Uploaded, Missing: PAN Card, Passport Photo"
+
+ Stage 2: Admin Verification (admin-facing, invisible to dealer)
+
+ - Admin reviews uploaded documents in a queue
+ - System runs OCR + API verification (Decentro)
+ - Admin approves/rejects each document with reasons
+ - Rejected docs trigger "Reupload Required" for dealer
+ - Dealer cannot proceed to Step 3 until Admin marks ALL documents as verified
+
+ ---
+ What Already Exists vs. What's New
+
+ Already Exists (can reuse):
+
+ ┌────────────────────────────┬─────────────────────────────────────────────────┬──────────────────────────────────────────────────┐
+ │         Component          │                    Location                     │                      Status                      │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ consentRecords table       │ schema.ts:868-884                               │ Has token, link, status, signed_url, verified_by │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ leads.consent_status field │ schema.ts:230                                   │ Already tracks consent state                     │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ kycDocuments table         │ schema.ts:820-844                               │ Full doc upload tracking                         │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ adminKycReviews table      │ schema.ts:1041-1054                             │ Review outcomes, rejection reasons               │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ kycVerifications table     │ schema.ts:846-866                               │ API verification tracking                        │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ Send consent API           │ api/kyc/[leadId]/send-consent/route.ts          │ Generates token + link (SMS TODO)                │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ Generate consent PDF API   │ api/kyc/[leadId]/generate-consent-pdf/route.ts  │ Placeholder (PDF gen TODO)                       │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ Upload signed consent API  │ api/kyc/[leadId]/upload-signed-consent/route.ts │ Stores PDF, updates status                       │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ Document upload API        │ api/kyc/[leadId]/upload-document/route.ts       │ Full upload flow works                           │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ Admin KYC review API       │ api/admin/kyc-reviews/route.ts                  │ GET queue + POST review                          │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ Admin KYC review page      │ admin/kyc-review/page.tsx                       │ Lists pending docs                               │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ Digio client/service       │ lib/digio/client.ts, service.ts, mapper.ts      │ Agreement creation, status, download             │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ Complete step 2 API        │ api/kyc/[leadId]/complete-step2/route.ts        │ Validates consent + docs before proceeding       │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ KYC page (Step 2 UI)       │ dealer-portal/leads/[id]/kyc/page.tsx           │ Full page with consent + doc sections            │
+ ├────────────────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────────────────────┤
+ │ isFinalConsentStatus()     │ kyc/page.tsx:37                                 │ Already checks admin_verified/manual_verified    │
+ └────────────────────────────┴─────────────────────────────────────────────────┴──────────────────────────────────────────────────┘
+
+ Needs to Be Built:
+
+ ┌───────────────────────────────────────┬────────────────────────────────────────────────────────────────────────────────┐
+ │               Component               │                                 What's Missing                                 │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ SMS/WhatsApp sending                  │ Actual provider integration (MSG91/Twilio/WhatsApp Business API)               │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ Consent PDF generation                │ Real PDF template with pdfkit/Puppeteer (consent text, signature boxes)        │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ Aadhaar eSign flow                    │ Digio eSign for consent (not agreements) — link generation, OTP page, callback │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ eSign webhook handler                 │ POST /api/kyc/consent/esign/callback — receive signed PDF from provider        │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ Customer consent page                 │ Public page at /consent/{leadId}/{token} — consent text + "Sign with Aadhaar"  │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ Consent link expiry cron              │ Hourly job to expire 24hr-old links                                            │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ Consent status state machine          │ Expand from 5 states to full 10-state machine per BRD                          │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ Admin consent review queue            │ Dedicated queue view (currently mixed with doc review)                         │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ Admin consent review screen           │ PDF viewer + digital signature details + approve/reject                        │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ Re-consent flow                       │ On rejection: generate new link, notify customer, increment attempt count      │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ Document progress counter             │ "9/11 Uploaded" UI component                                                   │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ Dealer-simplified status mapping      │ Map internal statuses to dealer-friendly labels                                │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ Admin document verification checklist │ Manual checks UI (legible, signatures present, etc.)                           │
+ ├───────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+ │ Reupload notification                 │ When admin rejects → dealer sees "Reupload Required" with reason               │
+ └───────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────┘
+
+ ---
+ Implementation Order (Recommended)
+
+ Phase 1: Consent State Machine + DB Schema Updates
+
+ - Expand consent_status to support full BRD state machine
+ - Add missing fields to consentRecords: esign_transaction_id, esign_certificate_id, consent_attempt_count, consent_delivery_channel, consent_link_expires_at
+ - Add doc_status enum to kycDocuments for dealer-facing status
+
+ Phase 2: Manual Consent Path (simpler, no external dependency)
+
+ - Build consent PDF template with pdfkit/Puppeteer
+ - Implement download + upload + admin review flow
+ - Build admin consent review screen
+
+ Phase 3: Digital Consent Path (requires eSign provider)
+
+ - Build customer-facing consent page (/consent/[leadId]/[token])
+ - Integrate Digio eSign for consent signing
+ - Build eSign webhook handler
+ - Implement link expiry cron
+
+ Phase 4: SMS/WhatsApp Integration
+
+ - Integrate MSG91 or Twilio for consent link delivery
+ - WhatsApp Business API for WhatsApp channel
+
+ Phase 5: Admin Review Enhancements
+
+ - Dedicated consent review queue
+ - Document verification checklist UI
+ - Re-consent and reupload flows
+
+ ---
+ Verification
+
+ - Test manual consent: generate PDF → download → upload signed → admin approve → "Save & Next" enables
+ - Test digital consent: send link → customer signs → webhook → admin approve → "Save & Next" enables
+ - Test rejection: admin rejects → dealer notified → re-consent/reupload → admin re-reviews
+ - Test gating: verify "Save & Next" is blocked unless consent_status is admin_verified/manual_verified
+ - Test document upload: upload all required docs → admin verifies all → step completion allowed

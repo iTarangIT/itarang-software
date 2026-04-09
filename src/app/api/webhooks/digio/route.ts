@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import {
   dealerAgreementSigners,
   dealerOnboardingApplications,
+  consentRecords,
+  leads,
 } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import {
@@ -10,6 +12,7 @@ import {
   mapDigioStatusToAgreementStatus,
 } from "@/lib/agreement/status";
 import { insertAgreementEvent } from "@/lib/agreement/tracking";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 
 function cleanString(value: unknown) {
   if (typeof value !== "string") return "";
@@ -86,6 +89,102 @@ async function findApplication(documentId?: string | null, requestId?: string | 
   return null;
 }
 
+/**
+ * Handle Digio webhook for consent eSign documents.
+ * Maps Digio statuses to consent state machine.
+ */
+async function handleConsentWebhook(
+  consent: any,
+  body: any,
+  rawStatus: string,
+  documentId: string
+) {
+  const now = new Date();
+  const status = rawStatus.toLowerCase();
+
+  console.log("[DIGIO WEBHOOK - CONSENT] status:", status, "consentId:", consent.id, "leadId:", consent.lead_id);
+
+  const signedPdfUrl = extractSignedAgreementUrl(body);
+  const signingParties = Array.isArray(body?.signing_parties) ? body.signing_parties : [];
+  const signerAadhaar = signingParties[0]?.aadhaar_masked || signingParties[0]?.signer_aadhaar || null;
+
+  if (status === "completed" || status === "signed") {
+    // eSign completed successfully → set esign_completed (admin picks up for review)
+    await db.update(consentRecords).set({
+      consent_status: "esign_completed",
+      signed_consent_url: signedPdfUrl || consent.signed_consent_url,
+      signed_at: now,
+      signer_aadhaar_masked: signerAadhaar,
+      esign_error_code: null,
+      esign_error_message: null,
+      updated_at: now,
+    }).where(eq(consentRecords.id, consent.id));
+
+    await db.update(leads).set({
+      consent_status: "esign_completed",
+      updated_at: now,
+    }).where(eq(leads.id, consent.lead_id));
+
+    console.log("[DIGIO WEBHOOK - CONSENT] eSign completed, status set to esign_completed");
+
+  } else if (status === "failed" || status === "rejected") {
+    // eSign failed
+    const failureReason = extractFailureReason(body);
+    const retryCount = (consent.esign_retry_count || 0) + 1;
+    const newStatus = retryCount >= 3 ? "esign_blocked" : "esign_failed";
+
+    await db.update(consentRecords).set({
+      consent_status: newStatus,
+      esign_error_code: body?.error_code || body?.errorCode || null,
+      esign_error_message: failureReason || "eSign failed",
+      esign_retry_count: retryCount,
+      updated_at: now,
+    }).where(eq(consentRecords.id, consent.id));
+
+    await db.update(leads).set({
+      consent_status: newStatus,
+      updated_at: now,
+    }).where(eq(leads.id, consent.lead_id));
+
+    console.log("[DIGIO WEBHOOK - CONSENT] eSign failed, retryCount:", retryCount, "status:", newStatus);
+
+  } else if (status === "expired") {
+    await db.update(consentRecords).set({
+      consent_status: "expired",
+      updated_at: now,
+    }).where(eq(consentRecords.id, consent.id));
+
+    await db.update(leads).set({
+      consent_status: "expired",
+      updated_at: now,
+    }).where(eq(leads.id, consent.lead_id));
+
+    console.log("[DIGIO WEBHOOK - CONSENT] link expired");
+
+  } else if (status === "viewed" || status === "sent") {
+    // Customer opened the link
+    const mappedStatus = status === "viewed" ? "link_opened" : "link_sent";
+    await db.update(consentRecords).set({
+      consent_status: mappedStatus,
+      updated_at: now,
+    }).where(eq(consentRecords.id, consent.id));
+
+    if (mappedStatus !== consent.consent_status) {
+      await db.update(leads).set({
+        consent_status: mappedStatus,
+        updated_at: now,
+      }).where(eq(leads.id, consent.lead_id));
+    }
+  }
+
+  return NextResponse.json({
+    success: true,
+    type: "consent",
+    consentId: consent.id,
+    status: rawStatus,
+  });
+}
+
 export async function POST(req: NextRequest) {
   try {
     let body: any = {};
@@ -127,6 +226,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── Check if this is a consent document (not a dealer agreement) ────
+    if (documentId) {
+      const consentRow = await db
+        .select()
+        .from(consentRecords)
+        .where(eq(consentRecords.esign_transaction_id, documentId))
+        .limit(1);
+
+      if (consentRow[0]) {
+        return handleConsentWebhook(consentRow[0], body, rawStatus, documentId);
+      }
+    }
+
+    // ── Otherwise, handle as dealer agreement ────────────────────────────
     const application = await findApplication(documentId, requestId);
 
     if (!application) {
@@ -169,35 +282,107 @@ export async function POST(req: NextRequest) {
         updatePayload.auditTrailUrl = auditTrailUrl;
       }
 
-      // Auto-fetch/store files if provider did not send direct URLs
+      // Auto-fetch/store files directly from Digio (no APP_URL dependency)
       try {
-        const appBaseUrl =
-          process.env.APP_URL ||
-          process.env.NEXT_PUBLIC_APP_URL ||
-          "http://localhost:3000";
+        const digioBaseUrl =
+          (process.env.DIGIO_BASE_URL || "https://ext.digio.in:444").trim().replace(/^["']|["']$/g, "");
+        const digioClientId =
+          (process.env.DIGIO_CLIENT_ID || "").trim().replace(/^["']|["']$/g, "");
+        const digioClientSecret =
+          (process.env.DIGIO_CLIENT_SECRET || "").trim().replace(/^["']|["']$/g, "");
+        const supabaseUrl =
+          (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim().replace(/^["']|["']$/g, "");
+        const serviceRoleKey =
+          (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim().replace(/^["']|["']$/g, "");
 
-        if (!signedAgreementUrl) {
-          const signedFetchRes = await fetch(
-            `${appBaseUrl}/api/admin/dealer-verifications/${application.id}/download-signed-agreement`,
-            { method: "GET" }
-          );
+        const docId = documentId || application.providerDocumentId;
 
-          console.log(
-            "[DIGIO WEBHOOK] auto signed-agreement fetch status:",
-            signedFetchRes.status
-          );
-        }
+        if (digioClientId && digioClientSecret && docId && supabaseUrl && serviceRoleKey) {
+          const digioAuth = `Basic ${Buffer.from(`${digioClientId}:${digioClientSecret}`).toString("base64")}`;
+          const supabase = createSupabaseClient(supabaseUrl, serviceRoleKey);
+          const bucketName = "dealer-documents";
 
-        if (!auditTrailUrl) {
-          const auditFetchRes = await fetch(
-            `${appBaseUrl}/api/admin/dealer-verifications/${application.id}/fetch-audit-trail`,
-            { method: "POST" }
-          );
+          // Fetch signed agreement PDF from Digio
+          if (!signedAgreementUrl) {
+            try {
+              const signedRes = await fetch(
+                `${digioBaseUrl}/v2/client/document/download?document_id=${docId}`,
+                { method: "GET", headers: { Authorization: digioAuth, Accept: "application/pdf" }, cache: "no-store" }
+              );
 
-          console.log(
-            "[DIGIO WEBHOOK] auto audit-trail fetch status:",
-            auditFetchRes.status
-          );
+              if (signedRes.ok) {
+                const contentType = signedRes.headers.get("content-type") || "";
+                if (contentType.includes("pdf") || contentType.includes("octet-stream")) {
+                  const pdfBuffer = await signedRes.arrayBuffer();
+                  if (pdfBuffer.byteLength > 100) {
+                    const filePath = `agreements/${application.id}/signed-agreement.pdf`;
+                    const { error: upErr } = await supabase.storage
+                      .from(bucketName)
+                      .upload(filePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
+
+                    if (!upErr) {
+                      const { data: urlData } = supabase.storage.from(bucketName).getPublicUrl(filePath);
+                      updatePayload.signedAgreementStoragePath = filePath;
+                      updatePayload.signedAgreementUrl = urlData?.publicUrl || null;
+                      console.log("[DIGIO WEBHOOK] Signed agreement stored in Supabase");
+                    } else {
+                      console.error("[DIGIO WEBHOOK] Supabase upload error (signed):", upErr.message);
+                    }
+                  } else {
+                    console.warn("[DIGIO WEBHOOK] Signed agreement PDF too small, skipping:", pdfBuffer.byteLength);
+                  }
+                } else {
+                  const text = await signedRes.text();
+                  console.warn("[DIGIO WEBHOOK] Signed agreement response not PDF:", contentType, text.slice(0, 200));
+                }
+              } else {
+                console.warn("[DIGIO WEBHOOK] Digio signed agreement download failed:", signedRes.status);
+              }
+            } catch (e) {
+              console.error("[DIGIO WEBHOOK] Signed agreement fetch error:", e);
+            }
+          }
+
+          // Fetch audit trail PDF from Digio
+          if (!auditTrailUrl) {
+            try {
+              const auditRes = await fetch(
+                `${digioBaseUrl}/v2/client/document/download_audit_trail?document_id=${docId}`,
+                { method: "GET", headers: { Authorization: digioAuth, Accept: "application/pdf" }, cache: "no-store" }
+              );
+
+              if (auditRes.ok) {
+                const contentType = auditRes.headers.get("content-type") || "";
+                if (contentType.includes("pdf") || contentType.includes("octet-stream")) {
+                  const pdfBuffer = await auditRes.arrayBuffer();
+                  if (pdfBuffer.byteLength > 100) {
+                    const filePath = `agreements/${application.id}/audit-trail.pdf`;
+                    const { error: upErr } = await supabase.storage
+                      .from(bucketName)
+                      .upload(filePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
+
+                    if (!upErr) {
+                      const { data: urlData } = supabase.storage.from(bucketName).getPublicUrl(filePath);
+                      updatePayload.auditTrailStoragePath = filePath;
+                      updatePayload.auditTrailUrl = urlData?.publicUrl || null;
+                      console.log("[DIGIO WEBHOOK] Audit trail stored in Supabase");
+                    } else {
+                      console.error("[DIGIO WEBHOOK] Supabase upload error (audit):", upErr.message);
+                    }
+                  } else {
+                    console.warn("[DIGIO WEBHOOK] Audit trail PDF too small, skipping:", pdfBuffer.byteLength);
+                  }
+                } else {
+                  const text = await auditRes.text();
+                  console.warn("[DIGIO WEBHOOK] Audit trail response not PDF:", contentType, text.slice(0, 200));
+                }
+              } else {
+                console.warn("[DIGIO WEBHOOK] Digio audit trail download failed:", auditRes.status);
+              }
+            } catch (e) {
+              console.error("[DIGIO WEBHOOK] Audit trail fetch error:", e);
+            }
+          }
         }
       } catch (e) {
         console.error("[DIGIO WEBHOOK] AUTO FETCH ERROR:", e);

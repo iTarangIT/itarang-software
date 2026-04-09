@@ -234,10 +234,13 @@ export async function POST(req: NextRequest) {
     }
 
     if (application && application.onboardingStatus === "approved") {
-      const res = NextResponse.json(
-        { success: false, message: "This application has already been approved and cannot be modified" },
-        { status: 409 }
-      );
+      // Don't modify approved applications via auto-save.
+      // Return success silently so the frontend doesn't show an error.
+      const res = NextResponse.json({
+        success: true,
+        data: { applicationId: application.id, onboardingStatus: "approved" },
+        message: "Application already approved.",
+      });
       mergeCookies(cookieCollector, res);
       return res;
     }

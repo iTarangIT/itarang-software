@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Plus, X, AlertCircle, Scan, Info, ChevronRight, ChevronDown, Loader2 } from 'lucide-react';
+import { Plus, X, AlertCircle, Scan, Info, ChevronRight, ChevronDown, Loader2, ShieldCheck, UserPlus, ArrowRight } from 'lucide-react';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { DatePicker } from '@/components/ui/date-picker';
 import {
@@ -335,17 +335,84 @@ function NewLeadWizardContent() {
             {/* Confirmation Modal */}
             {showConfirm && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-6 space-y-4">
-                        <h3 className="text-lg font-bold text-gray-900">Create Lead?</h3>
-                        <p className="text-sm text-gray-600">
-                            {formData.interest_level === 'hot' && finFlow
-                                ? 'This will create the lead and take you to KYC (Step 2).'
-                                : 'This will create the lead and return to your leads list.'}
-                        </p>
-                        <div className="flex gap-3">
-                            <button onClick={() => setShowConfirm(false)} className="flex-1 px-4 py-2.5 border border-gray-300 rounded-xl font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
-                            <button onClick={handleFinalConfirm} disabled={loading} className="flex-1 px-4 py-2.5 bg-[#0047AB] text-white rounded-xl font-medium hover:bg-[#003580] flex items-center justify-center gap-2">
-                                {loading && <Loader2 className="w-4 h-4 animate-spin" />} Create Lead
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+                        {/* Header gradient */}
+                        <div className="bg-gradient-to-r from-[#0047AB] to-[#1D4ED8] px-6 py-5">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                                    <UserPlus className="w-5 h-5 text-white" />
+                                </div>
+                                <div>
+                                    <h3 className="text-lg font-bold text-white">Confirm Lead Creation</h3>
+                                    <p className="text-blue-100 text-xs mt-0.5">Reference: {referenceId || 'Generating...'}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Body */}
+                        <div className="px-6 py-5 space-y-4">
+                            {/* Summary card */}
+                            <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 space-y-2.5">
+                                {formData.full_name && (
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs text-gray-500 font-medium">Customer</span>
+                                        <span className="text-sm font-semibold text-gray-900">{formData.full_name}</span>
+                                    </div>
+                                )}
+                                {formData.phone && (
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs text-gray-500 font-medium">Phone</span>
+                                        <span className="text-sm font-semibold text-gray-900">{formData.phone}</span>
+                                    </div>
+                                )}
+                                {formData.asset_model && (
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs text-gray-500 font-medium">Product</span>
+                                        <span className="text-sm font-semibold text-gray-900">{formData.product_name || formData.asset_model}</span>
+                                    </div>
+                                )}
+                                {formData.payment_method && (
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs text-gray-500 font-medium">Payment</span>
+                                        <span className="text-sm font-semibold text-gray-900 capitalize">{formData.payment_method?.replace(/_/g, ' ')}</span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Next step info */}
+                            <div className={`flex items-start gap-3 p-3 rounded-xl border ${
+                                formData.interest_level === 'hot' && finFlow
+                                    ? 'bg-emerald-50 border-emerald-200'
+                                    : 'bg-blue-50 border-blue-200'
+                            }`}>
+                                <ShieldCheck className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+                                    formData.interest_level === 'hot' && finFlow ? 'text-emerald-600' : 'text-blue-600'
+                                }`} />
+                                <p className={`text-xs leading-relaxed ${
+                                    formData.interest_level === 'hot' && finFlow ? 'text-emerald-700' : 'text-blue-700'
+                                }`}>
+                                    {formData.interest_level === 'hot' && finFlow
+                                        ? 'This lead will be created and you will proceed directly to KYC verification (Step 2).'
+                                        : 'This lead will be created and saved. You can initiate KYC later from the leads list.'}
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Footer */}
+                        <div className="px-6 pb-5 flex gap-3">
+                            <button
+                                onClick={() => setShowConfirm(false)}
+                                className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl font-semibold text-sm text-gray-600 hover:bg-gray-50 hover:border-gray-300 transition-all"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleFinalConfirm}
+                                disabled={loading}
+                                className="flex-1 px-4 py-3 bg-gradient-to-r from-[#0047AB] to-[#1D4ED8] text-white rounded-xl font-semibold text-sm hover:from-[#003580] hover:to-[#1E40AF] transition-all disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-blue-500/25"
+                            >
+                                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+                                {loading ? 'Creating...' : 'Create Lead'}
                             </button>
                         </div>
                     </div>
@@ -679,12 +746,14 @@ function NewLeadWizardContent() {
                 </main>
 
                 {/* ─── Bottom Bar ────────────────────────────────────────── */}
-                <StickyBottomBar lastSaved={lastSaved}>
-                    <OutlineButton onClick={handleCancel}>Cancel</OutlineButton>
-                    <PrimaryButton onClick={commitStep} loading={loading}>
-                        <ChevronRight className="w-4 h-4" /> Create Lead
-                    </PrimaryButton>
-                </StickyBottomBar>
+                {!showConfirm && (
+                    <StickyBottomBar lastSaved={lastSaved}>
+                        <OutlineButton onClick={handleCancel}>Cancel</OutlineButton>
+                        <PrimaryButton onClick={commitStep} loading={loading}>
+                            <ChevronRight className="w-4 h-4" /> Create Lead
+                        </PrimaryButton>
+                    </StickyBottomBar>
+                )}
             </div>
         </div>
     );

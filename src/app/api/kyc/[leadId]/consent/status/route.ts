@@ -1,0 +1,51 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { db } from '@/lib/db';
+import { consentRecords } from '@/lib/db/schema';
+import { eq, desc } from 'drizzle-orm';
+import { requireRole } from '@/lib/auth-utils';
+
+type RouteContext = {
+    params: Promise<{ leadId: string }>;
+};
+
+export async function GET(_req: NextRequest, { params }: RouteContext) {
+    try {
+        await requireRole(['dealer', 'admin', 'ceo', 'business_head', 'sales_head']);
+        const { leadId } = await params;
+
+        const records = await db.select()
+            .from(consentRecords)
+            .where(eq(consentRecords.lead_id, leadId))
+            .orderBy(desc(consentRecords.updated_at))
+            .limit(1);
+
+        if (!records.length) {
+            return NextResponse.json({ success: true, data: null });
+        }
+
+        const record = records[0];
+        return NextResponse.json({
+            success: true,
+            data: {
+                id: record.id,
+                consent_status: record.consent_status,
+                consent_type: record.consent_type,
+                sign_method: record.sign_method,
+                signed_at: record.signed_at,
+                signed_consent_url: record.signed_consent_url,
+                generated_pdf_url: record.generated_pdf_url,
+                signer_aadhaar_masked: record.signer_aadhaar_masked,
+                esign_provider: record.esign_provider,
+                consent_link_sent_at: record.consent_link_sent_at,
+                consent_link_expires_at: record.consent_link_expires_at,
+                consent_delivery_channel: record.consent_delivery_channel,
+                esign_error_message: record.esign_error_message,
+                updated_at: record.updated_at,
+            },
+        });
+    } catch (error) {
+        console.error('[Consent Status] Error:', error);
+        const message = error instanceof Error ? error.message : 'Failed to fetch consent status';
+        return NextResponse.json({ success: false, error: { message } }, { status: 500 });
+    }
+}

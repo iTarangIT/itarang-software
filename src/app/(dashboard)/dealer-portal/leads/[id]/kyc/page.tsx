@@ -38,6 +38,44 @@ function isFinalConsentStatus(status: string) {
     return ['admin_verified', 'manual_verified', 'verified'].includes((status || '').toLowerCase());
 }
 
+function ConsentStatusBadge({ status }: { status: string }) {
+    const s = (status || '').toLowerCase();
+    if (isFinalConsentStatus(s)) {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Verified</span>;
+    }
+    if (s === 'admin_review_pending') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold"><Clock className="w-3 h-3" />Pending Review</span>;
+    }
+    if (s === 'admin_rejected') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold"><AlertCircle className="w-3 h-3" />Rejected</span>;
+    }
+    if (s === 'esign_failed') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold"><AlertCircle className="w-3 h-3" />eSign Failed</span>;
+    }
+    if (s === 'esign_blocked') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold"><AlertCircle className="w-3 h-3" />Blocked</span>;
+    }
+    if (s === 'expired') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold"><Clock className="w-3 h-3" />Expired</span>;
+    }
+    if (s === 'esign_completed') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Customer Signed</span>;
+    }
+    if (s === 'esign_in_progress') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Loader2 className="w-3 h-3 animate-spin" />Signing in Progress</span>;
+    }
+    if (s === 'link_sent' || s === 'link_opened') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Send className="w-3 h-3" />{s === 'link_opened' ? 'Link Opened' : 'Link Sent'}</span>;
+    }
+    if (s === 'consent_generated') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-teal-100 text-teal-700 rounded-full text-xs font-bold"><FileText className="w-3 h-3" />PDF Generated</span>;
+    }
+    if (s === 'consent_uploaded') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Upload className="w-3 h-3" />Uploaded</span>;
+    }
+    return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-bold">Awaiting Signature</span>;
+}
+
 export default function KYCPage() {
     const router = useRouter();
     const params = useParams();
@@ -56,6 +94,14 @@ export default function KYCPage() {
     const [savingDraft, setSavingDraft] = useState(false);
     const [lastSaved, setLastSaved] = useState<string | null>(null);
     const [submitting, setSubmitting] = useState(false);
+
+    // Consent flow state
+    const [consentPath, setConsentPath] = useState<'none' | 'digital' | 'manual'>('none'); // mutually exclusive
+    const [consentLoading, setConsentLoading] = useState(false);
+    const [consentPdfUrl, setConsentPdfUrl] = useState<string | null>(null);
+
+    // Consent record details
+    const [consentRecord, setConsentRecord] = useState<any>(null);
 
     // Coupon state
     const [couponCode, setCouponCode] = useState('');
@@ -87,9 +133,10 @@ export default function KYCPage() {
             setLead(fetchedLead);
             if (fetchedLead?.consent_status) setConsentStatus(fetchedLead.consent_status);
 
-            const [docsRes, verificationsRes] = await Promise.allSettled([
+            const [docsRes, verificationsRes, consentRes] = await Promise.allSettled([
                 fetch(`/api/kyc/${leadId}/documents`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/verifications`, { cache: 'no-store' }),
+                fetch(`/api/kyc/${leadId}/consent/status`, { cache: 'no-store' }),
             ]);
 
             if (docsRes.status === 'fulfilled') {
@@ -105,6 +152,15 @@ export default function KYCPage() {
                 const verJson = await verificationsRes.value.json();
                 if (verJson?.success && Array.isArray(verJson.data)) setVerifications(verJson.data);
             }
+
+            if (consentRes.status === 'fulfilled') {
+                const consentJson = await consentRes.value.json();
+                if (consentJson?.success && consentJson.data) {
+                    setConsentRecord(consentJson.data);
+                    // Sync consent status from record (most up-to-date source)
+                    if (consentJson.data.consent_status) setConsentStatus(consentJson.data.consent_status);
+                }
+            }
         } catch {
             setApiError('Failed to load KYC data');
         } finally {
@@ -114,6 +170,14 @@ export default function KYCPage() {
     };
 
     useEffect(() => { loadPageData(); }, [leadId]);
+
+    // Auto-poll consent status when waiting for customer action
+    useEffect(() => {
+        const waitingStatuses = ['link_sent', 'link_opened', 'esign_in_progress'];
+        if (!waitingStatuses.includes(consentStatus)) return;
+        const interval = setInterval(() => loadPageData(true), 10000); // poll every 10s
+        return () => clearInterval(interval);
+    }, [consentStatus, leadId]);
 
     // Auto-save every 2 minutes
     useEffect(() => {
@@ -212,47 +276,81 @@ export default function KYCPage() {
     const handleSendConsent = async (channel: 'sms' | 'whatsapp') => {
         try {
             setApiError(null);
+            setConsentLoading(true);
+            setConsentPath('digital');
             const res = await fetch(`/api/kyc/${leadId}/send-consent`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ channel }),
             });
             const data = await res.json();
-            if (!res.ok || !data?.success) throw new Error(data?.message || 'Failed to send consent');
+            if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Failed to send consent');
             setConsentStatus('link_sent');
         } catch (err: any) {
             setApiError(err?.message || 'Failed to send consent');
+            setConsentPath('none');
+        } finally {
+            setConsentLoading(false);
         }
     };
 
     const handleGenerateConsentPDF = async () => {
         try {
             setApiError(null);
+            setConsentLoading(true);
+            setConsentPath('manual');
             const res = await fetch(`/api/kyc/${leadId}/generate-consent-pdf`, { method: 'POST' });
             const data = await res.json();
-            if (!res.ok || !data?.success) throw new Error(data?.message || 'Failed to generate consent PDF');
-            setConsentStatus('manual_pdf_generated');
-            if (data.pdfUrl) window.open(data.pdfUrl, '_blank');
+            if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Failed to generate consent PDF');
+            setConsentStatus('consent_generated');
+            setConsentPdfUrl(data.pdfUrl || null);
+            // Auto-download PDF
+            if (data.pdfUrl) {
+                const a = document.createElement('a');
+                a.href = data.pdfUrl;
+                a.download = `consent_${leadId}.pdf`;
+                a.target = '_blank';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            }
         } catch (err: any) {
             setApiError(err?.message || 'Failed to generate consent PDF');
+            setConsentPath('none');
+        } finally {
+            setConsentLoading(false);
         }
     };
 
     const handleUploadSignedConsent = async (file: File) => {
         try {
             setApiError(null);
+            setConsentLoading(true);
             if (file.type !== 'application/pdf') throw new Error('Only PDF files allowed');
             if (file.size > 10 * 1024 * 1024) throw new Error('Max 10MB');
             const formData = new FormData();
             formData.append('file', file);
             const res = await fetch(`/api/kyc/${leadId}/upload-signed-consent`, { method: 'POST', body: formData });
             const data = await res.json();
-            if (!res.ok || !data?.success) throw new Error(data?.message || 'Upload failed');
-            setConsentStatus('manual_uploaded');
+            if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Upload failed');
+            setConsentStatus('admin_review_pending');
         } catch (err: any) {
             setApiError(err?.message || 'Failed to upload signed consent');
+        } finally {
+            setConsentLoading(false);
         }
     };
+
+    // Determine which consent path is active based on status
+    useEffect(() => {
+        const digitalStatuses = ['link_sent', 'link_opened', 'esign_in_progress', 'esign_completed'];
+        const manualStatuses = ['consent_generated', 'consent_uploaded'];
+        if (digitalStatuses.includes(consentStatus)) setConsentPath('digital');
+        else if (manualStatuses.includes(consentStatus)) setConsentPath('manual');
+        else if (isFinalConsentStatus(consentStatus) || consentStatus === 'admin_review_pending' || consentStatus === 'admin_rejected') {
+            // Keep whatever path was set, or detect from status
+        }
+    }, [consentStatus]);
 
     // ─── Coupon Validation ──────────────────────────────────────────────────
 
@@ -346,8 +444,6 @@ export default function KYCPage() {
         );
     }
 
-    const consentLabel = consentStatus.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-
     return (
         <div className="min-h-screen bg-[#F8F9FB]">
             <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
@@ -368,65 +464,288 @@ export default function KYCPage() {
 
                 <main className="grid grid-cols-1 gap-6">
                     {/* ─── Customer Consent ───────────────────────────── */}
-                    <SectionCard title="Customer Consent">
-                        <div className="flex flex-wrap items-center gap-3 mb-4">
-                            <button
-                                onClick={() => handleSendConsent('whatsapp')}
-                                disabled={isFinalConsentStatus(consentStatus)}
-                                className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-bold hover:border-[#0047AB] transition-all disabled:opacity-40"
-                            >
-                                <Send className="w-4 h-4" /> Send SMS/WhatsApp Consent
-                            </button>
-                            <button
-                                onClick={handleGenerateConsentPDF}
-                                disabled={isFinalConsentStatus(consentStatus)}
-                                className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-bold hover:border-[#0047AB] transition-all disabled:opacity-40"
-                            >
-                                <Download className="w-4 h-4" /> Generate Consent PDF
-                            </button>
-                            <label className={`inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-bold hover:border-[#0047AB] transition-all cursor-pointer ${isFinalConsentStatus(consentStatus) ? 'opacity-40 pointer-events-none' : ''}`}>
-                                <Upload className="w-4 h-4" /> Upload signed consent PDF
-                                <input type="file" className="hidden" accept="application/pdf" onChange={e => e.target.files?.[0] && handleUploadSignedConsent(e.target.files[0])} />
-                            </label>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-gray-500">Consent Status:</span>
-                            <span className={`text-sm font-bold ${
-                                isFinalConsentStatus(consentStatus) ? 'text-green-700' :
-                                consentStatus === 'link_sent' ? 'text-amber-700' :
-                                'text-gray-600'
-                            }`}>
-                                {isFinalConsentStatus(consentStatus) ? 'Verified' : consentLabel}
-                            </span>
-                            {isFinalConsentStatus(consentStatus) && <CheckCircle2 className="w-4 h-4 text-green-600" />}
-                        </div>
+                    <SectionCard title="Customer Consent" action={
+                        <ConsentStatusBadge status={consentStatus} />
+                    }>
+                        {isFinalConsentStatus(consentStatus) ? (
+                            /* ── Consent Verified ─────────────────────────── */
+                            <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                                <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+                                <div>
+                                    <p className="text-sm font-bold text-emerald-800">Consent Verified</p>
+                                    <p className="text-xs text-emerald-600 mt-0.5">Admin has verified the customer consent. You can proceed to the next step.</p>
+                                </div>
+                            </div>
+                        ) : consentStatus === 'admin_review_pending' ? (
+                            /* ── Awaiting Admin Review ────────────────────── */
+                            <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                                <Clock className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                                <div>
+                                    <p className="text-sm font-bold text-amber-800">Awaiting Admin Verification</p>
+                                    <p className="text-xs text-amber-600 mt-0.5">Signed consent has been uploaded and is pending admin review. You will be notified once verified.</p>
+                                </div>
+                            </div>
+                        ) : consentStatus === 'esign_failed' ? (
+                            /* ── eSign Failed — Retry ─────────────────────── */
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+                                    <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                                    <div>
+                                        <p className="text-sm font-bold text-red-800">Aadhaar eSign Failed</p>
+                                        <p className="text-xs text-red-600 mt-0.5">Customer eSign was unsuccessful. You can resend the consent link or switch to manual consent.</p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-3">
+                                    <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
+                                        className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center gap-2">
+                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend via WhatsApp
+                                    </button>
+                                    <button onClick={handleGenerateConsentPDF} disabled={consentLoading}
+                                        className="px-5 py-2.5 bg-white border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all disabled:opacity-50 flex items-center gap-2">
+                                        <FileText className="w-4 h-4" /> Switch to Manual
+                                    </button>
+                                </div>
+                            </div>
+                        ) : consentStatus === 'esign_blocked' ? (
+                            /* ── eSign Blocked — Must use manual ──────────── */
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+                                    <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                                    <div>
+                                        <p className="text-sm font-bold text-red-800">Digital Consent Blocked</p>
+                                        <p className="text-xs text-red-600 mt-0.5">Maximum eSign attempts (3) reached. Please use manual consent.</p>
+                                    </div>
+                                </div>
+                                <button onClick={handleGenerateConsentPDF} disabled={consentLoading}
+                                    className="px-5 py-2.5 bg-teal-600 text-white rounded-xl text-sm font-bold hover:bg-teal-700 transition-all disabled:opacity-50 flex items-center gap-2">
+                                    {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} Generate Manual Consent PDF
+                                </button>
+                            </div>
+                        ) : consentStatus === 'expired' ? (
+                            /* ── Link Expired — Resend ────────────────────── */
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                                    <Clock className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                                    <div>
+                                        <p className="text-sm font-bold text-amber-800">Consent Link Expired</p>
+                                        <p className="text-xs text-amber-600 mt-0.5">The consent link has expired (24 hours). Please resend.</p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-3">
+                                    <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
+                                        className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center gap-2">
+                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend via WhatsApp
+                                    </button>
+                                    <button onClick={() => handleSendConsent('sms')} disabled={consentLoading}
+                                        className="px-5 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2">
+                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend via SMS
+                                    </button>
+                                </div>
+                            </div>
+                        ) : consentStatus === 'esign_completed' ? (
+                            /* ── Customer Signed Successfully ────────────── */
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                                    <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                                        <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <p className="text-sm font-bold text-emerald-800">Customer Signed Successfully</p>
+                                        <p className="text-xs text-emerald-600 mt-0.5">The customer has completed Aadhaar eSign. Consent is now pending admin verification.</p>
+                                        {consentRecord?.signed_at && (
+                                            <p className="text-xs text-emerald-500 mt-1">
+                                                Signed at: {new Date(consentRecord.signed_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                                                {consentRecord.signer_aadhaar_masked && ` · Aadhaar: ${consentRecord.signer_aadhaar_masked}`}
+                                            </p>
+                                        )}
+                                    </div>
+                                    <div className="flex-shrink-0">
+                                        <span className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold">
+                                            <CheckCircle2 className="w-3.5 h-3.5" /> Signed
+                                        </span>
+                                    </div>
+                                </div>
+                                {consentRecord?.signed_consent_url && (
+                                    <a href={consentRecord.signed_consent_url} target="_blank" rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-emerald-200 rounded-lg text-xs font-bold text-emerald-700 hover:bg-emerald-50 transition-all">
+                                        <Download className="w-3.5 h-3.5" /> Download Signed Consent PDF
+                                    </a>
+                                )}
+                            </div>
+                        ) : consentStatus === 'esign_in_progress' ? (
+                            /* ── eSign In Progress ───────────────────────── */
+                            <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                                    <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+                                </div>
+                                <div className="flex-1">
+                                    <p className="text-sm font-bold text-blue-800">Customer is Signing...</p>
+                                    <p className="text-xs text-blue-600 mt-0.5">Customer has opened the consent link and is completing the Aadhaar eSign process. This page will update automatically.</p>
+                                </div>
+                            </div>
+                        ) : consentStatus === 'admin_rejected' ? (
+                            /* ── Rejected — Re-consent ────────────────────── */
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+                                    <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                                    <div>
+                                        <p className="text-sm font-bold text-red-800">Consent Rejected by Admin</p>
+                                        <p className="text-xs text-red-600 mt-0.5">Please re-generate and re-upload the consent form, or resend digital consent.</p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-3">
+                                    <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
+                                        className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center gap-2">
+                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend Digital
+                                    </button>
+                                    <button onClick={handleGenerateConsentPDF} disabled={consentLoading}
+                                        className="px-5 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2">
+                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                                        Re-generate Manual PDF
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            /* ── Choose Consent Path ──────────────────────── */
+                            <div className="space-y-4">
+                                <p className="text-sm text-gray-500">Choose one method to obtain customer consent. Both options are mutually exclusive.</p>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {/* Digital Consent Card */}
+                                    <div className={`relative p-5 rounded-2xl border-2 transition-all ${
+                                        consentPath === 'digital'
+                                            ? 'border-[#0047AB] bg-blue-50/50 shadow-md'
+                                            : consentPath === 'manual'
+                                                ? 'border-gray-100 bg-gray-50 opacity-50 pointer-events-none'
+                                                : 'border-gray-200 bg-white hover:border-[#0047AB] hover:shadow-md cursor-pointer'
+                                    }`}>
+                                        <div className="flex items-start gap-3 mb-3">
+                                            <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
+                                                <Send className="w-5 h-5 text-[#0047AB]" />
+                                            </div>
+                                            <div>
+                                                <h4 className="text-sm font-bold text-gray-900">Digital Consent (Aadhaar eSign)</h4>
+                                                <p className="text-xs text-gray-500 mt-0.5">Send consent link via SMS/WhatsApp. Customer signs digitally with Aadhaar OTP.</p>
+                                            </div>
+                                        </div>
+                                        {consentPath !== 'manual' && (
+                                            <div className="flex gap-2">
+                                                <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading || consentPath === 'digital'}
+                                                    className="flex-1 px-3 py-2 bg-[#25D366] text-white rounded-lg text-xs font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                                    {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                                                    WhatsApp
+                                                </button>
+                                                <button onClick={() => handleSendConsent('sms')} disabled={consentLoading || consentPath === 'digital'}
+                                                    className="flex-1 px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                                    {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                                                    SMS
+                                                </button>
+                                            </div>
+                                        )}
+                                        {(consentStatus === 'link_sent' || consentStatus === 'link_opened') && (
+                                            <div className="mt-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2">
+                                                <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
+                                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+                                                </span>
+                                                <p className="text-xs font-medium text-amber-700">
+                                                    {consentStatus === 'link_opened' ? 'Customer opened the link. Waiting for signature...' : 'Consent link sent. Waiting for customer to sign...'}
+                                                    <span className="text-amber-500 ml-1">(auto-updating)</span>
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Manual Consent Card */}
+                                    <div className={`relative p-5 rounded-2xl border-2 transition-all ${
+                                        consentPath === 'manual'
+                                            ? 'border-[#0047AB] bg-blue-50/50 shadow-md'
+                                            : consentPath === 'digital'
+                                                ? 'border-gray-100 bg-gray-50 opacity-50 pointer-events-none'
+                                                : 'border-gray-200 bg-white hover:border-[#0047AB] hover:shadow-md cursor-pointer'
+                                    }`}>
+                                        <div className="flex items-start gap-3 mb-3">
+                                            <div className="w-10 h-10 rounded-xl bg-teal-100 flex items-center justify-center flex-shrink-0">
+                                                <FileText className="w-5 h-5 text-teal-700" />
+                                            </div>
+                                            <div>
+                                                <h4 className="text-sm font-bold text-gray-900">Manual Consent (Signed PDF)</h4>
+                                                <p className="text-xs text-gray-500 mt-0.5">Generate PDF, print, get customer signature, scan and upload.</p>
+                                            </div>
+                                        </div>
+                                        {consentPath !== 'digital' && (
+                                            <div className="space-y-2">
+                                                {/* Step 1: Generate PDF */}
+                                                <button onClick={handleGenerateConsentPDF}
+                                                    disabled={consentLoading || consentStatus === 'consent_generated' || consentStatus === 'consent_uploaded'}
+                                                    className="w-full px-3 py-2 bg-teal-600 text-white rounded-lg text-xs font-bold hover:bg-teal-700 transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                                    {consentLoading && consentPath === 'manual' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+                                                    {consentStatus === 'consent_generated' ? 'PDF Generated' : 'Generate Consent PDF'}
+                                                </button>
+
+                                                {/* Step 2: Upload Signed PDF (enabled after generate) */}
+                                                {(consentStatus === 'consent_generated' || consentPdfUrl) && (
+                                                    <>
+                                                        {consentPdfUrl && (
+                                                            <div className="p-2.5 bg-green-50 border border-green-200 rounded-lg">
+                                                                <p className="text-xs text-green-700 font-medium"><CheckCircle2 className="w-3 h-3 inline mr-1" />PDF downloaded. Print, get signature, then upload scanned copy below.</p>
+                                                            </div>
+                                                        )}
+                                                        <label className="w-full px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all cursor-pointer flex items-center justify-center gap-1.5">
+                                                            <Upload className="w-3 h-3" /> Upload Signed Consent PDF
+                                                            <input type="file" className="hidden" accept="application/pdf"
+                                                                onChange={e => e.target.files?.[0] && handleUploadSignedConsent(e.target.files[0])} />
+                                                        </label>
+                                                    </>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </SectionCard>
 
                     {/* ─── Loan Documents ─────────────────────────────── */}
-                    <SectionCard title="Loan Documents">
-                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 mb-6">
+                    <SectionCard title="Loan Documents" action={
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-gray-500">Uploaded:</span>
+                            <span className={`text-sm font-black ${docStats.uploadedCount === docStats.total ? 'text-emerald-600' : 'text-[#0047AB]'}`}>
+                                {docStats.uploadedCount}/{docStats.total}
+                            </span>
+                            {docStats.uploadedCount === docStats.total && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+                        </div>
+                    }>
+                        {/* Progress Bar */}
+                        <div className="mb-5">
+                            <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+                                <div
+                                    className={`h-full rounded-full transition-all duration-500 ${
+                                        docStats.uploadedCount === docStats.total ? 'bg-emerald-500' : 'bg-[#0047AB]'
+                                    }`}
+                                    style={{ width: `${docStats.total > 0 ? (docStats.uploadedCount / docStats.total) * 100 : 0}%` }}
+                                />
+                            </div>
+                            {docStats.pending.length > 0 && (
+                                <p className="text-xs text-red-500 font-medium mt-2">
+                                    Missing: {docStats.pending.map(d => d.label).join(', ')}
+                                </p>
+                            )}
+                        </div>
+
+                        {/* Document Cards Grid */}
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                             {requiredDocs.map(doc => (
                                 <DocumentCard
                                     key={doc.key}
                                     label={doc.label}
                                     required={doc.required}
                                     uploaded={!!uploadedDocs[doc.key]?.file_url}
-                                    status={uploadedDocs[doc.key]?.verification_status || uploadedDocs[doc.key]?.doc_status}
+                                    status={uploadedDocs[doc.key]?.doc_status || uploadedDocs[doc.key]?.verification_status}
                                     failedReason={uploadedDocs[doc.key]?.rejection_reason || uploadedDocs[doc.key]?.failed_reason}
                                     onUpload={file => handleDocUpload(doc.key, file)}
                                 />
                             ))}
-                        </div>
-
-                        <div className="flex items-center gap-4 pt-2 border-t border-gray-100">
-                            <span className="text-sm font-bold text-gray-900">
-                                Documents Uploaded: <span className="text-[#0047AB]">{String(docStats.uploadedCount).padStart(2, '0')}/{docStats.total}</span>
-                            </span>
-                            {docStats.pending.length > 0 && (
-                                <span className="text-sm font-medium text-red-600">
-                                    Documents Pending: {docStats.pending.map(d => d.label).join(', ')}
-                                </span>
-                            )}
                         </div>
                     </SectionCard>
 
@@ -514,12 +833,8 @@ export default function KYCPage() {
                             </div>
 
                             <div className="mt-4 flex items-center gap-4 text-xs">
-                                <span className="font-bold text-gray-500">Consent Status:</span>
-                                <span className={`font-bold ${isFinalConsentStatus(consentStatus) ? 'text-green-700' : 'text-amber-700'}`}>
-                                    {isFinalConsentStatus(consentStatus) ? 'Verified' : consentLabel}
-                                </span>
-                                <span className="font-bold text-gray-500 ml-4">Substatus:</span>
-                                <span className="font-medium text-gray-600">{consentLabel}</span>
+                                <span className="font-bold text-gray-500">Consent:</span>
+                                <ConsentStatusBadge status={consentStatus} />
                             </div>
                         </SectionCard>
                     )}
