@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -lt \"D:/itarang-software/drizzle/\"*.sql)",
+      "Bash(npx next:*)",
+      "Bash(npx eslint:*)",
+      "Bash(node:*)",
+      "Bash(npx tsc:*)",
+      "WebFetch(domain:docs.decentro.tech)",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS: %{http_code}\\\\nCONTENT_TYPE: %{content_type}\" http://localhost:3000/api/admin/kyc/test/final-decision)",
+      "Bash(xargs grep:*)",
+      "Bash(npm run:*)"
+    ]
+  }
+}

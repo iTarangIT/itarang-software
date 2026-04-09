@@ -215,9 +215,14 @@ function parseCSV(text: string): Record<string, string>[] {
   });
 }
 function normalizeRow(row: Record<string, string>) {
+  // Build a lowercase-keyed version of the row for case-insensitive matching
+  const lowerRow: Record<string, string> = {};
+  for (const [k, v] of Object.entries(row)) {
+    lowerRow[k.toLowerCase().trim()] = v;
+  }
   const get = (...keys: string[]) => {
     for (const k of keys) {
-      if (row[k] !== undefined && row[k] !== "") return row[k];
+      if (lowerRow[k] !== undefined && lowerRow[k] !== "") return lowerRow[k];
     }
     return null;
   };
@@ -230,6 +235,9 @@ function normalizeRow(row: Record<string, string>) {
       "business name",
       "store",
       "store name",
+      "company/dealer name",
+      "company name",
+      "company",
     ),
     dealer_name: get(
       "dealer_name",
@@ -239,6 +247,7 @@ function normalizeRow(row: Record<string, string>) {
       "owner",
       "owner name",
       "contact",
+      "contact person",
     ),
     phone: get(
       "phone",
@@ -248,7 +257,7 @@ function normalizeRow(row: Record<string, string>) {
       "contact number",
       "number",
     ),
-    location: get("location", "city", "area", "address", "place"),
+    location: get("location", "city", "area", "address", "place", "state"),
     language: get("language", "lang") ?? "hindi",
     current_status: get("status", "current_status", "lead status") ?? "new",
   };
@@ -283,9 +292,7 @@ function UploadModal({
         const text = await f.text();
         rows = parseCSV(text);
       } else {
-        const XLSX = await import(
-          "https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs" as any
-        );
+        const XLSX = await import("xlsx");
         const buffer = await f.arrayBuffer();
         const wb = XLSX.read(buffer, { type: "array" });
         const ws = wb.Sheets[wb.SheetNames[0]];
@@ -904,6 +911,7 @@ export default function LeadsUnifiedPage() {
   const [countdown, setCountdown] = useState(COUNTDOWN_SECS);
 
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
+  const pollerRef = useRef<NodeJS.Timeout | null>(null);
   const stopRef = useRef(false);
   const queueRef = useRef<any[]>([]);
   const indexRef = useRef(0);
@@ -997,6 +1005,35 @@ export default function LeadsUnifiedPage() {
     [triggerCall],
   );
 
+  const startDialerPoller = useCallback(() => {
+    if (pollerRef.current) clearInterval(pollerRef.current);
+    pollerRef.current = setInterval(async () => {
+      try {
+        const res = await fetch("/api/ai-dialer/status");
+        const status = await res.json();
+        if (!status.active) {
+          // Session ended on the backend — queue exhausted
+          if (pollerRef.current) clearInterval(pollerRef.current);
+          setDialerOn(false);
+          setDialerPhase("idle");
+          return;
+        }
+        setDialerCallsMade(status.callsMade);
+        // Find the index of the current lead in our local queue
+        const idx = queueRef.current.findIndex(
+          (l: any) => l.id === status.currentLeadId,
+        );
+        if (idx >= 0 && idx !== indexRef.current) {
+          setDialerIndex(idx);
+          indexRef.current = idx;
+          setDialerPhase("calling");
+        }
+      } catch {
+        // ignore poll errors
+      }
+    }, 5000);
+  }, []);
+
   const handleDialerOn = useCallback(async () => {
     const res = await fetch(`/api/dealer-leads?page=1&limit=500&search=`);
     const data = await res.json();
@@ -1021,11 +1058,13 @@ export default function LeadsUnifiedPage() {
       body: JSON.stringify({ phone: queue[0].phone, leadId: queue[0].id }),
     });
     setDialerCallsMade(1);
-  }, []);
+    startDialerPoller();
+  }, [startDialerPoller]);
 
   const handleDialerOff = useCallback(() => {
     stopRef.current = true;
     if (countdownRef.current) clearInterval(countdownRef.current);
+    if (pollerRef.current) clearInterval(pollerRef.current);
     setDialerOn(false);
     setDialerPhase("idle");
     setDialerQueue([]);
@@ -1048,6 +1087,7 @@ export default function LeadsUnifiedPage() {
   useEffect(
     () => () => {
       if (countdownRef.current) clearInterval(countdownRef.current);
+      if (pollerRef.current) clearInterval(pollerRef.current);
     },
     [],
   );

@@ -195,7 +195,34 @@ export const inventory = pgTable("inventory", {
 
 // --- DEALER SALES ---
 
-// export const leads = pgTable(
+export const leads = pgTable("leads", {
+  id: varchar("id", { length: 255 }).primaryKey(),
+  owner_name: text("owner_name"),
+  owner_contact: varchar("owner_contact", { length: 20 }),
+  full_name: text("full_name"),
+  phone: varchar("phone", { length: 20 }),
+  mobile: varchar("mobile", { length: 20 }),
+  business_name: text("business_name"),
+  owner_email: text("owner_email"),
+  state: varchar("state", { length: 100 }),
+  city: varchar("city", { length: 100 }),
+  shop_address: text("shop_address"),
+  local_address: text("local_address"),
+  permanent_address: text("permanent_address"),
+  current_address: text("current_address"),
+  vehicle_rc: varchar("vehicle_rc", { length: 50 }),
+  dob: timestamp("dob", { withTimezone: true }),
+  father_or_husband_name: text("father_or_husband_name"),
+  status: varchar("status", { length: 50 }),
+  kyc_status: varchar("kyc_status", { length: 30 }),
+  payment_method: varchar("payment_method", { length: 20 }),
+  consent_status: varchar("consent_status", { length: 30 }),
+  dealer_id: varchar("dealer_id", { length: 255 }),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// export const leads_commented = pgTable(
 //   "leads",
 //   {
 //     id: varchar("id", { length: 255 }).primaryKey(), // LEAD-YYYYMMDD-SEQ
@@ -1284,6 +1311,10 @@ export const kycVerifications = pgTable(
     retry_count: integer("retry_count").default(0),
     submitted_at: timestamp("submitted_at", { withTimezone: true }),
     completed_at: timestamp("completed_at", { withTimezone: true }),
+    admin_action: varchar("admin_action", { length: 30 }), // accepted, rejected, request_more_docs
+    admin_action_by: uuid("admin_action_by").references(() => users.id),
+    admin_action_at: timestamp("admin_action_at", { withTimezone: true }),
+    admin_action_notes: text("admin_action_notes"),
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -1299,6 +1330,88 @@ export const kycVerifications = pgTable(
       ),
     };
   },
+);
+
+// --- DIGILOCKER TRANSACTIONS ---
+
+export const digilockerTransactions = pgTable(
+  "digilocker_transactions",
+  {
+    id: varchar("id", { length: 255 }).primaryKey(), // DIGI-YYYYMMDD-SEQ
+    lead_id: varchar("lead_id", { length: 255 })
+      .references(() => dealerLeads.id, { onDelete: "cascade" })
+      .notNull(),
+    verification_id: varchar("verification_id", { length: 255 }).references(
+      () => kycVerifications.id,
+    ),
+    reference_id: varchar("reference_id", { length: 255 }).notNull(),
+    decentro_txn_id: varchar("decentro_txn_id", { length: 255 }),
+    session_id: varchar("session_id", { length: 255 }),
+    status: varchar("status", { length: 30 })
+      .default("initiated")
+      .notNull(), // initiated, link_sent, link_opened, consent_given, document_fetched, failed, expired
+    customer_phone: varchar("customer_phone", { length: 20 }).notNull(),
+    customer_email: varchar("customer_email", { length: 255 }),
+    digilocker_url: text("digilocker_url"),
+    short_url: text("short_url"),
+    notification_channel: varchar("notification_channel", { length: 10 })
+      .default("sms")
+      .notNull(), // sms, email, both
+    link_sent_at: timestamp("link_sent_at", { withTimezone: true }),
+    link_opened_at: timestamp("link_opened_at", { withTimezone: true }),
+    customer_authorized_at: timestamp("customer_authorized_at", {
+      withTimezone: true,
+    }),
+    digilocker_raw_response: jsonb("digilocker_raw_response"),
+    aadhaar_extracted_data: jsonb("aadhaar_extracted_data"),
+    cross_match_result: jsonb("cross_match_result"),
+    expires_at: timestamp("expires_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    digilockerLeadIdx: index("digilocker_transactions_lead_idx").on(
+      table.lead_id,
+    ),
+    digilockerTxnIdx: index("digilocker_transactions_txn_idx").on(
+      table.decentro_txn_id,
+    ),
+    digilockerStatusIdx: index("digilocker_transactions_status_idx").on(
+      table.status,
+    ),
+  }),
+);
+
+// --- KYC DATA AUDIT (BRD Section 8) ---
+
+export const kycDataAudit = pgTable(
+  "kyc_data_audit",
+  {
+    id: varchar("id", { length: 255 }).primaryKey(), // KYCAUD-YYYYMMDD-SEQ
+    lead_id: varchar("lead_id", { length: 255 })
+      .references(() => dealerLeads.id, { onDelete: "cascade" })
+      .notNull(),
+    field_name: varchar("field_name", { length: 50 }).notNull(),
+    field_value: varchar("field_value", { length: 200 }),
+    data_source: varchar("data_source", { length: 20 }).notNull(), // ocr, api, manual
+    entered_by: uuid("entered_by")
+      .references(() => users.id)
+      .notNull(),
+    entered_at: timestamp("entered_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    reason: text("reason"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    kycDataAuditLeadIdx: index("kyc_data_audit_lead_idx").on(table.lead_id),
+  }),
 );
 
 export const consentRecords = pgTable("consent_records", {
@@ -1497,18 +1610,16 @@ export const coBorrowerDocuments = pgTable("co_borrower_documents", {
   lead_id: varchar("lead_id", { length: 255 })
     .references(() => dealerLeads.id, { onDelete: "cascade" })
     .notNull(),
-  doc_type: varchar("doc_type", { length: 50 }).notNull(), // aadhaar_front, aadhaar_back, pan_card, passport_photo, address_proof, rc_copy, bank_statement, cheque_1-4
-  file_url: text("file_url").notNull(),
-  file_name: text("file_name"),
-  file_size: integer("file_size"),
-  verification_status: varchar("verification_status", { length: 30 })
+  doc_type: varchar("document_type", { length: 50 }).notNull(), // aadhaar_front, aadhaar_back, pan_card, passport_photo, address_proof, rc_copy, bank_statement, cheque_1-4
+  file_url: text("document_url").notNull(),
+  status: varchar("status", { length: 30 })
     .default("pending")
     .notNull(),
-  failed_reason: text("failed_reason"),
   ocr_data: jsonb("ocr_data"),
-  api_response: jsonb("api_response"),
-  verified_at: timestamp("verified_at", { withTimezone: true }),
   uploaded_at: timestamp("uploaded_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  created_at: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true })
@@ -1685,6 +1796,8 @@ export const kycVerificationMetadata = pgTable(
     first_api_type: varchar("first_api_type", { length: 50 }),
     final_decision: varchar("final_decision", { length: 30 }),
     final_decision_at: timestamp("final_decision_at", { withTimezone: true }),
+    final_decision_by: uuid("final_decision_by").references(() => users.id),
+    final_decision_notes: text("final_decision_notes"),
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),

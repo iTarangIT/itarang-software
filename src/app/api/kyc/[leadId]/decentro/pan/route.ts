@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { db } from '@/lib/db';
-import { kycVerifications, leads } from '@/lib/db/schema';
+import { kycVerifications, leads, personalDetails } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { validateDocument } from '@/lib/decentro';
 
@@ -23,33 +23,59 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
         const { leadId } = await params;
-        const { pan_number, dob, document_type = 'PAN' } = await req.json();
+        const { pan_number, dob, document_type = 'PAN_DETAILED' } = await req.json();
 
         if (!pan_number) {
             return NextResponse.json({ success: false, error: 'PAN number is required' }, { status: 400 });
         }
 
-        // Fetch lead to compare name
-        const [lead] = await db.select({ full_name: leads.full_name }).from(leads).where(eq(leads.id, leadId)).limit(1);
+        // Fetch lead + personal details to compare fields
+        const [leadRows, pdRows] = await Promise.all([
+            db.select({
+                full_name: leads.full_name,
+                owner_name: leads.owner_name,
+                phone: leads.phone,
+                mobile: leads.mobile,
+                dob: leads.dob,
+                current_address: leads.current_address,
+                local_address: leads.local_address,
+            }).from(leads).where(eq(leads.id, leadId)).limit(1),
+            db.select({
+                pan_no: personalDetails.pan_no,
+                aadhaar_no: personalDetails.aadhaar_no,
+                dob: personalDetails.dob,
+                local_address: personalDetails.local_address,
+                father_husband_name: personalDetails.father_husband_name,
+            }).from(personalDetails).where(eq(personalDetails.lead_id, leadId)).limit(1),
+        ]);
+        const lead = leadRows[0];
+        const pd = pdRows[0];
         if (!lead) {
             return NextResponse.json({ success: false, error: 'Lead not found' }, { status: 404 });
         }
 
-        // Call Decentro API
+        // Call Decentro API (DOB not required for PAN validation)
         const decentroRes = await validateDocument({
             document_type,
             id_number: pan_number.toUpperCase().trim(),
-            dob,
         });
 
-        console.log('[Decentro PAN] Response:', JSON.stringify(decentroRes));
+        console.log('[Decentro PAN] document_type:', document_type, '| kycResult keys:', Object.keys(decentroRes.kycResult || decentroRes.data?.kycResult || {}));
 
         const apiSuccess = (decentroRes.responseStatus || decentroRes.status || '').toUpperCase() === 'SUCCESS'
-            || decentroRes.message?.toLowerCase().includes('retrieved successfully');
+            || decentroRes.message?.toLowerCase().includes('retrieved successfully')
+            || decentroRes.message?.toLowerCase().includes('fetched successfully');
 
+        // PAN_DETAILED: kycResult is at top level. PAN basic: may be under data.kycResult
         const kycResult = decentroRes.kycResult || decentroRes.data?.kycResult || decentroRes.data || {};
-        const panName = kycResult.name || '';
-        const panStatus = (kycResult.idStatus || '').toUpperCase();
+
+        // Extract name — PAN_DETAILED uses fullName / firstName+lastName, basic PAN uses name
+        const panName = kycResult.fullName
+            || [kycResult.firstName, kycResult.middleName, kycResult.lastName].filter(Boolean).join(' ')
+            || kycResult.name || '';
+
+        // Extract status — PAN_DETAILED has both idStatus and panStatus
+        const panStatus = (kycResult.idStatus || kycResult.panStatus || kycResult.status || '').toUpperCase();
         const isPanValid = panStatus === 'VALID' || panStatus === 'ACTIVE';
 
         // Build verification result
@@ -86,16 +112,92 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
         const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
 
+        // Build BRD cross-match fields: Name, Gender, DOB, Address, Mobile
+        // Each field has leadValue, panValue, aadhaarValue (aadhaar filled later via DigiLocker)
+        const leadDob = pd?.dob ? new Date(pd.dob).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+            : (lead.dob ? new Date(lead.dob).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '');
+        const leadAddress = pd?.local_address || lead.local_address || lead.current_address || '';
+        const leadPhone = lead.phone || lead.mobile || '';
+        const leadGender = ''; // gender from lead if available
+
+        const panGender = kycResult.gender || '';
+        const panDob = kycResult.dateOfBirth || kycResult.dob || '';
+        const panAddress = kycResult.address?.full || (typeof kycResult.address === 'string' ? kycResult.address : '') || '';
+        const panMobile = kycResult.mobile || kycResult.phone || '';
+
+        function computeMatch(a: string, b: string, type: 'similarity' | 'exact' | 'phone' = 'similarity'): { score: number | null; pass: boolean } {
+            if (!a || !b) return { score: null, pass: true };
+            if (type === 'exact') {
+                const match = a.trim().toLowerCase() === b.trim().toLowerCase();
+                return { score: match ? 100 : 0, pass: match };
+            }
+            if (type === 'phone') {
+                const match = a.replace(/\D/g, '').slice(-10) === b.replace(/\D/g, '').slice(-10);
+                return { score: match ? 100 : 0, pass: match };
+            }
+            const sim = nameSimilarity(a, b);
+            return { score: sim, pass: sim >= 80 };
+        }
+
+        const nameMatch = computeMatch(leadName, panName);
+        const genderMatch = computeMatch(leadGender, panGender, 'exact');
+        const dobMatch = computeMatch(leadDob, panDob, 'exact');
+        const addressMatch = computeMatch(leadAddress, typeof panAddress === 'string' ? panAddress : '');
+        const mobileMatch = computeMatch(leadPhone, panMobile, 'phone');
+
+        const allCrossMatchFields = [
+            { field: 'Name', leadValue: leadName || null, panValue: panName || null, aadhaarValue: null, matchScore: nameMatch.score, pass: nameMatch.pass },
+            { field: 'Gender', leadValue: leadGender || null, panValue: panGender || null, aadhaarValue: null, matchScore: genderMatch.score, pass: genderMatch.pass },
+            { field: 'DOB', leadValue: leadDob || null, panValue: panDob || null, aadhaarValue: null, matchScore: dobMatch.score, pass: dobMatch.pass },
+            { field: 'Address', leadValue: leadAddress || null, panValue: typeof panAddress === 'string' ? panAddress : JSON.stringify(panAddress) || null, aadhaarValue: null, matchScore: addressMatch.score, pass: addressMatch.pass },
+            { field: 'Mobile', leadValue: leadPhone || null, panValue: panMobile || null, aadhaarValue: null, matchScore: mobileMatch.score, pass: mobileMatch.pass },
+        ];
+
+        const crossMatchFields = allCrossMatchFields.filter(f => f.leadValue || f.panValue);
+
+        // Build response message
+        let message = decentroRes.message || '';
+        if (overallSuccess) {
+            message = isPanValid ? `PAN verified. Name: ${panName}` : message;
+            if (matchScore !== null && matchScore >= 50) {
+                message += ` (${matchScore}% name match with lead)`;
+            }
+        } else {
+            message = reasons.join('. ');
+        }
+
         const verRecord = {
             status: verificationStatus,
             api_provider: 'decentro' as const,
             api_request: { pan_number, document_type },
-            api_response: decentroRes,
+            api_response: {
+                ...decentroRes,
+                message,
+                data: {
+                    crossMatchFields,
+                    pan_name: panName,
+                    lead_name: leadName,
+                    pan_status: kycResult.idStatus || kycResult.panStatus || null,
+                    name_match_score: matchScore,
+                },
+            },
             failed_reason: failedReason,
             match_score: matchScore !== null ? matchScore.toString() : null,
             completed_at: now,
             updated_at: now,
         };
+
+        // Save PAN number to personalDetails so it persists and auto-populates everywhere (CIBIL, etc.)
+        const panUpper = pan_number.toUpperCase().trim();
+        if (pd) {
+            await db.update(personalDetails).set({ pan_no: panUpper })
+                .where(eq(personalDetails.lead_id, leadId));
+        } else {
+            await db.insert(personalDetails).values({
+                lead_id: leadId,
+                pan_no: panUpper,
+            });
+        }
 
         // Upsert kycVerification record
         const existing = await db.select({ id: kycVerifications.id })
@@ -117,26 +219,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             });
         }
 
-        // Build response message
-        let message = decentroRes.message || '';
-        if (overallSuccess) {
-            message = isPanValid ? `PAN verified. Name: ${panName}` : message;
-            if (matchScore !== null && matchScore >= 50) {
-                message += ` (${matchScore}% name match with lead)`;
-            }
-        } else {
-            message = reasons.join('. ');
-        }
-
         return NextResponse.json({
             success: overallSuccess,
             message,
             data: {
                 pan_name: panName,
                 lead_name: leadName,
-                pan_status: kycResult.idStatus || null,
+                pan_status: kycResult.idStatus || kycResult.panStatus || null,
                 pan_category: kycResult.category || null,
+                pan_type: kycResult.panType || null,
+                email: kycResult.email || null,
+                aadhaar_seeding: kycResult.aadhaarSeedingStatus || null,
+                masked_aadhaar: kycResult.maskedAadhaar || null,
+                father_name: kycResult.fatherName || null,
                 name_match_score: matchScore,
+                crossMatchFields,
             },
             decentroTxnId: decentroRes.decentroTxnId,
         });

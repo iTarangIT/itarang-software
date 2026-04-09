@@ -157,8 +157,15 @@ export default function AdminKYCReviewPage() {
                                             <div className="text-xs text-gray-500">{lead.pending_count} pending</div>
                                         </div>
                                         <span className={`px-3 py-1 rounded-full text-[10px] font-bold capitalize ${lead.kyc_status === 'verified' ? 'bg-green-50 text-green-700' : lead.kyc_status === 'rejected' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
-                                            {lead.kyc_status}
+                                            {lead.kyc_status || 'pending'}
                                         </span>
+                                        <a
+                                            href={`/admin/kyc-review/${lead.lead_id}`}
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="px-3 py-1.5 bg-[#0047AB] text-white rounded-lg text-[10px] font-bold hover:bg-[#003580]"
+                                        >
+                                            Review
+                                        </a>
                                         {expandedLead === lead.lead_id ? <ChevronDown className="w-5 h-5 text-gray-400" /> : <ChevronRight className="w-5 h-5 text-gray-400" />}
                                     </div>
                                 </button>

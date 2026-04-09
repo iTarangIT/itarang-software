@@ -5,7 +5,7 @@ import {
   adminKycReviews,
   coBorrowerDocuments,
   coBorrowers,
-  dealerLeads,
+  leads,
   kycDocuments,
 } from "@/lib/db/schema";
 import { and, desc, eq, inArray } from "drizzle-orm";
@@ -129,7 +129,7 @@ async function fetchCoBorrowerDocuments(
       lead_id: coBorrowerDocuments.lead_id,
       document_type: coBorrowerDocuments.doc_type,
       document_url: coBorrowerDocuments.file_url,
-      verification_status: coBorrowerDocuments.verification_status,
+      verification_status: coBorrowerDocuments.status,
       uploaded_at: coBorrowerDocuments.uploaded_at,
       ocr_data: coBorrowerDocuments.ocr_data,
     })
@@ -137,7 +137,7 @@ async function fetchCoBorrowerDocuments(
 
   return statuses
     ? query
-        .where(inArray(coBorrowerDocuments.verification_status, statuses))
+        .where(inArray(coBorrowerDocuments.status, statuses))
         .orderBy(desc(coBorrowerDocuments.uploaded_at))
         .limit(200)
     : query.orderBy(desc(coBorrowerDocuments.uploaded_at)).limit(200);
@@ -197,13 +197,13 @@ export async function GET(req: NextRequest) {
     const [leadRows, coBorrowerRows] = await Promise.all([
       db
         .select({
-          id: dealerLeads.id,
-          owner_name: dealerLeads.dealer_name,
-          dealer_name: dealerLeads.shop_name,
-          kyc_status: dealerLeads.current_status,
+          id: leads.id,
+          owner_name: leads.owner_name,
+          dealer_name: leads.business_name,
+          kyc_status: leads.kyc_status,
         })
-        .from(dealerLeads)
-        .where(inArray(dealerLeads.id, leadIds)),
+        .from(leads)
+        .where(inArray(leads.id, leadIds)),
       db
         .select({ lead_id: coBorrowers.lead_id })
         .from(coBorrowers)
@@ -393,27 +393,33 @@ export async function POST(req: NextRequest) {
       created_at: now,
     });
 
-    const documentUpdate = {
-      verification_status:
-        typedOutcome === "verified"
-          ? "success"
-          : typedOutcome === "rejected"
-            ? "failed"
-            : "awaiting_action",
-      failed_reason: typedOutcome === "rejected" ? rejectionReason : null,
-      verified_at: typedOutcome === "verified" ? now : null,
-      updated_at: now,
-    };
-
     if (reviewFor === "primary") {
       await db
         .update(kycDocuments)
-        .set(documentUpdate)
+        .set({
+          verification_status:
+            typedOutcome === "verified"
+              ? "success"
+              : typedOutcome === "rejected"
+                ? "failed"
+                : "awaiting_action",
+          failed_reason: typedOutcome === "rejected" ? rejectionReason : null,
+          verified_at: typedOutcome === "verified" ? now : null,
+          updated_at: now,
+        })
         .where(eq(kycDocuments.id, documentId));
     } else {
       await db
         .update(coBorrowerDocuments)
-        .set(documentUpdate)
+        .set({
+          status:
+            typedOutcome === "verified"
+              ? "success"
+              : typedOutcome === "rejected"
+                ? "failed"
+                : "awaiting_action",
+          updated_at: now,
+        })
         .where(eq(coBorrowerDocuments.id, documentId));
     }
 
