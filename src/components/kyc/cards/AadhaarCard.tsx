@@ -25,11 +25,16 @@ interface AadhaarCardProps {
 
 interface CrossMatchField {
   field: string;
-  leadValue: string | null;
-  aadhaarValue: string | null;
+  leadValue?: string | null;
+  aadhaarValue?: string | null;
+  // Decentro cross-match lib uses these names
+  inputValue?: string | null;
+  documentValue?: string | null;
+  matchResult?: string;
   similarity: number;
   threshold: number;
-  pass: boolean;
+  pass?: boolean;
+  label?: string;
 }
 
 interface CrossMatchResult {
@@ -89,6 +94,7 @@ export default function AadhaarCard({
   const [linkValidity, setLinkValidity] = useState(24);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [digilockerUrl, setDigilockerUrl] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -164,6 +170,7 @@ export default function AadhaarCard({
       }
       setTransactionId(data.data.transactionId);
       setLinkExpiry(data.data.linkExpiresAt);
+      setDigilockerUrl(data.data.digilockerUrl || "");
       setDigiStatus("link_sent");
       setCardStatus("awaiting_consent");
     } catch {
@@ -339,9 +346,26 @@ export default function AadhaarCard({
               </div>
               <p className="text-xs text-blue-500 mt-3">Auto-refreshing every 10s...</p>
             </div>
+            {digilockerUrl && (
+              <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">DigiLocker Link (share with customer)</p>
+                <div className="flex items-center gap-2">
+                  <input type="text" readOnly value={digilockerUrl}
+                    className="flex-1 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 truncate" />
+                  <button onClick={() => { navigator.clipboard.writeText(digilockerUrl); }}
+                    className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded transition-colors whitespace-nowrap">
+                    Copy
+                  </button>
+                  <a href={digilockerUrl} target="_blank" rel="noopener noreferrer"
+                    className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors whitespace-nowrap">
+                    Open
+                  </a>
+                </div>
+              </div>
+            )}
             {transactionId && <p className="text-xs text-gray-400">Transaction: {transactionId}</p>}
             <div className="flex gap-2">
-              <button onClick={() => { setTransactionId(""); setDigiStatus("idle"); setCardStatus("pending"); setError(""); }}
+              <button onClick={() => { setTransactionId(""); setDigiStatus("idle"); setCardStatus("pending"); setDigilockerUrl(""); setError(""); }}
                 className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors">
                 Resend Link
               </button>
@@ -378,8 +402,8 @@ export default function AadhaarCard({
                     {crossMatch.overallPass ? "Pass" : "Fail"}
                   </span>
                 </div>
-                <div className="overflow-hidden rounded-lg border border-gray-200">
-                  <table className="w-full text-sm">
+                <div className="overflow-x-auto rounded-lg border border-gray-200">
+                  <table className="w-full text-sm min-w-[600px]">
                     <thead>
                       <tr className="bg-gray-50 border-b border-gray-200">
                         <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500">#</th>
@@ -390,15 +414,20 @@ export default function AadhaarCard({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {crossMatch.fields.map((f, i) => (
-                        <tr key={f.field} className="hover:bg-gray-50/50">
-                          <td className="px-4 py-2 text-gray-400">{i + 1}</td>
-                          <td className="px-4 py-2 font-medium text-gray-700 capitalize">{f.field.replace(/_/g, " ")}</td>
-                          <td className="px-4 py-2 text-gray-600 max-w-[160px] truncate">{f.leadValue || "—"}</td>
-                          <td className="px-4 py-2 text-gray-600 max-w-[160px] truncate">{f.aadhaarValue || "—"}</td>
-                          <td className="px-4 py-2">{getMatchBadge(f.similarity, f.threshold, f.pass)}</td>
-                        </tr>
-                      ))}
+                      {crossMatch.fields.map((f, i) => {
+                        const lead = f.leadValue || f.inputValue || null;
+                        const aadhaar = f.aadhaarValue || f.documentValue || null;
+                        const passed = f.pass ?? (f.matchResult === "strong" || f.matchResult === "moderate");
+                        return (
+                          <tr key={f.field} className="hover:bg-gray-50/50">
+                            <td className="px-4 py-2 text-gray-400">{i + 1}</td>
+                            <td className="px-4 py-2 font-medium text-gray-700 capitalize">{(f.label || f.field).replace(/_/g, " ")}</td>
+                            <td className="px-4 py-2 text-gray-600 max-w-[160px] truncate">{lead || "—"}</td>
+                            <td className="px-4 py-2 text-gray-600 max-w-[160px] truncate">{aadhaar || "—"}</td>
+                            <td className="px-4 py-2">{getMatchBadge(f.similarity, f.threshold, passed)}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

@@ -7,12 +7,24 @@ interface PANCardProps {
   leadName: string;
   panNumber?: string;
   dob?: string;
+  existingVerification?: {
+    id: string;
+    status: string;
+    adminAction?: string | null;
+    adminActionNotes?: string | null;
+    matchScore?: string | null;
+    apiResponse?: Record<string, unknown> | null;
+  } | null;
+  onActionComplete?: () => void;
 }
 
 interface CrossMatchField {
   field: string;
   leadValue: string | null;
-  apiValue: string | null;
+  panValue: string | null;
+  aadhaarValue: string | null;
+  // backward compat
+  apiValue?: string | null;
   matchScore: number | null;
   pass: boolean;
 }
@@ -24,12 +36,30 @@ export default function PANCard({
   leadName,
   panNumber,
   dob,
+  existingVerification,
+  onActionComplete,
 }: PANCardProps) {
   const [pan, setPan] = useState(panNumber || "");
-  const [status, setStatus] = useState<CardStatus>("pending");
-  const [crossMatchFields, setCrossMatchFields] = useState<CrossMatchField[]>([]);
+  const [status, setStatus] = useState<CardStatus>(() => {
+    if (existingVerification?.adminAction === "accepted") return "success";
+    if (existingVerification?.adminAction === "rejected") return "failed";
+    if (existingVerification?.status === "success") return "success";
+    if (existingVerification?.status === "failed") return "failed";
+    return "pending";
+  });
+  const [crossMatchFields, setCrossMatchFields] = useState<CrossMatchField[]>(() => {
+    const resp = existingVerification?.apiResponse;
+    const d = resp?.data as Record<string, unknown> | undefined;
+    const fields = d?.crossMatchFields as CrossMatchField[] | undefined;
+    return fields || [];
+  });
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(() => {
+    const resp = existingVerification?.apiResponse;
+    return (resp?.message as string) || "";
+  });
+  const [adminNotes, setAdminNotes] = useState("");
+  const [actionLoading, setActionLoading] = useState("");
 
   const handleVerify = async () => {
     if (!pan.trim()) { setError("PAN number is required"); return; }
@@ -37,6 +67,8 @@ export default function PANCard({
     setError("");
     setMessage("");
     setCrossMatchFields([]);
+
+    // https://in.staging.decentro.tech/kyc/public_registry/validate
 
     try {
       const res = await fetch(`/api/kyc/${leadId}/decentro/pan`, {
@@ -55,6 +87,32 @@ export default function PANCard({
     } catch {
       setStatus("failed");
       setError("Network error. Please try again.");
+    }
+  };
+
+  const handleAdminAction = async (action: "accept" | "reject" | "request_more_docs") => {
+    if (!existingVerification?.id) return;
+    if (action === "reject" && !adminNotes.trim()) { setError("Please add rejection reason"); return; }
+    setActionLoading(action);
+    setError("");
+    try {
+      const res = await fetch(`/api/admin/kyc/${leadId}/verification/${existingVerification.id}/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (action === "accept") setStatus("success");
+        else if (action === "reject") setStatus("failed");
+        onActionComplete?.();
+      } else {
+        setError(data.error?.message || "Action failed");
+      }
+    } catch {
+      setError("Network error");
+    } finally {
+      setActionLoading("");
     }
   };
 
@@ -140,7 +198,7 @@ export default function PANCard({
         {(status === "pending" || status === "failed") && (
           <button
             onClick={handleVerify}
-            disabled={status === "loading" || !pan.trim()}
+            disabled={!pan.trim()}
             className="w-full bg-teal-600 hover:bg-teal-700 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
           >
             Run PAN Verification
@@ -155,35 +213,37 @@ export default function PANCard({
           </div>
         )}
 
-        {/* Cross-Match Table (BRD format) */}
+        {/* Cross-Match Table (BRD: Field Name | As per Lead | PAN Card | Aadhaar | Match Result) */}
         {crossMatchFields.length > 0 && (
           <div>
             <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide mb-3">
               Verification Match Results
             </p>
-            <div className="overflow-hidden rounded-lg border border-gray-200">
+            <div className="overflow-x-auto rounded-lg border border-gray-200">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-200">
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase w-8">#</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Field Name</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">As per Lead</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">PAN Card</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Match Result</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase">Field Name</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase">As per Lead</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase">PAN Card</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase">Aadhaar</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase">Match Result</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {crossMatchFields.map((f, i) => (
-                    <tr key={f.field} className={`hover:bg-gray-50/50 ${!f.pass ? "bg-red-50/30" : ""}`}>
-                      <td className="px-4 py-2.5 text-gray-400 text-xs">{i + 1}</td>
-                      <td className="px-4 py-2.5 font-medium text-gray-800">{f.field}</td>
-                      <td className="px-4 py-2.5 text-gray-600 max-w-[180px] truncate">
+                  {crossMatchFields.map((f) => (
+                    <tr key={f.field} className={`hover:bg-gray-50/50 ${!f.pass && f.matchScore !== null ? "bg-red-50/30" : ""}`}>
+                      <td className="px-3 py-2.5 font-semibold text-gray-800">{f.field}</td>
+                      <td className="px-3 py-2.5 text-gray-600 max-w-[140px] truncate">
                         {f.leadValue || <span className="text-gray-300">—</span>}
                       </td>
-                      <td className="px-4 py-2.5 text-gray-600 max-w-[180px] truncate">
-                        {f.apiValue || <span className="text-gray-300">—</span>}
+                      <td className="px-3 py-2.5 text-gray-600 max-w-[140px] truncate font-mono text-xs">
+                        {(f.panValue ?? f.apiValue) || <span className="text-gray-300 italic text-[10px]">Not in response</span>}
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td className="px-3 py-2.5 text-gray-600 max-w-[140px] truncate font-mono text-xs">
+                        {f.aadhaarValue || <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-3 py-2.5">
                         {getMatchBadge(f.matchScore, f.pass)}
                       </td>
                     </tr>
@@ -213,6 +273,32 @@ export default function PANCard({
           >
             Retry
           </button>
+        )}
+
+        {/* Admin Actions */}
+        {(status === "success" || status === "failed") && existingVerification?.id && (
+          <div className="space-y-3 pt-3 border-t border-gray-100">
+            <div>
+              <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Admin Notes</label>
+              <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
+                placeholder="PAN verification remarks..."
+                className="w-full mt-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-teal-500 focus:border-teal-500" />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => handleAdminAction("accept")} disabled={!!actionLoading}
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                {actionLoading === "accept" ? "..." : "Accept"}
+              </button>
+              <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                {actionLoading === "reject" ? "..." : "Reject"}
+              </button>
+              <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
+                className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                {actionLoading === "request_more_docs" ? "..." : "Request Docs"}
+              </button>
+            </div>
+          </div>
         )}
 
         {error && !message && (

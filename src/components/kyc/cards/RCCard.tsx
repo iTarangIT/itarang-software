@@ -10,20 +10,9 @@ interface RCCardProps {
     status: string;
     adminAction?: string | null;
     adminActionNotes?: string | null;
+    apiResponse?: Record<string, unknown> | null;
   } | null;
   onActionComplete?: () => void;
-}
-
-interface RcDetails {
-  chassisNumber: string | null;
-  engineNumber: string | null;
-  ownerName: string | null;
-  registrationDate: string | null;
-  vehicleClass: string | null;
-  fuelType: string | null;
-  makerModel: string | null;
-  fitnessUpto: string | null;
-  insuranceUpto: string | null;
 }
 
 type CardStatus = "pending" | "loading" | "success" | "failed";
@@ -35,6 +24,7 @@ export default function RCCard({
   onActionComplete,
 }: RCCardProps) {
   const [rcNumber, setRcNumber] = useState(initRc);
+  const [editing, setEditing] = useState(false);
   const [status, setStatus] = useState<CardStatus>(() => {
     if (existingVerification?.adminAction === "accepted") return "success";
     if (existingVerification?.adminAction === "rejected") return "failed";
@@ -42,7 +32,12 @@ export default function RCCard({
     if (existingVerification?.status === "failed") return "failed";
     return "pending";
   });
-  const [rcDetails, setRcDetails] = useState<RcDetails | null>(null);
+  const [chassisNumber, setChassisNumber] = useState<string | null>(() => {
+    const resp = existingVerification?.apiResponse;
+    const d = resp?.data as Record<string, unknown> | undefined;
+    const details = d?.rcDetails as Record<string, unknown> | undefined;
+    return (details?.chassisNumber as string) || null;
+  });
   const [error, setError] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
@@ -51,7 +46,7 @@ export default function RCCard({
     if (!rcNumber.trim()) { setError("RC number is required"); return; }
     setStatus("loading");
     setError("");
-    setRcDetails(null);
+    setChassisNumber(null);
 
     try {
       const res = await fetch(`/api/admin/kyc/${leadId}/rc/verify`, {
@@ -59,10 +54,16 @@ export default function RCCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rc_number: rcNumber.trim().toUpperCase() }),
       });
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        setError(`API returned ${res.status}. Please restart dev server.`);
+        setStatus("failed");
+        return;
+      }
       const data = await res.json();
 
       if (data.success) {
-        setRcDetails(data.data.rcDetails);
+        setChassisNumber(data.data?.rcDetails?.chassisNumber || null);
         setStatus("success");
       } else {
         setError(data.error?.message || "RC verification failed");
@@ -105,17 +106,7 @@ export default function RCCard({
     failed: { bg: "bg-red-100 text-red-700", label: "Failed" },
   };
 
-  const detailRows = rcDetails ? [
-    { label: "Chassis Number", value: rcDetails.chassisNumber },
-    { label: "Engine Number", value: rcDetails.engineNumber },
-    { label: "Owner Name", value: rcDetails.ownerName },
-    { label: "Registration Date", value: rcDetails.registrationDate },
-    { label: "Vehicle Class", value: rcDetails.vehicleClass },
-    { label: "Fuel Type", value: rcDetails.fuelType },
-    { label: "Make / Model", value: rcDetails.makerModel },
-    { label: "Fitness Upto", value: rcDetails.fitnessUpto },
-    { label: "Insurance Upto", value: rcDetails.insuranceUpto },
-  ] : [];
+  const hasResults = chassisNumber !== null && status !== "loading";
 
   return (
     <div className="border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden">
@@ -124,7 +115,7 @@ export default function RCCard({
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg bg-orange-600 flex items-center justify-center text-white font-bold text-sm">R</div>
           <div>
-            <h3 className="text-base font-semibold text-gray-900">RC / Chassis Verification</h3>
+            <h3 className="text-base font-semibold text-gray-900">RC to Chassis (Vehicle)</h3>
             <p className="text-xs text-gray-500">via Decentro</p>
           </div>
         </div>
@@ -134,25 +125,44 @@ export default function RCCard({
       </div>
 
       <div className="p-5 space-y-5">
-        {/* Input */}
+        {/* INPUT DATA */}
         <div className="bg-gray-50 rounded-lg p-4">
           <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide mb-3">Input Data</p>
-          <div>
-            <label className="text-xs text-gray-500">RC Number</label>
-            <input type="text" value={rcNumber}
-              onChange={(e) => setRcNumber(e.target.value.toUpperCase())}
-              placeholder="e.g. DL3CAB7889" disabled={status === "loading"}
-              className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm uppercase focus:ring-2 focus:ring-orange-500 focus:border-orange-500 disabled:bg-gray-100" />
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-400 shrink-0">RC Number:</span>
+            {editing ? (
+              <input
+                type="text"
+                value={rcNumber}
+                onChange={(e) => setRcNumber(e.target.value.toUpperCase())}
+                onBlur={() => setEditing(false)}
+                onKeyDown={(e) => e.key === "Enter" && setEditing(false)}
+                autoFocus
+                className="flex-1 border border-orange-300 rounded-lg px-3 py-1.5 text-sm uppercase font-mono focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+              />
+            ) : (
+              <span className="font-medium text-gray-800 font-mono text-sm">
+                {rcNumber || "Not available"}
+              </span>
+            )}
+            {!editing && (status === "pending" || status === "failed") && (
+              <button onClick={() => setEditing(true)}
+                className="text-xs text-orange-600 hover:text-orange-700 font-medium">
+                Edit
+              </button>
+            )}
           </div>
         </div>
 
-        {status === "pending" && (
-          <button onClick={handleVerify}
-            className="w-full bg-orange-600 hover:bg-orange-700 text-white py-2.5 rounded-lg text-sm font-medium transition-colors">
-            Verify RC Number
+        {/* Initiate Verification */}
+        {(status === "pending" || status === "failed") && !hasResults && (
+          <button onClick={handleVerify} disabled={!rcNumber.trim()}
+            className="w-full bg-orange-600 hover:bg-orange-700 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+            Initiate Verification
           </button>
         )}
 
+        {/* Loading */}
         {status === "loading" && (
           <div className="flex items-center justify-center py-8">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-600" />
@@ -160,57 +170,63 @@ export default function RCCard({
           </div>
         )}
 
-        {/* RC Details */}
-        {rcDetails && (
+        {/* RESULTS TABLE */}
+        {hasResults && (
           <div>
-            <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide mb-3">Vehicle Details</p>
             <div className="overflow-hidden rounded-lg border border-gray-200">
               <table className="w-full text-sm">
-                <tbody className="divide-y divide-gray-100">
-                  {detailRows.map((row) => (
-                    <tr key={row.label} className="hover:bg-gray-50/50">
-                      <td className="px-4 py-2.5 text-gray-600 w-1/3">{row.label}</td>
-                      <td className="px-4 py-2.5 font-medium text-gray-800">{row.value || "—"}</td>
-                    </tr>
-                  ))}
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-200">
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">RC Number</th>
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Chassis Number</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td className="px-4 py-3 font-mono text-gray-800">{rcNumber}</td>
+                    <td className="px-4 py-3 font-mono font-medium text-gray-800">{chassisNumber || "—"}</td>
+                  </tr>
                 </tbody>
               </table>
             </div>
           </div>
         )}
 
-        {/* Admin Actions */}
-        {(status === "success" || status === "failed") && existingVerification?.id && (
-          <div className="space-y-3 pt-3 border-t border-gray-100">
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Admin Notes</label>
-              <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
-                placeholder="RC verification remarks..."
-                className="w-full mt-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-orange-500 focus:border-orange-500" />
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => handleAdminAction("accept")} disabled={!!actionLoading}
-                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                {actionLoading === "accept" ? "..." : "Accept"}
-              </button>
-              <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                {actionLoading === "reject" ? "..." : "Reject"}
-              </button>
-              <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
-                className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                {actionLoading === "request_more_docs" ? "..." : "Request Docs"}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Retry on failure */}
-        {status === "failed" && !rcDetails && (
+        {/* Retry */}
+        {status === "failed" && !hasResults && (
           <button onClick={() => { setStatus("pending"); setError(""); }}
             className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium transition-colors">
             Retry Verification
           </button>
+        )}
+
+        {/* ADMIN NOTES + DECISION */}
+        {(status === "success" || status === "failed") && existingVerification?.id && (
+          <div className="space-y-3 pt-3 border-t border-gray-100">
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Admin Notes</p>
+              <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
+                placeholder="RC verification remarks..."
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-orange-500 focus:border-orange-500" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Admin Decision</p>
+              <div className="flex gap-2">
+                <button onClick={() => handleAdminAction("accept")} disabled={!!actionLoading}
+                  className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                  {actionLoading === "accept" ? "..." : "Accept"}
+                </button>
+                <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                  {actionLoading === "reject" ? "..." : "Reject"}
+                </button>
+                <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
+                  className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                  {actionLoading === "request_more_docs" ? "..." : "Request More Docs"}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {error && <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">{error}</div>}

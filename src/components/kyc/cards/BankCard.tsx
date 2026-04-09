@@ -15,6 +15,7 @@ interface BankCardProps {
     adminAction?: string | null;
     adminActionNotes?: string | null;
     matchScore?: string | null;
+    apiResponse?: Record<string, unknown> | null;
   } | null;
   onActionComplete?: () => void;
 }
@@ -44,7 +45,9 @@ export default function BankCard({
     if (existingVerification?.status === "failed") return "failed";
     return "pending";
   });
-  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [result, setResult] = useState<Record<string, unknown> | null>(
+    existingVerification?.apiResponse || null
+  );
   const [error, setError] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
@@ -211,38 +214,52 @@ export default function BankCard({
                   <tr>
                     <td className="px-4 py-2 text-gray-600">Account Status</td>
                     <td className="px-4 py-2">
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                        bankData.accountStatus === "VALID" || bankData.account_status === "VALID"
-                          ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                      }`}>
-                        {(bankData.accountStatus || bankData.account_status || "—") as string}
-                      </span>
+                      {(() => {
+                        const status = String(bankData.account_status || bankData.accountStatus || "—").toLowerCase();
+                        const isValid = status === "valid";
+                        return (
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                            isValid ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                          }`}>
+                            {String(bankData.account_status || bankData.accountStatus || "—")}
+                          </span>
+                        );
+                      })()}
                     </td>
                   </tr>
                   <tr>
                     <td className="px-4 py-2 text-gray-600">Account Holder (Bank)</td>
                     <td className="px-4 py-2 font-medium text-gray-800">
-                      {(bankData.beneficiaryName || bankData.beneficiary_name || bankData.accountHolderName || "—") as string}
+                      {(bankData.beneficiary_name || bankData.beneficiaryName || bankData.accountHolderName || "—") as string}
                     </td>
                   </tr>
-                  {bankData.nameMatchScore !== undefined && (
+                  {(bankData.name_match_percentage !== undefined || bankData.nameMatchScore !== undefined) && (
                     <tr>
                       <td className="px-4 py-2 text-gray-600">Name Match</td>
                       <td className="px-4 py-2">
-                        <span className={`text-xs font-medium ${
-                          Number(bankData.nameMatchScore) >= 80 ? "text-green-700" : "text-red-700"
-                        }`}>
-                          {String(bankData.nameMatchScore)}%
-                        </span>
+                        {(() => {
+                          const score = Number(bankData.name_match_percentage ?? bankData.nameMatchScore ?? 0);
+                          return (
+                            <span className={`text-xs font-medium ${score >= 80 ? "text-green-700" : "text-red-700"}`}>
+                              {score}%
+                            </span>
+                          );
+                        })()}
                       </td>
                     </tr>
                   )}
                   <tr>
                     <td className="px-4 py-2 text-gray-600">Bank Reference</td>
                     <td className="px-4 py-2 text-gray-800 font-mono text-xs">
-                      {(bankData.bankTxnId || bankData.bank_reference_number || "—") as string}
+                      {(bankData.bank_reference_number || bankData.bankTxnId || "—") as string}
                     </td>
                   </tr>
+                  {bankData.validation_message && (
+                    <tr>
+                      <td className="px-4 py-2 text-gray-600">Validation</td>
+                      <td className="px-4 py-2 text-gray-600 text-xs">{String(bankData.validation_message)}</td>
+                    </tr>
+                  )}
                   <tr>
                     <td className="px-4 py-2 text-gray-600">Message</td>
                     <td className="px-4 py-2 text-gray-600 text-xs">{(result.message || "—") as string}</td>

@@ -6,7 +6,7 @@ import {
   adminVerificationQueue,
   auditLogs,
   couponCodes,
-  dealerLeads,
+  leads,
   kycVerificationMetadata,
 } from "@/lib/db/schema";
 import {
@@ -168,9 +168,9 @@ export async function POST(
       const leadStatus =
         decision === "approved" ? "kyc_approved" : "kyc_rejected";
       await tx
-        .update(dealerLeads)
-        .set({ current_status: leadStatus })
-        .where(eq(dealerLeads.id, leadId));
+        .update(leads)
+        .set({ kyc_status: leadStatus })
+        .where(eq(leads.id, leadId));
 
       // 6. Audit log
       await tx.insert(auditLogs).values({

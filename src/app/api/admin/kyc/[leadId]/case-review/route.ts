@@ -19,6 +19,13 @@ import {
   requireAdminAppUser,
 } from "@/lib/kyc/admin-workflow";
 
+function formatDob(dob: Date | string | null | undefined): string | null {
+  if (!dob) return null;
+  const d = new Date(dob);
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ leadId: string }> },
@@ -119,6 +126,7 @@ export async function GET(
       adminActionNotes: v.admin_action_notes,
       submittedAt: v.submitted_at,
       completedAt: v.completed_at,
+      apiResponse: v.api_response,
     }));
 
     // SLA and priority for queue entry
@@ -149,7 +157,7 @@ export async function GET(
           ? {
               aadhaarNo: personal.aadhaar_no,
               panNo: personal.pan_no,
-              dob: personal.dob || lead.dob,
+              dob: formatDob(personal.dob || lead.dob),
               email: personal.email || lead.owner_email,
               fatherHusbandName:
                 personal.father_husband_name || lead.father_or_husband_name,
@@ -163,7 +171,7 @@ export async function GET(
           : {
               aadhaarNo: null,
               panNo: null,
-              dob: lead.dob,
+              dob: formatDob(lead.dob),
               email: lead.owner_email,
               fatherHusbandName: lead.father_or_husband_name,
               localAddress: lead.local_address || lead.current_address,
