@@ -69,6 +69,7 @@ export const products = pgTable(
     capacity_ah: integer("capacity_ah"), // 105 / 132 / 153 / 232 (null for non-battery)
     sku: text("sku").notNull().unique(), // e.g. "3W-51V-105AH"
     hsn_code: varchar("hsn_code", { length: 8 }),
+    price: integer("price"),
     asset_type: varchar("asset_type", { length: 50 }), // Battery, Charger, SOC, Harness, Inverter
     is_serialized: boolean("is_serialized").notNull().default(true),
     warranty_months: integer("warranty_months").notNull().default(0),
@@ -194,7 +195,6 @@ export const inventory = pgTable("inventory", {
 });
 
 // --- DEALER SALES ---
-
 export const leads = pgTable("leads", {
   id: varchar("id", { length: 255 }).primaryKey(),
   owner_name: text("owner_name"),
@@ -218,8 +218,12 @@ export const leads = pgTable("leads", {
   payment_method: varchar("payment_method", { length: 20 }),
   consent_status: varchar("consent_status", { length: 30 }),
   dealer_id: varchar("dealer_id", { length: 255 }),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  created_at: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
 });
 
 // export const leads_commented = pgTable(
@@ -406,6 +410,12 @@ export const personalDetails = pgTable("personal_details", {
   marital_status: varchar("marital_status", { length: 20 }),
   spouse_name: text("spouse_name"),
   local_address: text("local_address"),
+
+  // Bank Details (from OCR / manual entry)
+  bank_account_number: text("bank_account_number"),
+  bank_ifsc: varchar("bank_ifsc", { length: 11 }),
+  bank_name: text("bank_name"),
+  bank_branch: text("bank_branch"),
 
   // OCR Confidence
   dob_confidence: decimal("dob_confidence", { precision: 5, scale: 2 }),
@@ -1347,9 +1357,7 @@ export const digilockerTransactions = pgTable(
     reference_id: varchar("reference_id", { length: 255 }).notNull(),
     decentro_txn_id: varchar("decentro_txn_id", { length: 255 }),
     session_id: varchar("session_id", { length: 255 }),
-    status: varchar("status", { length: 30 })
-      .default("initiated")
-      .notNull(), // initiated, link_sent, link_opened, consent_given, document_fetched, failed, expired
+    status: varchar("status", { length: 30 }).default("initiated").notNull(), // initiated, link_sent, link_opened, consent_given, document_fetched, failed, expired
     customer_phone: varchar("customer_phone", { length: 20 }).notNull(),
     customer_email: varchar("customer_email", { length: 255 }),
     digilocker_url: text("digilocker_url"),
@@ -1612,9 +1620,7 @@ export const coBorrowerDocuments = pgTable("co_borrower_documents", {
     .notNull(),
   doc_type: varchar("document_type", { length: 50 }).notNull(), // aadhaar_front, aadhaar_back, pan_card, passport_photo, address_proof, rc_copy, bank_statement, cheque_1-4
   file_url: text("document_url").notNull(),
-  status: varchar("status", { length: 30 })
-    .default("pending")
-    .notNull(),
+  status: varchar("status", { length: 30 }).default("pending").notNull(),
   ocr_data: jsonb("ocr_data"),
   uploaded_at: timestamp("uploaded_at", { withTimezone: true })
     .defaultNow()
@@ -1753,9 +1759,9 @@ export const adminVerificationQueue = pgTable(
       .notNull(),
   },
   (table) => ({
-    adminVerificationQueueLeadIdx: index("admin_verification_queue_lead_idx").on(
-      table.lead_id,
-    ),
+    adminVerificationQueueLeadIdx: index(
+      "admin_verification_queue_lead_idx",
+    ).on(table.lead_id),
     adminVerificationQueueStatusIdx: index(
       "admin_verification_queue_status_idx",
     ).on(table.status),
@@ -2722,15 +2728,15 @@ export const scraperLeadsDuplicates = pgTable("scraper_leads_duplicates", {
 });
 
 export const scraperCityQueue = pgTable("scraper_city_queue", {
-  id:          text("id").primaryKey(),
-  base_query:  text("base_query").notNull(),   
-  state:       text("state").notNull(),       
-  city:        text("city").notNull(),          
-  full_query:  text("full_query").notNull(),    
-  status:      text("status").default("pending"), 
+  id: text("id").primaryKey(),
+  base_query: text("base_query").notNull(),
+  state: text("state").notNull(),
+  city: text("city").notNull(),
+  full_query: text("full_query").notNull(),
+  status: text("status").default("pending"),
   leads_found: integer("leads_found").default(0),
-  new_leads:   integer("new_leads").default(0),
-  duplicates:  integer("duplicates").default(0),
-  scraped_at:  timestamp("scraped_at"),
-  created_at:  timestamp("created_at").defaultNow(),
+  new_leads: integer("new_leads").default(0),
+  duplicates: integer("duplicates").default(0),
+  scraped_at: timestamp("scraped_at"),
+  created_at: timestamp("created_at").defaultNow(),
 });

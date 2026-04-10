@@ -23,7 +23,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
         const { leadId } = await params;
-        const { pan_number, dob, document_type = 'PAN_DETAILED' } = await req.json();
+        const { pan_number, dob, document_type = 'PAN_DETAILED_COMPLETE' } = await req.json();
 
         if (!pan_number) {
             return NextResponse.json({ success: false, error: 'PAN number is required' }, { status: 400 });
@@ -60,11 +60,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             id_number: pan_number.toUpperCase().trim(),
         });
 
-        console.log('[Decentro PAN] document_type:', document_type, '| kycResult keys:', Object.keys(decentroRes.kycResult || decentroRes.data?.kycResult || {}));
+        console.log('[Decentro PAN] document_type:', document_type, '| response:', JSON.stringify(decentroRes).slice(0, 500));
+
+        // message can be a string or an object — normalize to string
+        const decentroMessage = typeof decentroRes.message === 'string'
+            ? decentroRes.message
+            : (decentroRes.message?.message || decentroRes.error?.message || '');
 
         const apiSuccess = (decentroRes.responseStatus || decentroRes.status || '').toUpperCase() === 'SUCCESS'
-            || decentroRes.message?.toLowerCase().includes('retrieved successfully')
-            || decentroRes.message?.toLowerCase().includes('fetched successfully');
+            || decentroMessage.toLowerCase().includes('retrieved successfully')
+            || decentroMessage.toLowerCase().includes('fetched successfully');
 
         // PAN_DETAILED: kycResult is at top level. PAN basic: may be under data.kycResult
         const kycResult = decentroRes.kycResult || decentroRes.data?.kycResult || decentroRes.data || {};
@@ -83,7 +88,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         let overallSuccess = apiSuccess;
 
         if (!apiSuccess) {
-            reasons.push(`API error: ${decentroRes.message || 'Unknown error'}`);
+            reasons.push(`API error: ${decentroMessage || decentroRes.responseMessage || JSON.stringify(decentroRes).slice(0, 200)}`);
             overallSuccess = false;
         } else if (!isPanValid) {
             reasons.push(`PAN status: ${kycResult.idStatus || 'UNKNOWN'} (not valid)`);
@@ -156,7 +161,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const crossMatchFields = allCrossMatchFields.filter(f => f.leadValue || f.panValue);
 
         // Build response message
-        let message = decentroRes.message || '';
+        let message = decentroMessage || '';
         if (overallSuccess) {
             message = isPanValid ? `PAN verified. Name: ${panName}` : message;
             if (matchScore !== null && matchScore >= 50) {

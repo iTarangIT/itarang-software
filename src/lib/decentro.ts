@@ -43,7 +43,7 @@ function bankingHeaders(): Record<string, string> {
 // ─── Public Registry Validate (PAN / GSTIN / Voter ID / DL) ─────────────────
 
 export type PublicRegistryDocType =
-    | 'PAN' | 'PAN_DETAILED'
+    | 'PAN' | 'PAN-DETAILED' | 'PAN_DETAILED_COMPLETE' | 'PAN_BANK_ACCOUNT_LINKAGE' | 'PAN-MATCH' | 'PAN_COMPARE'
     | 'GSTIN' | 'GSTIN_DETAILED'
     | 'VOTERID'
     | 'DRIVING_LICENSE'
@@ -73,7 +73,12 @@ export async function validateDocument(params: ValidateDocParams) {
         headers: kycHeaders(),
         body: JSON.stringify(body),
     });
-    return res.json();
+    const data = await res.json();
+    if (!res.ok) {
+        console.error('[Decentro validateDocument] HTTP', res.status, JSON.stringify(data));
+        return { responseStatus: 'ERROR', status: 'ERROR', message: data?.message || data?.error || `Decentro API returned HTTP ${res.status}`, ...data };
+    }
+    return data;
 }
 
 // ─── Aadhaar OTP ─────────────────────────────────────────────────────────────
@@ -527,7 +532,7 @@ export async function verifyRcNumber(rc_number: string) {
     const body = {
         reference_id: genRefId(),
         consent: true,
-        purpose: 'Vehicle registration verification for loan application',
+        purpose: 'Vehicle RC verification for loan',
         id: rc_number.toUpperCase().trim().replace(/[^A-Z0-9]/g, ''),
     };
 
