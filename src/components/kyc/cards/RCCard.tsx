@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import OcrAutofillButton from "./OcrAutofillButton";
 
 interface RCCardProps {
   leadId: string;
   rcNumber?: string;
+  ocrData?: Record<string, unknown> | null;
   existingVerification?: {
     id: string;
     status: string;
@@ -20,6 +22,7 @@ type CardStatus = "pending" | "loading" | "success" | "failed";
 export default function RCCard({
   leadId,
   rcNumber: initRc = "",
+  ocrData,
   existingVerification,
   onActionComplete,
 }: RCCardProps) {
@@ -127,7 +130,19 @@ export default function RCCard({
       <div className="p-5 space-y-5">
         {/* INPUT DATA */}
         <div className="bg-gray-50 rounded-lg p-4">
-          <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide mb-3">Input Data</p>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide">Input Data</p>
+            <OcrAutofillButton
+              leadId={leadId}
+              docType="rc_copy"
+              cachedOcrData={ocrData}
+              disabled={status === "loading"}
+              onOcrResult={(data) => {
+                const rc = (data.rc_number || data.rcNumber || data.registration_number || data.registrationNumber) as string | undefined;
+                if (rc) setRcNumber(rc.toUpperCase());
+              }}
+            />
+          </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-gray-400 shrink-0">RC Number:</span>
             {editing ? (
