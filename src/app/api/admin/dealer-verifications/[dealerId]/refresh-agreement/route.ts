@@ -11,7 +11,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-async function uploadFileToSupabase(url: string, path: string, headers?: Record<string, string>) {
+async function downloadAndCacheFile(url: string, path: string, headers?: Record<string, string>) {
   const response = await fetch(url, {
     method: "GET",
     headers: headers || {},
@@ -35,19 +35,27 @@ async function uploadFileToSupabase(url: string, path: string, headers?: Record<
     throw new Error(`Expected PDF but got JSON: ${text.slice(0, 200)}`);
   }
 
-  const { error } = await supabase.storage
-    .from("dealer-documents")
-    .upload(path, buffer, {
-      contentType: "application/pdf",
-      upsert: true,
-    });
+  // Try caching to Supabase (non-blocking — don't fail if upload fails)
+  let publicUrl: string | null = null;
+  try {
+    const { error } = await supabase.storage
+      .from("dealer-documents")
+      .upload(path, buffer, {
+        contentType: "application/pdf",
+        upsert: true,
+      });
 
-  if (error) {
-    throw new Error("Supabase upload failed: " + error.message);
+    if (!error) {
+      const { data } = supabase.storage.from("dealer-documents").getPublicUrl(path);
+      publicUrl = data.publicUrl;
+    } else {
+      console.warn("[REFRESH AGREEMENT] Supabase cache upload failed (non-blocking):", error.message);
+    }
+  } catch (cacheErr) {
+    console.warn("[REFRESH AGREEMENT] Supabase caching error (non-blocking):", cacheErr);
   }
 
-  const { data } = supabase.storage.from("dealer-documents").getPublicUrl(path);
-  return data.publicUrl;
+  return publicUrl;
 }
 
 type RouteContext = {
@@ -217,21 +225,23 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         };
 
         if (extractedSignedUrl && !application.signedAgreementStoragePath) {
-          const publicUrl = await uploadFileToSupabase(
+          const publicUrl = await downloadAndCacheFile(
             extractedSignedUrl,
             signedStoragePath,
             digioAuthHeaders
           );
 
-          signedAgreementUrl = publicUrl;
+          signedAgreementUrl = publicUrl || extractedSignedUrl;
 
-          await db
-            .update(dealerOnboardingApplications)
-            .set({
-              signedAgreementStoragePath: signedStoragePath,
-              signedAgreementUrl: publicUrl,
-            })
-            .where(eq(dealerOnboardingApplications.id, dealerId));
+          if (publicUrl) {
+            await db
+              .update(dealerOnboardingApplications)
+              .set({
+                signedAgreementStoragePath: signedStoragePath,
+                signedAgreementUrl: publicUrl,
+              })
+              .where(eq(dealerOnboardingApplications.id, dealerId));
+          }
         } else if (!application.signedAgreementStoragePath) {
           // Fallback: try Digio direct download only if no signed URL available
           const directDownloadUrl = `${baseUrl}/v2/client/document/download?document_id=${application.providerDocumentId}`;
@@ -284,17 +294,19 @@ export async function POST(_req: NextRequest, context: RouteContext) {
           const auditTrailDigioUrl = `${baseUrl}/v2/client/document/download_audit_trail?document_id=${application.providerDocumentId}`;
           const auditPath = `agreements/${dealerId}/audit-trail.pdf`;
 
-          const publicUrl = await uploadFileToSupabase(auditTrailDigioUrl, auditPath, digioAuthHeaders);
+          const publicUrl = await downloadAndCacheFile(auditTrailDigioUrl, auditPath, digioAuthHeaders);
 
-          auditTrailUrl = publicUrl;
+          if (publicUrl) {
+            auditTrailUrl = publicUrl;
 
-          await db
-            .update(dealerOnboardingApplications)
-            .set({
-              auditTrailStoragePath: auditPath,
-              auditTrailUrl: publicUrl,
-            })
-            .where(eq(dealerOnboardingApplications.id, dealerId));
+            await db
+              .update(dealerOnboardingApplications)
+              .set({
+                auditTrailStoragePath: auditPath,
+                auditTrailUrl: publicUrl,
+              })
+              .where(eq(dealerOnboardingApplications.id, dealerId));
+          }
         }
       } catch (err) {
         console.error("[REFRESH AGREEMENT] file upload error:", err);

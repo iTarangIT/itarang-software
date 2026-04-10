@@ -117,53 +117,106 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         );
       }
 
-      const downloadUrl = `${baseUrl}/v2/client/document/download?document_id=${application.providerDocumentId}`;
+      // Try multiple Digio download endpoints
+      const downloadUrls = [
+        `${baseUrl}/v2/client/document/download?document_id=${application.providerDocumentId}`,
+        `${baseUrl}/v2/client/document/${application.providerDocumentId}/download`,
+      ];
 
-      console.log("[DOWNLOAD SIGNED AGREEMENT] Fallback Digio URL:", downloadUrl);
+      let digioResponse: Response | null = null;
 
-      const digioResponse = await fetch(downloadUrl, {
-        method: "GET",
-        headers: {
-          Authorization: basicAuthHeader(clientId, clientSecret),
-          Accept: "application/pdf",
-        },
-        cache: "no-store",
-      });
+      for (const downloadUrl of downloadUrls) {
+        console.log("[DOWNLOAD SIGNED AGREEMENT] Trying Digio URL:", downloadUrl);
 
-      if (!digioResponse.ok) {
-        const errorText = await digioResponse.text();
-        console.error(
-          "[DOWNLOAD SIGNED AGREEMENT] Digio download failed:",
-          digioResponse.status,
-          errorText
-        );
-
-        return NextResponse.json(
-          {
-            success: false,
-            message: "Failed to download signed agreement from Digio",
-            raw: errorText,
+        const res = await fetch(downloadUrl, {
+          method: "GET",
+          headers: {
+            Authorization: basicAuthHeader(clientId, clientSecret),
+            Accept: "application/pdf, application/octet-stream, */*",
           },
-          { status: digioResponse.status }
-        );
+          cache: "no-store",
+        });
+
+        const ct = res.headers.get("content-type") || "";
+
+        if (res.ok && (ct.includes("pdf") || ct.includes("octet-stream"))) {
+          digioResponse = res;
+          break;
+        }
+
+        const errText = await res.text();
+        console.warn("[DOWNLOAD SIGNED AGREEMENT] Digio URL failed:", downloadUrl, res.status, errText.slice(0, 300));
       }
 
-      // Validate that Digio returned an actual PDF, not a JSON error
-      const contentType = digioResponse.headers.get("content-type") || "";
-      if (!contentType.includes("pdf") && !contentType.includes("octet-stream")) {
-        const errorText = await digioResponse.text();
-        console.error("[DOWNLOAD SIGNED AGREEMENT] Digio returned non-PDF:", contentType, errorText.slice(0, 300));
-        return NextResponse.json(
-          {
-            success: false,
-            message: "Digio returned invalid response (not a PDF). The document may not be ready yet.",
-            raw: errorText,
+      // If both endpoints failed, check agreement status first
+      if (!digioResponse) {
+        // Query Digio for the document status to get the signed URL directly
+        const statusUrl = `${baseUrl}/v2/client/document/${application.providerDocumentId}`;
+        console.log("[DOWNLOAD SIGNED AGREEMENT] Checking Digio document status:", statusUrl);
+
+        const statusRes = await fetch(statusUrl, {
+          method: "GET",
+          headers: {
+            Authorization: basicAuthHeader(clientId, clientSecret),
+            Accept: "application/json",
           },
-          { status: 502 }
-        );
+          cache: "no-store",
+        });
+
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          const agreementStatus = String(statusData?.agreement_status || statusData?.status || "").toLowerCase();
+
+          // Check if a signed file URL is available in the status response
+          const signedFileUrl =
+            statusData?.signed_file_url ||
+            statusData?.signed_agreement_url ||
+            statusData?.executed_file_url ||
+            statusData?.file_url ||
+            statusData?.download_url ||
+            null;
+
+          if (signedFileUrl) {
+            console.log("[DOWNLOAD SIGNED AGREEMENT] Found signed URL from status:", signedFileUrl);
+            const signedRes = await fetch(signedFileUrl, {
+              method: "GET",
+              headers: {
+                Authorization: basicAuthHeader(clientId, clientSecret),
+                Accept: "application/pdf, application/octet-stream, */*",
+              },
+              cache: "no-store",
+            });
+
+            if (signedRes.ok) {
+              digioResponse = signedRes;
+            }
+          }
+
+          if (!digioResponse) {
+            const notCompleted = !["completed", "signed"].includes(agreementStatus);
+            return NextResponse.json(
+              {
+                success: false,
+                message: notCompleted
+                  ? `Agreement is not fully signed yet. Current status: "${agreementStatus}". Please wait for all signers to complete.`
+                  : "Digio system error — the signed document may not be ready yet. Please try again in a few minutes.",
+                agreementStatus,
+              },
+              { status: notCompleted ? 400 : 502 }
+            );
+          }
+        } else {
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Failed to download signed agreement from Digio. The document may not be ready yet. Please try again in a few minutes.",
+            },
+            { status: 502 }
+          );
+        }
       }
 
-      pdfBuffer = await digioResponse.arrayBuffer();
+      pdfBuffer = await digioResponse!.arrayBuffer();
 
       // Validate the PDF has actual content
       if (pdfBuffer.byteLength < 100) {

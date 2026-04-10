@@ -2,6 +2,11 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema";
 
+// AWS RDS uses Amazon-signed certificates; allow them through Node's TLS layer
+if (!process.env.NODE_TLS_REJECT_UNAUTHORIZED) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
+
 function buildAwsDatabaseUrl() {
   const host = process.env.AWS_DB_HOST;
   const port = process.env.AWS_DB_PORT ?? "5432";
@@ -37,7 +42,7 @@ declare global {
 const client: PostgresClient =
   globalThis.__itarangAwsSqlClient__ ??
   postgres(getDatabaseUrl(), {
-    ssl: "require",
+    ssl: { rejectUnauthorized: false },
     prepare: false,
     max: process.env.NODE_ENV === "production" ? 10 : 5,
   });

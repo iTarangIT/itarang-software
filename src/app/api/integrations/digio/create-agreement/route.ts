@@ -45,6 +45,8 @@ function mapSigningMethod(method?: string) {
       return "aadhaar";
     case "dsc_signature":
       return "dsc";
+    case "electronic_signature":
+      return "electronic";
     default:
       return "electronic";
   }

@@ -62,15 +62,21 @@ export async function login(formData: FormData) {
     redirect("/login?error=Could not authenticate user");
   }
 
-  const matchedUsers = await db
-    .select()
-    .from(users)
-    .where(
-      data.user?.id
-        ? or(eq(users.id, data.user.id), eq(users.email, email))
-        : eq(users.email, email)
-    )
-    .limit(1);
+  let matchedUsers;
+  try {
+    matchedUsers = await db
+      .select()
+      .from(users)
+      .where(
+        data.user?.id
+          ? or(eq(users.id, data.user.id), eq(users.email, email))
+          : eq(users.email, email)
+      )
+      .limit(1);
+  } catch (dbErr) {
+    console.error("[LOGIN] Database query failed:", dbErr);
+    redirect("/login?error=Database connection failed. Please try again.");
+  }
 
   const appUser = matchedUsers[0];
 

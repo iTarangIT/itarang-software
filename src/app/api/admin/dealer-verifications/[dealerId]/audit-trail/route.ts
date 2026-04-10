@@ -103,48 +103,38 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         );
       }
 
-      const { error: uploadError } = await supabase.storage
-        .from(bucketName)
-        .upload(filePath, fileBuffer, {
-          contentType: contentType || "application/pdf",
-          upsert: true,
-        });
+      // Try to cache in Supabase storage for future downloads (non-blocking)
+      try {
+        const { error: uploadError } = await supabase.storage
+          .from(bucketName)
+          .upload(filePath, fileBuffer, {
+            contentType: contentType || "application/pdf",
+            upsert: true,
+          });
 
-      if (uploadError) {
-        return NextResponse.json(
-          {
-            success: false,
-            message: "Failed to upload audit trail to Supabase",
-            raw: uploadError.message,
-          },
-          { status: 500 }
-        );
+        if (!uploadError) {
+          const { data: publicUrlData } = supabase.storage
+            .from(bucketName)
+            .getPublicUrl(filePath);
+
+          const auditTrailUrl = publicUrlData?.publicUrl;
+
+          if (auditTrailUrl) {
+            await db
+              .update(dealerOnboardingApplications)
+              .set({
+                auditTrailUrl,
+                auditTrailStoragePath: filePath,
+                updatedAt: new Date(),
+              })
+              .where(eq(dealerOnboardingApplications.id, dealerId));
+          }
+        } else {
+          console.warn("[AUDIT TRAIL] Supabase cache upload failed (non-blocking):", uploadError.message);
+        }
+      } catch (cacheErr) {
+        console.warn("[AUDIT TRAIL] Supabase caching error (non-blocking):", cacheErr);
       }
-
-      const { data: publicUrlData } = supabase.storage
-        .from(bucketName)
-        .getPublicUrl(filePath);
-
-      const auditTrailUrl = publicUrlData?.publicUrl;
-
-      if (!auditTrailUrl) {
-        return NextResponse.json(
-          {
-            success: false,
-            message: "Failed to generate audit trail public URL",
-          },
-          { status: 500 }
-        );
-      }
-
-      await db
-        .update(dealerOnboardingApplications)
-        .set({
-          auditTrailUrl,
-          auditTrailStoragePath: filePath,
-          updatedAt: new Date(),
-        })
-        .where(eq(dealerOnboardingApplications.id, dealerId));
     }
 
     if (!fileBuffer) {
