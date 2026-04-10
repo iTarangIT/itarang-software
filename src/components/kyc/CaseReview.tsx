@@ -341,14 +341,18 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               <p className="text-xs text-gray-400">Phone</p>
               <p className="font-medium text-gray-800">{lead.phone || "—"}</p>
             </div>
-            <div>
-              <p className="text-xs text-gray-400">Shop</p>
-              <p className="font-medium text-gray-800">{lead.shopName || "—"}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-400">Location</p>
-              <p className="font-medium text-gray-800">{lead.location || "—"}</p>
-            </div>
+            {lead.shopName && (
+              <div>
+                <p className="text-xs text-gray-400">Shop</p>
+                <p className="font-medium text-gray-800">{lead.shopName}</p>
+              </div>
+            )}
+            {lead.location && (
+              <div>
+                <p className="text-xs text-gray-400">Location</p>
+                <p className="font-medium text-gray-800">{lead.location}</p>
+              </div>
+            )}
             {pd?.dob && (
               <div>
                 <p className="text-xs text-gray-400">DOB</p>
@@ -506,6 +510,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
             leadName={lead.name}
             panNumber={pd?.panNo || ocrPan || undefined}
             dob={pd?.dob || ocrDob || undefined}
+            ocrData={documents.find((d) => d.docType === "pan_card")?.ocrData || null}
             existingVerification={getVerification("pan") ? {
               id: getVerification("pan")!.id,
               status: getVerification("pan")!.status,
@@ -525,6 +530,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
             ifsc={ocrIfsc}
             bankName={ocrBankName}
             branch={ocrBranch}
+            ocrData={documents.find((d) => ["bank_statement", "cheque_1", "cheque_2", "cheque_3", "cheque_4"].includes(d.docType) && d.ocrData)?.ocrData || null}
             existingVerification={getVerification("bank") ? {
               id: getVerification("bank")!.id,
               status: getVerification("bank")!.status,
@@ -559,6 +565,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           <RCCard
             leadId={leadId}
             rcNumber={pd?.vehicleRc || ocrRcNumber || undefined}
+            ocrData={documents.find((d) => d.docType === "rc_copy")?.ocrData || null}
             existingVerification={getVerification("rc") ? {
               id: getVerification("rc")!.id,
               status: getVerification("rc")!.status,
