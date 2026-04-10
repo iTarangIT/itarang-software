@@ -991,6 +991,24 @@ export const couponCodes = pgTable('coupon_codes', {
     couponLeadIdx: index('coupon_codes_lead_idx').on(table.reserved_for_lead_id),
 }));
 
+// --- COUPON AUDIT LOG ---
+
+export const couponAuditLog = pgTable('coupon_audit_log', {
+    id: varchar('id', { length: 255 }).primaryKey(),
+    coupon_id: varchar('coupon_id', { length: 255 }).references(() => couponCodes.id).notNull(),
+    action: varchar('action', { length: 20 }).notNull(), // created, allocated, reserved, released, used, expired, revoked
+    old_status: varchar('old_status', { length: 20 }),
+    new_status: varchar('new_status', { length: 20 }),
+    lead_id: varchar('lead_id', { length: 255 }).references(() => leads.id),
+    performed_by: uuid('performed_by'), // user who triggered action (no FK due to users table missing PK constraint)
+    ip_address: varchar('ip_address', { length: 45 }),
+    notes: text('notes'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+    auditCouponIdx: index('coupon_audit_log_coupon_idx').on(table.coupon_id, table.created_at),
+    auditActionIdx: index('coupon_audit_log_action_idx').on(table.action),
+}));
+
 // --- FACILITATION PAYMENTS ---
 
 export const facilitationPayments = pgTable('facilitation_payments', {

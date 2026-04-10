@@ -7,6 +7,10 @@
     {
       "path": "/api/scraper/cron",
       "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/expire-coupons",
+      "schedule": "0 0 * * *"
     }
   ]
 }

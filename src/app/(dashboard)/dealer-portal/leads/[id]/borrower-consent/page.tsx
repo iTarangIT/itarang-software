@@ -384,6 +384,24 @@ export default function BorrowerConsentPage() {
         try {
             setSubmitting(true);
             setApiError(null);
+
+            // Save draft first
+            await fetch(`/api/kyc/${leadId}/save-draft`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ step: 3, data: { borrowerForm, documents: uploadedDocs, consentStatus } }),
+            });
+
+            // Complete Step 3 → advance workflow_step to 4
+            const res = await fetch(`/api/kyc/${leadId}/complete-step3`, { method: 'POST' });
+            const data = await res.json();
+
+            if (!res.ok || !data.success) {
+                setApiError(data?.error?.message || 'Cannot proceed — ensure borrower consent is admin-verified.');
+                return;
+            }
+
+            // Always go to Step 4 Interim
             router.push(`/dealer-portal/leads/${leadId}/kyc/interim`);
         } catch (err: any) {
             setApiError(err?.message || 'Failed to proceed');

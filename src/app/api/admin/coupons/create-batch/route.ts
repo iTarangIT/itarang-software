@@ -4,6 +4,7 @@ import { couponBatches, couponCodes, accounts } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
+import { logCouponActionsBulk } from '@/lib/coupon-audit';
 
 const createBatchSchema = z.object({
     dealer_id: z.string().min(1),
@@ -90,6 +91,16 @@ export async function POST(req: NextRequest) {
         for (let i = 0; i < coupons.length; i += 100) {
             await db.insert(couponCodes).values(coupons.slice(i, i + 100));
         }
+
+        // Audit log for batch creation
+        await logCouponActionsBulk(coupons.map(c => ({
+            couponId: c.id,
+            action: 'created' as const,
+            oldStatus: null,
+            newStatus: 'available',
+            performedBy: user.id,
+            notes: `Batch ${batchId} created`,
+        })));
 
         return NextResponse.json({
             success: true,

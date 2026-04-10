@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { couponCodes, leads } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
+import { logCouponAction } from '@/lib/coupon-audit';
 
 type RouteContext = {
     params: Promise<{ leadId: string }>;
@@ -51,6 +52,17 @@ export async function POST(_req: NextRequest, context: RouteContext) {
                     reserved_for_lead_id: null,
                 })
                 .where(eq(couponCodes.id, reservedCoupons[0].id));
+
+            // Audit log
+            await logCouponAction({
+                couponId: reservedCoupons[0].id,
+                action: 'released',
+                oldStatus: 'reserved',
+                newStatus: 'available',
+                leadId,
+                performedBy: user.id,
+                notes: 'Dealer changed coupon',
+            });
         }
 
         // Clear lead coupon fields

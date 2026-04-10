@@ -28,6 +28,8 @@ type LeadReview = {
     dealer_name: string;
     kyc_status: string;
     interest_level: string;
+    coupon_code: string | null;
+    coupon_status: string | null;
     documents: ReviewableDoc[];
     total_docs: number;
     pending_count: number;
@@ -221,6 +223,22 @@ export default function AdminKYCReviewPage() {
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-4">
+                                        {/* Coupon Status Badge */}
+                                        {lead.coupon_code ? (
+                                            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                                                lead.coupon_status === 'used' ? 'bg-emerald-50 text-emerald-700' :
+                                                lead.coupon_status === 'reserved' ? 'bg-blue-50 text-blue-700' :
+                                                'bg-gray-50 text-gray-600'
+                                            }`}>
+                                                <Shield className="w-3 h-3" />
+                                                {lead.coupon_code} ({lead.coupon_status})
+                                            </span>
+                                        ) : (
+                                            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-50 text-red-600 rounded-full text-[10px] font-bold">
+                                                <AlertTriangle className="w-3 h-3" />
+                                                No Coupon
+                                            </span>
+                                        )}
                                         <div className="text-right">
                                             <div className="text-sm font-bold text-gray-900">{lead.total_docs} docs</div>
                                             {lead.pending_count > 0 && <div className="text-xs text-amber-600 font-medium">{lead.pending_count} pending</div>}

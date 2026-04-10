@@ -62,11 +62,12 @@ export default function InterimStepPage() {
                 const accessRes = await fetch(`/api/coborrower/${leadId}/access-check`);
                 const accessData = await accessRes.json();
                 if (!accessData.success || !accessData.allowed) {
-                    router.push(`/dealer-portal/leads/${leadId}/kyc`);
+                    // workflow_step < 4 — not ready for this step yet
+                    router.replace(`/dealer-portal/leads/${leadId}/borrower-consent`);
                     return;
                 }
 
-                setHasCoBorrower(accessData.has_co_borrower ?? null);
+                setHasCoBorrower(accessData.has_co_borrower ?? false);
                 setHasAdditionalDocs(accessData.has_additional_docs ?? false);
 
                 if (accessData.has_co_borrower) {
@@ -221,7 +222,7 @@ export default function InterimStepPage() {
                 <ProgressHeader
                     title="Co-Borrower KYC"
                     subtitle={`Lead: ${leadId}`}
-                    step={3}
+                    step={4}
                     onBack={() => router.back()}
                 />
 

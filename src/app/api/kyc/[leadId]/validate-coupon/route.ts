@@ -4,6 +4,7 @@ import { couponCodes, leads } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 import { calculateDiscount } from '@/lib/razorpay';
+import { logCouponAction } from '@/lib/coupon-audit';
 
 const BASE_FEE = Number(process.env.FACILITATION_FEE_BASE_AMOUNT) || 1500;
 
@@ -116,6 +117,17 @@ export async function POST(req: NextRequest, context: RouteContext) {
                 updated_at: now,
             })
             .where(eq(leads.id, leadId));
+
+        // Audit log
+        await logCouponAction({
+            couponId: coupon.id,
+            action: 'reserved',
+            oldStatus: 'available',
+            newStatus: 'reserved',
+            leadId,
+            performedBy: user.id,
+            notes: `Reserved for Lead #${leadId}`,
+        });
 
         return NextResponse.json({
             valid: true,

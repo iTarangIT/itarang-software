@@ -101,6 +101,8 @@ export async function GET(req: NextRequest) {
             dealer_id: leads.dealer_id,
             kyc_status: leads.kyc_status,
             interest_level: leads.interest_level,
+            coupon_code: leads.coupon_code,
+            coupon_status: leads.coupon_status,
         }).from(leads).where(inArray(leads.id, leadIds));
 
         const dealerIds = [...new Set(leadRows.map(l => l.dealer_id).filter(Boolean))] as string[];
@@ -128,6 +130,8 @@ export async function GET(req: NextRequest) {
                 dealer_name: dealerMap[lead.dealer_id || ''] || 'Unknown',
                 kyc_status: lead.kyc_status || 'pending',
                 interest_level: lead.interest_level || 'cold',
+                coupon_code: lead.coupon_code || null,
+                coupon_status: lead.coupon_status || null,
                 documents: docs,
                 total_docs: docs.length,
                 pending_count: docs.filter(d => d.doc_status === 'uploaded').length,

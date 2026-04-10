@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { kycVerifications, kycDocuments, leads, couponCodes } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { validateDocument, verifyBankAccount } from '@/lib/decentro';
+import { logCouponAction } from '@/lib/coupon-audit';
 
 const VERIFICATION_LABELS: Record<string, string> = {
     aadhaar: 'Aadhaar Verification',
@@ -71,6 +72,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
         }
 
         // Consume coupon: reserved → used
+        const reservedCoupons = await db.select({ id: couponCodes.id })
+            .from(couponCodes)
+            .where(and(eq(couponCodes.code, leadCouponCode), eq(couponCodes.status, 'reserved')))
+            .limit(1);
+
         await db.update(couponCodes)
             .set({ status: 'used', used_by_lead_id: leadId, used_by: user.id, used_at: new Date() })
             .where(and(eq(couponCodes.code, leadCouponCode), eq(couponCodes.status, 'reserved')));
@@ -79,6 +85,19 @@ export async function POST(req: NextRequest, context: RouteContext) {
         await db.update(leads)
             .set({ coupon_status: 'used', updated_at: new Date() })
             .where(eq(leads.id, leadId));
+
+        // Audit log
+        if (reservedCoupons.length) {
+            await logCouponAction({
+                couponId: reservedCoupons[0].id,
+                action: 'used',
+                oldStatus: 'reserved',
+                newStatus: 'used',
+                leadId,
+                performedBy: user.id,
+                notes: `Consumed for verification of Lead #${leadId}`,
+            });
+        }
 
         const vehicleSlugs = ['2w', '3w', '4w', 'commercial'];
         const assetModel = (lead[0].asset_model || '').toLowerCase();
