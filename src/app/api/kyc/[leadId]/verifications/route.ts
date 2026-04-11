@@ -3,7 +3,7 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { kycVerifications, leads } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 
 type RouteContext = {
@@ -30,7 +30,7 @@ const DEFAULT_VERIFICATIONS = [
   "photo",
 ];
 
-export async function GET(_req: NextRequest, { params }: RouteContext) {
+export async function GET(req: NextRequest, { params }: RouteContext) {
   try {
     const user = await requireRole(["dealer"]);
     const { leadId } = await params;
@@ -76,10 +76,15 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
       expectedTypes.push("rc");
     }
 
+    const verificationFor = req.nextUrl.searchParams.get("verification_for") || "customer";
+
     const verificationRows = await db
       .select()
       .from(kycVerifications)
-      .where(eq(kycVerifications.lead_id, leadId));
+      .where(and(
+        eq(kycVerifications.lead_id, leadId),
+        eq(kycVerifications.verification_for, verificationFor),
+      ));
 
     const verificationMap = new Map(
       verificationRows.map((row) => [String(row.verification_type), row])

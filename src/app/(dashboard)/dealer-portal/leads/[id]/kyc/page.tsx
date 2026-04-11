@@ -146,8 +146,8 @@ export default function KYCPage() {
 
             const [docsRes, verificationsRes, consentRes] = await Promise.allSettled([
                 fetch(`/api/kyc/${leadId}/documents`, { cache: 'no-store' }),
-                fetch(`/api/kyc/${leadId}/verifications`, { cache: 'no-store' }),
-                fetch(`/api/kyc/${leadId}/consent/status`, { cache: 'no-store' }),
+                fetch(`/api/kyc/${leadId}/verifications?verification_for=customer`, { cache: 'no-store' }),
+                fetch(`/api/kyc/${leadId}/consent/status?consent_for=customer`, { cache: 'no-store' }),
             ]);
 
             if (docsRes.status === 'fulfilled') {
@@ -204,7 +204,7 @@ export default function KYCPage() {
         const assetModel = String(lead?.asset_model || lead?.asset_category || '').toUpperCase();
         const isVehicle = ['2W', '3W', '4W'].includes(assetModel);
         return FINANCE_DOCUMENTS.map(doc =>
-            doc.key === 'rc_copy' ? { ...doc, required: isVehicle } : { ...doc, required: true }
+            doc.key === 'rc_copy' ? { ...doc, required: isVehicle } : doc
         );
     }, [lead]);
 
@@ -292,7 +292,7 @@ export default function KYCPage() {
             const res = await fetch(`/api/kyc/${leadId}/send-consent`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel }),
+                body: JSON.stringify({ channel, consent_for: 'customer' }),
             });
             const data = await res.json();
             if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Failed to send consent');
@@ -310,20 +310,32 @@ export default function KYCPage() {
             setApiError(null);
             setConsentLoading(true);
             setConsentPath('manual');
-            const res = await fetch(`/api/kyc/${leadId}/generate-consent-pdf`, { method: 'POST' });
+            const res = await fetch(`/api/kyc/${leadId}/generate-consent-pdf`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ consent_for: 'customer' }),
+            });
             const data = await res.json();
             if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Failed to generate consent PDF');
             setConsentStatus('consent_generated');
             setConsentPdfUrl(data.pdfUrl || null);
-            // Auto-download PDF
+            // Auto-download PDF locally
             if (data.pdfUrl) {
-                const a = document.createElement('a');
-                a.href = data.pdfUrl;
-                a.download = `consent_${leadId}.pdf`;
-                a.target = '_blank';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
+                try {
+                    const pdfRes = await fetch(data.pdfUrl);
+                    const blob = await pdfRes.blob();
+                    const blobUrl = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = `consent_${leadId}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(blobUrl);
+                } catch {
+                    // Fallback: open in new tab if blob download fails
+                    window.open(data.pdfUrl, '_blank');
+                }
             }
         } catch (err: any) {
             setApiError(err?.message || 'Failed to generate consent PDF');
@@ -341,6 +353,7 @@ export default function KYCPage() {
             if (file.size > 10 * 1024 * 1024) throw new Error('Max 10MB');
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('consent_for', 'customer');
             const res = await fetch(`/api/kyc/${leadId}/upload-signed-consent`, { method: 'POST', body: formData });
             const data = await res.json();
             if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Upload failed');
@@ -377,7 +390,18 @@ export default function KYCPage() {
             });
             const data = await res.json();
             setCouponResult(data);
-            if (!data.success && !data.valid) setApiError(data.message || data.error || 'Invalid coupon');
+            if (data.success || data.valid) {
+                if (data.already_used) {
+                    // Repeat validation — show inline message, no alert
+                    setLead((prev: any) => prev ? { ...prev, coupon_code: data.coupon_code, coupon_status: data.status } : prev);
+                } else {
+                    // First validation — show success alert
+                    setLead((prev: any) => prev ? { ...prev, coupon_code: data.coupon_code, coupon_status: 'reserved' } : prev);
+                    alert(`Coupon "${data.coupon_code}" validated successfully! Your coupon has been reserved for this lead.`);
+                }
+            } else {
+                setApiError(data.message || data.error || 'Invalid coupon');
+            }
         } catch {
             setApiError('Coupon validation failed');
         } finally {
@@ -411,11 +435,13 @@ export default function KYCPage() {
             const res = await fetch(`/api/kyc/${leadId}/submit-verification`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({}),
+                body: JSON.stringify({ verification_for: 'customer' }),
             });
             const data = await res.json();
             if (data.success) {
                 setSubmittedForVerification(true);
+                setLead((prev: any) => prev ? { ...prev, coupon_status: 'used' } : prev);
+                alert('Verification submitted successfully! KYC verification is now in progress.');
                 await loadPageData(true);
             } else {
                 setApiError(data.message || data.error?.message || 'Submission failed');
@@ -761,6 +787,7 @@ export default function KYCPage() {
                                     status={uploadedDocs[doc.key]?.doc_status || uploadedDocs[doc.key]?.verification_status}
                                     failedReason={uploadedDocs[doc.key]?.rejection_reason || uploadedDocs[doc.key]?.failed_reason}
                                     onUpload={file => handleDocUpload(doc.key, file)}
+                                    fileUrl={uploadedDocs[doc.key]?.file_url}
                                 />
                             ))}
                         </div>
@@ -824,7 +851,7 @@ export default function KYCPage() {
                                         type="text"
                                         value={couponCode}
                                         onChange={e => setCouponCode(e.target.value.toUpperCase())}
-                                        placeholder="Enter coupon code (e.g., TEST--971-001)"
+                                        placeholder="Enter coupon code (e.g., ITARANG-FREE)"
                                         maxLength={20}
                                         className="flex-1 h-11 px-4 bg-white border-2 border-[#EBEBEB] rounded-xl outline-none text-sm font-mono focus:border-[#1D4ED8] transition-all"
                                     />
@@ -837,6 +864,14 @@ export default function KYCPage() {
                                         Validate
                                     </button>
                                 </div>
+                                {couponResult && couponResult.already_used && (
+                                    <div className="px-4 py-2 bg-amber-50 border border-amber-200 rounded-xl">
+                                        <p className="text-sm font-medium text-amber-700">
+                                            <AlertCircle className="w-4 h-4 inline mr-1" />
+                                            Coupon <span className="font-mono font-bold">{couponResult.coupon_code}</span> is already applied to this lead.
+                                        </p>
+                                    </div>
+                                )}
                                 {couponResult && !couponResult.valid && !couponResult.success && (
                                     <div className="px-4 py-2 bg-red-50 border border-red-200 rounded-xl">
                                         <p className="text-sm font-medium text-red-700">

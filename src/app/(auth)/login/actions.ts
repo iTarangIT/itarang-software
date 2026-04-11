@@ -140,6 +140,11 @@ export async function login(formData: FormData) {
   }
 
   if (appUser.role === "dealer") {
+    // If dealer already has a dealer_id, they are fully approved — go straight to portal
+    if (appUser.dealer_id) {
+      redirect("/dealer-portal");
+    }
+
     const authUserId = data.user?.id;
 
     const onboardingApplication =

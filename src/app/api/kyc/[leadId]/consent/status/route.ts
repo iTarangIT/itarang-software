@@ -1,21 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { consentRecords } from '@/lib/db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 
 type RouteContext = {
     params: Promise<{ leadId: string }>;
 };
 
-export async function GET(_req: NextRequest, { params }: RouteContext) {
+export async function GET(req: NextRequest, { params }: RouteContext) {
     try {
         await requireRole(['dealer', 'admin', 'ceo', 'business_head', 'sales_head']);
         const { leadId } = await params;
 
+        // consent_for: "customer" (Step 2 KYC) or "borrower" (Step 3 Borrower Consent)
+        const consentFor = req.nextUrl.searchParams.get('consent_for') || 'primary';
+        const dbConsentFor = consentFor === 'customer' ? 'primary' : consentFor;
+
         const records = await db.select()
             .from(consentRecords)
-            .where(eq(consentRecords.lead_id, leadId))
+            .where(and(eq(consentRecords.lead_id, leadId), eq(consentRecords.consent_for, dbConsentFor)))
             .orderBy(desc(consentRecords.updated_at))
             .limit(1);
 

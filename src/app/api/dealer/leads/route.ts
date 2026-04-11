@@ -4,7 +4,7 @@ import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-util
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { leads, loanDetails, personalDetails, documents, auditLogs, accounts } from '@/lib/db/schema'; // Added accounts
-import { eq } from 'drizzle-orm';
+import { eq, and, desc, ilike, or, ne } from 'drizzle-orm';
 import { resolveDealerProfile } from '@/lib/supabase/identity';
 
 // Extended Zod Schema
@@ -198,27 +198,36 @@ export const GET = withErrorHandler(async (req: Request) => {
         return errorResponse('Access denied', 403);
     }
 
-    // 2. Query Leads (Scoped by Dealer ID)
+    // 2. Query Leads using Drizzle (same DB as lead creation)
     const { searchParams } = new URL(req.url);
     const search = searchParams.get('search');
     const status = searchParams.get('status');
     const type = searchParams.get('type');
 
-    let query = supabase
-        .from('leads')
-        .select('*')
-        .eq('dealer_id', profile.dealer_id) // STRICT SCOPING
-        .order('created_at', { ascending: false });
+    const conditions = [
+        eq(leads.dealer_id, profile.dealer_id),
+        ne(leads.status, 'INCOMPLETE'), // Hide drafts
+    ];
 
-    if (status && status !== 'All') query = query.eq('lead_status', status.toLowerCase());
-    if (type && type !== 'All') query = query.eq('interest_level', type.toLowerCase());
-
+    if (status && status !== 'All') {
+        conditions.push(eq(leads.lead_status, status.toLowerCase()));
+    }
+    if (type && type !== 'All') {
+        conditions.push(eq(leads.interest_level, type.toLowerCase()));
+    }
     if (search) {
-        query = query.or(`owner_name.ilike.%${search}%,owner_contact.ilike.%${search}%`);
+        conditions.push(
+            or(
+                ilike(leads.owner_name, `%${search}%`),
+                ilike(leads.owner_contact, `%${search}%`)
+            )!
+        );
     }
 
-    const { data, error } = await query;
-    if (error) return errorResponse(error.message, 500);
+    const data = await db.select()
+        .from(leads)
+        .where(and(...conditions))
+        .orderBy(desc(leads.created_at));
 
     return successResponse(data);
 });

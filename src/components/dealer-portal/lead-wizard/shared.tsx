@@ -3,7 +3,7 @@
 import { type ReactNode, useState } from 'react';
 import {
     ChevronLeft, ChevronDown, Loader2, AlertCircle, X,
-    Upload, CheckCircle2, XCircle, Clock, Scan
+    Upload, CheckCircle2, XCircle, Clock, Scan, Eye
 } from 'lucide-react';
 
 // ─── Section Card ───────────────────────────────────────────────────────────
@@ -152,7 +152,7 @@ function getDealerStatus(uploaded: boolean, status?: string): { label: string; c
     return { label: 'Uploaded - Pending Review', color: 'text-blue-600', dotColor: 'bg-amber-500', icon: 'clock' };
 }
 
-export function DocumentCard({ label, required, uploaded, status, failedReason, onUpload, disabled }: {
+export function DocumentCard({ label, required, uploaded, status, failedReason, onUpload, disabled, fileUrl }: {
     label: string;
     required?: boolean;
     uploaded: boolean;
@@ -160,41 +160,56 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
     failedReason?: string | null;
     onUpload: (file: File) => void;
     disabled?: boolean;
+    fileUrl?: string | null;
 }) {
     const dealerStatus = getDealerStatus(uploaded, status);
 
     return (
-        <label className={`relative flex flex-col items-center justify-center p-5 border-2 rounded-2xl transition-all min-h-[130px] ${
-            disabled ? 'opacity-50 cursor-not-allowed' :
-            'cursor-pointer hover:border-[#0047AB] hover:shadow-md'
-        } ${
+        <div className={`relative flex flex-col items-center border-2 rounded-2xl transition-all min-h-[130px] ${
             uploaded
                 ? dealerStatus.icon === 'error' || dealerStatus.icon === 'reupload' ? 'border-red-200 bg-red-50'
                 : dealerStatus.icon === 'check' ? 'border-green-200 bg-green-50'
                 : 'border-blue-200 bg-blue-50'
                 : 'border-dashed border-gray-200 bg-white'
         }`}>
-            <input
-                type="file"
-                className="hidden"
-                accept="image/png,image/jpeg,image/jpg,application/pdf"
-                disabled={disabled}
-                onChange={e => e.target.files?.[0] && onUpload(e.target.files[0])}
-            />
-            {/* Status dot */}
-            <div className={`absolute top-3 right-3 w-2.5 h-2.5 rounded-full ${dealerStatus.dotColor}`} />
+            <label className={`flex flex-col items-center justify-center p-5 flex-1 w-full ${
+                disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-[#0047AB]'
+            }`}>
+                <input
+                    type="file"
+                    className="hidden"
+                    accept="image/png,image/jpeg,image/jpg,application/pdf"
+                    disabled={disabled}
+                    onChange={e => e.target.files?.[0] && onUpload(e.target.files[0])}
+                />
+                {/* Status dot */}
+                <div className={`absolute top-3 right-3 w-2.5 h-2.5 rounded-full ${dealerStatus.dotColor}`} />
 
-            {dealerStatus.icon === 'check' ? <CheckCircle2 className="w-6 h-6 text-green-500 mb-2" /> :
-             dealerStatus.icon === 'reupload' || dealerStatus.icon === 'error' ? <XCircle className="w-6 h-6 text-red-500 mb-2" /> :
-             dealerStatus.icon === 'clock' ? <Clock className="w-5 h-5 text-blue-500 mb-2" /> :
-             <Upload className="w-6 h-6 text-gray-300 mb-2" />}
+                {dealerStatus.icon === 'check' ? <CheckCircle2 className="w-6 h-6 text-green-500 mb-2" /> :
+                 dealerStatus.icon === 'reupload' || dealerStatus.icon === 'error' ? <XCircle className="w-6 h-6 text-red-500 mb-2" /> :
+                 dealerStatus.icon === 'clock' ? <Clock className="w-5 h-5 text-blue-500 mb-2" /> :
+                 <Upload className="w-6 h-6 text-gray-300 mb-2" />}
 
-            <span className="text-xs font-bold text-gray-700 text-center leading-tight">{label}</span>
-            <span className={`text-[10px] font-semibold mt-1 text-center ${dealerStatus.color}`}>{dealerStatus.label}</span>
-            {required && !uploaded && <span className="text-[10px] text-red-400 mt-0.5">Required</span>}
-            {failedReason && <span className="text-[10px] text-red-500 mt-0.5 text-center px-1 leading-tight">{failedReason}</span>}
-            {dealerStatus.icon === 'reupload' && <span className="text-[10px] text-[#0047AB] font-bold mt-1">Click to Re-upload</span>}
-        </label>
+                <span className="text-xs font-bold text-gray-700 text-center leading-tight">{label}</span>
+                <span className={`text-[10px] font-semibold mt-1 text-center ${dealerStatus.color}`}>{dealerStatus.label}</span>
+                {required && !uploaded && <span className="text-[10px] text-red-400 mt-0.5">Required</span>}
+                {failedReason && <span className="text-[10px] text-red-500 mt-0.5 text-center px-1 leading-tight">{failedReason}</span>}
+                {dealerStatus.icon === 'reupload' && <span className="text-[10px] text-[#0047AB] font-bold mt-1">Click to Re-upload</span>}
+            </label>
+
+            {uploaded && fileUrl && (
+                <a
+                    href={fileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={e => e.stopPropagation()}
+                    className="flex items-center justify-center gap-1.5 w-full py-2 border-t border-gray-200 text-[11px] font-bold text-[#0047AB] hover:bg-blue-50 transition-colors rounded-b-2xl"
+                >
+                    <Eye className="w-3.5 h-3.5" />
+                    View Document
+                </a>
+            )}
+        </div>
     );
 }
 

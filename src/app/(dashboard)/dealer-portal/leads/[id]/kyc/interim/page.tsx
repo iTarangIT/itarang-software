@@ -386,6 +386,7 @@ export default function InterimStepPage() {
                                                     uploaded={!!coBorrowerDocs[doc.key]?.file_url}
                                                     status={coBorrowerDocs[doc.key]?.status}
                                                     onUpload={file => handleDocUpload(doc.key, file)}
+                                                    fileUrl={coBorrowerDocs[doc.key]?.file_url}
                                                 />
                                             ))}
                                         </div>
@@ -443,6 +444,7 @@ export default function InterimStepPage() {
                                             status={doc.upload_status === 'verified' ? 'success' : doc.upload_status === 'rejected' ? 'failed' : 'pending'}
                                             failedReason={doc.rejection_reason}
                                             onUpload={file => handleOtherDocUpload(doc.doc_key, file)}
+                                            fileUrl={doc.file_url}
                                         />
                                     ))}
                                 </div>

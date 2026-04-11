@@ -52,6 +52,7 @@ export async function GET(_req: Request, context: RouteContext) {
       data: {
         leadId,
         canAccess,
+        lead,
         reason: canAccess
           ? null
           : "Step 2 allowed only for hot leads with non-cash payment method",

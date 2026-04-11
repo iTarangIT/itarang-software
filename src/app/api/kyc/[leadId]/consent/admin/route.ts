@@ -22,7 +22,9 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         const { leadId } = await params;
         const body = await req.json();
 
-        const { decision, reviewerNotes, rejectionReason } = body;
+        const { decision, reviewerNotes, rejectionReason, consent_for: consentForParam } = body;
+        const consentFor = String(consentForParam || 'customer').toLowerCase();
+        const dbConsentFor = consentFor === 'customer' ? 'primary' : consentFor;
 
         if (!decision || !['approved', 'rejected'].includes(decision)) {
             return NextResponse.json(
@@ -43,7 +45,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             .from(consentRecords)
             .where(and(
                 eq(consentRecords.lead_id, leadId),
-                eq(consentRecords.consent_for, 'primary'),
+                eq(consentRecords.consent_for, dbConsentFor),
             ))
             .orderBy(desc(consentRecords.updated_at))
             .limit(1);
@@ -72,8 +74,11 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
                 })
                 .where(eq(consentRecords.id, consent.id));
 
+            const approveUpdate = consentFor === 'borrower'
+                ? { borrower_consent_status: finalStatus, updated_at: now }
+                : { consent_status: finalStatus, updated_at: now };
             await db.update(leads)
-                .set({ consent_status: finalStatus, updated_at: now })
+                .set(approveUpdate)
                 .where(eq(leads.id, leadId));
 
             return NextResponse.json({
@@ -94,8 +99,11 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
                 })
                 .where(eq(consentRecords.id, consent.id));
 
+            const rejectUpdate = consentFor === 'borrower'
+                ? { borrower_consent_status: 'admin_rejected', updated_at: now }
+                : { consent_status: 'admin_rejected', updated_at: now };
             await db.update(leads)
-                .set({ consent_status: 'admin_rejected', updated_at: now })
+                .set(rejectUpdate)
                 .where(eq(leads.id, leadId));
 
             return NextResponse.json({
@@ -120,11 +128,14 @@ export async function GET(req: NextRequest, { params }: RouteContext) {
         await requireRole(['admin', 'ceo', 'business_head', 'sales_head']);
         const { leadId } = await params;
 
+        const consentFor = req.nextUrl.searchParams.get('consent_for') || 'customer';
+        const dbConsentFor = consentFor === 'customer' ? 'primary' : consentFor;
+
         const consentRows = await db.select()
             .from(consentRecords)
             .where(and(
                 eq(consentRecords.lead_id, leadId),
-                eq(consentRecords.consent_for, 'primary'),
+                eq(consentRecords.consent_for, dbConsentFor),
             ))
             .orderBy(desc(consentRecords.updated_at))
             .limit(1);

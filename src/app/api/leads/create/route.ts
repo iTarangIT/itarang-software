@@ -276,6 +276,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                     kyc_status: isUpfront ? 'not_required' : 'not_started',
                     workflow_step: isUpfront ? 3 : 1,
                     status: 'ACTIVE',
+                    lead_status: 'new',
                     updated_at: new Date()
                 }).where(eq(leads.id, data.leadId!));
 

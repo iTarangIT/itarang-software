@@ -24,6 +24,62 @@ export async function POST(req: NextRequest, context: RouteContext) {
 
         const code = couponCode.toUpperCase().trim();
 
+        // ── Hardcoded universal coupon — works for any lead, any dealer ──
+        const HARDCODED_COUPON = 'ITARANG-FREE';
+
+        if (code === HARDCODED_COUPON) {
+            // Verify lead exists
+            const leadCheck = await db.select({ id: leads.id, coupon_code: leads.coupon_code, coupon_status: leads.coupon_status })
+                .from(leads).where(eq(leads.id, leadId)).limit(1);
+
+            if (!leadCheck.length) {
+                return NextResponse.json({ valid: false, message: 'Lead not found' }, { status: 404 });
+            }
+
+            const currentStatus = leadCheck[0].coupon_status;
+            const currentCode = leadCheck[0].coupon_code;
+
+            // If already reserved or used on this lead, return already_used flag
+            if (currentCode === HARDCODED_COUPON && (currentStatus === 'reserved' || currentStatus === 'used')) {
+                return NextResponse.json({
+                    valid: true,
+                    success: true,
+                    already_used: true,
+                    coupon_id: 'HARDCODED',
+                    coupon_code: HARDCODED_COUPON,
+                    discount_type: 'flat',
+                    discount_value: 0,
+                    discount_amount: 0,
+                    base_amount: BASE_FEE,
+                    final_amount: BASE_FEE,
+                    status: currentStatus,
+                    message: 'Coupon is already applied to this lead',
+                });
+            }
+
+            // First time — reserve it
+            await db.update(leads)
+                .set({ coupon_code: HARDCODED_COUPON, coupon_status: 'reserved', updated_at: new Date() })
+                .where(eq(leads.id, leadId));
+
+            return NextResponse.json({
+                valid: true,
+                success: true,
+                already_used: false,
+                coupon_id: 'HARDCODED',
+                coupon_code: HARDCODED_COUPON,
+                discount_type: 'flat',
+                discount_value: 0,
+                discount_amount: 0,
+                base_amount: BASE_FEE,
+                final_amount: BASE_FEE,
+                status: 'reserved',
+                message: 'Coupon validated and reserved successfully',
+            });
+        }
+
+        // ── Normal coupon flow ──────────────────────────────────────────
+
         // Verify lead exists
         const leadRows = await db.select({
             id: leads.id,

@@ -117,7 +117,7 @@ export default function BorrowerConsentPage() {
 
             setAccessDenied(false);
             setLead(fetchedLead);
-            if (fetchedLead?.consent_status) setConsentStatus(fetchedLead.consent_status);
+            if (fetchedLead?.borrower_consent_status) setConsentStatus(fetchedLead.borrower_consent_status);
 
             // Populate borrower form from lead data (only on initial load)
             if (!soft && fetchedLead) {
@@ -136,8 +136,8 @@ export default function BorrowerConsentPage() {
             const [personalRes, docsRes, verificationsRes, consentRes] = await Promise.allSettled([
                 fetch(`/api/kyc/${leadId}/borrower-details`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/documents`, { cache: 'no-store' }),
-                fetch(`/api/kyc/${leadId}/verifications`, { cache: 'no-store' }),
-                fetch(`/api/kyc/${leadId}/consent/status`, { cache: 'no-store' }),
+                fetch(`/api/kyc/${leadId}/verifications?verification_for=borrower`, { cache: 'no-store' }),
+                fetch(`/api/kyc/${leadId}/consent/status?consent_for=borrower`, { cache: 'no-store' }),
             ]);
 
             // Merge personal details into form (only on initial load)
@@ -231,7 +231,7 @@ export default function BorrowerConsentPage() {
         const assetModel = String(lead?.asset_model || lead?.asset_category || '').toUpperCase();
         const isVehicle = ['2W', '3W', '4W'].includes(assetModel);
         return FINANCE_DOCUMENTS.map(doc =>
-            doc.key === 'rc_copy' ? { ...doc, required: isVehicle } : { ...doc, required: true }
+            doc.key === 'rc_copy' ? { ...doc, required: isVehicle } : doc
         );
     }, [lead]);
 
@@ -319,7 +319,7 @@ export default function BorrowerConsentPage() {
             const res = await fetch(`/api/kyc/${leadId}/send-consent`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel }),
+                body: JSON.stringify({ channel, consent_for: 'borrower' }),
             });
             const data = await res.json();
             if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Failed to send consent');
@@ -337,19 +337,31 @@ export default function BorrowerConsentPage() {
             setApiError(null);
             setConsentLoading(true);
             setConsentPath('manual');
-            const res = await fetch(`/api/kyc/${leadId}/generate-consent-pdf`, { method: 'POST' });
+            const res = await fetch(`/api/kyc/${leadId}/generate-consent-pdf`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ consent_for: 'borrower' }),
+            });
             const data = await res.json();
             if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Failed to generate consent PDF');
             setConsentStatus('consent_generated');
             setConsentPdfUrl(data.pdfUrl || null);
             if (data.pdfUrl) {
-                const a = document.createElement('a');
-                a.href = data.pdfUrl;
-                a.download = `consent_${leadId}.pdf`;
-                a.target = '_blank';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
+                try {
+                    const pdfRes = await fetch(data.pdfUrl);
+                    const blob = await pdfRes.blob();
+                    const blobUrl = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = `consent_${leadId}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(blobUrl);
+                } catch {
+                    // Fallback: open in new tab if blob download fails
+                    window.open(data.pdfUrl, '_blank');
+                }
             }
         } catch (err: any) {
             setApiError(err?.message || 'Failed to generate consent PDF');
@@ -367,6 +379,7 @@ export default function BorrowerConsentPage() {
             if (file.size > 10 * 1024 * 1024) throw new Error('Max 10MB');
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('consent_for', 'borrower');
             const res = await fetch(`/api/kyc/${leadId}/upload-signed-consent`, { method: 'POST', body: formData });
             const data = await res.json();
             if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Upload failed');
@@ -756,6 +769,7 @@ export default function BorrowerConsentPage() {
                                     status={uploadedDocs[doc.key]?.doc_status || uploadedDocs[doc.key]?.verification_status}
                                     failedReason={uploadedDocs[doc.key]?.rejection_reason || uploadedDocs[doc.key]?.failed_reason}
                                     onUpload={file => handleDocUpload(doc.key, file)}
+                                    fileUrl={uploadedDocs[doc.key]?.file_url}
                                 />
                             ))}
                         </div>

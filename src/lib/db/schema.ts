@@ -230,6 +230,7 @@ export const leads = pgTable('leads', {
     consent_status: varchar('consent_status', { length: 30 }).default('awaiting_signature'),
     // Digital: awaiting_signature → link_sent → link_opened → esign_in_progress → esign_completed → admin_review_pending → admin_verified | admin_rejected | expired | esign_failed | esign_blocked
     // Manual: awaiting_signature → consent_generated → consent_uploaded → admin_review_pending → manual_verified | admin_rejected
+    borrower_consent_status: varchar('borrower_consent_status', { length: 30 }).default('awaiting_signature'),
     coupon_code: varchar('coupon_code', { length: 20 }),
     coupon_status: varchar('coupon_status', { length: 20 }), // null, reserved, used
     has_co_borrower: boolean('has_co_borrower').default(false),
@@ -873,6 +874,7 @@ export const kycVerifications = pgTable('kyc_verifications', {
     id: varchar('id', { length: 255 }).primaryKey(), // KYCVER-YYYYMMDD-SEQ
     lead_id: varchar('lead_id', { length: 255 }).references(() => leads.id, { onDelete: 'cascade' }).notNull(),
     verification_type: varchar('verification_type', { length: 50 }).notNull(), // aadhaar, pan, bank, address, rc, mobile, cibil, photo
+    verification_for: varchar('verification_for', { length: 20 }).default('customer').notNull(), // customer, borrower
     status: varchar('status', { length: 30 }).default('pending').notNull(), // pending, initiating, awaiting_action, in_progress, success, failed
     api_provider: varchar('api_provider', { length: 50 }), // decentro, surepass, vahan
     api_request: jsonb('api_request'),

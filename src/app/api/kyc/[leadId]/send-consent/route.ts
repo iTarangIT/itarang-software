@@ -3,7 +3,7 @@ export const maxDuration = 30;
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { consentRecords, leads, users } from "@/lib/db/schema";
+import { consentRecords, leads, users, personalDetails } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
@@ -39,6 +39,8 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     const { leadId } = await params;
     const body = await req.json().catch(() => ({}));
     const channel = String(body?.channel || "whatsapp").toLowerCase();
+    const consentFor = String(body?.consent_for || "customer").toLowerCase();
+    const dbConsentFor = consentFor === "customer" ? "primary" : consentFor;
 
     if (!["sms", "whatsapp"].includes(channel)) {
       return NextResponse.json(
@@ -58,8 +60,37 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       );
     }
 
+    // For borrower consent, fetch personal_details (borrower-specific data)
+    let borrowerData: any = null;
+    if (consentFor === "borrower") {
+      const personalRows = await db.select()
+        .from(personalDetails)
+        .where(eq(personalDetails.lead_id, leadId))
+        .limit(1);
+      borrowerData = personalRows[0] || null;
+    }
+
+    // Resolve person data based on consent type
     const customerPhone = lead.phone;
-    const customerName = lead.full_name || lead.owner_name || "Customer";
+    const customerName = consentFor === "borrower"
+      ? (lead.full_name || lead.owner_name || "Borrower")
+      : (lead.full_name || lead.owner_name || "Customer");
+    const personFather = consentFor === "borrower"
+      ? (borrowerData?.father_husband_name || lead.father_or_husband_name || "")
+      : (lead.father_or_husband_name || "");
+    const personAddress = consentFor === "borrower"
+      ? (borrowerData?.local_address || lead.current_address || "")
+      : (lead.current_address || "");
+    const personPermanentAddress = lead.permanent_address || personAddress;
+    const personDob = consentFor === "borrower"
+      ? (borrowerData?.dob || lead.dob)
+      : lead.dob;
+    const personAadhaar = consentFor === "borrower"
+      ? (borrowerData?.aadhaar_no || "")
+      : "";
+    const personPan = consentFor === "borrower"
+      ? (borrowerData?.pan_no || "")
+      : "";
 
     if (!customerPhone) {
       return NextResponse.json(
@@ -85,19 +116,21 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
 
     // Format DOB
     let dobFormatted = "";
-    if (lead.dob) {
-      const d = new Date(lead.dob);
+    if (personDob) {
+      const d = new Date(personDob);
       dobFormatted = `${d.getDate().toString().padStart(2, "0")}/${(d.getMonth() + 1).toString().padStart(2, "0")}/${d.getFullYear()}`;
     }
 
     // 1. Generate consent PDF
     const html = generateConsentHtml({
       customerName,
-      fatherOrHusbandName: lead.father_or_husband_name || "",
+      fatherOrHusbandName: personFather,
       dob: dobFormatted,
       phone: customerPhone,
-      currentAddress: lead.current_address || "",
-      permanentAddress: lead.permanent_address || lead.current_address || "",
+      currentAddress: personAddress,
+      permanentAddress: personPermanentAddress,
+      aadhaarMasked: personAadhaar,
+      panNumber: personPan,
       productName: lead.asset_model || "",
       productCategory: lead.asset_model || "",
       paymentMethod: lead.payment_method || "",
@@ -152,7 +185,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     await db.insert(consentRecords).values({
       id: consentId,
       lead_id: leadId,
-      consent_for: "primary",
+      consent_for: dbConsentFor,
       consent_type: "digital",
       consent_status: "link_sent",
       consent_delivery_channel: channel,
@@ -169,8 +202,11 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     });
 
     // 4. Update lead consent status
+    const leadUpdate = consentFor === "borrower"
+      ? { borrower_consent_status: "link_sent", updated_at: now }
+      : { consent_status: "link_sent", updated_at: now };
     await db.update(leads)
-      .set({ consent_status: "link_sent", updated_at: now })
+      .set(leadUpdate)
       .where(eq(leads.id, leadId));
 
     return NextResponse.json({

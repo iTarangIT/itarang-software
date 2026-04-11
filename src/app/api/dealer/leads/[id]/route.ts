@@ -17,6 +17,7 @@ const updateSchema = z.object({
     product_category_id: z.string().optional().nullable(),
     product_type_id: z.string().optional().nullable(),
     interest_level: z.enum(['hot', 'warm', 'cold']).optional().nullable(),
+    payment_method: z.string().optional().nullable(),
     vehicle_rc: z.string().optional().nullable(),
     vehicle_ownership: z.string().optional().nullable(),
     vehicle_owner_name: z.string().optional().nullable(),
@@ -33,9 +34,9 @@ const normalizePhone = (phone?: string | null) => {
     return phone.startsWith('+') ? phone : `+91${clean}`;
 };
 
-export const PATCH = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
+export const PATCH = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['dealer']);
-    const { id } = params;
+    const { id } = await params;
     const body = await req.json();
 
     const result = updateSchema.safeParse(body);
@@ -51,7 +52,10 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
     }
 
     if (!lead) return errorResponse('Lead not found', 404);
-    if (lead.uploader_id !== user.id) return errorResponse('Forbidden: You do not have permission to edit this lead', 403);
+    // Allow edit if user is the uploader OR if the lead belongs to the same dealer
+    const isOwner = lead.uploader_id === user.id;
+    const isSameDealer = user.dealer_id && lead.dealer_id === user.dealer_id;
+    if (!isOwner && !isSameDealer) return errorResponse('Forbidden: You do not have permission to edit this lead', 403);
 
     if (data.commitStep) {
         if (!data.full_name || data.full_name.trim().length < 2) return errorResponse('Full name required', 400);
@@ -88,7 +92,7 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
             if (data.vehicle_rc !== undefined) leadUpdates.vehicle_rc = data.vehicle_rc?.toUpperCase().trim();
             if (data.vehicle_owner_phone !== undefined) leadUpdates.vehicle_owner_phone = normalizePhone(data.vehicle_owner_phone);
 
-            const fields = ['father_or_husband_name', 'current_address', 'permanent_address', 'is_current_same', 'primary_product_id', 'product_category_id', 'product_type_id', 'vehicle_ownership', 'vehicle_owner_name', 'interested_in'];
+            const fields = ['father_or_husband_name', 'current_address', 'permanent_address', 'is_current_same', 'primary_product_id', 'product_category_id', 'product_type_id', 'vehicle_ownership', 'vehicle_owner_name', 'interested_in', 'payment_method'];
             fields.forEach(f => {
                 if ((data as any)[f] !== undefined) leadUpdates[f] = (data as any)[f];
             });
@@ -156,7 +160,9 @@ export const DELETE = withErrorHandler(async (req: Request, { params }: { params
         await db.execute(sql`DELETE FROM ai_call_logs WHERE lead_id = ${id}`);
         await db.execute(sql`DELETE FROM call_records WHERE lead_id = ${id}`);
         await db.execute(sql`DELETE FROM deployed_assets WHERE lead_id = ${id}`);
+        await db.execute(sql`UPDATE coupon_codes SET reserved_for_lead_id = NULL WHERE reserved_for_lead_id = ${id}`);
         await db.execute(sql`UPDATE coupon_codes SET used_by_lead_id = NULL WHERE used_by_lead_id = ${id}`);
+        await db.execute(sql`UPDATE coupon_audit_log SET lead_id = NULL WHERE lead_id = ${id}`);
         await db.execute(sql`UPDATE scraped_dealer_leads SET converted_lead_id = NULL WHERE converted_lead_id = ${id}`);
 
         // Insert audit log before deleting the lead

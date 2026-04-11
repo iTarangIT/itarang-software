@@ -17,6 +17,8 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         const { leadId } = await params;
         const formData = await req.formData();
         const file = formData.get('file') as File;
+        const consentFor = String(formData.get('consent_for') || 'customer').toLowerCase();
+        const dbConsentFor = consentFor === 'customer' ? 'primary' : consentFor;
 
         if (!file) {
             return NextResponse.json({ success: false, error: { message: 'File is required' } }, { status: 400 });
@@ -47,7 +49,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             .from(consentRecords)
             .where(and(
                 eq(consentRecords.lead_id, leadId),
-                eq(consentRecords.consent_for, 'primary'),
+                eq(consentRecords.consent_for, dbConsentFor),
                 eq(consentRecords.consent_type, 'manual'),
             ))
             .orderBy(desc(consentRecords.created_at))
@@ -71,7 +73,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             await db.insert(consentRecords).values({
                 id: `CONSENT-${dateStr}-${seq}`,
                 lead_id: leadId,
-                consent_for: 'primary',
+                consent_for: dbConsentFor,
                 consent_type: 'manual',
                 consent_status: 'admin_review_pending',
                 sign_method: 'manual',
@@ -84,8 +86,11 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         }
 
         // Update lead consent status to admin_review_pending
+        const leadUpdate = consentFor === 'borrower'
+            ? { borrower_consent_status: 'admin_review_pending', updated_at: now }
+            : { consent_status: 'admin_review_pending', updated_at: now };
         await db.update(leads)
-            .set({ consent_status: 'admin_review_pending', updated_at: now })
+            .set(leadUpdate)
             .where(eq(leads.id, leadId));
 
         return NextResponse.json({

@@ -3,7 +3,7 @@ export const maxDuration = 30;
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { leads, consentRecords, users } from '@/lib/db/schema';
+import { leads, consentRecords, users, personalDetails } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 import { uploadFileToStorage } from '@/lib/storage';
@@ -45,6 +45,9 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     try {
         const user = await requireRole(['dealer']);
         const { leadId } = await params;
+        const body = await req.json().catch(() => ({}));
+        const consentFor = String(body?.consent_for || 'customer').toLowerCase();
+        const dbConsentFor = consentFor === 'customer' ? 'primary' : consentFor;
 
         // Fetch lead data
         const leadRows = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
@@ -64,10 +67,42 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             }
         }
 
+        // For borrower consent, fetch personal_details (borrower-specific data)
+        let borrowerData: any = null;
+        if (consentFor === 'borrower') {
+            const personalRows = await db.select()
+                .from(personalDetails)
+                .where(eq(personalDetails.lead_id, leadId))
+                .limit(1);
+            borrowerData = personalRows[0] || null;
+        }
+
+        // Resolve person data based on consent type
+        const personName = consentFor === 'borrower'
+            ? (borrowerData?.father_husband_name ? lead.full_name : lead.full_name) || lead.owner_name || ''
+            : lead.full_name || lead.owner_name || '';
+        const personFather = consentFor === 'borrower'
+            ? (borrowerData?.father_husband_name || lead.father_or_husband_name || '')
+            : (lead.father_or_husband_name || '');
+        const personPhone = lead.phone || '';
+        const personAddress = consentFor === 'borrower'
+            ? (borrowerData?.local_address || lead.current_address || '')
+            : (lead.current_address || '');
+        const personPermanentAddress = lead.permanent_address || personAddress;
+        const personDob = consentFor === 'borrower'
+            ? (borrowerData?.dob || lead.dob)
+            : lead.dob;
+        const personAadhaar = consentFor === 'borrower'
+            ? (borrowerData?.aadhaar_no || '')
+            : '';
+        const personPan = consentFor === 'borrower'
+            ? (borrowerData?.pan_no || '')
+            : '';
+
         // Format DOB
         let dobFormatted = '';
-        if (lead.dob) {
-            const d = new Date(lead.dob);
+        if (personDob) {
+            const d = new Date(personDob);
             dobFormatted = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
         }
 
@@ -81,12 +116,14 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
 
         // Generate HTML
         const html = generateConsentHtml({
-            customerName: lead.full_name || lead.owner_name || '',
-            fatherOrHusbandName: lead.father_or_husband_name || '',
+            customerName: personName,
+            fatherOrHusbandName: personFather,
             dob: dobFormatted,
-            phone: lead.phone || '',
-            currentAddress: lead.current_address || '',
-            permanentAddress: lead.permanent_address || lead.current_address || '',
+            phone: personPhone,
+            currentAddress: personAddress,
+            permanentAddress: personPermanentAddress,
+            aadhaarMasked: personAadhaar,
+            panNumber: personPan,
             productName: lead.asset_model || '',
             productCategory: lead.asset_model || '',
             paymentMethod: lead.payment_method || '',
@@ -113,7 +150,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         await db.insert(consentRecords).values({
             id: consentId,
             lead_id: leadId,
-            consent_for: 'primary',
+            consent_for: dbConsentFor,
             consent_type: 'manual',
             consent_status: 'consent_generated',
             sign_method: 'manual',
@@ -124,8 +161,11 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         });
 
         // Update lead consent status
+        const leadUpdate = consentFor === 'borrower'
+            ? { borrower_consent_status: 'consent_generated' }
+            : { consent_status: 'consent_generated' };
         await db.update(leads)
-            .set({ consent_status: 'consent_generated' })
+            .set(leadUpdate)
             .where(eq(leads.id, leadId));
 
         return NextResponse.json({

@@ -10,6 +10,7 @@ type UserProfile = {
   role?: string | null;
   email?: string | null;
   id?: string | null;
+  dealer_id?: string | null;
 };
 
 type DealerOnboardingProfile = {
@@ -125,7 +126,7 @@ export async function middleware(request: NextRequest) {
   const profile = await findSupabaseUserProfile<UserProfile>(
     supabase,
     user,
-    "role,email,id"
+    "role,email,id,dealer_id"
   );
 
   const rawRole = profile?.role || getAuthMetadataRole(user);
@@ -170,6 +171,11 @@ export async function middleware(request: NextRequest) {
 
   // Dealer-specific gating
   if (role === "dealer") {
+    // If dealer already has a dealer_id, they are fully approved — skip onboarding checks
+    if (profile?.dealer_id) {
+      return response;
+    }
+
     const dealerProfile =
       await findLatestDealerOnboardingRecord<DealerOnboardingProfile>(
         supabase,

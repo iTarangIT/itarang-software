@@ -31,11 +31,10 @@ export async function GET() {
             revoked: 0,
         };
 
-        let total = 0;
         for (const row of rows) {
             counts[row.status] = row.count;
-            total += row.count;
         }
+        const total = counts.available + counts.reserved + counts.used;
 
         return NextResponse.json({
             success: true,
