@@ -6,6 +6,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { createClient } from "@/lib/supabase/client";
@@ -55,9 +56,13 @@ export function AuthProvider({
   const [user, setUser] = useState<AppUser | null>(initialUser ?? null);
   const [loading, setLoading] = useState(!initialUser);
 
+  const userRef = useRef(user);
+  userRef.current = user;
+
   const fetchUser = useCallback(async () => {
     try {
-      setLoading(true);
+      // Only show loading spinner if we don't already have user data
+      if (!userRef.current) setLoading(true);
 
       const {
         data: { user: authUser },
@@ -113,7 +118,9 @@ export function AuthProvider({
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async () => {
+    } = supabase.auth.onAuthStateChange(async (event) => {
+      // Skip the initial session event if we already have server-provided user data
+      if (event === "INITIAL_SESSION" && hasInitialUser) return;
       await fetchUser();
     });
 
