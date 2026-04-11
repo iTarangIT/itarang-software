@@ -8,6 +8,7 @@ const CLIENT_ID = process.env.DECENTRO_CLIENT_ID!;
 const CLIENT_SECRET = process.env.DECENTRO_CLIENT_SECRET!;
 const MODULE_SECRET_KYC = process.env.DECENTRO_MODULE_SECRET_KYC;
 const MODULE_SECRET_BANKING = process.env.DECENTRO_MODULE_SECRET_BANKING;
+const MODULE_SECRET_CREDIT = process.env.DECENTRO_MODULE_SECRET_CREDIT;
 
 function genRefId(): string {
     const ts = Date.now().toString(36).toUpperCase();
@@ -194,11 +195,16 @@ export function getExpectedDocClass(docType: string): ClassificationDocType {
 }
 
 export async function classifyDocument(documentBlob: Blob, filename: string) {
+    const lastDot = filename.lastIndexOf('.');
+    const sanitizedFilename = lastDot > 0
+        ? filename.slice(0, lastDot).replace(/\./g, '_') + filename.slice(lastDot)
+        : filename;
+
     const form = new FormData();
     form.append('reference_id', genRefId());
     form.append('consent', 'Y');
     form.append('consent_purpose', 'Document classification for KYC verification');
-    form.append('document', documentBlob, filename);
+    form.append('document', documentBlob, sanitizedFilename);
 
     const headers: Record<string, string> = {
         'client_id': CLIENT_ID,
@@ -224,12 +230,19 @@ export async function classifyDocument(documentBlob: Blob, filename: string) {
 export type OcrDocType = 'PAN' | 'AADHAAR' | 'DRIVING_LICENSE' | 'VOTERID' | 'PASSPORT';
 
 export async function extractDocumentOcr(document_type: OcrDocType, documentBlob: Blob, filename: string) {
+    // Decentro rejects filenames with multiple periods — sanitize by keeping only the last one (extension)
+    const lastDot = filename.lastIndexOf('.');
+    const sanitizedFilename = lastDot > 0
+        ? filename.slice(0, lastDot).replace(/\./g, '_') + filename.slice(lastDot)
+        : filename;
+
     const form = new FormData();
     form.append('reference_id', genRefId());
     form.append('document_type', document_type);
     form.append('consent', 'Y');
     form.append('consent_purpose', 'Document OCR extraction for KYC verification');
-    form.append('document_data', documentBlob, filename);
+    form.append('kyc_validate', '1');
+    form.append('document', documentBlob, sanitizedFilename);
 
     const headers: Record<string, string> = {
         'client_id': CLIENT_ID,
@@ -237,12 +250,18 @@ export async function extractDocumentOcr(document_type: OcrDocType, documentBlob
     };
     if (isRealSecret(MODULE_SECRET_KYC)) headers['module_secret'] = MODULE_SECRET_KYC!;
 
-    const res = await fetch(`${BASE_URL}/kyc/scan_extract/ocr`, {
+    const url = `${BASE_URL}/kyc/scan_extract/ocr`;
+    console.log(`[Decentro OCR] POST ${url} document_type=${document_type} file=${filename} size=${documentBlob.size}`);
+
+    const res = await fetch(url, {
         method: 'POST',
         headers,
         body: form,
     });
-    return res.json();
+
+    const json = await res.json();
+    console.log(`[Decentro OCR] Response status=${res.status}:`, JSON.stringify(json).slice(0, 500));
+    return json;
 }
 
 // ─── OCR Data Comparison Helpers ──────────────────────────────────────────────
@@ -474,7 +493,20 @@ export async function digilockerCheckStatus(decentroTxnId: string) {
 
 // ─── Credit Bureau (Equifax via Decentro) ───────────────────────────────────
 // Score:       POST /v2/bytes/credit-score       (lightweight — mobile + name)
-// Data Pull:   POST /v2/financial_services/data/pull  (full report — name, mobile, PAN)
+// Report:      POST /v2/financial_services/credit_bureau/credit_report/summary
+
+function creditHeaders(): Record<string, string> {
+    const h: Record<string, string> = {
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+        'Content-Type': 'application/json',
+        'accept': 'application/json',
+    };
+    // Credit bureau may use its own module secret, fall back to KYC secret
+    if (isRealSecret(MODULE_SECRET_CREDIT)) h['module_secret'] = MODULE_SECRET_CREDIT!;
+    else if (isRealSecret(MODULE_SECRET_KYC)) h['module_secret'] = MODULE_SECRET_KYC!;
+    return h;
+}
 
 export interface CibilParams {
     name: string;
@@ -493,7 +525,7 @@ export async function fetchCibilScore(params: CibilParams) {
 
     const res = await fetch(`${BASE_URL}/v2/bytes/credit-score`, {
         method: 'POST',
-        headers: kycHeaders(),
+        headers: creditHeaders(),
         body: JSON.stringify(body),
     });
     return res.json();
@@ -519,7 +551,7 @@ export async function fetchCibilReport(params: CibilParams) {
 
     const res = await fetch(`${BASE_URL}/v2/financial_services/credit_bureau/credit_report/summary`, {
         method: 'POST',
-        headers: kycHeaders(),
+        headers: creditHeaders(),
         body: JSON.stringify(body),
     });
     return res.json();

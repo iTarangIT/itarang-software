@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { db } from '@/lib/db';
-import { kycVerifications, leads, personalDetails } from '@/lib/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { kycVerifications, leads, personalDetails, digilockerTransactions, kycDocuments } from '@/lib/db/schema';
+import { eq, and, desc } from 'drizzle-orm';
 import { validateDocument } from '@/lib/decentro';
 
 // Simple name similarity check (normalized Jaccard on words)
@@ -117,8 +117,106 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
         const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
 
+        // Fetch Aadhaar data from DigiLocker transactions (if available)
+        const digiRows = await db
+            .select({ aadhaar_extracted_data: digilockerTransactions.aadhaar_extracted_data })
+            .from(digilockerTransactions)
+            .where(
+                and(
+                    eq(digilockerTransactions.lead_id, leadId),
+                    eq(digilockerTransactions.status, "document_fetched"),
+                ),
+            )
+            .orderBy(desc(digilockerTransactions.created_at))
+            .limit(1);
+
+        let aadhaarData = digiRows[0]?.aadhaar_extracted_data as Record<string, string | null> | null;
+        console.log(`[PAN Verify] DigiLocker rows found: ${digiRows.length}, aadhaarData:`, aadhaarData ? Object.keys(aadhaarData) : 'null');
+
+        // Fallback 1: if DigiLocker data exists but might use different field structure
+        if (!aadhaarData && digiRows.length > 0) {
+            const raw = digiRows[0].aadhaar_extracted_data as Record<string, unknown> | null;
+            console.log(`[PAN Verify] DigiLocker raw data:`, JSON.stringify(raw).slice(0, 300));
+        }
+
+        // Fallback 2: Check DigiLocker with any status that has aadhaar data
+        if (!aadhaarData) {
+            const allDigiRows = await db
+                .select({
+                    status: digilockerTransactions.status,
+                    aadhaar_extracted_data: digilockerTransactions.aadhaar_extracted_data,
+                    cross_match_result: digilockerTransactions.cross_match_result,
+                })
+                .from(digilockerTransactions)
+                .where(eq(digilockerTransactions.lead_id, leadId))
+                .orderBy(desc(digilockerTransactions.created_at))
+                .limit(5);
+
+            console.log(`[PAN Verify] All DigiLocker txns: ${allDigiRows.length}`, allDigiRows.map(r => ({ status: r.status, hasData: !!r.aadhaar_extracted_data })));
+
+            for (const row of allDigiRows) {
+                const data = row.aadhaar_extracted_data as Record<string, string | null> | null;
+                if (data && (data.name || data.uid)) {
+                    aadhaarData = data;
+                    console.log(`[PAN Verify] Found aadhaar data from txn with status="${row.status}"`);
+                    break;
+                }
+                // Also check cross_match_result for aadhaar values
+                const crossResult = row.cross_match_result as { fields?: Array<{ aadhaarValue?: string; documentValue?: string; field?: string }> } | null;
+                if (crossResult?.fields?.length) {
+                    const extracted: Record<string, string | null> = {};
+                    for (const f of crossResult.fields) {
+                        const val = f.aadhaarValue || f.documentValue || null;
+                        if (val) {
+                            const key = (f.field || '').toLowerCase().replace(/\s+/g, '_');
+                            extracted[key] = val;
+                        }
+                    }
+                    if (Object.keys(extracted).length > 0) {
+                        aadhaarData = {
+                            name: extracted.name || null,
+                            gender: extracted.gender || null,
+                            dob: extracted.dob || null,
+                            address: extracted.address || null,
+                            careof: extracted.father_husband_name || extracted.careof || null,
+                            mobile: extracted.phone || extracted.mobile || null,
+                        };
+                        console.log(`[PAN Verify] Extracted aadhaar data from cross_match_result`);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Fallback 3: check kycDocuments OCR data for aadhaar_front/aadhaar_back
+        if (!aadhaarData) {
+            const aadhaarDocs = await db
+                .select({ ocrData: kycDocuments.ocr_data, docType: kycDocuments.doc_type })
+                .from(kycDocuments)
+                .where(eq(kycDocuments.lead_id, leadId))
+                .orderBy(desc(kycDocuments.uploaded_at));
+
+            for (const adoc of aadhaarDocs) {
+                if (adoc.docType !== 'aadhaar_front' && adoc.docType !== 'aadhaar_back') continue;
+                const ocr = adoc.ocrData as Record<string, unknown> | null;
+                if (!ocr) continue;
+                const kycR = (ocr.kycResult || ocr.extractedData || ocr) as Record<string, unknown>;
+                const name = (kycR.name || kycR.fullName || kycR.full_name || '') as string;
+                const gender = (kycR.gender || '') as string;
+                const adob = (kycR.dob || kycR.dateOfBirth || kycR.date_of_birth || '') as string;
+                const address = (kycR.address || kycR.full_address || kycR.currentAddress || '') as string;
+                const careof = (kycR.careof || kycR.careOf || kycR.fatherName || kycR.father_name || kycR.fatherOrHusbandName || '') as string;
+                if (name || adob || address) {
+                    aadhaarData = { name, gender, dob: adob, address: typeof address === 'string' ? address : JSON.stringify(address), careof };
+                    break;
+                }
+            }
+        }
+
+        console.log(`[PAN Verify] Final aadhaarData:`, aadhaarData ? JSON.stringify(aadhaarData).slice(0, 200) : 'null');
+
         // Build BRD cross-match fields: Name, Gender, DOB, Address, Mobile
-        // Each field has leadValue, panValue, aadhaarValue (aadhaar filled later via DigiLocker)
+        // Each field has leadValue, panValue, aadhaarValue from DigiLocker
         const leadDob = pd?.dob ? new Date(pd.dob).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
             : (lead.dob ? new Date(lead.dob).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '');
         const leadAddress = pd?.local_address || lead.local_address || lead.current_address || '';
@@ -150,12 +248,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const addressMatch = computeMatch(leadAddress, typeof panAddress === 'string' ? panAddress : '');
         const mobileMatch = computeMatch(leadPhone, panMobile, 'phone');
 
+        // Extract Aadhaar field values
+        const aadhaarName = aadhaarData?.name || null;
+        const aadhaarGender = aadhaarData?.gender || null;
+        const aadhaarDob = aadhaarData?.dob || null;
+        const aadhaarAddress = aadhaarData?.address || null;
+        const aadhaarMobile = aadhaarData?.mobile || aadhaarData?.phone || null;
+        const aadhaarFather = aadhaarData?.careof || aadhaarData?.fatherName || null;
+
         const allCrossMatchFields = [
-            { field: 'Name', leadValue: leadName || null, panValue: panName || null, aadhaarValue: null, matchScore: nameMatch.score, pass: nameMatch.pass },
-            { field: 'Gender', leadValue: leadGender || null, panValue: panGender || null, aadhaarValue: null, matchScore: genderMatch.score, pass: genderMatch.pass },
-            { field: 'DOB', leadValue: leadDob || null, panValue: panDob || null, aadhaarValue: null, matchScore: dobMatch.score, pass: dobMatch.pass },
-            { field: 'Address', leadValue: leadAddress || null, panValue: typeof panAddress === 'string' ? panAddress : JSON.stringify(panAddress) || null, aadhaarValue: null, matchScore: addressMatch.score, pass: addressMatch.pass },
-            { field: 'Mobile', leadValue: leadPhone || null, panValue: panMobile || null, aadhaarValue: null, matchScore: mobileMatch.score, pass: mobileMatch.pass },
+            { field: 'Name', leadValue: leadName || null, panValue: panName || null, aadhaarValue: aadhaarName, matchScore: nameMatch.score, pass: nameMatch.pass },
+            { field: 'Gender', leadValue: leadGender || null, panValue: panGender || null, aadhaarValue: aadhaarGender, matchScore: genderMatch.score, pass: genderMatch.pass },
+            { field: 'DOB', leadValue: leadDob || null, panValue: panDob || null, aadhaarValue: aadhaarDob, matchScore: dobMatch.score, pass: dobMatch.pass },
+            { field: 'Address', leadValue: leadAddress || null, panValue: typeof panAddress === 'string' ? panAddress : JSON.stringify(panAddress) || null, aadhaarValue: aadhaarAddress, matchScore: addressMatch.score, pass: addressMatch.pass },
+            { field: 'Mobile', leadValue: leadPhone || null, panValue: panMobile || null, aadhaarValue: aadhaarMobile, matchScore: mobileMatch.score, pass: mobileMatch.pass },
+            { field: 'Father/Husband Name', leadValue: pd?.father_husband_name || null, panValue: kycResult.fatherName || null, aadhaarValue: aadhaarFather, matchScore: pd?.father_husband_name && kycResult.fatherName ? computeMatch(pd.father_husband_name, kycResult.fatherName).score : null, pass: pd?.father_husband_name && kycResult.fatherName ? computeMatch(pd.father_husband_name, kycResult.fatherName).pass : true },
         ];
 
         const crossMatchFields = allCrossMatchFields.filter(f => f.leadValue || f.panValue);
@@ -210,12 +317,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             .where(and(eq(kycVerifications.lead_id, leadId), eq(kycVerifications.verification_type, 'pan')))
             .limit(1);
 
+        const verificationId = existing[0]?.id || `KYCVER-${dateStr}-${seq}`;
+
         if (existing.length > 0) {
             await db.update(kycVerifications).set(verRecord)
                 .where(and(eq(kycVerifications.lead_id, leadId), eq(kycVerifications.verification_type, 'pan')));
         } else {
             await db.insert(kycVerifications).values({
-                id: `KYCVER-${dateStr}-${seq}`,
+                id: verificationId,
                 lead_id: leadId,
                 verification_type: 'pan',
                 submitted_at: now,
@@ -228,6 +337,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             success: overallSuccess,
             message,
             data: {
+                verificationId,
                 pan_name: panName,
                 lead_name: leadName,
                 pan_status: kycResult.idStatus || kycResult.panStatus || null,
