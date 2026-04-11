@@ -41,12 +41,22 @@ export default function RCCard({
     const details = d?.rcDetails as Record<string, unknown> | undefined;
     return (details?.chassisNumber as string) || null;
   });
+  const [verificationId, setVerificationId] = useState(existingVerification?.id || "");
   const [error, setError] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
 
   const handleVerify = async () => {
     if (!rcNumber.trim()) { setError("RC number is required"); return; }
+
+    // Validate RC format client-side
+    const cleaned = rcNumber.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const rcPattern = /^[A-Z]{2}\d{1,2}[A-Z]{0,3}\d{1,4}$/;
+    if (!rcPattern.test(cleaned) || cleaned.length < 6 || cleaned.length > 13) {
+      setError(`Invalid RC number "${rcNumber}". Expected format: MH12AB1234 (state code + district + series + number)`);
+      return;
+    }
+
     setStatus("loading");
     setError("");
     setChassisNumber(null);
@@ -67,6 +77,7 @@ export default function RCCard({
 
       if (data.success) {
         setChassisNumber(data.data?.rcDetails?.chassisNumber || null);
+        if (data.data?.verificationId) setVerificationId(data.data.verificationId);
         setStatus("success");
       } else {
         setError(data.error?.message || "RC verification failed");
@@ -79,12 +90,13 @@ export default function RCCard({
   };
 
   const handleAdminAction = async (action: "accept" | "reject" | "request_more_docs") => {
-    if (!existingVerification?.id) return;
+    const vid = verificationId || existingVerification?.id;
+    if (!vid) { setError("No verification record found. Please run verification first."); return; }
     if (action === "reject" && !adminNotes.trim()) { setError("Please add rejection reason"); return; }
     setActionLoading(action);
     setError("");
     try {
-      const res = await fetch(`/api/admin/kyc/${leadId}/verification/${existingVerification.id}/action`, {
+      const res = await fetch(`/api/admin/kyc/${leadId}/verification/${vid}/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
@@ -216,7 +228,7 @@ export default function RCCard({
         )}
 
         {/* ADMIN NOTES + DECISION */}
-        {(status === "success" || status === "failed") && existingVerification?.id && (
+        {(status === "success" || status === "failed") && (verificationId || existingVerification?.id) && (
           <div className="space-y-3 pt-3 border-t border-gray-100">
             <div>
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Admin Notes</p>

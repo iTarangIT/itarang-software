@@ -14,6 +14,7 @@ import {
   createWorkflowId,
   requireAdminAppUser,
 } from "@/lib/kyc/admin-workflow";
+import { notifyKycFinalDecision } from "@/lib/notifications";
 
 const VALID_DECISIONS = ["approved", "rejected"] as const;
 
@@ -191,6 +192,15 @@ export async function POST(
         timestamp: now,
       });
     });
+
+    // Notify dealer (non-blocking)
+    notifyKycFinalDecision({
+      leadId,
+      decision,
+      notes,
+      rejectionReason,
+      adminId: appUser.id,
+    }).catch(() => {});
 
     return NextResponse.json({
       success: true,

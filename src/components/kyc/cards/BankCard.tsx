@@ -52,6 +52,7 @@ export default function BankCard({
   const [result, setResult] = useState<Record<string, unknown> | null>(
     existingVerification?.apiResponse || null,
   );
+  const [verificationId, setVerificationId] = useState(existingVerification?.id || "");
   const [error, setError] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
@@ -86,6 +87,7 @@ export default function BankCard({
       });
       const data = await res.json();
       setResult(data);
+      if (data.data?.verificationId) setVerificationId(data.data.verificationId);
       setStatus(data.success ? "success" : "failed");
       if (!data.success)
         setError(data.message || data.error || "Bank verification failed");
@@ -98,7 +100,8 @@ export default function BankCard({
   const handleAdminAction = async (
     action: "accept" | "reject" | "request_more_docs",
   ) => {
-    if (!existingVerification?.id) return;
+    const vid = verificationId || existingVerification?.id;
+    if (!vid) { setError("No verification record found. Please run verification first."); return; }
     if (action === "reject" && !adminNotes.trim()) {
       setError("Please add rejection reason");
       return;
@@ -107,7 +110,7 @@ export default function BankCard({
     setError("");
     try {
       const res = await fetch(
-        `/api/admin/kyc/${leadId}/verification/${existingVerification.id}/action`,
+        `/api/admin/kyc/${leadId}/verification/${vid}/action`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -406,7 +409,7 @@ export default function BankCard({
 
         {/* Admin Actions */}
         {(status === "success" || status === "failed") &&
-          existingVerification?.id && (
+          (verificationId || existingVerification?.id) && (
             <div className="space-y-3 pt-3 border-t border-gray-100">
               <div>
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">

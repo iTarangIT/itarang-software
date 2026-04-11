@@ -86,16 +86,32 @@ export async function POST(
     const now = new Date();
     const responseData = decentroRes?.data || {};
     // /v2/bytes/credit-score returns score in data.scoreDetails[0].value
-    const scoreDetails = responseData.scoreDetails;
-    const score =
-      (Array.isArray(scoreDetails) && scoreDetails.length > 0 && scoreDetails[0]?.value) ||
-      (responseData.credit_score ?? responseData.score ?? null);
+    // Also check nested cCRResponse for some API versions
+    const scoreDetails =
+      responseData.scoreDetails ||
+      responseData.cCRResponse?.cIRReportData?.scoreDetails ||
+      responseData.cCRResponse?.scoreDetails;
+    const rawScore =
+      (Array.isArray(scoreDetails) && scoreDetails.length > 0
+        ? scoreDetails[0]?.value
+        : null) ||
+      responseData.creditScore?.score ||
+      responseData.credit_score ||
+      responseData.score ||
+      decentroRes?.data?.credit_score ||
+      null;
+    const score = rawScore !== null && rawScore !== undefined ? Number(rawScore) : null;
+    const responseKey = decentroRes?.responseKey || "";
+    const isErrorResponse = responseKey.startsWith("error_");
     const overallSuccess =
-      (decentroRes?.responseKey === "success_credit_score" ||
+      !isErrorResponse &&
+      (responseKey === "success_credit_score" ||
+       responseKey === "success" ||
        decentroRes?.status === "SUCCESS") &&
-      score !== null;
+      score !== null &&
+      !isNaN(score);
 
-    const interpretation = score ? interpretCibilScore(Number(score)) : null;
+    const interpretation = score !== null && !isNaN(score) ? interpretCibilScore(score) : null;
 
     // Upsert kycVerifications
     const existingRows = await db
@@ -112,13 +128,15 @@ export async function POST(
     const verificationId =
       existingRows[0]?.id || createWorkflowId("KYCVER", now);
 
+    const apiRequest = { name, pan: personal?.pan_no || "", dob, phone, address };
+
     if (existingRows.length > 0) {
       await db
         .update(kycVerifications)
         .set({
           status: overallSuccess ? "success" : "failed",
           api_provider: "decentro",
-          api_request: { name, pan: personal.pan_no, dob, phone, address },
+          api_request: apiRequest,
           api_response: decentroRes,
           failed_reason: overallSuccess
             ? null
@@ -135,7 +153,7 @@ export async function POST(
         verification_type: "cibil",
         status: overallSuccess ? "success" : "failed",
         api_provider: "decentro",
-        api_request: { name, pan: personal.pan_no, dob, phone, address },
+        api_request: apiRequest,
         api_response: decentroRes,
         failed_reason: overallSuccess
           ? null
@@ -171,9 +189,9 @@ export async function POST(
       success: overallSuccess,
       data: {
         verificationId,
-        score: score ? Number(score) : null,
+        score,
         interpretation,
-        reportId: decentroRes?.data?.report_id || null,
+        reportId: decentroRes?.decentroTxnId || responseData.report_id || null,
         generatedAt: now.toISOString(),
         rawResponse: decentroRes,
       },

@@ -38,7 +38,7 @@ interface CibilSummary {
   creditMix: string | null;
 }
 
-type CardStatus = "pending" | "loading_score" | "loading_report" | "success" | "failed";
+type CardStatus = "pending" | "loading_score" | "loading_report" | "success" | "no_history" | "failed";
 
 export default function CIBILCard({
   leadId,
@@ -53,7 +53,12 @@ export default function CIBILCard({
   const [status, setStatus] = useState<CardStatus>(() => {
     if (existingVerification?.adminAction === "accepted") return "success";
     if (existingVerification?.adminAction === "rejected") return "failed";
-    if (existingVerification?.status === "success") return "success";
+    if (existingVerification?.status === "success") {
+      // Check if it was a "consumer not found" result
+      const d = existingVerification?.apiResponse?.data as Record<string, unknown> | undefined;
+      if (d?.consumerNotFound) return "no_history";
+      return existingVerification?.matchScore ? "success" : "no_history";
+    }
     if (existingVerification?.status === "failed") return "failed";
     return "pending";
   });
@@ -76,6 +81,7 @@ export default function CIBILCard({
     const d = existingVerification?.apiResponse?.data as Record<string, unknown> | undefined;
     return (d?.generatedAt as string) || "";
   });
+  const [verificationId, setVerificationId] = useState(existingVerification?.id || "");
   const [error, setError] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
@@ -101,15 +107,30 @@ export default function CIBILCard({
       }
       const data = await res.json();
 
-      if (data.success || data.data?.score) {
+      // Store verification ID for admin actions
+      if (data.data?.verificationId) setVerificationId(data.data.verificationId);
+      if (data.data?.reportId) setReportId(data.data.reportId);
+      if (data.data?.generatedAt) setGeneratedAt(data.data.generatedAt);
+
+      if (data.success && data.data?.score !== null && data.data?.score !== undefined) {
+        // Score found
         setScore(data.data.score);
         setInterpretation(data.data.interpretation);
-        setReportId(data.data.reportId || "");
-        setGeneratedAt(data.data.generatedAt || "");
         if (data.data.summary) setSummary(data.data.summary);
         setStatus("success");
+      } else if (data.data?.consumerNotFound || data.success) {
+        // Consumer not found in bureau — valid result, no credit history
+        setScore(null);
+        setStatus("no_history");
       } else {
-        setError(data.error?.message || "Failed to fetch CIBIL data");
+        // Actual API failure
+        const rawKey = data.data?.rawResponse?.responseKey || "";
+        const rawMsg = data.data?.rawResponse?.message || data.error?.message || "";
+        if (rawKey === "error_credits_score_not_found" && type === "score") {
+          setError("Credit score not found via basic lookup. Try 'Get Report' for a full credit bureau search using PAN & DOB.");
+        } else {
+          setError(rawMsg || "Failed to fetch CIBIL data");
+        }
         setStatus("failed");
       }
     } catch {
@@ -119,12 +140,13 @@ export default function CIBILCard({
   };
 
   const handleAdminAction = async (action: "accept" | "reject" | "request_more_docs") => {
-    if (!existingVerification?.id) return;
+    const vid = verificationId || existingVerification?.id;
+    if (!vid) return;
     if (action === "reject" && !adminNotes.trim()) { setError("Please add rejection reason"); return; }
     setActionLoading(action);
     setError("");
     try {
-      const res = await fetch(`/api/admin/kyc/${leadId}/verification/${existingVerification.id}/action`, {
+      const res = await fetch(`/api/admin/kyc/${leadId}/verification/${vid}/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
@@ -147,6 +169,7 @@ export default function CIBILCard({
     loading_score: { bg: "bg-blue-100 text-blue-700", label: "Fetching Score..." },
     loading_report: { bg: "bg-blue-100 text-blue-700", label: "Fetching Report..." },
     success: { bg: "bg-green-100 text-green-700", label: "Score Received" },
+    no_history: { bg: "bg-amber-100 text-amber-700", label: "No Credit History" },
     failed: { bg: "bg-red-100 text-red-700", label: "Failed" },
   };
 
@@ -163,7 +186,12 @@ export default function CIBILCard({
     : "HIGH";
 
   const isLoading = status === "loading_score" || status === "loading_report";
-  const hasResults = score !== null && !isLoading;
+  const hasScoreResults = score !== null && !isLoading;
+
+  // Format phone for display: strip country code prefix for display
+  const displayPhone = phone
+    ? `+91 ${phone.replace(/^\+?91/, "").replace(/\D/g, "")}`
+    : "Not available";
 
   return (
     <div className="border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden">
@@ -200,7 +228,7 @@ export default function CIBILCard({
             </div>
             <div className="flex gap-2">
               <span className="text-gray-400 w-16 shrink-0">Mobile:</span>
-              <span className="font-medium text-gray-800">{phone ? `+91 ${phone}` : "Not available"}</span>
+              <span className="font-medium text-gray-800">{displayPhone}</span>
             </div>
             <div className="flex gap-2">
               <span className="text-gray-400 w-16 shrink-0">Address:</span>
@@ -209,7 +237,7 @@ export default function CIBILCard({
           </div>
         </div>
 
-        {/* VERIFICATION OPTIONS */}
+        {/* VERIFICATION OPTIONS — show when pending or failed */}
         {(status === "pending" || status === "failed") && (
           <div>
             <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide mb-3">Verification Options</p>
@@ -259,8 +287,85 @@ export default function CIBILCard({
           </div>
         )}
 
-        {/* VERIFICATION RESULTS */}
-        {hasResults && (
+        {/* NO CREDIT HISTORY RESULT */}
+        {status === "no_history" && (
+          <div className="space-y-4">
+            <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide">Verification Result</p>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-5 space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-amber-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-base font-semibold text-amber-800">No Credit History Found</p>
+                  <p className="text-sm text-amber-700">Consumer not found in credit bureau</p>
+                </div>
+              </div>
+
+              <div className="text-sm text-amber-700 space-y-1 pl-[52px]">
+                <p>This person has no credit history with CIBIL/TransUnion. This typically means:</p>
+                <ul className="list-disc list-inside space-y-0.5 text-amber-600">
+                  <li>No previous loans or credit cards</li>
+                  <li>First-time borrower (NTC - New to Credit)</li>
+                  <li>Credit history may exist under a different name/PAN</li>
+                </ul>
+              </div>
+
+              {reportId && (
+                <div className="text-xs text-amber-500 pt-2 border-t border-amber-200 pl-[52px]">
+                  Report ID: {reportId}
+                  {generatedAt && (
+                    <span className="ml-3">
+                      Checked: {new Date(generatedAt).toLocaleString("en-IN", {
+                        day: "2-digit", month: "short", year: "numeric",
+                        hour: "2-digit", minute: "2-digit",
+                      })}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">
+              <span className="font-semibold">Recommendation:</span> Since no CIBIL score exists, consider requiring a co-borrower with established credit history, or proceed with alternative assessment.
+            </div>
+
+            {/* Admin actions for no_history */}
+            {verificationId && (
+              <div className="space-y-3 pt-3 border-t border-gray-100">
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Admin Notes</p>
+                  <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
+                    placeholder="CIBIL verification remarks..."
+                    className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 focus:border-purple-500" />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Admin Decision</p>
+                  <div className="flex gap-2">
+                    <button onClick={() => handleAdminAction("accept")} disabled={!!actionLoading}
+                      className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                      {actionLoading === "accept" ? "..." : "Accept (Proceed without CIBIL)"}
+                    </button>
+                    <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
+                      className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                      {actionLoading === "reject" ? "..." : "Reject"}
+                    </button>
+                    <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
+                      className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                      {actionLoading === "request_more_docs" ? "..." : "Need Co-Borrower KYC"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SCORE RESULTS */}
+        {hasScoreResults && (
           <div className="space-y-4">
             <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide">
               Verification Results {summary ? "" : "(Score Only)"}
@@ -366,7 +471,7 @@ export default function CIBILCard({
             )}
 
             {/* ADMIN NOTES */}
-            {existingVerification?.id && (
+            {(existingVerification?.id || verificationId) && (
               <div className="space-y-3 pt-3 border-t border-gray-100">
                 <div>
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Admin Notes</p>
