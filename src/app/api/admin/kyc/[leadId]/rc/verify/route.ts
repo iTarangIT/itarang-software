@@ -56,6 +56,24 @@ export async function POST(
       );
     }
 
+    // Normalize: remove dots, dashes, spaces and uppercase
+    rcNumber = rcNumber.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+    // Validate Indian RC format: 2-letter state + 1-2 digit district + 1-4 alpha/digit series + 1-4 digit number
+    // Examples: MH12AB1234, DL1CAB1234, KA01MA1234
+    const rcPattern = /^[A-Z]{2}\d{1,2}[A-Z]{0,3}\d{1,4}$/;
+    if (!rcPattern.test(rcNumber) || rcNumber.length < 6 || rcNumber.length > 13) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            message: `Invalid RC number format "${rcNumber}". Expected format: MH12AB1234 (state + district + series + number)`,
+          },
+        },
+        { status: 400 },
+      );
+    }
+
     // Call Decentro RC to Chassis API
     const decentroRes = await verifyRcNumber(rcNumber);
 
@@ -63,11 +81,13 @@ export async function POST(
 
     const now = new Date();
     const responseData = decentroRes?.data || {};
+    const responseKey = decentroRes?.responseKey || "";
+    const isErrorResponse = responseKey.startsWith("error_");
     const overallSuccess =
-      decentroRes?.status === "SUCCESS" ||
-      decentroRes?.responseKey === "success" ||
-      !!responseData.chassisNumber ||
-      !!responseData.chassis_number;
+      !isErrorResponse &&
+      (decentroRes?.status === "SUCCESS" ||
+       responseKey === "success") &&
+      !!(responseData.chassisNumber || responseData.chassis_number);
 
     const rcDetails = {
       chassisNumber: responseData.chassisNumber ?? responseData.chassis_number ?? null,

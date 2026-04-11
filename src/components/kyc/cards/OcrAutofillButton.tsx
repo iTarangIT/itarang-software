@@ -34,6 +34,7 @@ export default function OcrAutofillButton({
     // Try each doc type in order (for bank docs with multiple cheques)
     const types = Array.isArray(docType) ? docType : [docType];
     setLoading(true);
+    let lastError = "";
 
     for (const dt of types) {
       try {
@@ -51,12 +52,13 @@ export default function OcrAutofillButton({
           return;
         }
         // If this doc_type had no document, try next
+        if (data.error) lastError = data.error;
       } catch {
         // Try next doc type
       }
     }
 
-    setError("No OCR data found. Upload a document first.");
+    setError(lastError || "No OCR data found. Upload a document first.");
     setLoading(false);
   };
 

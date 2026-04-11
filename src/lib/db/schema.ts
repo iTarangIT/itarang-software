@@ -2727,6 +2727,22 @@ export const scraperLeadsDuplicates = pgTable("scraper_leads_duplicates", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// --- NOTIFICATIONS ---
+
+export const notifications = pgTable("notifications", {
+  id: text("id").primaryKey(),
+  user_id: uuid("user_id"), // target user (dealer user id)
+  dealer_id: varchar("dealer_id", { length: 255 }), // target dealer account
+  lead_id: varchar("lead_id", { length: 100 }),
+  type: varchar("type", { length: 50 }).notNull(), // kyc_accepted, kyc_rejected, kyc_docs_requested, kyc_approved, kyc_rejected_final
+  title: text("title").notNull(),
+  message: text("message").notNull(),
+  data: jsonb("data"), // extra context (verification_type, notes, etc.)
+  read: boolean("read").default(false),
+  read_at: timestamp("read_at", { withTimezone: true }),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
 export const scraperCityQueue = pgTable("scraper_city_queue", {
   id: text("id").primaryKey(),
   base_query: text("base_query").notNull(),

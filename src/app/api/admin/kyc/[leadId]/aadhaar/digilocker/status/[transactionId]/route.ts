@@ -140,8 +140,11 @@ export async function GET(
         || remoteData.aadhaar_data
         || remoteData.kycResult
         || remoteData.name  // eAadhaar fields directly in data
+        || remoteData.proofOfIdentity  // Decentro eAadhaar response format
+        || remoteData.aadhaarUid
         || statusRes?.kycResult
-        || (statusRes?.status === "SUCCESS" && statusRes?.responseKey?.includes("eaadhaar"));
+        || (statusRes?.status === "SUCCESS" && statusRes?.responseKey?.includes("eaadhaar"))
+        || (statusRes?.status === "SUCCESS" && typeof statusRes?.message === "string" && statusRes.message.toLowerCase().includes("aadhaar"));
 
       if (hasDocument) {
         updatedStatus = "document_fetched";
