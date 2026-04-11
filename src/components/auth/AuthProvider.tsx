@@ -44,10 +44,16 @@ const AuthContext = createContext<AuthContextType>({
   logout: async () => {},
 });
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({
+  children,
+  initialUser,
+}: {
+  children: React.ReactNode;
+  initialUser?: AppUser | null;
+}) {
   const supabase = useMemo(() => createClient(), []);
-  const [user, setUser] = useState<AppUser | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<AppUser | null>(initialUser ?? null);
+  const [loading, setLoading] = useState(!initialUser);
 
   const fetchUser = useCallback(async () => {
     try {
@@ -97,8 +103,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [supabase]);
 
+  const hasInitialUser = !!initialUser;
+
   useEffect(() => {
-    fetchUser();
+    // Skip initial fetch if server already provided the user
+    if (!hasInitialUser) {
+      fetchUser();
+    }
 
     const {
       data: { subscription },
@@ -109,7 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       subscription.unsubscribe();
     };
-  }, [fetchUser, supabase]);
+  }, [fetchUser, supabase, hasInitialUser]);
 
   const logout = async () => {
     try {
