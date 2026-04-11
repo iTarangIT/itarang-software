@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { auditLogs, kycVerifications } from "@/lib/db/schema";
+import { auditLogs, kycVerifications, leads } from "@/lib/db/schema";
 import {
   createWorkflowId,
   requireAdminAppUser,
 } from "@/lib/kyc/admin-workflow";
+import { notifyKycCardAction } from "@/lib/notifications";
 
 const VALID_ACTIONS = ["accept", "reject", "request_more_docs"] as const;
 type CardAction = (typeof VALID_ACTIONS)[number];
@@ -132,6 +133,23 @@ export async function POST(
       performed_by: appUser.id,
       timestamp: now,
     });
+
+    // Update lead kyc_status when docs are requested
+    if (action === "request_more_docs") {
+      await db
+        .update(leads)
+        .set({ kyc_status: "docs_requested", updated_at: now })
+        .where(eq(leads.id, leadId));
+    }
+
+    // Notify dealer (non-blocking)
+    notifyKycCardAction({
+      leadId,
+      verificationType: verification.verification_type,
+      action: adminAction,
+      notes: notes || rejectionReason,
+      adminId: appUser.id,
+    }).catch(() => {});
 
     return NextResponse.json({
       success: true,

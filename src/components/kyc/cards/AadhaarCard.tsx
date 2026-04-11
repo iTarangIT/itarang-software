@@ -182,7 +182,8 @@ export default function AadhaarCard({
   };
 
   const handleAdminAction = async (action: "accept" | "reject" | "request_more_docs") => {
-    if (!existingVerification?.id) return;
+    const vid = existingVerification?.id;
+    if (!vid) { setError("No verification record found. Please wait for document to be fetched."); return; }
     if (action === "reject" && !adminNotes.trim()) {
       setError("Please provide rejection reason in admin notes");
       return;
@@ -190,7 +191,7 @@ export default function AadhaarCard({
     setActionLoading(action);
     setError("");
     try {
-      const res = await fetch(`/api/admin/kyc/${leadId}/verification/${existingVerification.id}/action`, {
+      const res = await fetch(`/api/admin/kyc/${leadId}/verification/${vid}/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

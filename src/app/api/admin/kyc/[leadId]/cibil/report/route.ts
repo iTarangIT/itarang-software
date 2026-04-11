@@ -83,41 +83,72 @@ export async function POST(
     const responseData = decentroRes?.data || {};
 
     // /v2/financial_services/credit_bureau/credit_report/summary
-    const overallSuccess =
-      decentroRes?.responseKey === "success_credit_report" ||
-      decentroRes?.status === "SUCCESS";
+    const responseKey = decentroRes?.responseKey || "";
+    const isErrorResponse = responseKey.startsWith("error_");
+    const apiCallSucceeded =
+      !isErrorResponse &&
+      (responseKey === "success_credit_report" ||
+       responseKey === "success" ||
+       decentroRes?.status === "SUCCESS");
+
+    // Check for bureau-level "Consumer not found" error inside cIRReportDataLst
+    const reportDataLst = responseData.cCRResponse?.cIRReportDataLst;
+    const bureauError =
+      Array.isArray(reportDataLst) && reportDataLst[0]?.error
+        ? reportDataLst[0].error
+        : null;
+    const consumerNotFound = bureauError?.errorDesc === "Consumer not found in bureau";
+
+    // The actual report data may be in cIRReportDataLst[0].cIRReportData or at cCRResponse level
+    const reportData =
+      (Array.isArray(reportDataLst) && !bureauError && reportDataLst[0]?.cIRReportData) ||
+      responseData.cCRResponse?.cIRReportData ||
+      responseData.cCRResponse ||
+      responseData;
 
     // Extract score — credit report summary may return score in various locations
-    const scoreDetails = responseData.scoreDetails || responseData.cCRResponse?.scoreDetails;
-    const score =
-      (Array.isArray(scoreDetails) && scoreDetails.length > 0 && scoreDetails[0]?.value) ||
-      (responseData.creditScore?.score ?? responseData.credit_score ?? responseData.score ?? null);
+    const scoreDetails =
+      reportData.scoreDetails ||
+      responseData.scoreDetails;
+    const rawScore =
+      (Array.isArray(scoreDetails) && scoreDetails.length > 0
+        ? scoreDetails[0]?.value
+        : null) ||
+      reportData.creditScore?.score ||
+      responseData.creditScore?.score ||
+      responseData.credit_score ||
+      responseData.score ||
+      null;
+    const score = rawScore !== null && rawScore !== undefined ? Number(rawScore) : null;
 
-    const interpretation = score ? interpretCibilScore(Number(score)) : null;
+    const overallSuccess = apiCallSucceeded && !consumerNotFound && score !== null && !isNaN(score);
+
+    const interpretation = score !== null && !isNaN(score) ? interpretCibilScore(score) : null;
 
     // Build summary from credit report summary response
-    const personalInfo = responseData.personalInfo || {};
-    const accountSummary = responseData.accountSummary || {};
-    const enquirySummary = responseData.enquirySummary || {};
+    // Data may be at top level or nested under cCRResponse
+    const personalInfo = reportData.personalInfo || responseData.personalInfo || {};
+    const accountSummary = reportData.accountSummary || responseData.accountSummary || {};
+    const enquirySummary = reportData.enquirySummary || responseData.enquirySummary || {};
     const summary = {
       fullName: personalInfo.fullName || null,
       dob: personalInfo.dob || null,
       gender: personalInfo.gender || null,
       totalIncome: personalInfo.totalIncome || null,
       occupation: personalInfo.occupation || null,
-      panNumber: responseData.identityInfo?.panNumber?.[0]?.idNumber || responseData.document_id || null,
-      addresses: responseData.addressInfo || [],
-      phones: responseData.phoneInfo || [],
-      emails: responseData.emailInfo || [],
-      activeLoans: accountSummary.activeAccounts ?? responseData.active_loans ?? null,
-      totalOutstanding: accountSummary.totalOutstanding ?? responseData.total_outstanding ?? null,
+      panNumber: reportData.identityInfo?.panNumber?.[0]?.idNumber || responseData.identityInfo?.panNumber?.[0]?.idNumber || responseData.document_id || null,
+      addresses: reportData.addressInfo || responseData.addressInfo || [],
+      phones: reportData.phoneInfo || responseData.phoneInfo || [],
+      emails: reportData.emailInfo || responseData.emailInfo || [],
+      activeLoans: accountSummary.activeAccounts ?? accountSummary.noOfActiveAccounts ?? responseData.active_loans ?? null,
+      totalOutstanding: accountSummary.totalOutstanding ?? accountSummary.totalBalanceAmount ?? responseData.total_outstanding ?? null,
       creditUtilization: accountSummary.creditUtilization ?? responseData.credit_utilization ?? null,
-      paymentDefaults: accountSummary.overdueAccounts ?? responseData.payment_defaults ?? null,
-      recentEnquiries: enquirySummary.last30Days ?? responseData.recent_enquiries ?? null,
+      paymentDefaults: accountSummary.overdueAccounts ?? accountSummary.noOfPastDueAccounts ?? responseData.payment_defaults ?? null,
+      recentEnquiries: enquirySummary.last30Days ?? enquirySummary.numberOfEnquiries ?? responseData.recent_enquiries ?? null,
       oldestAccountAge: accountSummary.oldestAccountAge ?? responseData.oldest_account_age ?? null,
       creditMix: accountSummary.creditMix ?? responseData.credit_mix ?? null,
-      accounts: responseData.accounts || responseData.accountDetails || [],
-      enquiries: responseData.enquiries || responseData.enquiryDetails || [],
+      accounts: reportData.retailAccountDetails || responseData.accounts || responseData.accountDetails || [],
+      enquiries: reportData.enquiryDetails || responseData.enquiries || responseData.enquiryDetails || [],
     };
 
     // Upsert kycVerifications
@@ -135,24 +166,33 @@ export async function POST(
     const verificationId =
       existingRows[0]?.id || createWorkflowId("KYCVER", now);
 
+    // DB status: "success" if we got a score, "failed" only if API call itself failed
+    // Consumer not found is a valid result — store as "success" with no score
+    const dbStatus = overallSuccess ? "success" : (consumerNotFound ? "success" : "failed");
+    const failedReason = overallSuccess
+      ? null
+      : consumerNotFound
+        ? "Consumer not found in credit bureau — no credit history"
+        : decentroRes?.message || "CIBIL report fetch failed";
+
+    const apiRequest = {
+      name,
+      pan: personal.pan_no,
+      dob,
+      phone,
+      address,
+      report_type: "full_report",
+    };
+
     if (existingRows.length > 0) {
       await db
         .update(kycVerifications)
         .set({
-          status: overallSuccess ? "success" : "failed",
+          status: dbStatus,
           api_provider: "decentro",
-          api_request: {
-            name,
-            pan: personal.pan_no,
-            dob,
-            phone,
-            address,
-            report_type: "full_report",
-          },
+          api_request: apiRequest,
           api_response: decentroRes,
-          failed_reason: overallSuccess
-            ? null
-            : decentroRes?.message || "CIBIL report fetch failed",
+          failed_reason: failedReason,
           match_score: score ? String(score) : null,
           completed_at: now,
           updated_at: now,
@@ -163,20 +203,11 @@ export async function POST(
         id: verificationId,
         lead_id: leadId,
         verification_type: "cibil",
-        status: overallSuccess ? "success" : "failed",
+        status: dbStatus,
         api_provider: "decentro",
-        api_request: {
-          name,
-          pan: personal.pan_no,
-          dob,
-          phone,
-          address,
-          report_type: "full_report",
-        },
+        api_request: apiRequest,
         api_response: decentroRes,
-        failed_reason: overallSuccess
-          ? null
-          : decentroRes?.message || "CIBIL report fetch failed",
+        failed_reason: failedReason,
         match_score: score ? String(score) : null,
         submitted_at: now,
         completed_at: now,
@@ -205,17 +236,20 @@ export async function POST(
     }
 
     return NextResponse.json({
-      success: overallSuccess,
+      success: overallSuccess || consumerNotFound,
       data: {
         verificationId,
-        score: score ? Number(score) : null,
+        score,
         interpretation,
-        summary,
-        reportId: responseData.report_id || null,
+        summary: overallSuccess ? summary : null,
+        consumerNotFound,
+        bureauError: bureauError?.errorDesc || null,
+        reportOrderNumber: responseData.reportOrderNumber || null,
+        reportId: decentroRes?.decentroTxnId || responseData.report_id || null,
         generatedAt: now.toISOString(),
         rawResponse: decentroRes,
       },
-      ...(overallSuccess
+      ...(overallSuccess || consumerNotFound
         ? {}
         : {
             error: {
