@@ -13,6 +13,7 @@ import {
 } from "@/lib/agreement/status";
 import { insertAgreementEvent } from "@/lib/agreement/tracking";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
 
 function cleanString(value: unknown) {
   if (typeof value !== "string") return "";
@@ -109,10 +110,19 @@ async function handleConsentWebhook(
   const signerAadhaar = signingParties[0]?.aadhaar_masked || signingParties[0]?.signer_aadhaar || null;
 
   if (status === "completed" || status === "signed") {
+    // Fallback — if webhook payload doesn't contain a download URL
+    // (common for consent docs), fetch the signed PDF directly from Digio
+    // and upload it to our storage so signed_consent_url is always persisted.
+    let persistedUrl = signedPdfUrl || consent.signed_consent_url;
+    if (!persistedUrl && consent.esign_transaction_id) {
+      const stored = await fetchAndStoreSignedConsent(consent.esign_transaction_id, consent.lead_id);
+      if (stored?.publicUrl) persistedUrl = stored.publicUrl;
+    }
+
     // eSign completed successfully → set esign_completed (admin picks up for review)
     await db.update(consentRecords).set({
       consent_status: "esign_completed",
-      signed_consent_url: signedPdfUrl || consent.signed_consent_url,
+      signed_consent_url: persistedUrl,
       signed_at: now,
       signer_aadhaar_masked: signerAadhaar,
       esign_error_code: null,
@@ -125,7 +135,7 @@ async function handleConsentWebhook(
       updated_at: now,
     }).where(eq(leads.id, consent.lead_id));
 
-    console.log("[DIGIO WEBHOOK - CONSENT] eSign completed, status set to esign_completed");
+    console.log("[DIGIO WEBHOOK - CONSENT] eSign completed, signed_consent_url:", persistedUrl);
 
   } else if (status === "failed" || status === "rejected") {
     // eSign failed

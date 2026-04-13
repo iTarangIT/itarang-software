@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
 import { createDigioAgreement } from "@/lib/digio/service";
+import { uploadFileToStorage } from "@/lib/storage";
 import puppeteer from "puppeteer";
 
 type RouteContext = {
@@ -144,6 +145,24 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     const pdfBuffer = await renderPdfFromHtml(html);
     const pdfBase64 = pdfBuffer.toString("base64");
 
+    // Persist the generated (unsigned) PDF to our own storage so
+    // consent_records.generated_pdf_url is populated for the digital flow too.
+    // Failure here should not block the Digio handoff — log and continue.
+    let generatedPdfUrl: string | null = null;
+    try {
+      const uploadResult = await uploadFileToStorage({
+        fileBuffer: pdfBuffer,
+        fileName: `generated-${Date.now()}.pdf`,
+        folder: `kyc/${leadId}/consent`,
+        bucket: process.env.CONSENT_STORAGE_BUCKET || "documents",
+        contentType: "application/pdf",
+        upsert: true,
+      });
+      generatedPdfUrl = uploadResult.url;
+    } catch (e) {
+      console.warn("[Send Consent] Failed to persist generated PDF to storage:", e);
+    }
+
     // 2. Upload to Digio for Aadhaar eSign
     // Clean phone number — Digio needs 10-digit mobile
     const cleanPhone = customerPhone.replace(/\D/g, "").slice(-10);
@@ -196,6 +215,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       esign_provider: "digio",
       esign_transaction_id: digioDocumentId,
       esign_certificate_id: digioRequestId,
+      generated_pdf_url: generatedPdfUrl,
       consent_attempt_count: 1,
       created_at: now,
       updated_at: now,

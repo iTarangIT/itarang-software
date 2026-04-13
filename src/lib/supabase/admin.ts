@@ -9,3 +9,9 @@ export const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
     persistSession: false,
   },
 });
+
+// Factory alias so callers can do `const client = createAdminClient()`.
+// Returns the same singleton — no need to spin up a new client per call.
+export function createAdminClient() {
+  return supabaseAdmin;
+}

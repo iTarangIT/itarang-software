@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { consentRecords, leads } from '@/lib/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
+import { fetchAndStoreSignedConsent } from '@/lib/digio/fetch-signed-consent';
 
 type RouteContext = { params: Promise<{ leadId: string }> };
 
@@ -96,6 +97,15 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
             updates.consent_status = newStatus;
             updates.signed_at = now;
             updates.signer_aadhaar_masked = firstParty?.aadhaar_masked || firstParty?.signer_aadhaar || record.signer_aadhaar_masked;
+
+            // Fetch signed PDF bytes from Digio and upload to Supabase storage.
+            // This is the pull-based equivalent of the auto-upload branch in the Digio webhook.
+            if (!record.signed_consent_url) {
+                const stored = await fetchAndStoreSignedConsent(record.esign_transaction_id, leadId);
+                if (stored?.publicUrl) {
+                    updates.signed_consent_url = stored.publicUrl;
+                }
+            }
         } else if (viewedStatuses.includes(rawStatus)) {
             newStatus = 'link_opened';
             if (newStatus !== record.consent_status) updates.consent_status = newStatus;
@@ -110,9 +120,14 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
             updates.esign_error_message = parsed?.failure_reason || parsed?.message || 'eSign failed';
         }
 
-        if (newStatus && newStatus !== record.consent_status) {
+        const statusChanged = newStatus && newStatus !== record.consent_status;
+        const backfillingPdf = newStatus === 'esign_completed' && updates.signed_consent_url && !record.signed_consent_url;
+
+        if (statusChanged || backfillingPdf) {
             await db.update(consentRecords).set(updates).where(eq(consentRecords.id, record.id));
-            await db.update(leads).set({ consent_status: newStatus, updated_at: now }).where(eq(leads.id, leadId));
+            if (statusChanged) {
+                await db.update(leads).set({ consent_status: newStatus, updated_at: now }).where(eq(leads.id, leadId));
+            }
         }
 
         return NextResponse.json({
