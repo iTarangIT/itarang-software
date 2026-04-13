@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import OcrAutofillButton from "./OcrAutofillButton";
+import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface RCCardProps {
   leadId: string;
   rcNumber?: string;
   ocrData?: Record<string, unknown> | null;
+  applicant?: "primary" | "co_borrower";
   existingVerification?: {
     id: string;
     status: string;
@@ -23,9 +25,14 @@ export default function RCCard({
   leadId,
   rcNumber: initRc = "",
   ocrData,
+  applicant = "primary",
   existingVerification,
   onActionComplete,
 }: RCCardProps) {
+  const apiBase =
+    applicant === "co_borrower"
+      ? `/api/admin/kyc/${leadId}/coborrower`
+      : `/api/admin/kyc/${leadId}`;
   const [rcNumber, setRcNumber] = useState(initRc);
   const [editing, setEditing] = useState(false);
   const [status, setStatus] = useState<CardStatus>(() => {
@@ -45,6 +52,7 @@ export default function RCCard({
   const [error, setError] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
+  const [showMoreDocsModal, setShowMoreDocsModal] = useState(false);
 
   const handleVerify = async () => {
     if (!rcNumber.trim()) { setError("RC number is required"); return; }
@@ -62,7 +70,7 @@ export default function RCCard({
     setChassisNumber(null);
 
     try {
-      const res = await fetch(`/api/admin/kyc/${leadId}/rc/verify`, {
+      const res = await fetch(`${apiBase}/rc/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rc_number: rcNumber.trim().toUpperCase() }),
@@ -247,9 +255,9 @@ export default function RCCard({
                   className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
                   {actionLoading === "reject" ? "..." : "Reject"}
                 </button>
-                <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
+                <button onClick={() => setShowMoreDocsModal(true)} disabled={!!actionLoading}
                   className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                  {actionLoading === "request_more_docs" ? "..." : "Request More Docs"}
+                  Request More Docs
                 </button>
               </div>
             </div>
@@ -258,6 +266,15 @@ export default function RCCard({
 
         {error && <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">{error}</div>}
       </div>
+
+      <RequestMoreDocsModal
+        open={showMoreDocsModal}
+        onClose={() => setShowMoreDocsModal(false)}
+        leadId={leadId}
+        sourceVerificationId={verificationId || existingVerification?.id || null}
+        sourceCardLabel="RC Verification"
+        onSuccess={() => onActionComplete?.()}
+      />
     </div>
   );
 }

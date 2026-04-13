@@ -871,11 +871,54 @@ export const kycDocuments = pgTable('kyc_documents', {
     };
 });
 
+export const digilockerTransactions = pgTable('digilocker_transactions', {
+    id: varchar('id', { length: 255 }).primaryKey(), // DIGI-YYYYMMDD-SEQ
+    lead_id: varchar('lead_id', { length: 255 }).references(() => leads.id, { onDelete: 'cascade' }).notNull(),
+    verification_id: varchar('verification_id', { length: 255 }),
+    reference_id: varchar('reference_id', { length: 255 }).notNull(),
+    decentro_txn_id: varchar('decentro_txn_id', { length: 255 }),
+    session_id: varchar('session_id', { length: 255 }),
+    status: varchar('status', { length: 30 }).default('initiated').notNull(),
+    customer_phone: varchar('customer_phone', { length: 20 }).notNull(),
+    customer_email: varchar('customer_email', { length: 255 }),
+    digilocker_url: text('digilocker_url'),
+    short_url: text('short_url'),
+    notification_channel: varchar('notification_channel', { length: 10 }).default('sms').notNull(),
+    link_sent_at: timestamp('link_sent_at', { withTimezone: true }),
+    link_opened_at: timestamp('link_opened_at', { withTimezone: true }),
+    customer_authorized_at: timestamp('customer_authorized_at', { withTimezone: true }),
+    digilocker_raw_response: jsonb('digilocker_raw_response'),
+    aadhaar_extracted_data: jsonb('aadhaar_extracted_data'),
+    cross_match_result: jsonb('cross_match_result'),
+    expires_at: timestamp('expires_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+    digilockerLeadIdx: index('digilocker_transactions_lead_idx').on(table.lead_id),
+    digilockerTxnIdx: index('digilocker_transactions_txn_idx').on(table.decentro_txn_id),
+    digilockerStatusIdx: index('digilocker_transactions_status_idx').on(table.status),
+}));
+
+export const kycDataAudit = pgTable('kyc_data_audit', {
+    id: varchar('id', { length: 255 }).primaryKey(), // KYCAUD-YYYYMMDD-SEQ
+    lead_id: varchar('lead_id', { length: 255 }).references(() => leads.id, { onDelete: 'cascade' }).notNull(),
+    field_name: varchar('field_name', { length: 50 }).notNull(),
+    field_value: varchar('field_value', { length: 200 }),
+    data_source: varchar('data_source', { length: 20 }).notNull(),
+    entered_by: uuid('entered_by').references(() => users.id).notNull(),
+    entered_at: timestamp('entered_at', { withTimezone: true }).defaultNow().notNull(),
+    reason: text('reason'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+    kycDataAuditLeadIdx: index('kyc_data_audit_lead_idx').on(table.lead_id),
+}));
+
 export const kycVerifications = pgTable('kyc_verifications', {
     id: varchar('id', { length: 255 }).primaryKey(), // KYCVER-YYYYMMDD-SEQ
     lead_id: varchar('lead_id', { length: 255 }).references(() => leads.id, { onDelete: 'cascade' }).notNull(),
     verification_type: varchar('verification_type', { length: 50 }).notNull(), // aadhaar, pan, bank, address, rc, mobile, cibil, photo
     verification_for: varchar('verification_for', { length: 20 }).default('customer').notNull(), // customer, borrower
+    applicant: varchar('applicant', { length: 20 }).default('primary').notNull(), // primary, co_borrower
     status: varchar('status', { length: 30 }).default('pending').notNull(), // pending, initiating, awaiting_action, in_progress, success, failed
     api_provider: varchar('api_provider', { length: 50 }), // decentro, surepass, vahan
     api_request: jsonb('api_request'),
@@ -885,6 +928,10 @@ export const kycVerifications = pgTable('kyc_verifications', {
     retry_count: integer('retry_count').default(0),
     submitted_at: timestamp('submitted_at', { withTimezone: true }),
     completed_at: timestamp('completed_at', { withTimezone: true }),
+    admin_action: varchar('admin_action', { length: 30 }), // accepted, rejected, request_more_docs
+    admin_action_by: uuid('admin_action_by').references(() => users.id),
+    admin_action_at: timestamp('admin_action_at', { withTimezone: true }),
+    admin_action_notes: text('admin_action_notes'),
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => {
@@ -927,6 +974,8 @@ export const consentRecords = pgTable('consent_records', {
     // Admin review
     verified_by: uuid('verified_by').references(() => users.id),
     verified_at: timestamp('verified_at', { withTimezone: true }),
+    admin_viewed_by: uuid('admin_viewed_by').references(() => users.id),
+    admin_viewed_at: timestamp('admin_viewed_at', { withTimezone: true }),
     rejected_by: uuid('rejected_by').references(() => users.id),
     rejected_at: timestamp('rejected_at', { withTimezone: true }),
     rejection_reason: varchar('rejection_reason', { length: 255 }),
@@ -1121,6 +1170,31 @@ export const otherDocumentRequests = pgTable('other_document_requests', {
     token_expires_at: timestamp('token_expires_at', { withTimezone: true }),
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const coBorrowerRequests = pgTable(
+  "co_borrower_requests",
+  {
+    id: varchar("id", { length: 255 }).primaryKey(), // COBREQ-YYYYMMDD-SEQ
+    lead_id: varchar("lead_id", { length: 255 })
+      .references(() => leads.id, { onDelete: "cascade" })
+      .notNull(),
+    attempt_number: integer("attempt_number").default(1).notNull(),
+    reason: text("reason"),
+    status: varchar("status", { length: 30 }).default("open").notNull(), // open, replaced, completed
+    created_by: uuid("created_by").references(() => users.id),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    coBorrowerRequestsLeadIdx: index("co_borrower_requests_lead_id_idx").on(
+      table.lead_id,
+    ),
+  }),
+);
 
 // --- LOAN OFFERS (SM → Dealer) ---
 

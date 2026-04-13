@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { leads, loanDetails, personalDetails, documents, auditLogs, accounts } from '@/lib/db/schema'; // Added accounts
+import { leads, loanDetails, personalDetails, kycDocuments, auditLogs, accounts } from '@/lib/db/schema';
 import { eq, and, desc, ilike, or, ne } from 'drizzle-orm';
 import { resolveDealerProfile } from '@/lib/supabase/identity';
 
@@ -151,14 +151,20 @@ export const POST = withErrorHandler(async (req: Request) => {
                 local_address: data.local_address,
             });
 
-            // D. Insert Documents
+            // D. Insert KYC Documents so they appear in the admin KYC review queue
             if (data.documents && data.documents.length > 0) {
-                await tx.insert(documents).values(
-                    data.documents.map(doc => ({
-                        lead_id: leadId,
-                        document_type: doc.type,
-                        file_url: doc.url
-                    }))
+                const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+                await tx.insert(kycDocuments).values(
+                    data.documents.map((doc, idx) => {
+                        const seq = `${Date.now().toString().slice(-6)}${idx.toString().padStart(2, '0')}`;
+                        return {
+                            id: `KYCDOC-${dateStr}-${seq}`,
+                            lead_id: leadId,
+                            doc_type: doc.type,
+                            file_url: doc.url,
+                            verification_status: 'pending',
+                        };
+                    })
                 );
             }
 

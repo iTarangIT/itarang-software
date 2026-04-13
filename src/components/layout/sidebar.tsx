@@ -213,7 +213,7 @@ export function Sidebar() {
     const { user, loading } = useAuth();
 
     if (loading || !user) {
-        return <div className="w-64 bg-slate-50/50 h-full border-r border-gray-100 hidden md:flex animate-pulse" />;
+        return <div className="w-64 bg-slate-50/50 h-screen border-r border-gray-100 fixed left-0 top-0 z-10 animate-pulse hidden md:block" />;
     }
 
     const userRole = resolveRole(user.role, pathname);
@@ -221,7 +221,7 @@ export function Sidebar() {
     const displayRole = formatRoleLabel(user.role, pathname);
 
     return (
-        <div className="w-64 bg-slate-50/50 h-full border-r border-gray-100 flex flex-col fixed left-0 top-0 z-10 hidden md:flex">
+        <div className="w-64 bg-slate-50/50 h-screen border-r border-gray-100 flex flex-col fixed left-0 top-0 z-10 hidden md:flex">
             <div className="p-6 flex items-center gap-3">
                 <div className="w-8 h-8 bg-brand-600 rounded-xl shadow-lg shadow-brand-500/20 flex items-center justify-center">
                     <div className="w-4 h-4 bg-white rounded-sm opacity-50 rotate-45"></div>
