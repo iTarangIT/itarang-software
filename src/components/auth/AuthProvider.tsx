@@ -36,9 +36,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchUser = async () => {
+  const fetchUser = async ({ silent = false }: { silent?: boolean } = {}) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
 
       const {
         data: { user: authUser },
@@ -70,7 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error("[AuthProvider] Failed to fetch user profile:", error);
       setUser(null);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -79,13 +79,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async () => {
-      await fetchUser();
+    } = supabase.auth.onAuthStateChange(async (event) => {
+      // Only show loading state on sign-out; other events (TOKEN_REFRESHED,
+      // USER_UPDATED, INITIAL_SESSION) fire on every navigation and should
+      // refresh silently so the sidebar/header don't flash their skeleton.
+      if (event === "SIGNED_OUT") {
+        setUser(null);
+        return;
+      }
+      await fetchUser({ silent: true });
     });
 
     return () => {
       subscription.unsubscribe();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase]);
 
   const logout = async () => {
@@ -105,7 +113,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         user,
         loading,
-        refreshUser: fetchUser,
+        refreshUser: () => fetchUser({ silent: true }),
         logout,
       }}
     >

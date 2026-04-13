@@ -479,7 +479,7 @@ export function Sidebar() {
 
   if (loading || !user) {
     return (
-      <div className="w-64 bg-slate-50/50 h-full border-r border-gray-100 hidden md:flex animate-pulse" />
+      <div className="w-64 bg-slate-50/50 h-screen border-r border-gray-100 fixed left-0 top-0 z-10 animate-pulse hidden md:block" />
     );
   }
 
@@ -487,7 +487,7 @@ export function Sidebar() {
   const menuItems = roleNavigation[userRole] || roleNavigation["user"] || [];
 
   return (
-    <div className="w-64 bg-slate-50/50 h-full border-r border-gray-100 flex flex-col fixed left-0 top-0 z-10 hidden md:flex">
+    <div className="w-64 bg-slate-50/50 h-screen border-r border-gray-100 flex-col fixed left-0 top-0 z-10 hidden md:flex">
       <div className="p-6 flex items-center gap-3">
         <div className="w-8 h-8 bg-brand-600 rounded-xl shadow-lg shadow-brand-500/20 flex items-center justify-center">
           <div className="w-4 h-4 bg-white rounded-sm opacity-50 rotate-45"></div>

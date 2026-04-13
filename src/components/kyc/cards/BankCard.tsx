@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import OcrAutofillButton from "./OcrAutofillButton";
+import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface BankCardProps {
   leadId: string;
@@ -11,6 +12,7 @@ interface BankCardProps {
   bankName?: string;
   branch?: string;
   ocrData?: Record<string, unknown> | null;
+  applicant?: "primary" | "co_borrower";
   existingVerification?: {
     id: string;
     status: string;
@@ -33,9 +35,14 @@ export default function BankCard({
   bankName: initBank = "",
   branch: initBranch = "",
   ocrData,
+  applicant = "primary",
   existingVerification,
   onActionComplete,
 }: BankCardProps) {
+  const apiBase =
+    applicant === "co_borrower"
+      ? `/api/admin/kyc/${leadId}/coborrower`
+      : `/api/admin/kyc/${leadId}`;
   const [accountNumber, setAccountNumber] = useState(initAccNo);
   const [ifsc, setIfsc] = useState(initIfsc);
   const [bankName, setBankName] = useState(initBank);
@@ -56,6 +63,7 @@ export default function BankCard({
   const [error, setError] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
+  const [showMoreDocsModal, setShowMoreDocsModal] = useState(false);
 
   const handleVerify = async () => {
     if (!accountNumber.trim()) {
@@ -71,7 +79,7 @@ export default function BankCard({
     setResult(null);
 
     try {
-      const res = await fetch(`/api/kyc/${leadId}/decentro/bank`, {
+      const res = await fetch(`${apiBase}/bank/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -439,13 +447,11 @@ export default function BankCard({
                   {actionLoading === "reject" ? "..." : "Reject"}
                 </button>
                 <button
-                  onClick={() => handleAdminAction("request_more_docs")}
+                  onClick={() => setShowMoreDocsModal(true)}
                   disabled={!!actionLoading}
                   className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
                 >
-                  {actionLoading === "request_more_docs"
-                    ? "..."
-                    : "Request Docs"}
+                  Request Docs
                 </button>
               </div>
             </div>
@@ -457,6 +463,15 @@ export default function BankCard({
           </div>
         )}
       </div>
+
+      <RequestMoreDocsModal
+        open={showMoreDocsModal}
+        onClose={() => setShowMoreDocsModal(false)}
+        leadId={leadId}
+        sourceVerificationId={existingVerification?.id || null}
+        sourceCardLabel="Bank Verification"
+        onSuccess={() => onActionComplete?.()}
+      />
     </div>
   );
 }

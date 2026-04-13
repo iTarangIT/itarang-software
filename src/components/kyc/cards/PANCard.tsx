@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import OcrAutofillButton from "./OcrAutofillButton";
+import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface PANCardProps {
   leadId: string;
@@ -9,6 +10,7 @@ interface PANCardProps {
   panNumber?: string;
   dob?: string;
   ocrData?: Record<string, unknown> | null;
+  applicant?: "primary" | "co_borrower";
   existingVerification?: {
     id: string;
     status: string;
@@ -39,9 +41,14 @@ export default function PANCard({
   panNumber,
   dob,
   ocrData,
+  applicant = "primary",
   existingVerification,
   onActionComplete,
 }: PANCardProps) {
+  const apiBase =
+    applicant === "co_borrower"
+      ? `/api/admin/kyc/${leadId}/coborrower`
+      : `/api/admin/kyc/${leadId}`;
   const [pan, setPan] = useState(panNumber || "");
   const [status, setStatus] = useState<CardStatus>(() => {
     if (existingVerification?.adminAction === "accepted") return "success";
@@ -66,6 +73,7 @@ export default function PANCard({
   });
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
+  const [showMoreDocsModal, setShowMoreDocsModal] = useState(false);
 
   const handleVerify = async () => {
     if (!pan.trim()) {
@@ -81,7 +89,7 @@ export default function PANCard({
     // PAN_DETAILED_COMPLETE
 
     try {
-      const res = await fetch(`/api/kyc/${leadId}/decentro/pan`, {
+      const res = await fetch(`${apiBase}/pan/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pan_number: pan.trim().toUpperCase(), dob }),
@@ -391,13 +399,11 @@ export default function PANCard({
                   {actionLoading === "reject" ? "..." : "Reject"}
                 </button>
                 <button
-                  onClick={() => handleAdminAction("request_more_docs")}
+                  onClick={() => setShowMoreDocsModal(true)}
                   disabled={!!actionLoading}
                   className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
                 >
-                  {actionLoading === "request_more_docs"
-                    ? "..."
-                    : "Request Docs"}
+                  Request Docs
                 </button>
               </div>
             </div>
@@ -409,6 +415,15 @@ export default function PANCard({
           </div>
         )}
       </div>
+
+      <RequestMoreDocsModal
+        open={showMoreDocsModal}
+        onClose={() => setShowMoreDocsModal(false)}
+        leadId={leadId}
+        sourceVerificationId={verificationId || existingVerification?.id || null}
+        sourceCardLabel="PAN Verification"
+        onSuccess={() => onActionComplete?.()}
+      />
     </div>
   );
 }

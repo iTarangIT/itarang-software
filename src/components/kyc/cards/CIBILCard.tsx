@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import RequestCoBorrowerModal from "../step3/RequestCoBorrowerModal";
+import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface CIBILCardProps {
   leadId: string;
@@ -9,6 +11,7 @@ interface CIBILCardProps {
   dob?: string;
   phone?: string;
   address?: string;
+  applicant?: "primary" | "co_borrower";
   existingVerification?: {
     id: string;
     status: string;
@@ -47,9 +50,14 @@ export default function CIBILCard({
   dob,
   phone,
   address,
+  applicant = "primary",
   existingVerification,
   onActionComplete,
 }: CIBILCardProps) {
+  const apiBase =
+    applicant === "co_borrower"
+      ? `/api/admin/kyc/${leadId}/coborrower`
+      : `/api/admin/kyc/${leadId}`;
   const [status, setStatus] = useState<CardStatus>(() => {
     if (existingVerification?.adminAction === "accepted") return "success";
     if (existingVerification?.adminAction === "rejected") return "failed";
@@ -85,14 +93,16 @@ export default function CIBILCard({
   const [error, setError] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
+  const [showCoBorrowerModal, setShowCoBorrowerModal] = useState(false);
+  const [showMoreDocsModal, setShowMoreDocsModal] = useState(false);
 
   const handleFetch = async (type: "score" | "report") => {
     setStatus(type === "score" ? "loading_score" : "loading_report");
     setError("");
 
     const endpoint = type === "score"
-      ? `/api/admin/kyc/${leadId}/cibil/score`
-      : `/api/admin/kyc/${leadId}/cibil/report`;
+      ? `${apiBase}/cibil/score`
+      : `${apiBase}/cibil/report`;
 
     try {
       const res = await fetch(endpoint, {
@@ -353,9 +363,9 @@ export default function CIBILCard({
                       className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
                       {actionLoading === "reject" ? "..." : "Reject"}
                     </button>
-                    <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
+                    <button onClick={() => setShowCoBorrowerModal(true)} disabled={!!actionLoading}
                       className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                      {actionLoading === "request_more_docs" ? "..." : "Need Co-Borrower KYC"}
+                      Need Co-Borrower KYC
                     </button>
                   </div>
                 </div>
@@ -493,9 +503,9 @@ export default function CIBILCard({
                       {actionLoading === "reject" ? "..." : "Reject"}
                     </button>
                     {interpretation?.coBorrowerRequired && (
-                      <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
+                      <button onClick={() => setShowCoBorrowerModal(true)} disabled={!!actionLoading}
                         className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                        {actionLoading === "request_more_docs" ? "..." : "Need Co-Borrower KYC"}
+                        Need Co-Borrower KYC
                       </button>
                     )}
                   </div>
@@ -507,6 +517,21 @@ export default function CIBILCard({
 
         {error && <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">{error}</div>}
       </div>
+
+      <RequestCoBorrowerModal
+        open={showCoBorrowerModal}
+        onClose={() => setShowCoBorrowerModal(false)}
+        leadId={leadId}
+        onSuccess={() => onActionComplete?.()}
+      />
+      <RequestMoreDocsModal
+        open={showMoreDocsModal}
+        onClose={() => setShowMoreDocsModal(false)}
+        leadId={leadId}
+        sourceVerificationId={verificationId || existingVerification?.id || null}
+        sourceCardLabel="CIBIL Verification"
+        onSuccess={() => onActionComplete?.()}
+      />
     </div>
   );
 }

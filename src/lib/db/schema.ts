@@ -1312,6 +1312,7 @@ export const kycVerifications = pgTable(
       .references(() => dealerLeads.id, { onDelete: "cascade" })
       .notNull(),
     verification_type: varchar("verification_type", { length: 50 }).notNull(), // aadhaar, pan, bank, address, rc, mobile, cibil, photo
+    applicant: varchar("applicant", { length: 20 }).default("primary").notNull(), // primary, co_borrower
     status: varchar("status", { length: 30 }).default("pending").notNull(), // pending, initiating, awaiting_action, in_progress, success, failed
     api_provider: varchar("api_provider", { length: 50 }), // decentro, surepass, vahan
     api_request: jsonb("api_request"),
@@ -1444,6 +1445,8 @@ export const consentRecords = pgTable("consent_records", {
   signed_at: timestamp("signed_at", { withTimezone: true }),
   verified_by: uuid("verified_by").references(() => users.id),
   verified_at: timestamp("verified_at", { withTimezone: true }),
+  admin_viewed_by: uuid("admin_viewed_by").references(() => users.id),
+  admin_viewed_at: timestamp("admin_viewed_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -1659,6 +1662,31 @@ export const otherDocumentRequests = pgTable("other_document_requests", {
     .defaultNow()
     .notNull(),
 });
+
+export const coBorrowerRequests = pgTable(
+  "co_borrower_requests",
+  {
+    id: varchar("id", { length: 255 }).primaryKey(), // COBREQ-YYYYMMDD-SEQ
+    lead_id: varchar("lead_id", { length: 255 })
+      .references(() => dealerLeads.id, { onDelete: "cascade" })
+      .notNull(),
+    attempt_number: integer("attempt_number").default(1).notNull(),
+    reason: text("reason"),
+    status: varchar("status", { length: 30 }).default("open").notNull(), // open, replaced, completed
+    created_by: uuid("created_by").references(() => users.id),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    coBorrowerRequestsLeadIdx: index("co_borrower_requests_lead_id_idx").on(
+      table.lead_id,
+    ),
+  }),
+);
 
 // --- LOAN OFFERS (SM → Dealer) ---
 
