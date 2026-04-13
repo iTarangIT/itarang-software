@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface AadhaarCardProps {
   leadId: string;
   leadName: string;
   phone: string;
   email?: string;
+  applicant?: "primary" | "co_borrower";
   existingTransaction?: {
     id: string;
     status: string;
@@ -66,10 +68,15 @@ export default function AadhaarCard({
   leadName,
   phone,
   email,
+  applicant = "primary",
   existingTransaction,
   existingVerification,
   onActionComplete,
 }: AadhaarCardProps) {
+  const apiBase =
+    applicant === "co_borrower"
+      ? `/api/admin/kyc/${leadId}/coborrower`
+      : `/api/admin/kyc/${leadId}`;
   const [cardStatus, setCardStatus] = useState<CardStatus>(() => {
     if (existingVerification?.adminAction === "accepted") return "success";
     if (existingVerification?.adminAction === "rejected") return "failed";
@@ -97,12 +104,13 @@ export default function AadhaarCard({
   const [digilockerUrl, setDigilockerUrl] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
+  const [showMoreDocsModal, setShowMoreDocsModal] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const pollStatus = useCallback(async () => {
     if (!transactionId) return;
     try {
-      const res = await fetch(`/api/admin/kyc/${leadId}/aadhaar/digilocker/status/${transactionId}`);
+      const res = await fetch(`${apiBase}/aadhaar/digilocker/status/${transactionId}`);
       const data = await res.json();
       if (!data.success) return;
       const s = data.data;
@@ -157,7 +165,7 @@ export default function AadhaarCard({
     setError("");
     setCardStatus("initiating");
     try {
-      const res = await fetch(`/api/admin/kyc/${leadId}/aadhaar/digilocker/initiate`, {
+      const res = await fetch(`${apiBase}/aadhaar/digilocker/initiate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ notification_channel: "sms", link_validity_hours: linkValidity }),
@@ -452,9 +460,9 @@ export default function AadhaarCard({
                     className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
                     {actionLoading === "reject" ? "..." : "Reject"}
                   </button>
-                  <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
+                  <button onClick={() => setShowMoreDocsModal(true)} disabled={!!actionLoading}
                     className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                    {actionLoading === "request_more_docs" ? "..." : "Request Docs"}
+                    Request Docs
                   </button>
                 </div>
               </div>
@@ -472,6 +480,15 @@ export default function AadhaarCard({
           <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">{error}</div>
         )}
       </div>
+
+      <RequestMoreDocsModal
+        open={showMoreDocsModal}
+        onClose={() => setShowMoreDocsModal(false)}
+        leadId={leadId}
+        sourceVerificationId={existingVerification?.id || null}
+        sourceCardLabel="Aadhaar Verification"
+        onSuccess={() => onActionComplete?.()}
+      />
     </div>
   );
 }

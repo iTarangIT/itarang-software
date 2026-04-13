@@ -5,12 +5,16 @@ import { db } from "@/lib/db";
 import {
   adminKycReviews,
   adminVerificationQueue,
+  coBorrowerDocuments,
+  coBorrowerRequests,
+  coBorrowers,
   consentRecords,
   leads,
   digilockerTransactions,
   kycDocuments,
   kycVerificationMetadata,
   kycVerifications,
+  otherDocumentRequests,
   personalDetails,
 } from "@/lib/db/schema";
 import {
@@ -41,7 +45,7 @@ export async function GET(
 
     const { leadId } = await params;
 
-    // Parallel fetch all case data
+    // Parallel fetch all case data (primary + Step 3 supporting docs + co-borrower)
     const [
       leadRows,
       personalRows,
@@ -52,6 +56,10 @@ export async function GET(
       queueRows,
       reviewRows,
       digilockerRows,
+      supportingDocsRows,
+      coBorrowerRows,
+      coBorrowerDocRows,
+      coBorrowerRequestRows,
     ] = await Promise.all([
       db
         .select()
@@ -99,6 +107,26 @@ export async function GET(
         .from(digilockerTransactions)
         .where(eq(digilockerTransactions.lead_id, leadId))
         .orderBy(desc(digilockerTransactions.created_at)),
+      db
+        .select()
+        .from(otherDocumentRequests)
+        .where(eq(otherDocumentRequests.lead_id, leadId))
+        .orderBy(desc(otherDocumentRequests.created_at)),
+      db
+        .select()
+        .from(coBorrowers)
+        .where(eq(coBorrowers.lead_id, leadId))
+        .limit(1),
+      db
+        .select()
+        .from(coBorrowerDocuments)
+        .where(eq(coBorrowerDocuments.lead_id, leadId))
+        .orderBy(coBorrowerDocuments.uploaded_at),
+      db
+        .select()
+        .from(coBorrowerRequests)
+        .where(eq(coBorrowerRequests.lead_id, leadId))
+        .orderBy(desc(coBorrowerRequests.attempt_number)),
     ]);
 
     const lead = leadRows[0];
@@ -112,11 +140,16 @@ export async function GET(
     const personal = personalRows[0] || null;
     const metadata = metadataRows[0] || null;
     const queueEntry = queueRows[0] || null;
+    const coBorrower = coBorrowerRows[0] || null;
+    const activeCoBorrowerRequest =
+      coBorrowerRequestRows.find((r) => r.status === "open") ||
+      coBorrowerRequestRows[0] ||
+      null;
 
-    // Build verification cards summary
-    const verificationCards = verifications.map((v) => ({
+    const mapVerification = (v: typeof verifications[number]) => ({
       id: v.id,
       type: v.verification_type,
+      applicant: v.applicant,
       status: v.status,
       provider: v.api_provider,
       matchScore: v.match_score,
@@ -127,7 +160,17 @@ export async function GET(
       submittedAt: v.submitted_at,
       completedAt: v.completed_at,
       apiResponse: v.api_response,
-    }));
+    });
+
+    // Split verifications by applicant. Rows without an applicant column
+    // (backfill default) count as primary.
+    const verificationCards = verifications
+      .filter((v) => (v.applicant ?? "primary") === "primary")
+      .map(mapVerification);
+
+    const coBorrowerVerificationCards = verifications
+      .filter((v) => v.applicant === "co_borrower")
+      .map(mapVerification);
 
     // SLA and priority for queue entry
     const sla = queueEntry?.created_at
@@ -195,8 +238,12 @@ export async function GET(
           consentFor: c.consent_for,
           consentType: c.consent_type,
           consentStatus: c.consent_status,
+          generatedPdfUrl: c.generated_pdf_url,
+          signedConsentUrl: c.signed_consent_url,
           signedAt: c.signed_at,
           verifiedAt: c.verified_at,
+          adminViewedBy: c.admin_viewed_by,
+          adminViewedAt: c.admin_viewed_at,
         })),
         metadata: metadata
           ? {
@@ -245,6 +292,56 @@ export async function GET(
           crossMatchResult: d.cross_match_result,
           expiresAt: d.expires_at,
         })),
+        supportingDocs: supportingDocsRows.map((r) => ({
+          id: r.id,
+          docFor: r.doc_for,
+          docLabel: r.doc_label,
+          docKey: r.doc_key,
+          isRequired: r.is_required,
+          fileUrl: r.file_url,
+          uploadStatus: r.upload_status,
+          rejectionReason: r.rejection_reason,
+          requestedAt: r.created_at,
+          uploadedAt: r.uploaded_at,
+          reviewedAt: r.reviewed_at,
+          uploadToken: r.upload_token,
+          tokenExpiresAt: r.token_expires_at,
+        })),
+        coBorrower: coBorrower
+          ? {
+              id: coBorrower.id,
+              fullName: coBorrower.full_name,
+              fatherOrHusbandName: coBorrower.father_or_husband_name,
+              dob: formatDob(coBorrower.dob),
+              phone: coBorrower.phone,
+              permanentAddress: coBorrower.permanent_address,
+              currentAddress: coBorrower.current_address,
+              isCurrentSame: coBorrower.is_current_same,
+              panNo: coBorrower.pan_no,
+              aadhaarNo: coBorrower.aadhaar_no,
+              kycStatus: coBorrower.kyc_status,
+              consentStatus: coBorrower.consent_status,
+              verificationSubmittedAt: coBorrower.verification_submitted_at,
+              documents: coBorrowerDocRows.map((d) => ({
+                id: d.id,
+                docType: d.doc_type,
+                fileUrl: d.file_url,
+                status: d.status,
+                ocrData: d.ocr_data,
+                uploadedAt: d.uploaded_at,
+              })),
+              verificationCards: coBorrowerVerificationCards,
+              activeRequest: activeCoBorrowerRequest
+                ? {
+                    id: activeCoBorrowerRequest.id,
+                    attemptNumber: activeCoBorrowerRequest.attempt_number,
+                    reason: activeCoBorrowerRequest.reason,
+                    status: activeCoBorrowerRequest.status,
+                    createdAt: activeCoBorrowerRequest.created_at,
+                  }
+                : null,
+            }
+          : null,
       },
     });
   } catch (error) {
