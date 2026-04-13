@@ -1,0 +1,66 @@
+{
+  "lead_id": "L-2024-001",
+  "dealer_name": "Ramesh Kumar",
+  "phone": "+91 9876543210",
+  "language": "hindi",
+  "follow_up_history": [
+    {
+      "attempt": 1,
+      "called_at": "2026-03-24 12:00",
+      "outcome": "callback_requested",
+      "dealer_said": "mujhe 2 ghante me call karo",
+      "next_call_at": "2026-03-24 14:00",
+
+      "analysis": {
+        "next_step_commitment": 6,
+        "urgency_signals": 5,
+        "product_curiosity": 3,
+        "need_acknowledgment": 4,
+        "objection_quality": 5,
+        "engagement_depth": 5,
+        "intent_score": 52
+      }
+    },
+    {
+      "attempt": 2,
+      "called_at": "2026-03-24 14:00",
+      "outcome": "callback_requested",
+      "dealer_said": "kal subah call karo",
+      "next_call_at": "2026-03-25 10:00",
+
+      "analysis": {
+        "next_step_commitment": 7,
+        "urgency_signals": 6,
+        "product_curiosity": 4,
+        "need_acknowledgment": 5,
+        "objection_quality": 5,
+        "engagement_depth": 6,
+        "intent_score": 58
+      }
+    },
+    {
+      "attempt": 3,
+      "called_at": "2026-03-25 10:00",
+      "outcome": "interested",
+      "dealer_said": "haan baat karte hain",
+      "next_call_at": null,
+
+      "analysis": {
+        "next_step_commitment": 9,
+        "urgency_signals": 7,
+        "product_curiosity": 8,
+        "need_acknowledgment": 8,
+        "objection_quality": 6,
+        "engagement_depth": 7,
+        "intent_score": 78
+      }
+    }
+  ],
+  "current_status": "qualified",
+  "total_attempts": 3,
+  "final_intent_score": 78
+}
+
+
+
+
