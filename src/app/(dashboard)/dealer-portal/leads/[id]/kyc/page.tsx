@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
     AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Clock,
@@ -41,7 +41,7 @@ function isFinalConsentStatus(status: string) {
 function ConsentStatusBadge({ status }: { status: string }) {
     const s = (status || '').toLowerCase();
     if (isFinalConsentStatus(s)) {
-        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Verified</span>;
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Admin Verified</span>;
     }
     if (s === 'admin_review_pending') {
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold"><Clock className="w-3 h-3" />Pending Review</span>;
@@ -110,6 +110,11 @@ export default function KYCPage() {
     const [releasingCoupon, setReleasingCoupon] = useState(false);
     const [submittedForVerification, setSubmittedForVerification] = useState(false);
 
+    // Reupload state
+    const reuploadInputRef = useRef<HTMLInputElement>(null);
+    const [reuploadType, setReuploadType] = useState<string | null>(null);
+    const [reuploading, setReuploading] = useState(false);
+
     // ─── Data Loading ───────────────────────────────────────────────────────
 
     const loadPageData = async (soft = false) => {
@@ -145,7 +150,7 @@ export default function KYCPage() {
             }
 
             const [docsRes, verificationsRes, consentRes] = await Promise.allSettled([
-                fetch(`/api/kyc/${leadId}/documents`, { cache: 'no-store' }),
+                fetch(`/api/kyc/${leadId}/documents?doc_for=customer`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/verifications?verification_for=customer`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/consent/status?consent_for=customer`, { cache: 'no-store' }),
             ]);
@@ -182,11 +187,21 @@ export default function KYCPage() {
 
     useEffect(() => { loadPageData(); }, [leadId]);
 
-    // Auto-poll consent status when waiting for customer action
+    // Auto-poll consent status while anything is in-flight:
+    //  - link_sent / link_opened / esign_in_progress → waiting for customer to sign (calls Digio sync)
+    //  - esign_completed / admin_review_pending / consent_uploaded → waiting for admin to verify
     useEffect(() => {
-        const waitingStatuses = ['link_sent', 'link_opened', 'esign_in_progress'];
-        if (!waitingStatuses.includes(consentStatus)) return;
-        const interval = setInterval(() => loadPageData(true), 10000); // poll every 10s
+        const digioSyncStatuses = ['link_sent', 'link_opened', 'esign_in_progress'];
+        const adminWaitStatuses = ['esign_completed', 'admin_review_pending', 'consent_uploaded'];
+        const needsPoll = digioSyncStatuses.includes(consentStatus) || adminWaitStatuses.includes(consentStatus);
+        if (!needsPoll) return;
+        const tick = async () => {
+            if (digioSyncStatuses.includes(consentStatus)) {
+                try { await fetch(`/api/kyc/${leadId}/consent/sync`, { method: 'POST', cache: 'no-store' }); } catch {}
+            }
+            loadPageData(true);
+        };
+        const interval = setInterval(tick, 10000);
         return () => clearInterval(interval);
     }, [consentStatus, leadId]);
 
@@ -238,6 +253,7 @@ export default function KYCPage() {
             formData.append('file', file);
             formData.append('documentType', documentType);
             formData.append('docType', documentType);
+            formData.append('docFor', 'customer');
 
             const res = await fetch(`/api/kyc/${leadId}/upload-document`, { method: 'POST', body: formData });
             const data = await res.json();
@@ -260,6 +276,49 @@ export default function KYCPage() {
             await loadPageData(true);
         } catch (err: any) {
             setApiError(err?.message || 'Document upload failed');
+        }
+    };
+
+    // ─── Verification Re-upload ──────────────────────────────────────────────
+
+    const triggerReupload = (verificationType: string) => {
+        setReuploadType(verificationType);
+        reuploadInputRef.current?.click();
+    };
+
+    const handleReuploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file || !reuploadType) return;
+
+        if (!['image/png', 'image/jpeg', 'image/jpg', 'application/pdf'].includes(file.type)) {
+            setApiError('Only PNG, JPEG, JPG, and PDF files are allowed');
+            return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+            setApiError('File size must be 5MB or smaller');
+            return;
+        }
+
+        setReuploading(true);
+        setApiError(null);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('verificationType', reuploadType);
+
+            const res = await fetch(`/api/kyc/${leadId}/re-upload`, { method: 'POST', body: formData });
+            const data = await res.json();
+
+            if (!res.ok || !data?.success) throw new Error(data?.error?.message || 'Re-upload failed');
+
+            await loadPageData(true);
+        } catch (err: any) {
+            setApiError(err?.message || 'Re-upload failed');
+        } finally {
+            setReuploading(false);
+            setReuploadType(null);
+            // Reset file input so same file can be re-selected
+            if (reuploadInputRef.current) reuploadInputRef.current.value = '';
         }
     };
 
@@ -494,7 +553,10 @@ export default function KYCPage() {
                     step={2}
                     onBack={() => router.back()}
                     rightAction={
-                        <button onClick={() => loadPageData(true)} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold">
+                        <button onClick={async () => {
+                            try { await fetch(`/api/kyc/${leadId}/consent/sync`, { method: 'POST', cache: 'no-store' }); } catch {}
+                            loadPageData(true);
+                        }} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold">
                             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
                         </button>
                     }
@@ -508,13 +570,34 @@ export default function KYCPage() {
                         <ConsentStatusBadge status={consentStatus} />
                     }>
                         {isFinalConsentStatus(consentStatus) ? (
-                            /* ── Consent Verified ─────────────────────────── */
-                            <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
-                                <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-                                <div>
-                                    <p className="text-sm font-bold text-emerald-800">Consent Verified</p>
-                                    <p className="text-xs text-emerald-600 mt-0.5">Admin has verified the customer consent. You can proceed to the next step.</p>
+                            /* ── Admin Verified Successfully ─────────────── */
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                                    <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                                        <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <p className="text-sm font-bold text-emerald-800">Admin Verified Successfully</p>
+                                        <p className="text-xs text-emerald-600 mt-0.5">The admin has verified the customer consent. You can now proceed to the next step.</p>
+                                        {consentRecord?.verified_at && (
+                                            <p className="text-xs text-emerald-500 mt-1">
+                                                Verified at: {new Date(consentRecord.verified_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                                                {consentRecord.signer_aadhaar_masked && ` · Aadhaar: ${consentRecord.signer_aadhaar_masked}`}
+                                            </p>
+                                        )}
+                                    </div>
+                                    <div className="flex-shrink-0">
+                                        <span className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold">
+                                            <CheckCircle2 className="w-3.5 h-3.5" /> Verified
+                                        </span>
+                                    </div>
                                 </div>
+                                {consentRecord?.signed_consent_url && (
+                                    <a href={consentRecord.signed_consent_url} target="_blank" rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-emerald-200 rounded-lg text-xs font-bold text-emerald-700 hover:bg-emerald-50 transition-all">
+                                        <Download className="w-3.5 h-3.5" /> Download Signed Consent PDF
+                                    </a>
+                                )}
                             </div>
                         ) : consentStatus === 'admin_review_pending' ? (
                             /* ── Awaiting Admin Review ────────────────────── */
@@ -884,6 +967,15 @@ export default function KYCPage() {
                         )}
                     </SectionCard>
 
+                    {/* Hidden file input for verification re-uploads */}
+                    <input
+                        ref={reuploadInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/jpg,application/pdf"
+                        className="hidden"
+                        onChange={handleReuploadFile}
+                    />
+
                     {/* ─── Verification Status ────────────────────────── */}
                     {verifications.length > 0 && (
                         <SectionCard title="Verification Status (Customer)">
@@ -909,12 +1001,17 @@ export default function KYCPage() {
                                                 <td className="py-3 px-3">
                                                     {v.status === 'success' || v.status === 'verified' ? (
                                                         <span className="text-green-600 font-bold text-xs">Verified</span>
-                                                    ) : v.status === 'failed' ? (
+                                                    ) : (v.status === 'failed' || v.status === 'awaiting_action') ? (
                                                         <button
-                                                            onClick={() => {/* re-upload trigger */}}
-                                                            className="text-xs font-bold text-[#0047AB] hover:underline flex items-center gap-1"
+                                                            onClick={() => triggerReupload(v.type)}
+                                                            disabled={reuploading && reuploadType === v.type}
+                                                            className="text-xs font-bold text-[#0047AB] hover:underline flex items-center gap-1 disabled:opacity-50"
                                                         >
-                                                            <Upload className="w-3 h-3" /> Re-upload
+                                                            {reuploading && reuploadType === v.type ? (
+                                                                <><Loader2 className="w-3 h-3 animate-spin" /> Uploading...</>
+                                                            ) : (
+                                                                <><Upload className="w-3 h-3" /> Re-upload</>
+                                                            )}
                                                         </button>
                                                     ) : (
                                                         <span className="text-gray-400 text-xs">—</span>

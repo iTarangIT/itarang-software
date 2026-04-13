@@ -165,7 +165,13 @@ function NewLeadWizardContent() {
     const updateField = (field: string, value: any) => {
         let fin = value;
         if (['full_name', 'father_or_husband_name', 'vehicle_owner_name'].includes(field)) {
-            fin = value.split(' ').map((s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '')).join(' ');
+            // Strip digits and other non-name characters; allow letters, spaces, dots, apostrophes, hyphens
+            const lettersOnly = String(value ?? '').replace(/[^A-Za-z\s.'-]/g, '');
+            fin = lettersOnly.split(' ').map((s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '')).join(' ');
+        }
+        if (['phone', 'vehicle_owner_phone'].includes(field)) {
+            // Strip all non-digits and cap at 10
+            fin = String(value ?? '').replace(/\D/g, '').slice(0, 10);
         }
         if (field === 'vehicle_rc') fin = value.toUpperCase();
 
@@ -213,9 +219,18 @@ function NewLeadWizardContent() {
         const e: Record<string, string> = {};
         const finFlow = isFinanceMethod(formData.payment_method);
 
+        const nameRegex = /^[A-Za-z\s.'-]+$/;
+        const phoneRegex = /^[0-9]{10}$/;
+
         if (!formData.full_name || formData.full_name.trim().length < 2) e.full_name = 'Minimum 2 characters required';
+        else if (!nameRegex.test(formData.full_name.trim())) e.full_name = 'Only letters allowed';
+
         if (finFlow && !formData.father_or_husband_name?.trim()) e.father_or_husband_name = 'Required for finance cases';
-        if (!formData.phone || formData.phone.replace(/\D/g, '').length < 10) e.phone = 'Invalid phone number';
+        else if (formData.father_or_husband_name?.trim() && !nameRegex.test(formData.father_or_husband_name.trim())) e.father_or_husband_name = 'Only letters allowed';
+
+        if (!formData.phone) e.phone = 'Phone is required';
+        else if (!phoneRegex.test(formData.phone)) e.phone = 'Must be exactly 10 digits';
+
         if (!formData.dob) e.dob = 'Required';
         else if (calculateAge(formData.dob) < 18) e.dob = 'Must be 18+';
         if (!formData.product_category_id) e.product_category_id = 'Required';
@@ -227,7 +242,9 @@ function NewLeadWizardContent() {
         if (isVehicle && formData.vehicle_rc?.trim()) {
             if (!formData.vehicle_ownership) e.vehicle_ownership = 'Required';
             if (!formData.vehicle_owner_name?.trim()) e.vehicle_owner_name = 'Required';
+            else if (!nameRegex.test(formData.vehicle_owner_name.trim())) e.vehicle_owner_name = 'Only letters allowed';
             if (!formData.vehicle_owner_phone?.trim()) e.vehicle_owner_phone = 'Required';
+            else if (!phoneRegex.test(formData.vehicle_owner_phone)) e.vehicle_owner_phone = 'Must be exactly 10 digits';
         }
 
         setErrors(e);
@@ -492,7 +509,7 @@ function NewLeadWizardContent() {
                                 {errors.dob && <p className="text-[10px] text-red-500 font-bold px-1">{errors.dob}</p>}
                             </div>
 
-                            <InputField label="Phone Number" value={formData.phone} onChange={v => updateField('phone', v)} onBlur={handlePhoneBlur} error={errors.phone} placeholder="9876543210" required />
+                            <InputField label="Phone Number" value={formData.phone} onChange={v => updateField('phone', v)} onBlur={handlePhoneBlur} error={errors.phone} placeholder="9876543210" required inputMode="numeric" maxLength={10} />
 
                             <div className="md:col-span-2">
                                 <TextAreaField label="Current Address" value={formData.current_address} onChange={v => updateField('current_address', v)} error={errors.current_address} placeholder="123, Main Street, City, State - 123456" required />
@@ -649,7 +666,7 @@ function NewLeadWizardContent() {
                                         error={errors.vehicle_ownership}
                                     />
                                     <InputField label={`Owner Full Name${formData.vehicle_rc?.trim() ? ' *' : ''}`} value={formData.vehicle_owner_name} onChange={v => updateField('vehicle_owner_name', v)} placeholder="Vijay Sharma" error={errors.vehicle_owner_name} />
-                                    <InputField label={`Owner Phone${formData.vehicle_rc?.trim() ? ' *' : ''}`} value={formData.vehicle_owner_phone} onChange={v => updateField('vehicle_owner_phone', v)} placeholder="+91 9876543210" error={errors.vehicle_owner_phone} />
+                                    <InputField label={`Owner Phone${formData.vehicle_rc?.trim() ? ' *' : ''}`} value={formData.vehicle_owner_phone} onChange={v => updateField('vehicle_owner_phone', v)} placeholder="9876543210" error={errors.vehicle_owner_phone} inputMode="numeric" maxLength={10} />
                                 </div>
                                 {formData.vehicle_rc?.trim() && (
                                     <div className="mt-4 px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg">

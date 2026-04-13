@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { kycDocuments, leads } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 
 type RouteContext = {
@@ -40,12 +40,13 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
     }
 
     // ---------------------------
-    // Fetch uploaded documents
+    // Fetch uploaded documents (filtered by doc_for if provided)
     // ---------------------------
+    const docFor = _req.nextUrl.searchParams.get("doc_for") || "customer";
     const docs = await db
       .select()
       .from(kycDocuments)
-      .where(eq(kycDocuments.lead_id, leadId));
+      .where(and(eq(kycDocuments.lead_id, leadId), eq(kycDocuments.doc_for, docFor)));
 
     // Map to frontend format
     const data = docs.map((doc) => {

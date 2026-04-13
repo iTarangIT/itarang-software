@@ -26,6 +26,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     const formData = await req.formData();
     const file = formData.get("file") as File;
     const docType = String(formData.get("documentType") || formData.get("docType"));
+    const docFor = String(formData.get("docFor") || "customer");
 
     if (!file || !docType) {
       return NextResponse.json(
@@ -56,7 +57,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       .from(kycDocuments)
       .where(eq(kycDocuments.lead_id, leadId));
 
-    const existingDoc = existingRows.find((d) => d.doc_type === docType);
+    const existingDoc = existingRows.find((d) => d.doc_type === docType && d.doc_for === docFor);
 
     const now = new Date();
 
@@ -88,6 +89,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         id: docId,
         lead_id: leadId,
         doc_type: docType,
+        doc_for: docFor,
         file_url: fileUrl,
         file_name: file.name,
         file_size: file.size,

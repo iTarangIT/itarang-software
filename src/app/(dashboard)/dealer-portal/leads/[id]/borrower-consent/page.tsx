@@ -135,7 +135,7 @@ export default function BorrowerConsentPage() {
 
             const [personalRes, docsRes, verificationsRes, consentRes] = await Promise.allSettled([
                 fetch(`/api/kyc/${leadId}/borrower-details`, { cache: 'no-store' }),
-                fetch(`/api/kyc/${leadId}/documents`, { cache: 'no-store' }),
+                fetch(`/api/kyc/${leadId}/documents?doc_for=borrower`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/verifications?verification_for=borrower`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/consent/status?consent_for=borrower`, { cache: 'no-store' }),
             ]);
@@ -265,6 +265,7 @@ export default function BorrowerConsentPage() {
             formData.append('file', file);
             formData.append('documentType', documentType);
             formData.append('docType', documentType);
+            formData.append('docFor', 'borrower');
 
             const res = await fetch(`/api/kyc/${leadId}/upload-document`, { method: 'POST', body: formData });
             const data = await res.json();

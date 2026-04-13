@@ -39,9 +39,9 @@ export const INTEREST_LEVELS = [
 ] as const;
 
 export const PAYMENT_METHODS = [
-    { value: 'other_finance', label: 'Other Finance' },
+    { value: 'other_finance', label: 'iTarang Finance' },
     { value: 'cash', label: 'Cash' },
-    { value: 'dealer_finance', label: 'Dealer Finance' },
+    { value: 'dealer_finance', label: 'Self Finance' },
 ] as const;
 
 export const VEHICLE_OWNERSHIP_OPTIONS = [

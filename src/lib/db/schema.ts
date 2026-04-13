@@ -839,6 +839,7 @@ export const kycDocuments = pgTable('kyc_documents', {
         .references(() => leads.id, { onDelete: 'cascade' })
         .notNull(),
     doc_type: varchar('doc_type', { length: 50 }).notNull(),
+    doc_for: varchar('doc_for', { length: 20 }).default('customer').notNull(), // customer, borrower
 
     file_url: text('file_url'),
     file_name: text('file_name'),

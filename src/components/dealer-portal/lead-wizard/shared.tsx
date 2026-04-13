@@ -3,7 +3,7 @@
 import { type ReactNode, useState } from 'react';
 import {
     ChevronLeft, ChevronDown, Loader2, AlertCircle, X,
-    Upload, CheckCircle2, XCircle, Clock, Scan, Eye
+    Upload, CheckCircle2, XCircle, Clock, Scan, Eye, FileText
 } from 'lucide-react';
 
 // ─── Section Card ───────────────────────────────────────────────────────────
@@ -29,7 +29,7 @@ export function SectionCard({ title, children, action }: {
 
 // ─── Input Field ────────────────────────────────────────────────────────────
 
-export function InputField({ label, value, onChange, onBlur, error, placeholder, required, type = 'text', disabled, className }: {
+export function InputField({ label, value, onChange, onBlur, error, placeholder, required, type = 'text', disabled, className, inputMode, maxLength }: {
     label: string;
     value: string;
     onChange: (v: string) => void;
@@ -40,6 +40,8 @@ export function InputField({ label, value, onChange, onBlur, error, placeholder,
     type?: string;
     disabled?: boolean;
     className?: string;
+    inputMode?: 'text' | 'numeric' | 'tel' | 'email' | 'url' | 'search' | 'decimal' | 'none';
+    maxLength?: number;
 }) {
     return (
         <div className={`space-y-2 ${className || ''}`}>
@@ -53,6 +55,8 @@ export function InputField({ label, value, onChange, onBlur, error, placeholder,
                 onBlur={onBlur}
                 placeholder={placeholder}
                 disabled={disabled}
+                inputMode={inputMode}
+                maxLength={maxLength}
                 className={`w-full h-11 px-4 bg-white border-2 rounded-xl outline-none transition-all text-sm placeholder-gray-400 ${
                     disabled ? 'bg-gray-50 border-[#F5F5F5] text-gray-400' :
                     error ? 'border-red-400 focus:border-red-500' :
@@ -163,18 +167,31 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
     fileUrl?: string | null;
 }) {
     const dealerStatus = getDealerStatus(uploaded, status);
+    const isPdf = !!fileUrl && /\.pdf($|\?)/i.test(fileUrl);
+    const isImage = !!fileUrl && !isPdf;
+    const isVerified = dealerStatus.icon === 'check';
+    const isRejected = dealerStatus.icon === 'reupload' || dealerStatus.icon === 'error';
+    const isPending = uploaded && !isVerified && !isRejected;
+
+    const border = !uploaded
+        ? 'border-dashed border-gray-200 hover:border-[#0047AB]/60'
+        : isVerified
+            ? 'border-emerald-200 hover:border-emerald-400'
+            : isRejected
+                ? 'border-red-200 hover:border-red-400'
+                : 'border-amber-200 hover:border-amber-400';
+
+    const pill = !uploaded
+        ? { bg: 'bg-gray-100', text: 'text-gray-500', label: required ? 'Required' : 'Optional' }
+        : isVerified
+            ? { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Verified' }
+            : isRejected
+                ? { bg: 'bg-red-50', text: 'text-red-700', label: 'Re-upload' }
+                : { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Pending' };
 
     return (
-        <div className={`relative flex flex-col items-center border-2 rounded-2xl transition-all min-h-[130px] ${
-            uploaded
-                ? dealerStatus.icon === 'error' || dealerStatus.icon === 'reupload' ? 'border-red-200 bg-red-50'
-                : dealerStatus.icon === 'check' ? 'border-green-200 bg-green-50'
-                : 'border-blue-200 bg-blue-50'
-                : 'border-dashed border-gray-200 bg-white'
-        }`}>
-            <label className={`flex flex-col items-center justify-center p-5 flex-1 w-full ${
-                disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-[#0047AB]'
-            }`}>
+        <div className={`group relative rounded-2xl border-2 bg-white transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5 overflow-hidden ${border} ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
+            <label className={`block ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
                 <input
                     type="file"
                     className="hidden"
@@ -182,33 +199,75 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
                     disabled={disabled}
                     onChange={e => e.target.files?.[0] && onUpload(e.target.files[0])}
                 />
-                {/* Status dot */}
-                <div className={`absolute top-3 right-3 w-2.5 h-2.5 rounded-full ${dealerStatus.dotColor}`} />
 
-                {dealerStatus.icon === 'check' ? <CheckCircle2 className="w-6 h-6 text-green-500 mb-2" /> :
-                 dealerStatus.icon === 'reupload' || dealerStatus.icon === 'error' ? <XCircle className="w-6 h-6 text-red-500 mb-2" /> :
-                 dealerStatus.icon === 'clock' ? <Clock className="w-5 h-5 text-blue-500 mb-2" /> :
-                 <Upload className="w-6 h-6 text-gray-300 mb-2" />}
+                {/* Preview area */}
+                <div className="relative aspect-[4/3] bg-gradient-to-br from-gray-50 to-gray-100">
+                    {isImage && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={fileUrl!} alt={label} className="w-full h-full object-cover" />
+                    )}
+                    {isPdf && (
+                        <div className="w-full h-full flex flex-col items-center justify-center">
+                            <div className="w-14 h-16 bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col items-center justify-center">
+                                <FileText className="w-6 h-6 text-red-400" strokeWidth={2.2} />
+                                <span className="text-[8px] font-black text-red-500 tracking-wider mt-0.5">PDF</span>
+                            </div>
+                        </div>
+                    )}
+                    {!uploaded && (
+                        <div className="w-full h-full flex flex-col items-center justify-center">
+                            <div className="w-12 h-12 rounded-full bg-white shadow-sm border border-gray-200 flex items-center justify-center mb-2 group-hover:border-[#0047AB]/40 transition-colors">
+                                <Upload className="w-5 h-5 text-gray-400 group-hover:text-[#0047AB] transition-colors" />
+                            </div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 group-hover:text-[#0047AB] transition-colors">Tap to Upload</span>
+                        </div>
+                    )}
 
-                <span className="text-xs font-bold text-gray-700 text-center leading-tight">{label}</span>
-                <span className={`text-[10px] font-semibold mt-1 text-center ${dealerStatus.color}`}>{dealerStatus.label}</span>
-                {required && !uploaded && <span className="text-[10px] text-red-400 mt-0.5">Required</span>}
-                {failedReason && <span className="text-[10px] text-red-500 mt-0.5 text-center px-1 leading-tight">{failedReason}</span>}
-                {dealerStatus.icon === 'reupload' && <span className="text-[10px] text-[#0047AB] font-bold mt-1">Click to Re-upload</span>}
+                    {/* Status dot — top right */}
+                    <span className={`absolute top-2.5 right-2.5 w-3 h-3 rounded-full ring-2 ring-white shadow-sm ${dealerStatus.dotColor}`} />
+
+                    {/* Required badge — top left (only when not uploaded) */}
+                    {!uploaded && required && (
+                        <span className="absolute top-2.5 left-2.5 px-1.5 py-0.5 rounded-md bg-red-500 text-white text-[9px] font-black uppercase tracking-wide shadow-sm">Required</span>
+                    )}
+
+                    {/* Hover overlay (only when uploaded) */}
+                    {uploaded && (
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-end justify-center pb-3 gap-2">
+                            {fileUrl && (
+                                <a
+                                    href={fileUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={e => e.stopPropagation()}
+                                    className="px-3 py-1.5 bg-white/95 backdrop-blur rounded-lg text-[11px] font-bold text-gray-900 flex items-center gap-1.5 hover:bg-white shadow-md"
+                                >
+                                    <Eye className="w-3.5 h-3.5" /> View
+                                </a>
+                            )}
+                            <span className="px-3 py-1.5 bg-[#0047AB] rounded-lg text-[11px] font-bold text-white flex items-center gap-1.5 shadow-md">
+                                <Upload className="w-3.5 h-3.5" /> Re-upload
+                            </span>
+                        </div>
+                    )}
+                </div>
+
+                {/* Label + status pill */}
+                <div className="px-3 py-3 border-t border-gray-100">
+                    <p className="text-xs font-bold text-gray-900 truncate leading-tight">{label}</p>
+                    <div className="flex items-center gap-1.5 mt-1.5">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${pill.bg} ${pill.text}`}>
+                            {isVerified && <CheckCircle2 className="w-2.5 h-2.5" />}
+                            {isRejected && <XCircle className="w-2.5 h-2.5" />}
+                            {isPending && <Clock className="w-2.5 h-2.5" />}
+                            {pill.label}
+                        </span>
+                    </div>
+                    {failedReason && (
+                        <p className="text-[10px] text-red-500 mt-1.5 leading-snug line-clamp-2">{failedReason}</p>
+                    )}
+                </div>
             </label>
-
-            {uploaded && fileUrl && (
-                <a
-                    href={fileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={e => e.stopPropagation()}
-                    className="flex items-center justify-center gap-1.5 w-full py-2 border-t border-gray-200 text-[11px] font-bold text-[#0047AB] hover:bg-blue-50 transition-colors rounded-b-2xl"
-                >
-                    <Eye className="w-3.5 h-3.5" />
-                    View Document
-                </a>
-            )}
         </div>
     );
 }

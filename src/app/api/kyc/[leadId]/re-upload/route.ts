@@ -3,10 +3,12 @@ import { db } from '@/lib/db';
 import { kycDocuments, kycVerifications } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
+import { requireRole } from '@/lib/auth-utils';
 
-export async function POST(req: NextRequest, { params }: { params: { leadId: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
-        const { leadId } = params;
+        await requireRole(['dealer']);
+        const { leadId } = await params;
         const formData = await req.formData();
         const file = formData.get('file') as File;
         const verificationType = formData.get('verificationType') as string;
@@ -42,12 +44,15 @@ export async function POST(req: NextRequest, { params }: { params: { leadId: str
         const docType = docTypeMap[verificationType] || verificationType;
         const now = new Date();
 
-        // Update document
+        // Update document — reset status and clear rejection
         await db.update(kycDocuments)
             .set({
                 file_url: urlData.publicUrl,
+                doc_status: 'uploaded',
                 verification_status: 'pending',
                 failed_reason: null,
+                rejection_reason: null,
+                uploaded_at: now,
                 updated_at: now,
             })
             .where(and(
