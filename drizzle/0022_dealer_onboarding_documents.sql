@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS dealer_onboarding_documents (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    application_id uuid NOT NULL REFERENCES dealer_onboarding_applications(id) ON DELETE CASCADE,
+    document_type varchar(100) NOT NULL,
+    bucket_name text NOT NULL,
+    storage_path text NOT NULL,
+    file_name text NOT NULL,
+    file_url text,
+    mime_type varchar(100),
+    file_size bigint,
+    uploaded_by uuid,
+    uploaded_at timestamp DEFAULT now() NOT NULL,
+    doc_status varchar(30) NOT NULL DEFAULT 'uploaded',
+    verification_status varchar(30) DEFAULT 'pending',
+    verified_at timestamp,
+    verified_by uuid,
+    rejection_reason text,
+    extracted_data jsonb DEFAULT '{}'::jsonb,
+    api_verification_results jsonb DEFAULT '{}'::jsonb,
+    metadata jsonb DEFAULT '{}'::jsonb,
+    created_at timestamp DEFAULT now() NOT NULL,
+    updated_at timestamp DEFAULT now() NOT NULL
+);
