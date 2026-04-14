@@ -1,4 +1,4 @@
-import { createAdminClient } from '@/lib/supabase/admin';
+import { supabaseAdmin } from '@/lib/supabase/admin';
 import { db } from '@/lib/db';
 import { leadDocuments } from '@/lib/db/schema';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
@@ -25,7 +25,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         return errorResponse('File too large (max 5MB)', 400);
     }
 
-    const adminSupabase = createAdminClient();
+    const adminSupabase = supabaseAdmin;
     const bucketName = 'private-documents';
 
     // Ensure bucket exists (simplified check)

@@ -12,7 +12,7 @@ const rejectionSchema = z.object({
 export const POST = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
     const body = await req.json();
     const result = rejectionSchema.safeParse(body);
-    if (!result.success) return errorResponse(result.error.errors[0].message, 400);
+    if (!result.success) return errorResponse(result.error.issues[0].message, 400);
     const { rejection_reason } = result.data;
 
     const approvalId = params.id;

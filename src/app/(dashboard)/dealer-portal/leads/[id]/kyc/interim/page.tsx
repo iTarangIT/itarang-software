@@ -429,7 +429,7 @@ function SectionCard({ title, children }: { title: string; children: React.React
     );
 }
 
-function FormInput({ label, value, onChange, placeholder, type = 'text' }: any) {
+function FormInput({ label, value, onChange, placeholder, type = 'text' }: { label: string; value: string | null | undefined; onChange: (v: string) => void; placeholder?: string; type?: string }) {
     return (
         <div className="space-y-2">
             <label className="text-sm font-bold text-gray-900 px-1">{label}</label>
@@ -438,7 +438,7 @@ function FormInput({ label, value, onChange, placeholder, type = 'text' }: any) 
     );
 }
 
-function DocumentCard({ label, required, uploaded, status, failedReason, onUpload }: any) {
+function DocumentCard({ label, required, uploaded, status, failedReason, onUpload }: { label: string; required?: boolean; uploaded: boolean; status?: string; failedReason?: string | null; onUpload: (file: File) => void }) {
     return (
         <label className={`flex flex-col items-center justify-center p-6 border-2 rounded-2xl cursor-pointer transition-all min-h-[120px] ${uploaded ? status === 'failed' ? 'border-red-200 bg-red-50' : status === 'success' ? 'border-green-200 bg-green-50' : 'border-blue-200 bg-blue-50' : 'border-dashed border-gray-200 hover:border-[#0047AB] hover:bg-gray-50'}`}>
             <input type="file" className="hidden" accept="image/*,application/pdf" onChange={e => e.target.files?.[0] && onUpload(e.target.files[0])} />

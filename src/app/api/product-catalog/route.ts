@@ -14,9 +14,9 @@ const schema = z.object({
     asset_type: z.string().optional(),
     voltage_v: z.number().optional(),
     capacity_ah: z.number().optional(),
-    sku: z.string().optional(),
+    sku: z.string().min(1),
     is_serialized: z.boolean().default(true),
-    warranty_months: z.number().int().min(1).max(120).optional(),
+    warranty_months: z.number().int().min(1).max(120).default(0),
     sort_order: z.number().int().default(0),
 });
 

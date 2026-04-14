@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import OcrAutofillButton from "./OcrAutofillButton";
+import ManualDecisionSection from "./ManualDecisionSection";
 import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface BankCardProps {
@@ -303,6 +304,16 @@ export default function BankCard({
           {status === "loading" ? "Verifying..." : "Run Bank Verification"}
         </button>
 
+        {/* Manual Override — available until an admin decision is captured */}
+        {status === "pending" && !verificationId && !existingVerification?.id && (
+          <ManualDecisionSection
+            leadId={leadId}
+            verificationType="bank"
+            applicant={applicant}
+            onActionComplete={onActionComplete}
+          />
+        )}
+
         {/* Results */}
         {result && bankData && (
           <div>
@@ -395,7 +406,7 @@ export default function BankCard({
                       }
                     </td>
                   </tr>
-                  {bankData.validation_message && (
+                  {Boolean(bankData.validation_message) && (
                     <tr>
                       <td className="px-4 py-2 text-gray-600">Validation</td>
                       <td className="px-4 py-2 text-gray-600 text-xs">

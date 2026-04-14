@@ -2,7 +2,7 @@ import { db } from '@/lib/db';
 import { leads, leadDocuments } from '@/lib/db/schema';
 import { eq, and, lt } from 'drizzle-orm';
 import { successResponse, withErrorHandler } from '@/lib/api-utils';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { supabaseAdmin } from '@/lib/supabase/admin';
 
 export const GET = withErrorHandler(async (req: Request) => {
     // Secret verification
@@ -16,7 +16,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 
-    const adminSupabase = createAdminClient();
+    const adminSupabase = supabaseAdmin;
 
     // 1. Cleanup INCOMPLETE leads older than 7 days
     const abandonedLeads = await db.select()

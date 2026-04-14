@@ -14,7 +14,7 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
     const disputeId = params.id;
     const body = await req.json();
     const result = resolveSchema.safeParse(body);
-    if (!result.success) return errorResponse(result.error.errors[0].message, 400);
+    if (!result.success) return errorResponse(result.error.issues[0].message, 400);
     const { resolution_details, action_taken } = result.data;
 
     // 1. Fetch Dispute

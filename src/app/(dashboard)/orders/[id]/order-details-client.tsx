@@ -14,7 +14,8 @@ import {
     ShieldCheck,
     ArrowRight,
     Download,
-    AlertTriangle
+    AlertTriangle,
+    Truck
 } from 'lucide-react';
 
 interface OrderDetailsClientProps {

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import OcrAutofillButton from "./OcrAutofillButton";
+import ManualDecisionSection from "./ManualDecisionSection";
 import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface RCCardProps {
@@ -195,6 +196,16 @@ export default function RCCard({
             className="w-full bg-orange-600 hover:bg-orange-700 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
             Initiate Verification
           </button>
+        )}
+
+        {/* Manual Override — available until an admin decision is captured */}
+        {status === "pending" && !verificationId && !existingVerification?.id && (
+          <ManualDecisionSection
+            leadId={leadId}
+            verificationType="rc"
+            applicant={applicant}
+            onActionComplete={onActionComplete}
+          />
         )}
 
         {/* Loading */}

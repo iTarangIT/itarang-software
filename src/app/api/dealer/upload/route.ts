@@ -1,6 +1,6 @@
 
 import { createClient } from '@/lib/supabase/server';
-import { createAdminClient } from '@/lib/supabase/admin'; // New Service Role Client
+import { supabaseAdmin } from '@/lib/supabase/admin';
 import { withErrorHandler, successResponse } from '@/lib/api-utils';
 import { NextResponse } from 'next/server';
 
@@ -37,7 +37,7 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     // 4. Initialize Admin Client for Storage Operations (Bypassing RLS)
     console.log('Using admin Supabase client for storage operations...');
-    const adminSupabase = createAdminClient();
+    const adminSupabase = supabaseAdmin;
 
     // 5. Ensure Bucket Exists
     const bucketName = 'documents';

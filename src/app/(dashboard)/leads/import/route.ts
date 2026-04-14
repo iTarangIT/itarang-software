@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
         follow_up_history: [],
         total_attempts: 0,
         final_intent_score: 0,
-        created_at: new Date().toISOString(),
+        created_at: new Date(),
       });
 
       inserted++;

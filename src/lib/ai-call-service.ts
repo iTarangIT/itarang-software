@@ -1,11 +1,11 @@
 
-import { createAdminClient } from './supabase/admin';
+import { supabaseAdmin } from './supabase/admin';
 import { ChatOpenAI } from "@langchain/openai";
 import { PromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { v4 as uuidv4 } from 'uuid';
 
-const supabase = createAdminClient();
+const supabase = supabaseAdmin;
 
 /**
  * Starts a new AI call session for a lead.

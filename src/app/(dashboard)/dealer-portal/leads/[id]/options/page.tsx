@@ -160,7 +160,7 @@ export default function DealerOptionsPage() {
         try {
             const res = await fetch(`/api/kyc/${leadId}/regenerate-payment-qr`, { method: 'POST' });
             const data = await res.json();
-            if (data.success) { setPaymentData(prev => ({ ...prev, ...data.data })); setPaymentStatus('QR_GENERATED'); }
+            if (data.success) { setPaymentData((prev: Record<string, unknown> | null) => ({ ...(prev ?? {}), ...data.data })); setPaymentStatus('QR_GENERATED'); }
             else { setApiError(data.error?.message || 'Failed to regenerate QR'); }
         } catch { setApiError('Failed'); }
         finally { setRegeneratingQr(false); }

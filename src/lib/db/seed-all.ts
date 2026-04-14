@@ -4,6 +4,7 @@ import path from 'path';
 config({ path: path.resolve(process.cwd(), '.env.local') });
 
 import { db } from './index';
+import { eq } from 'drizzle-orm';
 import {
     users,
     oems,
@@ -23,7 +24,7 @@ async function seed() {
     console.log('🌱 Starting full database seed...');
 
     // 1. Ensure a CEO exists (required for created_by fields)
-    const [ceo] = await db.select().from(users).where(({ role }) => role === 'ceo').limit(1);
+    const [ceo] = await db.select().from(users).where(eq(users.role, 'ceo')).limit(1);
     if (!ceo) {
         throw new Error('No CEO found in database. Run check-db.ts to verify users.');
     }
@@ -76,7 +77,7 @@ async function seed() {
     // Only insert sample products if category was created (or fetch existing)
     const categoryId = cat3w?.id ?? (
         await db.select({ id: productCategories.id }).from(productCategories)
-            .where(({ slug }) => slug === '3w-batteries').limit(1)
+            .where(eq(productCategories.slug, '3w-batteries')).limit(1)
     )[0]?.id;
 
     if (categoryId) {

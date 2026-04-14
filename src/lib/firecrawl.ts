@@ -108,7 +108,7 @@ export async function scrapeDirectoryPage(url: string): Promise<RawDealerRecord[
     const results: RawDealerRecord[] = [];
 
     try {
-        const scrapeResponse = await app.scrapeUrl(url, {
+        const scrapeResponse = await app.scrape(url, {
             formats: [
                 {
                     type: 'json',

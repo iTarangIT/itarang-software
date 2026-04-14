@@ -1,5 +1,6 @@
 'use client';
 
+import React from 'react';
 import { KPICard } from '@/components/shared/kpi-card';
 import { MetricsChart } from '@/components/shared/charts';
 import { DataTable } from '@/components/shared/data-table';
@@ -60,21 +61,21 @@ export default function BusinessHeadDashboard() {
         }
     ];
 
-    const approvalColumns = [
+    const approvalColumns: Array<{ header: string; accessor: string; render?: (value: unknown) => React.ReactNode }> = [
         { header: 'Deal ID', accessor: 'id' },
         { header: 'OEM', accessor: 'oem' },
         {
             header: 'Value',
             accessor: 'value',
-            render: (val: any) => <span className="font-bold text-emerald-600">₹{parseFloat(val).toLocaleString()}</span>
+            render: (val) => <span className="font-bold text-emerald-600">₹{parseFloat(String(val)).toLocaleString()}</span>
         },
         { header: 'Item', accessor: 'item' },
         {
             header: 'Status',
             accessor: 'status',
-            render: (val: string) => (
+            render: (val) => (
                 <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-medium">
-                    {val.replace(/_/g, ' ')}
+                    {String(val).replace(/_/g, ' ')}
                 </span>
             )
         },

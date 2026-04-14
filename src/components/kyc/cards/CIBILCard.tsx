@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import ManualDecisionSection from "./ManualDecisionSection";
 import RequestCoBorrowerModal from "../step3/RequestCoBorrowerModal";
 import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
@@ -246,6 +247,16 @@ export default function CIBILCard({
             </div>
           </div>
         </div>
+
+        {/* Manual Override — available until an admin decision is captured */}
+        {status === "pending" && !verificationId && !existingVerification?.id && (
+          <ManualDecisionSection
+            leadId={leadId}
+            verificationType="cibil"
+            applicant={applicant}
+            onActionComplete={onActionComplete}
+          />
+        )}
 
         {/* VERIFICATION OPTIONS — show when pending or failed */}
         {(status === "pending" || status === "failed") && (

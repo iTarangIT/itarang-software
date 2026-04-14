@@ -132,6 +132,23 @@ export async function POST(
       .filter((v) => (v.applicant ?? "primary") === "primary")
       .every((v) => v.admin_action === "accepted");
 
+    const allPrimaryRejected =
+      step3Verifications.filter((v) => (v.applicant ?? "primary") === "primary")
+        .length > 0 &&
+      step3Verifications
+        .filter((v) => (v.applicant ?? "primary") === "primary")
+        .every((v) => v.admin_action === "rejected");
+
+    const allSupportingDocsRejected = step3SupportingDocs.every(
+      (d) => d.upload_status === "rejected",
+    );
+
+    const coBorrowerAllRejected =
+      hasCoBorrower &&
+      step3Verifications
+        .filter((v) => v.applicant === "co_borrower")
+        .every((v) => v.admin_action === "rejected");
+
     if (decision === "approved") {
       const approvable =
         allPrimaryApproved &&
@@ -144,6 +161,25 @@ export async function POST(
             error: {
               message:
                 "Cannot approve: every verification, supporting doc, and co-borrower check must be approved.",
+            },
+          },
+          { status: 400 },
+        );
+      }
+    }
+
+    if (decision === "rejected") {
+      const rejectable =
+        allPrimaryRejected &&
+        allSupportingDocsRejected &&
+        (!hasCoBorrower || coBorrowerAllRejected);
+      if (!rejectable) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              message:
+                "Cannot reject: every verification, supporting doc, and co-borrower check must be rejected.",
             },
           },
           { status: 400 },

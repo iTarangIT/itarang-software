@@ -12,6 +12,7 @@ interface Product {
     id: string;
     name: string;
     sku?: string;
+    base_price?: number;
 }
 
 function NewDealForm() {

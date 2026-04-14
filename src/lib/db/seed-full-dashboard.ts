@@ -419,17 +419,6 @@ async function seed() {
         payment_term: 'advance',
         payment_status: 'paid',
         delivery_status: 'pending',
-        // Line 391 order_status: ... in_transit, delivered
-        // Line 392 delivery_status: pending, in_transit
-        // Let's set order_status='payment_made' and delivery_status='pending' for "Pending Dispatch"
-        // Wait, Route.ts queries: shipping_status? 
-        // Line 240: count(sql`CASE WHEN shipping_status = 'pending' THEN 1 END`)
-        // BUT Schema `orders` (Line 363) DOES NOT HAVE `shipping_status`.
-        // It has `delivery_status`.
-        // This means the API Route is likely Broken/Mocked aggressively or using a field that doesn't exist.
-        // I will fix this in Route Refactor. I will use `delivery_status`.
-
-        delivery_status: 'pending',
         created_by: salesManagerId
     }).onConflictDoNothing();
 

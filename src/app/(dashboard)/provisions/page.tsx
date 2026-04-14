@@ -32,7 +32,7 @@ export default async function ProvisionsPage() {
                     <p className="text-sm text-gray-500 mt-1">Track asset procurement requests from OEMs</p>
                 </div>
                 <Link href="/provisions/new">
-                    <Button variant="default">
+                    <Button variant="primary">
                         <Plus className="w-4 h-4 mr-2" />
                         Create Provision
                     </Button>
@@ -91,7 +91,7 @@ export default async function ProvisionsPage() {
                                 </Link>
                                 {prov.status === 'ready_for_pdi' && (
                                     <Link href={`/service-engineer/pdi/provision/${prov.id}`}>
-                                        <Button variant="default" size="sm">Start PDI</Button>
+                                        <Button variant="primary" size="sm">Start PDI</Button>
                                     </Link>
                                 )}
                             </div>

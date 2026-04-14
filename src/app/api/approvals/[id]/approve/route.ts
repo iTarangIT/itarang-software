@@ -32,7 +32,7 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
         if (deal) {
             const [lead] = await db.select().from(leads).where(eq(leads.id, deal.lead_id)).limit(1);
             if (lead) {
-                const [account] = await db.select().from(accounts).where(eq(accounts.phone, lead.owner_contact)).limit(1);
+                const [account] = lead.owner_contact ? await db.select().from(accounts).where(eq(accounts.phone, lead.owner_contact)).limit(1) : [];
                 if (account) {
                     const blockStatus = await checkCreditBlock(account.id);
                     if (blockStatus.isBlocked) {
