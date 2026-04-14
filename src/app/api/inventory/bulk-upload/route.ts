@@ -23,12 +23,12 @@ const inventoryRowSchema = z.object({
     // Purchase details
     warranty_months: z.coerce.number().int().nonnegative(),
     quantity: z.coerce.number().int().positive().default(1),
-    manufacturing_date: z.string().optional(), // Added SOP 7.4
-    expiry_date: z.string().optional(), // Added SOP 7.4
+    manufacturing_date: z.string().min(1, 'Manufacturing date is required'),
+    expiry_date: z.string().min(1, 'Expiry date is required'),
 
     // Invoice / Challan
-    oem_invoice_number: z.string().optional(), // Renamed
-    oem_invoice_date: z.string().optional(), // Renamed
+    oem_invoice_number: z.string().min(1, 'OEM invoice number is required'),
+    oem_invoice_date: z.string().min(1, 'OEM invoice date is required'),
     oem_invoice_url: z.string().optional(), // Added SOP 7.4
     challan_number: z.string().optional(),
     challan_date: z.string().optional(),
@@ -129,27 +129,24 @@ export const POST = withErrorHandler(async (req: Request) => {
                 iot_imei_no: validated.iot_imei_no,
 
                 quantity: validated.quantity,
-                warranty_months: validated.warranty_months,
-                manufacturing_date: validated.manufacturing_date ? new Date(validated.manufacturing_date) : null,
-                expiry_date: validated.expiry_date ? new Date(validated.expiry_date) : null,
+                manufacturing_date: new Date(validated.manufacturing_date),
+                expiry_date: new Date(validated.expiry_date),
 
                 oem_invoice_number: validated.oem_invoice_number,
-                oem_invoice_date: validated.oem_invoice_date ? new Date(validated.oem_invoice_date) : null,
+                oem_invoice_date: new Date(validated.oem_invoice_date),
                 oem_invoice_url: validated.oem_invoice_url,
-                challan_number: validated.challan_number,
-                challan_date: validated.challan_date ? new Date(validated.challan_date) : null,
 
                 warehouse_location: validated.warehouse_location,
                 product_manual_url: validated.product_manual_url,
                 warranty_document_url: validated.warranty_document_url,
 
                 inventory_amount: validated.inventory_amount.toString(),
-                gst_percent: validated.gst_percent,
+                gst_percent: validated.gst_percent.toString(),
                 gst_amount: gst_amount.toString(),
                 final_amount: final_amount.toString(),
 
                 status: 'available',
-                uploaded_by: user.id,
+                created_by: user.id,
             }).returning();
 
             results.success.push({ row: i + 2, id: created.id });

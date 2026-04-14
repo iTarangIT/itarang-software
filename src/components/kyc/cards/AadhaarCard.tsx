@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import ManualDecisionSection from "./ManualDecisionSection";
 import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface AadhaarCardProps {
@@ -311,6 +312,16 @@ export default function AadhaarCard({
             >
               {loading ? "Sending..." : "Send DigiLocker Link via SMS"}
             </button>
+
+            {/* Manual Override — skip DigiLocker when Aadhaar was verified offline */}
+            {!existingVerification?.id && (
+              <ManualDecisionSection
+                leadId={leadId}
+                verificationType="aadhaar"
+                applicant={applicant}
+                onActionComplete={onActionComplete}
+              />
+            )}
           </div>
         )}
 

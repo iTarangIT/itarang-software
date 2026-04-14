@@ -8,7 +8,7 @@ import {
   leads,
   personalDetails,
 } from "@/lib/db/schema";
-import { validateDocument } from "@/lib/decentro";
+import { validateDocument, type PublicRegistryDocType } from "@/lib/decentro";
 
 function nameSimilarity(a: string, b: string): number {
   const normalize = (s: string) =>
@@ -42,7 +42,7 @@ function computeMatch(
 
 export type PanVerificationInput = {
   panNumber: string;
-  documentType?: string;
+  documentType?: PublicRegistryDocType;
   dob?: string;
 };
 

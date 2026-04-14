@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
         for (const leadId of leadIds.slice(0, 10)) { // Limit to 10 for immediate scoring
             try {
                 const result = await runLeadQualification(leadId);
-                results.push({ leadId, ...result });
+                results.push({ ...result, leadId });
             } catch (err) {
                 results.push({ leadId, error: err instanceof Error ? err.message : 'Scoring failed' });
             }

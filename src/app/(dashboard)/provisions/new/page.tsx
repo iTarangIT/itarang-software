@@ -189,7 +189,7 @@ export default function NewProvisionPage() {
                                 <Button
                                     type="button"
                                     variant="ghost"
-                                    size="icon"
+                                    size="sm"
                                     className="text-red-400 hover:text-red-600 hover:bg-red-50"
                                     onClick={() => removeItem(index)}
                                 >
@@ -201,7 +201,7 @@ export default function NewProvisionPage() {
                         {items.length === 0 && (
                             <div className="text-center py-8 border-2 border-dashed border-gray-100 rounded-xl">
                                 <p className="text-sm text-gray-400">No products added yet.</p>
-                                <Button type="button" variant="link" size="sm" onClick={addItem} className="text-brand-600 font-bold">
+                                <Button type="button" variant="ghost" size="sm" onClick={addItem} className="text-brand-600 font-bold">
                                     Tap to add product
                                 </Button>
                             </div>

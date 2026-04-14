@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import OcrAutofillButton from "./OcrAutofillButton";
+import ManualDecisionSection from "./ManualDecisionSection";
 import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface PANCardProps {
@@ -267,6 +268,16 @@ export default function PANCard({
           >
             Run PAN Verification
           </button>
+        )}
+
+        {/* Manual Override — available until admin has decided */}
+        {status === "pending" && !verificationId && !existingVerification?.id && (
+          <ManualDecisionSection
+            leadId={leadId}
+            verificationType="pan"
+            applicant={applicant}
+            onActionComplete={onActionComplete}
+          />
         )}
 
         {/* Loading */}

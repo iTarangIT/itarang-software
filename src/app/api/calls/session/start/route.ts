@@ -53,7 +53,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     });
 
     // 4. Trigger Bolna
-    const result = await triggerBolnaCall(topLead.owner_contact, topLead.id, topLead);
+    const result = await triggerBolnaCall(topLead.owner_contact ?? '', topLead.id, topLead);
 
     if (!result.success) {
         await db.update(callRecords).set({ status: 'failed' }).where(eq(callRecords.id, callId));

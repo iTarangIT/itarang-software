@@ -83,7 +83,7 @@ export const GET = async (req: Request) => {
     .set({ last_run_at: new Date(), updated_at: new Date() })
     .where(eq(scraperSchedules.id, schedule.id));
 
-  runDealerScraper(runId).catch((err) =>
+  runDealerScraper(runId, "").catch((err) =>
     console.error(`[Scraper Cron] Background run failed for ${runId}:`, err),
   );
 

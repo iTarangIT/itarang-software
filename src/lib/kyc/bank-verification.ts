@@ -9,7 +9,7 @@ export type BankVerificationInput = {
   ifsc: string;
   name?: string;
   performNameMatch?: boolean;
-  validationType?: string;
+  validationType?: 'penniless' | 'pennydrop' | 'hybrid';
 };
 
 export type BankVerificationResult = {

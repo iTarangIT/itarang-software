@@ -19,7 +19,7 @@ export async function saveLeads(leadsData: any[]) {
     if (existing) {
       await db.insert(scraperLeadsDuplicates).values({
         id: crypto.randomUUID(),
-        original_lead_id: existing.id,
+        originalLeadId: existing.id,
 
         name: lead.name,
         phone: lead.phone,

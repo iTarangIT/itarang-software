@@ -150,6 +150,7 @@ export const inventory = pgTable("inventory", {
   is_serialized: boolean("is_serialized").default(true).notNull(),
   serial_number: varchar("serial_number", { length: 255 }).unique(),
   batch_number: varchar("batch_number", { length: 255 }),
+  iot_imei_no: varchar("iot_imei_no", { length: 255 }),
   quantity: integer("quantity"),
 
   // Dates
@@ -218,6 +219,84 @@ export const leads = pgTable("leads", {
   payment_method: varchar("payment_method", { length: 20 }),
   consent_status: varchar("consent_status", { length: 30 }),
   dealer_id: varchar("dealer_id", { length: 255 }),
+
+  // Lead source / classification
+  lead_source: varchar("lead_source", { length: 50 }),
+  lead_type: varchar("lead_type", { length: 20 }),
+  lead_status: varchar("lead_status", { length: 50 }),
+  lead_score: integer("lead_score"),
+  interest_level: varchar("interest_level", { length: 20 }),
+  reference_id: varchar("reference_id", { length: 255 }),
+  uploader_id: uuid("uploader_id"),
+
+  // Product / vehicle / asset
+  vehicle_ownership: varchar("vehicle_ownership", { length: 50 }),
+  vehicle_owner_name: text("vehicle_owner_name"),
+  vehicle_owner_phone: varchar("vehicle_owner_phone", { length: 20 }),
+  battery_type: varchar("battery_type", { length: 50 }),
+  asset_model: text("asset_model"),
+  asset_price: decimal("asset_price", { precision: 12, scale: 2 }),
+  family_members: integer("family_members"),
+  driving_experience: integer("driving_experience"),
+  is_current_same: boolean("is_current_same").default(false),
+  product_category_id: varchar("product_category_id", { length: 255 }),
+  product_type_id: varchar("product_type_id", { length: 255 }),
+  primary_product_id: uuid("primary_product_id"),
+
+  // Business
+  interested_in: jsonb("interested_in"),
+  battery_order_expected: integer("battery_order_expected"),
+  investment_capacity: decimal("investment_capacity", { precision: 12, scale: 2 }),
+  business_type: varchar("business_type", { length: 50 }),
+
+  // Qualification
+  qualified_by: uuid("qualified_by"),
+  qualified_at: timestamp("qualified_at", { withTimezone: true }),
+  qualification_notes: text("qualification_notes"),
+
+  // Conversion
+  converted_deal_id: varchar("converted_deal_id", { length: 255 }),
+  converted_at: timestamp("converted_at", { withTimezone: true }),
+
+  // AI call tracking
+  total_ai_calls: integer("total_ai_calls").default(0),
+  last_ai_call_at: timestamp("last_ai_call_at", { withTimezone: true }),
+  last_call_outcome: text("last_call_outcome"),
+  last_call_status: text("last_call_status"),
+  conversation_summary: text("conversation_summary"),
+  ai_priority_score: decimal("ai_priority_score", { precision: 5, scale: 2 }),
+  next_call_after: timestamp("next_call_after", { withTimezone: true }),
+  next_call_at: timestamp("next_call_at", { withTimezone: true }),
+  do_not_call: boolean("do_not_call").default(false),
+
+  // AI dialer (Bolna)
+  ai_managed: boolean("ai_managed").default(false),
+  ai_owner: text("ai_owner"),
+  manual_takeover: boolean("manual_takeover").default(false),
+  last_ai_action_at: timestamp("last_ai_action_at", { withTimezone: true }),
+  intent_score: integer("intent_score"),
+  intent_reason: text("intent_reason"),
+  call_priority: integer("call_priority").default(0),
+
+  // V2 workflow
+  workflow_step: integer("workflow_step").default(1),
+  auto_filled: boolean("auto_filled").default(false),
+  ocr_status: varchar("ocr_status", { length: 20 }),
+  ocr_error: text("ocr_error"),
+
+  // KYC
+  kyc_score: integer("kyc_score"),
+  kyc_completed_at: timestamp("kyc_completed_at", { withTimezone: true }),
+  has_co_borrower: boolean("has_co_borrower").default(false),
+  has_additional_docs_required: boolean("has_additional_docs_required").default(false),
+  interim_step_status: varchar("interim_step_status", { length: 20 }),
+  kyc_draft_data: jsonb("kyc_draft_data"),
+
+  // SM workflow
+  sm_review_status: varchar("sm_review_status", { length: 30 }),
+  submitted_to_sm_at: timestamp("submitted_to_sm_at", { withTimezone: true }),
+  sm_assigned_to: uuid("sm_assigned_to"),
+
   created_at: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -811,6 +890,8 @@ export const orders = pgTable(
       withTimezone: true,
     }),
 
+    reorder_tat_days: integer("reorder_tat_days"),
+
     created_by: uuid("created_by")
       .references(() => users.id)
       .notNull(),
@@ -883,6 +964,13 @@ export const aiCallLogs = pgTable(
     recording_url: text("recording_url"),
     call_duration: integer("call_duration"), // in seconds
     status: varchar("status", { length: 50 }),
+    provider: varchar("provider", { length: 50 }),
+    started_at: timestamp("started_at", { withTimezone: true }),
+    ended_at: timestamp("ended_at", { withTimezone: true }),
+    model_used: varchar("model_used", { length: 100 }),
+    intent_score: integer("intent_score"),
+    intent_reason: text("intent_reason"),
+    next_action: text("next_action"),
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -1623,6 +1711,9 @@ export const coBorrowerDocuments = pgTable("co_borrower_documents", {
     .notNull(),
   doc_type: varchar("document_type", { length: 50 }).notNull(), // aadhaar_front, aadhaar_back, pan_card, passport_photo, address_proof, rc_copy, bank_statement, cheque_1-4
   file_url: text("document_url").notNull(),
+  file_name: text("file_name"),
+  file_size: integer("file_size"),
+  verification_status: varchar("verification_status", { length: 30 }).default("pending"),
   status: varchar("status", { length: 30 }).default("pending").notNull(),
   ocr_data: jsonb("ocr_data"),
   uploaded_at: timestamp("uploaded_at", { withTimezone: true })
@@ -2714,6 +2805,7 @@ export const scraperRaw = pgTable("scraper_raw", {
 export const dealerLeads = pgTable("dealer_leads", {
   id: text("id").primaryKey(),
 
+  dealer_id: text("dealer_id"),
   dealer_name: text("dealer_name"),
   phone: text("phone").unique(),
   language: text("language"),

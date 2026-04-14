@@ -1,4 +1,4 @@
-import { createAdminClient } from '@/lib/supabase/admin';
+import { supabaseAdmin } from '@/lib/supabase/admin';
 import { db } from '@/lib/db';
 import { leadDocuments } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
@@ -21,7 +21,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         return errorResponse('Forbidden', 403);
     }
 
-    const adminSupabase = createAdminClient();
+    const adminSupabase = supabaseAdmin;
     const { data, error } = await adminSupabase.storage
         .from('private-documents')
         .createSignedUrl(doc.storage_path, 900); // 15 mins

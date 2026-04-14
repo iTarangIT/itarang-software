@@ -1,5 +1,6 @@
 'use client';
 
+import React from 'react';
 import { KPICard } from '@/components/shared/kpi-card';
 import { MetricsChart } from '@/components/shared/charts';
 import { DataTable } from '@/components/shared/data-table';
@@ -62,18 +63,18 @@ export default function FinanceControllerDashboard() {
         }
     ];
 
-    const invoicingColumns = [
+    const invoicingColumns: Array<{ header: string; accessor: string; textRight?: boolean; render?: (value: unknown) => React.ReactNode }> = [
         { header: 'Deal ID', accessor: 'id' },
         { header: 'Customer / OEM', accessor: 'name' },
         {
             header: 'Amount',
             accessor: 'amount',
-            render: (val: any) => <span className="font-bold text-slate-900">₹{parseFloat(val).toLocaleString()}</span>
+            render: (val) => <span className="font-bold text-slate-900">₹{parseFloat(String(val)).toLocaleString()}</span>
         },
         {
             header: 'Approval Date',
             accessor: 'date',
-            render: (val: string) => new Date(val).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+            render: (val) => new Date(String(val)).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
         },
         {
             header: 'Action',

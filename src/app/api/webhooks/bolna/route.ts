@@ -115,7 +115,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                     created_at: new Date()
                 });
 
-                const result = await triggerBolnaCall(nextLead.owner_contact, nextLead.id, nextLead);
+                const result = await triggerBolnaCall(nextLead.owner_contact ?? '', nextLead.id, nextLead);
                 if (result.success) {
                     await db.update(callRecords)
                         .set({ bolna_call_id: result.callId, status: 'ringing' })
@@ -125,7 +125,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                         .set({ status: 'failed' })
                         .where(eq(callRecords.id, nextCallId));
                 }
-            } else {
+            } else if (session.session_id) {
                 // No more leads, close session
                 await db.update(callSessions)
                     .set({ status: 'completed', ended_at: new Date() })

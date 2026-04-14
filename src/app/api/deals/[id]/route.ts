@@ -1,7 +1,7 @@
 import { db } from '@/lib/db';
 import { deals, approvals, leads, auditLogs } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
+import { withErrorHandler, successResponse, errorResponse, generateId } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
 
