@@ -1570,6 +1570,66 @@ export const couponCodes = pgTable("coupon_codes", {
     .notNull(),
 });
 
+// --- COUPON BATCHES ---
+
+export const couponBatches = pgTable(
+  "coupon_batches",
+  {
+    id: varchar("id", { length: 255 }).primaryKey(),
+    name: varchar("name", { length: 200 }).notNull(),
+    dealer_id: varchar("dealer_id", { length: 255 })
+      .references(() => accounts.id)
+      .notNull(),
+    prefix: varchar("prefix", { length: 20 }).notNull(),
+    coupon_value: decimal("coupon_value", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    total_quantity: integer("total_quantity").notNull(),
+    expiry_date: timestamp("expiry_date", { withTimezone: true }),
+    status: varchar("status", { length: 20 }).default("active").notNull(),
+    created_by: uuid("created_by").references(() => users.id),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    batchDealerIdx: index("coupon_batches_dealer_idx").on(table.dealer_id),
+    batchStatusIdx: index("coupon_batches_status_idx").on(table.status),
+  }),
+);
+
+// --- COUPON AUDIT LOG ---
+
+export const couponAuditLog = pgTable(
+  "coupon_audit_log",
+  {
+    id: varchar("id", { length: 255 }).primaryKey(),
+    coupon_id: varchar("coupon_id", { length: 255 })
+      .references(() => couponCodes.id)
+      .notNull(),
+    action: varchar("action", { length: 20 }).notNull(),
+    old_status: varchar("old_status", { length: 20 }),
+    new_status: varchar("new_status", { length: 20 }),
+    lead_id: varchar("lead_id", { length: 255 }).references(() => leads.id),
+    performed_by: uuid("performed_by"),
+    ip_address: varchar("ip_address", { length: 45 }),
+    notes: text("notes"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    auditCouponIdx: index("coupon_audit_log_coupon_idx").on(
+      table.coupon_id,
+      table.created_at,
+    ),
+    auditActionIdx: index("coupon_audit_log_action_idx").on(table.action),
+  }),
+);
+
 // --- FACILITATION PAYMENTS ---
 
 export const facilitationPayments = pgTable(
@@ -2703,6 +2763,72 @@ export const dealerOnboardingApplications = pgTable(
     }).default("inactive"),
     dealerCode: text("dealer_code"),
   },
+);
+
+export const dealerAgreementSigners = pgTable(
+  "dealer_agreement_signers",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    applicationId: uuid("application_id")
+      .notNull()
+      .references(() => dealerOnboardingApplications.id, { onDelete: "cascade" }),
+    providerDocumentId: text("provider_document_id"),
+    requestId: text("request_id"),
+    signerRole: varchar("signer_role", { length: 50 }).notNull(),
+    signerName: text("signer_name").notNull(),
+    signerEmail: text("signer_email"),
+    signerMobile: text("signer_mobile"),
+    signingMethod: varchar("signing_method", { length: 50 }),
+    providerSignerIdentifier: text("provider_signer_identifier"),
+    providerSigningUrl: text("provider_signing_url"),
+    signerStatus: varchar("signer_status", { length: 50 })
+      .default("pending")
+      .notNull(),
+    signedAt: timestamp("signed_at"),
+    lastEventAt: timestamp("last_event_at"),
+    providerRawResponse: jsonb("provider_raw_response").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    appIdx: index("dealer_agreement_signers_application_id_idx").on(
+      table.applicationId,
+    ),
+    docIdx: index("dealer_agreement_signers_provider_document_id_idx").on(
+      table.providerDocumentId,
+    ),
+    statusIdx: index("dealer_agreement_signers_signer_status_idx").on(
+      table.signerStatus,
+    ),
+  }),
+);
+
+export const dealerAgreementEvents = pgTable(
+  "dealer_agreement_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    applicationId: uuid("application_id")
+      .notNull()
+      .references(() => dealerOnboardingApplications.id, { onDelete: "cascade" }),
+    providerDocumentId: text("provider_document_id"),
+    requestId: text("request_id"),
+    eventType: varchar("event_type", { length: 100 }).notNull(),
+    signerRole: varchar("signer_role", { length: 50 }),
+    eventStatus: varchar("event_status", { length: 50 }),
+    eventPayload: jsonb("event_payload").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    appIdx: index("dealer_agreement_events_application_id_idx").on(
+      table.applicationId,
+    ),
+    docIdx: index("dealer_agreement_events_provider_document_id_idx").on(
+      table.providerDocumentId,
+    ),
+    createdIdx: index("dealer_agreement_events_created_at_idx").on(
+      table.createdAt,
+    ),
+  }),
 );
 
 export const dealerOnboardingDocuments = pgTable(
