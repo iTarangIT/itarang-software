@@ -1178,6 +1178,72 @@ export const adminKycReviews = pgTable('admin_kyc_reviews', {
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const kycVerificationMetadata = pgTable('kyc_verification_metadata', {
+    lead_id: varchar('lead_id', { length: 255 }).primaryKey().references(() => leads.id, { onDelete: 'cascade' }),
+    submission_timestamp: timestamp('submission_timestamp', { withTimezone: true }),
+    case_type: varchar('case_type', { length: 20 }),
+    coupon_code: varchar('coupon_code', { length: 100 }),
+    coupon_status: varchar('coupon_status', { length: 30 }).default('reserved'),
+    documents_count: integer('documents_count'),
+    consent_verified: boolean('consent_verified').default(false),
+    dealer_edits_locked: boolean('dealer_edits_locked').default(false),
+    verification_started_at: timestamp('verification_started_at', { withTimezone: true }),
+    first_api_execution_at: timestamp('first_api_execution_at', { withTimezone: true }),
+    first_api_type: varchar('first_api_type', { length: 50 }),
+    final_decision: varchar('final_decision', { length: 20 }),
+    final_decision_at: timestamp('final_decision_at', { withTimezone: true }),
+    final_decision_by: uuid('final_decision_by').references(() => users.id),
+    final_decision_notes: text('final_decision_notes'),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const digilockerTransactions = pgTable('digilocker_transactions', {
+    id: varchar('id', { length: 255 }).primaryKey(),
+    lead_id: varchar('lead_id', { length: 255 }).references(() => leads.id, { onDelete: 'cascade' }).notNull(),
+    verification_id: varchar('verification_id', { length: 255 }),
+    reference_id: varchar('reference_id', { length: 255 }),
+    decentro_txn_id: varchar('decentro_txn_id', { length: 255 }),
+    session_id: varchar('session_id', { length: 255 }),
+    status: varchar('status', { length: 50 }).default('initiated').notNull(),
+    customer_phone: varchar('customer_phone', { length: 20 }),
+    customer_email: varchar('customer_email', { length: 255 }),
+    digilocker_url: text('digilocker_url'),
+    short_url: text('short_url'),
+    notification_channel: varchar('notification_channel', { length: 20 }).default('sms'),
+    link_sent_at: timestamp('link_sent_at', { withTimezone: true }),
+    link_opened_at: timestamp('link_opened_at', { withTimezone: true }),
+    customer_authorized_at: timestamp('customer_authorized_at', { withTimezone: true }),
+    digilocker_raw_response: jsonb('digilocker_raw_response'),
+    aadhaar_extracted_data: jsonb('aadhaar_extracted_data'),
+    cross_match_result: jsonb('cross_match_result'),
+    expires_at: timestamp('expires_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const coBorrowerRequests = pgTable('co_borrower_requests', {
+    id: varchar('id', { length: 255 }).primaryKey(), // COBREQ-YYYYMMDD-SEQ
+    lead_id: varchar('lead_id', { length: 255 }).references(() => leads.id, { onDelete: 'cascade' }).notNull(),
+    attempt_number: integer('attempt_number').default(1).notNull(),
+    status: varchar('status', { length: 20 }).default('open').notNull(), // open, replaced, fulfilled
+    reason: text('reason'),
+    created_by: uuid('created_by').references(() => users.id).notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const kycDataAudit = pgTable('kyc_data_audit', {
+    id: varchar('id', { length: 255 }).primaryKey(), // KYCAUD-YYYYMMDD-SEQ
+    lead_id: varchar('lead_id', { length: 255 }).references(() => leads.id, { onDelete: 'cascade' }).notNull(),
+    field_name: varchar('field_name', { length: 100 }).notNull(),
+    field_value: text('field_value'),
+    data_source: varchar('data_source', { length: 20 }).notNull(), // ocr, api, manual
+    reason: text('reason'),
+    entered_by: uuid('entered_by').references(() => users.id).notNull(),
+    entered_at: timestamp('entered_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 // --- DEPLOYED ASSETS MODULE ---
 
 export const deployedAssets = pgTable('deployed_assets', {

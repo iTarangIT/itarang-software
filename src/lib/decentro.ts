@@ -160,6 +160,129 @@ export async function faceMatch(image1: Blob, image2: Blob) {
     return res.json();
 }
 
+// ─── DigiLocker (Aadhaar) ─────────────────────────────────────────────────────
+
+export interface DigilockerInitiateParams {
+    reference_id?: string;
+    redirect_url: string;
+    consent_purpose?: string;
+    notification_channel?: 'sms' | 'whatsapp' | 'email' | 'both';
+    mobile_number?: string;
+    email?: string | null;
+}
+
+export async function digilockerInitiateSession(params: DigilockerInitiateParams) {
+    const body: Record<string, unknown> = {
+        reference_id: params.reference_id || genRefId(),
+        redirect_url: params.redirect_url,
+        consent: 'Y',
+        consent_purpose: params.consent_purpose || 'Customer Aadhaar verification for loan processing',
+        notification_channel: params.notification_channel || 'sms',
+    };
+    if (params.mobile_number) body.mobile_number = params.mobile_number;
+    if (params.email) body.email = params.email;
+
+    const res = await fetch(`${BASE_URL}/v2/kyc/digilocker/initiate_session`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+export async function digilockerCheckStatus(decentroTxnId: string) {
+    const res = await fetch(
+        `${BASE_URL}/v2/kyc/digilocker/check_status?decentro_txn_id=${encodeURIComponent(decentroTxnId)}`,
+        {
+            method: 'GET',
+            headers: kycHeaders(),
+        },
+    );
+    return res.json();
+}
+
+export interface DigilockerGetEaadhaarParams {
+    initial_decentro_transaction_id: string;
+    reference_id?: string;
+}
+
+export async function digilockerGetEaadhaar(params: DigilockerGetEaadhaarParams) {
+    const body = {
+        reference_id: params.reference_id || genRefId(),
+        initial_decentro_transaction_id: params.initial_decentro_transaction_id,
+        consent: 'Y',
+        consent_purpose: 'Retrieve eAadhaar for KYC verification',
+    };
+
+    const res = await fetch(`${BASE_URL}/v2/kyc/digilocker/eaadhaar`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+// ─── CIBIL (Credit Bureau) ────────────────────────────────────────────────────
+
+export interface CibilParams {
+    name: string;
+    pan: string;
+    dob: string;
+    phone: string;
+    address?: string;
+}
+
+function cibilBody(params: CibilParams): Record<string, unknown> {
+    return {
+        reference_id: genRefId(),
+        consent: 'Y',
+        consent_purpose: 'Customer credit assessment for loan processing',
+        name: params.name,
+        pan: params.pan,
+        mobile: params.phone,
+        dob: params.dob,
+        address: params.address || '',
+    };
+}
+
+export async function fetchCibilScore(params: CibilParams) {
+    const res = await fetch(`${BASE_URL}/v2/bytes/credit-score`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(cibilBody(params)),
+    });
+    return res.json();
+}
+
+export async function fetchCibilReport(params: CibilParams) {
+    const res = await fetch(
+        `${BASE_URL}/v2/financial_services/credit_bureau/credit_report/summary`,
+        {
+            method: 'POST',
+            headers: kycHeaders(),
+            body: JSON.stringify(cibilBody(params)),
+        },
+    );
+    return res.json();
+}
+
+// ─── RC (Vehicle) to Chassis ──────────────────────────────────────────────────
+
+export async function verifyRcNumber(rcNumber: string) {
+    const res = await fetch(`${BASE_URL}/kyc/public_registry/validate`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify({
+            reference_id: genRefId(),
+            document_type: 'RC',
+            id_number: rcNumber,
+            consent: 'Y',
+            consent_purpose: 'Vehicle registration verification for loan processing',
+        }),
+    });
+    return res.json();
+}
+
 // ─── Document Classification ──────────────────────────────────────────────────
 
 export type ClassificationDocType = 'PAN' | 'AADHAAR' | 'AADHAAR_BACK' | 'DRIVING_LICENSE' | 'VOTERID' | 'PASSPORT' | 'CHEQUE' | 'BANK_STATEMENT' | 'RC' | 'UNKNOWN';
@@ -249,7 +372,7 @@ function normalizeString(s: string | null | undefined): string {
     return (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-function stringSimilarity(a: string, b: string): number {
+export function stringSimilarity(a: string, b: string): number {
     const na = normalizeString(a);
     const nb = normalizeString(b);
     if (!na || !nb) return 0;
@@ -346,7 +469,7 @@ export function compareOcrWithLead(
     return comparisons;
 }
 
-function normalizeDate(dateStr: string): string {
+export function normalizeDate(dateStr: string): string {
     // Try various date formats and convert to YYYY-MM-DD
     const cleaned = dateStr.replace(/[/\\]/g, '-');
     // DD-MM-YYYY
