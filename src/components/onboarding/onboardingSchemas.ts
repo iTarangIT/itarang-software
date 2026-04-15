@@ -285,11 +285,10 @@ export function validateStep(
       errors.dateOfSigning = "Date of signing is required";
     }
 
-    if (!state.agreement.mouDate.trim()) {
-      errors.mouDate = "MoU date is required";
+    if (!state.agreement.expiryDays || state.agreement.expiryDays <= 0) {
+      errors.expiryDays = "Expiry days must be greater than 0";
     }
 
-    // Dealer Signer
     if (!state.agreement.dealerSignerName.trim()) {
       errors.dealerSignerName = "Dealer signatory name is required";
     }
@@ -314,7 +313,10 @@ export function validateStep(
       errors.dealerSigningMethod = "Dealer signing method is required";
     }
 
-    // iTarang Signatory 1 — always required
+    if (!state.agreement.financierName.trim()) {
+      errors.financierName = "Financier name is required";
+    }
+
     if (!state.agreement.itarangSignatory1.name.trim()) {
       errors.itarangSignatory1_name = "iTarang signatory 1 name is required";
     }
@@ -327,16 +329,13 @@ export function validateStep(
     if (!state.agreement.itarangSignatory1.email.trim()) {
       errors.itarangSignatory1_email = "iTarang signatory 1 email is required";
     } else if (!EMAIL_REGEX.test(state.agreement.itarangSignatory1.email.trim())) {
-      errors.itarangSignatory1_email =
-        "Enter a valid iTarang signatory 1 email";
+      errors.itarangSignatory1_email = "Enter a valid iTarang signatory 1 email";
     }
 
     if (!state.agreement.itarangSignatory1.mobile.trim()) {
-      errors.itarangSignatory1_mobile =
-        "iTarang signatory 1 mobile is required";
+      errors.itarangSignatory1_mobile = "iTarang signatory 1 mobile is required";
     } else if (!PHONE_REGEX.test(state.agreement.itarangSignatory1.mobile.trim())) {
-      errors.itarangSignatory1_mobile =
-        "Enter a valid iTarang signatory 1 mobile";
+      errors.itarangSignatory1_mobile = "Enter a valid iTarang signatory 1 mobile";
     }
 
     if (!state.agreement.itarangSignatory1.signingMethod) {
@@ -344,54 +343,124 @@ export function validateStep(
         "iTarang signatory 1 signing method is required";
     }
 
-    // iTarang Signatory 2 — OPTIONAL
-    // Only validate if the user has started filling it in
-    const s2 = state.agreement.itarangSignatory2;
-    const s2HasData =
-      s2?.name?.trim() || s2?.email?.trim() || s2?.mobile?.trim();
-
-    if (s2HasData) {
-      if (!s2.name.trim()) {
-        errors.itarangSignatory2_name =
-          "iTarang signatory 2 name is required";
-      }
-      if (!s2.designation.trim()) {
-        errors.itarangSignatory2_designation =
-          "iTarang signatory 2 designation is required";
-      }
-      if (!s2.email.trim()) {
-        errors.itarangSignatory2_email =
-          "iTarang signatory 2 email is required";
-      } else if (!EMAIL_REGEX.test(s2.email.trim())) {
-        errors.itarangSignatory2_email =
-          "Enter a valid iTarang signatory 2 email";
-      }
-      if (!s2.mobile.trim()) {
-        errors.itarangSignatory2_mobile =
-          "iTarang signatory 2 mobile is required";
-      } else if (!PHONE_REGEX.test(s2.mobile.trim())) {
-        errors.itarangSignatory2_mobile =
-          "Enter a valid iTarang signatory 2 mobile";
-      }
-      if (!s2.signingMethod) {
-        errors.itarangSignatory2_signingMethod =
-          "iTarang signatory 2 signing method is required";
-      }
+    if (!state.agreement.itarangSignatory2.name.trim()) {
+      errors.itarangSignatory2_name = "iTarang signatory 2 name is required";
     }
 
-    // OEM Financing Conditional Fields
-    if (state.agreement.isOemFinancing) {
-      if (!state.agreement.vehicleType.trim()) {
-        errors.vehicleType = "Vehicle type is required";
+    if (!state.agreement.itarangSignatory2.designation.trim()) {
+      errors.itarangSignatory2_designation =
+        "iTarang signatory 2 designation is required";
+    }
+
+    if (!state.agreement.itarangSignatory2.email.trim()) {
+      errors.itarangSignatory2_email = "iTarang signatory 2 email is required";
+    } else if (!EMAIL_REGEX.test(state.agreement.itarangSignatory2.email.trim())) {
+      errors.itarangSignatory2_email = "Enter a valid iTarang signatory 2 email";
+    }
+
+    if (!state.agreement.itarangSignatory2.mobile.trim()) {
+      errors.itarangSignatory2_mobile = "iTarang signatory 2 mobile is required";
+    } else if (!PHONE_REGEX.test(state.agreement.itarangSignatory2.mobile.trim())) {
+      errors.itarangSignatory2_mobile = "Enter a valid iTarang signatory 2 mobile";
+    }
+
+    if (!state.agreement.itarangSignatory2.signingMethod) {
+      errors.itarangSignatory2_signingMethod =
+        "iTarang signatory 2 signing method is required";
+    }
+
+    if (!state.agreement.financierSignatory.name.trim()) {
+      errors.financierSignatory_name = "Financier signatory name is required";
+    }
+
+    if (!state.agreement.financierSignatory.designation.trim()) {
+      errors.financierSignatory_designation =
+        "Financier signatory designation is required";
+    }
+
+    if (!state.agreement.financierSignatory.email.trim()) {
+      errors.financierSignatory_email = "Financier signatory email is required";
+    } else if (
+      !EMAIL_REGEX.test(state.agreement.financierSignatory.email.trim())
+    ) {
+      errors.financierSignatory_email =
+        "Enter a valid financier signatory email";
+    }
+
+    if (!state.agreement.financierSignatory.mobile.trim()) {
+      errors.financierSignatory_mobile = "Financier signatory mobile is required";
+    } else if (
+      !PHONE_REGEX.test(state.agreement.financierSignatory.mobile.trim())
+    ) {
+      errors.financierSignatory_mobile =
+        "Enter a valid financier signatory mobile";
+    }
+
+    if (!state.agreement.financierSignatory.address.trim()) {
+      errors.financierSignatory_address =
+        "Financier signatory address is required";
+    }
+
+    if (!state.agreement.financierSignatory.signingMethod) {
+      errors.financierSignatory_signingMethod =
+        "Financier signatory signing method is required";
+    }
+
+    if (state.agreement.includeWitnessesInSigning) {
+      if (!state.agreement.witness1.name.trim()) {
+        errors.witness1_name = "Witness 1 name is required";
       }
-      if (!state.agreement.manufacturer.trim()) {
-        errors.manufacturer = "Manufacturer is required";
+
+      if (!state.agreement.witness1.designation.trim()) {
+        errors.witness1_designation = "Witness 1 designation is required";
       }
-      if (!state.agreement.brand.trim()) {
-        errors.brand = "Brand is required";
+
+      if (!state.agreement.witness1.email.trim()) {
+        errors.witness1_email = "Witness 1 email is required";
+      } else if (!EMAIL_REGEX.test(state.agreement.witness1.email.trim())) {
+        errors.witness1_email = "Enter a valid witness 1 email";
       }
-      if (!state.agreement.statePresence.trim()) {
-        errors.statePresence = "State presence is required";
+
+      if (!state.agreement.witness1.mobile.trim()) {
+        errors.witness1_mobile = "Witness 1 mobile is required";
+      } else if (!PHONE_REGEX.test(state.agreement.witness1.mobile.trim())) {
+        errors.witness1_mobile = "Enter a valid witness 1 mobile";
+      }
+
+      if (!state.agreement.witness1.address.trim()) {
+        errors.witness1_address = "Witness 1 address is required";
+      }
+
+      if (!state.agreement.witness1.signingMethod) {
+        errors.witness1_signingMethod = "Witness 1 signing method is required";
+      }
+
+      if (!state.agreement.witness2.name.trim()) {
+        errors.witness2_name = "Witness 2 name is required";
+      }
+
+      if (!state.agreement.witness2.designation.trim()) {
+        errors.witness2_designation = "Witness 2 designation is required";
+      }
+
+      if (!state.agreement.witness2.email.trim()) {
+        errors.witness2_email = "Witness 2 email is required";
+      } else if (!EMAIL_REGEX.test(state.agreement.witness2.email.trim())) {
+        errors.witness2_email = "Enter a valid witness 2 email";
+      }
+
+      if (!state.agreement.witness2.mobile.trim()) {
+        errors.witness2_mobile = "Witness 2 mobile is required";
+      } else if (!PHONE_REGEX.test(state.agreement.witness2.mobile.trim())) {
+        errors.witness2_mobile = "Enter a valid witness 2 mobile";
+      }
+
+      if (!state.agreement.witness2.address.trim()) {
+        errors.witness2_address = "Witness 2 address is required";
+      }
+
+      if (!state.agreement.witness2.signingMethod) {
+        errors.witness2_signingMethod = "Witness 2 signing method is required";
       }
     }
   }

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { executePanVerification } from '@/lib/kyc/pan-verification';
 
-export async function POST(req: NextRequest, { params }: { params: { leadId: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();

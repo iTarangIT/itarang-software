@@ -3,9 +3,7 @@ import { login, signup } from './actions';
 import { Mail, Lock, UserPlus, LogIn } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
-    const params = await searchParams;
-    const errorMessage = params?.error || null;
+export default function LoginPage() {
     return (
         <div className="flex min-h-screen bg-white">
             {/* Left Side - Image & Slogan */}
@@ -56,12 +54,6 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
                         <h1 className="text-3xl font-bold text-gray-900 mb-2">Welcome to iTarang</h1>
                         <p className="text-sm font-medium text-gray-500 uppercase tracking-wide">EVERY THING EV!</p>
                     </div>
-
-                    {errorMessage && (
-                        <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg">
-                            <p className="text-sm font-medium text-red-700">{errorMessage}</p>
-                        </div>
-                    )}
 
                     <form className="space-y-6">
                         <div>

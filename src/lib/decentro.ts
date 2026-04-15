@@ -8,6 +8,7 @@ const CLIENT_ID = process.env.DECENTRO_CLIENT_ID!;
 const CLIENT_SECRET = process.env.DECENTRO_CLIENT_SECRET!;
 const MODULE_SECRET_KYC = process.env.DECENTRO_MODULE_SECRET_KYC;
 const MODULE_SECRET_BANKING = process.env.DECENTRO_MODULE_SECRET_BANKING;
+const MODULE_SECRET_CREDIT = process.env.DECENTRO_MODULE_SECRET_CREDIT;
 
 function genRefId(): string {
     const ts = Date.now().toString(36).toUpperCase();
@@ -24,6 +25,7 @@ function kycHeaders(): Record<string, string> {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
         'Content-Type': 'application/json',
+        'accept': 'application/json',
     };
     if (isRealSecret(MODULE_SECRET_KYC)) h['module_secret'] = MODULE_SECRET_KYC!;
     return h;
@@ -42,7 +44,7 @@ function bankingHeaders(): Record<string, string> {
 // ─── Public Registry Validate (PAN / GSTIN / Voter ID / DL) ─────────────────
 
 export type PublicRegistryDocType =
-    | 'PAN' | 'PAN_DETAILED'
+    | 'PAN' | 'PAN-DETAILED' | 'PAN_DETAILED_COMPLETE' | 'PAN_BANK_ACCOUNT_LINKAGE' | 'PAN-MATCH' | 'PAN_COMPARE'
     | 'GSTIN' | 'GSTIN_DETAILED'
     | 'VOTERID'
     | 'DRIVING_LICENSE'
@@ -62,17 +64,22 @@ export async function validateDocument(params: ValidateDocParams) {
         document_type: params.document_type,
         id_number: params.id_number,
         consent: 'Y',
-        consent_purpose: params.consent_purpose || 'Customer identity verification for loan processing',
-        generate_pdf: params.generate_pdf ?? false,
+        consent_purpose: params.consent_purpose || 'For bank account purpose only',
     };
     if (params.dob) body.dob = params.dob;
+    if (params.generate_pdf) body.generate_pdf = true;
 
     const res = await fetch(`${BASE_URL}/kyc/public_registry/validate`, {
         method: 'POST',
         headers: kycHeaders(),
         body: JSON.stringify(body),
     });
-    return res.json();
+    const data = await res.json();
+    if (!res.ok) {
+        console.error('[Decentro validateDocument] HTTP', res.status, JSON.stringify(data));
+        return { responseStatus: 'ERROR', status: 'ERROR', message: data?.message || data?.error || `Decentro API returned HTTP ${res.status}`, ...data };
+    }
+    return data;
 }
 
 // ─── Aadhaar OTP ─────────────────────────────────────────────────────────────
@@ -104,12 +111,16 @@ export async function aadhaarValidateOtp(decentro_txn_id: string, otp: string) {
     return res.json();
 }
 
-// ─── Bank Account Verification ───────────────────────────────────────────────
+// ─── Bank Account Verification (V3) ─────────────────────────────────────────
+// Staging: /v3/banking/money_transfer/validate_bank_account
+
+const CONSUMER_URN = process.env.DECENTRO_CONSUMER_URN || '';
 
 export interface BankVerifyParams {
     account_number: string;
     ifsc: string;
     name?: string;
+    mobile_number?: string;
     perform_name_match?: boolean;
     validation_type?: 'penniless' | 'pennydrop' | 'hybrid';
 }
@@ -118,17 +129,18 @@ export async function verifyBankAccount(params: BankVerifyParams) {
     const body: Record<string, unknown> = {
         reference_id: genRefId(),
         purpose_message: 'Account verification for loan application',
-        transfer_amount: 1,
+        consumer_urn: CONSUMER_URN,
         validation_type: params.validation_type || 'penniless',
         perform_name_match: params.perform_name_match ?? !!params.name,
         beneficiary_details: {
             account_number: params.account_number,
             ifsc: params.ifsc,
             ...(params.name ? { name: params.name } : {}),
+            ...(params.mobile_number ? { mobile_number: params.mobile_number } : {}),
         },
     };
 
-    const res = await fetch(`${BASE_URL}/core_banking/money_transfer/validate_account`, {
+    const res = await fetch(`${BASE_URL}/v3/banking/money_transfer/validate_bank_account`, {
         method: 'POST',
         headers: bankingHeaders(),
         body: JSON.stringify(body),
@@ -160,129 +172,6 @@ export async function faceMatch(image1: Blob, image2: Blob) {
     return res.json();
 }
 
-// ─── DigiLocker (Aadhaar) ─────────────────────────────────────────────────────
-
-export interface DigilockerInitiateParams {
-    reference_id?: string;
-    redirect_url: string;
-    consent_purpose?: string;
-    notification_channel?: 'sms' | 'whatsapp' | 'email' | 'both';
-    mobile_number?: string;
-    email?: string | null;
-}
-
-export async function digilockerInitiateSession(params: DigilockerInitiateParams) {
-    const body: Record<string, unknown> = {
-        reference_id: params.reference_id || genRefId(),
-        redirect_url: params.redirect_url,
-        consent: 'Y',
-        consent_purpose: params.consent_purpose || 'Customer Aadhaar verification for loan processing',
-        notification_channel: params.notification_channel || 'sms',
-    };
-    if (params.mobile_number) body.mobile_number = params.mobile_number;
-    if (params.email) body.email = params.email;
-
-    const res = await fetch(`${BASE_URL}/v2/kyc/digilocker/initiate_session`, {
-        method: 'POST',
-        headers: kycHeaders(),
-        body: JSON.stringify(body),
-    });
-    return res.json();
-}
-
-export async function digilockerCheckStatus(decentroTxnId: string) {
-    const res = await fetch(
-        `${BASE_URL}/v2/kyc/digilocker/check_status?decentro_txn_id=${encodeURIComponent(decentroTxnId)}`,
-        {
-            method: 'GET',
-            headers: kycHeaders(),
-        },
-    );
-    return res.json();
-}
-
-export interface DigilockerGetEaadhaarParams {
-    initial_decentro_transaction_id: string;
-    reference_id?: string;
-}
-
-export async function digilockerGetEaadhaar(params: DigilockerGetEaadhaarParams) {
-    const body = {
-        reference_id: params.reference_id || genRefId(),
-        initial_decentro_transaction_id: params.initial_decentro_transaction_id,
-        consent: 'Y',
-        consent_purpose: 'Retrieve eAadhaar for KYC verification',
-    };
-
-    const res = await fetch(`${BASE_URL}/v2/kyc/digilocker/eaadhaar`, {
-        method: 'POST',
-        headers: kycHeaders(),
-        body: JSON.stringify(body),
-    });
-    return res.json();
-}
-
-// ─── CIBIL (Credit Bureau) ────────────────────────────────────────────────────
-
-export interface CibilParams {
-    name: string;
-    pan: string;
-    dob: string;
-    phone: string;
-    address?: string;
-}
-
-function cibilBody(params: CibilParams): Record<string, unknown> {
-    return {
-        reference_id: genRefId(),
-        consent: 'Y',
-        consent_purpose: 'Customer credit assessment for loan processing',
-        name: params.name,
-        pan: params.pan,
-        mobile: params.phone,
-        dob: params.dob,
-        address: params.address || '',
-    };
-}
-
-export async function fetchCibilScore(params: CibilParams) {
-    const res = await fetch(`${BASE_URL}/v2/bytes/credit-score`, {
-        method: 'POST',
-        headers: kycHeaders(),
-        body: JSON.stringify(cibilBody(params)),
-    });
-    return res.json();
-}
-
-export async function fetchCibilReport(params: CibilParams) {
-    const res = await fetch(
-        `${BASE_URL}/v2/financial_services/credit_bureau/credit_report/summary`,
-        {
-            method: 'POST',
-            headers: kycHeaders(),
-            body: JSON.stringify(cibilBody(params)),
-        },
-    );
-    return res.json();
-}
-
-// ─── RC (Vehicle) to Chassis ──────────────────────────────────────────────────
-
-export async function verifyRcNumber(rcNumber: string) {
-    const res = await fetch(`${BASE_URL}/kyc/public_registry/validate`, {
-        method: 'POST',
-        headers: kycHeaders(),
-        body: JSON.stringify({
-            reference_id: genRefId(),
-            document_type: 'RC',
-            id_number: rcNumber,
-            consent: 'Y',
-            consent_purpose: 'Vehicle registration verification for loan processing',
-        }),
-    });
-    return res.json();
-}
-
 // ─── Document Classification ──────────────────────────────────────────────────
 
 export type ClassificationDocType = 'PAN' | 'AADHAAR' | 'AADHAAR_BACK' | 'DRIVING_LICENSE' | 'VOTERID' | 'PASSPORT' | 'CHEQUE' | 'BANK_STATEMENT' | 'RC' | 'UNKNOWN';
@@ -306,11 +195,16 @@ export function getExpectedDocClass(docType: string): ClassificationDocType {
 }
 
 export async function classifyDocument(documentBlob: Blob, filename: string) {
+    const lastDot = filename.lastIndexOf('.');
+    const sanitizedFilename = lastDot > 0
+        ? filename.slice(0, lastDot).replace(/\./g, '_') + filename.slice(lastDot)
+        : filename;
+
     const form = new FormData();
     form.append('reference_id', genRefId());
     form.append('consent', 'Y');
     form.append('consent_purpose', 'Document classification for KYC verification');
-    form.append('document', documentBlob, filename);
+    form.append('document', documentBlob, sanitizedFilename);
 
     const headers: Record<string, string> = {
         'client_id': CLIENT_ID,
@@ -333,15 +227,22 @@ export async function classifyDocument(documentBlob: Blob, filename: string) {
 
 // ─── Document OCR ─────────────────────────────────────────────────────────────
 
-export type OcrDocType = 'PAN' | 'AADHAAR' | 'DRIVING_LICENSE' | 'VOTERID';
+export type OcrDocType = 'PAN' | 'AADHAAR' | 'DRIVING_LICENSE' | 'VOTERID' | 'PASSPORT';
 
 export async function extractDocumentOcr(document_type: OcrDocType, documentBlob: Blob, filename: string) {
+    // Decentro rejects filenames with multiple periods — sanitize by keeping only the last one (extension)
+    const lastDot = filename.lastIndexOf('.');
+    const sanitizedFilename = lastDot > 0
+        ? filename.slice(0, lastDot).replace(/\./g, '_') + filename.slice(lastDot)
+        : filename;
+
     const form = new FormData();
     form.append('reference_id', genRefId());
-    form.append('document_type', document_type.toLowerCase());
+    form.append('document_type', document_type);
     form.append('consent', 'Y');
-    form.append('consent_purpose', 'for bank account purpose only');
-    form.append('document', documentBlob, filename);
+    form.append('consent_purpose', 'Document OCR extraction for KYC verification');
+    form.append('kyc_validate', '1');
+    form.append('document', documentBlob, sanitizedFilename);
 
     const headers: Record<string, string> = {
         'client_id': CLIENT_ID,
@@ -349,12 +250,18 @@ export async function extractDocumentOcr(document_type: OcrDocType, documentBlob
     };
     if (isRealSecret(MODULE_SECRET_KYC)) headers['module_secret'] = MODULE_SECRET_KYC!;
 
-    const res = await fetch(`${BASE_URL}/kyc/scan_extract/ocr`, {
+    const url = `${BASE_URL}/kyc/scan_extract/ocr`;
+    console.log(`[Decentro OCR] POST ${url} document_type=${document_type} file=${filename} size=${documentBlob.size}`);
+
+    const res = await fetch(url, {
         method: 'POST',
         headers,
         body: form,
     });
-    return res.json();
+
+    const json = await res.json();
+    console.log(`[Decentro OCR] Response status=${res.status}:`, JSON.stringify(json).slice(0, 500));
+    return json;
 }
 
 // ─── OCR Data Comparison Helpers ──────────────────────────────────────────────
@@ -372,7 +279,7 @@ function normalizeString(s: string | null | undefined): string {
     return (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-export function stringSimilarity(a: string, b: string): number {
+function stringSimilarity(a: string, b: string): number {
     const na = normalizeString(a);
     const nb = normalizeString(b);
     if (!na || !nb) return 0;
@@ -469,7 +376,7 @@ export function compareOcrWithLead(
     return comparisons;
 }
 
-export function normalizeDate(dateStr: string): string {
+function normalizeDate(dateStr: string): string {
     // Try various date formats and convert to YYYY-MM-DD
     const cleaned = dateStr.replace(/[/\\]/g, '-');
     // DD-MM-YYYY
@@ -486,4 +393,185 @@ export function normalizeDate(dateStr: string): string {
     return dateStr;
 }
 
+// Export helpers for reuse in cross-match module
+export { stringSimilarity, normalizeString, normalizeDate };
 
+// ─── DigiLocker eAadhaar (two-step flow) ────────────────────────────────────
+// Step 1: Initiate Session → get auth URL + decentro_transaction_id
+// Step 2: Get eAadhaar     → fetch Aadhaar data using transaction ID
+
+export interface DigilockerInitSessionParams {
+    reference_id: string;
+    redirect_url: string;
+    consent_purpose?: string;
+    mobile_number?: string;
+    email?: string | null;
+    notification_channel?: 'sms' | 'whatsapp' | 'email' | 'both';
+}
+
+/** Step 1: Initiate DigiLocker session — returns auth URL for customer */
+export async function digilockerInitiateSession(params: DigilockerInitSessionParams) {
+    const body: Record<string, unknown> = {
+        reference_id: params.reference_id,
+        consent: true,
+        consent_purpose: params.consent_purpose || 'Aadhaar verification for loan application',
+        redirect_url: params.redirect_url,
+        redirect_to_signup: false,
+        abstract_access_token: true,
+    };
+
+    // Send notification to customer so they receive the DigiLocker link
+    if (params.mobile_number) {
+        const phone = params.mobile_number.replace(/\D/g, '').slice(-10);
+        const channel = params.notification_channel || 'sms';
+
+        if (channel === 'sms' || channel === 'both') {
+            body.notifications = {
+                ...(body.notifications as object || {}),
+                sms: { mobile_number: phone },
+            };
+        }
+        if (channel === 'whatsapp' || channel === 'both') {
+            body.notifications = {
+                ...(body.notifications as object || {}),
+                whatsapp: { mobile_number: phone },
+            };
+        }
+        if (channel === 'email' && params.email) {
+            body.notifications = {
+                ...(body.notifications as object || {}),
+                email: { email_id: params.email },
+            };
+        }
+    }
+
+    const res = await fetch(`${BASE_URL}/v2/kyc/digilocker/initiate_session`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+// Alias for backward compatibility with existing imports
+export const digilockerSsoInit = digilockerInitiateSession;
+
+export interface DigilockerGetEaadhaarParams {
+    initial_decentro_transaction_id: string;
+    reference_id: string;
+    consent_purpose?: string;
+    generate_xml?: boolean;
+    generate_pdf?: boolean;
+}
+
+/** Step 2: Fetch eAadhaar data using the transaction ID from initiate_session */
+export async function digilockerGetEaadhaar(params: DigilockerGetEaadhaarParams) {
+    const body = {
+        initial_decentro_transaction_id: params.initial_decentro_transaction_id,
+        consent: true,
+        consent_purpose: params.consent_purpose || 'Aadhaar verification for loan application',
+        reference_id: params.reference_id,
+        generate_xml: params.generate_xml ?? false,
+        generate_pdf: params.generate_pdf ?? false,
+    };
+
+    const res = await fetch(`${BASE_URL}/v2/kyc/digilocker/eaadhaar`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+/** Check status / fetch eAadhaar — calls the eAadhaar endpoint with the transaction ID */
+export async function digilockerCheckStatus(decentroTxnId: string) {
+    return digilockerGetEaadhaar({
+        initial_decentro_transaction_id: decentroTxnId,
+        reference_id: genRefId(),
+    });
+}
+
+// ─── Credit Bureau (Equifax via Decentro) ───────────────────────────────────
+// Score:       POST /v2/bytes/credit-score       (lightweight — mobile + name)
+// Report:      POST /v2/financial_services/credit_bureau/credit_report/summary
+
+function creditHeaders(): Record<string, string> {
+    const h: Record<string, string> = {
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+        'Content-Type': 'application/json',
+        'accept': 'application/json',
+    };
+    // Credit bureau may use its own module secret, fall back to KYC secret
+    if (isRealSecret(MODULE_SECRET_CREDIT)) h['module_secret'] = MODULE_SECRET_CREDIT!;
+    else if (isRealSecret(MODULE_SECRET_KYC)) h['module_secret'] = MODULE_SECRET_KYC!;
+    return h;
+}
+
+export interface CibilParams {
+    name: string;
+    pan: string;
+    dob: string;      // YYYY-MM-DD
+    phone: string;
+    address: string;
+}
+
+/** Credit score via Bytes module (lightweight — mobile + name only) */
+export async function fetchCibilScore(params: CibilParams) {
+    const body = {
+        mobile: params.phone.replace(/\D/g, '').slice(-10),
+        name: params.name,
+    };
+
+    const res = await fetch(`${BASE_URL}/v2/bytes/credit-score`, {
+        method: 'POST',
+        headers: creditHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+/** Full credit report summary — returns score + accounts + enquiries */
+export async function fetchCibilReport(params: CibilParams) {
+    const body: Record<string, unknown> = {
+        reference_id: genRefId(),
+        consent: true,
+        consent_purpose: 'Credit report for loan application processing',
+        name: params.name,
+        mobile: params.phone.replace(/\D/g, '').slice(-10),
+        inquiry_purpose: 'PL',
+    };
+
+    if (params.pan) {
+        body.document_type = 'PAN';
+        body.document_id = params.pan.toUpperCase().trim();
+    }
+    if (params.dob) body.date_of_birth = params.dob;
+    if (params.address) body.address = params.address;
+
+    const res = await fetch(`${BASE_URL}/v2/financial_services/credit_bureau/credit_report/summary`, {
+        method: 'POST',
+        headers: creditHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}
+
+// ─── RC to Chassis (Vehicle) ─────────────────────────────────────────────────
+// Staging: POST /v2/bytes/converter/rc/chassis
+
+export async function verifyRcNumber(rc_number: string) {
+    const body = {
+        reference_id: genRefId(),
+        consent: true,
+        purpose: 'Vehicle RC verification for loan',
+        id: rc_number.toUpperCase().trim().replace(/[^A-Z0-9]/g, ''),
+    };
+
+    const res = await fetch(`${BASE_URL}/v2/bytes/converter/rc/chassis`, {
+        method: 'POST',
+        headers: kycHeaders(),
+        body: JSON.stringify(body),
+    });
+    return res.json();
+}

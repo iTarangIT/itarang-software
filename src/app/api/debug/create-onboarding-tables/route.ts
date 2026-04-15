@@ -8,7 +8,6 @@ export async function GET() {
       ALTER TABLE dealer_onboarding_applications
       ADD COLUMN IF NOT EXISTS owner_name text,
       ADD COLUMN IF NOT EXISTS owner_phone text,
-      ADD COLUMN IF NOT EXISTS owner_landline varchar(20),
       ADD COLUMN IF NOT EXISTS owner_email text,
       ADD COLUMN IF NOT EXISTS bank_name text,
       ADD COLUMN IF NOT EXISTS account_number text,

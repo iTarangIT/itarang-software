@@ -4,8 +4,7 @@ import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-util
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { leads, loanDetails, personalDetails, kycDocuments, auditLogs, accounts } from '@/lib/db/schema';
-import { eq, and, desc, ilike, or, ne } from 'drizzle-orm';
-import { resolveDealerProfile } from '@/lib/supabase/identity';
+import { eq } from 'drizzle-orm';
 
 // Extended Zod Schema
 const dealerLeadSchema = z.object({
@@ -63,8 +62,8 @@ export const POST = withErrorHandler(async (req: Request) => {
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) return errorResponse('Unauthorized', 401);
 
-        const profile = await resolveDealerProfile(supabase, user, 'id,email,role,dealer_id');
-        if (!profile) {
+        const { data: profile } = await supabase.from('users').select('role, dealer_id').eq('id', user.id).single();
+        if (profile?.role !== 'dealer' || !profile?.dealer_id) {
             return errorResponse('Access denied: Dealer account required', 403);
         }
 
@@ -199,41 +198,32 @@ export const GET = withErrorHandler(async (req: Request) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return errorResponse('Unauthorized', 401);
 
-    const profile = await resolveDealerProfile(supabase, user, 'id,email,role,dealer_id');
-    if (!profile) {
+    const { data: profile } = await supabase.from('users').select('role, dealer_id').eq('id', user.id).single();
+    if (profile?.role !== 'dealer' || !profile?.dealer_id) {
         return errorResponse('Access denied', 403);
     }
 
-    // 2. Query Leads using Drizzle (same DB as lead creation)
+    // 2. Query Leads (Scoped by Dealer ID)
     const { searchParams } = new URL(req.url);
     const search = searchParams.get('search');
     const status = searchParams.get('status');
     const type = searchParams.get('type');
 
-    const conditions = [
-        eq(leads.dealer_id, profile.dealer_id),
-        ne(leads.status, 'INCOMPLETE'), // Hide drafts
-    ];
+    let query = supabase
+        .from('leads')
+        .select('*')
+        .eq('dealer_id', profile.dealer_id) // STRICT SCOPING
+        .order('created_at', { ascending: false });
 
-    if (status && status !== 'All') {
-        conditions.push(eq(leads.lead_status, status.toLowerCase()));
-    }
-    if (type && type !== 'All') {
-        conditions.push(eq(leads.interest_level, type.toLowerCase()));
-    }
+    if (status && status !== 'All') query = query.eq('lead_status', status.toLowerCase());
+    if (type && type !== 'All') query = query.eq('interest_level', type.toLowerCase());
+
     if (search) {
-        conditions.push(
-            or(
-                ilike(leads.owner_name, `%${search}%`),
-                ilike(leads.owner_contact, `%${search}%`)
-            )!
-        );
+        query = query.or(`owner_name.ilike.%${search}%,owner_contact.ilike.%${search}%`);
     }
 
-    const data = await db.select()
-        .from(leads)
-        .where(and(...conditions))
-        .orderBy(desc(leads.created_at));
+    const { data, error } = await query;
+    if (error) return errorResponse(error.message, 500);
 
     return successResponse(data);
 });

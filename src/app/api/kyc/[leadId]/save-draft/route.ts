@@ -2,14 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { leads } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
+import {
+    buildDealerEditLockMessage,
+    isDealerKycEditsLocked,
+} from '@/lib/kyc/admin-workflow';
 
-type RouteContext = { params: Promise<{ leadId: string }> };
-
-export async function PATCH(req: NextRequest, { params }: RouteContext) {
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const { leadId } = await params;
-        if (!leadId) {
-            return NextResponse.json({ success: false, error: { message: 'leadId missing' } }, { status: 400 });
+
+        if (await isDealerKycEditsLocked(leadId)) {
+            return NextResponse.json(
+                { success: false, error: { message: buildDealerEditLockMessage() } },
+                { status: 409 }
+            );
         }
 
         const { step, data } = await req.json();

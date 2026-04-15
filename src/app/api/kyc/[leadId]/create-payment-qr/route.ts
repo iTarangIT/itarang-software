@@ -7,9 +7,9 @@ import { createPaymentQr, calculateDiscount } from '@/lib/razorpay';
 
 const BASE_FEE = Number(process.env.FACILITATION_FEE_BASE_AMOUNT) || 1500;
 
-export async function POST(req: NextRequest, { params }: { params: { leadId: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
-        const { leadId } = params;
+        const { leadId } = await params;
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });

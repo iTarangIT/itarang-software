@@ -4,7 +4,7 @@
  */
 
 import { db } from "@/lib/db";
-import { scraperRuns } from "@/lib/db/schema";
+import { scrapeRuns } from "@/lib/db/schema";
 import { withErrorHandler, successResponse } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 import { desc } from "drizzle-orm";
@@ -19,17 +19,17 @@ export const GET = withErrorHandler(async (req: Request) => {
 
   const runs = await db
     .select({
-      id: scraperRuns.id,
-      status: scraperRuns.status,
-      startedAt: scraperRuns.started_at,
-      completedAt: scraperRuns.completed_at,
-      totalFound: scraperRuns.total_found,
-      newLeadsSaved: scraperRuns.new_leads_saved,
-      duplicatesSkipped: scraperRuns.duplicates_skipped,
-      errorMessage: scraperRuns.error_message,
+      id: scrapeRuns.id,
+      status: scrapeRuns.status,
+      startedAt: scrapeRuns.startedAt,
+      completedAt: scrapeRuns.completedAt,
+      totalFound: scrapeRuns.totalFound,
+      newLeadsSaved: scrapeRuns.newLeadsSaved,
+      duplicatesSkipped: scrapeRuns.duplicatesSkipped,
+      errorMessage: scrapeRuns.errorMessage,
     })
-    .from(scraperRuns)
-    .orderBy(desc(scraperRuns.started_at))
+    .from(scrapeRuns)
+    .orderBy(desc(scrapeRuns.startedAt))
     .limit(limit)
     .offset(offset);
 

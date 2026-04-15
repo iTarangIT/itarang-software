@@ -82,14 +82,16 @@ type StoreActions = {
 function createInitialAgreementState(): DealerOnboardingState["agreement"] {
   return {
     agreementName: "Dealer Finance Enablement Agreement",
+    templateSource: "Server Generated Agreement",
     provider: "Digio",
     agreementVersion: "v1.0",
     generatedDate: "",
     agreementStatus: "not_generated",
+    selectedTemplate: "Tarang Dealer Agreement Template",
 
     dateOfSigning: "",
-    mouDate: "",
-    expiryDays: 5,
+    expiryDays: 7,
+    sequenceMode: "sequential",
 
     dealerLegalEntityName: "",
     authorizedSignatoryName: "",
@@ -103,12 +105,8 @@ function createInitialAgreementState(): DealerOnboardingState["agreement"] {
     dealerSignerPhone: "",
     dealerSigningMethod: "",
 
-    salesManager: {
-      name: "",
-      email: "",
-      mobile: "",
-    },
     financierName: "",
+    mouDate: "",
 
     isOemFinancing: false,
     vehicleType: "",
@@ -143,9 +141,25 @@ function createInitialAgreementState(): DealerOnboardingState["agreement"] {
       signingMethod: "",
     },
 
-    // Fixed Signing Order
-    signingOrder: ["dealer", "financier", "itarang_1", "itarang_2"],
-    sequentialSigning: true,
+    includeWitnessesInSigning: false,
+
+    witness1: {
+      name: "",
+      designation: "",
+      email: "",
+      mobile: "",
+      address: "",
+      signingMethod: "",
+    },
+
+    witness2: {
+      name: "",
+      designation: "",
+      email: "",
+      mobile: "",
+      address: "",
+      signingMethod: "",
+    },
 
     requestId: "",
     providerDocumentId: "",
@@ -153,8 +167,10 @@ function createInitialAgreementState(): DealerOnboardingState["agreement"] {
     providerRawResponse: "",
     lastActionTimestamp: "",
     signedAt: "",
-    stampStatus: "pending",
-    completionStatus: "pending",
+    stampStatus: "Pending",
+    completionStatus: "Not Started",
+
+    agreementTemplateFile: null,
     signedAgreementFile: null,
   };
 }
@@ -450,26 +466,19 @@ export const useOnboardingStore = create<
         ...createInitialAgreementState(),
         dateOfSigning: state.agreement.dateOfSigning,
         expiryDays: state.agreement.expiryDays,
+        sequenceMode: state.agreement.sequenceMode,
         dealerSignerName: state.agreement.dealerSignerName,
         dealerSignerDesignation: state.agreement.dealerSignerDesignation,
         dealerSignerEmail: state.agreement.dealerSignerEmail,
         dealerSignerPhone: state.agreement.dealerSignerPhone,
         dealerSigningMethod: state.agreement.dealerSigningMethod,
-        salesManager: {
-          name: "",
-          email: "",
-          mobile: "",
-        },
         financierName: state.agreement.financierName,
-        mouDate: state.agreement.mouDate,
-        isOemFinancing: state.agreement.isOemFinancing,
-        vehicleType: state.agreement.vehicleType,
-        manufacturer: state.agreement.manufacturer,
-        brand: state.agreement.brand,
-        statePresence: state.agreement.statePresence,
         itarangSignatory1: { ...state.agreement.itarangSignatory1 },
         itarangSignatory2: { ...state.agreement.itarangSignatory2 },
         financierSignatory: { ...state.agreement.financierSignatory },
+        includeWitnessesInSigning: state.agreement.includeWitnessesInSigning,
+        witness1: { ...state.agreement.witness1 },
+        witness2: { ...state.agreement.witness2 },
       },
       lastSavedAt: new Date().toISOString(),
     })),
@@ -528,7 +537,7 @@ export const useOnboardingStore = create<
     set({
       dealerId: generatedDealerId,
       dealerDisplayName,
-      status: "submitted",
+      status: "under_review",
       lastSavedAt: new Date().toISOString(),
       errors: {},
     });

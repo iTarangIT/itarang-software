@@ -7,7 +7,6 @@ type ContactRow = {
   id: string;
   name: string;
   phone: string;
-  landline?: string; // optional
   email: string;
   age?: string;
   photo?: any;
@@ -87,15 +86,6 @@ function ContactDetailCard({
                 update(row.id, "phone", value.replace(/[^0-9]/g, ""))
               }
               placeholder={`${title} Phone Number`}
-            />
-
-            {/* Landline Number — optional */}
-            <TextInput
-              value={row.landline || ""}
-              onChange={(value) =>
-                update(row.id, "landline", value.replace(/[^0-9]/g, ""))
-              }
-              placeholder={`${title} Landline Number (Optional)`}
             />
 
             <TextInput
@@ -223,19 +213,6 @@ export default function StepOwnership() {
                   )
                 }
                 placeholder="Owner Phone Number"
-              />
-
-              {/* Landline — optional */}
-              <TextInput
-                value={(ownership as any).ownerLandline || ""}
-                onChange={(value) =>
-                  setField(
-                    "ownership",
-                    "ownerLandline",
-                    value.replace(/[^0-9]/g, "")
-                  )
-                }
-                placeholder="Owner Landline Number (Optional)"
               />
 
               <TextInput
