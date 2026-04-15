@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 
+// force-rebuild: vercel
 const nextConfig = {
   output: "standalone",
   images: {
