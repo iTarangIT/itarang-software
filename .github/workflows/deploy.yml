@@ -1,0 +1,36 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy and restart on VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          command_timeout: 15m
+          script: |
+            cd /home/itarang-crm/htdocs/crm.itarang.com
+            git pull origin main
+            npm ci
+            npm run build
+            cp .env.production .next/standalone/.env.production
+            cp -r .next/static .next/standalone/.next/static
+            cp -r public .next/standalone/public
+            chown -R itarang-crm:itarang-crm /home/itarang-crm/htdocs/crm.itarang.com
+            su - itarang-crm -c "cd /home/itarang-crm/htdocs/crm.itarang.com && pm2 restart itarang-crm-new --update-env"
+            sleep 5
+            if lsof -ti:3002 > /dev/null; then
+              echo "✅ Deployed successfully"
+            else
+              echo "❌ App failed to start"
+              su - itarang-crm -c "pm2 logs itarang-crm-new --lines 10 --nostream"
+              exit 1
+            fi
