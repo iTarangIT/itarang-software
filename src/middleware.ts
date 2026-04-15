@@ -2,6 +2,12 @@ import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function middleware(request: NextRequest) {
+  // Logout route clears cookies itself and must not pay for getUser() / DB
+  // profile lookups — short-circuit before any Supabase calls.
+  if (request.nextUrl.pathname === "/api/auth/logout") {
+    return NextResponse.next({ request: { headers: request.headers } });
+  }
+
   let response = NextResponse.next({
     request: {
       headers: request.headers,

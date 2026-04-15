@@ -112,9 +112,10 @@ export async function aadhaarValidateOtp(decentro_txn_id: string, otp: string) {
 }
 
 // ─── Bank Account Verification (V3) ─────────────────────────────────────────
-// Staging: /v3/banking/money_transfer/validate_bank_account
+// Staging: POST /v3/banking/money_transfer/validate_bank_account
+// Requires a consumer_urn provisioned against the merchant account.
 
-const CONSUMER_URN = process.env.DECENTRO_CONSUMER_URN || '';
+const CONSUMER_URN = (process.env.DECENTRO_CONSUMER_URN || '').trim();
 
 export interface BankVerifyParams {
     account_number: string;
@@ -126,6 +127,15 @@ export interface BankVerifyParams {
 }
 
 export async function verifyBankAccount(params: BankVerifyParams) {
+    if (!CONSUMER_URN) {
+        return {
+            responseStatus: 'ERROR',
+            status: 'ERROR',
+            message:
+                'DECENTRO_CONSUMER_URN is not configured. Set it in .env.local to a valid staging consumer URN and restart the dev server.',
+        };
+    }
+
     const body: Record<string, unknown> = {
         reference_id: genRefId(),
         purpose_message: 'Account verification for loan application',

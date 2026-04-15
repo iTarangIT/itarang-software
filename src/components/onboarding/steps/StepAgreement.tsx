@@ -233,6 +233,18 @@ export default function StepAgreement() {
   const setField = useOnboardingStore((s) => s.setField);
   const resetAgreementState = useOnboardingStore((s) => s.resetAgreementState);
   const updateAgreementStatus = useOnboardingStore((s) => s.updateAgreementStatus);
+  const errors = useOnboardingStore((s) => s.errors);
+
+  const handleContinue = () => {
+    const ok = nextStep();
+    if (!ok) {
+      // Surface the validation errors so the user knows what's blocking them.
+      const firstError = Object.values(useOnboardingStore.getState().errors)[0];
+      if (firstError) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    }
+  };
 
   const dealerSignatoryOptions = useMemo(() => {
     if (company.companyType === "sole_proprietorship") {
@@ -1168,6 +1180,17 @@ export default function StepAgreement() {
         )}
       </SectionCard>
 
+      {Object.keys(errors).length > 0 && (
+        <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-700 shadow-sm">
+          <p className="font-semibold">Please fix the following before continuing:</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {Object.entries(errors).map(([key, message]) => (
+              <li key={key}>{message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="flex items-center justify-between rounded-3xl border border-[#E3E8EF] bg-white p-5 shadow-sm">
         <button
           type="button"
@@ -1184,7 +1207,7 @@ export default function StepAgreement() {
 
         <button
           type="button"
-          onClick={nextStep}
+          onClick={handleContinue}
           className="inline-flex items-center gap-2 rounded-2xl bg-[#173F63] px-5 py-3 text-sm font-semibold text-white hover:bg-[#12324f]"
         >
           <CheckCircle2 className="h-4 w-4" />
