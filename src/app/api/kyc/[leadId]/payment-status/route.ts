@@ -4,9 +4,9 @@ import { facilitationPayments } from '@/lib/db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { fetchQrStatus, fetchQrPayments } from '@/lib/razorpay';
 
-export async function GET(_req: NextRequest, { params }: { params: { leadId: string } }) {
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
-        const { leadId } = params;
+        const { leadId } = await params;
 
         // Get latest facilitation payment for this lead
         const rows = await db.select()

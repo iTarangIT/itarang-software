@@ -156,7 +156,7 @@ export default function DealerDashboardPage({ dealer }: DealerDashboardProps) {
           />
 
           <ActionCard
-            href="/dealer-portal/loans/facilitation"
+            href="/loan-processing"
             icon={<Wallet className="h-7 w-7" />}
             title="Process Loan"
             description="Upload docs for financing"
