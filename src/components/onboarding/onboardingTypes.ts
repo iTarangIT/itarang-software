@@ -32,6 +32,7 @@ export type ContactCard = {
   name: string;
   designation?: string;
   phone: string;
+  landline?: string;
   email: string;
   age?: string;
   photo?: UploadFileItem | null;
@@ -64,6 +65,7 @@ export type ComplianceStepData = {
 export type OwnershipBankingData = {
   ownerName: string;
   ownerPhone: string;
+  ownerLandline?: string;
   ownerEmail: string;
   ownerAge?: string;
   ownerPhoto?: UploadFileItem | null;
@@ -98,10 +100,10 @@ export type FinanceData = {
 
 export type AgreementStatus =
   | "not_generated"
-  | "draft_generated"
+  | "draft_ready"
   | "sent_for_signature"
-  | "viewed_by_dealer"
-  | "signed_by_dealer"
+  | "viewed"
+  | "partially_signed"
   | "completed"
   | "expired"
   | "failed";
@@ -121,18 +123,22 @@ export type AgreementParty = {
   signingMethod: SigningMethod;
 };
 
+export type SigningOrderKey =
+  | "dealer"
+  | "financier"
+  | "itarang_1"
+  | "itarang_2";
+
 export type AgreementData = {
   agreementName: string;
-  templateSource: string;
   provider: string;
   agreementVersion: string;
   generatedDate: string;
   agreementStatus: AgreementStatus;
-  selectedTemplate: string;
 
   dateOfSigning: string;
+  mouDate: string;
   expiryDays: number;
-  sequenceMode: "sequential" | "parallel";
 
   dealerLegalEntityName: string;
   authorizedSignatoryName: string;
@@ -146,8 +152,13 @@ export type AgreementData = {
   dealerSignerPhone: string;
   dealerSigningMethod: SigningMethod;
 
+  salesManager: {
+    name: string;
+    email: string;
+    mobile: string;
+  };
+
   financierName: string;
-  mouDate: string;
 
   isOemFinancing: boolean;
   vehicleType: string;
@@ -159,9 +170,8 @@ export type AgreementData = {
   itarangSignatory2: AgreementParty;
   financierSignatory: AgreementParty;
 
-  includeWitnessesInSigning: boolean;
-  witness1: AgreementParty;
-  witness2: AgreementParty;
+  signingOrder: SigningOrderKey[];
+  sequentialSigning: true;
 
   requestId: string;
   providerDocumentId: string;
@@ -172,7 +182,6 @@ export type AgreementData = {
   stampStatus: string;
   completionStatus: string;
 
-  agreementTemplateFile: UploadCardValue | null;
   signedAgreementFile: UploadCardValue | null;
 };
 
@@ -184,7 +193,17 @@ export type ReviewChecks = {
 
 export type DealerOnboardingState = {
   step: number;
-  status: "draft" | "in_progress" | "under_review" | "action_needed" | "approved";
+  status:
+  | "draft"
+  | "in_progress"
+  | "submitted"
+  | "pending_sales_head"
+  | "under_review"
+  | "agreement_in_progress"
+  | "agreement_completed"
+  | "correction_requested"
+  | "rejected"
+  | "approved";
   lastSavedAt: string | null;
   dealerId: string;
   dealerDisplayName: string;

@@ -8,167 +8,164 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
 
 const leadSchema = z.object({
-  lead_source: z.string(),
-  owner_name: z.string().min(1),
-  owner_contact: z.string().min(10),
-  state: z.string().min(1),
-  city: z.string().min(1),
-  interest_level: z.string(),
-  lead_status: z.string(),
-  business_name: z.string().optional(),
-  owner_email: z.string().optional(),
-  shop_address: z.string().optional(),
+    lead_source: z.enum(['call_center', 'ground_sales', 'digital_marketing', 'database_upload', 'dealer_referral']),
+    owner_name: z.string().min(1, 'Lead Owner Name is required'),
+    owner_contact: z.string().regex(/^\+91[0-9]{10}$/, "Must be +91 followed by 10 digits"),
+    state: z.string().min(1, 'State is required'),
+    city: z.string().min(1, 'City is required'),
+    interest_level: z.enum(['cold', 'warm', 'hot']),
+    lead_status: z.enum(['new', 'assigned', 'contacted', 'qualified', 'converted', 'lost']),
+    business_name: z.string().optional(),
+    owner_email: z.string().email().optional().or(z.literal('')),
+    shop_address: z.string().optional(),
 });
 
 type LeadFormData = z.infer<typeof leadSchema>;
 
-export function EditLeadForm({ initialData, leadId }: any) {
-  const router = useRouter();
-  const [loading, setLoading] = useState(false);
+interface EditLeadFormProps {
+    initialData: any; // Using any for simplicity with Supabase return type, ideally strictly typed
+    leadId: string;
+}
 
-  const { register, handleSubmit, formState: { errors } } = useForm<LeadFormData>({
-    resolver: zodResolver(leadSchema),
-    defaultValues: initialData
-  });
+export function EditLeadForm({ initialData, leadId }: EditLeadFormProps) {
+    const router = useRouter();
+    const [submitting, setSubmitting] = useState(false);
+    const { register, handleSubmit, formState: { errors } } = useForm<LeadFormData>({
+        resolver: zodResolver(leadSchema),
+        defaultValues: {
+            lead_source: initialData.lead_source,
+            owner_name: initialData.owner_name,
+            owner_contact: initialData.owner_contact,
+            state: initialData.state,
+            city: initialData.city,
+            interest_level: initialData.interest_level,
+            lead_status: initialData.lead_status,
+            business_name: initialData.business_name || '',
+            owner_email: initialData.owner_email || '',
+            shop_address: initialData.shop_address || '',
+        }
+    });
 
-  const onSubmit = async (data: LeadFormData) => {
-    setLoading(true);
-    try {
-      await fetch(`/api/leads/${leadId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
+    const onSubmit = async (data: LeadFormData) => {
+        setSubmitting(true);
+        try {
+            const res = await fetch(`/api/leads/${leadId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
+            });
 
-      router.push('/leads');
-      router.refresh();
-    } finally {
-      setLoading(false);
-    }
-  };
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.error?.message || 'Failed to update lead');
+            }
 
-  return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-10">
+            // Show success logic here? Using alert for now as per previous patterns
+            alert('Lead updated successfully');
+            router.push('/leads');
+            router.refresh();
+        } catch (error: any) {
+            console.error(error);
+            alert(error.message || 'Error updating lead');
+        } finally {
+            setSubmitting(false);
+        }
+    };
 
-      {/* SECTION 1 */}
-      <div className="bg-white rounded-xl shadow-sm p-6 space-y-5">
-        <h2 className="text-lg font-semibold text-gray-900">
-          Lead Information
-        </h2>
+    return (
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 bg-white p-6 rounded-xl border border-gray-100 shadow-sm">
+            {/* Lead ID - Read Only */}
+            <div className="space-y-2">
+                <Label className="text-gray-500">Lead ID</Label>
+                <Input value={leadId} disabled className="bg-gray-100 text-gray-500" />
+            </div>
 
-        <div className="grid md:grid-cols-3 gap-5">
+            {/* Basic Info */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                    <Label>Lead Source</Label>
+                    <Select {...register('lead_source')} error={!!errors.lead_source}>
+                        <option value="call_center">Call Center</option>
+                        <option value="ground_sales">Ground Sales</option>
+                        <option value="digital_marketing">Digital Marketing</option>
+                        <option value="dealer_referral">Dealer Referral</option>
+                    </Select>
+                </div>
+                <div className="space-y-2">
+                    <Label>Interest Level <span className="text-red-500">*</span></Label>
+                    <Select {...register('interest_level')} error={!!errors.interest_level}>
+                        <option value="cold">Cold</option>
+                        <option value="warm">Warm</option>
+                        <option value="hot">Hot</option>
+                    </Select>
+                </div>
+            </div>
 
-          <div>
-            <Label className="text-gray-600">Source</Label>
-            <select {...register('lead_source')} className="mt-1 w-full border rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500">
-              <option value="call_center">Call Center</option>
-              <option value="ground_sales">Ground Sales</option>
-              <option value="digital_marketing">Digital Marketing</option>
-            </select>
-          </div>
+            <div className="space-y-2">
+                <Label>Status</Label>
+                <Select {...register('lead_status')} error={!!errors.lead_status}>
+                    <option value="new">New</option>
+                    <option value="assigned">Assigned</option>
+                    <option value="contacted">Contacted</option>
+                    <option value="qualified">Qualified</option>
+                    <option value="converted">Converted</option>
+                    <option value="lost">Lost</option>
+                </Select>
+            </div>
 
-          <div>
-            <Label className="text-gray-600">Interest</Label>
-            <select {...register('interest_level')} className="mt-1 w-full border rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500">
-              <option value="cold">Cold</option>
-              <option value="warm">Warm</option>
-              <option value="hot">Hot</option>
-            </select>
-          </div>
+            {/* Owner Details */}
+            <div className="space-y-2">
+                <Label>Lead Owner Name <span className="text-red-500">*</span></Label>
+                <Input {...register('owner_name')} error={!!errors.owner_name} />
+                {errors.owner_name && <p className="text-red-500 text-xs">{errors.owner_name.message}</p>}
+            </div>
 
-          <div>
-            <Label className="text-gray-600">Status</Label>
-            <select {...register('lead_status')} className="mt-1 w-full border rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500">
-              <option value="new">New</option>
-              <option value="qualified">Qualified</option>
-              <option value="converted">Converted</option>
-            </select>
-          </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                    <Label>Contact Number <span className="text-red-500">*</span></Label>
+                    <Input {...register('owner_contact')} error={!!errors.owner_contact} />
+                    {errors.owner_contact && <p className="text-red-500 text-xs">{errors.owner_contact.message}</p>}
+                </div>
+                <div className="space-y-2">
+                    <Label>Email (Optional)</Label>
+                    <Input {...register('owner_email')} type="email" />
+                    {errors.owner_email && <p className="text-red-500 text-xs">{errors.owner_email.message}</p>}
+                </div>
+            </div>
 
-        </div>
-      </div>
+            <div className="space-y-2">
+                <Label>Business Name (Optional)</Label>
+                <Input {...register('business_name')} />
+            </div>
 
-      {/* SECTION 2 */}
-      <div className="bg-white rounded-xl shadow-sm p-6 space-y-5">
-        <h2 className="text-lg font-semibold text-gray-900">
-          Owner Details
-        </h2>
+            {/* Location */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                    <Label>State <span className="text-red-500">*</span></Label>
+                    <Input {...register('state')} error={!!errors.state} />
+                    {errors.state && <p className="text-red-500 text-xs">{errors.state.message}</p>}
+                </div>
+                <div className="space-y-2">
+                    <Label>City <span className="text-red-500">*</span></Label>
+                    <Input {...register('city')} error={!!errors.city} />
+                    {errors.city && <p className="text-red-500 text-xs">{errors.city.message}</p>}
+                </div>
+            </div>
 
-        <div className="grid md:grid-cols-2 gap-5">
+            <div className="space-y-2">
+                <Label>Shop Address (Optional)</Label>
+                <Input {...register('shop_address')} />
+            </div>
 
-          <div>
-            <Label>Owner Name</Label>
-            <Input {...register('owner_name')} />
-            {errors.owner_name && <p className="text-xs text-red-500 mt-1">Required</p>}
-          </div>
-
-          <div>
-            <Label>Business Name</Label>
-            <Input {...register('business_name')} />
-          </div>
-
-          <div>
-            <Label>Phone</Label>
-            <Input {...register('owner_contact')} />
-          </div>
-
-          <div>
-            <Label>Email</Label>
-            <Input {...register('owner_email')} />
-          </div>
-
-        </div>
-      </div>
-
-      {/* SECTION 3 */}
-      <div className="bg-white rounded-xl shadow-sm p-6 space-y-5">
-        <h2 className="text-lg font-semibold text-gray-900">
-          Location
-        </h2>
-
-        <div className="grid md:grid-cols-2 gap-5">
-
-          <div>
-            <Label>State</Label>
-            <Input {...register('state')} />
-          </div>
-
-          <div>
-            <Label>City</Label>
-            <Input {...register('city')} />
-          </div>
-
-        </div>
-
-        <div>
-          <Label>Shop Address</Label>
-          <Input {...register('shop_address')} />
-        </div>
-      </div>
-
-      {/* ACTION */}
-      <div className="flex justify-between items-center pt-4">
-
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => router.back()}
-        >
-          Cancel
-        </Button>
-
-        <Button
-          type="submit"
-          className="bg-blue-600 hover:bg-blue-700"
-          disabled={loading}
-        >
-          {loading ? 'Updating...' : 'Update Lead'}
-        </Button>
-
-      </div>
-
-    </form>
-  );
+            <div className="flex justify-end gap-2 pt-4 border-t mt-6">
+                <Button type="button" variant="ghost" onClick={() => router.back()}>Cancel</Button>
+                <Button type="submit" disabled={submitting}>
+                    {submitting ? 'Updating...' : 'Update Lead'}
+                </Button>
+            </div>
+        </form>
+    );
 }

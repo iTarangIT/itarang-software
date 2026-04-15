@@ -46,7 +46,7 @@ export default function DeployedAssetsPage() {
                 const params = new URLSearchParams({ status: filterStatus, payment: filterPayment, category: filterCategory, search: searchQuery });
                 const res = await fetch(`/api/dealer/assets?${params}`);
                 const data = await res.json();
-                if (data.success) setAssets(data.data);
+                if (data.success && Array.isArray(data.data)) setAssets(data.data);
             } catch { /* silent */ }
             finally { setLoading(false); }
         };

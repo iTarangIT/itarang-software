@@ -338,7 +338,7 @@ export default function FileUploadCard({
                 ) : null}
 
                 <div className="mt-2 flex flex-wrap items-center gap-3">
-                  {currentValue.previewUrl ? (
+                  {/* {currentValue.previewUrl ? (
                     <a
                       href={currentValue.previewUrl}
                       target="_blank"
@@ -349,7 +349,7 @@ export default function FileUploadCard({
                       <Eye className="h-3.5 w-3.5" />
                       Preview file
                     </a>
-                  ) : null}
+                  ) : null} */}
 
                   {currentValue.uploadedUrl ? (
                     <a

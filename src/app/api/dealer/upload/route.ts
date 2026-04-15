@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 import { withErrorHandler, successResponse } from '@/lib/api-utils';
 import { NextResponse } from 'next/server';
+import { resolveDealerProfile } from '@/lib/supabase/identity';
 
 export const POST = withErrorHandler(async (req: Request) => {
     // 1. Initialize Standard Client for Auth
@@ -15,14 +16,10 @@ export const POST = withErrorHandler(async (req: Request) => {
         return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
     }
 
-    const { data: profile, error: profileError } = await supabase
-        .from('users')
-        .select('role, dealer_id')
-        .eq('id', user.id)
-        .single();
+    const profile = await resolveDealerProfile(supabase, user, 'id,email,role,dealer_id');
 
-    if (profileError || profile?.role !== 'dealer' || !profile?.dealer_id) {
-        console.error('Upload Profile Error:', profileError);
+    if (!profile) {
+        console.error('Upload Profile Error: dealer profile not found for authenticated user');
         return NextResponse.json({ success: false, message: 'Access denied: Dealer account required' }, { status: 403 });
     }
 

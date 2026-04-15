@@ -1,5 +1,39 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
+import { normalizeRole } from "@/lib/roles";
+import {
+  findLatestDealerOnboardingRecord,
+  findSupabaseUserProfile,
+} from "@/lib/supabase/identity";
+
+type UserProfile = {
+  role?: string | null;
+  email?: string | null;
+  id?: string | null;
+  dealer_id?: string | null;
+};
+
+type DealerOnboardingProfile = {
+  onboarding_status?: string | null;
+  dealer_account_status?: string | null;
+};
+
+function getAuthMetadataRole(user: {
+  user_metadata?: Record<string, unknown> | null;
+  app_metadata?: Record<string, unknown> | null;
+}) {
+  const userRole = user.user_metadata?.role;
+  if (typeof userRole === "string" && userRole.trim()) {
+    return userRole;
+  }
+
+  const appRole = user.app_metadata?.role;
+  if (typeof appRole === "string" && appRole.trim()) {
+    return appRole;
+  }
+
+  return "user";
+}
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
@@ -18,7 +52,7 @@ export async function middleware(request: NextRequest) {
         },
         setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value),
+            request.cookies.set(name, value)
           );
 
           response = NextResponse.next({
@@ -26,11 +60,11 @@ export async function middleware(request: NextRequest) {
           });
 
           cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options),
+            response.cookies.set(name, value, options)
           );
         },
       },
-    },
+    }
   );
 
   const {
@@ -61,8 +95,9 @@ export async function middleware(request: NextRequest) {
     path === "/favicon.ico";
 
   const isProtectedRoute =
-    Object.values(roleDashboards).some((dashboardPath) =>
-      path.startsWith(dashboardPath),
+    Object.values(roleDashboards).some(
+      (dashboardPath) =>
+        path === dashboardPath || path.startsWith(`${dashboardPath}/`)
     ) ||
     path.startsWith("/inventory") ||
     path.startsWith("/product-catalog") ||
@@ -88,30 +123,14 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
-  let profile: { role?: string | null } | null = null;
+  const profile = await findSupabaseUserProfile<UserProfile>(
+    supabase,
+    user,
+    "role,email,id,dealer_id"
+  );
 
-  const { data: profileById } = await supabase
-    .from("users")
-    .select("role,email,id")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  if (profileById) {
-    profile = profileById;
-  } else if (user.email) {
-    const { data: profileByEmail } = await supabase
-      .from("users")
-      .select("role,email,id")
-      .eq("email", user.email)
-      .maybeSingle();
-
-    if (profileByEmail) {
-      profile = profileByEmail;
-    }
-  }
-
-  const rawRole = profile?.role || "user";
-  const role = rawRole.toLowerCase();
+  const rawRole = profile?.role || getAuthMetadataRole(user);
+  const role = normalizeRole(rawRole);
   const myDashboard = roleDashboards[role] || "/";
 
   console.log("[MIDDLEWARE] Auth user:", {
@@ -122,38 +141,134 @@ export async function middleware(request: NextRequest) {
     path,
   });
 
-  if (path === "/login" || path === "/" || path === "/dashboard") {
+  if (path === "/login") {
+    return response;
+  }
+
+  if (path === "/" || path === "/dashboard") {
     if (myDashboard !== "/") {
       return NextResponse.redirect(new URL(myDashboard, request.url));
     }
     return response;
   }
 
-  // Shared access routes
-  const sharedRouteAccess: Record<string, string[]> = {
-    "/admin/dealer-verification": [
-      "admin",
-      "sales_head",
-      "business_head",
-      "ceo",
-    ],
-    "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
-  };
-
-  const allowedSharedRoles = Object.entries(sharedRouteAccess).find(
-    ([routePrefix]) => path.startsWith(routePrefix),
-  )?.[1];
-
-  if (allowedSharedRoles && allowedSharedRoles.includes(role)) {
-    return response;
+  // Explicit shared access for dealer verification pages
+  if (path === "/admin/dealer-verification" || path.startsWith("/admin/dealer-verification/")) {
+    if (["admin", "sales_head", "business_head", "ceo"].includes(role)) {
+      return response;
+    }
+    return NextResponse.redirect(new URL(myDashboard, request.url));
   }
 
-  const matchedRole = Object.entries(roleDashboards).find(([, dashboardPath]) =>
-    path.startsWith(dashboardPath),
+  const matchedRole = Object.entries(roleDashboards).find(
+    ([, dashboardPath]) =>
+      path === dashboardPath || path.startsWith(`${dashboardPath}/`)
   )?.[0];
 
   if (matchedRole && matchedRole !== role && role !== "ceo") {
     return NextResponse.redirect(new URL(myDashboard, request.url));
+  }
+
+  // Dealer-specific gating
+  if (role === "dealer") {
+    // If dealer already has a dealer_id, they are fully approved — skip onboarding checks
+    if (profile?.dealer_id) {
+      return response;
+    }
+
+    const dealerProfile =
+      await findLatestDealerOnboardingRecord<DealerOnboardingProfile>(
+        supabase,
+        user,
+        {
+          profileUserId: profile?.id || null,
+          selectClause: "onboarding_status,dealer_account_status",
+        }
+      );
+
+    // If onboarding lookup returned null (e.g. RLS blocking), check if user
+    // already has a dealer_id in the users table — that means they were approved.
+    let onboardingStatus = (
+      dealerProfile?.onboarding_status || "draft"
+    ).toLowerCase();
+
+    let dealerAccountStatus = (
+      dealerProfile?.dealer_account_status || ""
+    ).toLowerCase();
+
+    if (!dealerProfile) {
+      // Fallback: check if the users table has dealer_id set (set during approval)
+      const { data: fullProfile } = await supabase
+        .from("users")
+        .select("dealer_id")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (!fullProfile) {
+        // Also try by email
+        const { data: emailProfile } = await supabase
+          .from("users")
+          .select("dealer_id")
+          .eq("email", user.email)
+          .maybeSingle();
+
+        if (emailProfile?.dealer_id) {
+          onboardingStatus = "approved";
+          dealerAccountStatus = "active";
+        }
+      } else if (fullProfile?.dealer_id) {
+        onboardingStatus = "approved";
+        dealerAccountStatus = "active";
+      }
+    }
+
+    const isDealerPortalRoute = path.startsWith("/dealer-portal");
+    const isDealerOnboardingRoute =
+      path.startsWith("/dealer-onboarding") ||
+      path.startsWith("/dealer-portal/onboarding-status");
+
+    // Allow onboarding routes through BEFORE dealer portal gating
+    // to prevent infinite redirect loop on /dealer-portal/onboarding-status
+    if (isDealerOnboardingRoute) {
+      return response;
+    }
+
+    if (isDealerPortalRoute) {
+      const isApprovedAndActive =
+        onboardingStatus === "approved" && dealerAccountStatus === "active";
+
+      if (isApprovedAndActive) {
+        return response;
+      }
+
+      const url = request.nextUrl.clone();
+
+      if (
+        onboardingStatus === "draft" ||
+        onboardingStatus === "in_progress" ||
+        onboardingStatus === ""
+      ) {
+        url.pathname = "/dealer-onboarding";
+        return NextResponse.redirect(url);
+      }
+
+      if (
+        onboardingStatus === "submitted" ||
+        onboardingStatus === "pending_sales_head" ||
+        onboardingStatus === "under_review" ||
+        onboardingStatus === "agreement_in_progress" ||
+        onboardingStatus === "agreement_completed" ||
+        onboardingStatus === "correction_requested" ||
+        onboardingStatus === "action_needed" ||
+        onboardingStatus === "rejected"
+      ) {
+        url.pathname = "/dealer-portal/onboarding-status";
+        return NextResponse.redirect(url);
+      }
+
+      url.pathname = "/dealer-onboarding";
+      return NextResponse.redirect(url);
+    }
   }
 
   return response;

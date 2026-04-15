@@ -4,8 +4,43 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
-import { users } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { dealerOnboardingApplications, users } from "@/lib/db/schema";
+import { desc, eq, or } from "drizzle-orm";
+
+function resolveDealerRedirect(application?: {
+  onboardingStatus?: string | null;
+  reviewStatus?: string | null;
+  dealerAccountStatus?: string | null;
+}) {
+  const onboardingStatus = (application?.onboardingStatus || "draft").toLowerCase();
+  const reviewStatus = (application?.reviewStatus || "").toLowerCase();
+  const dealerAccountStatus = (application?.dealerAccountStatus || "").toLowerCase();
+
+  if (onboardingStatus === "approved" && dealerAccountStatus === "active") {
+    return "/dealer-portal";
+  }
+
+  if (
+    onboardingStatus === "submitted" ||
+    reviewStatus === "pending_sales_head" ||
+    reviewStatus === "pending_admin_review" ||
+    reviewStatus === "under_review" ||
+    reviewStatus === "agreement_in_progress" ||
+    reviewStatus === "agreement_completed" ||
+    onboardingStatus === "rejected"
+  ) {
+    return "/dealer-portal/onboarding-status";
+  }
+
+  if (
+    onboardingStatus === "correction_requested" ||
+    onboardingStatus === "action_needed"
+  ) {
+    return "/dealer-onboarding";
+  }
+
+  return "/dealer-onboarding";
+}
 
 export async function login(formData: FormData) {
   const supabase = await createClient();
@@ -17,7 +52,7 @@ export async function login(formData: FormData) {
     redirect("/login?error=Email and password are required");
   }
 
-  const { error } = await supabase.auth.signInWithPassword({
+  const { data, error } = await supabase.auth.signInWithPassword({
     email,
     password,
   });
@@ -27,15 +62,60 @@ export async function login(formData: FormData) {
     redirect("/login?error=Could not authenticate user");
   }
 
-  const matchedUsers = await db
-    .select()
-    .from(users)
-    .where(eq(users.email, email))
-    .limit(1);
+  let matchedUsers;
+  try {
+    matchedUsers = await db
+      .select()
+      .from(users)
+      .where(
+        data.user?.id
+          ? or(eq(users.id, data.user.id), eq(users.email, email))
+          : eq(users.email, email)
+      )
+      .limit(1);
+  } catch (dbErr) {
+    console.error("[LOGIN] Database query failed:", dbErr);
+    redirect("/login?error=Database connection failed. Please try again.");
+  }
 
   const appUser = matchedUsers[0];
 
   if (!appUser) {
+    const authUserId = data.user?.id;
+
+    const onboardingApplication =
+      (
+        await db
+          .select({
+            onboardingStatus: dealerOnboardingApplications.onboardingStatus,
+            reviewStatus: dealerOnboardingApplications.reviewStatus,
+            dealerAccountStatus:
+              dealerOnboardingApplications.dealerAccountStatus,
+          })
+          .from(dealerOnboardingApplications)
+          .where(
+            authUserId
+              ? or(
+                  eq(dealerOnboardingApplications.dealerUserId, authUserId),
+                  eq(dealerOnboardingApplications.ownerEmail, email)
+                )
+              : eq(dealerOnboardingApplications.ownerEmail, email)
+          )
+          .orderBy(desc(dealerOnboardingApplications.updatedAt))
+          .limit(1)
+      )[0] ?? null;
+
+    if (onboardingApplication) {
+      console.log("[LOGIN] Dealer onboarding record found without local users row:", {
+        email,
+        onboardingStatus: onboardingApplication.onboardingStatus,
+        reviewStatus: onboardingApplication.reviewStatus,
+        dealerAccountStatus: onboardingApplication.dealerAccountStatus,
+      });
+
+      redirect(resolveDealerRedirect(onboardingApplication));
+    }
+
     console.error("[LOGIN] Local app user not found for:", email);
     redirect("/login?error=User record not found");
   }
@@ -60,7 +140,36 @@ export async function login(formData: FormData) {
   }
 
   if (appUser.role === "dealer") {
-    redirect("/dealer-portal");
+    // If dealer already has a dealer_id, they are fully approved — go straight to portal
+    if (appUser.dealer_id) {
+      redirect("/dealer-portal");
+    }
+
+    const authUserId = data.user?.id;
+
+    const onboardingApplication =
+      (
+        await db
+          .select({
+            onboardingStatus: dealerOnboardingApplications.onboardingStatus,
+            reviewStatus: dealerOnboardingApplications.reviewStatus,
+            dealerAccountStatus:
+              dealerOnboardingApplications.dealerAccountStatus,
+          })
+          .from(dealerOnboardingApplications)
+          .where(
+            authUserId
+              ? or(
+                  eq(dealerOnboardingApplications.dealerUserId, authUserId),
+                  eq(dealerOnboardingApplications.ownerEmail, email)
+                )
+              : eq(dealerOnboardingApplications.ownerEmail, email)
+          )
+          .orderBy(desc(dealerOnboardingApplications.updatedAt))
+          .limit(1)
+      )[0] ?? null;
+
+    redirect(resolveDealerRedirect(onboardingApplication || undefined));
   }
 
   if (appUser.role === "admin") {

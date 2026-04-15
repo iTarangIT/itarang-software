@@ -1,7 +1,14 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { createClient } from "@/lib/supabase/client";
+import { normalizeRole } from "@/lib/roles";
 
 type AppUser = {
   id: string;
@@ -15,6 +22,11 @@ type AppUser = {
   is_active?: boolean;
   created_at?: string;
   updated_at?: string;
+
+  // Dealer onboarding/account fields
+  onboarding_status?: string | null;
+  review_status?: string | null;
+  dealer_account_status?: string | null;
 };
 
 interface AuthContextType {
@@ -31,10 +43,16 @@ const AuthContext = createContext<AuthContextType>({
   logout: async () => {},
 });
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({
+  children,
+  initialUser,
+}: {
+  children: React.ReactNode;
+  initialUser?: AppUser | null;
+}) {
   const supabase = useMemo(() => createClient(), []);
-  const [user, setUser] = useState<AppUser | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<AppUser | null>(initialUser ?? null);
+  const [loading, setLoading] = useState(!initialUser);
 
   const fetchUser = async ({ silent = false }: { silent?: boolean } = {}) => {
     try {
@@ -61,10 +79,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      const metadataName =
+        (typeof authUser.user_metadata?.name === "string" && authUser.user_metadata.name) ||
+        authUser.email?.split("@")[0] ||
+        "User";
+      const metadataRole =
+        (typeof authUser.user_metadata?.role === "string" && authUser.user_metadata.role) ||
+        (typeof authUser.app_metadata?.role === "string" && authUser.app_metadata.role) ||
+        "user";
+
       setUser({
         id: authUser.id,
         email: authUser.email || "",
-        role: "user",
+        name: metadataName,
+        role: normalizeRole(metadataRole),
       });
     } catch (error) {
       console.error("[AuthProvider] Failed to fetch user profile:", error);
@@ -74,8 +102,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const hasInitialUser = !!initialUser;
+
   useEffect(() => {
-    fetchUser();
+    // Skip initial fetch if server already provided the user
+    if (!hasInitialUser) {
+      fetchUser();
+    }
 
     const {
       data: { subscription },

@@ -1,6 +1,6 @@
 {
-  "id": "6de5f87b-9949-49ae-8161-7a7c8401f701",
-  "prevId": "f1eff06d-4c7e-48ba-8ced-64f3a155c5fe",
+  "id": "7629de15-5ca8-41a8-a553-0fb4f03a6311",
+  "prevId": "392cb36d-3792-4704-8243-8923c4de1214",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1906,8 +1906,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.dealer_onboarding_applications": {
-      "name": "dealer_onboarding_applications",
+    "public.dealer_agreement_events": {
+      "name": "dealer_agreement_events",
       "schema": "",
       "columns": {
         "id": {
@@ -1917,106 +1917,221 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
-        "dealer_user_id": {
-          "name": "dealer_user_id",
+        "application_id": {
+          "name": "application_id",
           "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_document_id": {
+          "name": "provider_document_id",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "company_name": {
-          "name": "company_name",
+        "request_id": {
+          "name": "request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event_type": {
+          "name": "event_type",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "signer_role": {
+          "name": "signer_role",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event_status": {
+          "name": "event_status",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event_payload": {
+          "name": "event_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "dealer_agreement_events_application_id_idx": {
+          "name": "dealer_agreement_events_application_id_idx",
+          "columns": [
+            {
+              "expression": "application_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "dealer_agreement_events_provider_document_id_idx": {
+          "name": "dealer_agreement_events_provider_document_id_idx",
+          "columns": [
+            {
+              "expression": "provider_document_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "dealer_agreement_events_created_at_idx": {
+          "name": "dealer_agreement_events_created_at_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "dealer_agreement_events_application_id_dealer_onboarding_applications_id_fk": {
+          "name": "dealer_agreement_events_application_id_dealer_onboarding_applications_id_fk",
+          "tableFrom": "dealer_agreement_events",
+          "tableTo": "dealer_onboarding_applications",
+          "columnsFrom": [
+            "application_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.dealer_agreement_signers": {
+      "name": "dealer_agreement_signers",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "application_id": {
+          "name": "application_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_document_id": {
+          "name": "provider_document_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "request_id": {
+          "name": "request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "signer_role": {
+          "name": "signer_role",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "signer_name": {
+          "name": "signer_name",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "company_type": {
-          "name": "company_type",
+        "signer_email": {
+          "name": "signer_email",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "gst_number": {
-          "name": "gst_number",
+        "signer_mobile": {
+          "name": "signer_mobile",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "pan_number": {
-          "name": "pan_number",
+        "signing_method": {
+          "name": "signing_method",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_signer_identifier": {
+          "name": "provider_signer_identifier",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "cin_number": {
-          "name": "cin_number",
+        "provider_signing_url": {
+          "name": "provider_signing_url",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "business_address": {
-          "name": "business_address",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'{}'::jsonb"
-        },
-        "registered_address": {
-          "name": "registered_address",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'{}'::jsonb"
-        },
-        "finance_enabled": {
-          "name": "finance_enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false,
-          "default": false
-        },
-        "onboarding_status": {
-          "name": "onboarding_status",
-          "type": "varchar(30)",
+        "signer_status": {
+          "name": "signer_status",
+          "type": "varchar(50)",
           "primaryKey": false,
           "notNull": true,
-          "default": "'draft'"
-        },
-        "review_status": {
-          "name": "review_status",
-          "type": "varchar(30)",
-          "primaryKey": false,
-          "notNull": false,
           "default": "'pending'"
         },
-        "submitted_at": {
-          "name": "submitted_at",
+        "signed_at": {
+          "name": "signed_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
         },
-        "approved_at": {
-          "name": "approved_at",
+        "last_event_at": {
+          "name": "last_event_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
         },
-        "rejected_at": {
-          "name": "rejected_at",
-          "type": "timestamp",
+        "provider_raw_response": {
+          "name": "provider_raw_response",
+          "type": "jsonb",
           "primaryKey": false,
-          "notNull": false
-        },
-        "rejection_reason": {
-          "name": "rejection_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "admin_notes": {
-          "name": "admin_notes",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "default": "'{}'::jsonb"
         },
         "created_at": {
           "name": "created_at",
@@ -2031,6 +2146,263 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        }
+      },
+      "indexes": {
+        "dealer_agreement_signers_application_id_idx": {
+          "name": "dealer_agreement_signers_application_id_idx",
+          "columns": [
+            {
+              "expression": "application_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "dealer_agreement_signers_provider_document_id_idx": {
+          "name": "dealer_agreement_signers_provider_document_id_idx",
+          "columns": [
+            {
+              "expression": "provider_document_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "dealer_agreement_signers_signer_status_idx": {
+          "name": "dealer_agreement_signers_signer_status_idx",
+          "columns": [
+            {
+              "expression": "signer_status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "dealer_agreement_signers_application_id_dealer_onboarding_applications_id_fk": {
+          "name": "dealer_agreement_signers_application_id_dealer_onboarding_applications_id_fk",
+          "tableFrom": "dealer_agreement_signers",
+          "tableTo": "dealer_onboarding_applications",
+          "columnsFrom": [
+            "application_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.dealer_documents": {
+      "name": "dealer_documents",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "application_id": {
+          "name": "application_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "document_type": {
+          "name": "document_type",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "file_name": {
+          "name": "file_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mime_type": {
+          "name": "mime_type",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "file_size": {
+          "name": "file_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "s3_key": {
+          "name": "s3_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "s3_url": {
+          "name": "s3_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verification_status": {
+          "name": "verification_status",
+          "type": "varchar(30)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'uploaded'"
+        },
+        "extracted_data": {
+          "name": "extracted_data",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "remarks": {
+          "name": "remarks",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.dealer_onboarding_applications": {
+      "name": "dealer_onboarding_applications",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "dealer_user_id": {
+          "name": "dealer_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dealer_code": {
+          "name": "dealer_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "company_name": {
+          "name": "company_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "company_type": {
+          "name": "company_type",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "gst_number": {
+          "name": "gst_number",
+          "type": "varchar(30)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pan_number": {
+          "name": "pan_number",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "business_address": {
+          "name": "business_address",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "registered_address": {
+          "name": "registered_address",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "finance_enabled": {
+          "name": "finance_enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": false
+        },
+        "onboarding_status": {
+          "name": "onboarding_status",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'draft'"
+        },
+        "review_status": {
+          "name": "review_status",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'draft'"
+        },
+        "submitted_at": {
+          "name": "submitted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
         },
         "owner_name": {
           "name": "owner_name",
@@ -2040,7 +2412,7 @@
         },
         "owner_phone": {
           "name": "owner_phone",
-          "type": "text",
+          "type": "varchar(20)",
           "primaryKey": false,
           "notNull": false
         },
@@ -2070,32 +2442,112 @@
         },
         "ifsc_code": {
           "name": "ifsc_code",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sales_manager_name": {
+          "name": "sales_manager_name",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "correction_remarks": {
-          "name": "correction_remarks",
+        "sales_manager_email": {
+          "name": "sales_manager_email",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "rejection_remarks": {
-          "name": "rejection_remarks",
+        "sales_manager_mobile": {
+          "name": "sales_manager_mobile",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "itarang_signatory_1_name": {
+          "name": "itarang_signatory_1_name",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "dealer_account_status": {
-          "name": "dealer_account_status",
-          "type": "varchar(30)",
+        "itarang_signatory_1_email": {
+          "name": "itarang_signatory_1_email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "itarang_signatory_1_mobile": {
+          "name": "itarang_signatory_1_mobile",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "itarang_signatory_2_name": {
+          "name": "itarang_signatory_2_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "itarang_signatory_2_email": {
+          "name": "itarang_signatory_2_email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "itarang_signatory_2_mobile": {
+          "name": "itarang_signatory_2_mobile",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agreement_status": {
+          "name": "agreement_status",
+          "type": "varchar(50)",
           "primaryKey": false,
           "notNull": false,
-          "default": "'inactive'"
+          "default": "'not_generated'"
         },
-        "dealer_code": {
-          "name": "dealer_code",
+        "provider_signing_url": {
+          "name": "provider_signing_url",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_document_id": {
+          "name": "provider_document_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "request_id": {
+          "name": "request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_raw_response": {
+          "name": "provider_raw_response",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stamp_status": {
+          "name": "stamp_status",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'pending'"
+        },
+        "completion_status": {
+          "name": "completion_status",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'pending'"
+        },
+        "last_action_timestamp": {
+          "name": "last_action_timestamp",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false
         }
@@ -2127,7 +2579,7 @@
         },
         "document_type": {
           "name": "document_type",
-          "type": "varchar(100)",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -2157,113 +2609,59 @@
         },
         "mime_type": {
           "name": "mime_type",
-          "type": "varchar(100)",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
         "file_size": {
           "name": "file_size",
-          "type": "bigint",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
         "uploaded_by": {
           "name": "uploaded_by",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "uploaded_at": {
-          "name": "uploaded_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "doc_status": {
-          "name": "doc_status",
-          "type": "varchar(30)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'uploaded'"
-        },
-        "verification_status": {
-          "name": "verification_status",
-          "type": "varchar(30)",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'pending'"
-        },
-        "verified_at": {
-          "name": "verified_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified_by": {
-          "name": "verified_by",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "rejection_reason": {
-          "name": "rejection_reason",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "extracted_data": {
-          "name": "extracted_data",
-          "type": "jsonb",
+        "doc_status": {
+          "name": "doc_status",
+          "type": "varchar(50)",
           "primaryKey": false,
           "notNull": false,
-          "default": "'{}'::jsonb"
+          "default": "'uploaded'"
         },
-        "api_verification_results": {
-          "name": "api_verification_results",
-          "type": "jsonb",
+        "verification_status": {
+          "name": "verification_status",
+          "type": "varchar(50)",
           "primaryKey": false,
           "notNull": false,
-          "default": "'{}'::jsonb"
+          "default": "'pending'"
         },
         "metadata": {
           "name": "metadata",
           "type": "jsonb",
           "primaryKey": false,
-          "notNull": false,
-          "default": "'{}'::jsonb"
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "default": "now()"
         },
         "updated_at": {
           "name": "updated_at",
           "type": "timestamp",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "default": "now()"
         }
       },
       "indexes": {},
-      "foreignKeys": {
-        "dealer_onboarding_documents_application_id_dealer_onboarding_applications_id_fk": {
-          "name": "dealer_onboarding_documents_application_id_dealer_onboarding_applications_id_fk",
-          "tableFrom": "dealer_onboarding_documents",
-          "tableTo": "dealer_onboarding_applications",
-          "columnsFrom": [
-            "application_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -3624,7 +4022,7 @@
           "name": "file_url",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "file_name": {
           "name": "file_name",
@@ -3660,12 +4058,6 @@
         "api_response": {
           "name": "api_response",
           "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified_at": {
-          "name": "verified_at",
-          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
@@ -4120,69 +4512,624 @@
       "columns": {
         "id": {
           "name": "id",
-          "type": "text",
+          "type": "varchar(255)",
           "primaryKey": true,
           "notNull": true
         },
-        "dealer_name": {
-          "name": "dealer_name",
+        "lead_source": {
+          "name": "lead_source",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "interest_level": {
+          "name": "interest_level",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'cold'"
+        },
+        "lead_status": {
+          "name": "lead_status",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'new'"
+        },
+        "dealer_id": {
+          "name": "dealer_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "owner_name": {
+          "name": "owner_name",
           "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_contact": {
+          "name": "owner_contact",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "business_name": {
+          "name": "business_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "owner_email": {
+          "name": "owner_email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "state": {
+          "name": "state",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "city": {
+          "name": "city",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "shop_address": {
+          "name": "shop_address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mobile": {
+          "name": "mobile",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "permanent_address": {
+          "name": "permanent_address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "vehicle_ownership": {
+          "name": "vehicle_ownership",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "battery_type": {
+          "name": "battery_type",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "asset_model": {
+          "name": "asset_model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "asset_price": {
+          "name": "asset_price",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "family_members": {
+          "name": "family_members",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "driving_experience": {
+          "name": "driving_experience",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lead_type": {
+          "name": "lead_type",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "vehicle_rc": {
+          "name": "vehicle_rc",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "full_name": {
+          "name": "full_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "father_or_husband_name": {
+          "name": "father_or_husband_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dob": {
+          "name": "dob",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
         "phone": {
           "name": "phone",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "current_address": {
+          "name": "current_address",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "language": {
-          "name": "language",
+        "is_current_same": {
+          "name": "is_current_same",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "product_category_id": {
+          "name": "product_category_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "product_type_id": {
+          "name": "product_type_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "vehicle_owner_name": {
+          "name": "vehicle_owner_name",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "follow_up_history": {
-          "name": "follow_up_history",
+        "vehicle_owner_phone": {
+          "name": "vehicle_owner_phone",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "auto_filled": {
+          "name": "auto_filled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "ocr_status": {
+          "name": "ocr_status",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ocr_error": {
+          "name": "ocr_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reference_id": {
+          "name": "reference_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "interested_in": {
+          "name": "interested_in",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
-        "current_status": {
-          "name": "current_status",
+        "battery_order_expected": {
+          "name": "battery_order_expected",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "investment_capacity": {
+          "name": "investment_capacity",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "business_type": {
+          "name": "business_type",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "qualified_by": {
+          "name": "qualified_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "qualified_at": {
+          "name": "qualified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "qualification_notes": {
+          "name": "qualification_notes",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "total_attempts": {
-          "name": "total_attempts",
+        "converted_deal_id": {
+          "name": "converted_deal_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "converted_at": {
+          "name": "converted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "total_ai_calls": {
+          "name": "total_ai_calls",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "last_ai_call_at": {
+          "name": "last_ai_call_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_call_outcome": {
+          "name": "last_call_outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ai_priority_score": {
+          "name": "ai_priority_score",
+          "type": "numeric(5, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "next_call_after": {
+          "name": "next_call_after",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "do_not_call": {
+          "name": "do_not_call",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": false
+        },
+        "ai_managed": {
+          "name": "ai_managed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": false
+        },
+        "ai_owner": {
+          "name": "ai_owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "manual_takeover": {
+          "name": "manual_takeover",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": false
+        },
+        "last_ai_action_at": {
+          "name": "last_ai_action_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "intent_score": {
+          "name": "intent_score",
           "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
-        "final_intent_score": {
-          "name": "final_intent_score",
+        "intent_reason": {
+          "name": "intent_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "next_call_at": {
+          "name": "next_call_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "call_priority": {
+          "name": "call_priority",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "conversation_summary": {
+          "name": "conversation_summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_call_status": {
+          "name": "last_call_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'INCOMPLETE'"
+        },
+        "workflow_step": {
+          "name": "workflow_step",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "primary_product_id": {
+          "name": "primary_product_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lead_score": {
+          "name": "lead_score",
           "type": "integer",
           "primaryKey": false,
           "notNull": false
+        },
+        "kyc_status": {
+          "name": "kyc_status",
+          "type": "varchar(30)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'not_started'"
+        },
+        "kyc_score": {
+          "name": "kyc_score",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "kyc_completed_at": {
+          "name": "kyc_completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payment_method": {
+          "name": "payment_method",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "consent_status": {
+          "name": "consent_status",
+          "type": "varchar(30)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'awaiting_signature'"
+        },
+        "has_co_borrower": {
+          "name": "has_co_borrower",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": false
+        },
+        "has_additional_docs_required": {
+          "name": "has_additional_docs_required",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": false
+        },
+        "interim_step_status": {
+          "name": "interim_step_status",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "kyc_draft_data": {
+          "name": "kyc_draft_data",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sm_review_status": {
+          "name": "sm_review_status",
+          "type": "varchar(30)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'not_submitted'"
+        },
+        "submitted_to_sm_at": {
+          "name": "submitted_to_sm_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sm_assigned_to": {
+          "name": "sm_assigned_to",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "uploader_id": {
+          "name": "uploader_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
-          "type": "timestamp",
+          "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
           "default": "now()"
         }
       },
-      "indexes": {},
-      "foreignKeys": {},
+      "indexes": {
+        "leads_source_idx": {
+          "name": "leads_source_idx",
+          "columns": [
+            {
+              "expression": "lead_source",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "leads_interest_idx": {
+          "name": "leads_interest_idx",
+          "columns": [
+            {
+              "expression": "interest_level",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "leads_status_idx": {
+          "name": "leads_status_idx",
+          "columns": [
+            {
+              "expression": "lead_status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "leads_dealer_id_accounts_id_fk": {
+          "name": "leads_dealer_id_accounts_id_fk",
+          "tableFrom": "leads",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "dealer_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "leads_qualified_by_users_id_fk": {
+          "name": "leads_qualified_by_users_id_fk",
+          "tableFrom": "leads",
+          "tableTo": "users",
+          "columnsFrom": [
+            "qualified_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "leads_primary_product_id_products_id_fk": {
+          "name": "leads_primary_product_id_products_id_fk",
+          "tableFrom": "leads",
+          "tableTo": "products",
+          "columnsFrom": [
+            "primary_product_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "leads_sm_assigned_to_users_id_fk": {
+          "name": "leads_sm_assigned_to_users_id_fk",
+          "tableFrom": "leads",
+          "tableTo": "users",
+          "columnsFrom": [
+            "sm_assigned_to"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "leads_uploader_id_users_id_fk": {
+          "name": "leads_uploader_id_users_id_fk",
+          "tableFrom": "leads",
+          "tableTo": "users",
+          "columnsFrom": [
+            "uploader_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "leads_phone_unique": {
-          "name": "leads_phone_unique",
+        "leads_reference_id_unique": {
+          "name": "leads_reference_id_unique",
           "nullsNotDistinct": false,
           "columns": [
-            "phone"
+            "reference_id"
           ]
         }
       },
@@ -6422,136 +7369,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.scraper_runs": {
-      "name": "scraper_runs",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "varchar(255)",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "triggered_by": {
-          "name": "triggered_by",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "varchar(20)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'running'"
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "search_queries": {
-          "name": "search_queries",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "total_found": {
-          "name": "total_found",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 0
-        },
-        "new_leads_saved": {
-          "name": "new_leads_saved",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 0
-        },
-        "duplicates_skipped": {
-          "name": "duplicates_skipped",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 0
-        },
-        "error_message": {
-          "name": "error_message",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "scraper_runs_status_idx": {
-          "name": "scraper_runs_status_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "scraper_runs_triggered_by_idx": {
-          "name": "scraper_runs_triggered_by_idx",
-          "columns": [
-            {
-              "expression": "triggered_by",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "scraper_runs_triggered_by_users_id_fk": {
-          "name": "scraper_runs_triggered_by_users_id_fk",
-          "tableFrom": "scraper_runs",
-          "tableTo": "users",
-          "columnsFrom": [
-            "triggered_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.scraped_dealer_leads": {
       "name": "scraped_dealer_leads",
       "schema": "",
@@ -6960,112 +7777,130 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.scraper_leads": {
-      "name": "scraper_leads",
+    "public.scraper_runs": {
+      "name": "scraper_runs",
       "schema": "",
       "columns": {
         "id": {
           "name": "id",
-          "type": "text",
+          "type": "varchar(255)",
           "primaryKey": true,
           "notNull": true
         },
-        "name": {
-          "name": "name",
-          "type": "text",
+        "triggered_by": {
+          "name": "triggered_by",
+          "type": "uuid",
           "primaryKey": false,
-          "notNull": false
-        },
-        "phone": {
-          "name": "phone",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "email": {
-          "name": "email",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "website": {
-          "name": "website",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "city": {
-          "name": "city",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "address": {
-          "name": "address",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "source": {
-          "name": "source",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "status": {
           "name": "status",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'running'"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "search_queries": {
+          "name": "search_queries",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "total_found": {
+          "name": "total_found",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "new_leads_saved": {
+          "name": "new_leads_saved",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "duplicates_skipped": {
+          "name": "duplicates_skipped",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "error_message": {
+          "name": "error_message",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
         "created_at": {
           "name": "created_at",
-          "type": "timestamp",
+          "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "default": "now()"
         }
       },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.scraper_raw": {
-      "name": "scraper_raw",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
+      "indexes": {
+        "scraper_runs_status_idx": {
+          "name": "scraper_runs_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
-        "run_id": {
-          "name": "run_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "raw_data": {
-          "name": "raw_data",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "now()"
+        "scraper_runs_triggered_by_idx": {
+          "name": "scraper_runs_triggered_by_idx",
+          "columns": [
+            {
+              "expression": "triggered_by",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
-      "indexes": {},
-      "foreignKeys": {},
+      "foreignKeys": {
+        "scraper_runs_triggered_by_users_id_fk": {
+          "name": "scraper_runs_triggered_by_users_id_fk",
+          "tableFrom": "scraper_runs",
+          "tableTo": "users",
+          "columnsFrom": [
+            "triggered_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},

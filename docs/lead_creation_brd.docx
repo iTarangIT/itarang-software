@@ -1,0 +1,1984 @@
+Dashboard_Button Schema
+Button Functions & User Interactions
+Top Menu Action Buttons
+SEARCH BAR
+Purpose: Global search across dealer’s ecosystem.
+Workflow:
+Click → Open global search overlay
+Real-time search (debounced API)
+Show categorized results:
+Leads
+Loans
+Assets
+Inventory
+Campaigns
+Customers
+
+Each result clickable → redirect to respective module page
+Search parameters supported:
+Customer Name
+Mobile Number
+Lead ID
+Loan ID
+Asset ID
+Campaign ID
+Inventory ID
+Service ticket ID
+Add:
+Recent searches
+Fuzzy search
+2. Dealer Profile Dropdown
+Flow
+Click → dropdown:
+View Profile
+Change Password
+Active subscription status
+Logout
+
+
+
+Main Action Buttons
+NEW LEAD 
+Keep Modal Flow (Click → Create New Lead Form)
+PROCESS LOAN (LOAN FACILITATION)
+
+Logic
+
+‘Payment_Method = Finance/Loan
+AND
+documents_uploaded = true
+AND
+facilitation_fee_status != PAID’
+
+Probable screen:
+Open Loan Facilitation Queue screen
+Table View:
+Columns:
+Customer Name
+Mobile
+Document Status
+Company Validation Status
+Facilitation Fee Status
+Action
+Filters:
+Document Uploaded
+Under Validation
+Validation Passed
+Fee Pending
+Click "Process"
+
+Open detailed pseudo screen:
+Uploaded Documents viewer
+Validation notes
+Fee amount payable
+Pay Facilitation Fee button
+On Fee Payment:
+Update status → FEE_PAID
+Move file to Loan Management module
+
+Add Assets
+(Click → Pseudo Screen)
+VIEW (Recent Leads)
+
+Displays modal with customer information, lead status, timeline, associated loans, edit options, and action buttons
+Display time since last contact with alert if >7 days
+View Lead (Click → Lead Page)
+START CAMPAIGN
+(Click → Pseudo Screen)
+
+Probable Logic: Opens campaign wizard with audience selection, message composition, channel selection, and confirmation
+Pre-built segments: All Customers, Hot Leads, Pending Loans, Overdue Payments, Inactive Customers
+Custom segment builder with AND/OR logic
+Filter criteria: Lead status, Loan status, Purchase history, Last contact date, Location, Product interest
+Show estimated audience size as filters are applied
+Save custom segments for future use
+
+
+Navigation Menu Functions
+LEAD MANAGEMENT
+(Click → All Lead list with filters(Pseudo screen))
+table view, sorting, bulk actions, Create New Lead button
+Loan MANAGEMENT
+(Click → All Loan file list with payment processed filters, post disbursal payment and actionable(Pseudo screen))
+Deploy Asset MANAGEMENT
+(Click →Deployed Asset table, filters by type payment type, product type and status, QR code generation, deployment history, maintenance tracking, battery health tracking, telemetry support (Pseudo screen))
+Service  MANAGEMENT
+(Click → Pseudo Screen)
+ORDERS FROM OEM
+(Click → Pseudo Screen)
+INVENTORY
+(Click → Pseudo Screen)
+
+
+
+
+Create New Lead_Button Schema	
+Button Functions & User Interactions
+Screen Overview
+This is the first step in a 5-step workflow for creating a new lead in the iTarang CRM system. The screen collects personal information, product details, vehicle details, and lead classification data.
+Workflow Position: Step 1 of 5
+Reference ID Format: #IT-2026-0000001 (Auto-generated)
+Generate reference: #IT-[YEAR]-[SEQUENCE]
+Top Menu Action Buttons
+Workflow Type: Multi-step transactional form
+State: LEAD_DRAFT until final submission
+
+HEADER BUTTONS & ELEMENTS
+Frontend: 
+Workflow Progress Bar
+Type: Display-only component
+Function
+Shows: Step 1 of 5
+Highlights current step
+Non-clickable
+Backend:
+No API.
+Progress state derived from route /leads/create?step=1
+
+Info (ℹ️) Button
+Frontend:
+On click → Open help modal
+Modal shows:
+Required fields explanation
+Loan compliance guidelines
+Example formats
+Backend: Static content or fetched: GET /api/help/lead-step-1
+Auto-fill from ID [Document Link]
+Frontend
+Click → Open ‘Auto fill customer details pop up’ modal
+User click:
+Aadhaar Front: To upload image in png, jpeg and PDF 
+Aadhaar Back: To upload image in png,jpeg and PDF
+Start scanning: CALL API initiate OCR API, Both the uploaded images run through OCR and extract Name, Husband/Father Name, Date of Birth, Current Address
+Validation:
+Add File Size & Format Validation
+Max file size: 5MB per image
+Allowed formats: PNG, JPEG, PDF
+Image quality check (min 300 DPI recommended)
+Show upload progress bar
+OCR Error Handling
+What if OCR fails to extract data?: 
+Show error message: 'Could not read document. Please ensure image is clear'
+Allow manual entry fallback
+Retry option
+Support for poor quality scans
+	Backend:
+POST /api/leads/autofillRequest: { idType: 'aadhaar|pan|customer|lead', idValue: 'string' }Response: { success: boolean, data: { fullName, fatherName, dob, address, phone, etc. }, message: string }
+State Update:
+Overwrites matching fields
+Marks form as “Auto-filled”
+Logs audit event
+
+
+PERSONAL INFORMATION – FIELD WORKFLOW
+All fields update local form state until save.
+Full Name (Required)
+Validation:
+2–100 chars
+Letters + spaces + . -
+Auto-capitalize first letter of each word
+Validation: At least 2 characters
+Error message: 'Please enter a valid full name’, ‘No special characters except’
+Frontend:
+Validate on blur
+Red border if invalid
+Backend:
+Revalidated during submission
+Value syncs to form state
+
+Father/Husband Name (Required for loan eligibility)
+Same validation as Full Name.
+If the product selected later requires a loan: → This becomes mandatory.
+
+Date of Birth (Required)
+Frontend:
+Calendar picker
+Age >= 18
+Show calculated age
+Backend:
+Store ISO format
+
+Phone Number (Critical Field)
+Frontend:
+Format: +91 XXXXX XXXXX
+Real-time validation
+AJAX duplicate check: GET /api/leads/check-duplicate?phone=9876543210
+If duplicate:
+Show warning
+Provide "View Existing Lead" button
+Backend:
+Store with +91
+Soft duplicate allowed (with warning log)
+
+Current Address (Optional)
+Min 20 characters
+
+Permanent Address (Optional)
+Min 20 characters
+☑ Same as Current: if checked ‘Auto copy’
+Backend:
+Store boolean is_current_same
+
+PRODUCT DETAILS – CONDITIONAL LOGIC
+Product Category (Required)
+Fetch: GET /api/inventory/categories
+Selection triggers:
+Load Product Types
+Determine if vehicle section visible
+
+Product Type (Required)
+Fetch: GET /api/inventory/products?category=3-Wheeler
+Must store:
+Product_Type ids 
+Multiselect as per Product category
+Add 'Add Another Product' button to create multiple entries
+Consider: Primary product (required) + Secondary products (optional)
+If not in stock → show: “Order from OEM” suggestion
+
+VEHICLE DETAILS (Conditional Block)
+Visible only if:Product category = 3W/2W/4W
+
+Vehicle Registration Number (Mandatory)
+Auto uppercase’
+
+Vehicle Ownership
+vehicle_registration_number IS NOT NULL
+if the user fills Vehicle Reg. Number 
+Show validation: 'You've entered vehicle details
+Automatically make dependent fields required:   • 
+Vehicle Ownership (Required)
+Owner Name (Required)
+Owner Phone (Required)
+Show asterisk (*) dynamically on these fields.
+Add section heading: 'Existing Vehicle Information' (for context)
+Dropdown:
+Self
+Financed
+Company
+Leased
+Family
+Conditional fields appear based on selection.
+
+Owner Name 
+Name format same as ‘Full Name’.
+vehicle_registration_number IS NOT NULL
+if user fills Vehicle Reg. Number:
+Show validation: 'You've entered vehicle details'
+Automatically make dependent fields required:
+Vehicle Ownership (Required)
+Owner Name (Required)
+Owner Phone (Required)
+Show asterisk (*) dynamically on these fields
+Add section heading: 'Existing Vehicle Information' (for context)
+Owner Phone
+The phone format is the same as ‘Phone Number’.
+vehicle_registration_number IS NOT NULL
+if the user fills Vehicle Reg. Number:
+Show validation: 
+'You've entered vehicle details'
+Automatically make dependent fields required:
+Vehicle Ownership (Required)
+Owner Name (Required)
+Owner Phone (Required)
+Show asterisk (*) dynamically on these fields
+Add section heading: 'Existing Vehicle Information' (for context)
+LEAD CLASSIFICATION
+Hot / Warm / Cold (Required)
+Frontend:
+Toggle group
+Must select one
+Backend:
+	Stores:
+interest_level: hot | warm | cold
+lead_score: computed_value
+Suggested scoring:
+Hot → 90
+Warm → 60
+Cold → 30
+Triggers:
+Hot leads: 'Create Lead' saves Step 1 and auto-navigates to Step 2
+Warm/Cold: 'Create Lead' saves and exits workflow
+PAYMENT METHOD
+Payment Method Dropdown (Required)
+Options:
+Cash
+Other Finance (default)
+Dealer Finance
+Frontend Logic
+On change:
+If Cash:
+Next page: Inventory Selection and Pricing
+Skip intermediary steps
+If Other Finance/Dealer Finance:
+Show full Loan Documents section
+Required Docs = 11
+Backend:
+PATCH /api/kyc/:leadId/payment-method
+Store:
+payment_method = 'Cash' | 'Other finance' | ‘Dealer finance”
+loan_required = true/false
+Return:
+Next Page Logic
+
+BOTTOM BUTTONS – CORE LOGIC
+Create Lead
+Purpose: Immediate save & exit workflow
+Frontend:
+Validate all required fields
+If errors → highlight
+If valid → confirm modal:Create lead
+On confirm:
+Disable button
+Show spinner
+Call API
+Backend:
+POST /api/leads/create
+Actions:
+Server-side validation
+Generate reference:
+#IT-[YEAR]-[SEQUENCE]
+Set:
+status = INCOMPLETE
+workflow_step = 1
+Save to leads table
+Create activity log
+Trigger notifications if HOT
+Response
+{success: true,
+  	leadId,
+  	referenceId}
+After Success
+Toast: Lead created
+Redirect to:
+/leads/:id
+
+Cancel
+Frontend:
+If form untouched: → Go back
+If modified:→ Show confirmation modal
+On confirm:
+Clear local state
+Delete draft if exists:
+DELETE /api/leads/draft/:sessionId
+Redirect to dashboard
+STATE MANAGEMENT LOGIC
+During Step 1:
+form_state = LOCAL
+lead_state = DRAFT (optional)
+After Create Lead:
+lead_status = INCOMPLETE
+workflow_step = 1
+
+
+
+
+
+
+Button
+Frontend Action
+Backend Action
+State Change
+info
+Open modal
+None
+None
+Auto-fill
+Call autofill API
+Return data
+Populate form
+Create Lead
+Validate → POST
+Insert Lead
+incomplete
+Cancel
+Confirm → Navigate
+Delete draft (optional)
+Discard
+
+Error Handling
+For every API call and user action, specify:
+Network errors: 'Connection lost. Please try again'
+Validation errors: Field-specific error messages
+Server errors (500): 'Something went wrong. Contact support'
+Permission errors (403): 'You don't have permission'
+Timeout errors: Retry mechanism with exponential backoff
+
+	
+
+
+
+
+Customer KYC – Step 2 of 5 (Hot Lead Only)_Button Schema	
+SCREEN ACCESS LOGIC
+Access Condition
+User can access Step 2 only if:
+
+lead_created = true
+AND interest_level = 'hot'
+AND Payment_Method <> ‘Cash’
+
+Backend Gatekeeper
+GET /api/kyc/:leadId/access-check
+If not allowed → redirect to the ‘Create Lead Page’
+
+CUSTOMER CONSENT
+
+DIGITAL CONSENT WORKFLOW (AADHAAR ESIGN)
+
+Send SMS/WhatsApp Consent
+Frontend:
+Click button: Send SMS/WhatsApp Consent
+Disable Generate Consent PDF button (mutually exclusive)
+Show phone number confirmation modal
+On confirm:
+Disable button, show spinner
+Call API
+On success:
+Show toast: 'Consent form sent to customer'
+Update Consent Status: 'Link_sent (SMS/WhatsApp delivered)'
+
+Backend:
+POST /api/kyc/:leadId/consent/digital/send-link
+
+Request Body:
+{
+  leadId: "IT-2026-0000123",
+  customerPhone: "+919876543210",
+  channel: "whatsapp" | "sms"
+}
+
+Response:
+{
+  success: true,
+  consentLinkId: "CL-20260726-001",
+  linkUrl: "https://itarang.com/consent/CL-20260726-001",
+  expiresAt: "2026-07-27T10:30:00Z",
+  deliveryStatus: "sent"
+}
+
+Database Updates:
+- consent_status = 'link_sent'
+- consent_link_sent_at = CURRENT_TIMESTAMP
+- consent_link_expires_at = CURRENT_TIMESTAMP + INTERVAL 24 HOUR
+- consent_link_url = generated_url
+- consent_delivery_channel = 'whatsapp' | 'sms'
+```
+
+**SMS/WhatsApp Template:**
+```
+Hi {CustomerName},
+
+iTarang requires your consent to process your loan application.
+
+Click here to review and sign digitally:
+{ConsentLink}
+
+This link expires in 24 hours.
+Uses Aadhaar-based eSign (100% secure)
+
+Questions? Call 1800-XXX-XXXX
+- Team iTarang
+
+Link Expiry Handler:
+Cron job runs every hour
+If consent_link_expires_at < NOW AND consent_status = 'link_sent':
+Set consent_status = 'expired'
+Send notification to dealer: "Consent link expired for Lead #{leadId}"
+Show "Resend Consent" button in UI
+Customer Completes Aadhaar eSign
+Customer-Side Flow (External Page)
+Customer clicks consent link
+System records: consent_status = 'link_opened'
+Customer reviews consent text Consent format
+Clicks "Sign with Aadhaar"
+eSign provider (DigiLocker/NSDL/eMudhra) opens Aadhaar OTP screen
+System records: consent_status = 'esign_in_progress'
+Customer enters Aadhaar OTP
+eSign provider validates OTP with UIDAI
+eSign provider generates digitally signed PDF with:
+Digital signature certificate
+Timestamp
+Aadhaar number (masked)
+eSign transaction ID
+eSign Provider Callback (Webhook):
+POST /api/kyc/consent/esign/callback (called by eSign provider) 
+Request Body (from provider): { transactionId:"ESIGN-20260726-ABC123", status: "success" | "failed", signedPdfUrl: "https://esign-provider.com/signed/ABC123.pdf", signedAt: "2026-07-26T10:45:30Z", signerAadhaar: "XXXX-XXXX-3456",certificateId: "CERT-2026-XYZ", errorCode: null, errorMessage: null } 
+Backend Processing: 
+1. Validate webhook signature (security check) 
+2. Download signed PDF from provider URL 
+3. Store in iTarang permanent storage: -S3/Azure: /kyc/{leadId}/consent/signed_esign_{timestamp}.pdf 
+4. Extract and store metadata: - esign_transaction_id -esign_certificate_id - signed_pdf_url (iTarang storage) - signed_at - signer_aadhaar_masked - sign_method ='aadhaar_esign' 
+5. Update database: - consent_status = 'admin_review_pending' 🔶 - esign_completed_at =CURRENT_TIMESTAMP 
+6. Create admin task: - task_type = 'consent_review' - task_title = "Review Digital Consent - Lead #{leadId}" - assigned_to = 'consent_review_queue' - priority = 'high' 
+7. Send notifications: - Email to admin@itarang.com: "New consent pending review" - Dashboard alert for Admin users - SMS to dealer: "Customer signed consent, under review" Response to Provider: { success: true, received: true }
+Failure Handling:
+
+If eSign status = "failed"
+consent_status = 'esign_failed' 
+Store failure reason: 
+esign_error_code 
+esign_error_message (e.g., "Invalid OTP", "Aadhaar suspended")
+Send SMS to customer: "Consent signing failed. Reason: {error}. Click to retry: {link}"
+Allow 3 retry attempts
+After 3 failures:
+ consent_status = 'esign_blocked'
+Notify dealer: "Customer eSign blocked, switch to manual consent”
+
+Admin Reviews Digital Consent** 
+**Admin Console - Consent Review Queue:**
+**Navigation:** ``` Admin Dashboard → Consent ReviewQueue ``` 
+**Queue View (Table):** 
+
+Lead ID
+Customer
+Signed Via
+Signed At
+Status
+Action
+IT-2026-123 
+Vijay Sharma
+adhaar
+26-Jul 10:45
+Admin Review Pend.
+Review
+IT-2026-124 
+Rakesh Kumar
+Manual
+26-Jul 09:30
+Admin Review Pend.
+Review
+
+
+
+Filters:
+Status: All / Pending / Verified / Rejected
+Signed Method: All / Aadhaar eSign / Manual
+Date Range
+Dealer 
+
+**Review Screen (Click "Review" button):** 
+**Panel - Signed PDF Viewer:**
+
+📄 Signed Consent PDF
+[PDF Preview with zoom controls]
+
+Digital Signature Verified
+Certificate ID: CERT-2026-XYZ
+Signed: 26-Jul-2026 10:45:30 AM
+Signer Aadhaar: XXXX-XXXX-3456
+[Download PDF] [Print]
+
+[Admin Notes - Optional]
+
+[❌ Reject]  [✅ Approve & Verify]
+
+
+Backend - Approve Action:
+
+POST /api/kyc/:leadId/consent/admin/verify 
+Request Body: { leadId: "IT-2026-0000123", decision: "approved",reviewerNotes: "All details verified, signature valid", reviewerId: "ADMIN-001" }
+Database Updates:
+consent_status ='admin_verified'
+consent_verified_by = 'ADMIN-001'
+consent_verified_at = CURRENT_TIMESTAMP
+consent_verification_notes = reviewer_notes
+consent_final = true 
+Audit Log: { action: "consent_verified", entity:"Lead", entity_id: "IT-2026-0000123", performed_by: "ADMIN-001", timestamp: "2026-07-26T11:00:00Z", details: {previous_status: "admin_review_pending", new_status: "admin_verified" } } 
+
+Notifications:
+Email to dealer: "Consent verified for Lead #{leadId}, ready for next step"
+SMS to customer: "Your consent has been verified. Next: Product selection"
+Update lead workflow_step gating
+
+Backend - Reject Action:
+
+POST /api/kyc/:leadId/consent/admin/reject
+
+Request Body:
+{
+  leadId: "IT-2026-0000123",
+  decision: "rejected",
+  rejectionReason: "mandatory" dropdown:
+"Signature mismatch"
+"Name mismatch with Aadhaar"
+"Incomplete consent text"
+"Expired certificate"
+"Fraudulent document suspected"
+"Other (specify in notes)",
+  reviewerNotes: "Customer name in PDF does not match lead record",
+  reviewerId: "ADMIN-001"
+}
+
+Database Updates:
+consent_status = 'admin_rejected' 
+consent_rejected_by = 'ADMIN-001'
+consent_rejected_at = CURRENT_TIMESTAMP
+consent_rejection_reason = rejection_reason
+consent_rejection_notes = reviewer_notes
+
+Trigger Re-Consent Flow:
+Send email to dealer: "Consent rejected for Lead #{leadId}. Reason: {reason}"
+SMS to customer: "Your consent could not be verified. Please re-sign: {new_link}"
+Generate new consent link with extended expiry (48 hours)
+Reset consent_status = 'link_sent'
+Increment consent_attempt_count
+If consent_attempt_count > 3:
+Escalate to senior admin for manual handling
+
+MANUAL CONSENT WORKFLOW (OFFLINE SIGNED PDF)
+
+This is the fallback when digital consent fails or is unavailable.
+Generate Consent PDF (Preview Only)
+Frontend:
+Click button: Generate Consent PDF
+Disable Send SMS/WhatsApp Consent button (mutually exclusive)
+Show loading spinner
+Call API
+Backend:
+
+POST /api/kyc/:leadId/consent/manual/generate-pdf 
+Processing: 
+Fetch lead data:
+Customer name, father name, DOB,address
+Product details
+Generate PDF using template engine (pdfkit/Puppeteer):
+Header: iTarang logo,"Customer Consent Form"
+Body: CUSTOMER LOAN CONSENT FORM (Link)
+Footer: "This is a digitally generated document"
+Store PDF temporarily:
+/tmp/consent_preview_{leadId}_{timestamp}.pdf 
+Auto-delete after 24 hour
+ Set consent_status = 'manual_pdf_generated'
+
+Response: { success: true, pdfUrl: "https://itarang.com/tmp/consent_preview_123.pdf", expiresIn: 24*3600, // 24 hour
+downloadLink: "Download opens automatically" }
+
+**Frontend After Success:**
+Download PDF automatically to the user's device
+Show toast: `Consent PDF downloaded.Please print, sign, and upload scanned copy.`
+Enable `Upload Signed Consent PDF` button
+Show instructions:
+
+Next Steps: 
+Print the downloaded PDF
+Customer must sign in designated box
+Customer thumb impression required
+Witness signature required
+Scan or photo (clear, legible)
+Upload
+
+Upload Signed Consent PDF
+Frontend:
+Click button: Upload Signed Consent PDF
+Enabled only after Generate Consent PDF is clicked
+Open file picker
+Validation:
+Format: PDF only
+Max size: 10MB
+Min resolution: 300 DPI (if image-based PDF)
+Show upload progress bar
+On success:
+Show PDF thumbnail preview
+Display upload timestamp
+Update status indicator
+Backend:
+POST /api/kyc/:leadId/consent/manual/upload 
+Request: 
+FormData
+{ file: File (PDF), uploadedBy: "dealer_user_id" }
+Processing:
+Validate file:
+Check magic bytes (PDF signature)
+Virus scan (ClamAV or similar)
+Extract PDFmetadata
+OCR scan (optional):
+Detect signature presence
+Verify checkboxes marked
+Flag for quality review
+Store permanently: - S3/Azure: /kyc/{leadId}/consent/manual_signed_{timestamp}.pdf
+Update database:
+consent_status = 'manual_review_pending' 🔶
+pdf_consent_uploaded_at = CURRENT_TIMESTAMP
+pdf_consent_uploaded_by = Sales Manager_id - signed_pdf_url = storage_url
+sign_method = 'manual'
+Create admin task:
+Same as digital consent review queue
+Send notifications:
+Admin: "Manual consent uploaded for Lead #{leadId}"
+Dealer: "Consent uploaded, awaiting admin verification"
+Response: { success: true, fileUrl:"https://cdn.itarang.com/kyc/123/manual_signed.pdf", uploadedAt: "2026-07-26T12:00:00Z", status:"manual_review_pending" } ``` --- ##### 
+
+**Admin Reviews Manual Consent** 
+**Same Review Queue as Digital Consent**
+**Additional Manual Checks:**
+
+Admin Verification Checklist (Manual Consent):
+☑ PDF is legible and clear
+☑ All signature boxes filled
+☑ Thumb impression present
+☑ Witness signature present
+☑ Customer name matches lead record
+☑ Date signed is recent (within 7 days)
+☐ Any tampering/alteration detected?
+
+Approval:
+POST /api/kyc/:leadId/consent/manual/admin/verify
+Updates:
+consent_status = 'manual_verified' 
+(same fields as digital approval)
+Rejection:
+POST /api/kyc/:leadId/consent/manual/admin/reject 
+Rejection Reasons (Manual Specific):
+"Signature missing" -"Thumb impression missing"
+"Witness signature missing"
+"PDF not legible"
+"Date missing or invalid"
+"Suspected forgery" 
+Updates:
+consent_status = 'manual_rejected'
+Dealer notified to re-upload
+
+
+
+Consent Status Display
+Overview: iTarang requires explicit customer consent for KYC data processing, credit checks, and loan facilitation. Consent can be obtained via:
+Digital Consent (Aadhaar eSign) - Preferred
+Manual Consent (Signed PDF upload) - Fallback
+Critical Compliance Rule:
+All consents (digital or manual) MUST be reviewed and approved by iTarang Admin before lead can proceed to next step
+This ensures regulatory compliance and fraud prevention
+
+CONSENT STATUS STATE MACHINE
+Replace the simple status field with this comprehensive state machine:
+Digital consent Path
+Awaiting_signature (default)
+link_sent (SMS/WhatsApp delivered)
+Link_opened (customer clicked link)
+E-sign_in_progress (OTP stage active)
+E-sign_completed (Aadhaar OTP verified)
+Admin_review_pending  (awaiting approval)
+Admin_verified (FINAL - can proceed)
+Admin_rejected (must re-consent)
+Expired (link timeout - 24hrs) 
+Manual consent Path
+Consent_generated (preview downloaded)
+Consent_uploaded (scanned copy received)
+Admin_review_pending
+Admin_verified (FINAL - can proceed)
+Admin_rejected  (reupload required) 
+Consent Gating Rule 
+
+Save & Next button enabled ONLY IF: consent_status IN ('admin_verified', 'manual_verified')
+
+DOCUMENT UPLOAD CARDS
+(Only visible if payment_method <> ‘Cash’)
+Sales Manager
+
+WORKFLOW: Two-Stage Process
+Stage 1 - Dealer Upload (Dealer-facing)
+Dealer uploads required documents
+System stores files
+No API verification at this stage
+Status: uploaded → pending_admin_review
+Stage 2 - Admin Verification (iTarang internal)
+Admin reviews uploaded documents
+System runs OCR + API verification
+Admin approves/rejects with reasons
+Status: admin_review_pending → verified | rejected
+Critical Rule: Dealer cannot proceed to Step 3 until Admin marks verification as complete.
+STAGE 1: DEALER DOCUMENT UPLOAD (Dealer-Facing)
+This section covers what the dealer sees and does
+
+Logic:
+If payment_method === 'Other finance' or ‘Dealer finance’: Required documents = 11 (full list below)
+Document Upload Cards (Simple Upload Only)
+Available Document Types:
+Always Required:
+Aadhaar Front
+Aadhaar Back
+PAN Card
+Passport Size Photo 
+Address Proof (Electricity Bill / Rent Agreement)
+Bank Statement (last 3 months)
+4 Undated Cheques
+🔶 RC Copy (conditional: only if Asset Category = 2W/3W/4W)
+
+Common Upload Flow (All Documents)
+Frontend (Dealer View):
+
+
+
+
+
+📄 Aadhaar Front  [📤]
+Status: Not Uploaded
+Max size: 5MB 
+Format: PNG, JPEG, PDF
+
+
+Upload Steps:
+Click card → Open file picker
+Select file
+**Frontend validations:** - File size < 5MB
+File type: PNG, JPEG, PDF
+Image resolution > 300 DPI (recommended)
+Show upload progress bar
+On success: - Show green checkmark
+Display thumbnail preview
+Show uploaded timestamp
+Update document counter
+Status changes to: Uploaded - Pending Review
+Upload Card After Success:
+
+📄 Aadhaar Front  [✅]
+✅ Uploaded - Pending Review
+Uploaded: 26-Jul 10:45 AM
+[View] [Replace]
+
+
+Actions Available:
+View: Opens document in lightbox/modal
+Replace: Upload new version (replaces old file)
+
+
+Backend API - Upload Endpoint
+POST /api/kyc/:leadId/upload-document 
+Request: FormData { leadId: "IT-2026-0000123", documentType:"aadhaar_front" | "aadhaar_back" | "pan_card" | "passport_photo" | "address_proof" | "bank_statement" | "cheque_1" |"cheque_2" | "cheque_3" | "cheque_4" | "rc_copy", file: File, uploadedBy: "dealer_user_id" } 
+Processing:
+Validate file:
+Check file size < 5MB
+Verify file type (magic bytes check)
+Virus scan (optional but recommended) 
+Generateunique filename:
+{leadId}_{documentType}_{timestamp}.{ext}
+Upload to cloud storage:
+S3/Azure:/kyc/{leadId}/{documentType}/
+ Store metadata in database:
+File_url
+File_size
+File_type
+Uploaded_at
+Uploaded_by
+Doc_status = 'uploaded'
+verification_status = 'pending' (internal field, not shown to dealer)
+Do NOTrun OCR or API verification here
+Response: { success: true, documentId: "DOC-123456", fileUrl:"https://cdn.itarang.com/kyc/123/aadhaar_front.jpg", uploadedAt: "2026-07-26T10:45:00Z", status: "uploaded", message:"Document uploaded successfully. Awaiting admin verification." }
+
+Database Schema Update:
+Kyc_documents:
+id (PK)
+lead_id (FK)
+document_type (ENUM)
+file_url (VARCHAR)
+file_size (INT)
+file_type (VARCHAR)
+uploaded_at (TIMESTAMP)
+uploaded_by (FK: users)
+doc_status (ENUM: 'not_uploaded', 'uploaded','verified', 'rejected', 'reupload_requested')
+verification_status (ENUM: 'pending', 'in_progress', 'success', 'failed') -- Admin-only
+verified_at (TIMESTAMP)
+verified_by (FK: admin_users)
+rejection_reason (TEXT)
+extracted_data (JSON) -- OCR results stored here
+api_verification_results (JSON) -- API responses stored here
+
+Document Status Counter (Dealer View)
+​​Display Component (Top of Document Section)
+
+📊 Document Upload Progress 
+✅ Uploaded: 9/11
+⏳ Pending Upload: 2
+📝 Missing: PAN Card, Passport Photo
+Auto-updates as user uploads documents
+
+
+Backend API:
+GET /api/kyc/:leadId/document-status 
+Response: { totalRequired: 11, uploaded: 9, pending: 2, missingDocuments:['pan_card', 'passport_photo'], allUploaded: false, adminVerificationStatus: 'pending' | 'in_progress' | 'completed' | 'failed',canProceedToNextStep: false // Controlled by admin verification, not upload count }
+
+Dealer-Side Status States (Simplified)
+Dealer sees only these statuses:
+
+
+Status
+Display
+Meaning
+not_uploaded
+Not Uploaded 
+Dealer hasn't uploaded yet
+uploaded
+Uploaded - Pending Review
+File stored, awaiting admin
+reupload_request
+Reupload Required
+Admin rejected, reason shown
+verified
+Verified
+Admin approved
+
+
+
+Important: Dealer does NOT see:
+`in_progress` (that's admin-side only)
+`failed` (converted to `reupload_requested` for dealer)
+API error codes (those are internal)
+
+Reupload APIs:
+POST /api/kyc/:leadId/reupload
+document Same as upload, but:
+Replaces previous file
+Clears rejection reason
+Resets verification_status to 'pending'
+Notifies admin queue: "Document reuploaded for Lead #{leadId}"
+
+STAGE 2: ADMIN VERIFICATION (iTarang Internal)
+This section covers what **iTarang admin does** (not visible to the dealer).
+
+VERIFICATION ACTION
+
+Coupon Engine
+
+Purpose: Coupons act as verification tokens that control access to KYC verification services. Each coupon represents one verification credit.
+
+Core Principles:
+1 Coupon = 1 KYC Verification
+Coupons are dealer-specific (cannot be shared across dealers) 
+Coupons are single-use (cannot be reused) 
+Coupons can have different face values (₹0, ₹50, ₹100) 
+Settlement/billing is outside system scope (Phase 1)
+
+Lifecycle:
+Admin Creates Batch 
+    ↓
+Distributed to Dealer (Manual - Email/Excel)
+    ↓
+Dealer Enters Coupon Code
+    ↓
+System Validates & Reserves Coupon
+    ↓
+Coupon Locked to Lead
+    ↓
+Admin Runs Verification
+    ↓
+Coupon Consumed (Status: Used)
+
+Key Rules:
+One-to-One Binding: One coupon can only be used for exactly one lead (prevents duplicate usage)
+Reservation Lock: Once a coupon is entered and validated, it's reserved for that lead and cannot be used elsewhere
+Consumption Trigger: Coupon is consumed only when admin successfully runs verification (not on upload)
+Failure Handling: If verification fails or is cancelled before completion, coupon can be released back to available pool (admin decision)
+
+COUPON LIFECYCLE STATES:                                     
+
+COUPON STATUS FLOW
+[Created] (Admin generates batch)
+        ↓                                                  
+[Available] (Allocated to dealer, ready to use)
+        ↓  
+[Reserved] (Dealer entered code, locked to lead)
+        ↓                                                   
+[Used] (Verification completed) ✅ FINAL
+
+Alternative Paths:   
+[Available] → [Expired] (Past expiry date) ❌ FINAL
+[Available] → [Revoked] (Admin cancelled) ❌ FINAL
+[Reserved] → [Released] (Verification cancelled)
+                  → [Available] (Back to pool)
+
+
+Status Definitions:
+
+Status
+Description
+Can Be Used?
+Actions Allowed
+created
+Just generated, not yet allocated
+❌
+Allocate to dealer
+available
+Allocated to dealer, ready to use
+✅
+Enter code, expire, revoke
+reserved
+Entered by dealer, locked to lead
+⏳
+Wait for verification, release
+used
+Verification completed
+❌
+View history only
+expired
+Past expiry date
+❌
+None (permanent)
+revoked
+Admin cancelled
+❌
+None (permanent)
+released
+Released from reservation
+→ available
+Enter code again
+
+  
+ADMIN - COUPON BATCH CREATION:
+Navigation:
+Admin Dashboard → Coupon Management → Create Batch
+                                                          
+Create Batch Form:
+
+Create Coupon Batch
+Batch Name* │ ABC Motors - January 2026 │
+Select Dealer* │ [Dropdown: ABC Motors - Delhi] ▼ │
+Coupon Value* ◉ ₹0 (Free) ○ ₹50 ○ ₹100 ○ Custom: [____]
+Quantity* │ 500 │
+Coupon Prefix (Optional) │ABCDEL │ (💡 If blank, auto-generates from dealer code)
+Expiry Date (Optional) [📅 31-Dec-2026] (⚠️ Leave blank for no expiry)
+
+
+[Cancel] [Generate Batch]
+
+
+
+Field Validation:
+
+Field
+Required
+Format
+Validation
+Batch Name
+✅
+Text (3-100 chars)
+Unique per dealer
+Dealer
+✅
+Dropdown
+Must be active dealer
+Coupon Value
+✅
+Number (0-10000)
+Positive integer or zero
+Quantity
+✅
+Number (1-10000)
+Min: 1, Max: 10,000 per batch
+Prefix
+❌
+Alphanumeric (2-10 chars)
+No special chars except hyphen
+Expiry Date
+❌
+Date
+Must be future date
+
+
+Coupon Code Generation Logic
+
+Format:
+
+{PREFIX}-{SEQUENCE}
+
+Examples:
+ABCDEL-0001
+ABCDEL-0002
+ABCDEL-0003
+...
+ABCDEL-0500
+
+Prefix Rules:
+If admin provides custom prefix → Use custom prefix
+If blank → Auto-generate from dealer code
+
+Dealer: "ABC Motors Delhi" (Code: DLR-001)
+Auto-prefix: "DLR001"
+
+Sequence Rules:
+Always 4 digits with leading zeros
+Starts from 0001 for each batch
+Increments sequentially
+No gaps in sequence
+
+Uniqueness Guarantee:
+
+// Backend validation
+const existingCoupon = await db.coupons.findOne({
+  coupon_code: generatedCode
+});
+
+if (existingCoupon) {
+  // Add random suffix
+  generatedCode = `${prefix}-${sequence}-${randomString(3)}`;
+}
+
+Backend API - Create Batch:
+
+POST /api/admin/coupons/create-batch
+
+Request Body:
+{
+  batchName: "ABC Motors - January 2026",
+  dealerId: "DLR-001",
+  couponValue: 50,
+  quantity: 500,
+  prefix: "ABCDEL", // Optional
+  expiryDate: "2026-12-31" // Optional
+}
+
+Processing:
+1. Validate inputs:
+   - Dealer exists and is active
+   - Quantity within limits (1-10,000)
+   - Batch name unique for this dealer
+   - Expiry date is future (if provided)
+
+2. Generate prefix if not provided:
+   const prefix = requestPrefix || generatePrefix(dealer.code);
+
+3. Generate coupon codes:
+   const codes = [];
+   for (let i = 1; i <= quantity; i++) {
+     const sequence = i.toString().padStart(4, '0');
+     codes.push(`${prefix}-${sequence}`);
+   }
+
+4. Check for duplicate codes:
+   const existingCodes = await db.coupons.findAll({
+     where: { coupon_code: codes }
+   });
+   
+   if (existingCodes.length > 0) {
+     return { error: "Duplicate codes detected, regenerating..." };
+   }
+
+5. Insert batch record:
+   const batch = await db.coupon_batches.create({
+     batch_name: batchName,
+     dealer_id: dealerId,
+     coupon_value: couponValue,
+     total_quantity: quantity,
+     prefix: prefix,
+     expiry_date: expiryDate,
+     created_by: adminUserId,
+     created_at: NOW,
+     status: 'active'
+   });
+
+6. Bulk insert coupons:
+   const coupons = codes.map(code => ({
+     coupon_code: code,
+     batch_id: batch.id,
+     dealer_id: dealerId,
+     value: couponValue,
+     status: 'available',
+     expiry_date: expiryDate,
+     created_at: NOW
+   }));
+   
+   await db.coupons.bulkCreate(coupons);
+
+7. Create audit log:
+   await db.audit_logs.create({
+     action: 'coupon_batch_created',
+     entity: 'coupon_batch',
+     entity_id: batch.id,
+     performed_by: adminUserId,
+     details: { batchName, quantity, dealerId }
+   });
+
+Response:
+{
+  success: true,
+  batchId: "BATCH-20260726-001",
+  totalCoupons: 500,
+  prefix: "ABCDEL",
+  expiryDate: "2026-12-31",
+  downloadUrl: "/api/admin/coupons/download/BATCH-20260726-001",
+  message: "Batch created successfully. Click download to export coupon codes."
+}
+
+Database Schema - Coupons
+Table: coupon_batches
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  batch_id VARCHAR(50) UNIQUE NOT NULL, -- BATCH-20260726-001
+  batch_name VARCHAR(200) NOT NULL,
+  dealer_id INT NOT NULL,
+  coupon_value DECIMAL(10,2) NOT NULL, -- 0.00, 50.00, 100.00
+  total_quantity INT NOT NULL,
+  prefix VARCHAR(20) NOT NULL,
+  expiry_date DATE NULL,
+  status ENUM('active', 'expired', 'revoked') DEFAULT 'active',
+  created_by INT NOT NULL, -- FK: admin_users
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  
+  FOREIGN KEY (dealer_id) REFERENCES dealers(id),
+  FOREIGN KEY (created_by) REFERENCES admin_users(id),
+  INDEX idx_dealer_batch (dealer_id, created_at),
+  INDEX idx_batch_status (status)
+
+Table: coupons
+
+id INT PRIMARY KEY AUTO_INCREMENT, 
+coupon_code VARCHAR(50) UNIQUENOT NULL, -- ABCDEL-0001 
+batch_id INT NOT NULL, -- FK: coupon_batches 
+dealer_id INT NOT NULL, -- FK: dealers 
+value DECIMAL(10,2) NOT NULL, 
+status ENUM( 'created', 'available', 'reserved', 'used', 'expired', 'revoked','released' ) DEFAULT 'available',
+
+ -- Reservation tracking
+reserved_at TIMESTAMP NULL, 
+reserved_by INT NULL, -- FK: users (dealer user who entered code) reserved_for_lead_id INT NULL, -- FK: leads (which lead this is reserved for) 
+
+-- Usage tracking 
+used_at TIMESTAMP NULL, 
+used_by INT NULL, -- FK: admin_users (who ran verification)
+used_for_lead_id INT NULL, -- FK: leads (final lead verified) 
+verification_job_id VARCHAR(50) NULL,
+
+ -- Lifecycle
+expiry_date DATE NULL, 
+revoked_at TIMESTAMP NULL, 
+revoked_by INT NULL, -- FK: admin_users
+revoked_reason TEXT NULL, 
+
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+
+FOREIGN KEY(batch_id) REFERENCES coupon_batches(id), 
+FOREIGN KEY (dealer_id) REFERENCES dealers(id), 
+FOREIGN KEY(reserved_for_lead_id) REFERENCES leads(id), 
+FOREIGN KEY (used_for_lead_id) REFERENCES leads(id), 
+
+INDEXidx_coupon_code (coupon_code), 
+INDEX idx_dealer_status (dealer_id, status), 
+INDEX idx_lead_coupon (reserved_for_lead_id), 
+INDEX idx_expiry (expiry_date, status)
+
+Table: coupon_audit_log
+
+id INT PRIMARY KEY AUTO_INCREMENT, 
+coupon_id INT NOT NULL,
+action ENUM( 'created', 'allocated', 'reserved', 'released', 'used', 'expired', 'revoked' ), old_status VARCHAR(20),
+new_status VARCHAR(20),
+lead_id INT NULL, 
+performed_by INT, -- User/Admin who triggered action 
+ip_address VARCHAR(45), timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+notes TEXT NULL, 
+
+FOREIGN KEY(coupon_id) REFERENCES coupons(id), 
+
+INDEX idx_coupon_audit (coupon_id, timestamp) );
+
+Admin Coupon Batch Management:
+Navigation:
+Admin Dashboard → Coupon Management → View Batches
+
+Batch List View:
+
+
+Coupon Batches                                                                  [+ Create New Batch]
+
+Filters: [Dealer ▼] [Status ▼] [Date Range]
+
+
+Batch ID
+Dealer
+Value
+Total
+Available
+Used
+Action
+Created
+Expiry
+BATCH-001
+ABC Motors
+₹50
+500
+182
+318
+View
+15-Jan-2026
+31-Dec-2026
+BATCH-002
+XYZ Motors
+₹0
+1000
+856
+144
+View
+20-Jan-2026
+31-Dec-2026
+
+
+Batch Detail View (click ‘View’):
+
+
+Batch Details: BATCH-001
+
+Batch Name: ABC Motors - January 2026 │ │ Dealer: ABC Motors (Delhi) │ │ Coupon Value: ₹50 │ │ Created: 15-Jan-2026 by Admin User 1 │ │ Expiry: 31-Dec-2026
+
+Statistics:
+
+Total Coupons: 500 │ │ Available: 182 (36.4%) │ │ Reserved: 15 (3%) │ │ Used: 318 (63.6%) │ │ Expired: 0(0%) │ │ Revoked: 0 (0%)
+
+[📥 Download Available Coupons]       [📊 Usage Report]          [❌ Expire All]
+
+Individual Coupons:
+
+[Search by code] [Filter by status ▼]
+
+
+Coupon Code
+Status
+Reserved For
+Used For
+Action
+ABCDEL-0001
+Used
+IT-2026-00001
+15-Jan 10:30
+IT-2026-00001
+15-Jan 14:45
+View 
+ABCDEL-0002
+Reserved
+IT-2026-00001
+20-Jan 12:30
+
+
+Release
+ABCDEL-0003
+Available
+
+
+
+
+Revoke
+
+
+Download Coupon Batches:
+
+Button: 📥 Download Available Coupons
+
+
+Coupon Code
+Value
+Status
+Expiry Date
+ABCDEL-0001
+₹50
+Available
+31-Dec-2026
+ABCDEL-0002
+₹50
+Available
+31-Dec-2026
+ABCDEL-0003
+₹50
+Available
+31-Dec-2026
+...
+...
+...
+...
+ABCDEL-0500
+₹50
+Available
+31-Dec-2026
+
+
+Admin Actions on Individual Coupons
+
+Release, Reserved Coupon
+Scenario: Dealer reserved coupon but verification not completed, need to free it up.
+Button: Release (only visible for reserved status)
+Backend:
+Processing: 
+
+Validate:
+Coupon status = 'reserved' 
+Not yet used
+Update:
+status = 'released' (temporary state)
+Then auto-transition to 'available' 
+Clear reserved_at, reserved_by, reserved_for_lead_id
+ Audit log:
+action = 'released'
+performed_by = admin_user_id
+notes = "Manually released by admin" 
+4. Notify dealer: 
+"Coupon {code} released, now available for reuse"
+Response: { success: true, couponCode: "ABCDEL-0002", newStatus: "available", message:"Coupon released and now available" }
+
+Revoke Coupon
+Scenario: Fraud detected, wrong batch, dealer suspended, etc.
+Button: Revoke (only visible for reserved status)
+Modal:
+
+Revoke Coupon: ABCDEL-0003
+
+Reason for Revocation * 
+○ Fraud suspected
+○ Wrong batch allocation
+○ Dealer suspended
+○ Duplicate coupon
+○ Other (specify below)
+
+Additional Notes:
+
+┌────────────────────────┐ 
+└────────────────────────┘ 
+
+⚠️ This action is permanent and cannot be undone. 
+Revoked coupons cannot be used.
+
+[Cancel]                                       [Confirm Revoke]
+
+Backend:
+POST /api/admin/coupons/:couponId/revoke 
+
+Request: { couponId: 123, reason: "Fraud suspected", notes: "Duplicate verification attempt detected", adminUserId: "ADMIN-001" } 
+
+Processing:
+Validate:
+Coupon exists - Not already revoked
+Update:
+status = 'revoked'
+revoked_at = NOW (Date and timestamp)
+revoked_by = admin_user_id
+revoked_reason = reason +notes
+If coupon was reserved:
+Unlink from lead (set reserved_for_lead_id = NULL)
+Notify dealer of revocation
+Audit log:
+action = 'revoked' 
+details = { reason, notes } 
+
+Response: { success: true, message: "Coupon revoked successfully" }
+
+Expire Batch (Bulk Action)
+Scenario: Batch reached expiry date, or admin wants to force-expire old batch.
+Button: Expire All (in Batch Detail view)
+Modal:
+Expire Entire Batch?
+
+This will expire all coupons in batch:
+BATCH-001 (ABC Motors - January 2026)
+
+Affected Coupons: │ │  Available: 182 │ │  Reserved: 15
+
+Used and already-expired coupons unaffected.
+
+[Cancel]                       [Expire All Available Coupons]
+
+Backend:
+POST /api/admin/coupons/batch/:batchId/expire-all
+
+Processing:
+Update all coupons in batch:
+UPDATE coupons 
+SETstatus = 'expired' 
+WHERE batch_id = :batchId AND status IN ('available', 'reserved');
+Update batch: 
+UPDATEcoupon_batches 
+SET status = 'expired' 
+WHERE id = :batchId;
+Notify dealers:
+If any reserved coupons expired,notify dealer 
+
+Response: { success: true, expiredCount: 197, message: "197 coupons expired successfully" }
+
+COUPON DISTRIBUTION (Manual - Phase 1)
+
+1. Admin downloads coupon file
+2. Admin sends file to dealer via:
+Email attachment
+WhatsApp file
+ 3.Dealer receives and stores coupons locally 
+
+Future Enhancement (Not in Scope Now):
+In-app coupon delivery
+Dealer dashboard showing assigned coupons
+Auto-notification on new batch allocation
+
+DEALER - COUPON ENTRY & VALIDATION
+
+This is where the coupon enters the KYC workflow. 
+When: After all documents uploaded, before admin verification.
+
+Coupon Code Field
+Frontend:
+Text input field
+Placeholder: 'Enter verification coupon code'
+Max length: 20 characters
+Alphanumeric only
+Required
+
+Backend:
+Validates coupon code against dealer specific assigned coupon codes API
+If valid: strike off and enable verification
+If invalid: Show error 'Invalid coupon code'
+Store: coupon_code, coupon_applied_at, coupon_status change to used
+
+Validate Button
+Frontend:
+Check if coupon code entered
+If empty: Show error 'Please enter coupon code’
+If filled:
+Disable button
+show spinner
+Call validation API
+On success:
+Show toast: 'Coupon validated
+Enable 'Submit for Verification' button
+On failure:
+Show error: 'Invalid coupon or expired'
+Keep 'Submit for Verification' disabled
+Backend:
+POST /api/coupons/validate 
+Request: { couponCode: "ABCDEL-0001", leadId: "IT-2026-0000123", dealerUserId: "USR-456" } 
+Validation Checks:
+Coupon exists:
+
+const coupon = await db.coupons.findOne({ where: { coupon_code:couponCode } }); if (!coupon) { return { valid: false, error: "Coupon code not found" }
+
+Coupon belongs to dealer:
+
+const dealer = await getCurrentDealer(dealerUserId); if (coupon.dealer_id !== dealer.id) { return { valid: false, error:"This coupon is not assigned to your dealership" }
+
+Coupon status is available: 
+
+if (coupon.status !== 'available') {return { valid: false, error: `Coupon already ${coupon.status}` };
+
+Coupon not expired: 
+
+if (coupon.expiry_date &&new Date(coupon.expiry_date) < new Date()) { // Auto-expire if not already await coupon.update({ status: 'expired' });return { valid: false, error: "Coupon expired" }
+
+Lead doesn't already have a reserved coupon: const existingCoupon =await db.coupons.findOne({ where: { reserved_for_lead_id: leadId, status: 'reserved' } }); if (existingCoupon) { return {valid: false, error: `Lead already has coupon ${existingCoupon.coupon_code} reserved` }; } If All Checks Pass - ReserveCoupon: await coupon.update({ status: 'reserved', reserved_at: NOW, reserved_by: dealerUserId, reserved_for_lead_id:leadId }); await db.coupon_audit_log.create({ coupon_id: coupon.id, action: 'reserved', old_status: 'available', new_status:'reserved', lead_id: leadId, performed_by: dealerUserId, notes: `Reserved for Lead #${leadId}` }); 
+
+Response (Success): {valid: true, coupon: { code: "ABCDEL-0001", value: 50, status: "reserved", reservedAt: "2026-07-26T10:30:00Z",expiryDate: "2026-12-31" }, message: "Coupon validated and reserved successfully" } Response (Failure): { valid: false,error: "Coupon already used", message: "This coupon has already been used for another verification" }
+
+Frontend Handling
+On Success:
+if (response.valid) { setCouponStatus('validated'); toast.success('Coupon validated successfully!'); // Save to lead stateupdateLead({ coupon_code: response.coupon.code, coupon_value: response.coupon.value, coupon_status: 'reserved' }); // Enable "Submit for Verification" button setCanSubmit(true); }
+On Failure:
+if (!response.valid) { setCouponStatus('invalid'); toast.error(response.message || response.error); // Highlight input with error setErrors({ coupon: response.error }); // Keep "Submit for Verification" disabled setCanSubmit(false); }
+
+Change Coupon (After Validation)
+
+Scenario: Dealer entered wrong code or wants to use different coupon.
+Button: [Change Coupon]
+Action:
+Release current reserved coupon
+Show input field again
+Allow entering new code
+Backend:
+POST /api/coupons/release-and-change Request: { leadId: "IT-2026-0000123", currentCouponCode: "ABCDEL-0001" }
+Processing:
+Find reserved coupon: const coupon = await db.coupons.findOne({ where: { reserved_for_lead_id: leadId,status: 'reserved' } });
+Release it: await coupon.update({ status: 'available', reserved_at: NULL, reserved_by: NULL,reserved_for_lead_id: NULL });
+Audit log: await db.coupon_audit_log.create({ coupon_id: coupon.id, action:'released', old_status: 'reserved', new_status: 'available', lead_id: leadId, notes: "Dealer changed coupon" });
+Response: {success: true, message: "Coupon released. You can now enter a new code." }
+
+Submit for Verification Button
+When: Admin clicks "Run Verification" button (Section 2.3.3)
+Critical Rule: Coupon is consumed ONLY when verification successfully starts, NOT when submitted by the dealer.
+Verification Start - Consume Coupon
+
+Stage
+Documents Status
+Submit for verification
+Admin Can See?
+Admin Can Run OCR/API?
+Documents Uploaded
+Uploaded, stored in cloud
+Not entered yet
+No
+NO (cannot run verification)
+Consent Verified
+Uploaded
+Not entered yet
+YES (can view files)
+No
+Coupon Reserved
+Uploaded
+Reserved
+Yes
+No
+Submitted to Admin
+Uploaded
+Reserved
+Yes
+YES (can run verification
+Verification Running
+Uploaded
+Consumed
+Yes
+YES (In progress)
+Verification Complete
+Verified
+Used
+Yes
+Results available
+
+
+
+
+Verification Failure Handling:
+Scenario 1: Verification job fails to start (API error, system crash)
+
+// If verification job creation fails BEFORE coupon consumed:
+if (verificationJobFailed) {
+  // Coupon remains 'reserved' (not consumed)
+  // Dealer can try again or admin can retry
+  
+  // DO NOT consume coupon
+}
+
+Scenario 2: Verification completes but all checks fail
+
+// If verification runs but customer KYC rejected:
+// Coupon is STILL consumed (verification service was used)
+
+// Admin can decide to:
+// Option 1: Keep coupon as used (standard)
+// Option 2: Manually release coupon back to dealer (exceptional)
+
+Backend:
+
+POST /api/admin/kyc/:leadId/cancel-verification
+
+Request:
+{
+  leadId: "IT-2026-0000123",
+  couponAction: "release" | "consume"
+}
+
+Processing:
+if (couponAction === "release") {
+  await reservedCoupon.update({
+    status: 'released', // Then auto-transition to 'available'
+    reserved_for_lead_id: NULL,
+    // Clear reservation fields
+  });
+  
+  message = "Verification cancelled. Coupon released back to dealer.";
+} else {
+  await reservedCoupon.update({
+    status: 'used',
+    used_at: NOW,
+    used_by: adminUserId
+  });
+  
+  message = "Verification cancelled. Coupon marked as used.";
+}
+```
+
+COUPON INVENTORY TRACKING
+
+Dealer Dashboard Widget
+
+Display: Dealers see their coupon balance prominently.
+
+
+Your Verification Coupons 
+
+Available: 182                                
+Reserved: 15
+Used This Month: 48
+
+Running low! Request more coupons
+
+[Contact Support]   
+
+
+Backend API:
+
+GET /api/dealer/coupons/summary
+
+Response:
+{
+  dealerId: "DLR-001",
+  dealerName: "ABC Motors",
+  coupons: {
+    available: 182,
+    reserved: 15,
+    used: 318,
+    expired: 5,
+    revoked: 0
+  },
+  usageThisMonth: 48,
+  batches: [
+    {
+      batchId: "BATCH-001",
+      batchName: "January 2026",
+      available: 120,
+      total: 500
+    },
+    {
+      batchId: "BATCH-002",
+      batchName: "February 2026",
+      available: 62,
+      total: 200
+    }
+  ],
+  lowStockAlert: true, // Trigger if available < 50
+  message: "You have 182 coupons remaining"
+}
+
+---
+
+Low Coupon Alert
+
+Trigger: When dealer's available coupons fall below threshold (e.g., 50 coupons).
+
+Alert Banner (Dealer Dashboard):
+
+⚠️ Low Coupon Balance
+You have only 32 coupons remaining.   
+ [Request More Coupons]
+
+
+
+When Coupons Finish (Zero Available)
+
+Scenario: Dealer tries to validate coupon but none available.
+
+Error Message:
+
+  ❌ No Coupons Available
+You have no verification coupons remaining.
+                                              
+Please contact iTarang support to request
+new coupons: 
+
+ 📧 support@itarang.com  📞 1800-XXX-XXXX  [Contact Support]
+
+
+Backend:
+
+// In coupon validation API
+const availableCoupons = await db.coupons.count({
+  where: {
+    dealer_id: dealerId,
+    status: 'available'
+  }
+});
+
+if (availableCoupons === 0) {
+  // Send alert to admin
+  await sendAdminNotification({
+    type: 'dealer_out_of_coupons',
+    dealerId: dealerId,
+    dealerName: dealer.name,
+    message: `Dealer ${dealer.name} has run out of coupons`
+  });
+  
+  return {
+    valid: false,
+    error: "NO_COUPONS_AVAILABLE",
+    message: "No verification coupons available. Please contact support.",
+    supportContact: {
+      email: "support@itarang.com",
+      phone: "1800-XXX-XXXX"
+    }
+  };
+}
+
+COUPON EXPIRY - AUTO-CLEANUP (Cron Job: Runs daily at midnight)
+
+// Scheduled task: 0 0 * * * (Daily at 00:00)
+
+async function expireOldCoupons() {
+  const today = new Date();
+  
+  // Find all coupons past expiry date but not yet marked expired
+  const expiredCoupons = await db.coupons.findAll({
+    where: {
+      expiry_date: { $lt: today },
+      status: { $in: ['available', 'reserved'] }
+    }
+  });
+  
+  console.log(`Found ${expiredCoupons.length} coupons to expire`);
+  
+  for (const coupon of expiredCoupons) {
+    // If coupon was reserved, release it first
+    if (coupon.status === 'reserved') {
+      // Notify dealer
+      await notifyDealerCouponExpired(coupon);
+    }
+    
+    // Mark as expired
+    await coupon.update({ status: 'expired' });
+    
+    // Audit log
+    await db.coupon_audit_log.create({
+      coupon_id: coupon.id,
+      action: 'expired',
+      old_status: coupon.status,
+      new_status: 'expired',
+      performed_by: null, // System action
+      notes: 'Auto-expired by system'
+    });
+  }
+  
+  console.log(`Expired ${expiredCoupons.length} coupons`);
+}
+
+GATING RULE UPDATE - STEP 2 TO ADMIN VERIFICATION
+Critical Change: Admin cannot run verification without a valid coupon.
+Updated Admin Verification Button Logic:
+/// Frontend - Step 2 (KYC Page)
+
+const canSubmitForVerification = () => {
+  const checks = {
+    paymentMethodSelected: lead.payment_method !== null,
+    allDocsUploaded: uploadedDocs.length === requiredDocs.length,
+    consentVerified: lead.consent_status === 'admin_verified' || 
+                     lead.consent_status === 'manual_verified',
+    couponValidated: lead.coupon_status === 'reserved' && 
+                     lead.coupon_code !== null
+  };
+  
+  return Object.values(checks).every(check => check === true);
+};
+
+// Button UI
+<button
+  disabled={!canSubmitForVerification()}
+  onClick={handleSubmitForVerification}
+  className={canSubmitForVerification() ? "btn-primary" : "btn-disabled"}
+>
+  {canSubmitForVerification() 
+    ? "Submit for Verification" 
+    : getBlockingReason()}
+</button>
+
+// Helper function
+function getBlockingReason() {
+  if (!paymentMethodSelected) return "⏳ Select payment method";
+  if (!allDocsUploaded) return "⏳ Upload all documents";
+  if (!consentVerified) return "⏳ Awaiting consent verification";
+  if (!couponValidated) return "⏳ Enter verification coupon";
+  return "⏳ Complete all steps above";
+}
+
+// Tooltip
+{!canSubmitForVerification() && (
+  <Tooltip>
+    <strong>Required to submit:</strong>
+    <ul>
+      <li>{paymentMethodSelected ? "✅" : "❌"} Payment method selected</li>
+      <li>{allDocsUploaded ? "✅" : "❌"} All documents uploaded ({uploadedDocs.length}/{requiredDocs.length})</li>
+      <li>{consentVerified ? "✅" : "❌"} Consent verified by admin</li>
+      <li>{couponValidated ? "✅" : "❌"} Verification coupon validated</li>
+    </ul>
+  </Tooltip>
+)}
+
+
+
+COUPON AUDIT & REPORTING
+
+Admin Reports:
+
+Navigation: Admin → Reports → Coupon Usage Report
+
+Report Filters:
+- Date Range
+- Dealer (single or all)
+- Batch
+- Coupon Status
+- Coupon Value
+
+**Report Columns:**
+| Date | Dealer | Batch | Coupon Code | Value | Lead ID | Status | Used By | Used At |
+|------|--------|-------|-------------|-------|---------|--------|---------|---------|
+| 26-Jul | ABC | BATCH-001 | ABCDEL-0001 | ₹50 | #123 | Used | Admin 1 | 26-Jul 14:30 |
+| 26-Jul | ABC | BATCH-001 | ABCDEL-0002 | ₹50 | #124 | Used | Admin 2 | 26-Jul 15:15 |
+
+**Export Options:**
+- Excel
+- CSV
+- PDF
+
+Summary Stats:
+Total Coupons Issued: 5,000
+Total Used: 1,850 (37%)
+Total Available: 2,980 (59.6%)
+Total Expired: 120 (2.4%)
+Total Revoked: 50 (1%)
+
+By Dealer:
+- ABC Motors: 318 used / 500 total (63.6%)
+- XYZ Autos: 144 used / 1000 total (14.4%)
+...
+
+By Month:
+- January 2026: 520 used
+- February 2026: 680 used
+- March 2026: 650 used
+
+COMPLETE COUPON WORKFLOW DIAGRAM
+
+
+│ ADMIN CREATES BATCH 
+│   ↓                  
+│ Generates 500 unique coupon codes
+│   ↓                  
+│ Status: Available   
+│   ↓                  
+│ Downloads Excel file             
+│   ↓                  
+│ Sends to dealer via email        
+                          ↓
+│ DEALER RECEIVES COUPONS          
+│   ↓                  
+│ Stores codes locally             
+│   ↓                  
+│ Customer walk-in → Creates lead → Uploads KYC docs
+│   ↓                  
+│ Enters coupon code: ABCDEL-0001  
+│   ↓                  
+│ Clicks "Validate"   
+
+                          ↓
+
+│ SYSTEM VALIDATES COUPON          
+│   ├── Exists? ✅    
+│   ├── Belongs to dealer? ✅      
+│   ├── Status = available? ✅     
+│   ├── Not expired? ✅            
+│   └── Lead doesn't have coupon already? ✅         
+│   ↓                  
+│ ALL CHECKS PASS     
+│   ↓                  
+│ Coupon status: available → reserved                
+│ Reserved for Lead #123           
+│ Timestamp: 26-Jul 10:30 AM       
+                       ↓
+
+│ DEALER SUBMITS LEAD FOR ADMIN REVIEW               
+│   ↓                  
+│ Lead appears in Admin KYC Queue  
+
+                          ↓
+
+│ ADMIN REVIEWS DOCUMENTS          
+│   ↓                  
+│ Checks coupon status: Reserved ✅
+│   ↓                  
+│ Clicks "Run Verification"        
+│   ↓                  
+│ COUPON CONSUMED     
+│ Status: reserved → used          
+│ Used by: Admin User 1            
+│ Timestamp: 26-Jul 14:30 PM       
+│   ↓                  
+│ Verification job starts (OCR + APIs)               
+│   ↓                  
+│ Results stored      
+│   ↓                  
+│ Admin approves/rejects KYC       
+
+
