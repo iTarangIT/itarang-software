@@ -26,11 +26,12 @@ jobs:
             chown -R itarang-crm:itarang-crm /home/itarang-crm/htdocs/crm.itarang.com
             chmod -R 755 /home/itarang-crm/htdocs/crm.itarang.com/.next/standalone/public
             su - itarang-crm -c "cd /home/itarang-crm/htdocs/crm.itarang.com && pm2 restart itarang-crm-new --update-env"
-            sleep 5
-            if lsof -ti:3002 > /dev/null; then
-              echo "✅ Deployed successfully"
+            sleep 8
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3002)
+            if echo "$HTTP_CODE" | grep -qE "^(200|301|302|307)$"; then
+              echo "✅ Deployed successfully (HTTP $HTTP_CODE)"
             else
-              echo "❌ App failed to start"
+              echo "❌ App failed to start (HTTP $HTTP_CODE)"
               su - itarang-crm -c "pm2 logs itarang-crm-new --lines 10 --nostream"
               exit 1
             fi
