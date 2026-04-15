@@ -80,6 +80,7 @@ const roleNavigation: Record<string, NavigationGroup[]> = {
         {
             section: 'DEALER PROSPECTING', items: [
                 { id: 'dealer-scraper', label: 'Dealer Scraper', icon: Search, href: '/sales-head/scraper' },
+                { id: 'ai-dialer', label: 'AI Dialer (Bolna)', icon: Phone, href: '/ceo/ai-dialer' },
             ]
         },
         {
