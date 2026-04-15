@@ -14,6 +14,7 @@ export function Header() {
     const { user } = useAuth();
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
+    const [loggingOut, setLoggingOut] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
     const displayName = user?.name || user?.email?.split('@')[0] || 'User';
@@ -21,10 +22,14 @@ export function Header() {
     const displayRole = user?.role || 'user';
     const initials = displayName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
 
-    const handleLogout = async () => {
-        await supabase.auth.signOut();
-        router.push('/login');
-        router.refresh();
+    const handleLogout = () => {
+        if (loggingOut) return;
+        setLoggingOut(true);
+        setIsProfileOpen(false);
+        // Single round-trip: the /api/auth/logout route deletes sb-* cookies
+        // and 303-redirects to /login. No Supabase network call, no server
+        // action, no double session invalidation.
+        window.location.href = '/api/auth/logout';
     };
 
     // Close dropdown when clicking outside
@@ -108,10 +113,11 @@ export function Header() {
 
                             <button
                                 onClick={handleLogout}
-                                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                                disabled={loggingOut}
+                                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 <LogOut className="w-4 h-4" />
-                                Logout
+                                {loggingOut ? 'Signing out…' : 'Logout'}
                             </button>
                         </div>
                     )}

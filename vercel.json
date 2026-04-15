@@ -4,5 +4,11 @@
       "path": "/api/bolna/call-scheduler",
       "schedule": "0 3 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "src/app/api/kyc/[leadId]/generate-consent-pdf/route.ts": {
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  }
 }

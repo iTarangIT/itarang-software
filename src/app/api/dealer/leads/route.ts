@@ -4,7 +4,7 @@ import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-util
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { leads, loanDetails, personalDetails, kycDocuments, auditLogs, accounts } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, ilike, or } from 'drizzle-orm';
 
 // Extended Zod Schema
 const dealerLeadSchema = z.object({
@@ -203,27 +203,31 @@ export const GET = withErrorHandler(async (req: Request) => {
         return errorResponse('Access denied', 403);
     }
 
-    // 2. Query Leads (Scoped by Dealer ID)
+    // 2. Query via Drizzle (service-role connection bypasses RLS so the dealer
+    // sees rows they inserted via the POST handler below).
     const { searchParams } = new URL(req.url);
     const search = searchParams.get('search');
     const status = searchParams.get('status');
     const type = searchParams.get('type');
 
-    let query = supabase
-        .from('leads')
-        .select('*')
-        .eq('dealer_id', profile.dealer_id) // STRICT SCOPING
-        .order('created_at', { ascending: false });
+    const conditions = [eq(leads.dealer_id, profile.dealer_id)];
 
-    if (status && status !== 'All') query = query.eq('lead_status', status.toLowerCase());
-    if (type && type !== 'All') query = query.eq('interest_level', type.toLowerCase());
-
+    if (status && status !== 'All') {
+        conditions.push(eq(leads.lead_status, status.toLowerCase()));
+    }
+    if (type && type !== 'All') {
+        conditions.push(eq(leads.interest_level, type.toLowerCase()));
+    }
     if (search) {
-        query = query.or(`owner_name.ilike.%${search}%,owner_contact.ilike.%${search}%`);
+        const like = `%${search}%`;
+        conditions.push(or(ilike(leads.owner_name, like), ilike(leads.owner_contact, like))!);
     }
 
-    const { data, error } = await query;
-    if (error) return errorResponse(error.message, 500);
+    const data = await db
+        .select()
+        .from(leads)
+        .where(and(...conditions))
+        .orderBy(desc(leads.created_at));
 
     return successResponse(data);
 });

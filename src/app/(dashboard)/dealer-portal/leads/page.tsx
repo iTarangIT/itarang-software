@@ -120,7 +120,11 @@ function DealerLeadsContent() {
                             </thead>
                             <tbody className="divide-y divide-gray-100 text-sm">
                                 {leads.map((lead: any) => (
-                                    <tr key={lead.id} className={`hover:bg-gray-50 transition-colors group ${newLeadId === lead.id ? 'bg-brand-50' : ''}`}>
+                                    <tr
+                                        key={lead.id}
+                                        onClick={() => router.push(`/dealer-portal/leads/${lead.id}/kyc`)}
+                                        className={`hover:bg-gray-50 transition-colors group cursor-pointer ${newLeadId === lead.id ? 'bg-brand-50' : ''}`}
+                                    >
                                         <td className="px-6 py-4">
                                             <div className="font-medium text-gray-900">{lead.owner_name}</div>
                                             <div className="text-gray-500 text-xs">{lead.owner_contact}</div>
@@ -147,7 +151,13 @@ function DealerLeadsContent() {
                                             {new Date(lead.created_at).toLocaleDateString()}
                                         </td>
                                         <td className="px-6 py-4 text-right">
-                                            <button className="text-brand-600 hover:text-brand-800 font-medium text-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    router.push(`/dealer-portal/leads/${lead.id}/kyc`);
+                                                }}
+                                                className="text-brand-600 hover:text-brand-800 font-medium text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                                            >
                                                 View Details
                                             </button>
                                         </td>
