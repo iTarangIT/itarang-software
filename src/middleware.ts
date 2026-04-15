@@ -160,6 +160,22 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL(myDashboard, request.url));
   }
 
+  // KYC Review — admin feature surfaced to sales leadership
+  if (path === "/admin/kyc-review" || path.startsWith("/admin/kyc-review/")) {
+    if (["admin", "sales_head", "business_head", "ceo"].includes(role)) {
+      return response;
+    }
+    return NextResponse.redirect(new URL(myDashboard, request.url));
+  }
+
+  // Bolna AI Dialer lives under /ceo but is used by sales leadership too
+  if (path === "/ceo/ai-dialer" || path.startsWith("/ceo/ai-dialer/")) {
+    if (["ceo", "sales_head", "business_head", "admin"].includes(role)) {
+      return response;
+    }
+    return NextResponse.redirect(new URL(myDashboard, request.url));
+  }
+
   const matchedRole = Object.entries(roleDashboards).find(
     ([, dashboardPath]) =>
       path === dashboardPath || path.startsWith(`${dashboardPath}/`)
