@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/bolna/call-scheduler",
-      "schedule": "*/1 * * * *"
+      "schedule": "0 3 * * *"
     }
   ]
 }
