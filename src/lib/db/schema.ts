@@ -1149,6 +1149,20 @@ export const loanOffersRelations = relations(loanOffers, ({ one }) => ({
 
 // --- ADMIN KYC REVIEW ---
 
+export const adminVerificationQueue = pgTable('admin_verification_queue', {
+    id: varchar('id', { length: 255 }).primaryKey(),
+    queue_type: varchar('queue_type', { length: 50 }).default('kyc_verification').notNull(),
+    lead_id: varchar('lead_id', { length: 255 }).references(() => leads.id, { onDelete: 'cascade' }).notNull(),
+    priority: varchar('priority', { length: 20 }).default('normal').notNull(),
+    assigned_to: uuid('assigned_to').references(() => users.id),
+    submitted_by: uuid('submitted_by').references(() => users.id),
+    status: varchar('status', { length: 50 }).default('pending_itarang_verification').notNull(),
+    submitted_at: timestamp('submitted_at', { withTimezone: true }),
+    reviewed_at: timestamp('reviewed_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const adminKycReviews = pgTable('admin_kyc_reviews', {
     id: varchar('id', { length: 255 }).primaryKey(), // REVIEW-YYYYMMDD-SEQ
     lead_id: varchar('lead_id', { length: 255 }).references(() => leads.id, { onDelete: 'cascade' }).notNull(),
