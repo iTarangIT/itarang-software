@@ -1,10 +1,8 @@
 name: Deploy to VPS
-
 on:
   push:
     branches:
       - main
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -18,13 +16,15 @@ jobs:
           command_timeout: 15m
           script: |
             cd /home/itarang-crm/htdocs/crm.itarang.com
-            git pull origin main
+            git fetch origin main
+            git reset --hard origin/main
             npm ci
             npm run build
             cp .env.production .next/standalone/.env.production
             cp -r .next/static .next/standalone/.next/static
             cp -r public .next/standalone/public
             chown -R itarang-crm:itarang-crm /home/itarang-crm/htdocs/crm.itarang.com
+            chmod -R 755 /home/itarang-crm/htdocs/crm.itarang.com/.next/standalone/public
             su - itarang-crm -c "cd /home/itarang-crm/htdocs/crm.itarang.com && pm2 restart itarang-crm-new --update-env"
             sleep 5
             if lsof -ti:3002 > /dev/null; then
