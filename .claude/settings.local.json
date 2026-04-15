@@ -27,7 +27,17 @@
       "Bash(npx drizzle-kit:*)",
       "Bash(curl -s http://localhost:3000/api/user/list)",
       "Bash(grep -E \"\\\\.\\(tsx|ts\\)$\")",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/dealer-portal/leads/new)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/dealer-portal/leads/new)",
+      "Bash(git push:*)",
+      "Bash(git branch:*)",
+      "Bash(git reset:*)",
+      "Bash(echo \"EXIT_CODE=$?\")",
+      "Read(//tmp/**)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git switch:*)",
+      "Bash(git show:*)",
+      "Bash(git rev-list:*)"
     ]
   }
 }
