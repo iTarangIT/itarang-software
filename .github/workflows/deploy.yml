@@ -1,29 +1,15 @@
-name: Deploy to VPS
+name: Deploy Production to VPS
 
 on:
   push:
     branches:
-      - main
       - production
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Set environment variables
-        id: env
-        run: |
-          if [ "${{ github.ref_name }}" = "production" ]; then
-            echo "BRANCH=production" >> $GITHUB_OUTPUT
-            echo "DATABASE_URL=${{ secrets.PROD_DATABASE_URL }}" >> $GITHUB_OUTPUT
-            echo "ENV_LABEL=production" >> $GITHUB_OUTPUT
-          else
-            echo "BRANCH=main" >> $GITHUB_OUTPUT
-            echo "DATABASE_URL=${{ secrets.SANDBOX_DATABASE_URL }}" >> $GITHUB_OUTPUT
-            echo "ENV_LABEL=sandbox" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Deploy (${{ steps.env.outputs.ENV_LABEL }})
+      - name: Deploy production to Hostinger VPS
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -32,11 +18,11 @@ jobs:
           command_timeout: 15m
           script: |
             cd /home/itarang-crm/htdocs/crm.itarang.com
-            git fetch origin ${{ steps.env.outputs.BRANCH }}
-            git reset --hard origin/${{ steps.env.outputs.BRANCH }}
+            git fetch origin production
+            git reset --hard origin/production
 
             sed -i '/^DATABASE_URL=/d' .env.production
-            echo 'DATABASE_URL=${{ steps.env.outputs.DATABASE_URL }}' >> .env.production
+            echo 'DATABASE_URL=${{ secrets.PROD_DATABASE_URL }}' >> .env.production
 
             npm ci
             npm run build
@@ -49,9 +35,9 @@ jobs:
             sleep 8
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3002)
             if echo "$HTTP_CODE" | grep -qE "^(200|301|302|307)$"; then
-              echo "✅ Deployed ${{ steps.env.outputs.ENV_LABEL }} successfully (HTTP $HTTP_CODE)"
+              echo "✅ Production deployed successfully (HTTP $HTTP_CODE)"
             else
-              echo "❌ ${{ steps.env.outputs.ENV_LABEL }} deploy failed (HTTP $HTTP_CODE)"
+              echo "❌ Production deploy failed (HTTP $HTTP_CODE)"
               su - itarang-crm -c "pm2 logs itarang-crm-new --lines 10 --nostream"
               exit 1
             fi
