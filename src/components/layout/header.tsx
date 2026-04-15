@@ -3,13 +3,15 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Bell, LogOut, User, ChevronDown, Settings, CreditCard } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { GlobalSearchOverlay } from '@/components/search/GlobalSearchOverlay';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { formatRoleLabel } from '@/lib/roles';
 
 export function Header() {
     const router = useRouter();
+    const pathname = usePathname();
     const supabase = createClient();
     const { user } = useAuth();
     const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -18,7 +20,7 @@ export function Header() {
 
     const displayName = user?.name || user?.email?.split('@')[0] || 'User';
     const displayEmail = user?.email || '';
-    const displayRole = user?.role || 'user';
+    const displayRole = formatRoleLabel(user?.role, pathname);
     const initials = displayName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
 
     const handleLogout = async () => {

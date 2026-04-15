@@ -1,8 +1,16 @@
 {
   "crons": [
     {
-      "path": "/api/bolna/call-scheduler",
-      "schedule": "*/1 * * * *"
+      "path": "/api/cron/ai-dialer",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/scraper/cron",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/expire-coupons",
+      "schedule": "0 0 * * *"
     }
   ]
 }

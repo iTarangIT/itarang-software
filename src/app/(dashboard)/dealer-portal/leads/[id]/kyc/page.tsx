@@ -1,1099 +1,1046 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import {
-    ChevronLeft, Loader2, Upload, CheckCircle2, XCircle,
-    AlertCircle, Clock, Info, X, FileText, Camera, Shield,
-    Send, Download, Eye, ChevronRight,
-    ArrowRight, Table2, Landmark, RefreshCw
+    AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Clock,
+    Download, Eye, Loader2, RefreshCw, Send, Shield, Upload, X, FileText,
 } from 'lucide-react';
-import { useAuth } from '@/components/auth/AuthProvider';
+import {
+    SectionCard, DocumentCard, StatusBadge, ProgressHeader,
+    StickyBottomBar, ErrorBanner, PrimaryButton, SecondaryButton,
+    OutlineButton, FullPageLoader,
+} from '@/components/dealer-portal/lead-wizard/shared';
+import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const FINANCE_DOCUMENTS = [
-    { key: 'aadhaar_front', label: 'Aadhaar Front', required: true },
-    { key: 'aadhaar_back', label: 'Aadhaar Back', required: true },
-    { key: 'pan_card', label: 'PAN Card', required: true },
-    { key: 'passport_photo', label: 'Passport Size Photo', required: true },
-    { key: 'address_proof', label: 'Address Proof', required: true },
-    { key: 'rc_copy', label: 'RC Copy', required: false, conditional: true },
-    { key: 'bank_statement', label: 'Bank Statement', required: true },
-    { key: 'cheque_1', label: 'Undated Cheque 1', required: true },
-    { key: 'cheque_2', label: 'Undated Cheque 2', required: true },
-    { key: 'cheque_3', label: 'Undated Cheque 3', required: true },
-    { key: 'cheque_4', label: 'Undated Cheque 4', required: true },
-];
-
-const UPFRONT_DOCUMENTS = [
-    { key: 'aadhaar_front', label: 'Aadhaar Front', required: true },
-    { key: 'aadhaar_back', label: 'Aadhaar Back', required: true },
-    { key: 'pan_card', label: 'PAN Card', required: true },
-];
-
-type VerificationStatus = 'pending' | 'initiating' | 'awaiting_action' | 'in_progress' | 'success' | 'failed';
-
-interface OcrComparisonField {
-    field: string;
-    label: string;
-    ocrValue: string | null;
-    leadValue: string | null;
-    match: boolean;
-    similarity?: number;
-}
-
-interface DocUpload {
-    key: string;
+type UploadedDoc = {
+    id?: string;
+    doc_type: string;
     file_url: string | null;
-    verification_status: VerificationStatus;
-    failed_reason?: string;
-    ocr_data?: Record<string, any> | null;
-    ocr_comparison?: OcrComparisonField[] | null;
-    ocr_failed?: boolean;
-    enable_manual_entry?: boolean;
-}
+    file_name?: string | null;
+    file_size?: number | null;
+    uploaded_at?: string | null;
+    doc_status?: string;
+    verification_status?: string;
+    rejection_reason?: string | null;
+    failed_reason?: string | null;
+};
 
-interface VerificationRow {
+type VerificationRow = {
     type: string;
     label: string;
-    status: VerificationStatus;
-    last_update: string | null;
-    failed_reason: string | null;
+    status: string;
+    last_update?: string | null;
+    failed_reason?: string | null;
+};
+
+function isFinalConsentStatus(status: string) {
+    return ['admin_verified', 'manual_verified', 'verified'].includes((status || '').toLowerCase());
 }
 
-// ── Main Page ────────────────────────────────────────────────────────────────
+function ConsentStatusBadge({ status }: { status: string }) {
+    const s = (status || '').toLowerCase();
+    if (isFinalConsentStatus(s)) {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Admin Verified</span>;
+    }
+    if (s === 'admin_review_pending') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold"><Clock className="w-3 h-3" />Pending Review</span>;
+    }
+    if (s === 'admin_rejected') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold"><AlertCircle className="w-3 h-3" />Rejected</span>;
+    }
+    if (s === 'esign_failed') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold"><AlertCircle className="w-3 h-3" />eSign Failed</span>;
+    }
+    if (s === 'esign_blocked') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold"><AlertCircle className="w-3 h-3" />Blocked</span>;
+    }
+    if (s === 'expired') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold"><Clock className="w-3 h-3" />Expired</span>;
+    }
+    if (s === 'esign_completed') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Customer Signed</span>;
+    }
+    if (s === 'esign_in_progress') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Loader2 className="w-3 h-3 animate-spin" />Signing in Progress</span>;
+    }
+    if (s === 'link_sent' || s === 'link_opened') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Send className="w-3 h-3" />{s === 'link_opened' ? 'Link Opened' : 'Link Sent'}</span>;
+    }
+    if (s === 'consent_generated') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-teal-100 text-teal-700 rounded-full text-xs font-bold"><FileText className="w-3 h-3" />PDF Generated</span>;
+    }
+    if (s === 'consent_uploaded') {
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Upload className="w-3 h-3" />Uploaded</span>;
+    }
+    return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-bold">Awaiting Signature</span>;
+}
 
 export default function KYCPage() {
     const router = useRouter();
     const params = useParams();
     const leadId = params.id as string;
-    const { user } = useAuth();
 
-    // Core
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [lead, setLead] = useState<any>(null);
     const [accessDenied, setAccessDenied] = useState(false);
     const [apiError, setApiError] = useState<string | null>(null);
 
-    // ── Document Upload State ──
-    const [uploadedDocs, setUploadedDocs] = useState<Record<string, DocUpload>>({});
-    const [ocrComparisons, setOcrComparisons] = useState<Record<string, OcrComparisonField[]>>({});
-
-    // ── Manual Entry State ──
-    const [manualEntryDoc, setManualEntryDoc] = useState<string | null>(null);
-    const [manualFields, setManualFields] = useState<Record<string, string>>({
-        name: '', father_name: '', dob: '', address: '', pan_number: '', aadhaar_number: '',
-    });
-    const [bankManualFields, setBankManualFields] = useState({
-        account_holder_name: '', account_number: '', confirm_account_number: '',
-        ifsc: '', bank_name: '', branch: '', account_type: 'savings',
-    });
-    const [bankManualErrors, setBankManualErrors] = useState<Record<string, string>>({});
-    const [showBankManual, setShowBankManual] = useState(false);
-    const [savingManual, setSavingManual] = useState(false);
-    const [manualEntryTab, setManualEntryTab] = useState<'document' | 'bank'>('document');
-
-    // ── Verification State ──
+    const [uploadedDocs, setUploadedDocs] = useState<Record<string, UploadedDoc>>({});
     const [verifications, setVerifications] = useState<VerificationRow[]>([]);
     const [consentStatus, setConsentStatus] = useState<string>('awaiting_signature');
-    const [verificationSubmitted, setVerificationSubmitted] = useState(false);
+
+    const [savingDraft, setSavingDraft] = useState(false);
+    const [lastSaved, setLastSaved] = useState<string | null>(null);
     const [submitting, setSubmitting] = useState(false);
 
-    // ── Draft & Save ──
-    const [saving, setSaving] = useState(false);
-    const [lastSaved, setLastSaved] = useState<string | null>(null);
+    // Consent flow state
+    const [consentPath, setConsentPath] = useState<'none' | 'digital' | 'manual'>('none'); // mutually exclusive
+    const [consentLoading, setConsentLoading] = useState(false);
+    const [consentPdfUrl, setConsentPdfUrl] = useState<string | null>(null);
 
-    // ── Submit State ──
-    const [submitted, setSubmitted] = useState(false);
+    // Consent record details
+    const [consentRecord, setConsentRecord] = useState<any>(null);
 
-    // ── Load Data ────────────────────────────────────────────────────────────
+    // Coupon state
+    const [couponCode, setCouponCode] = useState('');
+    const [couponValidating, setCouponValidating] = useState(false);
+    const [couponResult, setCouponResult] = useState<any>(null);
+    const [releasingCoupon, setReleasingCoupon] = useState(false);
+    const [submittedForVerification, setSubmittedForVerification] = useState(false);
 
-    useEffect(() => {
-        const loadData = async () => {
-            try {
-                const res = await fetch(`/api/kyc/${leadId}/access-check`);
-                const data = await res.json();
-                if (!data.success || !data.allowed) { setAccessDenied(true); return; }
+    // Reupload state
+    const reuploadInputRef = useRef<HTMLInputElement>(null);
+    const [reuploadType, setReuploadType] = useState<string | null>(null);
+    const [reuploading, setReuploading] = useState(false);
 
-                setLead(data.lead);
-                if (data.lead.consent_status) setConsentStatus(data.lead.consent_status);
+    // ─── Data Loading ───────────────────────────────────────────────────────
 
-                // Load docs and verifications in parallel
-                const [docsRes, verRes] = await Promise.all([
-                    fetch(`/api/kyc/${leadId}/documents`),
-                    fetch(`/api/kyc/${leadId}/verifications`),
-                ]);
-
-                const [docsData, verData] = await Promise.all([
-                    docsRes.json(), verRes.json(),
-                ]);
-
-                if (docsData.success) {
-                    const docMap: Record<string, DocUpload> = {};
-                    docsData.data.forEach((d: any) => {
-                        docMap[d.doc_type] = {
-                            key: d.doc_type,
-                            file_url: d.file_url,
-                            verification_status: d.verification_status,
-                            failed_reason: d.failed_reason,
-                        };
-                    });
-                    setUploadedDocs(docMap);
-                }
-
-                if (verData.success) setVerifications(verData.data);
-
-            } catch { setApiError('Failed to load KYC data'); }
-            finally { setLoading(false); }
-        };
-        loadData();
-    }, [leadId]);
-
-    // ── Auto-save draft every 2 min ──
-    useEffect(() => {
-        const interval = setInterval(() => {
-            if (Object.keys(uploadedDocs).length > 0) handleSaveDraft(true);
-        }, 120000);
-        return () => clearInterval(interval);
-    }, [uploadedDocs, consentStatus]);
-
-    // ── Helpers ──────────────────────────────────────────────────────────────
-
-    const getRequiredDocs = () => {
-        const isFinance = lead && ['finance', 'other_finance', 'dealer_finance'].includes(lead.payment_method);
-        if (!isFinance) return UPFRONT_DOCUMENTS;
-        const docs = [...FINANCE_DOCUMENTS];
-        const isVehicle = lead && ['2W', '3W', '4W'].includes(lead.asset_model);
-        return docs.map(d => d.key === 'rc_copy' ? { ...d, required: isVehicle } : d);
-    };
-
-    const getDocStats = () => {
-        const required = getRequiredDocs().filter(d => d.required);
-        const uploaded = required.filter(d => uploadedDocs[d.key]?.file_url);
-        const pending = required.filter(d => !uploadedDocs[d.key]?.file_url);
-        return { total: required.length, uploaded: uploaded.length, pending };
-    };
-
-    // ── Document Upload ──────────────────────────────────────────────────────
-
-    const handleDocUpload = async (docType: string, file: File) => {
-        if (file.size > 5 * 1024 * 1024) { setApiError('File size must be less than 5MB'); return; }
-        const allowedTypes = ['image/png', 'image/jpeg', 'application/pdf'];
-        if (!allowedTypes.includes(file.type)) { setApiError('Only PNG, JPEG, and PDF files are allowed'); return; }
-
-        // Set uploading state
-        setUploadedDocs(prev => ({ ...prev, [docType]: { key: docType, file_url: null, verification_status: 'initiating' } }));
-
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('docType', docType);
+    const loadPageData = async (soft = false) => {
+        if (soft) setRefreshing(true);
+        else setLoading(true);
 
         try {
-            const res = await fetch(`/api/kyc/${leadId}/upload-document`, { method: 'POST', body: formData });
-            const data = await res.json();
-            if (data.success) {
-                const docUpload: DocUpload = {
-                    key: docType,
-                    file_url: data.file_url,
-                    verification_status: data.ocr_failed ? 'failed' : (data.ocr_data ? 'in_progress' : 'pending'),
-                    failed_reason: data.ocr_error || data.warning || undefined,
-                    ocr_data: data.ocr_data || null,
-                    ocr_comparison: data.ocr_comparison || null,
-                    ocr_failed: data.ocr_failed || false,
-                    enable_manual_entry: data.enable_manual_entry || false,
-                };
-                setUploadedDocs(prev => ({ ...prev, [docType]: docUpload }));
+            setApiError(null);
+            const accessRes = await fetch(`/api/kyc/${leadId}/access-check`, { cache: 'no-store' });
+            const accessJson = await accessRes.json();
 
-                if (data.ocr_comparison?.length > 0) {
-                    setOcrComparisons(prev => ({ ...prev, [docType]: data.ocr_comparison }));
-                }
-                if (data.warning) setApiError(data.warning);
-                if (data.ocr_failed || data.enable_manual_entry) setManualEntryDoc(docType);
+            const canAccess = accessJson?.data?.canAccess ?? accessJson?.allowed ?? false;
+            const fetchedLead = accessJson?.data?.lead ?? accessJson?.lead ?? null;
 
-                // Auto address match
-                if (docType === 'aadhaar_back' && data.ocr_data?.address) {
-                    triggerAutoAddressMatch(data.ocr_data.address);
+            if (!canAccess) {
+                setAccessDenied(true);
+                setLead(fetchedLead);
+                return;
+            }
+
+            setAccessDenied(false);
+            setLead(fetchedLead);
+            if (fetchedLead?.consent_status) setConsentStatus(fetchedLead.consent_status);
+
+            // Restore coupon state from lead
+            if (fetchedLead?.coupon_code && fetchedLead?.coupon_status === 'reserved') {
+                setCouponCode(fetchedLead.coupon_code);
+                setCouponResult({ valid: true, success: true, coupon_code: fetchedLead.coupon_code, status: 'reserved', message: 'Coupon reserved' });
+            } else if (fetchedLead?.coupon_code && fetchedLead?.coupon_status === 'used') {
+                setCouponCode(fetchedLead.coupon_code);
+                setCouponResult({ valid: true, success: true, coupon_code: fetchedLead.coupon_code, status: 'used', message: 'Coupon used' });
+                setSubmittedForVerification(true);
+            }
+
+            const [docsRes, verificationsRes, consentRes] = await Promise.allSettled([
+                fetch(`/api/kyc/${leadId}/documents?doc_for=customer`, { cache: 'no-store' }),
+                fetch(`/api/kyc/${leadId}/verifications?verification_for=customer`, { cache: 'no-store' }),
+                fetch(`/api/kyc/${leadId}/consent/status?consent_for=customer`, { cache: 'no-store' }),
+            ]);
+
+            if (docsRes.status === 'fulfilled') {
+                const docsJson = await docsRes.value.json();
+                if (docsJson?.success && Array.isArray(docsJson.data)) {
+                    const mapped: Record<string, UploadedDoc> = {};
+                    for (const doc of docsJson.data) mapped[doc.doc_type] = doc;
+                    setUploadedDocs(mapped);
                 }
-            } else {
-                setUploadedDocs(prev => ({ ...prev, [docType]: { key: docType, file_url: null, verification_status: 'failed', failed_reason: data.error?.message } }));
-                setApiError(data.error?.message || 'Upload failed');
+            }
+
+            if (verificationsRes.status === 'fulfilled') {
+                const verJson = await verificationsRes.value.json();
+                if (verJson?.success && Array.isArray(verJson.data)) setVerifications(verJson.data);
+            }
+
+            if (consentRes.status === 'fulfilled') {
+                const consentJson = await consentRes.value.json();
+                if (consentJson?.success && consentJson.data) {
+                    setConsentRecord(consentJson.data);
+                    // Sync consent status from record (most up-to-date source)
+                    if (consentJson.data.consent_status) setConsentStatus(consentJson.data.consent_status);
+                }
             }
         } catch {
-            setUploadedDocs(prev => ({ ...prev, [docType]: { key: docType, file_url: null, verification_status: 'failed', failed_reason: 'Upload failed' } }));
-            setApiError('Upload failed. Please try again.');
+            setApiError('Failed to load KYC data');
+        } finally {
+            setLoading(false);
+            setRefreshing(false);
         }
     };
 
-    const triggerAutoAddressMatch = (aadhaarAddress: string) => {
-        if (!lead?.current_address) return;
-        const a = aadhaarAddress.trim().toLowerCase().replace(/\s+/g, ' ');
-        const b = (lead.current_address || '').trim().toLowerCase().replace(/\s+/g, ' ');
-        const similarity = a === b ? 100 : Math.round((1 - Math.abs(a.length - b.length) / Math.max(a.length, b.length)) * 100);
-        if (similarity < 70) {
-            setOcrComparisons(prev => ({
-                ...prev,
-                'address_match': [{
-                    field: 'address', label: 'Address (Aadhaar vs Lead)',
-                    ocrValue: aadhaarAddress, leadValue: lead.current_address,
-                    match: false, similarity,
-                }],
-            }));
-        }
-    };
+    useEffect(() => { loadPageData(); }, [leadId]);
 
-    // ── Manual Entry ─────────────────────────────────────────────────────────
-
-    const handleSaveManualEntry = async () => {
-        if (!manualEntryDoc) return;
-        setSavingManual(true);
-        try {
-            const res = await fetch(`/api/kyc/${leadId}/save-draft`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    step: 2,
-                    data: { manualOcrData: { [manualEntryDoc]: manualFields }, documents: uploadedDocs, consentStatus },
-                }),
-            });
-            if (res.ok) {
-                setUploadedDocs(prev => ({
-                    ...prev,
-                    [manualEntryDoc!]: { ...prev[manualEntryDoc!], verification_status: 'in_progress', ocr_failed: false, enable_manual_entry: false, ocr_data: manualFields },
-                }));
-                setManualEntryDoc(null);
-                setManualFields({ name: '', father_name: '', dob: '', address: '', pan_number: '', aadhaar_number: '' });
+    // Auto-poll consent status while anything is in-flight:
+    //  - link_sent / link_opened / esign_in_progress → waiting for customer to sign (calls Digio sync)
+    //  - esign_completed / admin_review_pending / consent_uploaded → waiting for admin to verify
+    useEffect(() => {
+        const digioSyncStatuses = ['link_sent', 'link_opened', 'esign_in_progress'];
+        const adminWaitStatuses = ['esign_completed', 'admin_review_pending', 'consent_uploaded'];
+        const needsPoll = digioSyncStatuses.includes(consentStatus) || adminWaitStatuses.includes(consentStatus);
+        if (!needsPoll) return;
+        const tick = async () => {
+            if (digioSyncStatuses.includes(consentStatus)) {
+                try { await fetch(`/api/kyc/${leadId}/consent/sync`, { method: 'POST', cache: 'no-store' }); } catch {}
             }
-        } catch { setApiError('Failed to save manual entry'); }
-        finally { setSavingManual(false); }
-    };
-
-    // ── Bank Manual Entry ──────────────────────────────────────────────────────
-
-    const validateBankFields = () => {
-        const errs: Record<string, string> = {};
-        if (!bankManualFields.account_holder_name.trim()) errs.account_holder_name = 'Required';
-        if (!bankManualFields.account_number.trim()) errs.account_number = 'Required';
-        else if (bankManualFields.account_number.length < 9 || bankManualFields.account_number.length > 18) errs.account_number = '9-18 digits required';
-        if (bankManualFields.account_number !== bankManualFields.confirm_account_number) errs.confirm_account_number = 'Account numbers do not match';
-        if (!bankManualFields.ifsc.trim()) errs.ifsc = 'Required';
-        else if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(bankManualFields.ifsc)) errs.ifsc = 'Invalid IFSC format (e.g. SBIN0001234)';
-        if (!bankManualFields.bank_name.trim()) errs.bank_name = 'Required';
-        setBankManualErrors(errs);
-        return Object.keys(errs).length === 0;
-    };
-
-    const handleSaveBankManual = async () => {
-        if (!validateBankFields()) return;
-        setSavingManual(true);
-        try {
-            const res = await fetch(`/api/kyc/${leadId}/save-draft`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    step: 2,
-                    data: { bankManualData: bankManualFields, documents: uploadedDocs, consentStatus },
-                }),
-            });
-            if (res.ok) {
-                setShowBankManual(false);
-                setApiError(null);
-            }
-        } catch { setApiError('Failed to save bank details'); }
-        finally { setSavingManual(false); }
-    };
-
-    // ── Comparison Table Helpers ───────────────────────────────────────────────
-
-    const maskValue = (val: string | null | undefined, type: 'aadhaar' | 'pan' | 'account') => {
-        if (!val) return null;
-        if (type === 'aadhaar' && val.length >= 8) return 'XXXX XXXX ' + val.slice(-4);
-        if (type === 'pan' && val.length >= 6) return val.slice(0, 2) + 'XXXX' + val.slice(-2);
-        if (type === 'account' && val.length >= 4) return 'XXXXX' + val.slice(-4);
-        return val;
-    };
-
-    const buildComparisonRows = () => {
-        const rows: Array<{
-            field: string; label: string;
-            step1Value: string | null; ocrValue: string | null; manualValue: string | null;
-            finalValue: string | null; matchStatus: 'match' | 'mismatch' | 'pending';
-            source: string; remarks: string;
-        }> = [];
-
-        const allOcr: Record<string, any> = {};
-        Object.values(uploadedDocs).forEach(doc => {
-            if (doc.ocr_data) Object.assign(allOcr, doc.ocr_data);
-        });
-
-        const allManual: Record<string, string> = { ...manualFields };
-        if (bankManualFields.account_holder_name) Object.assign(allManual, bankManualFields);
-
-        const addRow = (field: string, label: string, step1Key: string | null, ocrKey: string | null, manualKey: string | null, mask?: 'aadhaar' | 'pan' | 'account') => {
-            const s1 = step1Key && lead ? (lead[step1Key] || null) : null;
-            const ocr = ocrKey ? (allOcr[ocrKey] || null) : null;
-            const manual = manualKey ? (allManual[manualKey] || null) : null;
-            const verified = ocr || manual;
-            const finalVal = verified || s1;
-            const displayS1 = mask ? maskValue(s1, mask) : s1;
-            const displayOcr = mask ? maskValue(ocr, mask) : ocr;
-            const displayManual = mask ? maskValue(manual, mask) : manual;
-            const displayFinal = mask ? maskValue(finalVal, mask) : finalVal;
-
-            let matchStatus: 'match' | 'mismatch' | 'pending' = 'pending';
-            if (s1 && ocr) {
-                matchStatus = s1.trim().toLowerCase() === ocr.trim().toLowerCase() ? 'match' : 'mismatch';
-            } else if (s1 && manual) {
-                matchStatus = s1.trim().toLowerCase() === manual.trim().toLowerCase() ? 'match' : 'mismatch';
-            }
-
-            let source = 'None';
-            if (ocr) source = 'OCR/API';
-            else if (manual) source = 'Manual';
-            else if (s1) source = 'Step 1';
-
-            rows.push({ field, label, step1Value: displayS1, ocrValue: displayOcr, manualValue: displayManual, finalValue: displayFinal, matchStatus, source, remarks: matchStatus === 'mismatch' ? 'Needs review' : '' });
+            loadPageData(true);
         };
+        const interval = setInterval(tick, 10000);
+        return () => clearInterval(interval);
+    }, [consentStatus, leadId]);
 
-        addRow('full_name', 'Full Name', 'full_name', 'full_name', 'name');
-        addRow('father_name', 'Father/Husband Name', 'father_or_husband_name', 'father_or_husband_name', 'father_name');
-        addRow('dob', 'Date of Birth', 'dob', 'date_of_birth', 'dob');
-        addRow('phone', 'Phone Number', 'phone', 'phone_number', null);
-        addRow('address', 'Address', 'current_address', 'address', 'address');
-        addRow('aadhaar_number', 'Aadhaar Number', null, 'aadhaar_number', 'aadhaar_number', 'aadhaar');
-        addRow('pan_number', 'PAN Number', null, 'pan_number', 'pan_number', 'pan');
-        addRow('bank_holder', 'Bank Account Holder', null, null, 'account_holder_name');
-        addRow('account_number', 'Account Number', null, null, 'account_number', 'account');
-        addRow('ifsc', 'IFSC', null, null, 'ifsc');
+    // Auto-save every 2 minutes
+    useEffect(() => {
+        const interval = setInterval(() => {
+            if (!loading && !accessDenied && Object.keys(uploadedDocs).length > 0) handleSaveDraft(true);
+        }, 120000);
+        return () => clearInterval(interval);
+    }, [loading, accessDenied, uploadedDocs, consentStatus]);
 
-        return rows;
+    // ─── Document Stats ─────────────────────────────────────────────────────
+
+    const requiredDocs = useMemo(() => {
+        const assetModel = String(lead?.asset_model || lead?.asset_category || '').toUpperCase();
+        const isVehicle = ['2W', '3W', '4W'].includes(assetModel);
+        return FINANCE_DOCUMENTS.map(doc =>
+            doc.key === 'rc_copy' ? { ...doc, required: isVehicle } : doc
+        );
+    }, [lead]);
+
+    const docStats = useMemo(() => {
+        const required = requiredDocs.filter(d => d.required);
+        const uploaded = required.filter(d => uploadedDocs[d.key]?.file_url);
+        const pending = required.filter(d => !uploadedDocs[d.key]?.file_url);
+        return { total: required.length, uploadedCount: uploaded.length, pending };
+    }, [requiredDocs, uploadedDocs]);
+
+    // ─── Document Upload ────────────────────────────────────────────────────
+
+    const handleDocUpload = async (documentType: string, file: File) => {
+        if (!['image/png', 'image/jpeg', 'image/jpg', 'application/pdf'].includes(file.type)) {
+            setApiError('Only PNG, JPEG, JPG, and PDF files are allowed');
+            return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+            setApiError('File size must be 5MB or smaller');
+            return;
+        }
+
+        setUploadedDocs(prev => ({
+            ...prev,
+            [documentType]: { ...(prev[documentType] || {}), doc_type: documentType, verification_status: 'pending', doc_status: 'uploaded', file_url: prev[documentType]?.file_url || null },
+        }));
+
+        try {
+            setApiError(null);
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('documentType', documentType);
+            formData.append('docType', documentType);
+            formData.append('docFor', 'customer');
+
+            const res = await fetch(`/api/kyc/${leadId}/upload-document`, { method: 'POST', body: formData });
+            const data = await res.json();
+
+            if (!res.ok || !data?.success) throw new Error(data?.message || data?.error?.message || 'Upload failed');
+
+            setUploadedDocs(prev => ({
+                ...prev,
+                [documentType]: {
+                    ...(prev[documentType] || {}),
+                    doc_type: documentType,
+                    verification_status: 'pending',
+                    doc_status: 'uploaded',
+                    file_url: data?.fileUrl || prev[documentType]?.file_url || null,
+                    file_name: file.name,
+                    file_size: file.size,
+                    uploaded_at: new Date().toISOString(),
+                },
+            }));
+            await loadPageData(true);
+        } catch (err: any) {
+            setApiError(err?.message || 'Document upload failed');
+        }
     };
 
-    const getComparisonSummary = (rows: ReturnType<typeof buildComparisonRows>) => {
-        const matched = rows.filter(r => r.matchStatus === 'match').length;
-        const mismatched = rows.filter(r => r.matchStatus === 'mismatch').length;
-        const pending = rows.filter(r => r.matchStatus === 'pending').length;
-        return { matched, mismatched, pending };
+    // ─── Verification Re-upload ──────────────────────────────────────────────
+
+    const triggerReupload = (verificationType: string) => {
+        setReuploadType(verificationType);
+        reuploadInputRef.current?.click();
     };
 
-    // ── Consent ──────────────────────────────────────────────────────────────
+    const handleReuploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file || !reuploadType) return;
+
+        if (!['image/png', 'image/jpeg', 'image/jpg', 'application/pdf'].includes(file.type)) {
+            setApiError('Only PNG, JPEG, JPG, and PDF files are allowed');
+            return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+            setApiError('File size must be 5MB or smaller');
+            return;
+        }
+
+        setReuploading(true);
+        setApiError(null);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('verificationType', reuploadType);
+
+            const res = await fetch(`/api/kyc/${leadId}/re-upload`, { method: 'POST', body: formData });
+            const data = await res.json();
+
+            if (!res.ok || !data?.success) throw new Error(data?.error?.message || 'Re-upload failed');
+
+            await loadPageData(true);
+        } catch (err: any) {
+            setApiError(err?.message || 'Re-upload failed');
+        } finally {
+            setReuploading(false);
+            setReuploadType(null);
+            // Reset file input so same file can be re-selected
+            if (reuploadInputRef.current) reuploadInputRef.current.value = '';
+        }
+    };
+
+    // ─── Save Draft ─────────────────────────────────────────────────────────
+
+    const handleSaveDraft = async (auto = false) => {
+        try {
+            setSavingDraft(true);
+            const res = await fetch(`/api/kyc/${leadId}/save-draft`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ step: 2, data: { documents: uploadedDocs, consentStatus } }),
+            });
+            if (!res.ok) throw new Error('Failed to save draft');
+            setLastSaved(`${auto ? 'Auto-saved' : 'Saved'} at ${new Date().toLocaleTimeString()}`);
+        } catch (err: any) {
+            setApiError(err?.message || 'Failed to save draft');
+        } finally {
+            setSavingDraft(false);
+        }
+    };
+
+    // ─── Consent ────────────────────────────────────────────────────────────
 
     const handleSendConsent = async (channel: 'sms' | 'whatsapp') => {
         try {
+            setApiError(null);
+            setConsentLoading(true);
+            setConsentPath('digital');
             const res = await fetch(`/api/kyc/${leadId}/send-consent`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel }),
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ channel, consent_for: 'customer' }),
             });
             const data = await res.json();
-            if (data.success) setConsentStatus('link_sent');
-            else setApiError(data.error?.message || 'Failed to send consent');
-        } catch { setApiError('Failed to send consent'); }
-    };
-
-    const handleUploadSignedConsent = async (file: File) => {
-        if (file.type !== 'application/pdf' || file.size > 10 * 1024 * 1024) {
-            setApiError('Only PDF files under 10MB are allowed'); return;
+            if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Failed to send consent');
+            setConsentStatus('link_sent');
+        } catch (err: any) {
+            setApiError(err?.message || 'Failed to send consent');
+            setConsentPath('none');
+        } finally {
+            setConsentLoading(false);
         }
-        const formData = new FormData();
-        formData.append('file', file);
-        try {
-            const res = await fetch(`/api/kyc/${leadId}/upload-signed-consent`, { method: 'POST', body: formData });
-            const data = await res.json();
-            if (data.success) setConsentStatus('manual_uploaded');
-        } catch { setApiError('Upload failed'); }
     };
 
     const handleGenerateConsentPDF = async () => {
         try {
-            const res = await fetch(`/api/kyc/${leadId}/generate-consent-pdf`, { method: 'POST' });
-            const data = await res.json();
-            if (data.success && data.pdfUrl) window.open(data.pdfUrl, '_blank');
-        } catch { setApiError('Failed to generate PDF'); }
-    };
-
-    // ── Submit & Save ────────────────────────────────────────────────────────
-
-    const handleSaveDraft = async (auto = false) => {
-        setSaving(true);
-        try {
-            await fetch(`/api/kyc/${leadId}/save-draft`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ step: 2, data: { documents: uploadedDocs, consentStatus } }),
+            setApiError(null);
+            setConsentLoading(true);
+            setConsentPath('manual');
+            const res = await fetch(`/api/kyc/${leadId}/generate-consent-pdf`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ consent_for: 'customer' }),
             });
-            setLastSaved(auto ? `Auto-saved at ${new Date().toLocaleTimeString()}` : `Saved at ${new Date().toLocaleTimeString()}`);
-        } catch { /* silent */ }
-        finally { setSaving(false); }
+            const data = await res.json();
+            if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Failed to generate consent PDF');
+            setConsentStatus('consent_generated');
+            setConsentPdfUrl(data.pdfUrl || null);
+            // Auto-download PDF locally
+            if (data.pdfUrl) {
+                try {
+                    const pdfRes = await fetch(data.pdfUrl);
+                    const blob = await pdfRes.blob();
+                    const blobUrl = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = `consent_${leadId}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(blobUrl);
+                } catch {
+                    // Fallback: open in new tab if blob download fails
+                    window.open(data.pdfUrl, '_blank');
+                }
+            }
+        } catch (err: any) {
+            setApiError(err?.message || 'Failed to generate consent PDF');
+            setConsentPath('none');
+        } finally {
+            setConsentLoading(false);
+        }
     };
 
-    const handleSubmitToSM = async () => {
-        setSaving(true);
+    const handleUploadSignedConsent = async (file: File) => {
         try {
-            const res = await fetch(`/api/leads/${leadId}/submit-to-sm`, { method: 'POST' });
+            setApiError(null);
+            setConsentLoading(true);
+            if (file.type !== 'application/pdf') throw new Error('Only PDF files allowed');
+            if (file.size > 10 * 1024 * 1024) throw new Error('Max 10MB');
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('consent_for', 'customer');
+            const res = await fetch(`/api/kyc/${leadId}/upload-signed-consent`, { method: 'POST', body: formData });
+            const data = await res.json();
+            if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Upload failed');
+            setConsentStatus('admin_review_pending');
+        } catch (err: any) {
+            setApiError(err?.message || 'Failed to upload signed consent');
+        } finally {
+            setConsentLoading(false);
+        }
+    };
+
+    // Determine which consent path is active based on status
+    useEffect(() => {
+        const digitalStatuses = ['link_sent', 'link_opened', 'esign_in_progress', 'esign_completed'];
+        const manualStatuses = ['consent_generated', 'consent_uploaded'];
+        if (digitalStatuses.includes(consentStatus)) setConsentPath('digital');
+        else if (manualStatuses.includes(consentStatus)) setConsentPath('manual');
+        else if (isFinalConsentStatus(consentStatus) || consentStatus === 'admin_review_pending' || consentStatus === 'admin_rejected') {
+            // Keep whatever path was set, or detect from status
+        }
+    }, [consentStatus]);
+
+    // ─── Coupon Validation ──────────────────────────────────────────────────
+
+    const handleValidateCoupon = async () => {
+        if (!couponCode.trim()) { setApiError('Please enter coupon code'); return; }
+        setCouponValidating(true);
+        setCouponResult(null);
+        try {
+            const res = await fetch(`/api/kyc/${leadId}/validate-coupon`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ couponCode: couponCode.trim() }),
+            });
+            const data = await res.json();
+            setCouponResult(data);
+            if (data.success || data.valid) {
+                if (data.already_used) {
+                    // Repeat validation — show inline message, no alert
+                    setLead((prev: any) => prev ? { ...prev, coupon_code: data.coupon_code, coupon_status: data.status } : prev);
+                } else {
+                    // First validation — show success alert
+                    setLead((prev: any) => prev ? { ...prev, coupon_code: data.coupon_code, coupon_status: 'reserved' } : prev);
+                    alert(`Coupon "${data.coupon_code}" validated successfully! Your coupon has been reserved for this lead.`);
+                }
+            } else {
+                setApiError(data.message || data.error || 'Invalid coupon');
+            }
+        } catch {
+            setApiError('Coupon validation failed');
+        } finally {
+            setCouponValidating(false);
+        }
+    };
+
+    const handleReleaseCoupon = async () => {
+        setReleasingCoupon(true);
+        setApiError(null);
+        try {
+            const res = await fetch(`/api/kyc/${leadId}/release-coupon`, { method: 'POST' });
             const data = await res.json();
             if (data.success) {
-                setSubmitted(true);
+                setCouponCode('');
+                setCouponResult(null);
             } else {
-                setApiError(data.error?.message || 'Failed to submit');
+                setApiError(data.error?.message || 'Failed to release coupon');
             }
-        } catch { setApiError('Connection failed'); }
-        finally { setSaving(false); }
+        } catch {
+            setApiError('Failed to release coupon');
+        } finally {
+            setReleasingCoupon(false);
+        }
     };
+
+    const handleSubmitForVerification = async () => {
+        try {
+            setApiError(null);
+            setSubmitting(true);
+            const res = await fetch(`/api/kyc/${leadId}/submit-verification`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ verification_for: 'customer' }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                setSubmittedForVerification(true);
+                setLead((prev: any) => prev ? { ...prev, coupon_status: 'used' } : prev);
+                alert('Verification submitted successfully! KYC verification is now in progress.');
+                await loadPageData(true);
+            } else {
+                setApiError(data.message || data.error?.message || 'Submission failed');
+            }
+        } catch {
+            setApiError('Failed to submit for verification');
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    // ─── Save & Next ────────────────────────────────────────────────────────
 
     const handleSaveAndNext = async () => {
-        const stats = getDocStats();
-        if (stats.uploaded < stats.total) { setApiError(`Missing: ${stats.pending.map(d => d.label).join(', ')}`); return; }
-        if (!['digitally_signed', 'manual_uploaded', 'verified'].includes(consentStatus)) {
-            setApiError('Customer consent is required'); return;
-        }
-        const failedVer = verifications.filter(v => v.status === 'failed');
-        if (failedVer.length > 0) { setApiError(`Verification failures: ${failedVer.map(v => v.label).join(', ')}`); return; }
-
-        setSaving(true);
         try {
-            const res = await fetch(`/api/kyc/${leadId}/complete-and-next`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({}),
-            });
-            const data = await res.json();
-            if (data.success) {
-                if (lead?.has_co_borrower) {
-                    router.push(`/dealer-portal/leads/${leadId}/kyc/interim`);
-                } else {
-                    await handleSubmitToSM();
-                }
-            } else { setApiError(data.error?.message || 'Failed to proceed'); }
-        } catch { setApiError('Connection failed'); }
-        finally { setSaving(false); }
+            setSubmitting(true);
+            setApiError(null);
+            router.push(`/dealer-portal/leads/${leadId}/borrower-consent`);
+        } catch (err: any) {
+            setApiError(err?.message || 'Failed to proceed');
+        } finally {
+            setSubmitting(false);
+        }
     };
 
-    // ── Render ───────────────────────────────────────────────────────────────
+    // ─── Render ─────────────────────────────────────────────────────────────
 
-    if (loading) return <div className="min-h-screen flex items-center justify-center bg-[#F8F9FB]"><Loader2 className="w-10 h-10 animate-spin text-[#1D4ED8]" /></div>;
-    if (accessDenied) return (
-        <div className="min-h-screen flex items-center justify-center bg-[#F8F9FB]">
-            <div className="text-center">
-                <Shield className="w-16 h-16 text-red-400 mx-auto mb-4" />
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h2>
-                <p className="text-gray-500 mb-6">KYC is only available for Hot leads.</p>
-                <button onClick={() => router.push('/dealer-portal/leads')} className="px-6 py-3 bg-[#0047AB] text-white rounded-xl font-bold">Back to Leads</button>
+    if (loading) return <FullPageLoader />;
+
+    if (accessDenied) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-[#F8F9FB]">
+                <div className="text-center max-w-md">
+                    <Shield className="w-14 h-14 text-red-400 mx-auto mb-4" />
+                    <h2 className="text-2xl font-bold text-gray-900">Access Denied</h2>
+                    <p className="mt-2 text-sm text-gray-500">Step 2 is only available for hot leads with non-cash payment method.</p>
+                    <button onClick={() => router.push('/dealer-portal/leads')} className="mt-6 px-6 py-3 bg-[#0047AB] text-white rounded-xl font-bold">Back to Leads</button>
+                </div>
             </div>
-        </div>
-    );
-
-    const requiredDocs = getRequiredDocs();
-    const docStats = getDocStats();
+        );
+    }
 
     return (
         <div className="min-h-screen bg-[#F8F9FB]">
             <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
-                {/* HEADER */}
-                <header className="mb-8 flex justify-between items-start">
-                    <div className="flex gap-4">
-                        <button onClick={() => router.back()} className="mt-1 p-2 hover:bg-white transition-colors rounded-lg">
-                            <ChevronLeft className="w-6 h-6 text-gray-900" />
+                {/* Header */}
+                <ProgressHeader
+                    title="KYC"
+                    subtitle={`Reference ID: ${lead?.reference_id || leadId}${lead?.full_name ? ` — ${lead.full_name}` : ''}`}
+                    step={2}
+                    onBack={() => router.back()}
+                    rightAction={
+                        <button onClick={async () => {
+                            try { await fetch(`/api/kyc/${leadId}/consent/sync`, { method: 'POST', cache: 'no-store' }); } catch {}
+                            loadPageData(true);
+                        }} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold">
+                            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
                         </button>
-                        <div>
-                            <h1 className="text-[28px] font-black text-gray-900 leading-tight tracking-tight">Customer KYC</h1>
-                            <p className="text-sm text-gray-500 mt-0.5">
-                                Lead: <span className="font-medium">{lead?.reference_id || leadId}</span>
-                                {lead?.full_name && <span> &mdash; {lead.full_name}</span>}
-                            </p>
-                        </div>
-                    </div>
-                    <div className="flex items-center gap-6">
-                        <div>
-                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest text-right mb-1.5">Workflow Progress</p>
-                            <div className="flex items-center gap-6">
-                                <span className="text-xs font-bold text-[#1D4ED8] whitespace-nowrap">Step 2 of 5</span>
-                                <div className="flex gap-2.5">
-                                    {[1, 2, 3, 4, 5].map(s => (
-                                        <div key={s} className={`h-[6px] w-[50px] rounded-full transition-all duration-300 ${s <= 2 ? 'bg-[#0047AB]' : 'bg-gray-200'}`} />
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </header>
+                    }
+                />
 
-                {/* Step 2 Sub-Progress */}
-                <div className="mb-6 flex items-center gap-2 overflow-x-auto pb-1">
-                    {[
-                        { label: 'Documents', done: docStats.uploaded === docStats.total, active: docStats.uploaded < docStats.total },
-                        { label: 'Consent', done: ['digitally_signed', 'manual_uploaded', 'verified'].includes(consentStatus), active: docStats.uploaded === docStats.total },
-                        { label: 'Review', done: false, active: false },
-                    ].map((s, i) => (
-                        <div key={s.label} className="flex items-center gap-2">
-                            {i > 0 && <div className={`w-8 h-[2px] ${s.done || s.active ? 'bg-[#0047AB]' : 'bg-gray-200'}`} />}
-                            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap ${
-                                s.done ? 'bg-green-50 text-green-700 border border-green-200'
-                                    : s.active ? 'bg-blue-50 text-[#0047AB] border border-blue-200'
-                                        : 'bg-gray-50 text-gray-400 border border-gray-100'
-                            }`}>
-                                {s.done ? <CheckCircle2 className="w-3.5 h-3.5" /> : s.active ? <div className="w-2 h-2 bg-[#0047AB] rounded-full animate-pulse" /> : <div className="w-2 h-2 bg-gray-300 rounded-full" />}
-                                {s.label}
-                            </div>
-                        </div>
-                    ))}
-                </div>
-
-                {/* Error Banner */}
-                {apiError && (
-                    <div className="mb-6 bg-red-50 border border-red-200 p-4 rounded-xl flex items-center justify-between">
-                        <div className="flex items-center gap-3 text-red-700 font-medium text-sm">
-                            <AlertCircle className="w-5 h-5" />
-                            {apiError}
-                        </div>
-                        <button onClick={() => setApiError(null)} className="p-1 hover:bg-white rounded-md"><X className="w-5 h-5" /></button>
-                    </div>
-                )}
-
-                {/* Submitted Banner */}
-                {submitted && (
-                    <div className="mb-6 bg-green-50 border border-green-200 p-6 rounded-xl text-center">
-                        <CheckCircle2 className="w-10 h-10 text-green-600 mx-auto mb-3" />
-                        <p className="text-lg font-bold text-green-800">Submitted to Itarang Team</p>
-                        <p className="text-sm text-green-600 mt-1">Our sales manager will review your documents and get back to you.</p>
-                        <button onClick={() => router.push('/dealer-portal/leads')} className="mt-4 px-6 py-2 bg-[#0047AB] text-white rounded-xl font-bold text-sm">Back to Leads</button>
-                    </div>
-                )}
+                <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
 
                 <main className="grid grid-cols-1 gap-6">
-
-                    {/* ═══════════════════════════════════════════════════════════
-                        SECTION 2: DOCUMENT UPLOAD
-                       ═══════════════════════════════════════════════════════════ */}
-                    <SectionCard
-                        title="Document Upload"
-                        icon={<FileText className="w-5 h-5 text-[#0047AB]" />}
-                    >
-                        <div className="flex items-center justify-between mb-6">
-                            <div className="flex items-center gap-4">
-                                <div className="text-sm font-bold text-gray-900">
-                                    Documents: <span className="text-[#0047AB]">{docStats.uploaded}/{docStats.total}</span>
+                    {/* ─── Customer Consent ───────────────────────────── */}
+                    <SectionCard title="Customer Consent" action={
+                        <ConsentStatusBadge status={consentStatus} />
+                    }>
+                        {isFinalConsentStatus(consentStatus) ? (
+                            /* ── Admin Verified Successfully ─────────────── */
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                                    <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                                        <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <p className="text-sm font-bold text-emerald-800">Admin Verified Successfully</p>
+                                        <p className="text-xs text-emerald-600 mt-0.5">The admin has verified the customer consent. You can now proceed to the next step.</p>
+                                        {consentRecord?.verified_at && (
+                                            <p className="text-xs text-emerald-500 mt-1">
+                                                Verified at: {new Date(consentRecord.verified_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                                                {consentRecord.signer_aadhaar_masked && ` · Aadhaar: ${consentRecord.signer_aadhaar_masked}`}
+                                            </p>
+                                        )}
+                                    </div>
+                                    <div className="flex-shrink-0">
+                                        <span className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold">
+                                            <CheckCircle2 className="w-3.5 h-3.5" /> Verified
+                                        </span>
+                                    </div>
                                 </div>
-                                <div className="h-2 w-40 bg-gray-100 rounded-full overflow-hidden">
-                                    <div className="h-full bg-[#0047AB] rounded-full transition-all" style={{ width: `${docStats.total > 0 ? (docStats.uploaded / docStats.total) * 100 : 0}%` }} />
+                                {consentRecord?.signed_consent_url && (
+                                    <a href={consentRecord.signed_consent_url} target="_blank" rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-emerald-200 rounded-lg text-xs font-bold text-emerald-700 hover:bg-emerald-50 transition-all">
+                                        <Download className="w-3.5 h-3.5" /> Download Signed Consent PDF
+                                    </a>
+                                )}
+                            </div>
+                        ) : consentStatus === 'admin_review_pending' ? (
+                            /* ── Awaiting Admin Review ────────────────────── */
+                            <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                                <Clock className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                                <div>
+                                    <p className="text-sm font-bold text-amber-800">Awaiting Admin Verification</p>
+                                    <p className="text-xs text-amber-600 mt-0.5">Signed consent has been uploaded and is pending admin review. You will be notified once verified.</p>
                                 </div>
                             </div>
-                            {docStats.pending.length > 0 && (
-                                <p className="text-xs font-medium text-red-500">
-                                    Pending: {docStats.pending.map(d => d.label).join(', ')}
-                                </p>
-                            )}
-                        </div>
-
-                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                            {requiredDocs.map(doc => {
-                                const uploaded = uploadedDocs[doc.key];
-                                return (
-                                    <DocumentCard
-                                        key={doc.key}
-                                        label={doc.label}
-                                        required={doc.required}
-                                        uploaded={!!uploaded?.file_url}
-                                        verificationStatus={uploaded?.verification_status}
-                                        failedReason={uploaded?.failed_reason}
-                                        ocrFailed={uploaded?.ocr_failed}
-                                        uploading={uploaded?.verification_status === 'initiating' && !uploaded?.file_url}
-                                        onUpload={(file) => handleDocUpload(doc.key, file)}
-                                        onManualEntry={() => setManualEntryDoc(doc.key)}
-                                    />
-                                );
-                            })}
-                        </div>
-                    </SectionCard>
-
-                    {/* ═══════════════════════════════════════════════════════════
-                        SECTION 3: OCR COMPARISON RESULTS
-                       ═══════════════════════════════════════════════════════════ */}
-                    {Object.keys(ocrComparisons).length > 0 && (
-                        <SectionCard title="Document Verification Results" icon={<Eye className="w-5 h-5 text-[#0047AB]" />}>
-                            <p className="text-xs text-gray-400 mb-4">Extracted data compared with lead details. Mismatches highlighted in red.</p>
+                        ) : consentStatus === 'esign_failed' ? (
+                            /* ── eSign Failed — Retry ─────────────────────── */
                             <div className="space-y-4">
-                                {Object.entries(ocrComparisons).map(([docKey, comparisons]) => (
-                                    <div key={docKey} className="p-4 bg-gray-50 rounded-xl">
-                                        <h4 className="text-sm font-bold text-gray-900 mb-3 capitalize">
-                                            {docKey.replace(/_/g, ' ')} - OCR Results
-                                        </h4>
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-sm">
-                                                <thead>
-                                                    <tr className="border-b border-gray-200">
-                                                        <th className="text-left py-2 px-3 text-xs font-bold text-gray-500 uppercase">Field</th>
-                                                        <th className="text-left py-2 px-3 text-xs font-bold text-gray-500 uppercase">From Document (OCR)</th>
-                                                        <th className="text-left py-2 px-3 text-xs font-bold text-gray-500 uppercase">From Lead (Step 1)</th>
-                                                        <th className="text-left py-2 px-3 text-xs font-bold text-gray-500 uppercase">Match</th>
-                                                        <th className="text-left py-2 px-3 text-xs font-bold text-gray-500 uppercase">Similarity</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {comparisons.map(c => (
-                                                        <tr key={c.field} className={`border-b border-gray-100 ${!c.match ? 'bg-red-50' : 'bg-green-50'}`}>
-                                                            <td className="py-2 px-3 font-medium text-gray-900">{c.label}</td>
-                                                            <td className="py-2 px-3 text-gray-700 font-mono text-xs">{c.ocrValue || <span className="text-gray-300 italic">Not found</span>}</td>
-                                                            <td className="py-2 px-3 text-gray-700 font-mono text-xs">{c.leadValue || <span className="text-gray-300 italic">Not filled</span>}</td>
-                                                            <td className="py-2 px-3">
-                                                                {c.match
-                                                                    ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700">Match</span>
-                                                                    : <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">Mismatch</span>
-                                                                }
-                                                            </td>
-                                                            <td className="py-2 px-3 text-xs font-bold">
-                                                                {c.similarity != null ? (
-                                                                    <span className={c.similarity >= 80 ? 'text-green-600' : c.similarity >= 50 ? 'text-amber-600' : 'text-red-600'}>
-                                                                        {c.similarity}%
-                                                                    </span>
-                                                                ) : '-'}
-                                                            </td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        </div>
+                                <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+                                    <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                                    <div>
+                                        <p className="text-sm font-bold text-red-800">Aadhaar eSign Failed</p>
+                                        <p className="text-xs text-red-600 mt-0.5">Customer eSign was unsuccessful. You can resend the consent link or switch to manual consent.</p>
                                     </div>
-                                ))}
-                            </div>
-                        </SectionCard>
-                    )}
-
-                    {/* ═══════════════════════════════════════════════════════════
-                        SECTION 4: MANUAL ENTRY FALLBACK (Document + Bank)
-                       ═══════════════════════════════════════════════════════════ */}
-                    {(manualEntryDoc || showBankManual) && (
-                        <SectionCard title="Manual Data Entry" icon={<FileText className="w-5 h-5 text-amber-500" />}>
-                            {/* Tabs */}
-                            {manualEntryDoc && (
-                                <div className="flex gap-2 mb-4">
-                                    <button onClick={() => setManualEntryTab('document')}
-                                        className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${manualEntryTab === 'document' ? 'bg-[#0047AB] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                                        Document Details
+                                </div>
+                                <div className="flex gap-3">
+                                    <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
+                                        className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center gap-2">
+                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend via WhatsApp
                                     </button>
-                                    <button onClick={() => { setManualEntryTab('bank'); setShowBankManual(true); }}
-                                        className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${manualEntryTab === 'bank' ? 'bg-[#0047AB] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                                        <Landmark className="w-3 h-3 inline mr-1" /> Bank Details
+                                    <button onClick={handleGenerateConsentPDF} disabled={consentLoading}
+                                        className="px-5 py-2.5 bg-white border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all disabled:opacity-50 flex items-center gap-2">
+                                        <FileText className="w-4 h-4" /> Switch to Manual
                                     </button>
                                 </div>
-                            )}
-
-                            {/* Document Manual Entry */}
-                            {manualEntryTab === 'document' && manualEntryDoc && (
-                                <>
-                                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl mb-4">
-                                        <div className="flex items-center gap-2 text-amber-700 text-sm font-medium mb-1">
-                                            <AlertCircle className="w-4 h-4" />
-                                            OCR could not extract data from <strong className="capitalize">{manualEntryDoc.replace(/_/g, ' ')}</strong>
-                                        </div>
-                                        <p className="text-xs text-amber-600">Please enter the details manually from the document.</p>
+                            </div>
+                        ) : consentStatus === 'esign_blocked' ? (
+                            /* ── eSign Blocked — Must use manual ──────────── */
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+                                    <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                                    <div>
+                                        <p className="text-sm font-bold text-red-800">Digital Consent Blocked</p>
+                                        <p className="text-xs text-red-600 mt-0.5">Maximum eSign attempts (3) reached. Please use manual consent.</p>
                                     </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        {(manualEntryDoc.includes('aadhaar') || manualEntryDoc.includes('pan')) && (
-                                            <>
-                                                <InputField label="Full Name (as on document)" value={manualFields.name} onChange={v => setManualFields(p => ({ ...p, name: v }))} placeholder="Full name as printed" />
-                                                <InputField label="Father/Husband Name" value={manualFields.father_name} onChange={v => setManualFields(p => ({ ...p, father_name: v }))} placeholder="Father or husband name" />
-                                                <InputField label="Date of Birth" type="date" value={manualFields.dob} onChange={v => setManualFields(p => ({ ...p, dob: v }))} />
-                                            </>
+                                </div>
+                                <button onClick={handleGenerateConsentPDF} disabled={consentLoading}
+                                    className="px-5 py-2.5 bg-teal-600 text-white rounded-xl text-sm font-bold hover:bg-teal-700 transition-all disabled:opacity-50 flex items-center gap-2">
+                                    {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} Generate Manual Consent PDF
+                                </button>
+                            </div>
+                        ) : consentStatus === 'expired' ? (
+                            /* ── Link Expired — Resend ────────────────────── */
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                                    <Clock className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                                    <div>
+                                        <p className="text-sm font-bold text-amber-800">Consent Link Expired</p>
+                                        <p className="text-xs text-amber-600 mt-0.5">The consent link has expired (24 hours). Please resend.</p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-3">
+                                    <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
+                                        className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center gap-2">
+                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend via WhatsApp
+                                    </button>
+                                    <button onClick={() => handleSendConsent('sms')} disabled={consentLoading}
+                                        className="px-5 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2">
+                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend via SMS
+                                    </button>
+                                </div>
+                            </div>
+                        ) : consentStatus === 'esign_completed' ? (
+                            /* ── Customer Signed Successfully ────────────── */
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                                    <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                                        <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <p className="text-sm font-bold text-emerald-800">Customer Signed Successfully</p>
+                                        <p className="text-xs text-emerald-600 mt-0.5">The customer has completed Aadhaar eSign. Consent is now pending admin verification.</p>
+                                        {consentRecord?.signed_at && (
+                                            <p className="text-xs text-emerald-500 mt-1">
+                                                Signed at: {new Date(consentRecord.signed_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                                                {consentRecord.signer_aadhaar_masked && ` · Aadhaar: ${consentRecord.signer_aadhaar_masked}`}
+                                            </p>
                                         )}
-                                        {manualEntryDoc.includes('aadhaar') && (
-                                            <>
-                                                <div className="space-y-1">
-                                                    <label className="text-xs font-bold text-gray-700">Aadhaar Number</label>
-                                                    <input
-                                                        value={manualFields.aadhaar_number}
-                                                        onChange={e => setManualFields(p => ({ ...p, aadhaar_number: e.target.value.replace(/\D/g, '').slice(0, 12) }))}
-                                                        placeholder="12-digit Aadhaar" maxLength={12}
-                                                        className="w-full h-10 px-3 bg-white border-2 border-[#EBEBEB] rounded-xl text-sm font-mono outline-none focus:border-[#1D4ED8]"
-                                                    />
-                                                    {manualFields.aadhaar_number && manualFields.aadhaar_number.length !== 12 && (
-                                                        <p className="text-[10px] text-red-500 font-bold">Must be exactly 12 digits</p>
-                                                    )}
-                                                </div>
-                                                <div className="space-y-1 md:col-span-2">
-                                                    <label className="text-xs font-bold text-gray-700">Address</label>
-                                                    <textarea
-                                                        value={manualFields.address}
-                                                        onChange={e => setManualFields(p => ({ ...p, address: e.target.value }))}
-                                                        className="w-full h-20 px-3 py-2 bg-white border-2 border-[#EBEBEB] rounded-xl text-sm outline-none focus:border-[#1D4ED8] resize-none"
-                                                        placeholder="Full address as on Aadhaar"
-                                                    />
-                                                </div>
-                                            </>
+                                    </div>
+                                    <div className="flex-shrink-0">
+                                        <span className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold">
+                                            <CheckCircle2 className="w-3.5 h-3.5" /> Signed
+                                        </span>
+                                    </div>
+                                </div>
+                                {consentRecord?.signed_consent_url && (
+                                    <a href={consentRecord.signed_consent_url} target="_blank" rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-emerald-200 rounded-lg text-xs font-bold text-emerald-700 hover:bg-emerald-50 transition-all">
+                                        <Download className="w-3.5 h-3.5" /> Download Signed Consent PDF
+                                    </a>
+                                )}
+                            </div>
+                        ) : consentStatus === 'esign_in_progress' ? (
+                            /* ── eSign In Progress ───────────────────────── */
+                            <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                                    <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+                                </div>
+                                <div className="flex-1">
+                                    <p className="text-sm font-bold text-blue-800">Customer is Signing...</p>
+                                    <p className="text-xs text-blue-600 mt-0.5">Customer has opened the consent link and is completing the Aadhaar eSign process. This page will update automatically.</p>
+                                </div>
+                            </div>
+                        ) : consentStatus === 'admin_rejected' ? (
+                            /* ── Rejected — Re-consent ────────────────────── */
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+                                    <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                                    <div>
+                                        <p className="text-sm font-bold text-red-800">Consent Rejected by Admin</p>
+                                        {consentRecord?.rejection_reason && (
+                                            <p className="text-xs text-red-700 mt-1 font-medium">Reason: {consentRecord.rejection_reason}</p>
                                         )}
-                                        {manualEntryDoc.includes('pan') && (
-                                            <div className="space-y-1">
-                                                <label className="text-xs font-bold text-gray-700">PAN Number</label>
-                                                <input
-                                                    value={manualFields.pan_number}
-                                                    onChange={e => setManualFields(p => ({ ...p, pan_number: e.target.value.toUpperCase().slice(0, 10) }))}
-                                                    placeholder="ABCDE1234F" maxLength={10}
-                                                    className="w-full h-10 px-3 bg-white border-2 border-[#EBEBEB] rounded-xl text-sm font-mono uppercase outline-none focus:border-[#1D4ED8]"
-                                                />
-                                                {manualFields.pan_number && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(manualFields.pan_number) && (
-                                                    <p className="text-[10px] text-red-500 font-bold">Invalid PAN format (e.g. ABCDE1234F)</p>
+                                        <p className="text-xs text-red-600 mt-0.5">Please re-generate and re-upload the consent form, or resend digital consent.</p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-3">
+                                    <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
+                                        className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center gap-2">
+                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend Digital
+                                    </button>
+                                    <button onClick={handleGenerateConsentPDF} disabled={consentLoading}
+                                        className="px-5 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2">
+                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                                        Re-generate Manual PDF
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            /* ── Choose Consent Path ──────────────────────── */
+                            <div className="space-y-4">
+                                <p className="text-sm text-gray-500">Choose one method to obtain customer consent. Both options are mutually exclusive.</p>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {/* Digital Consent Card */}
+                                    <div className={`relative p-5 rounded-2xl border-2 transition-all ${
+                                        consentPath === 'digital'
+                                            ? 'border-[#0047AB] bg-blue-50/50 shadow-md'
+                                            : consentPath === 'manual'
+                                                ? 'border-gray-100 bg-gray-50 opacity-50 pointer-events-none'
+                                                : 'border-gray-200 bg-white hover:border-[#0047AB] hover:shadow-md cursor-pointer'
+                                    }`}>
+                                        <div className="flex items-start gap-3 mb-3">
+                                            <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
+                                                <Send className="w-5 h-5 text-[#0047AB]" />
+                                            </div>
+                                            <div>
+                                                <h4 className="text-sm font-bold text-gray-900">Digital Consent (Aadhaar eSign)</h4>
+                                                <p className="text-xs text-gray-500 mt-0.5">Send consent link via SMS/WhatsApp. Customer signs digitally with Aadhaar OTP.</p>
+                                            </div>
+                                        </div>
+                                        {consentPath !== 'manual' && (
+                                            <div className="flex gap-2">
+                                                <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading || consentPath === 'digital'}
+                                                    className="flex-1 px-3 py-2 bg-[#25D366] text-white rounded-lg text-xs font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                                    {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                                                    WhatsApp
+                                                </button>
+                                                <button onClick={() => handleSendConsent('sms')} disabled={consentLoading || consentPath === 'digital'}
+                                                    className="flex-1 px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                                    {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                                                    SMS
+                                                </button>
+                                            </div>
+                                        )}
+                                        {(consentStatus === 'link_sent' || consentStatus === 'link_opened') && (
+                                            <div className="mt-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2">
+                                                <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
+                                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+                                                </span>
+                                                <p className="text-xs font-medium text-amber-700">
+                                                    {consentStatus === 'link_opened' ? 'Customer opened the link. Waiting for signature...' : 'Consent link sent. Waiting for customer to sign...'}
+                                                    <span className="text-amber-500 ml-1">(auto-updating)</span>
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Manual Consent Card */}
+                                    <div className={`relative p-5 rounded-2xl border-2 transition-all ${
+                                        consentPath === 'manual'
+                                            ? 'border-[#0047AB] bg-blue-50/50 shadow-md'
+                                            : consentPath === 'digital'
+                                                ? 'border-gray-100 bg-gray-50 opacity-50 pointer-events-none'
+                                                : 'border-gray-200 bg-white hover:border-[#0047AB] hover:shadow-md cursor-pointer'
+                                    }`}>
+                                        <div className="flex items-start gap-3 mb-3">
+                                            <div className="w-10 h-10 rounded-xl bg-teal-100 flex items-center justify-center flex-shrink-0">
+                                                <FileText className="w-5 h-5 text-teal-700" />
+                                            </div>
+                                            <div>
+                                                <h4 className="text-sm font-bold text-gray-900">Manual Consent (Signed PDF)</h4>
+                                                <p className="text-xs text-gray-500 mt-0.5">Generate PDF, print, get customer signature, scan and upload.</p>
+                                            </div>
+                                        </div>
+                                        {consentPath !== 'digital' && (
+                                            <div className="space-y-2">
+                                                {/* Step 1: Generate PDF */}
+                                                <button onClick={handleGenerateConsentPDF}
+                                                    disabled={consentLoading || consentStatus === 'consent_generated' || consentStatus === 'consent_uploaded'}
+                                                    className="w-full px-3 py-2 bg-teal-600 text-white rounded-lg text-xs font-bold hover:bg-teal-700 transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                                    {consentLoading && consentPath === 'manual' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+                                                    {consentStatus === 'consent_generated' ? 'PDF Generated' : 'Generate Consent PDF'}
+                                                </button>
+
+                                                {/* Step 2: Upload Signed PDF (enabled after generate) */}
+                                                {(consentStatus === 'consent_generated' || consentPdfUrl) && (
+                                                    <>
+                                                        {consentPdfUrl && (
+                                                            <div className="p-2.5 bg-green-50 border border-green-200 rounded-lg">
+                                                                <p className="text-xs text-green-700 font-medium"><CheckCircle2 className="w-3 h-3 inline mr-1" />PDF downloaded. Print, get signature, then upload scanned copy below.</p>
+                                                            </div>
+                                                        )}
+                                                        <label className="w-full px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all cursor-pointer flex items-center justify-center gap-1.5">
+                                                            <Upload className="w-3 h-3" /> Upload Signed Consent PDF
+                                                            <input type="file" className="hidden" accept="application/pdf"
+                                                                onChange={e => e.target.files?.[0] && handleUploadSignedConsent(e.target.files[0])} />
+                                                        </label>
+                                                    </>
                                                 )}
                                             </div>
                                         )}
                                     </div>
-                                    <div className="flex justify-end gap-3 mt-4">
-                                        <button onClick={() => { setManualEntryDoc(null); setManualFields({ name: '', father_name: '', dob: '', address: '', pan_number: '', aadhaar_number: '' }); }}
-                                            className="px-6 py-2 border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cancel</button>
-                                        <button onClick={handleSaveManualEntry} disabled={savingManual || !manualFields.name}
-                                            className="px-6 py-2 bg-[#0047AB] text-white rounded-xl text-sm font-bold disabled:opacity-40 flex items-center gap-2">
-                                            {savingManual ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                                            Save Manual Entry
-                                        </button>
-                                    </div>
-                                </>
-                            )}
-
-                            {/* Bank Manual Entry */}
-                            {(manualEntryTab === 'bank' || (!manualEntryDoc && showBankManual)) && (
-                                <>
-                                    <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl mb-4">
-                                        <div className="flex items-center gap-2 text-blue-700 text-sm font-medium">
-                                            <Landmark className="w-4 h-4" />
-                                            Enter bank account details for verification
-                                        </div>
-                                    </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <InputField label="Account Holder Name *" value={bankManualFields.account_holder_name}
-                                            onChange={v => setBankManualFields(p => ({ ...p, account_holder_name: v }))} placeholder="Name as per bank records" error={bankManualErrors.account_holder_name} />
-                                        <div className="space-y-1">
-                                            <label className="text-xs font-bold text-gray-700">Account Type</label>
-                                            <select value={bankManualFields.account_type}
-                                                onChange={e => setBankManualFields(p => ({ ...p, account_type: e.target.value }))}
-                                                className="w-full h-10 px-3 bg-white border-2 border-[#EBEBEB] rounded-xl text-sm outline-none focus:border-[#1D4ED8]">
-                                                <option value="savings">Savings</option>
-                                                <option value="current">Current</option>
-                                            </select>
-                                        </div>
-                                        <InputField label="Account Number *" value={bankManualFields.account_number}
-                                            onChange={v => setBankManualFields(p => ({ ...p, account_number: v.replace(/\D/g, '') }))} placeholder="Account number" mono error={bankManualErrors.account_number} />
-                                        <InputField label="Confirm Account Number *" value={bankManualFields.confirm_account_number}
-                                            onChange={v => setBankManualFields(p => ({ ...p, confirm_account_number: v.replace(/\D/g, '') }))} placeholder="Re-enter account number" mono error={bankManualErrors.confirm_account_number} />
-                                        <InputField label="IFSC Code *" value={bankManualFields.ifsc}
-                                            onChange={v => setBankManualFields(p => ({ ...p, ifsc: v.toUpperCase().slice(0, 11) }))} placeholder="e.g. SBIN0001234" mono upper error={bankManualErrors.ifsc} />
-                                        <InputField label="Bank Name *" value={bankManualFields.bank_name}
-                                            onChange={v => setBankManualFields(p => ({ ...p, bank_name: v }))} placeholder="e.g. State Bank of India" error={bankManualErrors.bank_name} />
-                                        <InputField label="Branch (optional)" value={bankManualFields.branch}
-                                            onChange={v => setBankManualFields(p => ({ ...p, branch: v }))} placeholder="Branch name" />
-                                    </div>
-                                    <div className="flex justify-end gap-3 mt-4">
-                                        <button onClick={() => { setShowBankManual(false); if (manualEntryDoc) setManualEntryTab('document'); }}
-                                            className="px-6 py-2 border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cancel</button>
-                                        <button onClick={handleSaveBankManual} disabled={savingManual}
-                                            className="px-6 py-2 bg-[#0047AB] text-white rounded-xl text-sm font-bold disabled:opacity-40 flex items-center gap-2">
-                                            {savingManual ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                                            Save Bank Details
-                                        </button>
-                                    </div>
-                                </>
-                            )}
-                        </SectionCard>
-                    )}
-
-                    {/* ═══════════════════════════════════════════════════════════
-                        SECTION 6: CUSTOMER CONSENT
-                       ═══════════════════════════════════════════════════════════ */}
-                    <SectionCard title="Customer Consent" icon={<FileText className="w-5 h-5 text-[#0047AB]" />}>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div className="space-y-3">
-                                <h4 className="text-sm font-bold text-gray-900">Digital Consent</h4>
-                                <button onClick={() => handleSendConsent('sms')} disabled={consentStatus !== 'awaiting_signature'}
-                                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold disabled:opacity-40 hover:bg-[#003580] transition-all">
-                                    <Send className="w-4 h-4" /> Send SMS Consent
-                                </button>
-                                <button onClick={() => handleSendConsent('whatsapp')} disabled={consentStatus !== 'awaiting_signature'}
-                                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-green-600 text-white rounded-xl text-sm font-bold disabled:opacity-40 hover:bg-green-700 transition-all">
-                                    <Send className="w-4 h-4" /> Send WhatsApp Consent
-                                </button>
-                            </div>
-                            <div className="space-y-3">
-                                <h4 className="text-sm font-bold text-gray-900">Manual Consent</h4>
-                                <button onClick={handleGenerateConsentPDF}
-                                    className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-gray-200 rounded-xl text-sm font-bold hover:border-[#0047AB] transition-all">
-                                    <Download className="w-4 h-4" /> Generate Consent PDF
-                                </button>
-                                <label className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-gray-200 rounded-xl text-sm font-bold cursor-pointer hover:border-[#0047AB] transition-all">
-                                    <Upload className="w-4 h-4" /> Upload Signed PDF
-                                    <input type="file" className="hidden" accept="application/pdf" onChange={e => e.target.files?.[0] && handleUploadSignedConsent(e.target.files[0])} />
-                                </label>
-                            </div>
-                            <div className="space-y-3">
-                                <h4 className="text-sm font-bold text-gray-900">Status</h4>
-                                <div className="p-4 bg-gray-50 rounded-xl space-y-2">
-                                    {['awaiting_signature', 'link_sent', 'digitally_signed', 'manual_uploaded', 'verified'].map(s => (
-                                        <div key={s} className="flex items-center gap-2">
-                                            {consentStatus === s || (['digitally_signed', 'manual_uploaded', 'verified'].includes(consentStatus) && ['awaiting_signature', 'link_sent'].includes(s))
-                                                ? <CheckCircle2 className="w-4 h-4 text-green-500" />
-                                                : <div className="w-4 h-4 rounded-full border-2 border-gray-200" />}
-                                            <span className={`text-xs font-medium ${consentStatus === s ? 'text-gray-900' : 'text-gray-400'}`}>
-                                                {s.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                                            </span>
-                                        </div>
-                                    ))}
                                 </div>
                             </div>
+                        )}
+                    </SectionCard>
+
+                    {/* ─── Loan Documents ─────────────────────────────── */}
+                    <SectionCard title="Loan Documents" action={
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-gray-500">Uploaded:</span>
+                            <span className={`text-sm font-black ${docStats.uploadedCount === docStats.total ? 'text-emerald-600' : 'text-[#0047AB]'}`}>
+                                {docStats.uploadedCount}/{docStats.total}
+                            </span>
+                            {docStats.uploadedCount === docStats.total && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+                        </div>
+                    }>
+                        {/* Progress Bar */}
+                        <div className="mb-5">
+                            <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+                                <div
+                                    className={`h-full rounded-full transition-all duration-500 ${
+                                        docStats.uploadedCount === docStats.total ? 'bg-emerald-500' : 'bg-[#0047AB]'
+                                    }`}
+                                    style={{ width: `${docStats.total > 0 ? (docStats.uploadedCount / docStats.total) * 100 : 0}%` }}
+                                />
+                            </div>
+                            {docStats.pending.length > 0 && (
+                                <p className="text-xs text-red-500 font-medium mt-2">
+                                    Missing: {docStats.pending.map(d => d.label).join(', ')}
+                                </p>
+                            )}
+                        </div>
+
+                        {/* Document Cards Grid */}
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                            {requiredDocs.map(doc => (
+                                <DocumentCard
+                                    key={doc.key}
+                                    label={doc.label}
+                                    required={doc.required}
+                                    uploaded={!!uploadedDocs[doc.key]?.file_url}
+                                    status={uploadedDocs[doc.key]?.doc_status || uploadedDocs[doc.key]?.verification_status}
+                                    failedReason={uploadedDocs[doc.key]?.rejection_reason || uploadedDocs[doc.key]?.failed_reason}
+                                    onUpload={file => handleDocUpload(doc.key, file)}
+                                    fileUrl={uploadedDocs[doc.key]?.file_url}
+                                />
+                            ))}
                         </div>
                     </SectionCard>
 
-                    {/* ═══════════════════════════════════════════════════════════
-                        SECTION 7: VERIFICATION STATUS TABLE
-                       ═══════════════════════════════════════════════════════════ */}
+                    {/* ─── Verification Action ────────────────────────── */}
+                    <SectionCard title="Verification Action" action={
+                        lead?.coupon_status === 'used'
+                            ? <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Submitted</span>
+                            : lead?.coupon_status === 'reserved'
+                                ? <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Shield className="w-3 h-3" />Reserved</span>
+                                : <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-bold">Awaiting Coupon</span>
+                    }>
+                        {lead?.coupon_status === 'used' || submittedForVerification ? (
+                            /* ── Coupon Used / Verification Submitted ──── */
+                            <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                                <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+                                <div>
+                                    <p className="text-sm font-bold text-emerald-800">Verification Submitted</p>
+                                    <p className="text-xs text-emerald-600 mt-0.5">Coupon <span className="font-mono font-bold">{couponCode}</span> consumed. Verification is in progress.</p>
+                                </div>
+                            </div>
+                        ) : (couponResult?.valid || couponResult?.success) && lead?.coupon_status === 'reserved' ? (
+                            /* ── Coupon Reserved ──────────────────────── */
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                                    <Shield className="w-5 h-5 text-blue-600 flex-shrink-0" />
+                                    <div className="flex-1">
+                                        <p className="text-sm font-bold text-blue-800">
+                                            Coupon Reserved: <span className="font-mono">{couponCode}</span>
+                                        </p>
+                                        {couponResult.discount_amount > 0 && (
+                                            <p className="text-xs text-blue-600 mt-0.5">Discount: ₹{couponResult.discount_amount} off (Final: ₹{couponResult.final_amount})</p>
+                                        )}
+                                        <p className="text-xs text-blue-500 mt-0.5">This coupon is locked to this lead. Click Submit to start verification.</p>
+                                    </div>
+                                    <button
+                                        onClick={handleReleaseCoupon}
+                                        disabled={releasingCoupon}
+                                        className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-50 transition-all disabled:opacity-50 flex items-center gap-1.5"
+                                    >
+                                        {releasingCoupon ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                                        Change Coupon
+                                    </button>
+                                </div>
+                                <button
+                                    onClick={handleSubmitForVerification}
+                                    disabled={submitting}
+                                    className="w-full px-6 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                    {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                                    Submit for Verification
+                                </button>
+                            </div>
+                        ) : (
+                            /* ── Enter Coupon Code ────────────────────── */
+                            <div className="space-y-3">
+                                <p className="text-xs text-gray-500">Enter your verification coupon code to proceed. Each coupon allows one KYC verification.</p>
+                                <div className="flex items-center gap-3">
+                                    <input
+                                        type="text"
+                                        value={couponCode}
+                                        onChange={e => setCouponCode(e.target.value.toUpperCase())}
+                                        placeholder="Enter coupon code (e.g., ITARANG-FREE)"
+                                        maxLength={20}
+                                        className="flex-1 h-11 px-4 bg-white border-2 border-[#EBEBEB] rounded-xl outline-none text-sm font-mono focus:border-[#1D4ED8] transition-all"
+                                    />
+                                    <button
+                                        onClick={handleValidateCoupon}
+                                        disabled={couponValidating || !couponCode.trim()}
+                                        className="px-6 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2"
+                                    >
+                                        {couponValidating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+                                        Validate
+                                    </button>
+                                </div>
+                                {couponResult && couponResult.already_used && (
+                                    <div className="px-4 py-2 bg-amber-50 border border-amber-200 rounded-xl">
+                                        <p className="text-sm font-medium text-amber-700">
+                                            <AlertCircle className="w-4 h-4 inline mr-1" />
+                                            Coupon <span className="font-mono font-bold">{couponResult.coupon_code}</span> is already applied to this lead.
+                                        </p>
+                                    </div>
+                                )}
+                                {couponResult && !couponResult.valid && !couponResult.success && (
+                                    <div className="px-4 py-2 bg-red-50 border border-red-200 rounded-xl">
+                                        <p className="text-sm font-medium text-red-700">
+                                            <AlertCircle className="w-4 h-4 inline mr-1" />
+                                            {couponResult.message || 'Invalid coupon code'}
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </SectionCard>
+
+                    {/* Hidden file input for verification re-uploads */}
+                    <input
+                        ref={reuploadInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/jpg,application/pdf"
+                        className="hidden"
+                        onChange={handleReuploadFile}
+                    />
+
+                    {/* ─── Verification Status ────────────────────────── */}
                     {verifications.length > 0 && (
-                        <SectionCard title="Verification Status" icon={<Shield className="w-5 h-5 text-[#0047AB]" />}>
+                        <SectionCard title="Verification Status (Customer)">
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead>
                                         <tr className="border-b border-gray-100">
-                                            <th className="text-left py-3 px-4 font-bold text-gray-500 text-xs uppercase">Check</th>
-                                            <th className="text-left py-3 px-4 font-bold text-gray-500 text-xs uppercase">Status</th>
-                                            <th className="text-left py-3 px-4 font-bold text-gray-500 text-xs uppercase">Last Update</th>
-                                            <th className="text-left py-3 px-4 font-bold text-gray-500 text-xs uppercase">Action</th>
-                                            <th className="text-left py-3 px-4 font-bold text-gray-500 text-xs uppercase">Reason</th>
+                                            <th className="text-left py-3 px-3 font-bold text-gray-900">Check</th>
+                                            <th className="text-left py-3 px-3 font-bold text-gray-900">Status</th>
+                                            <th className="text-left py-3 px-3 font-bold text-gray-900">Last Update</th>
+                                            <th className="text-left py-3 px-3 font-bold text-gray-900">Action</th>
+                                            <th className="text-left py-3 px-3 font-bold text-gray-900">Failed Reason</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {verifications.map(v => (
-                                            <tr key={v.type} className="border-b border-gray-50 hover:bg-gray-50/50">
-                                                <td className="py-3 px-4 font-medium text-gray-900">{v.label}</td>
-                                                <td className="py-3 px-4"><StatusBadge status={v.status} /></td>
-                                                <td className="py-3 px-4 text-gray-500 text-xs">{v.last_update || '-'}</td>
-                                                <td className="py-3 px-4">
-                                                    {v.status === 'failed' && (
-                                                        <label className="flex items-center gap-1 text-xs font-bold text-[#0047AB] cursor-pointer hover:underline">
-                                                            <RefreshCw className="w-3 h-3" /> Re-upload
-                                                            <input type="file" className="hidden" accept="image/*,application/pdf"
-                                                                onChange={async e => {
-                                                                    if (!e.target.files?.[0]) return;
-                                                                    const formData = new FormData();
-                                                                    formData.append('file', e.target.files[0]);
-                                                                    formData.append('verificationType', v.type);
-                                                                    try {
-                                                                        const res = await fetch(`/api/kyc/${leadId}/re-upload`, { method: 'POST', body: formData });
-                                                                        const data = await res.json();
-                                                                        if (data.success) setVerifications(prev => prev.map(x => x.type === v.type ? { ...x, status: 'awaiting_action', failed_reason: null } : x));
-                                                                    } catch { setApiError('Re-upload failed'); }
-                                                                }} />
-                                                        </label>
+                                        {verifications.map((v, i) => (
+                                            <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50">
+                                                <td className="py-3 px-3 font-medium text-gray-900">{v.label}</td>
+                                                <td className="py-3 px-3"><StatusBadge status={v.status} /></td>
+                                                <td className="py-3 px-3 text-gray-500 text-xs">
+                                                    {v.last_update ? new Date(v.last_update).toLocaleString() : '-'}
+                                                </td>
+                                                <td className="py-3 px-3">
+                                                    {v.status === 'success' || v.status === 'verified' ? (
+                                                        <span className="text-green-600 font-bold text-xs">Verified</span>
+                                                    ) : (v.status === 'failed' || v.status === 'awaiting_action') ? (
+                                                        <button
+                                                            onClick={() => triggerReupload(v.type)}
+                                                            disabled={reuploading && reuploadType === v.type}
+                                                            className="text-xs font-bold text-[#0047AB] hover:underline flex items-center gap-1 disabled:opacity-50"
+                                                        >
+                                                            {reuploading && reuploadType === v.type ? (
+                                                                <><Loader2 className="w-3 h-3 animate-spin" /> Uploading...</>
+                                                            ) : (
+                                                                <><Upload className="w-3 h-3" /> Re-upload</>
+                                                            )}
+                                                        </button>
+                                                    ) : (
+                                                        <span className="text-gray-400 text-xs">—</span>
                                                     )}
                                                 </td>
-                                                <td className="py-3 px-4 text-red-500 text-xs">{v.failed_reason || '-'}</td>
+                                                <td className="py-3 px-3 text-xs text-red-600">{v.failed_reason || '-'}</td>
                                             </tr>
                                         ))}
                                     </tbody>
                                 </table>
                             </div>
+
+                            <div className="mt-4 flex items-center gap-4 text-xs">
+                                <span className="font-bold text-gray-500">Consent:</span>
+                                <ConsentStatusBadge status={consentStatus} />
+                            </div>
                         </SectionCard>
                     )}
-
-                    {/* ═══════════════════════════════════════════════════════════
-                        SECTION 8: COMPARISON + VALIDATION TABLE
-                       ═══════════════════════════════════════════════════════════ */}
-                    {(Object.keys(uploadedDocs).length > 0 || Object.keys(manualFields).some(k => manualFields[k]) || bankManualFields.account_holder_name) && (() => {
-                        const rows = buildComparisonRows();
-                        const summary = getComparisonSummary(rows);
-                        const hasData = rows.some(r => r.step1Value || r.ocrValue || r.manualValue);
-                        if (!hasData) return null;
-                        return (
-                            <SectionCard title="Comparison & Validation Summary" icon={<Table2 className="w-5 h-5 text-[#0047AB]" />}>
-                                {/* Summary badges */}
-                                <div className="flex gap-4 mb-4">
-                                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 rounded-full text-xs font-bold text-green-700">
-                                        <CheckCircle2 className="w-3.5 h-3.5" /> {summary.matched} Matched
-                                    </div>
-                                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 border border-red-200 rounded-full text-xs font-bold text-red-700">
-                                        <XCircle className="w-3.5 h-3.5" /> {summary.mismatched} Mismatched
-                                    </div>
-                                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-full text-xs font-bold text-gray-500">
-                                        <Clock className="w-3.5 h-3.5" /> {summary.pending} Pending
-                                    </div>
-                                </div>
-
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm">
-                                        <thead>
-                                            <tr className="border-b-2 border-gray-200">
-                                                <th className="text-left py-2.5 px-3 text-[10px] font-black text-gray-500 uppercase">Field</th>
-                                                <th className="text-left py-2.5 px-3 text-[10px] font-black text-gray-500 uppercase">Step 1 Value</th>
-                                                <th className="text-left py-2.5 px-3 text-[10px] font-black text-gray-500 uppercase">OCR / API</th>
-                                                <th className="text-left py-2.5 px-3 text-[10px] font-black text-gray-500 uppercase">Manual</th>
-                                                <th className="text-left py-2.5 px-3 text-[10px] font-black text-gray-500 uppercase">Final Value</th>
-                                                <th className="text-left py-2.5 px-3 text-[10px] font-black text-gray-500 uppercase">Status</th>
-                                                <th className="text-left py-2.5 px-3 text-[10px] font-black text-gray-500 uppercase">Source</th>
-                                                <th className="text-left py-2.5 px-3 text-[10px] font-black text-gray-500 uppercase">Remarks</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {rows.map(r => (
-                                                <tr key={r.field} className={`border-b border-gray-50 ${
-                                                    r.matchStatus === 'mismatch' ? 'bg-red-50/50' : r.matchStatus === 'match' ? 'bg-green-50/30' : ''
-                                                }`}>
-                                                    <td className="py-2.5 px-3 font-medium text-gray-900 text-xs">{r.label}</td>
-                                                    <td className="py-2.5 px-3 text-gray-700 font-mono text-[11px]">{r.step1Value || <span className="text-gray-300 italic">-</span>}</td>
-                                                    <td className="py-2.5 px-3 text-gray-700 font-mono text-[11px]">{r.ocrValue || <span className="text-gray-300 italic">-</span>}</td>
-                                                    <td className="py-2.5 px-3 text-gray-700 font-mono text-[11px]">{r.manualValue || <span className="text-gray-300 italic">-</span>}</td>
-                                                    <td className="py-2.5 px-3 text-gray-900 font-mono text-[11px] font-bold">{r.finalValue || <span className="text-gray-300 italic">-</span>}</td>
-                                                    <td className="py-2.5 px-3">
-                                                        {r.matchStatus === 'match' ? (
-                                                            <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-green-100 text-green-700">Match</span>
-                                                        ) : r.matchStatus === 'mismatch' ? (
-                                                            <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-red-100 text-red-700">Mismatch</span>
-                                                        ) : (
-                                                            <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-gray-100 text-gray-500">Pending</span>
-                                                        )}
-                                                    </td>
-                                                    <td className="py-2.5 px-3 text-gray-500 text-[11px]">{r.source}</td>
-                                                    <td className="py-2.5 px-3 text-xs">
-                                                        {r.remarks && <span className="text-amber-600 font-medium">{r.remarks}</span>}
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </SectionCard>
-                        );
-                    })()}
                 </main>
 
-                {/* ═══════════════════════════════════════════════════════════
-                    STICKY FOOTER
-                   ═══════════════════════════════════════════════════════════ */}
-                <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-50">
-                    <div className="max-w-[1200px] mx-auto px-6 py-4 flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                            <button onClick={() => router.push('/dealer-portal/leads')}
-                                className="px-5 py-2.5 border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50 flex items-center gap-2">
-                                <ChevronLeft className="w-4 h-4" /> Back
-                            </button>
-                            {lastSaved && <span className="text-xs text-gray-400">{lastSaved}</span>}
-                            <button onClick={() => handleSaveDraft(false)} disabled={saving}
-                                className="px-5 py-2.5 border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50 disabled:opacity-40 flex items-center gap-2">
-                                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                                Save Draft
-                            </button>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <button onClick={handleSaveAndNext} disabled={saving || submitted}
-                                className="px-8 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold disabled:opacity-40 hover:bg-[#003580] flex items-center gap-2">
-                                Save & Next <ArrowRight className="w-4 h-4" />
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                {/* ─── Bottom Bar ────────────────────────────────────── */}
+                <StickyBottomBar lastSaved={lastSaved}>
+                    <OutlineButton onClick={() => router.push('/dealer-portal/leads')}>Back</OutlineButton>
+                    <SecondaryButton onClick={() => handleSaveDraft(false)} loading={savingDraft}>Save Draft</SecondaryButton>
+                    <PrimaryButton onClick={handleSaveAndNext} loading={submitting} disabled={submitting}>
+                        Next <ChevronRight className="w-4 h-4" />
+                    </PrimaryButton>
+                </StickyBottomBar>
             </div>
-        </div>
-    );
-}
-
-// ── Sub-Components ───────────────────────────────────────────────────────────
-
-function SectionCard({ title, icon, children, disabled, disabledMessage }: {
-    title: string; icon?: React.ReactNode; children: React.ReactNode;
-    disabled?: boolean; disabledMessage?: string;
-}) {
-    return (
-        <div className={`bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden ${disabled ? 'opacity-50' : ''}`}>
-            <div className="px-6 py-4 border-b border-gray-50 flex items-center gap-3">
-                {icon}
-                <h3 className="text-base font-black text-gray-900">{title}</h3>
-            </div>
-            <div className="px-6 py-5 relative">
-                {disabled && (
-                    <div className="absolute inset-0 bg-white/60 z-10 flex items-center justify-center">
-                        <div className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-bold">
-                            {disabledMessage || 'Section locked'}
-                        </div>
-                    </div>
-                )}
-                {children}
-            </div>
-        </div>
-    );
-}
-
-function DocumentCard({ label, required, uploaded, verificationStatus, failedReason, ocrFailed, uploading, onUpload, onManualEntry }: {
-    label: string; required: boolean; uploaded: boolean;
-    verificationStatus?: VerificationStatus; failedReason?: string;
-    ocrFailed?: boolean; uploading?: boolean;
-    onUpload: (file: File) => void; onManualEntry: () => void;
-}) {
-    return (
-        <div className={`p-4 rounded-xl border-2 transition-all ${
-            uploaded && verificationStatus === 'in_progress' ? 'border-green-200 bg-green-50/50'
-                : uploaded && verificationStatus === 'failed' ? 'border-red-200 bg-red-50/50'
-                    : uploaded ? 'border-blue-200 bg-blue-50/50'
-                        : 'border-dashed border-gray-200 hover:border-[#0047AB]'
-        }`}>
-            <div className="flex items-start justify-between mb-3">
-                <span className="text-xs font-bold text-gray-900">{label}</span>
-                {required && <span className="text-[9px] font-bold text-red-500 uppercase">Required</span>}
-            </div>
-
-            {uploading ? (
-                <div className="flex flex-col items-center py-4">
-                    <Loader2 className="w-6 h-6 animate-spin text-[#0047AB] mb-2" />
-                    <span className="text-[10px] text-gray-400">Uploading...</span>
-                </div>
-            ) : uploaded ? (
-                <div className="space-y-2">
-                    <div className="flex items-center gap-1.5">
-                        {verificationStatus === 'in_progress' ? <CheckCircle2 className="w-4 h-4 text-green-500" />
-                            : verificationStatus === 'failed' ? <XCircle className="w-4 h-4 text-red-500" />
-                                : <Clock className="w-4 h-4 text-amber-500" />}
-                        <span className="text-[10px] font-bold text-gray-600 capitalize">{verificationStatus?.replace(/_/g, ' ')}</span>
-                    </div>
-                    {failedReason && <p className="text-[10px] text-red-500 line-clamp-2">{failedReason}</p>}
-                    <div className="flex gap-2">
-                        <label className="text-[10px] font-bold text-[#0047AB] cursor-pointer hover:underline flex items-center gap-0.5">
-                            <RefreshCw className="w-3 h-3" /> Re-upload
-                            <input type="file" className="hidden" accept="image/*,application/pdf" onChange={e => e.target.files?.[0] && onUpload(e.target.files[0])} />
-                        </label>
-                        {ocrFailed && (
-                            <button onClick={onManualEntry} className="text-[10px] font-bold text-amber-600 hover:underline flex items-center gap-0.5">
-                                <FileText className="w-3 h-3" /> Manual
-                            </button>
-                        )}
-                    </div>
-                </div>
-            ) : (
-                <label className="flex flex-col items-center py-4 cursor-pointer group">
-                    <Upload className="w-6 h-6 text-gray-300 group-hover:text-[#0047AB] transition-colors mb-2" />
-                    <span className="text-[10px] font-bold text-gray-400 group-hover:text-[#0047AB]">Click to upload</span>
-                    <span className="text-[9px] text-gray-300 mt-0.5">PNG, JPEG, PDF (max 5MB)</span>
-                    <input type="file" className="hidden" accept="image/*,application/pdf" onChange={e => e.target.files?.[0] && onUpload(e.target.files[0])} />
-                </label>
-            )}
-        </div>
-    );
-}
-
-function StatusBadge({ status }: { status: VerificationStatus }) {
-    const cfg: Record<string, { bg: string; text: string; label: string }> = {
-        pending: { bg: 'bg-gray-100', text: 'text-gray-600', label: 'Pending' },
-        initiating: { bg: 'bg-blue-50', text: 'text-blue-600', label: 'Initiating' },
-        awaiting_action: { bg: 'bg-amber-50', text: 'text-amber-600', label: 'Awaiting' },
-        in_progress: { bg: 'bg-blue-50', text: 'text-blue-600', label: 'In Progress' },
-        success: { bg: 'bg-green-50', text: 'text-green-600', label: 'Success' },
-        failed: { bg: 'bg-red-50', text: 'text-red-600', label: 'Failed' },
-    };
-    const c = cfg[status] || cfg.pending;
-    return <span className={`px-3 py-1 rounded-full text-[10px] font-bold ${c.bg} ${c.text}`}>{c.label}</span>;
-}
-
-function InputField({ label, value, onChange, placeholder, type = 'text', maxLength, mono, upper, error }: {
-    label: string; value: string; onChange: (v: string) => void;
-    placeholder?: string; type?: string; maxLength?: number; mono?: boolean; upper?: boolean; error?: string;
-}) {
-    return (
-        <div className="space-y-1">
-            <label className="text-xs font-bold text-gray-700">{label}</label>
-            <input
-                type={type} value={value} onChange={e => onChange(upper ? e.target.value.toUpperCase() : e.target.value)}
-                placeholder={placeholder} maxLength={maxLength}
-                className={`w-full h-10 px-3 bg-white border-2 rounded-xl text-sm outline-none focus:border-[#1D4ED8] ${mono ? 'font-mono' : ''} ${upper ? 'uppercase' : ''} ${error ? 'border-red-400' : 'border-[#EBEBEB]'}`}
-            />
-            {error && <p className="text-[10px] text-red-500 font-bold">{error}</p>}
         </div>
     );
 }

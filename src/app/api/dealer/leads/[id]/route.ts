@@ -1,8 +1,8 @@
 import { db } from '@/lib/db';
-import { leads, personalDetails, auditLogs } from '@/lib/db/schema';
+import { leads, personalDetails, auditLogs, kycDocuments, kycVerifications, consentRecords } from '@/lib/db/schema';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { z } from 'zod';
 
 const updateSchema = z.object({
@@ -17,6 +17,7 @@ const updateSchema = z.object({
     product_category_id: z.string().optional().nullable(),
     product_type_id: z.string().optional().nullable(),
     interest_level: z.enum(['hot', 'warm', 'cold']).optional().nullable(),
+    payment_method: z.string().optional().nullable(),
     vehicle_rc: z.string().optional().nullable(),
     vehicle_ownership: z.string().optional().nullable(),
     vehicle_owner_name: z.string().optional().nullable(),
@@ -33,9 +34,9 @@ const normalizePhone = (phone?: string | null) => {
     return phone.startsWith('+') ? phone : `+91${clean}`;
 };
 
-export const PATCH = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
+export const PATCH = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['dealer']);
-    const { id } = params;
+    const { id } = await params;
     const body = await req.json();
 
     const result = updateSchema.safeParse(body);
@@ -51,7 +52,10 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
     }
 
     if (!lead) return errorResponse('Lead not found', 404);
-    if (lead.uploader_id !== user.id) return errorResponse('Forbidden: You do not have permission to edit this lead', 403);
+    // Allow edit if user is the uploader OR if the lead belongs to the same dealer
+    const isOwner = lead.uploader_id === user.id;
+    const isSameDealer = user.dealer_id && lead.dealer_id === user.dealer_id;
+    if (!isOwner && !isSameDealer) return errorResponse('Forbidden: You do not have permission to edit this lead', 403);
 
     if (data.commitStep) {
         if (!data.full_name || data.full_name.trim().length < 2) return errorResponse('Full name required', 400);
@@ -88,7 +92,7 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
             if (data.vehicle_rc !== undefined) leadUpdates.vehicle_rc = data.vehicle_rc?.toUpperCase().trim();
             if (data.vehicle_owner_phone !== undefined) leadUpdates.vehicle_owner_phone = normalizePhone(data.vehicle_owner_phone);
 
-            const fields = ['father_or_husband_name', 'current_address', 'permanent_address', 'is_current_same', 'primary_product_id', 'product_category_id', 'product_type_id', 'vehicle_ownership', 'vehicle_owner_name', 'interested_in'];
+            const fields = ['father_or_husband_name', 'current_address', 'permanent_address', 'is_current_same', 'primary_product_id', 'product_category_id', 'product_type_id', 'vehicle_ownership', 'vehicle_owner_name', 'interested_in', 'payment_method'];
             fields.forEach(f => {
                 if ((data as any)[f] !== undefined) leadUpdates[f] = (data as any)[f];
             });
@@ -121,5 +125,68 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
     } catch (err) {
         console.error("Lead update failed:", err);
         return errorResponse("Something went wrong while updating the lead. Please try again.", 500);
+    }
+});
+
+export const DELETE = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
+    const user = await requireRole(['dealer']);
+    const { id } = await params;
+
+    const [lead] = await db.select().from(leads).where(eq(leads.id, id)).limit(1);
+
+    if (!lead) return errorResponse('Lead not found', 404);
+    if (lead.uploader_id !== user.id) return errorResponse('Forbidden: You can only delete your own leads', 403);
+
+    try {
+        await db.transaction(async (tx) => {
+            // approvals reference deals via (entity_type, entity_id) — clear those first,
+            // since the approvals table has no lead_id column.
+            await tx.execute(sql`
+                DELETE FROM approvals
+                WHERE entity_type = 'deal'
+                  AND entity_id IN (SELECT id FROM deals WHERE lead_id = ${id})
+            `);
+
+            await tx.execute(sql`DELETE FROM kyc_documents WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM kyc_verifications WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM consent_records WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM personal_details WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM co_borrower_documents WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM co_borrowers WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM admin_kyc_reviews WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM other_document_requests WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM loan_offers WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM loan_applications WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM loan_files WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM facilitation_payments WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM lead_assignments WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM assignment_change_logs WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM deals WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM bolna_calls WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM ai_call_logs WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM call_records WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM deployed_assets WHERE lead_id = ${id}`);
+            await tx.execute(sql`UPDATE coupon_codes SET reserved_for_lead_id = NULL WHERE reserved_for_lead_id = ${id}`);
+            await tx.execute(sql`UPDATE coupon_codes SET used_by_lead_id = NULL WHERE used_by_lead_id = ${id}`);
+            await tx.execute(sql`UPDATE coupon_audit_log SET lead_id = NULL WHERE lead_id = ${id}`);
+            await tx.execute(sql`UPDATE scraped_dealer_leads SET converted_lead_id = NULL WHERE converted_lead_id = ${id}`);
+
+            await tx.insert(auditLogs).values({
+                id: `AUDIT-${Date.now()}`,
+                entity_type: 'lead',
+                entity_id: id,
+                action: 'LEAD_DELETED',
+                changes: { deleted_by: user.id, lead_name: lead.full_name || lead.owner_name },
+                performed_by: user.id,
+                timestamp: new Date(),
+            });
+
+            await tx.delete(leads).where(eq(leads.id, id));
+        });
+
+        return successResponse({ success: true, message: 'Lead deleted successfully' });
+    } catch (err) {
+        console.error("Lead delete failed:", err);
+        return errorResponse("Failed to delete lead. Please try again.", 500);
     }
 });

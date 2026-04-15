@@ -58,3 +58,16 @@ export type NewScraperRun = InferInsertModel<typeof schema.scraperRuns>;
 export type ScrapedDealerLead = InferSelectModel<typeof schema.scrapedDealerLeads>;
 export type NewScrapedDealerLead = InferInsertModel<typeof schema.scrapedDealerLeads>;
 export type ScraperDedupLog = InferSelectModel<typeof schema.scraperDedupLogs>;
+
+// KYC
+export type KycDocument = InferSelectModel<typeof schema.kycDocuments>;
+export type NewKycDocument = InferInsertModel<typeof schema.kycDocuments>;
+export type KycVerification = InferSelectModel<typeof schema.kycVerifications>;
+
+// Consent
+export type ConsentRecord = InferSelectModel<typeof schema.consentRecords>;
+export type NewConsentRecord = InferInsertModel<typeof schema.consentRecords>;
+
+// Admin KYC Review
+export type AdminKycReview = InferSelectModel<typeof schema.adminKycReviews>;
+export type NewAdminKycReview = InferInsertModel<typeof schema.adminKycReviews>;

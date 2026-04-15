@@ -1,473 +1,785 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Plus, X, AlertCircle, Scan, Info, ChevronRight, ChevronDown, Loader2, ShieldCheck, UserPlus, ArrowRight } from 'lucide-react';
+import { useAuth } from '@/components/auth/AuthProvider';
+import { DatePicker } from '@/components/ui/date-picker';
 import {
-  ChevronLeft,
-  Loader2,
-  User,
-  Phone,
-  Store,
-  MapPin,
-  Globe,
-  Tag,
-  CheckCircle2,
-  AlertCircle,
-  Sparkles,
-} from "lucide-react";
-import Link from "next/link";
+    SectionCard, InputField, SelectField, TextAreaField,
+    ProgressHeader, StickyBottomBar, ErrorBanner,
+    PrimaryButton, OutlineButton, OCRModal, FullPageLoader,
+} from '@/components/dealer-portal/lead-wizard/shared';
+import {
+    INTEREST_LEVELS, PAYMENT_METHODS, VEHICLE_OWNERSHIP_OPTIONS,
+    VEHICLE_CATEGORIES, isFinanceMethod,
+} from '@/components/dealer-portal/lead-wizard/constants';
 
-// ─── Constants ────────────────────────────────────────────────
+const emptyFormData = {
+    full_name: '',
+    phone: '',
+    father_or_husband_name: '',
+    dob: '',
+    current_address: '',
+    permanent_address: '',
+    is_current_same: false,
+    product_category_id: '',
+    product_type_id: '',
+    primary_product_id: '',
+    interested_in: [] as string[],
+    vehicle_rc: '',
+    vehicle_ownership: '',
+    vehicle_owner_name: '',
+    vehicle_owner_phone: '',
+    interest_level: 'hot',
+    payment_method: 'other_finance',
+    asset_model: '',
+    asset_model_label: '',
+    is_vehicle_category: false,
+};
 
-const LANGUAGES = [
-  { label: "Hindi",     value: "hindi" },
-  { label: "English",   value: "english" },
-  { label: "Hinglish",  value: "hinglish" },
-  { label: "Marathi",   value: "marathi" },
-  { label: "Gujarati",  value: "gujarati" },
-  { label: "Punjabi",   value: "punjabi" },
-  { label: "Telugu",    value: "telugu" },
-  { label: "Tamil",     value: "tamil" },
-];
+function NewLeadWizardContent() {
+    const router = useRouter();
+    const searchParams = useSearchParams();
+    const fromScraped = searchParams.get('from_scraped');
+    const prefillName = searchParams.get('name');
+    const prefillPhone = searchParams.get('phone');
+    const { user } = useAuth();
 
-const STATUSES: {
-  value: string;
-  label: string;
-  color: string;
-  ring: string;
-  dot: string;
-}[] = [
-  { value: "new",          label: "New",          color: "bg-gray-100 text-gray-700",     ring: "ring-gray-300",   dot: "bg-gray-400" },
-  { value: "cold",         label: "Cold",         color: "bg-blue-50 text-blue-700",      ring: "ring-blue-400",   dot: "bg-blue-400" },
-  { value: "warm",         label: "Warm",         color: "bg-amber-50 text-amber-700",    ring: "ring-amber-400",  dot: "bg-amber-400" },
-  { value: "hot",          label: "Hot",          color: "bg-red-50 text-red-700",        ring: "ring-red-400",    dot: "bg-red-500" },
-  { value: "contacted",    label: "Contacted",    color: "bg-purple-50 text-purple-700",  ring: "ring-purple-400", dot: "bg-purple-500" },
-  { value: "interested",   label: "Interested",   color: "bg-emerald-50 text-emerald-700",ring: "ring-emerald-400",dot: "bg-emerald-500" },
-  { value: "disqualified", label: "Disqualified", color: "bg-zinc-100 text-zinc-600",     ring: "ring-zinc-400",   dot: "bg-zinc-400" },
-  { value: "stop",         label: "Stop",         color: "bg-red-100 text-red-800",       ring: "ring-red-600",    dot: "bg-red-600" },
-];
+    const [leadId, setLeadId] = useState<string | null>(null);
+    const [referenceId, setReferenceId] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [initLoading, setInitLoading] = useState(true);
+    const [lastSaved, setLastSaved] = useState<string | null>(null);
+    const [isModified, setIsModified] = useState(false);
 
-// ─── Main Page ────────────────────────────────────────────────
+    const [formData, setFormData] = useState<any>(emptyFormData);
+    const [additionalProducts, setAdditionalProducts] = useState<{ category_id: string; product_id: string; category_name: string }[]>([]);
+    const [outOfStockProducts, setOutOfStockProducts] = useState<string[]>([]);
 
-export default function NewDealerLeadPage() {
-  const router = useRouter();
-  const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [apiError, setApiError] = useState("");
+    const [errors, setErrors] = useState<Record<string, string>>({});
+    const [apiError, setApiError] = useState<string | null>(null);
+    const [duplicateMatch, setDuplicateMatch] = useState<any>(null);
+    const [categories, setCategories] = useState<any[]>([]);
+    const [products, setProducts] = useState<any[]>([]);
+    const [showOCR, setShowOCR] = useState(false);
+    const [showHelp, setShowHelp] = useState(false);
+    const [showConfirm, setShowConfirm] = useState(false);
+    const [showDraftPrompt, setShowDraftPrompt] = useState(false);
+    const [hasDraft, setHasDraft] = useState(false);
 
-  const [form, setForm] = useState({
-    dealer_name: "",
-    phone: "",
-    shop_name: "",
-    location: "",
-    language: "hinglish",
-    current_status: "new",
-  });
+    // ─── Draft Init ─────────────────────────────────────────────────────────
 
-  const update = (field: string, value: string) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
-    setErrors((prev) => { const n = { ...prev }; delete n[field]; return n; });
-    setApiError("");
-  };
-
-  const validate = () => {
-    const e: Record<string, string> = {};
-    if (!form.dealer_name.trim())
-      e.dealer_name = "Dealer name is required";
-    if (!form.phone.trim())
-      e.phone = "Phone number is required";
-    else if (!/^\+?[0-9]{10,13}$/.test(form.phone.replace(/[\s-]/g, "")))
-      e.phone = "Enter a valid 10–13 digit phone number";
-    if (!form.location.trim())
-      e.location = "Location is required";
-    setErrors(e);
-    return Object.keys(e).length === 0;
-  };
-
-  const handleSubmit = async () => {
-    if (!validate()) return;
-    setLoading(true);
-    setApiError("");
-    try {
-      const res = await fetch("/api/dealer-leads", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          dealer_name: form.dealer_name.trim(),
-          phone: form.phone.trim(),
-          shop_name: form.shop_name.trim() || null,
-          location: form.location.trim(),
-          language: form.language,
-          current_status: form.current_status,
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setSuccess(true);
-        setTimeout(() => router.push("/leads"), 1200);
-      } else {
-        // Handle duplicate phone nicely
-        if (data.error?.includes("unique") || data.error?.includes("duplicate")) {
-          setErrors({ phone: "This phone number already exists in your leads" });
-        } else {
-          setApiError(data.error || "Failed to create lead. Please try again.");
+    const initDraft = async (fresh = false) => {
+        setInitLoading(true);
+        setApiError(null);
+        try {
+            const res = await fetch('/api/leads/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ initializeDraft: true, fresh })
+            });
+            const result = await res.json();
+            if (result.success) {
+                setLeadId(result.data.leadId);
+                setReferenceId(result.data.referenceId);
+                if (result.data.formData && !fresh) {
+                    const fd = result.data.formData;
+                    const hasData = fd.full_name || fd.phone || fd.dob || fd.father_or_husband_name;
+                    if (hasData && result.data.resumed) {
+                        setHasDraft(true);
+                        setShowDraftPrompt(true);
+                        setFormData((prev: any) => ({ ...prev, ...fd }));
+                        setLastSaved('Draft resumed');
+                    } else {
+                        setFormData((prev: any) => ({ ...prev, ...fd }));
+                    }
+                }
+            } else {
+                setApiError(result.error?.message || 'Initialization failed. Please retry.');
+            }
+        } catch {
+            setApiError('Connection lost. Please try again.');
+        } finally {
+            setInitLoading(false);
         }
-      }
-    } catch {
-      setApiError("Network error. Please check your connection and try again.");
-    } finally {
-      setLoading(false);
+    };
+
+    const handleStartFresh = async () => {
+        setShowDraftPrompt(false);
+        setFormData(emptyFormData);
+        setLeadId(null);
+        setReferenceId(null);
+        setIsModified(false);
+        setAdditionalProducts([]);
+        await initDraft(true);
+    };
+
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const fresh = params.get('fresh') === 'true';
+        initDraft(fresh);
+    }, []);
+
+    useEffect(() => {
+        if (prefillName || prefillPhone) {
+            setFormData((prev: any) => ({
+                ...prev,
+                full_name: prefillName || prev.full_name,
+                phone: prefillPhone || prev.phone,
+            }));
+        }
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ─── Categories & Products ──────────────────────────────────────────────
+
+    useEffect(() => {
+        fetch('/api/inventory/categories')
+            .then(r => r.json())
+            .then(d => {
+                console.log('[LeadWizard] categories response:', d);
+                if (d.success) setCategories(d.data);
+                else console.error('[LeadWizard] categories fetch failed:', d.error);
+            })
+            .catch(err => console.error('[LeadWizard] categories fetch error:', err));
+    }, []);
+
+    useEffect(() => {
+        if (formData.asset_model) {
+            fetch(`/api/inventory/products?category=${encodeURIComponent(formData.asset_model)}`)
+                .then(r => r.json())
+                .then(d => {
+                    if (d.success) {
+                        setProducts(d.data);
+                        setOutOfStockProducts(d.data.filter((p: any) => p.available_quantity === 0).map((p: any) => p.id));
+                    }
+                });
+        } else {
+            setProducts([]);
+            setOutOfStockProducts([]);
+        }
+    }, [formData.asset_model]);
+
+    // ─── Field Handlers ─────────────────────────────────────────────────────
+
+    const updateField = (field: string, value: any) => {
+        let fin = value;
+        if (['full_name', 'father_or_husband_name', 'vehicle_owner_name'].includes(field)) {
+            // Strip digits and other non-name characters; allow letters, spaces, dots, apostrophes, hyphens
+            const lettersOnly = String(value ?? '').replace(/[^A-Za-z\s.'-]/g, '');
+            fin = lettersOnly.split(' ').map((s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '')).join(' ');
+        }
+        if (['phone', 'vehicle_owner_phone'].includes(field)) {
+            // Strip all non-digits and cap at 10
+            fin = String(value ?? '').replace(/\D/g, '').slice(0, 10);
+        }
+        if (field === 'vehicle_rc') fin = value.toUpperCase();
+
+        setFormData((prev: any) => {
+            const next = { ...prev, [field]: fin };
+            if (field === 'is_current_same' && fin) next.permanent_address = next.current_address;
+            if (field === 'current_address' && next.is_current_same) next.permanent_address = fin;
+            return next;
+        });
+        setIsModified(true);
+        if (errors[field]) setErrors(prev => { const n = { ...prev }; delete n[field]; return n; });
+    };
+
+    const handlePhoneBlur = async () => {
+        if (!formData.phone || formData.phone.length < 10) return;
+        try {
+            const res = await fetch(`/api/leads/check-duplicate?phone=${encodeURIComponent(formData.phone)}`);
+            const data = await res.json();
+            setDuplicateMatch(data.success && data.data.length > 0 ? data.data[0] : null);
+        } catch { /* ignore */ }
+    };
+
+    const handleOCRResult = (data: any) => {
+        if (data.full_name) updateField('full_name', data.full_name);
+        if (data.father_or_husband_name) updateField('father_or_husband_name', data.father_or_husband_name);
+        if (data.phone) updateField('phone', data.phone);
+        if (data.dob) updateField('dob', data.dob);
+        if (data.current_address) updateField('current_address', data.current_address);
+        if (data.permanent_address) updateField('permanent_address', data.permanent_address);
+    };
+
+    // ─── Validation ─────────────────────────────────────────────────────────
+
+    const calculateAge = (dob: string) => {
+        if (!dob) return 0;
+        const birthDate = new Date(dob);
+        const today = new Date();
+        let age = today.getFullYear() - birthDate.getFullYear();
+        const m = today.getMonth() - birthDate.getMonth();
+        if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) age--;
+        return age;
+    };
+
+    const validate = () => {
+        const e: Record<string, string> = {};
+        const finFlow = isFinanceMethod(formData.payment_method);
+
+        const nameRegex = /^[A-Za-z\s.'-]+$/;
+        const phoneRegex = /^[0-9]{10}$/;
+
+        if (!formData.full_name || formData.full_name.trim().length < 2) e.full_name = 'Minimum 2 characters required';
+        else if (!nameRegex.test(formData.full_name.trim())) e.full_name = 'Only letters allowed';
+
+        if (finFlow && !formData.father_or_husband_name?.trim()) e.father_or_husband_name = 'Required for finance cases';
+        else if (formData.father_or_husband_name?.trim() && !nameRegex.test(formData.father_or_husband_name.trim())) e.father_or_husband_name = 'Only letters allowed';
+
+        if (!formData.phone) e.phone = 'Phone is required';
+        else if (!phoneRegex.test(formData.phone)) e.phone = 'Must be exactly 10 digits';
+
+        if (!formData.dob) e.dob = 'Required';
+        else if (calculateAge(formData.dob) < 18) e.dob = 'Must be 18+';
+        if (!formData.product_category_id) e.product_category_id = 'Required';
+        if (!formData.primary_product_id) e.primary_product_id = 'Required';
+        if (!formData.current_address || formData.current_address.trim().length < 20) e.current_address = 'Minimum 20 characters required';
+        if (formData.permanent_address && formData.permanent_address.trim().length < 20) e.permanent_address = 'Minimum 20 characters required';
+
+        const isVehicle = formData.is_vehicle_category;
+        if (isVehicle && formData.vehicle_rc?.trim()) {
+            if (!formData.vehicle_ownership) e.vehicle_ownership = 'Required';
+            if (!formData.vehicle_owner_name?.trim()) e.vehicle_owner_name = 'Required';
+            else if (!nameRegex.test(formData.vehicle_owner_name.trim())) e.vehicle_owner_name = 'Only letters allowed';
+            if (!formData.vehicle_owner_phone?.trim()) e.vehicle_owner_phone = 'Required';
+            else if (!phoneRegex.test(formData.vehicle_owner_phone)) e.vehicle_owner_phone = 'Must be exactly 10 digits';
+        }
+
+        setErrors(e);
+        return Object.keys(e).length === 0;
+    };
+
+    // ─── Submit ─────────────────────────────────────────────────────────────
+
+    const commitStep = () => {
+        if (!leadId) { setApiError('Lead draft not initialized. Please refresh.'); return; }
+        if (!validate()) return;
+        setShowConfirm(true);
+    };
+
+    const handleFinalConfirm = async () => {
+        setShowConfirm(false);
+        setLoading(true);
+        const leadScoreMap: Record<string, number> = { hot: 90, warm: 60, cold: 30 };
+
+        try {
+            const res = await fetch('/api/leads/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ...formData,
+                    leadId,
+                    commitStep: true,
+                    lead_score: leadScoreMap[formData.interest_level] || 30,
+                    additional_products: additionalProducts,
+                })
+            });
+            const result = await res.json();
+
+            if (result.success) {
+                const { leadId: updatedLeadId } = result.data;
+                if (fromScraped && updatedLeadId) {
+                    fetch(`/api/scraper/leads/${fromScraped}/convert`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ converted_lead_id: updatedLeadId }),
+                    }).catch(console.error);
+                }
+
+                if (formData.payment_method === 'cash' || formData.payment_method === 'upfront') {
+                    router.push('/dealer-portal/leads');
+                } else if (formData.interest_level === 'hot' && isFinanceMethod(formData.payment_method)) {
+                    router.push(`/dealer-portal/leads/${updatedLeadId}/kyc`);
+                } else {
+                    router.push('/dealer-portal/leads');
+                }
+            } else {
+                const details = result.error?.details?.map((d: any) => `${d.path}: ${d.message}`).join(', ');
+                setApiError(details ? `Validation error — ${details}` : (result.error?.message || 'Server Error'));
+            }
+        } catch {
+            setApiError('Connection failed. Please retry.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleCancel = async () => {
+        if (!isModified) { router.push('/dealer-portal'); return; }
+        if (confirm('Discard draft?')) {
+            if (leadId) await fetch(`/api/leads/draft/${leadId}`, { method: 'DELETE' }).catch(() => {});
+            router.push('/dealer-portal');
+        }
+    };
+
+    // ─── Loading States ─────────────────────────────────────────────────────
+
+    if (initLoading) return <FullPageLoader />;
+
+    if (!leadId && apiError) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-[#F8F9FB]">
+                <div className="text-center space-y-4">
+                    <AlertCircle className="w-12 h-12 text-red-500 mx-auto" />
+                    <p className="text-red-600 font-medium">{apiError}</p>
+                    <button onClick={() => initDraft()} className="px-6 py-2 bg-[#1D4ED8] text-white rounded-lg hover:bg-[#1E40AF]">Retry</button>
+                </div>
+            </div>
+        );
     }
-  };
 
-  // ── Success flash ──────────────────────────────────────────
-  if (success) {
+    const isVehicleCategory = formData.is_vehicle_category;
+    const finFlow = isFinanceMethod(formData.payment_method);
+
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-16 h-16 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-4 animate-bounce-once">
-            <CheckCircle2 className="w-8 h-8 text-emerald-500" />
-          </div>
-          <p className="text-base font-semibold text-gray-900">Lead Created!</p>
-          <p className="text-sm text-gray-500 mt-1">Redirecting to leads…</p>
-        </div>
-      </div>
-    );
-  }
-
-  const selectedStatus = STATUSES.find((s) => s.value === form.current_status);
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8">
-
-        {/* ── HEADER ─────────────────────────────────────────── */}
-        <div className="flex items-center gap-3 mb-8">
-          <Link
-            href="/leads"
-            className="p-2 hover:bg-white rounded-xl border border-transparent hover:border-gray-200 transition-all"
-          >
-            <ChevronLeft className="w-5 h-5 text-gray-600" />
-          </Link>
-          <div>
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight">New Dealer Lead</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Add a dealer to your outreach pipeline</p>
-          </div>
-        </div>
-
-        {/* ── API ERROR ───────────────────────────────────────── */}
-        {apiError && (
-          <div className="mb-5 flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl">
-            <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-            <p className="text-sm text-red-600">{apiError}</p>
-          </div>
-        )}
-
-        <div className="space-y-4">
-
-          {/* ── SECTION 1: Dealer Info ─────────────────────────── */}
-          <Section
-            icon={<User className="w-3.5 h-3.5 text-white" />}
-            title="Dealer Information"
-          >
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Dealer Name" required error={errors.dealer_name} className="sm:col-span-2">
-                <InputWithIcon icon={<User className="w-4 h-4" />} error={!!errors.dealer_name}>
-                  <input
-                    type="text"
-                    value={form.dealer_name}
-                    onChange={(e) => update("dealer_name", e.target.value)}
-                    placeholder="e.g. Ramesh Kumar"
-                    className={inputCls(!!errors.dealer_name)}
-                    autoComplete="off"
-                  />
-                </InputWithIcon>
-              </Field>
-
-              <Field label="Phone Number" required error={errors.phone} className="sm:col-span-2">
-                <InputWithIcon icon={<Phone className="w-4 h-4" />} error={!!errors.phone}>
-                  <input
-                    type="tel"
-                    value={form.phone}
-                    onChange={(e) => update("phone", e.target.value)}
-                    placeholder="+919876543210"
-                    className={inputCls(!!errors.phone)}
-                    autoComplete="off"
-                  />
-                </InputWithIcon>
-                <p className="text-xs text-gray-400 mt-1.5 ml-0.5">
-                  Include country code, e.g. +91XXXXXXXXXX
-                </p>
-              </Field>
-            </div>
-          </Section>
-
-          {/* ── SECTION 2: Shop Info ───────────────────────────── */}
-          <Section
-            icon={<Store className="w-3.5 h-3.5 text-white" />}
-            title="Shop Information"
-          >
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Shop Name" hint="Optional" className="sm:col-span-2">
-                <InputWithIcon icon={<Store className="w-4 h-4" />}>
-                  <input
-                    type="text"
-                    value={form.shop_name}
-                    onChange={(e) => update("shop_name", e.target.value)}
-                    placeholder="e.g. Ramesh Battery Shop"
-                    className={inputCls()}
-                    autoComplete="off"
-                  />
-                </InputWithIcon>
-              </Field>
-
-              <Field label="Location / City" required error={errors.location} className="sm:col-span-2">
-                <InputWithIcon icon={<MapPin className="w-4 h-4" />} error={!!errors.location}>
-                  <input
-                    type="text"
-                    value={form.location}
-                    onChange={(e) => update("location", e.target.value)}
-                    placeholder="e.g. Nashik, Maharashtra"
-                    className={inputCls(!!errors.location)}
-                    autoComplete="off"
-                  />
-                </InputWithIcon>
-              </Field>
-            </div>
-          </Section>
-
-          {/* ── SECTION 3: Lead Settings ───────────────────────── */}
-          <Section
-            icon={<Tag className="w-3.5 h-3.5 text-white" />}
-            title="Lead Settings"
-          >
-            <div className="space-y-6">
-
-              {/* Language */}
-              <div>
-                <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-600 mb-2.5">
-                  <Globe className="w-3.5 h-3.5" /> Preferred Language
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  {LANGUAGES.map((lang) => {
-                    const active = form.language === lang.value;
-                    return (
-                      <button
-                        key={lang.value}
-                        type="button"
-                        onClick={() => update("language", lang.value)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
-                          active
-                            ? "bg-gray-900 text-white border-gray-900 shadow-sm"
-                            : "bg-white text-gray-600 border-gray-200 hover:border-gray-400 hover:bg-gray-50"
-                        }`}
-                      >
-                        {lang.label}
-                      </button>
-                    );
-                  })}
+        <div className="min-h-screen bg-[#F8F9FB]">
+            {/* Draft Resume Modal */}
+            {showDraftPrompt && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-6 space-y-4">
+                        <h3 className="text-lg font-bold text-gray-900">Resume Previous Draft?</h3>
+                        <p className="text-sm text-gray-600">You have an unsaved lead draft. Would you like to continue where you left off?</p>
+                        <div className="flex gap-3">
+                            <button onClick={handleStartFresh} className="flex-1 px-4 py-2.5 border border-gray-300 rounded-xl font-medium text-gray-700 hover:bg-gray-50">Start Fresh</button>
+                            <button onClick={() => setShowDraftPrompt(false)} className="flex-1 px-4 py-2.5 bg-[#1D4ED8] text-white rounded-xl font-medium hover:bg-[#1E40AF]">Resume Draft</button>
+                        </div>
+                    </div>
                 </div>
-              </div>
-
-              {/* Status */}
-              <div>
-                <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-600 mb-2.5">
-                  <Sparkles className="w-3.5 h-3.5" /> Initial Status
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  {STATUSES.map((s) => {
-                    const active = form.current_status === s.value;
-                    return (
-                      <button
-                        key={s.value}
-                        type="button"
-                        onClick={() => update("current_status", s.value)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
-                          active
-                            ? `${s.color} ring-1 ${s.ring} border-transparent shadow-sm`
-                            : "bg-white text-gray-600 border-gray-200 hover:border-gray-300 hover:bg-gray-50"
-                        }`}
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full ${active ? s.dot : "bg-gray-300"}`} />
-                        {s.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                {selectedStatus && (
-                  <p className="text-xs text-gray-400 mt-2 ml-0.5">
-                    {statusHint(form.current_status)}
-                  </p>
-                )}
-              </div>
-            </div>
-          </Section>
-
-          {/* ── SUMMARY PILL ───────────────────────────────────── */}
-          {(form.dealer_name || form.phone || form.location) && (
-            <div className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center gap-3">
-              <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center shrink-0">
-                <Store className="w-4 h-4 text-gray-500" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-gray-900 truncate">
-                  {form.shop_name || form.dealer_name || "New Lead"}
-                </p>
-                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                  {form.dealer_name && (
-                    <span className="text-xs text-gray-500 flex items-center gap-1">
-                      <User className="w-3 h-3" />{form.dealer_name}
-                    </span>
-                  )}
-                  {form.location && (
-                    <span className="text-xs text-gray-400 flex items-center gap-1">
-                      <MapPin className="w-3 h-3" />{form.location}
-                    </span>
-                  )}
-                  {form.phone && (
-                    <span className="text-xs text-gray-400 flex items-center gap-1">
-                      <Phone className="w-3 h-3" />{form.phone}
-                    </span>
-                  )}
-                </div>
-              </div>
-              <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium shrink-0 ${selectedStatus?.color}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${selectedStatus?.dot}`} />
-                {selectedStatus?.label}
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* ── FOOTER ACTIONS ──────────────────────────────────── */}
-        <div className="flex items-center justify-between mt-6 pt-4">
-          <Link href="/leads">
-            <button
-              type="button"
-              className="px-5 py-2.5 text-sm font-medium text-gray-500 hover:text-gray-900 rounded-xl hover:bg-white border border-transparent hover:border-gray-200 transition-all"
-            >
-              Cancel
-            </button>
-          </Link>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={loading}
-            className="flex items-center gap-2 px-6 py-2.5 bg-gray-900 text-white text-sm font-medium rounded-xl hover:bg-gray-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Creating…
-              </>
-            ) : (
-              <>
-                <CheckCircle2 className="w-4 h-4" />
-                Create Lead
-              </>
             )}
-          </button>
+
+            {/* Confirmation Modal */}
+            {showConfirm && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+                        {/* Header gradient */}
+                        <div className="bg-gradient-to-r from-[#0047AB] to-[#1D4ED8] px-6 py-5">
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                                    <UserPlus className="w-5 h-5 text-white" />
+                                </div>
+                                <div>
+                                    <h3 className="text-lg font-bold text-white">Confirm Lead Creation</h3>
+                                    <p className="text-blue-100 text-xs mt-0.5">Reference: {referenceId || 'Generating...'}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Body */}
+                        <div className="px-6 py-5 space-y-4">
+                            {/* Summary card */}
+                            <div className="bg-gray-50 border border-gray-100 rounded-xl p-4 space-y-2.5">
+                                {formData.full_name && (
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs text-gray-500 font-medium">Customer</span>
+                                        <span className="text-sm font-semibold text-gray-900">{formData.full_name}</span>
+                                    </div>
+                                )}
+                                {formData.phone && (
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs text-gray-500 font-medium">Phone</span>
+                                        <span className="text-sm font-semibold text-gray-900">{formData.phone}</span>
+                                    </div>
+                                )}
+                                {formData.asset_model && (
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs text-gray-500 font-medium">Product</span>
+                                        <span className="text-sm font-semibold text-gray-900">{formData.product_name || formData.asset_model}</span>
+                                    </div>
+                                )}
+                                {formData.payment_method && (
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs text-gray-500 font-medium">Payment</span>
+                                        <span className="text-sm font-semibold text-gray-900 capitalize">{formData.payment_method?.replace(/_/g, ' ')}</span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Next step info */}
+                            <div className={`flex items-start gap-3 p-3 rounded-xl border ${
+                                formData.interest_level === 'hot' && finFlow
+                                    ? 'bg-emerald-50 border-emerald-200'
+                                    : 'bg-blue-50 border-blue-200'
+                            }`}>
+                                <ShieldCheck className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+                                    formData.interest_level === 'hot' && finFlow ? 'text-emerald-600' : 'text-blue-600'
+                                }`} />
+                                <p className={`text-xs leading-relaxed ${
+                                    formData.interest_level === 'hot' && finFlow ? 'text-emerald-700' : 'text-blue-700'
+                                }`}>
+                                    {formData.interest_level === 'hot' && finFlow
+                                        ? 'This lead will be created and you will proceed directly to KYC verification (Step 2).'
+                                        : 'This lead will be created and saved. You can initiate KYC later from the leads list.'}
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Footer */}
+                        <div className="px-6 pb-5 flex gap-3">
+                            <button
+                                onClick={() => setShowConfirm(false)}
+                                className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl font-semibold text-sm text-gray-600 hover:bg-gray-50 hover:border-gray-300 transition-all"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleFinalConfirm}
+                                disabled={loading}
+                                className="flex-1 px-4 py-3 bg-gradient-to-r from-[#0047AB] to-[#1D4ED8] text-white rounded-xl font-semibold text-sm hover:from-[#003580] hover:to-[#1E40AF] transition-all disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-blue-500/25"
+                            >
+                                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+                                {loading ? 'Creating...' : 'Create Lead'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Help Modal */}
+            {showHelp && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 p-6 space-y-4">
+                        <div className="flex justify-between items-start">
+                            <h3 className="text-lg font-bold text-gray-900">Help — Step 1</h3>
+                            <button onClick={() => setShowHelp(false)} className="p-1 hover:bg-gray-100 rounded-lg"><X className="w-5 h-5" /></button>
+                        </div>
+                        <div className="text-sm text-gray-600 space-y-3">
+                            <p><strong>Required fields</strong> are marked with a red asterisk (*). Father/Husband Name becomes required for finance cases.</p>
+                            <p><strong>Phone</strong> must be a valid 10-digit Indian mobile number. Duplicates are flagged but allowed.</p>
+                            <p><strong>Product Category</strong> determines available products and whether vehicle details are shown.</p>
+                            <p><strong>Hot leads</strong> with finance will proceed directly to KYC. Warm/Cold leads are saved for later follow-up.</p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* OCR Modal */}
+            <OCRModal open={showOCR} onClose={() => setShowOCR(false)} onResult={handleOCRResult} />
+
+            <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
+                {/* Header */}
+                <ProgressHeader
+                    title="Create New Lead"
+                    subtitle={`Reference ID: ${referenceId || '#IT-XXXX-XXXXXXX'}`}
+                    step={1}
+                    onBack={() => router.back()}
+                    rightAction={
+                        <div className="flex items-center gap-3">
+                            <button onClick={() => setShowHelp(true)} className="p-2 text-gray-400 hover:text-gray-600">
+                                <Info className="w-5 h-5" />
+                            </button>
+                            <button
+                                onClick={() => setShowOCR(true)}
+                                className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 rounded-xl font-bold text-sm text-gray-800 shadow-sm hover:border-[#1D4ED8] hover:text-[#1D4ED8] transition-all"
+                            >
+                                <Scan className="w-4 h-4" /> Auto-fill from ID
+                            </button>
+                        </div>
+                    }
+                />
+
+                {/* Error & Duplicate Banners */}
+                <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
+
+                {duplicateMatch && (
+                    <div className="mb-6 bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-start justify-between gap-4">
+                        <div>
+                            <p className="text-sm font-semibold text-amber-800">A lead with this phone number already exists</p>
+                            <p className="text-xs text-amber-700 mt-1">
+                                Existing lead: {duplicateMatch.owner_name || duplicateMatch.full_name || 'Unknown'} ({duplicateMatch.id || 'N/A'})
+                            </p>
+                        </div>
+                        <button onClick={() => router.push(`/dealer-portal/leads?new=${duplicateMatch.id}`)} className="px-3 py-2 rounded-lg bg-white border border-amber-300 text-xs font-bold text-amber-700 hover:bg-amber-100">
+                            View Existing Lead
+                        </button>
+                    </div>
+                )}
+
+                <main className="grid grid-cols-1 gap-6">
+                    {/* ─── Personal Information ──────────────────────────── */}
+                    <SectionCard title="Personal Information">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6">
+                            <InputField label="Full Name" value={formData.full_name} onChange={v => updateField('full_name', v)} error={errors.full_name} placeholder="Vijay Sharma" required />
+                            <InputField label={`Father/Husband Name${finFlow ? '' : ''}`} value={formData.father_or_husband_name} onChange={v => updateField('father_or_husband_name', v)} error={errors.father_or_husband_name} placeholder="Richard Doe" required={finFlow} />
+
+                            <div className="space-y-2">
+                                <label className="text-sm font-bold text-gray-900 px-1">Date of Birth <span className="text-red-500">*</span></label>
+                                <DatePicker value={formData.dob ?? ''} onChange={(v: string) => updateField('dob', v)} minAge={18} error={!!errors.dob} />
+                                {errors.dob && <p className="text-[10px] text-red-500 font-bold px-1">{errors.dob}</p>}
+                            </div>
+
+                            <InputField label="Phone Number" value={formData.phone} onChange={v => updateField('phone', v)} onBlur={handlePhoneBlur} error={errors.phone} placeholder="9876543210" required inputMode="numeric" maxLength={10} />
+
+                            <div className="md:col-span-2">
+                                <TextAreaField label="Current Address" value={formData.current_address} onChange={v => updateField('current_address', v)} error={errors.current_address} placeholder="123, Main Street, City, State - 123456" required />
+                            </div>
+
+                            <div className="md:col-span-2 space-y-2">
+                                <div className="flex items-center justify-between px-1">
+                                    <label className="text-sm font-bold text-gray-900">Permanent Address</label>
+                                    <label className="flex items-center gap-2 cursor-pointer group">
+                                        <input
+                                            type="checkbox"
+                                            checked={formData.is_current_same}
+                                            onChange={e => updateField('is_current_same', e.target.checked)}
+                                            className="w-4 h-4 rounded border-gray-300 text-[#0047AB] focus:ring-[#0047AB]"
+                                        />
+                                        <span className="text-xs font-medium text-gray-600">Same as current address</span>
+                                    </label>
+                                </div>
+                                <textarea
+                                    value={formData.permanent_address ?? ''}
+                                    disabled={formData.is_current_same}
+                                    onChange={e => updateField('permanent_address', e.target.value)}
+                                    placeholder="123, Main Street, City, State - 123456"
+                                    rows={2}
+                                    className={`w-full px-4 py-3 bg-white border-2 rounded-xl outline-none transition-all text-sm placeholder-gray-400 resize-none ${
+                                        formData.is_current_same ? 'bg-gray-50 border-[#F5F5F5] text-gray-400' :
+                                        errors.permanent_address ? 'border-red-400' :
+                                        'border-[#EBEBEB] focus:border-[#1D4ED8] focus:ring-4 focus:ring-blue-50/50'
+                                    }`}
+                                />
+                                {errors.permanent_address && <p className="text-[10px] text-red-500 font-bold px-1">{errors.permanent_address}</p>}
+                            </div>
+                        </div>
+                    </SectionCard>
+
+                    {/* ─── Product Details + Vehicle Details (side by side) ─ */}
+                    <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+                        {/* Product Details */}
+                        <div className="lg:col-span-2">
+                            <SectionCard title="Product Details">
+                                <div className="space-y-6">
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-gray-900 px-1">Product Category <span className="text-red-500">*</span></label>
+                                        <div className="relative">
+                                            <select
+                                                value={formData.asset_model ?? ''}
+                                                onChange={e => {
+                                                    const cat = categories.find((c: any) => c.slug === e.target.value);
+                                                    setFormData((p: any) => ({
+                                                        ...p,
+                                                        asset_model: cat?.slug || e.target.value,
+                                                        asset_model_label: cat?.name || e.target.value,
+                                                        is_vehicle_category: cat?.isVehicleCategory || false,
+                                                        product_category_id: cat?.id || '',
+                                                        primary_product_id: '',
+                                                    }));
+                                                    setIsModified(true);
+                                                }}
+                                                className={`w-full h-11 px-4 pr-10 bg-white border-2 rounded-xl outline-none appearance-none text-sm transition-all ${
+                                                    errors.product_category_id ? 'border-red-400' : 'border-[#EBEBEB] focus:border-[#1D4ED8]'
+                                                } ${!formData.asset_model ? 'text-gray-400' : 'text-gray-900'}`}
+                                            >
+                                                <option value="">Select from Current Inventory</option>
+                                                {categories.map((c: any) => <option key={c.id} value={c.slug}>{c.name}</option>)}
+                                            </select>
+                                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                                        </div>
+                                        {errors.product_category_id && <p className="text-[10px] text-red-500 font-bold px-1">{errors.product_category_id}</p>}
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-gray-900 px-1">Product Type</label>
+                                        <div className="relative">
+                                            <select
+                                                value={formData.primary_product_id ?? ''}
+                                                onChange={e => updateField('primary_product_id', e.target.value)}
+                                                className={`w-full h-11 px-4 pr-10 bg-white border-2 rounded-xl outline-none appearance-none text-sm transition-all ${
+                                                    errors.primary_product_id ? 'border-red-400' : 'border-[#EBEBEB] focus:border-[#1D4ED8]'
+                                                } ${!formData.primary_product_id ? 'text-gray-400' : 'text-gray-900'}`}
+                                            >
+                                                <option value="">Select Product type</option>
+                                                {products.map((p: any) => (
+                                                    <option key={p.id} value={p.id}>
+                                                        {p.name} — {p.voltage_v}V / {p.capacity_ah}Ah | SKU: {p.sku}{p.warranty_months ? ` | ${p.warranty_months}mo warranty` : ''}{outOfStockProducts.includes(p.id) ? ' (Out of Stock)' : ''}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                                        </div>
+                                        {outOfStockProducts.includes(formData.primary_product_id) && (
+                                            <div className="flex items-center justify-between gap-3 px-3 py-3 bg-amber-50 border border-amber-200 rounded-lg mt-2">
+                                                <div className="flex items-center gap-2">
+                                                    <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                                                    <span className="text-xs font-medium text-amber-700">Product out of stock</span>
+                                                </div>
+                                                <button onClick={() => router.push('/dealer-portal/oem-orders/new')} className="px-3 py-1 text-xs font-bold bg-amber-600 text-white rounded-lg hover:bg-amber-700">Order from OEM</button>
+                                            </div>
+                                        )}
+                                        {errors.primary_product_id && <p className="text-[10px] text-red-500 font-bold px-1">{errors.primary_product_id}</p>}
+                                    </div>
+
+                                    {/* Additional products */}
+                                    {additionalProducts.map((ap, idx) => (
+                                        <div key={idx} className="flex items-end gap-3 bg-gray-50 p-4 rounded-xl border border-gray-100">
+                                            <div className="flex-1">
+                                                <label className="text-xs font-bold text-gray-600 px-1 mb-1 block">Additional Product {idx + 1}</label>
+                                                <select
+                                                    value={ap.product_id}
+                                                    onChange={e => {
+                                                        const updated = [...additionalProducts];
+                                                        updated[idx].product_id = e.target.value;
+                                                        setAdditionalProducts(updated);
+                                                        setIsModified(true);
+                                                    }}
+                                                    className="w-full h-10 px-4 bg-white border-2 border-[#EBEBEB] rounded-xl text-sm outline-none focus:border-[#1D4ED8]"
+                                                >
+                                                    <option value="">Select product</option>
+                                                    {products.map((p: any) => <option key={p.id} value={p.id}>{p.name} — {p.voltage_v}V / {p.capacity_ah}Ah | SKU: {p.sku}</option>)}
+                                                </select>
+                                            </div>
+                                            <button onClick={() => { setAdditionalProducts(prev => prev.filter((_, i) => i !== idx)); setIsModified(true); }} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
+                                                <X className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    ))}
+
+                                    <button
+                                        onClick={() => {
+                                            setAdditionalProducts(prev => [...prev, { category_id: formData.product_category_id, product_id: '', category_name: formData.asset_model }]);
+                                            setIsModified(true);
+                                        }}
+                                        className="flex items-center gap-2 text-sm font-bold text-[#0047AB] hover:text-[#003580] transition-colors px-1"
+                                    >
+                                        <Plus className="w-4 h-4" /> Add Another Product
+                                    </button>
+                                </div>
+                            </SectionCard>
+                        </div>
+
+                        {/* Vehicle Details */}
+                        <div className="lg:col-span-3">
+                            <SectionCard title={isVehicleCategory ? 'Vehicle Details' : 'Vehicle Details'}>
+                                {!isVehicleCategory && (
+                                    <p className="text-sm text-gray-400 font-medium px-1 mb-4">Vehicle details are only applicable for 2W/3W/4W categories.</p>
+                                )}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-6">
+                                    <InputField label="Vehicle Reg. Number" value={formData.vehicle_rc} onChange={v => updateField('vehicle_rc', v)} placeholder="HR 35 A 78989" />
+                                    <SelectField
+                                        label={`Vehicle Ownership${formData.vehicle_rc?.trim() ? ' *' : ''}`}
+                                        value={formData.vehicle_ownership}
+                                        onChange={v => updateField('vehicle_ownership', v)}
+                                        options={VEHICLE_OWNERSHIP_OPTIONS.map(o => ({ value: o.label, label: o.label }))}
+                                        placeholder="Select ownership"
+                                        error={errors.vehicle_ownership}
+                                    />
+                                    <InputField label={`Owner Full Name${formData.vehicle_rc?.trim() ? ' *' : ''}`} value={formData.vehicle_owner_name} onChange={v => updateField('vehicle_owner_name', v)} placeholder="Vijay Sharma" error={errors.vehicle_owner_name} />
+                                    <InputField label={`Owner Phone${formData.vehicle_rc?.trim() ? ' *' : ''}`} value={formData.vehicle_owner_phone} onChange={v => updateField('vehicle_owner_phone', v)} placeholder="9876543210" error={errors.vehicle_owner_phone} inputMode="numeric" maxLength={10} />
+                                </div>
+                                {formData.vehicle_rc?.trim() && (
+                                    <div className="mt-4 px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg">
+                                        <p className="text-xs font-medium text-blue-700">You&apos;ve entered vehicle details. Ownership, Owner Name, and Owner Phone are now required.</p>
+                                    </div>
+                                )}
+                            </SectionCard>
+                        </div>
+                    </div>
+
+                    {/* ─── Lead Classification ───────────────────────────── */}
+                    <SectionCard title="Lead Classification">
+                        <div className="space-y-6">
+                            <div>
+                                <label className="text-sm font-bold text-gray-900 px-1 mb-3 block">Lead Interest Level</label>
+                                <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5">
+                                    {INTEREST_LEVELS.map(lvl => (
+                                        <button
+                                            key={lvl.value}
+                                            onClick={() => updateField('interest_level', lvl.value)}
+                                            className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all capitalize tracking-tight ${
+                                                formData.interest_level === lvl.value
+                                                    ? 'bg-[#0047AB] text-white shadow-sm'
+                                                    : 'text-gray-500 hover:text-gray-800'
+                                            }`}
+                                        >
+                                            {lvl.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </SectionCard>
+
+                    {/* ─── Select Payment Method ─────────────────────────── */}
+                    <SectionCard title="Select Payment Method">
+                        <div className="space-y-4">
+                            <div className="relative">
+                                <select
+                                    value={formData.payment_method}
+                                    onChange={e => updateField('payment_method', e.target.value)}
+                                    className="w-full h-11 px-4 pr-10 bg-white border-2 border-[#EBEBEB] rounded-xl outline-none appearance-none text-sm font-medium text-gray-900 focus:border-[#1D4ED8] transition-all"
+                                >
+                                    {PAYMENT_METHODS.map(pm => (
+                                        <option key={pm.value} value={pm.value}>{pm.label}</option>
+                                    ))}
+                                </select>
+                                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                            </div>
+
+                            <div className="flex items-center gap-6 px-1">
+                                {PAYMENT_METHODS.map(pm => (
+                                    <label key={pm.value} className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name="payment_method"
+                                            checked={formData.payment_method === pm.value}
+                                            onChange={() => updateField('payment_method', pm.value)}
+                                            className="w-4 h-4 text-[#0047AB] border-gray-300 focus:ring-[#0047AB]"
+                                        />
+                                        <span className="text-sm font-medium text-gray-700">{pm.label}</span>
+                                    </label>
+                                ))}
+                            </div>
+
+                            {isFinanceMethod(formData.payment_method) && (
+                                <div className="px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl">
+                                    <p className="text-xs font-medium text-amber-700">
+                                        Finance case selected. KYC documents will be mandatory in the next step.
+                                    </p>
+                                </div>
+                            )}
+
+                            <div className="px-4 py-3 bg-gray-50 rounded-xl border border-gray-100">
+                                {formData.payment_method === 'cash' ? (
+                                    <p className="text-xs font-medium text-gray-600">
+                                        <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2" />
+                                        <strong>Cash Payment:</strong> KYC verification will be skipped. Lead goes directly to product selection.
+                                    </p>
+                                ) : formData.interest_level === 'hot' ? (
+                                    <p className="text-xs font-medium text-gray-600">
+                                        <span className="inline-block w-2 h-2 bg-red-500 rounded-full mr-2" />
+                                        <strong>Hot Lead:</strong> After creating, you will proceed directly to KYC (Step 2).
+                                    </p>
+                                ) : (
+                                    <p className="text-xs font-medium text-gray-600">
+                                        <span className={`inline-block w-2 h-2 ${formData.interest_level === 'warm' ? 'bg-amber-500' : 'bg-blue-400'} rounded-full mr-2`} />
+                                        <strong>{formData.interest_level === 'warm' ? 'Warm' : 'Cold'} Lead:</strong> After creating, the lead will be saved and you will return to the leads list.
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    </SectionCard>
+                </main>
+
+                {/* ─── Bottom Bar ────────────────────────────────────────── */}
+                {!showConfirm && (
+                    <StickyBottomBar lastSaved={lastSaved}>
+                        <OutlineButton onClick={handleCancel}>Cancel</OutlineButton>
+                        <PrimaryButton onClick={commitStep} loading={loading}>
+                            <ChevronRight className="w-4 h-4" /> Create Lead
+                        </PrimaryButton>
+                    </StickyBottomBar>
+                )}
+            </div>
         </div>
-
-      </div>
-    </div>
-  );
+    );
 }
 
-// ─── Sub-components ───────────────────────────────────────────
-
-function Section({
-  icon,
-  title,
-  children,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
-      <div className="flex items-center gap-2.5 px-5 py-4 border-b border-gray-100">
-        <div className="w-6 h-6 bg-gray-900 rounded-md flex items-center justify-center shrink-0">
-          {icon}
-        </div>
-        <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
-      </div>
-      <div className="px-5 py-5">{children}</div>
-    </div>
-  );
-}
-
-function Field({
-  label,
-  required,
-  hint,
-  error,
-  className = "",
-  children,
-}: {
-  label: string;
-  required?: boolean;
-  hint?: string;
-  error?: string;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={className}>
-      <label className="flex items-center gap-1 text-xs font-semibold text-gray-600 mb-1.5">
-        {label}
-        {required && <span className="text-red-500 ml-0.5">*</span>}
-        {hint && <span className="text-gray-400 font-normal ml-1">— {hint}</span>}
-      </label>
-      {children}
-      {error && (
-        <p className="flex items-center gap-1 text-xs text-red-500 mt-1.5">
-          <AlertCircle className="w-3 h-3 shrink-0" />{error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function InputWithIcon({
-  icon,
-  error,
-  children,
-}: {
-  icon: React.ReactNode;
-  error?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="relative">
-      <div className={`absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none transition-colors ${error ? "text-red-400" : "text-gray-400"}`}>
-        {icon}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-// ─── Helpers ──────────────────────────────────────────────────
-
-const inputCls = (error?: boolean) =>
-  `w-full h-10 pl-9 pr-4 bg-white border rounded-xl text-sm outline-none transition-all
-   placeholder-gray-300 text-gray-900
-   focus:ring-2 focus:ring-gray-900/10 focus:border-gray-400
-   ${error ? "border-red-400 bg-red-50/30 focus:ring-red-500/10 focus:border-red-400" : "border-gray-200 hover:border-gray-300"}`;
-
-function statusHint(status: string): string {
-  const hints: Record<string, string> = {
-    new:          "Fresh lead — not yet contacted.",
-    cold:         "Low interest — needs nurturing.",
-    warm:         "Showing some interest — follow up soon.",
-    hot:          "High intent — prioritise immediately.",
-    contacted:    "Already reached out, awaiting response.",
-    interested:   "Expressed interest — move to qualification.",
-    disqualified: "Not a fit — removed from active pipeline.",
-    stop:         "Do not contact — excluded from all outreach.",
-  };
-  return hints[status] ?? "";
+export default function NewLeadPage() {
+    return (
+        <Suspense fallback={<FullPageLoader />}>
+            <NewLeadWizardContent />
+        </Suspense>
+    );
 }

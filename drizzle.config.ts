@@ -1,15 +1,23 @@
+import dotenv from "dotenv";
+import fs from "fs";
 import { defineConfig } from "drizzle-kit";
-import * as dotenv from "dotenv";
 
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env" });
 
-if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not set');
+console.log("DATABASE_URL:", process.env.DATABASE_URL);
+
+// Use sslmode=no-verify to bypass self-signed cert issue with AWS RDS
+const dbUrl = process.env.DATABASE_URL!.replace("sslmode=require", "sslmode=no-verify");
 
 export default defineConfig({
-    schema: "./src/lib/db/schema.ts",
-    out: "./drizzle",
-    dialect: "postgresql",
-    dbCredentials: {
-        url: process.env.DATABASE_URL,
+  schema: "./src/lib/db/schema.ts",
+  out: "./drizzle",
+  dialect: "postgresql",
+  dbCredentials: {
+    url: dbUrl,
+    ssl: {
+      rejectUnauthorized: false,
+      ca: fs.readFileSync("./global-bundle.pem").toString(),
     },
+  },
 });

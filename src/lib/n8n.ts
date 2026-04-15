@@ -21,11 +21,7 @@ export type WebhookType =
     | 'sla-breach-notification'
     | 'sla-breach-detected'
     | 'system-critical-error'
-    | 'daily-summary'
-    | 'kyc-card-action'
-    | 'kyc-approved'
-    | 'kyc-rejected'
-    | 'kyc-docs-requested';
+    | 'daily-summary';
 
 /**
  * Triggers an n8n webhook with a standardized payload and robust error handling.

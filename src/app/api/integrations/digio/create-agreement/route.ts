@@ -3,92 +3,9 @@ import puppeteer from "puppeteer";
 import { buildTarangDealerAgreementHtml } from "@/lib/agreement/dealer-agreement-template";
 
 type AgreementPayload = {
-  company?: {
-    companyName?: string;
-    companyAddress?: string;
-    companyType?: string;
-    gstNumber?: string;
-    companyPanNumber?: string;
-    companyCity?: string;
-    companyDistrict?: string;
-    companyState?: string;
-    companyPinCode?: string;
-  };
-  ownership?: {
-    ownerName?: string;
-    ownerPhone?: string;
-    ownerEmail?: string;
-    ownerAge?: string;
-    ownerAddressLine1?: string;
-    ownerCity?: string;
-    ownerDistrict?: string;
-    ownerState?: string;
-    ownerPinCode?: string;
-    bankName?: string;
-    accountNumber?: string;
-    ifsc?: string;
-    beneficiaryName?: string;
-    branch?: string;
-    accountType?: string;
-  };
-  agreement?: {
-    dateOfSigning?: string;
-    expiryDays?: number;
-    executionPlace?: string;
-    dealerSignerName?: string;
-    dealerSignerEmail?: string;
-    dealerSignerPhone?: string;
-    dealerSignerDesignation?: string;
-    dealerSigningMethod?: string;
-    financierName?: string;
-    financerLegalEntityName?: string;
-    sequenceMode?: "sequential" | "parallel";
-    vehicleType?: string;
-    manufacturer?: string;
-    brand?: string;
-    statePresence?: string;
-    itarangSignatory1?: {
-      name?: string;
-      designation?: string;
-      email?: string;
-      mobile?: string;
-      address?: string;
-      signingMethod?: string;
-    };
-    itarangSignatory2?: {
-      name?: string;
-      designation?: string;
-      email?: string;
-      mobile?: string;
-      address?: string;
-      signingMethod?: string;
-    };
-    financierSignatory?: {
-      name?: string;
-      designation?: string;
-      email?: string;
-      mobile?: string;
-      address?: string;
-      signingMethod?: string;
-    };
-    includeWitnessesInSigning?: boolean;
-    witness1?: {
-      name?: string;
-      designation?: string;
-      email?: string;
-      mobile?: string;
-      address?: string;
-      signingMethod?: string;
-    };
-    witness2?: {
-      name?: string;
-      designation?: string;
-      email?: string;
-      mobile?: string;
-      address?: string;
-      signingMethod?: string;
-    };
-  };
+  company?: any;
+  ownership?: any;
+  agreement?: any;
 };
 
 type SignerItem = {
@@ -129,6 +46,7 @@ function mapSigningMethod(method?: string) {
     case "dsc_signature":
       return "dsc";
     case "electronic_signature":
+      return "electronic";
     default:
       return "electronic";
   }
@@ -204,6 +122,24 @@ async function renderPdfFromHtml(html: string) {
   }
 }
 
+function normalizeDigioAgreementStatus(parsed: any) {
+  const digioStatus = String(
+    parsed?.agreement_status || parsed?.status || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  if (digioStatus === "completed" || digioStatus === "signed") {
+    return "completed";
+  }
+
+  if (digioStatus === "partially_signed" || digioStatus === "partial") {
+    return "partially_signed";
+  }
+
+  return "sent_for_signature";
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as AgreementPayload;
@@ -224,16 +160,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const agreement = body.agreement;
-    const company = body.company;
-    const ownership = body.ownership;
-
-    if (!agreement) {
-      return NextResponse.json(
-        { success: false, message: "Agreement payload is missing." },
-        { status: 400 }
-      );
-    }
+    const agreement = body.agreement || {};
+    const company = body.company || {};
+    const ownership = body.ownership || {};
 
     const dealerSigner = buildSigner(
       agreement.dealerSignerEmail,
@@ -241,14 +170,6 @@ export async function POST(req: NextRequest) {
       agreement.dealerSignerName,
       "dealer signer",
       agreement.dealerSigningMethod
-    );
-
-    const financierSigner = buildSigner(
-      agreement.financierSignatory?.email,
-      agreement.financierSignatory?.mobile,
-      agreement.financierSignatory?.name,
-      "financier signer",
-      agreement.financierSignatory?.signingMethod
     );
 
     const itarangSigner1 = buildSigner(
@@ -267,179 +188,157 @@ export async function POST(req: NextRequest) {
       agreement.itarangSignatory2?.signingMethod
     );
 
-    const witnessSigner1 = agreement.includeWitnessesInSigning
-      ? buildSigner(
-          agreement.witness1?.email,
-          agreement.witness1?.mobile,
-          agreement.witness1?.name,
-          "witness 1",
-          agreement.witness1?.signingMethod
-        )
-      : null;
-
-    const witnessSigner2 = agreement.includeWitnessesInSigning
-      ? buildSigner(
-          agreement.witness2?.email,
-          agreement.witness2?.mobile,
-          agreement.witness2?.name,
-          "witness 2",
-          agreement.witness2?.signingMethod
-        )
-      : null;
-
-    const signers = [
-      dealerSigner,
-      financierSigner,
-      itarangSigner1,
-      itarangSigner2,
-      witnessSigner1,
-      witnessSigner2,
-    ].filter(Boolean) as SignerItem[];
-
-    if (!dealerSigner) {
+    if (!dealerSigner || !itarangSigner1) {
       return NextResponse.json(
         {
           success: false,
           message:
-            "Dealer signatory is invalid. Please provide valid dealer signer name and a valid email or mobile number.",
+            "Dealer and iTarang Signer 1 are required with valid details.",
         },
         { status: 400 }
       );
     }
 
-    if (!financierSigner) {
+    const signer2Started =
+      !!agreement.itarangSignatory2?.name ||
+      !!agreement.itarangSignatory2?.email ||
+      !!agreement.itarangSignatory2?.mobile;
+
+    if (signer2Started && !itarangSigner2) {
       return NextResponse.json(
         {
           success: false,
           message:
-            "Financier signatory is invalid. Please provide valid financier signer name and a valid email or mobile number.",
+            "iTarang Signer 2 is optional but must be fully valid if provided.",
         },
         { status: 400 }
       );
     }
 
-    if (!itarangSigner1 || !itarangSigner2) {
+    const signers: SignerItem[] = [dealerSigner, itarangSigner1];
+
+    if (itarangSigner2) {
+      signers.push(itarangSigner2);
+    }
+
+    const duplicates = findDuplicateIdentifiers(signers);
+    if (duplicates.length > 0) {
       return NextResponse.json(
         {
           success: false,
-          message:
-            "iTarang signatories are invalid. Please provide valid names and valid email or mobile for both signatories.",
+          message: `Duplicate signer identifiers: ${duplicates.join(", ")}`,
         },
         { status: 400 }
       );
     }
 
-    if (
-      agreement.includeWitnessesInSigning &&
-      (!witnessSigner1 || !witnessSigner2)
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "Witness details are invalid. Please provide valid names and valid email or mobile numbers for both witnesses.",
-        },
-        { status: 400 }
-      );
-    }
+    // Use the signing method configured per signer (aadhaar, electronic, or dsc)
+    const digioSigners = signers.map(s => ({
+      identifier: s.identifier,
+      name: s.name,
+      reason: s.reason,
+      sign_type: s.sign_type,
+    }));
 
-    const duplicateIdentifiers = findDuplicateIdentifiers(signers);
-
-    if (duplicateIdentifiers.length > 0) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: `Duplicate signer email/mobile found: ${duplicateIdentifiers.join(
-            ", "
-          )}. Each signer must use a unique email or mobile.`,
-        },
-        { status: 400 }
-      );
-    }
-
+    // Generate agreement PDF from HTML template
     const html = buildTarangDealerAgreementHtml({
       company: {
-        companyName: company?.companyName,
-        companyAddress: company?.companyAddress,
-        companyType: company?.companyType,
-        gstNumber: company?.gstNumber,
-        companyPanNumber: company?.companyPanNumber,
-        companyCity: company?.companyCity,
-        companyDistrict: company?.companyDistrict,
-        companyState: company?.companyState,
-        companyPinCode: company?.companyPinCode,
+        companyName: company.companyName || "",
+        companyAddress: company.companyAddress || "",
+        companyType: company.companyType || "",
+        gstNumber: company.gstNumber || "",
+        companyPanNumber: company.companyPanNumber || company.panNumber || "",
+        companyCity: company.companyCity || "",
+        companyDistrict: company.companyDistrict || "",
+        companyState: company.companyState || "",
+        companyPinCode: company.companyPinCode || "",
       },
       ownership: {
-        ownerName: ownership?.ownerName,
-        ownerPhone: ownership?.ownerPhone,
-        ownerEmail: ownership?.ownerEmail,
-        ownerAge: ownership?.ownerAge,
-        ownerAddressLine1: ownership?.ownerAddressLine1,
-        ownerCity: ownership?.ownerCity,
-        ownerDistrict: ownership?.ownerDistrict,
-        ownerState: ownership?.ownerState,
-        ownerPinCode: ownership?.ownerPinCode,
-        bankName: ownership?.bankName,
-        accountNumber: ownership?.accountNumber,
-        ifsc: ownership?.ifsc,
-        beneficiaryName: ownership?.beneficiaryName,
-        branch: ownership?.branch,
-        accountType: ownership?.accountType,
+        ownerName: ownership.ownerName || "",
+        ownerPhone: ownership.ownerPhone || "",
+        ownerEmail: ownership.ownerEmail || "",
+        ownerAge: "",
+        ownerAddressLine1:
+          typeof ownership.businessAddress === "object" &&
+            ownership.businessAddress &&
+            "address" in ownership.businessAddress
+            ? String((ownership.businessAddress as any).address || "")
+            : "",
+        ownerCity:
+          typeof ownership.businessAddress === "object" &&
+            ownership.businessAddress &&
+            "city" in ownership.businessAddress
+            ? String((ownership.businessAddress as any).city || "")
+            : "",
+        ownerDistrict: "",
+        ownerState:
+          typeof ownership.businessAddress === "object" &&
+            ownership.businessAddress &&
+            "state" in ownership.businessAddress
+            ? String((ownership.businessAddress as any).state || "")
+            : "",
+        ownerPinCode:
+          typeof ownership.businessAddress === "object" &&
+            ownership.businessAddress &&
+            "pincode" in ownership.businessAddress
+            ? String((ownership.businessAddress as any).pincode || "")
+            : "",
+        bankName: ownership.bankName || "",
+        accountNumber: ownership.accountNumber || "",
+        ifsc: ownership.ifscCode || "",
+        beneficiaryName: ownership.beneficiaryName || "",
+        branch: "",
+        accountType: "",
       },
       agreement: {
-        dateOfSigning: agreement.dateOfSigning,
-        executionPlace: agreement.executionPlace,
-        dealerSignerName: agreement.dealerSignerName,
-        dealerSignerDesignation: agreement.dealerSignerDesignation,
-        dealerSignerEmail: agreement.dealerSignerEmail,
-        dealerSignerPhone: agreement.dealerSignerPhone,
-        financierName: agreement.financierName,
-        financerLegalEntityName: agreement.financerLegalEntityName,
-        vehicleType: agreement.vehicleType,
-        manufacturer: agreement.manufacturer,
-        brand: agreement.brand,
-        statePresence: agreement.statePresence,
-        itarangSignatory1: agreement.itarangSignatory1,
-        itarangSignatory2: agreement.itarangSignatory2,
-        financierSignatory: agreement.financierSignatory,
-        includeWitnessesInSigning: agreement.includeWitnessesInSigning,
-        witness1: agreement.witness1,
-        witness2: agreement.witness2,
+        dateOfSigning: agreement.dateOfSigning || "",
+        executionPlace: agreement.executionPlace || "",
+        dealerSignerName: agreement.dealerSignerName || "",
+        dealerSignerDesignation: agreement.dealerSignerDesignation || "",
+        dealerSignerEmail: agreement.dealerSignerEmail || "",
+        dealerSignerPhone: agreement.dealerSignerPhone || "",
+        financierName: "",
+        financerLegalEntityName: "",
+        vehicleType: agreement.vehicleType || "",
+        manufacturer: agreement.manufacturer || "",
+        brand: agreement.brand || "",
+        statePresence: agreement.statePresence || "",
+        itarangSignatory1: agreement.itarangSignatory1 || null,
+        itarangSignatory2: itarangSigner2 ? agreement.itarangSignatory2 || null : null,
       },
     });
 
+    console.log("DIGIO DEBUG -> Rendering PDF with Puppeteer...");
     const pdfBuffer = await renderPdfFromHtml(html);
     const agreementBase64 = pdfBuffer.toString("base64");
+    console.log("DIGIO DEBUG -> PDF generated, size:", pdfBuffer.length, "bytes");
 
-    const payload = {
-      file_name: `${cleanString(company?.companyName) || "dealer"}-agreement.pdf`,
+    const digioPayload = {
+      file_name: `${cleanString(company.companyName) || "dealer"}-agreement.pdf`,
       file_data: agreementBase64,
-      expire_in_days: agreement.expiryDays || 7,
+      expire_in_days: 5,
       notify_signers: true,
       send_sign_link: true,
       include_authentication_url: true,
-      signers,
+      sequential: true,
+      signers: digioSigners,
     };
 
-    console.log(
-      "DIGIO DEBUG -> REQUEST URL:",
-      `${baseUrl}/v2/client/document/uploadpdf`
-    );
-    console.log("DIGIO DEBUG -> SIGNERS:", signers);
+    const requestUrl = `${baseUrl}/v2/client/document/uploadpdf`;
 
-    const digioResponse = await fetch(
-      `${baseUrl}/v2/client/document/uploadpdf`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: basicAuthHeader(clientId, clientSecret),
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(payload),
-        cache: "no-store",
-      }
-    );
+    console.log("DIGIO DEBUG -> REQUEST URL:", requestUrl);
+    console.log("DIGIO DEBUG -> SIGNERS:", digioSigners);
+
+    const digioResponse = await fetch(requestUrl, {
+      method: "POST",
+      headers: {
+        Authorization: basicAuthHeader(clientId, clientSecret),
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(digioPayload),
+      cache: "no-store",
+    });
 
     const rawText = await digioResponse.text();
 
@@ -486,20 +385,13 @@ export async function POST(req: NextRequest) {
       parsed?.authentication_url ||
       "";
 
+    const normalizedStatus = normalizeDigioAgreementStatus(parsed);
+
     return NextResponse.json({
       success: true,
       data: {
-        requestId:
-          parsed?.id ||
-          parsed?.request_id ||
-          parsed?.document_id ||
-          parsed?.documentId ||
-          "",
-        providerDocumentId:
-          parsed?.document_id ||
-          parsed?.documentId ||
-          parsed?.id ||
-          "",
+        requestId: parsed?.id || parsed?.request_id || "",
+        providerDocumentId: parsed?.document_id || parsed?.documentId || "",
         signingUrl,
         signerUrls: signingParties.map((party: any) => ({
           name: party?.name || "",
@@ -508,11 +400,7 @@ export async function POST(req: NextRequest) {
           authenticationUrl: party?.authentication_url || "",
           status: party?.status || "",
         })),
-        status:
-          parsed?.agreement_status?.toLowerCase?.() === "completed" ||
-          parsed?.status?.toLowerCase?.() === "completed"
-            ? "completed"
-            : "sent_for_signature",
+        status: normalizedStatus,
         rawResponse: rawText,
       },
     });
@@ -522,7 +410,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         success: false,
-        message: "Unexpected server error while creating Digio agreement.",
+        message: error instanceof Error ? error.message : "Unexpected server error while creating Digio agreement.",
       },
       { status: 500 }
     );

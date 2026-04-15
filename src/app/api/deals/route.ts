@@ -44,7 +44,7 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     // 1.5 Check Credit Block for existing account (SOP 3.6)
     const [account] = lead.owner_contact
-        ? await db.select().from(accounts).where(eq(accounts.phone, lead.owner_contact)).limit(1)
+        ? await db.select().from(accounts).where(eq(accounts.contact_phone, lead.owner_contact)).limit(1)
         : [];
 
     if (account) {
