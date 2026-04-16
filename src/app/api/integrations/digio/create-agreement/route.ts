@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import puppeteer from "puppeteer";
 import { buildTarangDealerAgreementHtml } from "@/lib/agreement/dealer-agreement-template";
+
+const CHROMIUM_REMOTE_PACK =
+  "https://github.com/Sparticuz/chromium/releases/download/v147.0.0/chromium-v147.0.0-pack.x64.tar";
 
 type AgreementPayload = {
   company?: {
@@ -178,10 +180,25 @@ function findDuplicateIdentifiers(signers: SignerItem[]) {
 }
 
 async function renderPdfFromHtml(html: string) {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  let browser;
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    const [{ default: puppeteerCore }, { default: chromium }] = await Promise.all([
+      import("puppeteer-core"),
+      import("@sparticuz/chromium-min"),
+    ]);
+    browser = await puppeteerCore.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(CHROMIUM_REMOTE_PACK),
+      headless: true,
+    });
+  } else {
+    const { default: puppeteer } = await import("puppeteer");
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+  }
 
   try {
     const page = await browser.newPage();
