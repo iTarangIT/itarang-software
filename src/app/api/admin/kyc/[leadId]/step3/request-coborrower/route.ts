@@ -161,7 +161,7 @@ export async function POST(
 
     await db
       .update(leads)
-      .set({ kyc_status: nextStatus, updated_at: now })
+      .set({ kyc_status: nextStatus, has_co_borrower: true, updated_at: now })
       .where(eq(leads.id, leadId));
 
     await db.insert(auditLogs).values({
