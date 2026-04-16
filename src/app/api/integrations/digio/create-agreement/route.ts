@@ -307,23 +307,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!financierSigner) {
+    if (!itarangSigner1) {
       return NextResponse.json(
         {
           success: false,
           message:
-            "Financier signatory is invalid. Please provide valid financier signer name and a valid email or mobile number.",
-        },
-        { status: 400 }
-      );
-    }
-
-    if (!itarangSigner1 || !itarangSigner2) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "iTarang signatories are invalid. Please provide valid names and valid email or mobile for both signatories.",
+            "iTarang signatory 1 is invalid. Please provide a valid name and a valid email or mobile number.",
         },
         { status: 400 }
       );

@@ -33,8 +33,9 @@ export async function POST(
   try {
     const appUser = await requireAdminAppUser();
     if (!appUser) {
+      console.error("[Verification Action] Unauthorized - user not found or role not allowed. Allowed roles: admin, ceo, business_head, sales_head, sales_manager, sales_executive");
       return NextResponse.json(
-        { success: false, error: { message: "Unauthorized" } },
+        { success: false, error: { message: "Unauthorized. Your role does not have permission for this action." } },
         { status: 403 },
       );
     }

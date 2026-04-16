@@ -1,27 +1,149 @@
+'use client';
 
-import { login, signup } from './actions';
-import { Mail, Lock, UserPlus, LogIn } from 'lucide-react';
+import { useState } from 'react';
+import { Mail, Lock, Loader2, Eye, EyeOff } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
+import { toast } from 'sonner';
+
 export default function LoginPage() {
+    const router = useRouter();
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
+
+    const validate = (): boolean => {
+        const e: { email?: string; password?: string } = {};
+        const trimmedEmail = email.trim().toLowerCase();
+
+        if (!trimmedEmail) {
+            e.email = 'Email is required';
+        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+            e.email = 'Enter a valid email address';
+        }
+
+        if (!password) {
+            e.password = 'Password is required';
+        } else if (password.length < 6) {
+            e.password = 'Password must be at least 6 characters';
+        }
+
+        setErrors(e);
+        return Object.keys(e).length === 0;
+    };
+
+    const handleLogin = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!validate()) return;
+
+        setLoading(true);
+        setErrors({});
+
+        try {
+            const supabase = createClient();
+            const { error } = await supabase.auth.signInWithPassword({
+                email: email.trim().toLowerCase(),
+                password,
+            });
+
+            if (error) {
+                console.error('[LOGIN] Supabase login failed:', error.message);
+                if (error.message.includes('Invalid login')) {
+                    toast.error('Invalid email or password. Please try again.');
+                } else if (error.message.includes('Email not confirmed')) {
+                    toast.error('Please verify your email before signing in.');
+                } else {
+                    toast.error(error.message || 'Authentication failed. Please try again.');
+                }
+                setLoading(false);
+                return;
+            }
+
+            // Check app-level user record
+            const profileRes = await fetch('/api/user/profile', {
+                method: 'GET',
+                cache: 'no-store',
+                credentials: 'include',
+            });
+
+            if (!profileRes.ok) {
+                toast.error('User profile not found. Contact support.');
+                await supabase.auth.signOut();
+                setLoading(false);
+                return;
+            }
+
+            const profileData = await profileRes.json();
+            const appUser = profileData?.data;
+
+            if (!appUser) {
+                toast.error('User record not found. Contact support.');
+                await supabase.auth.signOut();
+                setLoading(false);
+                return;
+            }
+
+            if (!appUser.is_active) {
+                toast.error('Your account is inactive. Contact your administrator.');
+                await supabase.auth.signOut();
+                setLoading(false);
+                return;
+            }
+
+            toast.success(`Welcome back, ${appUser.name || appUser.email}!`);
+
+            if (appUser.must_change_password) {
+                router.push('/change-password');
+                return;
+            }
+
+            if (appUser.role === 'dealer') {
+                router.push('/dealer-portal');
+            } else if (appUser.role === 'admin') {
+                router.push('/admin');
+            } else if (appUser.role === 'ceo') {
+                router.push('/ceo');
+            } else if (appUser.role === 'sales_head') {
+                router.push('/sales-head');
+            } else if (appUser.role === 'business_head') {
+                router.push('/business-head');
+            } else if (appUser.role === 'finance_controller') {
+                router.push('/finance-controller');
+            } else if (appUser.role === 'sales_order_manager') {
+                router.push('/sales-order-manager');
+            } else if (appUser.role === 'inventory_manager') {
+                router.push('/inventory-manager');
+            } else if (appUser.role === 'service_engineer') {
+                router.push('/service-engineer');
+            } else if (appUser.role === 'sales_manager') {
+                router.push('/sales-manager');
+            } else if (appUser.role === 'sales_executive') {
+                router.push('/sales-executive');
+            } else {
+                router.push('/');
+            }
+        } catch (err) {
+            console.error('[LOGIN] Unexpected error:', err);
+            toast.error('Something went wrong. Please check your connection and try again.');
+            setLoading(false);
+        }
+    };
+
     return (
         <div className="flex min-h-screen bg-white">
             {/* Left Side - Image & Slogan */}
             <div className="hidden lg:flex lg:w-1/2 relative bg-[#F0F8FF] items-center justify-center overflow-hidden">
-                {/* Background Slogan */}
                 <div className="absolute top-12 left-0 right-0 z-10 text-center px-8">
                     <h2 className="text-2xl font-bold text-[#002B49] leading-tight">
                         "Unleash Your Potential with the<br />
                         <span className="text-[#002B49]">Next-Gen E-Rickshaw Battery"</span>
                     </h2>
                 </div>
-
-                {/* Main Image */}
                 <div className="relative w-full h-full flex items-end justify-center pb-0">
-                    {/* 
-                         NOTE: Please ensure 'rickshaw-login.png' is placed in the public/ folder.
-                         Ideally, this image should be transparent PNG of the driver and rickshaw.
-                     */}
                     <div className="relative w-[90%] h-[80%]">
                         <Image
                             src="/rickshaw-login.png"
@@ -40,9 +162,6 @@ export default function LoginPage() {
                     {/* Brand Logo */}
                     <div className="mb-10">
                         <div className="flex items-center gap-3 mb-6">
-                            {/* 
-                                NOTE: Please ensure 'logo-full.png' is placed in the public/ folder.
-                            */}
                             <Image
                                 src="/logo-full.png"
                                 alt="iTarang Logo"
@@ -55,7 +174,7 @@ export default function LoginPage() {
                         <p className="text-sm font-medium text-gray-500 uppercase tracking-wide">EVERY THING EV!</p>
                     </div>
 
-                    <form className="space-y-6">
+                    <form onSubmit={handleLogin} className="space-y-6">
                         <div>
                             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
                                 Email address
@@ -66,13 +185,19 @@ export default function LoginPage() {
                                     name="email"
                                     type="email"
                                     required
-                                    className="w-full px-4 py-3 bg-white border border-gray-200 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                                    value={email}
+                                    onChange={e => { setEmail(e.target.value); if (errors.email) setErrors(prev => ({ ...prev, email: undefined })); }}
+                                    disabled={loading}
+                                    className={`w-full px-4 py-3 bg-white border rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
+                                        errors.email ? 'border-red-400' : 'border-gray-200'
+                                    }`}
                                     placeholder="name@company.com"
                                 />
                                 <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
                                     <Mail className="h-5 w-5 text-gray-400" />
                                 </div>
                             </div>
+                            {errors.email && <p className="mt-1 text-xs text-red-500 font-medium">{errors.email}</p>}
                         </div>
 
                         <div>
@@ -88,23 +213,45 @@ export default function LoginPage() {
                                 <input
                                     id="password"
                                     name="password"
-                                    type="password"
+                                    type={showPassword ? 'text' : 'password'}
                                     required
-                                    className="w-full px-4 py-3 bg-white border border-gray-200 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                                    value={password}
+                                    onChange={e => { setPassword(e.target.value); if (errors.password) setErrors(prev => ({ ...prev, password: undefined })); }}
+                                    disabled={loading}
+                                    className={`w-full px-4 py-3 pr-20 bg-white border rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
+                                        errors.password ? 'border-red-400' : 'border-gray-200'
+                                    }`}
                                     placeholder="••••••••"
                                 />
-                                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                                <div className="absolute inset-y-0 right-0 pr-3 flex items-center gap-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPassword(!showPassword)}
+                                        className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                        tabIndex={-1}
+                                    >
+                                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                    </button>
                                     <Lock className="h-5 w-5 text-gray-400" />
                                 </div>
                             </div>
+                            {errors.password && <p className="mt-1 text-xs text-red-500 font-medium">{errors.password}</p>}
                         </div>
 
                         <div className="pt-2">
                             <button
-                                formAction={login}
-                                className="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-semibold text-white bg-[#005596] hover:bg-[#00447a] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                                type="submit"
+                                disabled={loading}
+                                className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-semibold text-white bg-[#005596] hover:bg-[#00447a] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                             >
-                                <span className="mr-2">Sign In</span>
+                                {loading ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                        <span>Signing in...</span>
+                                    </>
+                                ) : (
+                                    <span>Sign In</span>
+                                )}
                             </button>
                         </div>
 
@@ -114,7 +261,7 @@ export default function LoginPage() {
                             </div>
                             <div className="relative flex justify-center text-sm">
                                  <span className="px-2 bg-white text-gray-500">
-                                    Don't have an account?{" "}
+                                    Don&apos;t have an account?{" "}
                                     <Link
                                         href="/dealer-onboarding"
                                         className="font-medium text-blue-600 hover:text-blue-500"
@@ -128,5 +275,5 @@ export default function LoginPage() {
                 </div>
             </div>
         </div>
-    )
+    );
 }

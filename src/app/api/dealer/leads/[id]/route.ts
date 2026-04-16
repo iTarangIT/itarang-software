@@ -1,7 +1,8 @@
+import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { leads, personalDetails, auditLogs } from '@/lib/db/schema';
+import { leads, personalDetails, auditLogs, kycDocuments, consentRecords, kycVerifications } from '@/lib/db/schema';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
-import { requireRole } from '@/lib/auth-utils';
+import { requireRole, requireAuth } from '@/lib/auth-utils';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 
@@ -123,3 +124,93 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
         return errorResponse("Something went wrong while updating the lead. Please try again.", 500);
     }
 });
+
+// ─── DELETE ────────────────────────────────────────────────────────────────
+
+export async function DELETE(
+    _req: NextRequest,
+    { params }: { params: Promise<{ id: string }> }
+) {
+    try {
+        const user = await requireAuth();
+        const { id } = await params;
+
+        if (!id) {
+            return NextResponse.json(
+                { success: false, error: { message: 'Lead ID is required' } },
+                { status: 400 }
+            );
+        }
+
+        // Verify the lead exists
+        const [lead] = await db
+            .select({
+                id: leads.id,
+                dealer_id: leads.dealer_id,
+                lead_status: leads.lead_status,
+                uploader_id: leads.uploader_id,
+            })
+            .from(leads)
+            .where(eq(leads.id, id))
+            .limit(1);
+
+        if (!lead) {
+            return NextResponse.json(
+                { success: false, error: { message: 'Lead not found' } },
+                { status: 404 }
+            );
+        }
+
+        // Only the owning dealer, or admin/ceo/sales_head can delete
+        const isAdmin = ['admin', 'ceo', 'sales_head'].includes(user.role);
+        const isOwner = lead.dealer_id === user.dealer_id || lead.uploader_id === user.id;
+        if (!isAdmin && !isOwner) {
+            return NextResponse.json(
+                { success: false, error: { message: 'You can only delete your own leads' } },
+                { status: 403 }
+            );
+        }
+
+        // Don't allow deleting converted leads without admin role
+        if (!isAdmin && lead.lead_status === 'converted') {
+            return NextResponse.json(
+                { success: false, error: { message: 'Cannot delete a converted lead. Contact admin.' } },
+                { status: 403 }
+            );
+        }
+
+        // Delete related records (cascade handles most, but clean up explicitly for safety)
+        await db.delete(kycDocuments).where(eq(kycDocuments.lead_id, id));
+        await db.delete(consentRecords).where(eq(consentRecords.lead_id, id));
+        await db.delete(kycVerifications).where(eq(kycVerifications.lead_id, id));
+        try { await db.delete(personalDetails).where(eq(personalDetails.lead_id, id)); } catch {}
+
+        // Delete the lead
+        await db.delete(leads).where(eq(leads.id, id));
+
+        // Audit log
+        try {
+            await db.insert(auditLogs).values({
+                id: `AUDIT-DEL-${Date.now()}`,
+                entity_type: 'lead',
+                entity_id: id,
+                action: 'LEAD_DELETED',
+                changes: { deleted_by: user.id, deleted_at: new Date().toISOString() },
+                performed_by: user.id,
+                timestamp: new Date(),
+            });
+        } catch {}
+
+        return NextResponse.json({
+            success: true,
+            message: 'Lead and all related data deleted successfully',
+        });
+    } catch (error) {
+        console.error('[Delete Lead] Error:', error);
+        const message = error instanceof Error ? error.message : 'Failed to delete lead';
+        return NextResponse.json(
+            { success: false, error: { message } },
+            { status: 500 }
+        );
+    }
+}

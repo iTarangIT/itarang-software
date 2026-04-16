@@ -116,7 +116,9 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  const rawRole = profile?.role || "user";
+  // Fall back to user_metadata.role from Supabase Auth if DB lookup found nothing
+  // (handles cases where users table is in a separate database accessed via Drizzle)
+  const rawRole = profile?.role || (user.user_metadata?.role as string) || "user";
   const role = rawRole.toLowerCase();
   const myDashboard = roleDashboards[role] || "/";
 

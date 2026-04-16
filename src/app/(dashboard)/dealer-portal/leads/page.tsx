@@ -1,18 +1,39 @@
 'use client';
 
 import Link from 'next/link';
-import { PlusCircle, Search, Filter, Loader2 } from 'lucide-react';
+import { PlusCircle, Search, Filter, Loader2, Eye, FileCheck, Trash2 } from 'lucide-react';
 import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { toast } from 'sonner';
 
 function DealerLeadsContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const [leads, setLeads] = useState([]);
+    const [leads, setLeads] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('All');
     const [typeFilter, setTypeFilter] = useState('All');
+    const [deletingId, setDeletingId] = useState<string | null>(null);
+
+    const handleDeleteLead = async (leadId: string, leadName: string) => {
+        if (!confirm(`Are you sure you want to delete "${leadName}"? This cannot be undone.`)) return;
+        setDeletingId(leadId);
+        try {
+            const res = await fetch(`/api/dealer/leads/${leadId}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (data.success) {
+                toast.success(`"${leadName}" deleted successfully`);
+                setLeads((prev: any[]) => prev.filter((l: any) => l.id !== leadId));
+            } else {
+                toast.error(data.error?.message || 'Failed to delete lead');
+            }
+        } catch {
+            toast.error('Failed to delete lead');
+        } finally {
+            setDeletingId(null);
+        }
+    };
 
     const fetchLeads = async () => {
         setLoading(true);
@@ -40,6 +61,14 @@ function DealerLeadsContent() {
             fetchLeads();
         }, 500);
         return () => clearTimeout(timer);
+    }, [search, statusFilter, typeFilter]);
+
+    // Auto-refresh leads every 30 seconds
+    useEffect(() => {
+        const interval = setInterval(() => {
+            fetchLeads();
+        }, 30000);
+        return () => clearInterval(interval);
     }, [search, statusFilter, typeFilter]);
 
     // Highlight new lead
@@ -119,26 +148,34 @@ function DealerLeadsContent() {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100 text-sm">
-                                {leads.map((lead: any) => (
+                                {leads.map((lead: any) => {
+                                    const isFinance = lead.payment_method && !['cash', 'upfront'].includes(lead.payment_method);
+                                    const leadUrl = `/dealer-portal/leads/${lead.id}`;
+
+                                    return (
                                     <tr
                                         key={lead.id}
-                                        onClick={() => router.push(`/dealer-portal/leads/${lead.id}/kyc`)}
+                                        onClick={() => router.push(leadUrl)}
                                         className={`hover:bg-gray-50 transition-colors group cursor-pointer ${newLeadId === lead.id ? 'bg-brand-50' : ''}`}
                                     >
                                         <td className="px-6 py-4">
-                                            <div className="font-medium text-gray-900">{lead.owner_name}</div>
-                                            <div className="text-gray-500 text-xs">{lead.owner_contact}</div>
+                                            <div className="font-medium text-gray-900">{lead.owner_name || lead.full_name}</div>
+                                            <div className="text-gray-500 text-xs">{lead.owner_contact || lead.phone}</div>
                                         </td>
                                         <td className="px-6 py-4">
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize
-                                                ${lead.lead_status === 'new' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}
-                                            `}>
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${
+                                                lead.lead_status === 'new' ? 'bg-blue-100 text-blue-800' :
+                                                lead.lead_status === 'contacted' ? 'bg-amber-100 text-amber-800' :
+                                                lead.lead_status === 'qualified' ? 'bg-green-100 text-green-800' :
+                                                lead.lead_status === 'converted' ? 'bg-emerald-100 text-emerald-800' :
+                                                'bg-gray-100 text-gray-800'
+                                            }`}>
                                                 {lead.lead_status}
                                             </span>
                                         </td>
                                         <td className="px-6 py-4">
                                             <span className="inline-flex items-center gap-1.5 capitalize">
-                                                <span className={`w-2 h-2 rounded-full 
+                                                <span className={`w-2 h-2 rounded-full
                                                     ${lead.interest_level === 'hot' ? 'bg-red-500' : lead.interest_level === 'warm' ? 'bg-yellow-500' : 'bg-blue-500'}
                                                 `}></span>
                                                 {lead.interest_level}
@@ -151,18 +188,45 @@ function DealerLeadsContent() {
                                             {new Date(lead.created_at).toLocaleDateString()}
                                         </td>
                                         <td className="px-6 py-4 text-right">
-                                            <button
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    router.push(`/dealer-portal/leads/${lead.id}/kyc`);
-                                                }}
-                                                className="text-brand-600 hover:text-brand-800 font-medium text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-                                            >
-                                                View Details
-                                            </button>
+                                            <div className="flex items-center justify-end gap-2">
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        router.push(leadUrl);
+                                                    }}
+                                                    className="inline-flex items-center gap-1 text-brand-600 hover:text-brand-800 font-medium text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                                                >
+                                                    <Eye className="w-3 h-3" />
+                                                    View
+                                                </button>
+                                                {isFinance && (
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            router.push(`/dealer-portal/leads/${lead.id}/kyc`);
+                                                        }}
+                                                        className="inline-flex items-center gap-1 text-emerald-600 hover:text-emerald-800 font-medium text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                                                    >
+                                                        <FileCheck className="w-3 h-3" />
+                                                        KYC
+                                                    </button>
+                                                )}
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleDeleteLead(lead.id, lead.owner_name || lead.full_name || 'this lead');
+                                                    }}
+                                                    disabled={deletingId === lead.id}
+                                                    className="inline-flex items-center gap-1 text-red-500 hover:text-red-700 font-medium text-xs opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
+                                                >
+                                                    {deletingId === lead.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                                                    Delete
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
-                                ))}
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useOnboardingStore } from "@/store/onboardingStore";
 
 function ReviewCard({
@@ -94,7 +93,6 @@ function getPrimaryContact(state: ReturnType<typeof useOnboardingStore.getState>
 }
 
 export default function StepReview() {
-  const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const state = useOnboardingStore();
@@ -204,8 +202,6 @@ export default function StepReview() {
 
       console.log("Dealer onboarding saved in DB:", result.application);
       console.log("Dealer onboarding completed with ID:", generatedDealerId);
-
-      router.push("/dealer-portal");
     } catch (error) {
       console.error("Dealer onboarding submission error:", error);
       setErrors({

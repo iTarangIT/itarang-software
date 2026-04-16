@@ -284,6 +284,10 @@ export const leads = pgTable("leads", {
   ocr_status: varchar("ocr_status", { length: 20 }),
   ocr_error: text("ocr_error"),
 
+  // Coupon
+  coupon_code: varchar("coupon_code", { length: 20 }),
+  coupon_status: varchar("coupon_status", { length: 20 }),
+
   // KYC
   kyc_score: integer("kyc_score"),
   kyc_completed_at: timestamp("kyc_completed_at", { withTimezone: true }),
@@ -791,20 +795,27 @@ export const auditLogs = pgTable("audit_logs", {
 
 export const accounts = pgTable("accounts", {
   id: varchar("id", { length: 255 }).primaryKey(), // ACC-YYYYMMDD-XXX
-  business_name: text("business_name").notNull(),
-  owner_name: text("owner_name").notNull(),
-  email: text("email"),
-  phone: varchar("phone", { length: 20 }),
+  business_entity_name: text("business_entity_name"),
   gstin: varchar("gstin", { length: 15 }),
-  billing_address: text("billing_address"),
-  shipping_address: text("shipping_address"),
-  status: varchar("status", { length: 20 }).default("active").notNull(),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  last_order_fulfilled_at: timestamp("last_order_fulfilled_at", {
-    withTimezone: true,
-  }),
+  pan: varchar("pan", { length: 20 }),
+  address_line1: text("address_line1"),
+  address_line2: text("address_line2"),
+  city: varchar("city", { length: 100 }),
+  state: varchar("state", { length: 100 }),
+  pincode: varchar("pincode", { length: 10 }),
+  bank_name: text("bank_name"),
+  bank_account_number: text("bank_account_number"),
+  ifsc_code: varchar("ifsc_code", { length: 11 }),
+  bank_proof_url: text("bank_proof_url"),
+  dealer_code: text("dealer_code"),
+  contact_name: text("contact_name"),
+  contact_email: text("contact_email"),
+  contact_phone: varchar("contact_phone", { length: 20 }),
+  status: varchar("status", { length: 20 }).default("active"),
+  onboarding_status: varchar("onboarding_status", { length: 30 }),
+  created_by: uuid("created_by"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
 // --- PROCUREMENT ---
@@ -1528,9 +1539,14 @@ export const consentRecords = pgTable("consent_records", {
   consent_link_sent_at: timestamp("consent_link_sent_at", {
     withTimezone: true,
   }),
+  consent_delivery_channel: varchar("consent_delivery_channel", { length: 20 }),
+  esign_transaction_id: varchar("esign_transaction_id", { length: 255 }),
   signed_consent_url: text("signed_consent_url"),
   generated_pdf_url: text("generated_pdf_url"),
   signed_at: timestamp("signed_at", { withTimezone: true }),
+  signer_aadhaar_masked: varchar("signer_aadhaar_masked", { length: 20 }),
+  esign_retry_count: integer("esign_retry_count").default(0),
+  esign_error_message: text("esign_error_message"),
   verified_by: uuid("verified_by").references(() => users.id),
   verified_at: timestamp("verified_at", { withTimezone: true }),
   admin_viewed_by: uuid("admin_viewed_by").references(() => users.id),
@@ -2762,6 +2778,20 @@ export const dealerOnboardingApplications = pgTable(
       length: 30,
     }).default("inactive"),
     dealerCode: text("dealer_code"),
+
+    agreementStatus: varchar("agreement_status", { length: 50 }),
+    completionStatus: varchar("completion_status", { length: 30 }),
+    providerDocumentId: text("provider_document_id"),
+    requestId: text("request_id"),
+    providerSigningUrl: text("provider_signing_url"),
+    providerRawResponse: jsonb("provider_raw_response"),
+    stampStatus: varchar("stamp_status", { length: 30 }),
+    lastActionTimestamp: timestamp("last_action_timestamp"),
+    signedAt: timestamp("signed_at"),
+    signedAgreementUrl: text("signed_agreement_url"),
+    signedAgreementStoragePath: text("signed_agreement_storage_path"),
+    auditTrailUrl: text("audit_trail_url"),
+    auditTrailStoragePath: text("audit_trail_storage_path"),
   },
 );
 

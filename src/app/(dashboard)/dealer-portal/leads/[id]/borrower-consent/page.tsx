@@ -190,11 +190,20 @@ export default function BorrowerConsentPage() {
 
     useEffect(() => { loadPageData(); }, [leadId]);
 
-    // Auto-poll consent when waiting
+    // Auto-poll consent when waiting — sync with DigiO then reload
     useEffect(() => {
-        const waitingStatuses = ['link_sent', 'link_opened', 'esign_in_progress'];
+        const waitingStatuses = ['link_sent', 'link_opened', 'esign_in_progress', 'esign_completed', 'admin_review_pending'];
         if (!waitingStatuses.includes(consentStatus)) return;
-        const interval = setInterval(() => loadPageData(true), 10000);
+        const tick = async () => {
+            // Sync consent status from DigiO first
+            const syncStatuses = ['link_sent', 'link_opened', 'esign_in_progress'];
+            if (syncStatuses.includes(consentStatus)) {
+                try { await fetch(`/api/kyc/${leadId}/consent/sync`, { method: 'POST', cache: 'no-store' }); } catch {}
+            }
+            // Then reload page data to pick up changes
+            loadPageData(true);
+        };
+        const interval = setInterval(tick, 8000);
         return () => clearInterval(interval);
     }, [consentStatus, leadId]);
 

@@ -22,6 +22,7 @@ import {
   formatSlaAge,
   requireAdminAppUser,
 } from "@/lib/kyc/admin-workflow";
+import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
 
 function formatDob(dob: Date | string | null | undefined): string | null {
   if (!dob) return null;
@@ -233,17 +234,41 @@ export async function GET(
           uploadedAt: d.uploaded_at,
         })),
         verificationCards,
-        consent: consentRows.map((c) => ({
-          id: c.id,
-          consentFor: c.consent_for,
-          consentType: c.consent_type,
-          consentStatus: c.consent_status,
-          generatedPdfUrl: c.generated_pdf_url,
-          signedConsentUrl: c.signed_consent_url,
-          signedAt: c.signed_at,
-          verifiedAt: c.verified_at,
-          adminViewedBy: c.admin_viewed_by,
-          adminViewedAt: c.admin_viewed_at,
+        consent: await Promise.all(consentRows.map(async (c) => {
+          let signedUrl = c.signed_consent_url;
+
+          // Auto-fetch signed PDF from DigiO if consent is completed but PDF is missing
+          if (
+            !signedUrl &&
+            c.esign_transaction_id &&
+            ['esign_completed', 'admin_review_pending'].includes(c.consent_status)
+          ) {
+            try {
+              const stored = await fetchAndStoreSignedConsent(c.esign_transaction_id, leadId);
+              if (stored?.publicUrl) {
+                signedUrl = stored.publicUrl;
+                // Persist so we don't fetch again
+                await db.update(consentRecords)
+                  .set({ signed_consent_url: signedUrl, updated_at: new Date() })
+                  .where(eq(consentRecords.id, c.id));
+              }
+            } catch (e) {
+              console.error("[Case Review] Failed to auto-fetch signed consent PDF:", e);
+            }
+          }
+
+          return {
+            id: c.id,
+            consentFor: c.consent_for,
+            consentType: c.consent_type,
+            consentStatus: c.consent_status,
+            generatedPdfUrl: c.generated_pdf_url,
+            signedConsentUrl: signedUrl,
+            signedAt: c.signed_at,
+            verifiedAt: c.verified_at,
+            adminViewedBy: c.admin_viewed_by,
+            adminViewedAt: c.admin_viewed_at,
+          };
         })),
         metadata: metadata
           ? {

@@ -6,6 +6,7 @@ import {
     AlertCircle, CheckCircle2, ChevronRight, Clock,
     Download, Loader2, RefreshCw, Send, Shield, Upload, X, FileText,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import {
     SectionCard, DocumentCard, StatusBadge, ProgressHeader,
     StickyBottomBar, ErrorBanner, PrimaryButton, SecondaryButton,
@@ -113,6 +114,10 @@ export default function KYCPage() {
     const [reuploadType, setReuploadType] = useState<string | null>(null);
     const [reuploading, setReuploading] = useState(false);
 
+    // Requested docs from admin
+    const [requestedDocs, setRequestedDocs] = useState<any[]>([]);
+    const [uploadingRequestId, setUploadingRequestId] = useState<string | null>(null);
+
     const loadPageData = async (soft = false) => {
         if (soft) setRefreshing(true);
         else setLoading(true);
@@ -144,10 +149,11 @@ export default function KYCPage() {
                 setSubmittedForVerification(true);
             }
 
-            const [docsRes, verificationsRes, consentRes] = await Promise.allSettled([
+            const [docsRes, verificationsRes, consentRes, requestedDocsRes] = await Promise.allSettled([
                 fetch(`/api/kyc/${leadId}/documents?doc_for=customer`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/verifications?verification_for=customer`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/consent/status?consent_for=customer`, { cache: 'no-store' }),
+                fetch(`/api/kyc/${leadId}/requested-docs?doc_for=primary`, { cache: 'no-store' }),
             ]);
 
             if (docsRes.status === 'fulfilled') {
@@ -169,6 +175,13 @@ export default function KYCPage() {
                 if (consentJson?.success && consentJson.data) {
                     setConsentRecord(consentJson.data);
                     if (consentJson.data.consent_status) setConsentStatus(consentJson.data.consent_status);
+                }
+            }
+
+            if (requestedDocsRes.status === 'fulfilled') {
+                const rdJson = await requestedDocsRes.value.json();
+                if (rdJson?.success && Array.isArray(rdJson.data)) {
+                    setRequestedDocs(rdJson.data);
                 }
             }
         } catch {
@@ -266,6 +279,7 @@ export default function KYCPage() {
                     uploaded_at: new Date().toISOString(),
                 },
             }));
+            toast.success(`${documentType.replace(/_/g, ' ')} uploaded successfully`);
             await loadPageData(true);
         } catch (err: any) {
             setApiError(err?.message || 'Document upload failed');
@@ -312,6 +326,27 @@ export default function KYCPage() {
         }
     };
 
+    const handleRequestedDocUpload = async (requestId: string, file: File) => {
+        if (file.size > 5 * 1024 * 1024) { setApiError('File must be under 5MB'); return; }
+        setUploadingRequestId(requestId);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('requestId', requestId);
+            const res = await fetch(`/api/kyc/${leadId}/requested-docs`, { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data.success) {
+                toast.success('Document uploaded successfully');
+                setRequestedDocs(prev => prev.map(d =>
+                    d.id === requestId ? { ...d, file_url: data.fileUrl, upload_status: 'uploaded', uploaded_at: new Date().toISOString() } : d
+                ));
+            } else {
+                toast.error(data.error?.message || 'Upload failed');
+            }
+        } catch { toast.error('Upload failed'); }
+        finally { setUploadingRequestId(null); }
+    };
+
     const handleSaveDraft = async (auto = false) => {
         try {
             setSavingDraft(true);
@@ -342,8 +377,26 @@ export default function KYCPage() {
             const data = await res.json();
             if (!res.ok || !data?.success) throw new Error(data?.error?.message || data?.message || 'Failed to send consent');
             setConsentStatus('link_sent');
+
+            if (data.hasDigioIntegration) {
+                toast.success(`Consent SMS sent to customer via DigiO. They will receive a signing link shortly.`);
+            } else {
+                // DigiO failed — show warning with manual link
+                toast.warning(
+                    data.warning || 'SMS could not be sent automatically. Share the consent link manually.',
+                    { duration: 10000 }
+                );
+                if (data.consentLink) {
+                    // Copy to clipboard for manual sharing
+                    try {
+                        await navigator.clipboard.writeText(data.consentLink);
+                        toast.info('Consent link copied to clipboard. Share it with the customer manually.', { duration: 6000 });
+                    } catch {}
+                }
+            }
         } catch (err: any) {
             setApiError(err?.message || 'Failed to send consent');
+            toast.error(err?.message || 'Failed to send consent');
             setConsentPath('none');
         } finally {
             setConsentLoading(false);
@@ -432,7 +485,7 @@ export default function KYCPage() {
                     setLead((prev: any) => prev ? { ...prev, coupon_code: data.coupon_code, coupon_status: data.status } : prev);
                 } else {
                     setLead((prev: any) => prev ? { ...prev, coupon_code: data.coupon_code, coupon_status: 'reserved' } : prev);
-                    alert(`Coupon "${data.coupon_code}" validated successfully! Your coupon has been reserved for this lead.`);
+                    toast.success(`Coupon "${data.coupon_code}" validated and reserved for this lead.`);
                 }
             } else {
                 setApiError(data.message || data.error || 'Invalid coupon');
@@ -476,7 +529,7 @@ export default function KYCPage() {
             if (data.success) {
                 setSubmittedForVerification(true);
                 setLead((prev: any) => prev ? { ...prev, coupon_status: 'used' } : prev);
-                alert('Verification submitted successfully! KYC verification is now in progress.');
+                toast.success('Verification submitted successfully! KYC verification is now in progress.');
                 await loadPageData(true);
             } else {
                 setApiError(data.message || data.error?.message || 'Submission failed');
@@ -506,9 +559,21 @@ export default function KYCPage() {
         return (
             <div className="min-h-screen flex items-center justify-center bg-[#F8F9FB]">
                 <div className="text-center max-w-md">
-                    <Shield className="w-14 h-14 text-red-400 mx-auto mb-4" />
-                    <h2 className="text-2xl font-bold text-gray-900">Access Denied</h2>
-                    <p className="mt-2 text-sm text-gray-500">Step 2 is only available for hot leads with non-cash payment method.</p>
+                    <Shield className="w-14 h-14 text-amber-400 mx-auto mb-4" />
+                    <h2 className="text-2xl font-bold text-gray-900">KYC Not Available</h2>
+                    <p className="mt-2 text-sm text-gray-500">
+                        {lead?.payment_method === 'cash' || lead?.payment_method === 'upfront'
+                            ? 'KYC verification is not required for cash/upfront payment leads.'
+                            : 'KYC is only available for leads with a finance payment method.'}
+                    </p>
+                    {lead && (
+                        <div className="mt-4 p-4 bg-white border border-gray-200 rounded-xl text-left text-sm">
+                            <p><span className="font-semibold text-gray-700">Name:</span> {lead.full_name || lead.owner_name || '-'}</p>
+                            <p><span className="font-semibold text-gray-700">Phone:</span> {lead.phone || lead.owner_contact || '-'}</p>
+                            <p><span className="font-semibold text-gray-700">Payment:</span> {(lead.payment_method || '-').replace(/_/g, ' ')}</p>
+                            <p><span className="font-semibold text-gray-700">Status:</span> {lead.lead_status || '-'}</p>
+                        </div>
+                    )}
                     <button onClick={() => router.push('/dealer-portal/leads')} className="mt-6 px-6 py-3 bg-[#0047AB] text-white rounded-xl font-bold">Back to Leads</button>
                 </div>
             </div>
@@ -586,18 +651,27 @@ export default function KYCPage() {
                                             </div>
                                         </div>
                                         {consentPath !== 'manual' && (
-                                            <div className="flex gap-2">
-                                                <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
-                                                    className="flex-1 px-3 py-2 bg-[#25D366] text-white rounded-lg text-xs font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
-                                                    {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                                                    WhatsApp
-                                                </button>
-                                                <button onClick={() => handleSendConsent('sms')} disabled={consentLoading}
-                                                    className="flex-1 px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
-                                                    {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                                                    SMS
-                                                </button>
-                                            </div>
+                                            <>
+                                                <div className="flex gap-2">
+                                                    <button disabled
+                                                        title="WhatsApp consent is currently unavailable"
+                                                        className="flex-1 px-3 py-2 bg-gray-300 text-gray-500 rounded-lg text-xs font-bold cursor-not-allowed flex items-center justify-center gap-1.5">
+                                                        <Send className="w-3 h-3" />
+                                                        WhatsApp
+                                                        <span className="text-[9px] font-normal">(Coming soon)</span>
+                                                    </button>
+                                                    <button onClick={() => handleSendConsent('sms')} disabled={consentLoading}
+                                                        className="flex-1 px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                                        {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                                                        SMS
+                                                    </button>
+                                                </div>
+                                                {lead?.phone && (
+                                                    <p className="text-xs text-gray-500 mt-2">
+                                                        Consent SMS will be sent to: <span className="font-mono font-bold text-gray-700">{lead.phone}</span>
+                                                    </p>
+                                                )}
+                                            </>
                                         )}
                                         {(consentStatus === 'link_sent' || consentStatus === 'link_opened') && (
                                             <div className="mt-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2">
@@ -703,87 +777,58 @@ export default function KYCPage() {
 
                     <SectionCard title="Verification Action" action={
                         lead?.coupon_status === 'used'
-                            ? <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Submitted</span>
+                            ? <span className="text-xs font-bold text-emerald-600">Submitted</span>
                             : lead?.coupon_status === 'reserved'
-                                ? <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Shield className="w-3 h-3" />Reserved</span>
-                                : <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-bold">Awaiting Coupon</span>
+                                ? <span className="text-xs font-bold text-blue-600">Reserved</span>
+                                : null
                     }>
                         {lead?.coupon_status === 'used' || submittedForVerification ? (
-                            <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                            <div className="flex items-center gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
                                 <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-                                <div>
-                                    <p className="text-sm font-bold text-emerald-800">Verification Submitted</p>
-                                    <p className="text-xs text-emerald-600 mt-0.5">Coupon <span className="font-mono font-bold">{couponCode}</span> consumed. Verification is in progress.</p>
-                                </div>
+                                <p className="text-sm text-emerald-800">Verification submitted. Coupon <span className="font-mono font-bold">{couponCode}</span> consumed.</p>
                             </div>
-                        ) : (couponResult?.valid || couponResult?.success) && lead?.coupon_status === 'reserved' ? (
-                            <div className="space-y-3">
-                                <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
-                                    <Shield className="w-5 h-5 text-blue-600 flex-shrink-0" />
-                                    <div className="flex-1">
-                                        <p className="text-sm font-bold text-blue-800">
-                                            Coupon Reserved: <span className="font-mono">{couponCode}</span>
-                                        </p>
-                                        {couponResult.discount_amount > 0 && (
-                                            <p className="text-xs text-blue-600 mt-0.5">Discount: ₹{couponResult.discount_amount} off (Final: ₹{couponResult.final_amount})</p>
-                                        )}
-                                    </div>
+                        ) : (
+                            <div className="flex items-center gap-3 flex-wrap">
+                                <input
+                                    type="text"
+                                    value={couponCode}
+                                    onChange={e => setCouponCode(e.target.value.toUpperCase())}
+                                    placeholder="Enter coupon code"
+                                    maxLength={20}
+                                    className="h-10 px-4 bg-white border border-gray-300 rounded-lg outline-none text-sm font-mono focus:border-[#1D4ED8] transition-all w-48"
+                                />
+                                <button
+                                    onClick={handleValidateCoupon}
+                                    disabled={couponValidating || !couponCode.trim()}
+                                    className="h-10 px-5 bg-white border border-gray-300 rounded-lg text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-all disabled:opacity-40 flex items-center gap-2"
+                                >
+                                    {couponValidating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                                    Validate
+                                </button>
+                                <button
+                                    onClick={handleSubmitForVerification}
+                                    disabled={submitting || !(lead?.coupon_status === 'reserved')}
+                                    className="h-10 px-5 bg-white border border-gray-300 rounded-lg text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-all disabled:opacity-40 flex items-center gap-2"
+                                >
+                                    {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                                    Submit for Verification
+                                </button>
+                                {lead?.coupon_status === 'reserved' && (
                                     <button
                                         onClick={handleReleaseCoupon}
                                         disabled={releasingCoupon}
-                                        className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-50 transition-all disabled:opacity-50 flex items-center gap-1.5"
+                                        className="h-10 px-3 text-xs font-medium text-gray-500 hover:text-red-600 transition-all disabled:opacity-40 flex items-center gap-1"
                                     >
-                                        {releasingCoupon ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
-                                        Change Coupon
+                                        <X className="w-3 h-3" /> Change
                                     </button>
-                                </div>
-                                <button
-                                    onClick={handleSubmitForVerification}
-                                    disabled={submitting}
-                                    className="w-full px-6 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                                >
-                                    {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                                    Submit for Verification
-                                </button>
-                            </div>
-                        ) : (
-                            <div className="space-y-3">
-                                <p className="text-xs text-gray-500">Enter your verification coupon code to proceed. Each coupon allows one KYC verification.</p>
-                                <div className="flex items-center gap-3">
-                                    <input
-                                        type="text"
-                                        value={couponCode}
-                                        onChange={e => setCouponCode(e.target.value.toUpperCase())}
-                                        placeholder="Enter coupon code (e.g., ITARANG-FREE)"
-                                        maxLength={20}
-                                        className="flex-1 h-11 px-4 bg-white border-2 border-[#EBEBEB] rounded-xl outline-none text-sm font-mono focus:border-[#1D4ED8] transition-all"
-                                    />
-                                    <button
-                                        onClick={handleValidateCoupon}
-                                        disabled={couponValidating || !couponCode.trim()}
-                                        className="px-6 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2"
-                                    >
-                                        {couponValidating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
-                                        Validate
-                                    </button>
-                                </div>
-                                {couponResult && couponResult.already_used && (
-                                    <div className="px-4 py-2 bg-amber-50 border border-amber-200 rounded-xl">
-                                        <p className="text-sm font-medium text-amber-700">
-                                            <AlertCircle className="w-4 h-4 inline mr-1" />
-                                            Coupon <span className="font-mono font-bold">{couponResult.coupon_code}</span> is already applied to this lead.
-                                        </p>
-                                    </div>
-                                )}
-                                {couponResult && !couponResult.valid && !couponResult.success && (
-                                    <div className="px-4 py-2 bg-red-50 border border-red-200 rounded-xl">
-                                        <p className="text-sm font-medium text-red-700">
-                                            <AlertCircle className="w-4 h-4 inline mr-1" />
-                                            {couponResult.message || 'Invalid coupon code'}
-                                        </p>
-                                    </div>
                                 )}
                             </div>
+                        )}
+                        {couponResult && !couponResult.valid && !couponResult.success && !couponResult.already_used && (
+                            <p className="text-xs text-red-600 mt-2"><AlertCircle className="w-3 h-3 inline mr-1" />{couponResult.message || 'Invalid coupon code'}</p>
+                        )}
+                        {couponResult && couponResult.already_used && (
+                            <p className="text-xs text-amber-600 mt-2"><AlertCircle className="w-3 h-3 inline mr-1" />Coupon already applied to this lead.</p>
                         )}
                     </SectionCard>
 
@@ -795,51 +840,222 @@ export default function KYCPage() {
                         onChange={handleReuploadFile}
                     />
 
-                    {verifications.length > 0 && (
-                        <SectionCard title="Verification Status (Customer)">
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
-                                    <thead>
-                                        <tr className="border-b border-gray-100">
-                                            <th className="text-left py-3 px-3 font-bold text-gray-900">Check</th>
-                                            <th className="text-left py-3 px-3 font-bold text-gray-900">Status</th>
-                                            <th className="text-left py-3 px-3 font-bold text-gray-900">Last Update</th>
-                                            <th className="text-left py-3 px-3 font-bold text-gray-900">Action</th>
-                                            <th className="text-left py-3 px-3 font-bold text-gray-900">Failed Reason</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {verifications.map((v, i) => (
-                                            <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50">
-                                                <td className="py-3 px-3 font-medium text-gray-900">{v.label}</td>
-                                                <td className="py-3 px-3"><StatusBadge status={v.status} /></td>
-                                                <td className="py-3 px-3 text-gray-500 text-xs">
-                                                    {v.last_update ? new Date(v.last_update).toLocaleString() : '-'}
-                                                </td>
-                                                <td className="py-3 px-3">
-                                                    {v.status === 'success' || v.status === 'verified' ? (
-                                                        <span className="text-green-600 font-bold text-xs">Verified</span>
-                                                    ) : (v.status === 'failed' || v.status === 'awaiting_action') ? (
-                                                        <button
-                                                            onClick={() => triggerReupload(v.type)}
-                                                            disabled={reuploading && reuploadType === v.type}
-                                                            className="text-xs font-bold text-[#0047AB] hover:underline flex items-center gap-1 disabled:opacity-50"
-                                                        >
-                                                            {reuploading && reuploadType === v.type ? (
-                                                                <><Loader2 className="w-3 h-3 animate-spin" /> Uploading...</>
-                                                            ) : (
-                                                                <><Upload className="w-3 h-3" /> Re-upload</>
-                                                            )}
-                                                        </button>
-                                                    ) : (
-                                                        <span className="text-gray-400 text-xs">—</span>
-                                                    )}
-                                                </td>
-                                                <td className="py-3 px-3 text-xs text-red-600">{v.failed_reason || '-'}</td>
+                    {(() => {
+                        // Fixed verification checks matching the reference design
+                        const FIXED_CHECKS = [
+                            { type: 'aadhaar', label: 'Aadhaar Verification', docKeys: ['aadhaar_front', 'aadhaar_back'] },
+                            { type: 'pan', label: 'PAN Verification', docKeys: ['pan_card'] },
+                            { type: 'bank', label: 'Bank Verification', docKeys: ['bank_statement'] },
+                            { type: 'rc', label: 'RC Verification', docKeys: ['rc_copy'] },
+                            { type: 'mobile', label: 'Mobile Number', docKeys: [] },
+                        ];
+
+                        // Build a lookup from API verifications
+                        const apiVerMap: Record<string, VerificationRow> = {};
+                        for (const v of verifications) {
+                            apiVerMap[v.type] = v;
+                        }
+
+                        const rows = FIXED_CHECKS.map(check => {
+                            // 1. For mobile — always success if phone exists
+                            if (check.type === 'mobile') {
+                                return {
+                                    type: 'mobile',
+                                    label: 'Mobile Number',
+                                    status: lead?.phone ? 'success' : 'pending',
+                                    last_update: null,
+                                    failed_reason: null,
+                                } as VerificationRow;
+                            }
+
+                            // 2. Check uploaded document statuses first (admin review results)
+                            const docs = check.docKeys.map(k => uploadedDocs[k]).filter(Boolean);
+
+                            if (docs.length > 0) {
+                                // If any doc is failed/rejected by admin
+                                const failedDoc = docs.find(d => d.verification_status === 'failed' || d.verification_status === 'rejected');
+                                if (failedDoc) {
+                                    return {
+                                        type: check.type,
+                                        label: check.label,
+                                        status: 'failed',
+                                        last_update: failedDoc.uploaded_at || null,
+                                        failed_reason: failedDoc.rejection_reason || failedDoc.failed_reason || null,
+                                    } as VerificationRow;
+                                }
+
+                                // If all docs are verified/accepted by admin
+                                const allSuccess = docs.every(d => d.verification_status === 'success' || d.verification_status === 'verified');
+                                if (allSuccess) {
+                                    return {
+                                        type: check.type,
+                                        label: check.label,
+                                        status: 'success',
+                                        last_update: docs[0]?.uploaded_at || null,
+                                        failed_reason: null,
+                                    } as VerificationRow;
+                                }
+                            }
+
+                            // 3. Fall back to API verification result (from Decentro)
+                            const apiVer = apiVerMap[check.type];
+                            if (apiVer) {
+                                return apiVer;
+                            }
+
+                            // 4. No docs uploaded yet
+                            if (docs.length === 0) {
+                                return {
+                                    type: check.type,
+                                    label: check.label,
+                                    status: 'pending',
+                                    last_update: null,
+                                    failed_reason: null,
+                                } as VerificationRow;
+                            }
+
+                            // If in progress
+                            const anyInProgress = docs.some(d => d.verification_status === 'in_progress' || d.verification_status === 'initiating');
+                            if (anyInProgress) {
+                                return {
+                                    type: check.type,
+                                    label: check.label,
+                                    status: 'initiating',
+                                    last_update: docs[0]?.uploaded_at || null,
+                                    failed_reason: null,
+                                } as VerificationRow;
+                            }
+
+                            // Default: awaiting action (uploaded but not yet reviewed)
+                            return {
+                                type: check.type,
+                                label: check.label,
+                                status: 'awaiting_action',
+                                last_update: docs[0]?.uploaded_at || null,
+                                failed_reason: null,
+                            } as VerificationRow;
+                        });
+
+                        return (
+                            <SectionCard title="Verification Status (Customer)" action={
+                                <span className="text-sm">
+                                    Consent Status: {' '}
+                                    <span className={`font-bold ${
+                                        isFinalConsentStatus(consentStatus) ? 'text-emerald-600' :
+                                        consentStatus === 'esign_failed' || consentStatus === 'admin_rejected' ? 'text-red-600' :
+                                        'text-gray-700'
+                                    }`}>
+                                        {isFinalConsentStatus(consentStatus) ? 'Success' :
+                                         consentStatus === 'link_sent' ? 'Link Sent' :
+                                         consentStatus === 'esign_in_progress' ? 'Signing...' :
+                                         consentStatus === 'esign_completed' ? 'Signed' :
+                                         consentStatus.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                    </span>
+                                </span>
+                            }>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="border-b border-gray-200">
+                                                <th className="text-left py-2.5 px-3 font-semibold text-gray-500 text-xs">Check</th>
+                                                <th className="text-left py-2.5 px-3 font-semibold text-gray-500 text-xs">Status</th>
+                                                <th className="text-left py-2.5 px-3 font-semibold text-gray-500 text-xs">Last Update</th>
+                                                <th className="text-left py-2.5 px-3 font-semibold text-gray-500 text-xs">Action</th>
+                                                <th className="text-left py-2.5 px-3 font-semibold text-gray-500 text-xs">Failed Reason</th>
                                             </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                        </thead>
+                                        <tbody>
+                                            {rows.map((v, i) => (
+                                                <tr key={i} className="border-b border-gray-50">
+                                                    <td className="py-3 px-3 font-medium text-gray-900">{v.label}</td>
+                                                    <td className="py-3 px-3"><StatusBadge status={v.status} /></td>
+                                                    <td className="py-3 px-3 text-gray-500 text-xs">
+                                                        {v.last_update ? new Date(v.last_update).toLocaleString() : '-'}
+                                                    </td>
+                                                    <td className="py-3 px-3">
+                                                        {(v.status === 'failed' || v.status === 'rejected') ? (
+                                                            <button
+                                                                onClick={() => triggerReupload(v.type)}
+                                                                disabled={reuploading && reuploadType === v.type}
+                                                                className="text-xs font-semibold px-3 py-1.5 rounded flex items-center gap-1 disabled:opacity-50 transition-all bg-orange-500 text-white hover:bg-orange-600"
+                                                            >
+                                                                {reuploading && reuploadType === v.type ? (
+                                                                    <><Loader2 className="w-3 h-3 animate-spin" /> uploading...</>
+                                                                ) : (
+                                                                    <>re-upload</>
+                                                                )}
+                                                            </button>
+                                                        ) : null}
+                                                    </td>
+                                                    <td className="py-3 px-3 text-xs text-gray-600">{v.failed_reason || ''}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </SectionCard>
+                        );
+                    })()}
+
+                    {requestedDocs.length > 0 && (
+                        <SectionCard title="Requested Documents" action={
+                            <span className="text-xs font-semibold text-amber-600">
+                                {requestedDocs.filter(d => d.upload_status === 'not_uploaded').length} pending
+                            </span>
+                        }>
+                            <p className="text-xs text-gray-500 mb-4">The admin has requested the following documents. Please upload them to continue the verification process.</p>
+                            <div className="space-y-3">
+                                {requestedDocs.map(doc => (
+                                    <div key={doc.id} className={`flex items-center justify-between p-4 rounded-xl border ${
+                                        doc.upload_status === 'uploaded' ? 'border-emerald-200 bg-emerald-50/50' :
+                                        doc.upload_status === 'rejected' ? 'border-red-200 bg-red-50/50' :
+                                        'border-amber-200 bg-amber-50/50'
+                                    }`}>
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2">
+                                                <p className="text-sm font-bold text-gray-900">{doc.doc_label}</p>
+                                                {doc.is_required && <span className="text-red-500 text-xs">*</span>}
+                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                                    doc.upload_status === 'uploaded' ? 'bg-emerald-100 text-emerald-700' :
+                                                    doc.upload_status === 'rejected' ? 'bg-red-100 text-red-700' :
+                                                    'bg-amber-100 text-amber-700'
+                                                }`}>
+                                                    {doc.upload_status === 'not_uploaded' ? 'Pending Upload' :
+                                                     doc.upload_status === 'uploaded' ? 'Uploaded' :
+                                                     doc.upload_status === 'verified' ? 'Verified' :
+                                                     doc.upload_status === 'rejected' ? 'Rejected' : doc.upload_status}
+                                                </span>
+                                            </div>
+                                            {doc.rejection_reason && (
+                                                <p className="text-xs text-red-600 mt-1">Reason: {doc.rejection_reason}</p>
+                                            )}
+                                            {doc.created_at && (
+                                                <p className="text-[10px] text-gray-400 mt-1">Requested {new Date(doc.created_at).toLocaleString()}</p>
+                                            )}
+                                        </div>
+                                        {(doc.upload_status === 'not_uploaded' || doc.upload_status === 'rejected') && (
+                                            <label className={`px-4 py-2 rounded-lg text-xs font-bold cursor-pointer transition-all flex items-center gap-2 ${
+                                                uploadingRequestId === doc.id ? 'bg-gray-200 text-gray-500' : 'bg-[#0047AB] text-white hover:bg-[#003580]'
+                                            }`}>
+                                                {uploadingRequestId === doc.id ? (
+                                                    <><Loader2 className="w-3 h-3 animate-spin" /> Uploading...</>
+                                                ) : (
+                                                    <><Upload className="w-3 h-3" /> Upload</>
+                                                )}
+                                                <input
+                                                    type="file"
+                                                    className="hidden"
+                                                    accept="image/png,image/jpeg,application/pdf"
+                                                    disabled={uploadingRequestId === doc.id}
+                                                    onChange={e => e.target.files?.[0] && handleRequestedDocUpload(doc.id, e.target.files[0])}
+                                                />
+                                            </label>
+                                        )}
+                                        {doc.upload_status === 'uploaded' && (
+                                            <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
+                                        )}
+                                    </div>
+                                ))}
                             </div>
                         </SectionCard>
                     )}
@@ -848,9 +1064,31 @@ export default function KYCPage() {
                 <StickyBottomBar lastSaved={lastSaved}>
                     <OutlineButton onClick={() => router.push('/dealer-portal/leads')}>Back</OutlineButton>
                     <SecondaryButton onClick={() => handleSaveDraft(false)} loading={savingDraft}>Save Draft</SecondaryButton>
-                    <PrimaryButton onClick={handleSaveAndNext} loading={submitting} disabled={submitting}>
-                        Next <ChevronRight className="w-4 h-4" />
-                    </PrimaryButton>
+                    {(() => {
+                        const consentDone = isFinalConsentStatus(consentStatus);
+                        const allDocsUploaded = docStats.uploadedCount === docStats.total && docStats.total > 0;
+                        const canProceed = consentDone && allDocsUploaded;
+                        return (
+                            <div className="relative group">
+                                <PrimaryButton
+                                    onClick={handleSaveAndNext}
+                                    loading={submitting}
+                                    disabled={submitting || !canProceed}
+                                >
+                                    Next <ChevronRight className="w-4 h-4" />
+                                </PrimaryButton>
+                                {!canProceed && (
+                                    <div className="absolute bottom-full mb-2 right-0 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                                        {!consentDone && !allDocsUploaded
+                                            ? 'Complete consent verification and upload all documents'
+                                            : !consentDone
+                                                ? 'Consent must be verified by admin'
+                                                : 'Upload all required documents'}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })()}
                 </StickyBottomBar>
             </div>
         </div>

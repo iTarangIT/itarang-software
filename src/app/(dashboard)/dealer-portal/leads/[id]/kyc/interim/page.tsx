@@ -8,6 +8,7 @@ import {
     RefreshCw, ChevronRight, Plus, User, FileText, Scan, Camera
 } from 'lucide-react';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { toast } from 'sonner';
 
 const CO_BORROWER_DOCS = [
     { key: 'aadhaar_front', label: 'Aadhaar Front', required: true },
@@ -131,10 +132,12 @@ export default function InterimStepPage() {
             const data = await res.json();
             if (data.success) {
                 setCoBorrowerDocs(prev => ({ ...prev, [docType]: { file_url: data.file_url, status: 'pending' } }));
+                toast.success(`${docType.replace(/_/g, ' ')} uploaded successfully`);
             } else {
                 setApiError(data.error?.message || 'Upload failed');
+                toast.error(data.error?.message || 'Upload failed');
             }
-        } catch { setApiError('Upload failed'); }
+        } catch { setApiError('Upload failed'); toast.error('Upload failed'); }
     };
 
     const handleOtherDocUpload = async (docKey: string, file: File) => {
@@ -161,8 +164,13 @@ export default function InterimStepPage() {
                 body: JSON.stringify({ channel })
             });
             const data = await res.json();
-            if (data.success) setCoBorrowerConsentStatus('link_sent');
-        } catch { setApiError('Failed to send consent'); }
+            if (data.success) {
+                setCoBorrowerConsentStatus('link_sent');
+                toast.success(`Consent link sent via ${channel.toUpperCase()}`);
+            } else {
+                toast.error(data.error?.message || 'Failed to send consent');
+            }
+        } catch { setApiError('Failed to send consent'); toast.error('Failed to send consent'); }
     };
 
     const handleSubmitToSM = async () => {
@@ -175,10 +183,12 @@ export default function InterimStepPage() {
             const data = await res.json();
             if (data.success) {
                 setSubmitted(true);
+                toast.success('Submitted to iTarang team successfully!');
             } else {
                 setApiError(data.error?.message || 'Failed to submit');
+                toast.error(data.error?.message || 'Failed to submit');
             }
-        } catch { setApiError('Submission failed'); }
+        } catch { setApiError('Submission failed'); toast.error('Submission failed'); }
         finally { setSubmitting(false); }
     };
 
@@ -336,11 +346,18 @@ export default function InterimStepPage() {
                                 <button onClick={() => handleSendCoBorrowerConsent('sms')} disabled={coBorrowerConsentStatus !== 'awaiting_signature'} className="flex items-center justify-center gap-2 px-4 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold disabled:opacity-40">
                                     <Send className="w-4 h-4" /> Send SMS Consent
                                 </button>
-                                <button onClick={() => handleSendCoBorrowerConsent('whatsapp')} disabled={coBorrowerConsentStatus !== 'awaiting_signature'} className="flex items-center justify-center gap-2 px-4 py-3 bg-green-600 text-white rounded-xl text-sm font-bold disabled:opacity-40">
-                                    <Send className="w-4 h-4" /> Send WhatsApp Consent
+                                <button disabled
+                                    title="WhatsApp consent is currently unavailable"
+                                    className="flex items-center justify-center gap-2 px-4 py-3 bg-gray-300 text-gray-500 rounded-xl text-sm font-bold cursor-not-allowed">
+                                    <Send className="w-4 h-4" /> WhatsApp <span className="text-[10px] font-normal">(Coming soon)</span>
                                 </button>
                             </div>
-                            <div className={`mt-4 px-4 py-2 rounded-lg text-xs font-bold ${coBorrowerConsentStatus === 'link_sent' ? 'bg-amber-50 text-amber-700' : coBorrowerConsentStatus === 'digitally_signed' || coBorrowerConsentStatus === 'manual_uploaded' ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
+                            {coBorrowerForm.phone && (
+                                <p className="mt-3 text-xs text-gray-500">
+                                    Consent SMS will be sent to: <span className="font-mono font-bold text-gray-700">{coBorrowerForm.phone}</span>
+                                </p>
+                            )}
+                            <div className={`mt-3 px-4 py-2 rounded-lg text-xs font-bold ${coBorrowerConsentStatus === 'link_sent' ? 'bg-amber-50 text-amber-700' : coBorrowerConsentStatus === 'digitally_signed' || coBorrowerConsentStatus === 'manual_uploaded' ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
                                 Consent Status: {coBorrowerConsentStatus.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                             </div>
                         </SectionCard>
@@ -439,17 +456,28 @@ function FormInput({ label, value, onChange, placeholder, type = 'text' }: { lab
 }
 
 function DocumentCard({ label, required, uploaded, status, failedReason, onUpload }: { label: string; required?: boolean; uploaded: boolean; status?: string; failedReason?: string | null; onUpload: (file: File) => void }) {
+    const statusLabel = status === 'success' || status === 'verified'
+        ? 'Verified' : status === 'failed' || status === 'rejected'
+        ? 'Failed' : status === 'in_progress'
+        ? 'Verifying...' : uploaded
+        ? 'Uploaded - Pending' : null;
+
+    const statusColor = status === 'success' || status === 'verified'
+        ? 'text-green-600' : status === 'failed' || status === 'rejected'
+        ? 'text-red-500' : status === 'in_progress'
+        ? 'text-blue-600' : 'text-amber-600';
+
     return (
-        <label className={`flex flex-col items-center justify-center p-6 border-2 rounded-2xl cursor-pointer transition-all min-h-[120px] ${uploaded ? status === 'failed' ? 'border-red-200 bg-red-50' : status === 'success' ? 'border-green-200 bg-green-50' : 'border-blue-200 bg-blue-50' : 'border-dashed border-gray-200 hover:border-[#0047AB] hover:bg-gray-50'}`}>
+        <label className={`flex flex-col items-center justify-center p-6 border-2 rounded-2xl cursor-pointer transition-all min-h-[120px] ${uploaded ? status === 'failed' || status === 'rejected' ? 'border-red-200 bg-red-50' : status === 'success' || status === 'verified' ? 'border-green-200 bg-green-50' : 'border-blue-200 bg-blue-50' : 'border-dashed border-gray-200 hover:border-[#0047AB] hover:bg-gray-50'}`}>
             <input type="file" className="hidden" accept="image/*,application/pdf" onChange={e => e.target.files?.[0] && onUpload(e.target.files[0])} />
             {uploaded ? (
-                status === 'success' ? <CheckCircle2 className="w-6 h-6 text-green-500 mb-2" /> :
-                    status === 'failed' ? <XCircle className="w-6 h-6 text-red-500 mb-2" /> :
+                status === 'success' || status === 'verified' ? <CheckCircle2 className="w-6 h-6 text-green-500 mb-2" /> :
+                    status === 'failed' || status === 'rejected' ? <XCircle className="w-6 h-6 text-red-500 mb-2" /> :
                         <Clock className="w-6 h-6 text-blue-500 mb-2" />
             ) : <Upload className="w-6 h-6 text-gray-300 mb-2" />}
             <span className="text-xs font-bold text-gray-700 text-center">{label}</span>
             {required && !uploaded && <span className="text-[10px] text-red-400 mt-1">Required</span>}
-            {uploaded && <span className="text-[10px] text-green-600 mt-1">Uploaded</span>}
+            {statusLabel && <span className={`text-[10px] ${statusColor} mt-1 font-semibold`}>{statusLabel}</span>}
             {failedReason && <span className="text-[10px] text-red-500 mt-1 text-center">{failedReason}</span>}
         </label>
     );
