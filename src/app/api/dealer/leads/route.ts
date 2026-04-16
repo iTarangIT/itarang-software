@@ -3,8 +3,23 @@ import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-util
 import { requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { leads, loanDetails, personalDetails, kycDocuments, auditLogs, accounts } from '@/lib/db/schema';
+import { leads, loanDetails, personalDetails, kycDocuments, auditLogs, accounts, dealerOnboardingApplications } from '@/lib/db/schema';
 import { and, desc, eq, ilike, or } from 'drizzle-orm';
+
+/** Resolve dealer_id: user.dealer_id first, then onboarding dealerCode */
+async function resolveDealerId(user: { id: string; dealer_id?: string | null }): Promise<string | null> {
+    if (user.dealer_id) return user.dealer_id;
+    try {
+        const rows = await db.select({ dealerCode: dealerOnboardingApplications.dealerCode })
+            .from(dealerOnboardingApplications)
+            .where(eq(dealerOnboardingApplications.dealerUserId, user.id))
+            .orderBy(desc(dealerOnboardingApplications.updatedAt))
+            .limit(1);
+        return rows[0]?.dealerCode || null;
+    } catch {
+        return null;
+    }
+}
 
 // Extended Zod Schema
 const dealerLeadSchema = z.object({
@@ -57,17 +72,18 @@ const dealerLeadSchema = z.object({
 export const POST = withErrorHandler(async (req: Request) => {
     try {
         const user = await requireRole(['dealer']);
-        if (!user.dealer_id) {
+        const dealer_id = await resolveDealerId(user);
+        if (!dealer_id) {
             return errorResponse('Access denied: Dealer account required', 403);
         }
 
         // VERIFY DEALER ACCOUNT EXISTS
         const existingAccount = await db.query.accounts.findFirst({
-            where: eq(accounts.id, user.dealer_id)
+            where: eq(accounts.id, dealer_id)
         });
 
         if (!existingAccount) {
-            return errorResponse(`Configuration Error: Linked Dealer Account (${user.dealer_id}) not found in system. Please contact admin.`, 400);
+            return errorResponse(`Configuration Error: Linked Dealer Account (${dealer_id}) not found in system. Please contact admin.`, 400);
         }
 
         // 2. Validate Body
@@ -85,7 +101,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             // A. Insert Lead
             await tx.insert(leads).values({
                 id: leadId,
-                dealer_id: user.dealer_id,
+                dealer_id: dealer_id,
                 owner_name: data.full_name,
                 owner_contact: data.phone,
                 shop_address: data.local_address, // Use local address as shop address or permanent
@@ -188,7 +204,8 @@ export const POST = withErrorHandler(async (req: Request) => {
 export const GET = withErrorHandler(async (req: Request) => {
     // Use requireRole (Drizzle, bypasses RLS) — same pattern as leads/create
     const user = await requireRole(['dealer']);
-    if (!user.dealer_id) {
+    const dealer_id = await resolveDealerId(user);
+    if (!dealer_id) {
         return errorResponse('Access denied: no dealer account linked', 403);
     }
 
@@ -197,7 +214,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     const status = searchParams.get('status');
     const type = searchParams.get('type');
 
-    const conditions = [eq(leads.dealer_id, user.dealer_id)];
+    const conditions = [eq(leads.dealer_id, dealer_id)];
 
     if (status && status !== 'All') {
         conditions.push(eq(leads.lead_status, status.toLowerCase()));
