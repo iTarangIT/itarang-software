@@ -4,8 +4,9 @@ import { useState, useEffect } from 'react';
 import {
     Loader2, Search, CheckCircle2, XCircle, AlertTriangle,
     FileText, User, ChevronDown, ChevronRight, Eye, Download,
-    MessageSquare, Clock, Shield
+    MessageSquare, Clock, Shield, RefreshCw
 } from 'lucide-react';
+import { toast } from 'sonner';
 
 type ReviewableDoc = {
     id: string;
@@ -43,17 +44,25 @@ export default function AdminKYCReviewPage() {
     const [additionalDocRequest, setAdditionalDocRequest] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
+    const fetchReviews = async (silent = false) => {
+        try {
+            if (!silent) setLoading(true);
+            const params = new URLSearchParams({ status: filterStatus, search: searchQuery });
+            const res = await fetch(`/api/admin/kyc-reviews?${params}`);
+            const data = await res.json();
+            if (data.success) setLeads(data.data);
+        } catch { /* silent */ }
+        finally { if (!silent) setLoading(false); }
+    };
+
     useEffect(() => {
-        const fetchReviews = async () => {
-            try {
-                const params = new URLSearchParams({ status: filterStatus, search: searchQuery });
-                const res = await fetch(`/api/admin/kyc-reviews?${params}`);
-                const data = await res.json();
-                if (data.success) setLeads(data.data);
-            } catch { /* silent */ }
-            finally { setLoading(false); }
-        };
         fetchReviews();
+    }, [filterStatus, searchQuery]);
+
+    // Auto-refresh every 30 seconds
+    useEffect(() => {
+        const interval = setInterval(() => fetchReviews(true), 30000);
+        return () => clearInterval(interval);
     }, [filterStatus, searchQuery]);
 
     const handleReviewSubmit = async (docId: string, leadId: string) => {
@@ -73,18 +82,16 @@ export default function AdminKYCReviewPage() {
             });
             const data = await res.json();
             if (data.success) {
-                // Refresh
+                toast.success(`Document ${reviewAction === 'verified' ? 'verified' : reviewAction === 'rejected' ? 'rejected' : 'additional docs requested'} successfully`);
                 setReviewingDoc(null);
                 setReviewNotes('');
                 setRejectionReason('');
                 setAdditionalDocRequest('');
-                // Re-fetch
-                const params = new URLSearchParams({ status: filterStatus, search: searchQuery });
-                const refreshRes = await fetch(`/api/admin/kyc-reviews?${params}`);
-                const refreshData = await refreshRes.json();
-                if (refreshData.success) setLeads(refreshData.data);
+                await fetchReviews(true);
+            } else {
+                toast.error(data.error?.message || 'Review action failed');
             }
-        } catch { /* silent */ }
+        } catch { toast.error('Failed to submit review'); }
         finally { setSubmitting(false); }
     };
 

@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { GlobalSearchOverlay } from '@/components/search/GlobalSearchOverlay';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { toast } from 'sonner';
 
 export function Header() {
     const router = useRouter();
@@ -26,10 +27,14 @@ export function Header() {
         if (loggingOut) return;
         setLoggingOut(true);
         setIsProfileOpen(false);
-        // Single round-trip: the /api/auth/logout route deletes sb-* cookies
-        // and 303-redirects to /login. No Supabase network call, no server
-        // action, no double session invalidation.
-        window.location.href = '/api/auth/logout';
+        toast.success('Signed out successfully. Redirecting...');
+        // Short delay so the user sees the toast before redirect
+        setTimeout(() => {
+            // Single round-trip: the /api/auth/logout route deletes sb-* cookies
+            // and 303-redirects to /login. No Supabase network call, no server
+            // action, no double session invalidation.
+            window.location.href = '/api/auth/logout';
+        }, 800);
     };
 
     // Close dropdown when clicking outside

@@ -1,9 +1,15 @@
 /**
- * Decentro KYC API Client (Staging)
- * Base: https://in.staging.decentro.tech
+ * Decentro KYC API Client
+ * Set DECENTRO_BASE_URL to switch between environments:
+ *   Sandbox:    https://in.staging.decentro.tech
+ *   Production: https://in.decentro.tech
  */
 
-const BASE_URL = process.env.DECENTRO_BASE_URL || 'https://in.staging.decentro.tech';
+const BASE_URL = process.env.DECENTRO_BASE_URL || (
+    process.env.NODE_ENV === 'production'
+        ? 'https://in.decentro.tech'
+        : 'https://in.staging.decentro.tech'
+);
 const CLIENT_ID = process.env.DECENTRO_CLIENT_ID!;
 const CLIENT_SECRET = process.env.DECENTRO_CLIENT_SECRET!;
 const MODULE_SECRET_KYC = process.env.DECENTRO_MODULE_SECRET_KYC;

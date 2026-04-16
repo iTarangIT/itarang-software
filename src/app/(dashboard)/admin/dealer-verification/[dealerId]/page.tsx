@@ -16,7 +16,12 @@ import {
   Clock3,
   Download,
   ExternalLink,
+  RefreshCw,
+  Send,
+  Loader2,
+  FileSignature,
 } from "lucide-react";
+import { toast } from "sonner";
 
 type DocumentItem = {
   id?: string;
@@ -262,6 +267,8 @@ export default function DealerReviewPage() {
   const [remarks, setRemarks] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [agreementLoading, setAgreementLoading] = useState(false);
+  const [refreshingAgreement, setRefreshingAgreement] = useState(false);
 
   useEffect(() => {
     const loadDealer = async () => {
@@ -300,7 +307,10 @@ export default function DealerReviewPage() {
       });
       const json = await res.json();
       if (json.success) {
+        toast.success("Dealer approved and activated!");
         router.push("/admin/dealer-verification");
+      } else {
+        toast.error(json.error?.message || "Failed to approve");
       }
     } finally {
       setSubmitting(false);
@@ -317,7 +327,10 @@ export default function DealerReviewPage() {
       });
       const json = await res.json();
       if (json.success) {
+        toast.success("Correction requested");
         router.push("/admin/dealer-verification");
+      } else {
+        toast.error(json.error?.message || "Failed to request correction");
       }
     } finally {
       setSubmitting(false);
@@ -334,10 +347,79 @@ export default function DealerReviewPage() {
       });
       const json = await res.json();
       if (json.success) {
+        toast.success("Application rejected");
         router.push("/admin/dealer-verification");
       }
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const reloadData = async () => {
+    try {
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}`);
+      const json = await res.json();
+      if (json.success) setData(json.data);
+    } catch {}
+  };
+
+  const handleInitiateAgreement = async () => {
+    if (!data) return;
+    setAgreementLoading(true);
+    try {
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/initiate-agreement`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agreementConfig: {
+            dealerSignerName: data.ownerName || data.companyName || "",
+            dealerSignerEmail: data.ownerEmail || "",
+            dealerSignerPhone: data.ownerPhone || "",
+            dealerSignerDesignation: "Authorized Signatory",
+            dealerSigningMethod: "aadhaar_esign",
+            itarangSignatory1: {
+              name: "iTarang Authorized Signatory",
+              email: "agreements@itarang.com",
+              mobile: "",
+              signingMethod: "aadhaar_esign",
+            },
+            agreementName: `Dealer Agreement - ${data.companyName || dealerId}`,
+            agreementVersion: "1.0",
+            dateOfSigning: new Date().toISOString().slice(0, 10),
+          },
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success("Agreement initiated! Signing link sent to dealer.");
+        await reloadData();
+      } else {
+        toast.error(json.error?.message || "Failed to initiate agreement");
+      }
+    } catch (err) {
+      toast.error("Failed to initiate agreement");
+    } finally {
+      setAgreementLoading(false);
+    }
+  };
+
+  const handleRefreshAgreement = async () => {
+    setRefreshingAgreement(true);
+    try {
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/refresh-agreement`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success("Agreement status refreshed");
+        await reloadData();
+      } else {
+        toast.error(json.error?.message || "Failed to refresh agreement status");
+      }
+    } catch {
+      toast.error("Failed to refresh agreement status");
+    } finally {
+      setRefreshingAgreement(false);
     }
   };
 
@@ -528,19 +610,46 @@ export default function DealerReviewPage() {
                 />
               </div>
 
-              {data.agreement?.copyUrl ? (
-                <Link
-                  href={data.agreement.copyUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-5 inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  <Download className="h-4 w-4" />
-                  View / Download Agreement
-                </Link>
-              ) : (
-                <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                  Agreement copy is not available yet.
+              {/* Agreement Action Buttons */}
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                {(!data.agreement?.status || data.agreement?.status === "Not available" || data.agreement?.status === "not_generated" || data.agreement?.status === "failed" || data.agreement?.status === "expired") && (
+                  <button
+                    onClick={handleInitiateAgreement}
+                    disabled={agreementLoading}
+                    className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {agreementLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSignature className="h-4 w-4" />}
+                    {data.agreement?.status === "failed" || data.agreement?.status === "expired" ? "Re-initiate Agreement" : "Initiate Agreement"}
+                  </button>
+                )}
+
+                {data.agreement?.agreementId && data.agreement?.status !== "completed" && data.agreement?.status !== "Not available" && (
+                  <button
+                    onClick={handleRefreshAgreement}
+                    disabled={refreshingAgreement}
+                    className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {refreshingAgreement ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                    Refresh Status
+                  </button>
+                )}
+
+                {data.agreement?.copyUrl && (
+                  <a
+                    href={data.agreement.copyUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                  >
+                    <Download className="h-4 w-4" />
+                    Download Signed Agreement
+                  </a>
+                )}
+              </div>
+
+              {!data.agreement?.agreementId && !data.agreement?.copyUrl && data.agreement?.status !== "completed" && (
+                <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                  No agreement has been initiated yet. Click &quot;Initiate Agreement&quot; to send a signing request to the dealer.
                 </div>
               )}
             </SectionCard>

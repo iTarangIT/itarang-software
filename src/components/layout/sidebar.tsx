@@ -477,14 +477,26 @@ export function Sidebar() {
   const pathname = usePathname();
   const { user, loading } = useAuth();
 
-  if (loading || !user) {
-    return (
-      <div className="w-64 bg-slate-50/50 h-screen border-r border-gray-100 fixed left-0 top-0 z-10 animate-pulse hidden md:block" />
-    );
-  }
+  // Derive role from the current pathname so the sidebar renders immediately
+  // even before the auth context resolves. This eliminates the "blank sidebar
+  // until refresh" SSR issue because we no longer gate on loading/user.
+  const inferredRole = (() => {
+    if (user?.role) return user.role.toLowerCase();
+    if (pathname.startsWith("/dealer-portal")) return "dealer";
+    if (pathname.startsWith("/admin")) return "admin";
+    if (pathname.startsWith("/ceo")) return "ceo";
+    if (pathname.startsWith("/sales-head")) return "sales_head";
+    if (pathname.startsWith("/business-head")) return "business_head";
+    if (pathname.startsWith("/finance-controller")) return "finance_controller";
+    if (pathname.startsWith("/sales-order-manager")) return "sales_order_manager";
+    if (pathname.startsWith("/inventory-manager")) return "inventory_manager";
+    if (pathname.startsWith("/service-engineer")) return "service_engineer";
+    if (pathname.startsWith("/sales-manager")) return "sales_manager";
+    if (pathname.startsWith("/sales-executive")) return "sales_executive";
+    return "user";
+  })();
 
-  const userRole = (user.role || "user").toLowerCase();
-  const menuItems = roleNavigation[userRole] || roleNavigation["user"] || [];
+  const menuItems = roleNavigation[inferredRole] || roleNavigation["user"] || [];
 
   return (
     <div className="w-64 bg-slate-50/50 h-screen border-r border-gray-100 flex-col fixed left-0 top-0 z-10 hidden md:flex">
@@ -539,17 +551,29 @@ export function Sidebar() {
 
       <div className="p-4 border-t border-gray-100/50 space-y-2">
         <div className="flex items-center gap-3 p-3 rounded-xl hover:bg-white hover:shadow-sm transition-all group cursor-default">
-          <div className="w-9 h-9 bg-brand-600 rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm uppercase">
-            {user.name?.[0] || user.email?.[0] || "U"}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-gray-900 truncate">
-              {user.name || "User"}
-            </p>
-            <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium mt-1 bg-brand-100 text-brand-700 uppercase">
-              {user.role}
-            </span>
-          </div>
+          {loading && !user ? (
+            <>
+              <div className="w-9 h-9 bg-gray-200 rounded-full animate-pulse" />
+              <div className="flex-1 min-w-0 space-y-2">
+                <div className="h-4 w-24 bg-gray-200 rounded animate-pulse" />
+                <div className="h-3 w-16 bg-gray-200 rounded animate-pulse" />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="w-9 h-9 bg-brand-600 rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm uppercase">
+                {user?.name?.[0] || user?.email?.[0] || "U"}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-gray-900 truncate">
+                  {user?.name || "User"}
+                </p>
+                <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium mt-1 bg-brand-100 text-brand-700 uppercase">
+                  {user?.role || inferredRole}
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

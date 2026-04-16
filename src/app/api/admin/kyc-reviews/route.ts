@@ -10,7 +10,7 @@ import {
 } from "@/lib/db/schema";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
-const ADMIN_ROLES = ["ceo", "business_head", "sales_head"] as const;
+const ADMIN_ROLES = ["admin", "ceo", "business_head", "sales_head", "sales_manager", "sales_executive"] as const;
 const REVIEW_OUTCOMES = ["verified", "rejected", "request_additional"] as const;
 
 type ReviewFilter = "all" | "pending" | "verified" | "rejected";

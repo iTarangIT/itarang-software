@@ -2,8 +2,8 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dealerOnboardingApplications } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { dealerOnboardingApplications, dealerAgreementSigners } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -333,6 +333,33 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         updatedAt: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
+
+    // Sync per-signer statuses from Digio response
+    const signingParties = Array.isArray(parsed?.signing_parties)
+      ? parsed.signing_parties
+      : [];
+
+    for (const party of signingParties) {
+      const partyEmail = String(party?.identifier || party?.email || "").trim().toLowerCase();
+      if (!partyEmail) continue;
+
+      const signerStatus = String(party?.status || "").toLowerCase();
+
+      await db
+        .update(dealerAgreementSigners)
+        .set({
+          signerStatus: signerStatus || "sent",
+          providerSigningUrl: party?.authentication_url || null,
+          providerRawResponse: party || {},
+          lastEventAt: new Date(),
+        })
+        .where(
+          and(
+            eq(dealerAgreementSigners.applicationId, dealerId),
+            eq(dealerAgreementSigners.signerEmail, partyEmail)
+          )
+        );
+    }
 
     return NextResponse.json({
       success: true,

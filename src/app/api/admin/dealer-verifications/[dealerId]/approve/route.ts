@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dealerOnboardingApplications, users } from "@/lib/db/schema";
+import { dealerOnboardingApplications, users, accounts } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword";
 import { hashPassword } from "@/lib/auth/hashPassword";
@@ -77,6 +77,27 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         updatedAt: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
+
+    // 0) Create dealer account in accounts table (required for leads FK constraint)
+    const existingAccount = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.id, dealerCode))
+      .limit(1);
+
+    if (existingAccount.length === 0) {
+      await db.insert(accounts).values({
+        id: dealerCode,
+        business_entity_name: application.companyName || "Dealer",
+        contact_name: application.ownerName || application.companyName || "Dealer",
+        contact_email: dealerLoginEmail,
+        contact_phone: application.ownerPhone || null,
+        gstin: application.gstNumber || null,
+        dealer_code: dealerCode,
+        status: "active",
+        onboarding_status: "approved",
+      });
+    }
 
     // 1) Create or update Supabase Auth user
     const { data: authUsers, error: listError } = await supabaseAdmin.auth.admin.listUsers();

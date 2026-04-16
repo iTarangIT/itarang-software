@@ -4,6 +4,7 @@ import "./globals.css";
 
 import Providers from "@/components/Providers";
 import { AuthProvider } from "@/components/auth/AuthProvider";
+import { Toaster } from "sonner";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -23,6 +24,7 @@ export default function RootLayout({
         <Providers>
           <AuthProvider>{children}</AuthProvider>
         </Providers>
+        <Toaster position="top-right" richColors closeButton duration={4000} />
       </body>
     </html>
   );

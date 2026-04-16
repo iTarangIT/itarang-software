@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import ManualDecisionSection from "./ManualDecisionSection";
 import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface AadhaarCardProps {
@@ -106,6 +105,7 @@ export default function AadhaarCard({
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
   const [showMoreDocsModal, setShowMoreDocsModal] = useState(false);
+  const [actionResult, setActionResult] = useState<{ success: boolean; message: string } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const pollStatus = useCallback(async () => {
@@ -191,28 +191,36 @@ export default function AadhaarCard({
   };
 
   const handleAdminAction = async (action: "accept" | "reject" | "request_more_docs") => {
-    const vid = existingVerification?.id;
-    if (!vid) { setError("No verification record found. Please wait for document to be fetched."); return; }
+    if (action === "request_more_docs") { setShowMoreDocsModal(true); return; }
     if (action === "reject" && !adminNotes.trim()) {
       setError("Please provide rejection reason in admin notes");
       return;
     }
     setActionLoading(action);
     setError("");
+    setActionResult(null);
     try {
-      const res = await fetch(`/api/admin/kyc/${leadId}/verification/${vid}/action`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action,
-          notes: adminNotes,
-          rejection_reason: action === "reject" ? adminNotes : undefined,
-        }),
-      });
+      const vid = existingVerification?.id;
+      const res = vid
+        ? await fetch(`/api/admin/kyc/${leadId}/verification/${vid}/action`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
+          })
+        : await fetch(`/api/admin/kyc/${leadId}/verification/manual`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action, verification_type: "aadhaar", applicant, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
+          });
       const data = await res.json();
       if (data.success) {
-        if (action === "accept") setCardStatus("success");
-        else if (action === "reject") setCardStatus("failed");
+        if (action === "accept") {
+          setCardStatus("success");
+          setActionResult({ success: true, message: "Aadhaar verification accepted successfully" });
+        } else if (action === "reject") {
+          setCardStatus("failed");
+          setActionResult({ success: true, message: "Aadhaar verification rejected" });
+        }
         onActionComplete?.();
       } else {
         setError(data.error?.message || "Action failed");
@@ -313,15 +321,6 @@ export default function AadhaarCard({
               {loading ? "Sending..." : "Send DigiLocker Link via SMS"}
             </button>
 
-            {/* Manual Override — skip DigiLocker when Aadhaar was verified offline */}
-            {!existingVerification?.id && (
-              <ManualDecisionSection
-                leadId={leadId}
-                verificationType="aadhaar"
-                applicant={applicant}
-                onActionComplete={onActionComplete}
-              />
-            )}
           </div>
         )}
 
@@ -454,36 +453,47 @@ export default function AadhaarCard({
               </div>
             )}
 
-            {cardStatus === "document_fetched" && existingVerification?.id && (
-              <div className="space-y-3 pt-3 border-t border-gray-100">
-                <div>
-                  <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">Admin Notes</label>
-                  <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
-                    placeholder="Add verification remarks..."
-                    className="w-full mt-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => handleAdminAction("accept")} disabled={!!actionLoading}
-                    className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                    {actionLoading === "accept" ? "..." : "Accept"}
-                  </button>
-                  <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
-                    className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                    {actionLoading === "reject" ? "..." : "Reject"}
-                  </button>
-                  <button onClick={() => setShowMoreDocsModal(true)} disabled={!!actionLoading}
-                    className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                    Request Docs
-                  </button>
-                </div>
-              </div>
-            )}
+          </div>
+        )}
 
-            {cardStatus === "success" && (
-              <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-green-700 text-sm font-medium">
-                Aadhaar verification accepted by admin.
+        {/* Admin Actions — Always visible */}
+        {cardStatus !== "initiating" && (
+          <div className="space-y-3 pt-4 border-t border-gray-200">
+            {(existingVerification?.adminAction || actionResult) && (
+              <div className={`rounded-lg p-3 text-sm font-medium flex items-center gap-2 ${
+                (existingVerification?.adminAction === "accepted" || actionResult?.success)
+                  ? "bg-green-50 border border-green-200 text-green-700"
+                  : "bg-red-50 border border-red-200 text-red-700"
+              }`}>
+                <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  {(existingVerification?.adminAction === "accepted" || (actionResult?.success && actionResult.message.includes("accepted")))
+                    ? <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    : <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  }
+                </svg>
+                {actionResult?.message || `Aadhaar verification ${existingVerification?.adminAction} by admin.`}
               </div>
             )}
+            <div>
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Admin Notes</label>
+              <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
+                placeholder="Add verification remarks..."
+                className="w-full mt-1.5 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none" />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => handleAdminAction("accept")} disabled={!!actionLoading}
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
+                {actionLoading === "accept" ? "Accepting..." : "Accept"}
+              </button>
+              <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
+                {actionLoading === "reject" ? "Rejecting..." : "Reject"}
+              </button>
+              <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
+                className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
+                Request Docs
+              </button>
+            </div>
           </div>
         )}
 

@@ -3,8 +3,9 @@ import { db } from "@/lib/db/index";
 import {
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
+  dealerAgreementSigners,
 } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -78,15 +79,41 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         reviewStatus: row.reviewStatus,
         submittedAt: row.submittedAt,
         documents,
-        agreement: row.financeEnabled
-          ? {
-              agreementId: null,
+        agreement: await (async () => {
+          if (!row.financeEnabled) return null;
+          // Fetch actual agreement data from signers table
+          const signers = await db
+            .select()
+            .from(dealerAgreementSigners)
+            .where(eq(dealerAgreementSigners.applicationId, row.id))
+            .orderBy(desc(dealerAgreementSigners.lastEventAt));
+          if (signers.length === 0) {
+            return {
+              agreementId: row.providerDocumentId || null,
               signerName: null,
               signerEmail: null,
-              status: "Not available",
-              copyUrl: null,
-            }
-          : null,
+              status: row.agreementStatus || "Not available",
+              copyUrl: row.signedAgreementUrl || null,
+            };
+          }
+          const dealerSigner = signers.find(s => s.signerRole === 'dealer') || signers[0];
+          // Use overall agreement status from main table, fall back to dealer signer status
+          const overallStatus = row.agreementStatus || dealerSigner.signerStatus || "pending";
+          return {
+            agreementId: row.providerDocumentId || dealerSigner.providerDocumentId || dealerSigner.requestId || null,
+            signerName: dealerSigner.signerName || null,
+            signerEmail: dealerSigner.signerEmail || null,
+            status: overallStatus,
+            copyUrl: row.signedAgreementUrl || null,
+            signers: signers.map(s => ({
+              role: s.signerRole,
+              name: s.signerName,
+              email: s.signerEmail,
+              status: s.signerStatus,
+              signingUrl: s.providerSigningUrl,
+            })),
+          };
+        })(),
         ownerName: row.ownerName || "Not available",
         ownerPhone: row.ownerPhone || "Not available",
         ownerEmail: row.ownerEmail || "Not available",

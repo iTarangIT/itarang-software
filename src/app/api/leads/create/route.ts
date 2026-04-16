@@ -6,6 +6,7 @@ import { successResponse, errorResponse, withErrorHandler, generateId } from '@/
 import { requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
 import { eq, and, sql, desc } from 'drizzle-orm';
+import { dealerOnboardingApplications } from '@/lib/db/schema';
 
 const step1Schema = z.object({
     full_name: z.string().optional().nullable(),
@@ -24,7 +25,7 @@ const step1Schema = z.object({
     vehicle_owner_name: z.string().optional().nullable(),
     vehicle_owner_phone: z.string().optional().nullable(),
     interested_in: z.array(z.string()).optional(),
-    payment_method: z.enum(['upfront', 'finance', 'other_finance', 'cash', 'dealer_finance']).optional().nullable(),
+    payment_method: z.enum(['upfront', 'finance', 'cash', 'other_finance', 'dealer_finance']).optional().nullable(),
     initializeDraft: z.boolean().optional(),
     commitStep: z.boolean().optional(),
     leadId: z.string().optional().nullable(),
@@ -38,17 +39,12 @@ const step1Schema = z.object({
 async function generateLeadReference() {
     const year = new Date().getFullYear();
     const prefix = `#IT-${year}`;
-    const [lastRecord] = await db.select({ reference_id: leads.reference_id })
+    // Use COUNT for reliable sequencing instead of string ordering
+    const [countResult] = await db.select({ count: sql<number>`count(*)` })
         .from(leads)
-        .where(sql`${leads.reference_id} LIKE ${prefix + '-%'}`)
-        .orderBy(desc(leads.reference_id))
-        .limit(1);
+        .where(sql`${leads.reference_id} LIKE ${prefix + '-%'}`);
 
-    let sequenceNum = 1;
-    if (lastRecord?.reference_id) {
-        const lastSeq = lastRecord.reference_id.split('-').pop();
-        if (lastSeq) sequenceNum = parseInt(lastSeq) + 1;
-    }
+    const sequenceNum = (countResult?.count ?? 0) + 1;
     return `${prefix}-${sequenceNum.toString().padStart(7, '0')}`;
 }
 
@@ -64,17 +60,65 @@ export const POST = withErrorHandler(async (req: Request) => {
     const user = await requireRole(['dealer']);
     let dealer_id = user.dealer_id;
 
-    try {
-        if (!dealer_id) {
-            const [acc] = await db.select().from(accounts).limit(1);
-            dealer_id = acc?.id;
+    // Resolve dealer_id: first from user record, then from onboarding application
+    if (!dealer_id) {
+        try {
+            const onboardingRows = await db.select({ dealerCode: dealerOnboardingApplications.dealerCode })
+                .from(dealerOnboardingApplications)
+                .where(eq(dealerOnboardingApplications.dealerUserId, user.id))
+                .orderBy(desc(dealerOnboardingApplications.updatedAt))
+                .limit(1);
+
+            if (onboardingRows[0]?.dealerCode) {
+                dealer_id = onboardingRows[0].dealerCode;
+            }
+        } catch (err) {
+            console.error("[leads/create] Onboarding lookup failed:", err);
         }
-    } catch (err) {
-        console.error("Account lookup failed:", err);
-        return errorResponse("Failed to verify dealer account. Please try again.", 500);
     }
 
-    if (!dealer_id) return errorResponse('User not associated with a dealer', 403);
+    if (!dealer_id) return errorResponse('User not associated with a dealer. Please contact admin.', 403);
+
+    // Ensure the account row exists (auto-create if missing for approved dealers)
+    try {
+        const accRows = await db.select({ id: accounts.id }).from(accounts).where(eq(accounts.id, dealer_id)).limit(1);
+        if (accRows.length === 0) {
+            let bizName = user.name || "Dealer Business";
+            let contactName = user.name || "Dealer";
+            let contactEmail: string | null = user.email || null;
+            let gstin = "PENDING";
+
+            try {
+                const onbRows = await db.select()
+                    .from(dealerOnboardingApplications)
+                    .where(eq(dealerOnboardingApplications.dealerUserId, user.id))
+                    .orderBy(desc(dealerOnboardingApplications.updatedAt))
+                    .limit(1);
+                const onb = onbRows[0];
+                if (onb) {
+                    bizName = onb.companyName || bizName;
+                    contactName = onb.ownerName || contactName;
+                    contactEmail = onb.ownerEmail || contactEmail;
+                    gstin = onb.gstNumber || gstin;
+                }
+            } catch { /* use defaults */ }
+
+            await db.insert(accounts).values({
+                id: dealer_id,
+                business_entity_name: bizName,
+                gstin,
+                dealer_code: dealer_id,
+                contact_name: contactName,
+                contact_email: contactEmail,
+                status: "active",
+                onboarding_status: "approved",
+            });
+            console.log("[leads/create] Auto-created account:", dealer_id);
+        }
+    } catch (err) {
+        console.error("[leads/create] Account auto-create failed:", err);
+        return errorResponse("Failed to verify dealer account. Please try again.", 500);
+    }
 
     const body = await req.json();
     const result = step1Schema.safeParse(body);
@@ -141,30 +185,43 @@ export const POST = withErrorHandler(async (req: Request) => {
                 }
             }
 
-            const leadId = await generateId('LEAD', leads);
-            const referenceId = await generateLeadReference();
+            // Retry loop to handle race conditions on reference_id unique constraint
+            const MAX_RETRIES = 3;
+            for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+                try {
+                    const leadId = await generateId('LEAD', leads);
+                    const referenceId = await generateLeadReference();
 
-            await db.transaction(async (tx) => {
-                await tx.insert(leads).values({
-                    id: leadId,
-                    reference_id: referenceId,
-                    dealer_id,
-                    uploader_id: user.id,
-                    status: 'INCOMPLETE',
-                    workflow_step: 1,
-                    lead_source: 'dealer_referral', // Default for dealer portal
-                    owner_name: 'DRAFT',
-                    owner_contact: 'DRAFT',
-                });
-                await tx.insert(personalDetails).values({
-                    id: crypto.randomUUID(),
-                    lead_id: leadId,
-                    dob: null,
-                    father_husband_name: null
-                });
-            });
+                    await db.transaction(async (tx) => {
+                        await tx.insert(leads).values({
+                            id: leadId,
+                            reference_id: referenceId,
+                            dealer_id,
+                            uploader_id: user.id,
+                            status: 'INCOMPLETE',
+                            workflow_step: 1,
+                            lead_source: 'dealer_referral',
+                            owner_name: 'DRAFT',
+                            owner_contact: 'DRAFT',
+                        });
+                        await tx.insert(personalDetails).values({
+                            id: crypto.randomUUID(),
+                            lead_id: leadId,
+                            dob: null,
+                            father_husband_name: null
+                        });
+                    });
 
-            return successResponse({ leadId, referenceId }, 201);
+                    return successResponse({ leadId, referenceId }, 201);
+                } catch (retryErr: any) {
+                    const isDuplicate = retryErr?.cause?.code === '23505' || retryErr?.code === '23505';
+                    if (isDuplicate && attempt < MAX_RETRIES - 1) {
+                        console.warn(`[leads/create] Duplicate key on attempt ${attempt + 1}, retrying...`);
+                        continue;
+                    }
+                    throw retryErr;
+                }
+            }
         } catch (err) {
             console.error("Draft initialization failed:", err);
             return errorResponse("Failed to initialize or load your draft. Please try again.", 500);
@@ -227,6 +284,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                     kyc_status: isUpfront ? 'not_required' : 'not_started',
                     workflow_step: isUpfront ? 3 : 1,
                     status: 'ACTIVE',
+                    lead_status: 'new',
                     updated_at: new Date()
                 }).where(eq(leads.id, data.leadId!));
 

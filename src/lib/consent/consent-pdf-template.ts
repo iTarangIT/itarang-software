@@ -265,9 +265,9 @@ export function generateConsentHtml(input: ConsentTemplateInput): string {
     </ul>
     <p>To exercise these rights, you may contact us at:</p>
     <ul>
-        <li><strong>Email:</strong> support@itarang.com</li>
-        <li><strong>Phone:</strong> +91-XXXXXXXXXX</li>
-        <li><strong>Address:</strong> iTarang Technologies LLP, India</li>
+        <li><strong>Email:</strong> care@itarang.com</li>
+        <li><strong>Phone:</strong> +91-8076841497</li>
+        <li><strong>Address:</strong> iTarang Technologies LLP, 103, First Floor, Unitech Business Zone, Block B, Sector 50, South City 2, Gurugram, Haryana, 122018</li>
     </ul>
 </div>
 
@@ -287,15 +287,15 @@ export function generateConsentHtml(input: ConsentTemplateInput): string {
     <p>If you have any questions or concerns regarding this consent form or our data processing
     practices, please contact our Grievance Officer (GO) / Data Protection Officer (DPO):</p>
     <ul style="list-style: none; margin-left: 0; padding-left: 0;">
-        <li><strong>Name:</strong> Data Protection Officer, iTarang Technologies LLP</li>
-        <li><strong>Email:</strong> dpo@itarang.com</li>
-        <li><strong>Phone:</strong> +91-XXXXXXXXXX</li>
+        <li><strong>Name:</strong> Chirag Garg</li>
+        <li><strong>Email:</strong> care.itarang@gmail.com</li>
+        <li><strong>Phone:</strong> +91-8076841497</li>
     </ul>
 </div>
 
 <!-- ═══════ FOOTER ═══════ -->
 <div class="footer">
-    <span>iTarang Technologies LLP | support@itarang.com</span>
+    <span>iTarang Technologies LLP | care@itarang.com</span>
     <span>DPDPA 2023 Compliant | Ref: ${consentId}</span>
 </div>
 
