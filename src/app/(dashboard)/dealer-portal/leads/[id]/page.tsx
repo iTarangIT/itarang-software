@@ -310,7 +310,7 @@ export default function LeadDetailPage() {
                                 </div>
                             )}
 
-                            {lead.has_co_borrower && (
+                            {(lead.has_co_borrower || ['awaiting_co_borrower_kyc', 'awaiting_co_borrower_replacement', 'awaiting_both'].includes(lead.kyc_status || '')) && (
                                 <button
                                     onClick={() => router.push(`/dealer-portal/leads/${leadId}/kyc/interim`)}
                                     className="w-full flex items-center justify-between px-5 py-4 bg-white border-2 border-[#0047AB] text-[#0047AB] rounded-xl font-bold text-sm hover:bg-blue-50 transition-all"
@@ -320,6 +320,22 @@ export default function LeadDetailPage() {
                                         <div className="text-left">
                                             <p>Co-Borrower KYC</p>
                                             <p className="text-xs font-normal text-gray-500 mt-0.5">Upload co-borrower documents</p>
+                                        </div>
+                                    </div>
+                                    <ChevronRight className="w-5 h-5" />
+                                </button>
+                            )}
+
+                            {(lead.has_additional_docs_required || ['awaiting_additional_docs', 'awaiting_both'].includes(lead.kyc_status || '')) && !lead.has_co_borrower && (
+                                <button
+                                    onClick={() => router.push(`/dealer-portal/leads/${leadId}/kyc/interim`)}
+                                    className="w-full flex items-center justify-between px-5 py-4 bg-white border-2 border-amber-500 text-amber-700 rounded-xl font-bold text-sm hover:bg-amber-50 transition-all"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <Shield className="w-5 h-5" />
+                                        <div className="text-left">
+                                            <p>Additional Documents Required</p>
+                                            <p className="text-xs font-normal text-gray-500 mt-0.5">Upload documents requested by admin</p>
                                         </div>
                                     </div>
                                     <ChevronRight className="w-5 h-5" />
