@@ -39,12 +39,21 @@ type DocumentItem = {
   bucketName?: string | null;
 };
 
+type AgreementSigner = {
+  role?: string | null;
+  name?: string | null;
+  email?: string | null;
+  status?: string | null;
+  signingUrl?: string | null;
+};
+
 type AgreementData = {
   agreementId?: string | null;
   signerName?: string | null;
   signerEmail?: string | null;
   status?: string | null;
   copyUrl?: string | null;
+  signers?: AgreementSigner[];
 };
 
 type DealerReviewData = {
@@ -603,12 +612,56 @@ export default function DealerReviewPage() {
                     <AgreementBadge value={data.agreement?.status || undefined} />
                   </div>
                 </div>
-                <InfoField label="Signer Name" value={data.agreement?.signerName || undefined} />
-                <InfoField
-                  label="Signer Email"
-                  value={data.agreement?.signerEmail || undefined}
-                />
               </div>
+
+              {/* Signatories Table */}
+              {data.agreement?.signers && data.agreement.signers.length > 0 ? (
+                <div className="mt-4 overflow-x-auto">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Signatories</p>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200">
+                        <th className="text-left py-2.5 px-3 text-xs font-semibold text-slate-500">Role</th>
+                        <th className="text-left py-2.5 px-3 text-xs font-semibold text-slate-500">Name</th>
+                        <th className="text-left py-2.5 px-3 text-xs font-semibold text-slate-500">Email</th>
+                        <th className="text-left py-2.5 px-3 text-xs font-semibold text-slate-500">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.agreement.signers.map((s, i) => {
+                        const signerStatus = (s.status || 'pending').toLowerCase();
+                        const isSigned = ['signed', 'completed', 'success'].includes(signerStatus);
+                        const isFailed = ['failed', 'rejected', 'declined', 'expired'].includes(signerStatus);
+                        const roleName = (s.role || 'unknown').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                        return (
+                          <tr key={i} className="border-b border-slate-50">
+                            <td className="py-3 px-3 font-medium text-slate-900">{roleName}</td>
+                            <td className="py-3 px-3 text-slate-700">{s.name || '-'}</td>
+                            <td className="py-3 px-3 text-slate-500 text-xs">{s.email || '-'}</td>
+                            <td className="py-3 px-3">
+                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                isSigned ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' :
+                                isFailed ? 'bg-red-50 text-red-700 ring-1 ring-red-200' :
+                                'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
+                              }`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${
+                                  isSigned ? 'bg-emerald-500' : isFailed ? 'bg-red-500' : 'bg-amber-500'
+                                }`} />
+                                {isSigned ? 'Signed' : isFailed ? 'Failed' : signerStatus === 'requested' || signerStatus === 'sent' ? 'Awaiting Signature' : signerStatus.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 mt-4">
+                  <InfoField label="Signer Name" value={data.agreement?.signerName || undefined} />
+                  <InfoField label="Signer Email" value={data.agreement?.signerEmail || undefined} />
+                </div>
+              )}
 
               {/* Agreement Action Buttons */}
               <div className="mt-5 flex flex-wrap items-center gap-3">
