@@ -12,21 +12,24 @@ type RouteContext = {
   params: Promise<{ leadId: string }>;
 };
 
+const CHROMIUM_REMOTE_PACK =
+  "https://github.com/Sparticuz/chromium/releases/download/v147.0.0/chromium-v147.0.0-pack.x64.tar";
+
 async function renderPdfFromHtml(html: string): Promise<Buffer> {
   let browser;
   try {
     if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
-      // Serverless: use chromium-min + puppeteer-core
-      const chromium = await import("@sparticuz/chromium-min").then(m => m.default);
-      const puppeteerCore = await import("puppeteer-core").then(m => m.default);
-      const executablePath = await chromium.executablePath();
+      const [{ default: puppeteerCore }, { default: chromium }] = await Promise.all([
+        import("puppeteer-core"),
+        import("@sparticuz/chromium-min"),
+      ]);
       browser = await puppeteerCore.launch({
         args: chromium.args,
-        executablePath,
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath(CHROMIUM_REMOTE_PACK),
         headless: true,
       });
     } else {
-      // Local dev: use full puppeteer with bundled Chromium
       const puppeteerFull = await import("puppeteer").then(m => m.default);
       browser = await puppeteerFull.launch({
         headless: true,
