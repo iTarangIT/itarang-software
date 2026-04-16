@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
-import { db } from './db';
-import { sql, eq, desc } from 'drizzle-orm';
+import crypto from 'crypto';
 
 export function successResponse(data: any, status = 200) {
     return NextResponse.json({
@@ -48,42 +47,9 @@ export function withErrorHandler(handler: Function) {
     };
 }
 
-export async function generateId(prefix: string, table: any): Promise<string> {
+export async function generateId(prefix: string, _table?: any): Promise<string> {
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-
-    // Find the last ID for this prefix and date
-    const lastRecord = await db.select({ id: table.id })
-        .from(table)
-        .where(sql`${table.id} LIKE ${prefix + '-' + date + '-%'}`)
-        .orderBy(desc(table.id))
-        .limit(1);
-
-    let sequence = 1;
-    if (lastRecord.length > 0) {
-        const lastId = lastRecord[0].id;
-        const lastSeq = parseInt(lastId.split('-').pop() || '0');
-        sequence = lastSeq + 1;
-    }
-
-    return `${prefix}-${date}-${sequence.toString().padStart(3, '0')}`;
+    const rand = crypto.randomUUID().replace(/-/g, '').slice(0, 8);
+    return `${prefix}-${date}-${rand}`;
 }
 
-export async function generateLeadReference(table: any): Promise<string> {
-    const year = new Date().getFullYear();
-    const prefix = `#IT-${year}`;
-
-    const lastRecord = await db.select({ reference_id: table.reference_id })
-        .from(table)
-        .where(sql`${table.reference_id} LIKE ${prefix + '-%'}`)
-        .orderBy(desc(table.reference_id))
-        .limit(1);
-
-    let sequence = 1;
-    if (lastRecord.length > 0 && lastRecord[0].reference_id) {
-        const lastRef = lastRecord[0].reference_id;
-        const lastSeq = parseInt(lastRef.split('-').pop() || '0');
-        sequence = lastSeq + 1;
-    }
-
-    return `${prefix}-${sequence.toString().padStart(5, '0')}`;
-}

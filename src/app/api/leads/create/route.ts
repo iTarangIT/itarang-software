@@ -36,16 +36,32 @@ const step1Schema = z.object({
     is_vehicle_category: z.boolean().optional(),
 }).passthrough();
 
-async function generateLeadReference() {
-    const year = new Date().getFullYear();
-    const prefix = `#IT-${year}`;
-    // Use COUNT for reliable sequencing instead of string ordering
-    const [countResult] = await db.select({ count: sql<number>`count(*)` })
-        .from(leads)
-        .where(sql`${leads.reference_id} LIKE ${prefix + '-%'}`);
+let sequenceReady = false;
 
-    const sequenceNum = (countResult?.count ?? 0) + 1;
-    return `${prefix}-${sequenceNum.toString().padStart(7, '0')}`;
+async function ensureLeadSequence() {
+    if (sequenceReady) return;
+    // Create the sequence if it doesn't exist, starting after the current max
+    await db.execute(sql`
+        DO $$
+        DECLARE
+            max_seq INTEGER;
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'lead_reference_seq') THEN
+                SELECT COALESCE(MAX(CAST(SUBSTRING(reference_id FROM '#IT-[0-9]{4}-0*([0-9]+)') AS INTEGER)), 0)
+                INTO max_seq FROM leads WHERE reference_id LIKE '#IT-%';
+                EXECUTE format('CREATE SEQUENCE lead_reference_seq START WITH %s', max_seq + 1);
+            END IF;
+        END $$;
+    `);
+    sequenceReady = true;
+}
+
+async function generateLeadReference() {
+    await ensureLeadSequence();
+    const year = new Date().getFullYear();
+    const [result] = await db.execute(sql`SELECT nextval('lead_reference_seq') as seq`);
+    const seq = Number((result as any).seq);
+    return `#IT-${year}-${seq.toString().padStart(7, '0')}`;
 }
 
 const normalizePhone = (phone?: string | null) => {
@@ -185,43 +201,30 @@ export const POST = withErrorHandler(async (req: Request) => {
                 }
             }
 
-            // Retry loop to handle race conditions on reference_id unique constraint
-            const MAX_RETRIES = 3;
-            for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-                try {
-                    const leadId = await generateId('LEAD', leads);
-                    const referenceId = await generateLeadReference();
+            const leadId = await generateId('LEAD', leads);
+            const referenceId = await generateLeadReference();
 
-                    await db.transaction(async (tx) => {
-                        await tx.insert(leads).values({
-                            id: leadId,
-                            reference_id: referenceId,
-                            dealer_id,
-                            uploader_id: user.id,
-                            status: 'INCOMPLETE',
-                            workflow_step: 1,
-                            lead_source: 'dealer_referral',
-                            owner_name: 'DRAFT',
-                            owner_contact: 'DRAFT',
-                        });
-                        await tx.insert(personalDetails).values({
-                            id: crypto.randomUUID(),
-                            lead_id: leadId,
-                            dob: null,
-                            father_husband_name: null
-                        });
-                    });
+            await db.transaction(async (tx) => {
+                await tx.insert(leads).values({
+                    id: leadId,
+                    reference_id: referenceId,
+                    dealer_id,
+                    uploader_id: user.id,
+                    status: 'INCOMPLETE',
+                    workflow_step: 1,
+                    lead_source: 'dealer_referral',
+                    owner_name: 'DRAFT',
+                    owner_contact: 'DRAFT',
+                });
+                await tx.insert(personalDetails).values({
+                    id: crypto.randomUUID(),
+                    lead_id: leadId,
+                    dob: null,
+                    father_husband_name: null
+                });
+            });
 
-                    return successResponse({ leadId, referenceId }, 201);
-                } catch (retryErr: any) {
-                    const isDuplicate = retryErr?.cause?.code === '23505' || retryErr?.code === '23505';
-                    if (isDuplicate && attempt < MAX_RETRIES - 1) {
-                        console.warn(`[leads/create] Duplicate key on attempt ${attempt + 1}, retrying...`);
-                        continue;
-                    }
-                    throw retryErr;
-                }
-            }
+            return successResponse({ leadId, referenceId }, 201);
         } catch (err) {
             console.error("Draft initialization failed:", err);
             return errorResponse("Failed to initialize or load your draft. Please try again.", 500);
