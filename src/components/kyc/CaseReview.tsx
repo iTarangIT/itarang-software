@@ -15,6 +15,7 @@ import SupportingDocsPanel, {
 import CoBorrowerPanel, {
   type CoBorrowerData,
 } from "./step3/CoBorrowerPanel";
+import RequestCoBorrowerModal from "./step3/RequestCoBorrowerModal";
 
 interface CrossMatchResult {
   overallPass: boolean;
@@ -203,6 +204,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const [fetchingPdfId, setFetchingPdfId] = useState<string | null>(null);
   const [consentPdfOverrides, setConsentPdfOverrides] = useState<Record<string, string>>({});
   const [consentExpanded, setConsentExpanded] = useState(false);
+  const [showCoBorrowerModal, setShowCoBorrowerModal] = useState(false);
 
   const handleConsentVerify = useCallback(
     async (c: Consent, action: "approve" | "reject") => {
@@ -1029,6 +1031,31 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
         />
       )}
 
+      {/* Request Co-Borrower Banner — shown when no co-borrower exists yet */}
+      {activeTab === "verifications" && !data.coBorrower && (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+          <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center">
+            <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+            </svg>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-gray-900">Need a Co-Borrower?</p>
+            <p className="text-xs text-gray-600 mt-0.5">Request co-borrower KYC if CIBIL is low, income insufficient, high DTI ratio, or risk flags detected.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowCoBorrowerModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm flex-shrink-0"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+            </svg>
+            Request Co-Borrower KYC
+          </button>
+        </div>
+      )}
+
       {/* Documents Tab */}
       {activeTab === "documents" && (
         <div>
@@ -1137,6 +1164,23 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
             </span>
           )}
         </div>
+
+        {/* Co-Borrower Status Indicator */}
+        {data.coBorrower && (
+          <div className="flex items-center gap-2 mb-4 px-3 py-2 rounded-xl bg-blue-50 border border-blue-200 text-sm">
+            <svg className="w-4 h-4 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+            </svg>
+            <span className="text-blue-800 font-medium">
+              Co-Borrower: {data.coBorrower.fullName || "Pending submission"}
+              {data.coBorrower.kycStatus === "not_started" || data.coBorrower.kycStatus === "draft"
+                ? " — awaiting dealer submission"
+                : data.coBorrower.kycStatus === "completed"
+                  ? " — submitted for review"
+                  : ` — ${(data.coBorrower.kycStatus || "pending").replace(/_/g, " ")}`}
+            </span>
+          </div>
+        )}
 
         {!isFinalDecided ? (
           <div className="space-y-5">
@@ -1275,6 +1319,14 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           </div>
         )}
       </div>
+
+      {/* Request Co-Borrower Modal */}
+      <RequestCoBorrowerModal
+        open={showCoBorrowerModal}
+        onClose={() => setShowCoBorrowerModal(false)}
+        leadId={leadId}
+        onSuccess={() => { setShowCoBorrowerModal(false); fetchData(); }}
+      />
     </div>
   );
 }
