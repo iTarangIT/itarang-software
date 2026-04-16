@@ -115,6 +115,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             fatherOrHusbandName: personFather,
             dob: formatDob(personDob),
             phone: personPhone,
+            customerEmail: lead.owner_email || '',
             currentAddress: personAddress,
             permanentAddress: personPermanentAddress,
             aadhaarMasked: personAadhaar,

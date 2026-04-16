@@ -77,6 +77,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
 
     const customerPhone = lead.phone || lead.owner_contact;
     const customerName = lead.full_name || lead.owner_name || "Customer";
+    const customerEmail = lead.owner_email || "";
 
     if (!customerPhone) {
       return NextResponse.json(
@@ -113,6 +114,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       fatherOrHusbandName: lead.father_or_husband_name || "",
       dob: dobFormatted,
       phone: customerPhone,
+      customerEmail,
       currentAddress: lead.current_address || "",
       permanentAddress: lead.permanent_address || lead.current_address || "",
       productName: lead.asset_model || "",
