@@ -16,6 +16,7 @@ export type DigioSigner = {
   reason: string;
   sign_type: "aadhaar" | "electronic" | "dsc";
   sign_coordinates?: DigioSignCoordinates;
+  sign_coordinates_list?: DigioSignCoordinates[];
 };
 
 export type DigioUploadPdfInput = {
@@ -29,6 +30,14 @@ export type DigioUploadPdfInput = {
 
 const DEFAULT_CONSENT_SIGN_COORDINATES: DigioSignCoordinates = {
   page_no: 1,
+  x: 380,
+  y: 780,
+  w: 180,
+  h: 50,
+};
+
+const DEFAULT_CONSENT_SIGN_COORDINATES_PAGE2: DigioSignCoordinates = {
+  page_no: 2,
   x: 380,
   y: 780,
   w: 180,
@@ -57,10 +66,20 @@ export function buildUploadPdfPayload(data: DigioUploadPdfInput) {
     sequential: data.sequential ?? true,
     notify_url: getWebhookUrl(),
     ...(data.templateId ? { template_id: data.templateId } : {}),
-    signers: data.signers.map((signer) => ({
-      ...signer,
-      sign_coordinates: signer.sign_coordinates || DEFAULT_CONSENT_SIGN_COORDINATES,
-    })),
+    signers: data.signers.map((signer) => {
+      const coords = signer.sign_coordinates_list
+        || (signer.sign_coordinates
+          ? [signer.sign_coordinates]
+          : [DEFAULT_CONSENT_SIGN_COORDINATES, DEFAULT_CONSENT_SIGN_COORDINATES_PAGE2]);
+      // DigiO supports sign_coordinates (single) or multiple via first entry;
+      // pass the first as sign_coordinates and rest as additional_sign_coordinates
+      const { sign_coordinates_list: _list, ...rest } = signer;
+      return {
+        ...rest,
+        sign_coordinates: coords[0],
+        ...(coords.length > 1 ? { additional_sign_coordinates: coords.slice(1) } : {}),
+      };
+    }),
   };
 }
 

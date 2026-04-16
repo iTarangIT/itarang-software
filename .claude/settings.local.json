@@ -48,7 +48,9 @@
       "WebFetch(domain:dashboard.decentro.tech)",
       "Bash(gh api *)",
       "WebFetch(domain:api.github.com)",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(git commit *)",
+      "Bash(awk 'NR>=25 && NR<=25' \"D:/itarang-software/src/lib/consent/consent-pdf-template.ts\")"
     ]
   }
 }
