@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
 import { createDigioAgreement } from "@/lib/digio/service";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 type RouteContext = {
   params: Promise<{ leadId: string }>;
 };
@@ -130,6 +131,29 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     const pdfBuffer = await renderPdfFromHtml(html);
     const pdfBase64 = pdfBuffer.toString("base64");
 
+    // 1b. Store unsigned PDF in Supabase so admin can see it even before signing
+    let generatedPdfUrl: string | null = null;
+    try {
+      const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+      const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+      if (supabaseUrl && serviceRoleKey) {
+        const supabase = createSupabaseClient(supabaseUrl, serviceRoleKey);
+        const bucket = (process.env.CONSENT_STORAGE_BUCKET || "documents").trim();
+        const storagePath = `kyc/${leadId}/consent/unsigned-${Date.now()}.pdf`;
+        const { error: upErr } = await supabase.storage
+          .from(bucket)
+          .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
+        if (!upErr) {
+          const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+          generatedPdfUrl = urlData?.publicUrl || null;
+        } else {
+          console.warn("[Send Consent] Failed to store unsigned PDF:", upErr.message);
+        }
+      }
+    } catch (e) {
+      console.warn("[Send Consent] Unsigned PDF storage error:", e);
+    }
+
     // 2. Upload to Digio for Aadhaar eSign
     // Digio needs 10-digit mobile number
     const cleanPhone = customerPhone.replace(/\D/g, "").slice(-10);
@@ -175,6 +199,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       consent_link_url: customerSigningUrl,
       consent_link_sent_at: now,
       esign_transaction_id: digioDocumentId,
+      generated_pdf_url: generatedPdfUrl,
       created_at: now,
       updated_at: now,
     });

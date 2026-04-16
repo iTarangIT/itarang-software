@@ -329,6 +329,18 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // Auto-fetch signed PDF from DigiO when consent is esign_completed but PDF is missing
+  useEffect(() => {
+    if (!data?.consent) return;
+    for (const c of data.consent) {
+      const pdfUrl = consentPdfOverrides[c.id] ?? c.signedConsentUrl ?? c.generatedPdfUrl;
+      if (!pdfUrl && c.consentFor === "primary" && c.consentStatus === "esign_completed" && !fetchingPdfId) {
+        handleFetchPdf(c);
+        break;
+      }
+    }
+  }, [data?.consent, consentPdfOverrides, fetchingPdfId, handleFetchPdf]);
+
   const getVerification = (type: string) =>
     data?.verificationCards.find((v) => v.type === type) || null;
 
@@ -805,7 +817,15 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                               {isRejected && verifiedRelative && (
                                 <p className="text-[10px] text-red-700">Rejected by admin {verifiedRelative}</p>
                               )}
-                              {isPrimary && !pdfUrl && (
+                              {isPrimary && !pdfUrl && isEsignCompleted && (
+                                <button type="button"
+                                  disabled={fetchingPdfId === c.id}
+                                  onClick={(e) => { e.stopPropagation(); handleFetchPdf(c); }}
+                                  className="text-[10px] text-teal-600 hover:text-teal-800 italic underline cursor-pointer disabled:opacity-50">
+                                  {fetchingPdfId === c.id ? "Fetching PDF..." : "PDF not yet generated — click to fetch"}
+                                </button>
+                              )}
+                              {isPrimary && !pdfUrl && !isEsignCompleted && (
                                 <p className="text-[10px] text-gray-400 italic">PDF not yet generated</p>
                               )}
                             </div>

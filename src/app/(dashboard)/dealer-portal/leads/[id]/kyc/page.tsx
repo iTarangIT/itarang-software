@@ -196,7 +196,7 @@ export default function KYCPage() {
 
     // Poll Digio / admin review states so the UI self-updates.
     useEffect(() => {
-        const digioSyncStatuses = ['link_sent', 'link_opened', 'esign_in_progress'];
+        const digioSyncStatuses = ['link_sent', 'link_opened', 'esign_in_progress', 'esign_completed'];
         const adminWaitStatuses = ['esign_completed', 'admin_review_pending', 'consent_uploaded'];
         const needsPoll = digioSyncStatuses.includes(consentStatus) || adminWaitStatuses.includes(consentStatus);
         if (!needsPoll) return;
