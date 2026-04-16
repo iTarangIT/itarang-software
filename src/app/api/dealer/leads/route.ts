@@ -1,6 +1,6 @@
 
-import { createClient } from '@/lib/supabase/server';
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
+import { requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { leads, loanDetails, personalDetails, kycDocuments, auditLogs, accounts } from '@/lib/db/schema';
@@ -56,24 +56,18 @@ const dealerLeadSchema = z.object({
 
 export const POST = withErrorHandler(async (req: Request) => {
     try {
-        const supabase = await createClient();
-
-        // 1. Authenticate & Verify Dealer
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-        if (authError || !user) return errorResponse('Unauthorized', 401);
-
-        const { data: profile } = await supabase.from('users').select('role, dealer_id').eq('id', user.id).single();
-        if (profile?.role !== 'dealer' || !profile?.dealer_id) {
+        const user = await requireRole(['dealer']);
+        if (!user.dealer_id) {
             return errorResponse('Access denied: Dealer account required', 403);
         }
 
         // VERIFY DEALER ACCOUNT EXISTS
         const existingAccount = await db.query.accounts.findFirst({
-            where: eq(accounts.id, profile.dealer_id)
+            where: eq(accounts.id, user.dealer_id)
         });
 
         if (!existingAccount) {
-            return errorResponse(`Configuration Error: Linked Dealer Account (${profile.dealer_id}) not found in system. Please contact admin.`, 400);
+            return errorResponse(`Configuration Error: Linked Dealer Account (${user.dealer_id}) not found in system. Please contact admin.`, 400);
         }
 
         // 2. Validate Body
@@ -91,7 +85,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             // A. Insert Lead
             await tx.insert(leads).values({
                 id: leadId,
-                dealer_id: profile.dealer_id,
+                dealer_id: user.dealer_id,
                 owner_name: data.full_name,
                 owner_contact: data.phone,
                 shop_address: data.local_address, // Use local address as shop address or permanent
@@ -192,25 +186,18 @@ export const POST = withErrorHandler(async (req: Request) => {
 });
 
 export const GET = withErrorHandler(async (req: Request) => {
-    const supabase = await createClient();
-
-    // 1. Authenticate & Verify Dealer
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return errorResponse('Unauthorized', 401);
-
-    const { data: profile } = await supabase.from('users').select('role, dealer_id').eq('id', user.id).single();
-    if (profile?.role !== 'dealer' || !profile?.dealer_id) {
-        return errorResponse('Access denied', 403);
+    // Use requireRole (Drizzle, bypasses RLS) — same pattern as leads/create
+    const user = await requireRole(['dealer']);
+    if (!user.dealer_id) {
+        return errorResponse('Access denied: no dealer account linked', 403);
     }
 
-    // 2. Query via Drizzle (service-role connection bypasses RLS so the dealer
-    // sees rows they inserted via the POST handler below).
     const { searchParams } = new URL(req.url);
     const search = searchParams.get('search');
     const status = searchParams.get('status');
     const type = searchParams.get('type');
 
-    const conditions = [eq(leads.dealer_id, profile.dealer_id)];
+    const conditions = [eq(leads.dealer_id, user.dealer_id)];
 
     if (status && status !== 'All') {
         conditions.push(eq(leads.lead_status, status.toLowerCase()));

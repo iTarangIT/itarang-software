@@ -196,7 +196,7 @@ export default function BorrowerConsentPage() {
         if (!waitingStatuses.includes(consentStatus)) return;
         const tick = async () => {
             // Sync consent status from DigiO first
-            const syncStatuses = ['link_sent', 'link_opened', 'esign_in_progress'];
+            const syncStatuses = ['link_sent', 'link_opened', 'esign_in_progress', 'esign_completed'];
             if (syncStatuses.includes(consentStatus)) {
                 try { await fetch(`/api/kyc/${leadId}/consent/sync`, { method: 'POST', cache: 'no-store' }); } catch {}
             }
