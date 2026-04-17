@@ -413,6 +413,15 @@ export default function AadhaarCard({
               </div>
             )}
 
+            {/* Re-initiate DigiLocker — always available so admin can re-run after verify/accept/reject */}
+            <button
+              onClick={handleInitiate}
+              disabled={loading}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
+            >
+              {loading ? "Sending..." : "Re-send DigiLocker Link via SMS"}
+            </button>
+
             {crossMatch && (
               <div>
                 <div className="flex items-center justify-between mb-3">

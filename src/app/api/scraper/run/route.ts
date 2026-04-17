@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { db } from "@/lib/db";
 import { scrapeRuns } from "@/lib/db/schema";
 import {
@@ -7,10 +8,11 @@ import {
   errorResponse,
 } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
-import { runDealerScraper } from "@/lib/scraper/pipeline";
+import { startChunkedRun } from "@/lib/scraper/chunkedPipeline";
+import { reapStuckRuns } from "@/lib/scraper/storage/runStore";
 import { eq, desc } from "drizzle-orm";
 
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 export const POST = withErrorHandler(async (req: Request) => {
   const user = await requireRole(["sales_head", "ceo", "business_head"]);
@@ -21,6 +23,8 @@ export const POST = withErrorHandler(async (req: Request) => {
   if (!baseQuery) {
     return errorResponse("Query is required", 400);
   }
+
+  await reapStuckRuns();
 
   const running = await db
     .select({ id: scrapeRuns.id })
@@ -41,9 +45,21 @@ export const POST = withErrorHandler(async (req: Request) => {
     status: "running",
     triggeredBy: user.id,
     startedAt: new Date(),
+    totalChunks: 0,
+    completedChunks: 0,
   });
 
-  runDealerScraper(runId, baseQuery).catch(console.error);
+  // Fan-out (AI query/city generation + QStash publishes) runs in the
+  // background. Each chunk is dispatched as its own QStash message and
+  // handled in a separate /api/scraper/chunk invocation, so a large run
+  // no longer has to fit inside one serverless function's time budget.
+  after(async () => {
+    try {
+      await startChunkedRun(runId, baseQuery);
+    } catch (err) {
+      console.error(`[scraper:run] fan-out failed for ${runId}`, err);
+    }
+  });
 
   return successResponse({ run_id: runId }, 202);
 });

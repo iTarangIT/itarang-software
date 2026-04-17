@@ -198,13 +198,11 @@ export default function RCCard({
           </div>
         </div>
 
-        {/* Initiate Verification */}
-        {(status === "pending" || status === "failed") && !hasResults && (
-          <button onClick={handleVerify} disabled={!rcNumber.trim()}
-            className="w-full bg-orange-600 hover:bg-orange-700 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-            Initiate Verification
-          </button>
-        )}
+        {/* Initiate Verification — always visible so admin can re-run after a verify/accept/reject */}
+        <button onClick={handleVerify} disabled={!rcNumber.trim() || status === "loading"}
+          className="w-full bg-orange-600 hover:bg-orange-700 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+          {hasResults ? "Re-run RC Verification" : "Initiate Verification"}
+        </button>
 
 
         {/* Loading */}

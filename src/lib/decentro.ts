@@ -518,9 +518,11 @@ function creditHeaders(): Record<string, string> {
         'Content-Type': 'application/json',
         'accept': 'application/json',
     };
-    // Credit bureau may use its own module secret, fall back to KYC secret
+    // Per Decentro: CIBIL/credit-bureau endpoints authenticate with client_id +
+    // client_secret only. Sending a module_secret scoped to a different module
+    // (e.g. KYC) triggers E00030 error_unauthorized_module. Only attach one if
+    // an explicit credit-module secret is configured.
     if (isRealSecret(MODULE_SECRET_CREDIT)) h['module_secret'] = MODULE_SECRET_CREDIT!;
-    else if (isRealSecret(MODULE_SECRET_KYC)) h['module_secret'] = MODULE_SECRET_KYC!;
     return h;
 }
 
@@ -530,14 +532,23 @@ export interface CibilParams {
     dob: string;      // YYYY-MM-DD
     phone: string;
     address: string;
+    pincode?: string;      // 6-digit Indian pincode — bureau lookup uses this
+    address_type?: 'H' | 'O' | 'X';   // H=Home, O=Office, X=Other (defaults to H)
 }
 
-/** Credit score via Bytes module (lightweight — mobile + name only) */
+/** Credit score via Bytes module (lightweight — mobile + name only).
+ *  Name is uppercased to match the canonical PAN-card format that CIBIL
+ *  typically stores against each PAN. */
 export async function fetchCibilScore(params: CibilParams) {
     const body = {
         mobile: params.phone.replace(/\D/g, '').slice(-10),
-        name: params.name,
+        name: params.name.trim().toUpperCase(),
     };
+
+    console.log('[CIBIL Score] Request body:', JSON.stringify({
+        ...body,
+        mobile: `******${body.mobile.slice(-4)}`,
+    }));
 
     const res = await fetch(`${BASE_URL}/v2/bytes/credit-score`, {
         method: 'POST',
@@ -547,15 +558,23 @@ export async function fetchCibilScore(params: CibilParams) {
     return res.json();
 }
 
-/** Full credit report summary — returns score + accounts + enquiries */
+/** Full credit report summary — returns score + accounts + enquiries
+ *  Decentro requires: reference_id, consent, consent_purpose, name, mobile,
+ *  inquiry_purpose, date_of_birth, address_type, address, pincode, document_type,
+ *  document_id. Missing pincode/address_type degrades the bureau match and often
+ *  returns "Consumer not found" even for leads that do exist on CIBIL. */
 export async function fetchCibilReport(params: CibilParams) {
+    const pincode = (params.pincode || '').replace(/\D/g, '').slice(0, 6)
+        || (params.address.match(/\b\d{6}\b/)?.[0] ?? '');
+
     const body: Record<string, unknown> = {
         reference_id: genRefId(),
         consent: true,
         consent_purpose: 'Credit report for loan application processing',
-        name: params.name,
+        name: params.name.trim().toUpperCase(),
         mobile: params.phone.replace(/\D/g, '').slice(-10),
         inquiry_purpose: 'PL',
+        address_type: params.address_type || 'H',
     };
 
     if (params.pan) {
@@ -564,6 +583,13 @@ export async function fetchCibilReport(params: CibilParams) {
     }
     if (params.dob) body.date_of_birth = params.dob;
     if (params.address) body.address = params.address;
+    if (pincode) body.pincode = pincode;
+
+    console.log('[CIBIL Report] Request body:', JSON.stringify({
+        ...body,
+        document_id: body.document_id ? `${String(body.document_id).slice(0, 3)}****${String(body.document_id).slice(-2)}` : undefined,
+        mobile: body.mobile ? `******${String(body.mobile).slice(-4)}` : undefined,
+    }));
 
     const res = await fetch(`${BASE_URL}/v2/financial_services/credit_bureau/credit_report/summary`, {
         method: 'POST',

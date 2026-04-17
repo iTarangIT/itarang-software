@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Search, AlertCircle, CheckCircle } from "lucide-react";
 import { ScraperRunsTable } from "./ScraperRunsTable";
 import { QueryManager } from "./QueryManager";
 import { ScheduleConfig } from "./ScheduleConfig";
+import { ScraperRunProgress } from "./ScraperRunProgress";
+
+const ACTIVE_RUN_KEY = "scraper:active-run-id";
 
 interface ScraperDashboardProps {
   onSelectRun?: (runId: string) => void;
@@ -20,6 +23,16 @@ export function ScraperDashboard({ onSelectRun }: ScraperDashboardProps) {
   } | null>(null);
 
   const [tab, setTab] = useState<"history" | "queries">("history");
+
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const stored =
+      typeof window !== "undefined"
+        ? localStorage.getItem(ACTIVE_RUN_KEY)
+        : null;
+    if (stored) setActiveRunId(stored);
+  }, []);
 
   const triggerMutation = useMutation({
     mutationFn: async () => {
@@ -54,10 +67,14 @@ export function ScraperDashboard({ onSelectRun }: ScraperDashboardProps) {
     onSuccess: (data) => {
       setToast({
         type: "success",
-        msg: `Scraper started — Run ID: ${data.run_id}`,
+        msg: `Scraper started — tracking progress below`,
       });
+      setActiveRunId(data.run_id);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(ACTIVE_RUN_KEY, data.run_id);
+      }
       queryClient.invalidateQueries({ queryKey: ["scraper-runs"] });
-      setTimeout(() => setToast(null), 6000);
+      setTimeout(() => setToast(null), 4000);
     },
 
     onError: (err: Error) => {
@@ -86,6 +103,22 @@ export function ScraperDashboard({ onSelectRun }: ScraperDashboardProps) {
 
         <QueryManager />
       </div>
+
+      {/* Live progress for active run */}
+      {activeRunId && (
+        <ScraperRunProgress
+          runId={activeRunId}
+          onComplete={() => {
+            queryClient.invalidateQueries({ queryKey: ["scraper-runs"] });
+          }}
+          onDismiss={() => {
+            setActiveRunId(null);
+            if (typeof window !== "undefined") {
+              localStorage.removeItem(ACTIVE_RUN_KEY);
+            }
+          }}
+        />
+      )}
 
       {/* Toast */}
       {toast && (

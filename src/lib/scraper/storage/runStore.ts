@@ -1,6 +1,8 @@
 import { db } from "@/lib/db";
 import { scrapeRuns } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
+
+const STUCK_RUN_THRESHOLD_MS = 10 * 60 * 1000;
 
 export async function markRunStarted(
   runId: string,
@@ -50,4 +52,21 @@ export async function markRunFailed(runId: string, error: string) {
       completedAt: new Date(),
     })
     .where(eq(scrapeRuns.id, runId));
+}
+
+// Serverless functions can be terminated before the scraper finishes, leaving
+// rows stuck at status='running' forever. Reap any that exceed the threshold.
+export async function reapStuckRuns() {
+  const cutoff = new Date(Date.now() - STUCK_RUN_THRESHOLD_MS);
+
+  await db
+    .update(scrapeRuns)
+    .set({
+      status: "failed",
+      errorMessage: "Run timed out (serverless function terminated)",
+      completedAt: new Date(),
+    })
+    .where(
+      and(eq(scrapeRuns.status, "running"), lt(scrapeRuns.startedAt, cutoff)),
+    );
 }
