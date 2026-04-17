@@ -227,7 +227,7 @@ export default function StepOwnership() {
 
               {/* Landline — optional */}
               <TextInput
-                value={(ownership as any).ownerLandline || ""}
+                value={ownership.ownerLandline || ""}
                 onChange={(value) =>
                   setField(
                     "ownership",

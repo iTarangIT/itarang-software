@@ -49,6 +49,8 @@ function isConsentSignedOrLater(status: string) {
         'admin_verified',
         'manual_verified',
         'verified',
+        'digitally_signed',
+        'manual_uploaded',
     ].includes((status || '').toLowerCase());
 }
 

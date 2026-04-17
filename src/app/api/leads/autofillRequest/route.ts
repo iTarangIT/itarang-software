@@ -95,13 +95,17 @@ function sanitizeName(raw?: string): string | undefined {
     return cleaned;
 }
 
+const DECENTRO_OCR_TIMEOUT_MS = 12_000;
+
 async function runDecentroSide(
     fileBlob: Blob,
     filename: string,
     side: 'FRONT' | 'BACK',
 ): Promise<AnyRec | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DECENTRO_OCR_TIMEOUT_MS);
     try {
-        const res = await extractDocumentOcr('AADHAAR', fileBlob, filename, side);
+        const res = await extractDocumentOcr('AADHAAR', fileBlob, filename, side, controller.signal);
         const success =
             res.responseStatus === 'SUCCESS' ||
             res.status === 'SUCCESS' ||
@@ -113,8 +117,14 @@ async function runDecentroSide(
         }
         return (res.data || res.result || res.kycResult || res) as AnyRec;
     } catch (e) {
-        console.error(`[Lead OCR] Decentro ${side} threw:`, e);
+        if ((e as { name?: string })?.name === 'AbortError') {
+            console.error(`[Lead OCR] Decentro ${side} timed out after ${DECENTRO_OCR_TIMEOUT_MS}ms`);
+        } else {
+            console.error(`[Lead OCR] Decentro ${side} threw:`, e);
+        }
         return null;
+    } finally {
+        clearTimeout(timer);
     }
 }
 
