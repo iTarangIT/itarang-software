@@ -35,3 +35,4 @@ export async function launchBrowser() {
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
 }
+
