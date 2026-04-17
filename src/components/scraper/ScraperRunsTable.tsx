@@ -18,6 +18,11 @@ export function ScraperRunsTable({ onSelectRun }: ScraperRunsTableProps) {
       if (!json.success) throw new Error("Failed");
       return json.data;
     },
+    refetchInterval: (query) => {
+      const runs = query.state.data?.data ?? [];
+      const hasRunning = runs.some((r: any) => r.status === "running");
+      return hasRunning ? 4000 : false;
+    },
   });
 
   const runs = data?.data || [];

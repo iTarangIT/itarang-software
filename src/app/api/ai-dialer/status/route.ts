@@ -5,10 +5,10 @@ import { NextResponse } from "next/server";
 
 export async function GET() {
   // If current call timed out (3 min), auto-advance to next lead
-  if (dialerSession.isActive() && dialerSession.isCallTimedOut()) {
+  if ((await dialerSession.isActive()) && (await dialerSession.isCallTimedOut())) {
     console.log("[AI DIALER] Call timed out, advancing to next lead");
 
-    const nextLeadId = dialerSession.getNext();
+    const nextLeadId = await dialerSession.getNext();
     if (nextLeadId) {
       const lead = await db.query.dealerLeads.findFirst({
         where: (l, { eq }) => eq(l.id, nextLeadId),
@@ -23,5 +23,5 @@ export async function GET() {
     }
   }
 
-  return NextResponse.json(dialerSession.status());
+  return NextResponse.json(await dialerSession.status());
 }
