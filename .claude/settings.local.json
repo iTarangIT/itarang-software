@@ -53,7 +53,12 @@
       "Bash(awk 'NR>=25 && NR<=25' \"D:/itarang-software/src/lib/consent/consent-pdf-template.ts\")",
       "Bash(grep -E \"\\\\.ts$\")",
       "Bash(npx mammoth *)",
-      "Bash(grep *)"
+      "Bash(grep *)",
+      "Bash(where gh *)",
+      "Read(//c/Program Files/GitHub CLI/**)",
+      "Bash(git diff *)",
+      "Bash(git restore *)",
+      "Bash(gh pr create --base main --head Aditya --title 'feat: Vercel-ready scraper + bolna via QStash fan-out' --body ' *)"
     ]
   }
 }

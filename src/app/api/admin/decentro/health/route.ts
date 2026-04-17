@@ -34,8 +34,8 @@ export async function GET() {
 
   const modules = {
     kyc: {
-      configured: !isPlaceholder(process.env.DECENTRO_MODULE_SECRET_KYC),
-      preview: mask(process.env.DECENTRO_MODULE_SECRET_KYC),
+      configured: true,
+      preview: "(not required — client_id + client_secret only)",
       usedFor: [
         "PAN validate",
         "Aadhaar OTP",
@@ -62,10 +62,10 @@ export async function GET() {
     },
   };
 
-  const consumerUrn = {
-    configured: !!process.env.DECENTRO_CONSUMER_URN,
-    preview: mask(process.env.DECENTRO_CONSUMER_URN),
-    usedFor: ["Bank account verification (required)"],
+  const providerSecret = {
+    configured: !isPlaceholder(process.env.DECENTRO_PROVIDER_SECRET),
+    preview: mask(process.env.DECENTRO_PROVIDER_SECRET),
+    usedFor: ["Bank account verification (v2 core_banking — required)"],
   };
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || null;
@@ -88,7 +88,7 @@ export async function GET() {
         preview: mask(process.env.DECENTRO_CLIENT_SECRET),
       },
       modules,
-      consumerUrn,
+      providerSecret,
       digilocker: {
         appUrl,
         callbackSample,
