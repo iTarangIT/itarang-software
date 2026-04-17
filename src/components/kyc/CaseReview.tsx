@@ -78,6 +78,7 @@ interface VerificationCard {
   adminActionNotes: string | null;
   submittedAt: string | null;
   completedAt: string | null;
+  apiRequest: Record<string, unknown> | null;
   apiResponse: Record<string, unknown> | null;
 }
 
@@ -981,7 +982,12 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           <CIBILCard
             leadId={leadId}
             leadName={lead.name}
-            panNumber={pd?.panNo || ocrPan || undefined}
+            panNumber={
+              pd?.panNo ||
+              ocrPan ||
+              ((getVerification("pan")?.apiRequest as Record<string, unknown> | undefined)?.pan_number as string | undefined) ||
+              undefined
+            }
             dob={pd?.dob || ocrDob || undefined}
             phone={lead.phone}
             address={pd?.localAddress || undefined}
