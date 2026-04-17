@@ -68,6 +68,8 @@ export async function POST(
       : (lead.dob ? new Date(lead.dob).toISOString().slice(0, 10) : "");
     const phone = lead.phone || lead.mobile || lead.owner_contact || "";
     const address = personal.local_address || lead.local_address || lead.current_address || "";
+    // Extract 6-digit Indian pincode — Decentro CIBIL needs it for bureau match.
+    const pincode = address.match(/\b\d{6}\b/)?.[0] || "";
 
     const decentroRes = await fetchCibilReport({
       name,
@@ -75,6 +77,8 @@ export async function POST(
       dob,
       phone,
       address,
+      pincode,
+      address_type: "H",
     });
 
     console.log("[CIBIL Report] Response:", JSON.stringify(decentroRes));
@@ -181,6 +185,8 @@ export async function POST(
       dob,
       phone,
       address,
+      pincode,
+      address_type: "H",
       report_type: "full_report",
     };
 
