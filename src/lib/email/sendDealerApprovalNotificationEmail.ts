@@ -26,6 +26,17 @@ function getMailer() {
   });
 }
 
+function escapeHtml(value: unknown): string {
+  const s = value == null ? "" : String(value);
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/`/g, "&#96;");
+}
+
 function sanitizeEmails(emails: string[]) {
   return Array.from(
     new Set(
@@ -64,10 +75,10 @@ export async function sendDealerApprovalNotificationEmail(
         </p>
 
         <div style="margin-top: 16px; padding: 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px;">
-          <p style="margin: 0 0 8px;"><strong>Dealer / Company:</strong> ${payload.companyName}</p>
-          <p style="margin: 0 0 8px;"><strong>Primary Contact:</strong> ${payload.dealerName}</p>
-          <p style="margin: 0 0 8px;"><strong>Dealer Code:</strong> ${payload.dealerCode}</p>
-          <p style="margin: 0 0 8px;"><strong>Approved At:</strong> ${approvedAtLabel} IST</p>
+          <p style="margin: 0 0 8px;"><strong>Dealer / Company:</strong> ${escapeHtml(payload.companyName)}</p>
+          <p style="margin: 0 0 8px;"><strong>Primary Contact:</strong> ${escapeHtml(payload.dealerName)}</p>
+          <p style="margin: 0 0 8px;"><strong>Dealer Code:</strong> ${escapeHtml(payload.dealerCode)}</p>
+          <p style="margin: 0 0 8px;"><strong>Approved At:</strong> ${escapeHtml(approvedAtLabel)} IST</p>
           <p style="margin: 0;"><strong>Status:</strong> Approved &amp; Active</p>
         </div>
 

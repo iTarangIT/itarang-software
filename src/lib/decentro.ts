@@ -251,6 +251,7 @@ export async function extractDocumentOcr(
     documentBlob: Blob,
     filename: string,
     document_side?: OcrDocSide,
+    signal?: AbortSignal,
 ) {
     // Decentro rejects filenames with multiple periods — sanitize by keeping only the last one (extension)
     const lastDot = filename.lastIndexOf('.');
@@ -287,6 +288,7 @@ export async function extractDocumentOcr(
         method: 'POST',
         headers,
         body: form,
+        signal,
     });
 
     const json = await res.json();

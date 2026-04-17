@@ -318,9 +318,15 @@ export default function StepReview() {
               state.agreement?.financierSignatory || null,
             itarangSignatory1: state.agreement?.itarangSignatory1 || null,
             itarangSignatory2: state.agreement?.itarangSignatory2 || null,
-            signingOrder: state.agreement?.itarangSignatory2?.name?.trim()
-              ? ["dealer", "itarang_1", "itarang_2"]
-              : ["dealer", "itarang_1"],
+            signingOrder: (() => {
+              const hasFinancier = !!state.agreement?.financierSignatory?.name?.trim();
+              const hasItarang2 = !!state.agreement?.itarangSignatory2?.name?.trim();
+              const order: string[] = ["dealer"];
+              if (hasFinancier) order.push("financier");
+              order.push("itarang_1");
+              if (hasItarang2) order.push("itarang_2");
+              return order;
+            })(),
           }
           : null,
       };

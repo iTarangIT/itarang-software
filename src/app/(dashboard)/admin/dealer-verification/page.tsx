@@ -176,6 +176,15 @@ export default function DealerVerificationPage() {
     loadApplications();
   }, []);
 
+  // Parse a "YYYY-MM-DD" input value into a local-midnight Date so day
+  // boundaries align with the user's timezone (new Date("YYYY-MM-DD") parses
+  // as UTC and shifts off by a day in many timezones).
+  const parseLocalDate = (value: string): Date | null => {
+    const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  };
+
   // Reactive filtering — no Apply button needed
   const filtered = useMemo(() => {
     let result = applications;
@@ -186,14 +195,18 @@ export default function DealerVerificationPage() {
         const submitted = new Date(item.submittedAt);
         submitted.setHours(0, 0, 0, 0);
         if (dateFrom) {
-          const from = new Date(dateFrom);
-          from.setHours(0, 0, 0, 0);
-          if (submitted < from) return false;
+          const from = parseLocalDate(dateFrom);
+          if (from) {
+            from.setHours(0, 0, 0, 0);
+            if (submitted < from) return false;
+          }
         }
         if (dateTo) {
-          const to = new Date(dateTo);
-          to.setHours(23, 59, 59, 999);
-          if (submitted > to) return false;
+          const to = parseLocalDate(dateTo);
+          if (to) {
+            to.setHours(23, 59, 59, 999);
+            if (submitted > to) return false;
+          }
         }
         return true;
       });
@@ -232,8 +245,10 @@ export default function DealerVerificationPage() {
     return { total, pending, approved, correction };
   }, [applications]);
 
-  const formatDisplayDate = (d: string) =>
-    new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  const formatDisplayDate = (d: string) => {
+    const parsed = parseLocalDate(d) ?? new Date(d);
+    return parsed.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  };
 
   const activeFilterLabel =
     dateFrom && dateTo

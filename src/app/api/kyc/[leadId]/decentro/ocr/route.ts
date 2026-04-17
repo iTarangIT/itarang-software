@@ -1,8 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import { createClient } from '@/lib/supabase/server';
 import { extractDocumentOcr, OcrDocType } from '@/lib/decentro';
 
 const ALLOWED_TYPES: OcrDocType[] = ['PAN', 'AADHAAR', 'DRIVING_LICENSE', 'VOTERID'];
+
+const ocrRequestSchema = z.object({
+    document_side: z.preprocess(
+        (v) => {
+            if (typeof v !== 'string') return undefined;
+            const up = v.trim().toUpperCase();
+            return up === '' ? undefined : up;
+        },
+        z.enum(['FRONT', 'BACK']).optional(),
+    ),
+});
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -13,9 +25,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const formData = await req.formData();
         const file = formData.get('file') as File | null;
         const document_type = (formData.get('document_type') as string)?.toUpperCase() as OcrDocType;
-        const rawSide = (formData.get('document_side') as string | null)?.toUpperCase();
-        const side: 'FRONT' | 'BACK' | undefined =
-            rawSide === 'FRONT' || rawSide === 'BACK' ? (rawSide as 'FRONT' | 'BACK') : undefined;
+        const parsedRequest = ocrRequestSchema.safeParse({
+            document_side: formData.get('document_side') ?? undefined,
+        });
+        if (!parsedRequest.success) {
+            return NextResponse.json(
+                { success: false, error: 'document_side must be FRONT or BACK' },
+                { status: 400 },
+            );
+        }
+        const side = parsedRequest.data.document_side;
 
         if (!file) return NextResponse.json({ success: false, error: 'file is required' }, { status: 400 });
         if (!ALLOWED_TYPES.includes(document_type)) {

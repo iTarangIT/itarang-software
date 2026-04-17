@@ -155,7 +155,12 @@ export async function fetchDigioAndSyncSigners(params: {
 
   const clientId = process.env.DIGIO_CLIENT_ID?.trim();
   const clientSecret = process.env.DIGIO_CLIENT_SECRET?.trim();
-  const baseUrl = (process.env.DIGIO_BASE_URL || "https://api.digio.in").replace(/\/$/, "");
+  const baseUrl = (
+    process.env.DIGIO_BASE_URL ||
+    (process.env.NODE_ENV === "production"
+      ? "https://api.digio.in"
+      : "https://ext.digio.in:444")
+  ).replace(/\/$/, "");
 
   if (!clientId || !clientSecret) return null;
 

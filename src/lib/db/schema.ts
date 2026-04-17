@@ -2905,6 +2905,11 @@ export const dealerOnboardingDocuments = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
+  (table) => ({
+    applicationIdIdx: index("dealer_onboarding_documents_application_id_idx").on(
+      table.applicationId,
+    ),
+  }),
 );
 
 export const scrapeRuns = pgTable("scraper_runs", {

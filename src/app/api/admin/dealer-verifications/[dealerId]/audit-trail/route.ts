@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
-import puppeteer from "puppeteer";
+import { launchBrowser } from "@/lib/pdf/launch-browser";
 import { db } from "@/lib/db";
 import {
   dealerAgreementEvents,
@@ -194,7 +194,32 @@ async function renderAuditTrailPdf(
     (digioStatus as any)?.signed_on,
   );
 
-  const signers = localSigners.map((s, i) => mergeSigner(i + 1, s, partyMap, invitationAt));
+  let signers: AuditSignerDetail[];
+  if (localSigners.length === 0) {
+    // No DB-backed signer rows (e.g. rows not yet written, or cleared). Fall back to
+    // synthesizing minimal signer-like objects from the Digio party map so the audit
+    // PDF still renders per-signer entries instead of an empty table.
+    const syntheticEntries = Array.from(partyMap.entries()).filter(
+      ([key]) => !key.startsWith("reason:"),
+    );
+    signers = syntheticEntries.map(([email, party], i) => {
+      const synthetic = {
+        signerEmail: pickString(party?.email, email),
+        signerName: pickString(party?.name, party?.signer_name, party?.displayName),
+        signerMobile: pickString(party?.mobile, party?.phone),
+        signerRole: pickString(party?.reason, party?.role),
+        signerStatus: pickString(party?.status),
+        signingMethod: pickString(party?.sign_type),
+        signedAt: null,
+        createdAt: null,
+        providerRawResponse: party,
+        providerDocumentId: application.providerDocumentId,
+      } as unknown as typeof dealerAgreementSigners.$inferSelect;
+      return mergeSigner(i + 1, synthetic, partyMap, invitationAt);
+    });
+  } else {
+    signers = localSigners.map((s, i) => mergeSigner(i + 1, s, partyMap, invitationAt));
+  }
 
   const invitationIp = pickString(
     (digioStatus as any)?.owner_ip,
@@ -245,10 +270,7 @@ async function renderAuditTrailPdf(
     generatedAt: new Date(),
   });
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  const browser = await launchBrowser();
 
   try {
     const page = await browser.newPage();

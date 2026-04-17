@@ -77,12 +77,14 @@ function getAddress(data: Record<string, unknown>): string | undefined {
     return undefined;
 }
 
-/** Normalize a Decentro-returned Aadhaar ID into a clean 12-digit string (may be masked). */
+/** Normalize a Decentro-returned Aadhaar ID into a clean 12-digit string (may be masked).
+ *  Only accepts a full 12-digit number or the canonical masked shape (XXXX followed by 8 digits). */
 function normalizeAadhaar(raw: string | undefined): string | undefined {
     if (!raw) return undefined;
     const cleaned = raw.replace(/[^0-9Xx]/g, '');
-    if (cleaned.length < 4) return undefined;
-    return cleaned;
+    if (/^\d{12}$/.test(cleaned)) return cleaned;
+    if (/^[Xx]{4}\d{8}$/.test(cleaned)) return cleaned;
+    return undefined;
 }
 
 /** Parse various DOB formats Decentro may return into a Date, or null if unparseable. */
@@ -179,7 +181,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                     if (decentroOcrType) {
                         try {
                             const blob = new Blob([buf], { type: ct });
-                            const ocrRes = await extractDocumentOcr(decentroOcrType, blob, fname);
+                            const side: 'FRONT' | 'BACK' | undefined =
+                                doc_type === 'aadhaar_front' ? 'FRONT'
+                                : doc_type === 'aadhaar_back' ? 'BACK'
+                                : undefined;
+                            const ocrRes = await extractDocumentOcr(decentroOcrType, blob, fname, side);
                             // Decentro may use responseStatus or status field
                             const isSuccess = ocrRes.responseStatus === 'SUCCESS' || ocrRes.status === 'SUCCESS' || ocrRes.status === 200;
                             const ocrPayload = ocrRes.data || ocrRes.result || ocrRes.kycResult;

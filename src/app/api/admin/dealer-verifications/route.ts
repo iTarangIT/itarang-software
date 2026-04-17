@@ -70,7 +70,7 @@ export async function GET() {
       // Otherwise, surface the real agreement status from the DB
       const agreementLabel = !item.financeEnabled
         ? "N/A"
-        : item.agreementStatus ?? "not_generated";
+        : item.agreementStatus?.trim() || "not_generated";
       const status =
         onboardingStatus === "approved" ||
         onboardingStatus === "rejected" ||
