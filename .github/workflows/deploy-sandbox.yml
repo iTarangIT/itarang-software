@@ -1,0 +1,41 @@
+name: Deploy Sandbox to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy sandbox to Hostinger VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          command_timeout: 15m
+          script: |
+            cd /home/itarang-crm-sandbox/htdocs/sandbox.itarang.com
+            git fetch origin main
+            git reset --hard origin/main
+            sed -i '/^DATABASE_URL=/d' .env.sandbox
+            echo 'DATABASE_URL=${{ secrets.SANDBOX_DATABASE_URL }}' >> .env.sandbox
+            npm ci
+            npm run build
+            cp .env.sandbox .next/standalone/.env.sandbox
+            cp -r .next/static .next/standalone/.next/static
+            cp -r public .next/standalone/public
+            chown -R itarang-crm-sandbox:itarang-crm-sandbox /home/itarang-crm-sandbox/htdocs/sandbox.itarang.com
+            chmod -R 755 /home/itarang-crm-sandbox/htdocs/sandbox.itarang.com/.next/standalone/public
+            su - itarang-crm-sandbox -c "cd /home/itarang-crm-sandbox/htdocs/sandbox.itarang.com && pm2 restart itarang-crm-sandbox --update-env"
+            sleep 8
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3003)
+            if echo "$HTTP_CODE" | grep -qE "^(200|301|302|307)$"; then
+              echo "✅ Sandbox deployed successfully (HTTP $HTTP_CODE)"
+            else
+              echo "❌ Sandbox deploy failed (HTTP $HTTP_CODE)"
+              su - itarang-crm-sandbox -c "pm2 logs itarang-crm-sandbox --lines 10 --nostream"
+              exit 1
+            fi
