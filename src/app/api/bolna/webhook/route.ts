@@ -1,5 +1,7 @@
 import { handleBolnaWebhook } from "@/lib/ai/bolna_ai";
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
+
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,7 +14,15 @@ export async function POST(req: NextRequest) {
       keys: Object.keys(body),
     }));
 
-    await handleBolnaWebhook(body);
+    // Acknowledge Bolna immediately so it doesn't retry; do the heavy
+    // analysis + DB writes + next-lead trigger in the background.
+    after(async () => {
+      try {
+        await handleBolnaWebhook(body);
+      } catch (err) {
+        console.error("[bolna:webhook] background handler failed", err);
+      }
+    });
 
     return NextResponse.json({ success: true });
   } catch (err: any) {

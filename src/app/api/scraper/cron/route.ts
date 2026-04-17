@@ -1,10 +1,12 @@
+import { after } from "next/server";
 import { db } from "@/lib/db";
 import { scraperSchedules, scraperRuns } from "@/lib/db/schema";
 import { generateId, successResponse } from "@/lib/api-utils";
-import { runDealerScraper } from "@/lib/scraper/pipeline";
+import { startChunkedRun } from "@/lib/scraper/chunkedPipeline";
+import { reapStuckRuns } from "@/lib/scraper/storage/runStore";
 import { eq } from "drizzle-orm";
 
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 function isDue(schedule: {
   frequency: string;
@@ -56,6 +58,8 @@ export const GET = async (req: Request) => {
     return successResponse({ message: "Not due yet", triggered: false });
   }
 
+  await reapStuckRuns();
+
   // Check if a run is already in progress
   const [running] = await db
     .select({ id: scraperRuns.id })
@@ -83,9 +87,13 @@ export const GET = async (req: Request) => {
     .set({ last_run_at: new Date(), updated_at: new Date() })
     .where(eq(scraperSchedules.id, schedule.id));
 
-  runDealerScraper(runId, "").catch((err) =>
-    console.error(`[Scraper Cron] Background run failed for ${runId}:`, err),
-  );
+  after(async () => {
+    try {
+      await startChunkedRun(runId, "");
+    } catch (err) {
+      console.error(`[scraper:cron] fan-out failed for ${runId}`, err);
+    }
+  });
 
   return successResponse({
     message: "Scraper triggered by schedule",

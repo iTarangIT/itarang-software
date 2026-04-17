@@ -264,16 +264,14 @@ export default function PANCard({
           </div>
         </div>
 
-        {/* Run Button */}
-        {(status === "pending" || status === "failed") && (
-          <button
-            onClick={handleVerify}
-            disabled={!pan.trim()}
-            className="w-full bg-teal-600 hover:bg-teal-700 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
-          >
-            Run PAN Verification
-          </button>
-        )}
+        {/* Run Button — always visible so admin can re-run after a verify/accept/reject */}
+        <button
+          onClick={handleVerify}
+          disabled={!pan.trim() || status === "loading"}
+          className="w-full bg-teal-600 hover:bg-teal-700 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
+        >
+          {status === "success" ? "Re-run PAN Verification" : "Run PAN Verification"}
+        </button>
 
 
         {/* Loading */}
