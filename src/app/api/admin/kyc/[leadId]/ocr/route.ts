@@ -17,19 +17,88 @@ const DECENTRO_OCR_MAP: Record<string, OcrDocType> = {
 // Doc types that use Tesseract fallback
 const TESSERACT_TYPES = ['bank_statement', 'cheque_1', 'cheque_2', 'cheque_3', 'cheque_4', 'rc_copy'];
 
-/** Helper: extract a string field from nested OCR response */
+/** Helper: extract a string field from nested OCR response. Walks common nesting levels
+ *  (kycResult, extractedData, result, ocrResult, data) and accepts both strings and numbers.
+ */
 function getField(data: Record<string, unknown>, ...keys: string[]): string | undefined {
     const targets: Record<string, unknown>[] = [data];
-    for (const k of ['kycResult', 'extractedData', 'result', 'ocrResult']) {
+    for (const k of ['kycResult', 'extractedData', 'result', 'ocrResult', 'data', 'ocr_data']) {
         if (data[k] && typeof data[k] === 'object') targets.push(data[k] as Record<string, unknown>);
+    }
+    // Also look inside nested kycResult.extractedData etc.
+    for (const t of [...targets]) {
+        for (const k of ['kycResult', 'extractedData', 'result', 'ocrResult', 'data']) {
+            if (t[k] && typeof t[k] === 'object') targets.push(t[k] as Record<string, unknown>);
+        }
     }
     for (const t of targets) {
         for (const key of keys) {
             const v = t[key];
             if (typeof v === 'string' && v.trim()) return v.trim();
+            if (typeof v === 'number' && Number.isFinite(v)) return String(v);
         }
     }
     return undefined;
+}
+
+/** Flatten address field that Decentro may return as an object {line1, line2, city, state, pincode}. */
+function getAddress(data: Record<string, unknown>): string | undefined {
+    const targets: Record<string, unknown>[] = [data];
+    for (const k of ['kycResult', 'extractedData', 'result', 'ocrResult', 'data']) {
+        if (data[k] && typeof data[k] === 'object') targets.push(data[k] as Record<string, unknown>);
+    }
+    for (const t of targets) {
+        // Case 1: plain string
+        for (const key of ['address', 'full_address', 'fullAddress', 'currentAddress', 'current_address', 'localAddress', 'addressLine']) {
+            const v = t[key];
+            if (typeof v === 'string' && v.trim()) return v.trim();
+        }
+        // Case 2: object — Decentro commonly returns { line1, line2, vtc, district, state, pincode, country }
+        for (const key of ['address', 'addressObject', 'address_object', 'addressData']) {
+            const v = t[key];
+            if (v && typeof v === 'object' && !Array.isArray(v)) {
+                const o = v as Record<string, unknown>;
+                const parts = [
+                    o.line1 || o.addressLine1 || o.address_line_1,
+                    o.line2 || o.addressLine2 || o.address_line_2,
+                    o.street,
+                    o.locality || o.landmark,
+                    o.vtc || o.village || o.town || o.city,
+                    o.subdistrict || o.sub_district,
+                    o.district,
+                    o.state,
+                    o.country,
+                    o.pincode || o.pin || o.postalCode || o.zip,
+                ].filter((p) => typeof p === 'string' && (p as string).trim()).map((p) => (p as string).trim());
+                if (parts.length > 0) return parts.join(', ');
+            }
+        }
+    }
+    return undefined;
+}
+
+/** Normalize a Decentro-returned Aadhaar ID into a clean 12-digit string (may be masked). */
+function normalizeAadhaar(raw: string | undefined): string | undefined {
+    if (!raw) return undefined;
+    const cleaned = raw.replace(/[^0-9Xx]/g, '');
+    if (cleaned.length < 4) return undefined;
+    return cleaned;
+}
+
+/** Parse various DOB formats Decentro may return into a Date, or null if unparseable. */
+function parseDob(raw: string | undefined): Date | null {
+    if (!raw) return null;
+    const s = raw.trim();
+    // DD-MM-YYYY or DD/MM/YYYY
+    const ddmmyyyy = s.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
+    if (ddmmyyyy) {
+        const [, dd, mm, yyyy] = ddmmyyyy;
+        const d = new Date(`${yyyy}-${mm}-${dd}`);
+        return Number.isFinite(d.getTime()) ? d : null;
+    }
+    // YYYY-MM-DD ISO
+    const iso = new Date(s);
+    return Number.isFinite(iso.getTime()) ? iso : null;
 }
 
 /** Upsert personalDetails — create if not exists, update only non-null fields */
@@ -237,7 +306,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         if (decentroType) {
             // Use Decentro OCR for supported types
             const blob = new Blob([fileBuffer], { type: contentType });
-            const decentroRes = await extractDocumentOcr(decentroType, blob, fileName);
+            const side: 'FRONT' | 'BACK' | undefined =
+                doc_type === 'aadhaar_front' ? 'FRONT'
+                : doc_type === 'aadhaar_back' ? 'BACK'
+                : undefined;
+            const decentroRes = await extractDocumentOcr(decentroType, blob, fileName, side);
             const success = decentroRes.responseStatus === 'SUCCESS' || decentroRes.status === 'SUCCESS' || decentroRes.status === 200;
             const decentroPayload = decentroRes.data || decentroRes.result || decentroRes.kycResult;
             if (success && decentroPayload) {
@@ -290,15 +363,51 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 ...(dob ? { dob: new Date(dob) } : {}),
             });
         } else if (doc_type === 'aadhaar_front' || doc_type === 'aadhaar_back') {
-            const aadhaarNo = getField(ocrData, 'aadhaar_number', 'aadhaarNumber', 'uid', 'aadhaar');
-            const fatherName = getField(ocrData, 'fatherName', 'father_name', 'fatherOrHusbandName', 'careOf');
-            const address = getField(ocrData, 'address', 'full_address', 'currentAddress');
-            const dob = getField(ocrData, 'dob', 'dateOfBirth', 'date_of_birth');
+            // Decentro's Aadhaar OCR returns idNumber / nameOnDocument / dateOfBirth / fatherName / address.
+            // Front typically yields name + DOB + gender; back yields ID number + address + father's name.
+            // We extract everything we can from both sides and saveToPersonalDetails ignores empty values.
+            const aadhaarNo = normalizeAadhaar(
+                getField(
+                    ocrData,
+                    'idNumber', 'id_number',
+                    'aadhaar_number', 'aadhaarNumber', 'aadhaarNo', 'aadhaar_no',
+                    'uid', 'uidNumber', 'aadhaar',
+                    'maskedAadhaar', 'masked_aadhaar',
+                ),
+            );
+            const nameOnDoc = getField(
+                ocrData,
+                'nameOnDocument', 'name_on_document',
+                'name', 'fullName', 'full_name', 'holderName',
+            );
+            const fatherName = getField(
+                ocrData,
+                'fatherName', 'father_name', 'fathersName', 'fathers_name',
+                'fatherOrHusbandName', 'father_or_husband_name',
+                'careOf', 'careof', 'care_of', 'co',
+                'guardianName', 'guardian_name',
+            );
+            const address = getAddress(ocrData);
+            const pincode = getField(
+                ocrData,
+                'pincode', 'pinCode', 'pin_code', 'pin', 'postalCode', 'postal_code', 'zip',
+            );
+            const dobStr = getField(
+                ocrData,
+                'dob', 'dateOfBirth', 'date_of_birth', 'DOB',
+            );
+            const gender = getField(ocrData, 'gender', 'sex');
+            const parsedDob = parseDob(dobStr);
+
+            console.log(
+                `[Admin OCR] Aadhaar ${doc_type} extracted: aadhaar=${aadhaarNo ? 'Y' : 'N'}, name=${nameOnDoc ? 'Y' : 'N'}, father=${fatherName ? 'Y' : 'N'}, addr=${address ? 'Y' : 'N'}, dob=${parsedDob ? parsedDob.toISOString().slice(0, 10) : 'N'}, pincode=${pincode || '—'}, gender=${gender || '—'}`,
+            );
+
             await saveToPersonalDetails(leadId, {
                 aadhaar_no: aadhaarNo,
                 father_husband_name: fatherName,
-                local_address: address,
-                ...(dob ? { dob: new Date(dob) } : {}),
+                local_address: address && pincode && !address.includes(pincode) ? `${address}, ${pincode}` : address,
+                ...(parsedDob ? { dob: parsedDob } : {}),
             });
         } else if (doc_type === 'rc_copy') {
             const rcNumber = ocrData.rc_number as string | undefined;

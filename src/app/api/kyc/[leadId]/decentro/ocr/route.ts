@@ -13,6 +13,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const formData = await req.formData();
         const file = formData.get('file') as File | null;
         const document_type = (formData.get('document_type') as string)?.toUpperCase() as OcrDocType;
+        const rawSide = (formData.get('document_side') as string | null)?.toUpperCase();
+        const side: 'FRONT' | 'BACK' | undefined =
+            rawSide === 'FRONT' || rawSide === 'BACK' ? (rawSide as 'FRONT' | 'BACK') : undefined;
 
         if (!file) return NextResponse.json({ success: false, error: 'file is required' }, { status: 400 });
         if (!ALLOWED_TYPES.includes(document_type)) {
@@ -23,7 +26,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         }
 
         const blob = new Blob([await file.arrayBuffer()], { type: file.type });
-        const decentroRes = await extractDocumentOcr(document_type, blob, file.name);
+        const decentroRes = await extractDocumentOcr(document_type, blob, file.name, side);
 
         return NextResponse.json({
             success: decentroRes.responseStatus === 'SUCCESS',

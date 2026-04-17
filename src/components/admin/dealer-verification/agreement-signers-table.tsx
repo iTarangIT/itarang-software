@@ -10,10 +10,9 @@ type Signer = {
   signerStatus: string;
   signedAt?: string | null;
 };
-// hello world
+
 function statusClasses(status: string) {
   const safe = String(status || "").toLowerCase();
-  // hello world
 
   if (safe === "signed") return "bg-green-50 text-green-700 border-green-200";
   if (safe === "viewed") return "bg-indigo-50 text-indigo-700 border-indigo-200";

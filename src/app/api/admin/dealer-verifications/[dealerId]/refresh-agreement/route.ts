@@ -2,9 +2,10 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dealerOnboardingApplications, dealerAgreementSigners } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { dealerOnboardingApplications } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
+import { syncSignersFromDigio } from "@/lib/agreement/sync-signers";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -206,6 +207,19 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       parsed?.agreement_status || parsed?.status
     );
 
+    // Sync per-signer status from Digio's signing_parties array — this is what fixes the
+    // "Sent" badge never flipping to "Signed" after a signer completes the agreement.
+    try {
+      await syncSignersFromDigio(
+        dealerId,
+        application.providerDocumentId,
+        application.requestId,
+        parsed,
+      );
+    } catch (signerSyncErr) {
+      console.error("[REFRESH AGREEMENT] signer sync failed (non-blocking):", signerSyncErr);
+    }
+
     const signingUrl = extractSigningUrl(parsed);
     let signedAgreementUrl =
       extractSignedAgreementUrl(parsed) || application.signedAgreementUrl || null;
@@ -333,33 +347,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         updatedAt: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
-
-    // Sync per-signer statuses from Digio response
-    const signingParties = Array.isArray(parsed?.signing_parties)
-      ? parsed.signing_parties
-      : [];
-
-    for (const party of signingParties) {
-      const partyEmail = String(party?.identifier || party?.email || "").trim().toLowerCase();
-      if (!partyEmail) continue;
-
-      const signerStatus = String(party?.status || "").toLowerCase();
-
-      await db
-        .update(dealerAgreementSigners)
-        .set({
-          signerStatus: signerStatus || "sent",
-          providerSigningUrl: party?.authentication_url || null,
-          providerRawResponse: party || {},
-          lastEventAt: new Date(),
-        })
-        .where(
-          and(
-            eq(dealerAgreementSigners.applicationId, dealerId),
-            eq(dealerAgreementSigners.signerEmail, partyEmail)
-          )
-        );
-    }
 
     return NextResponse.json({
       success: true,

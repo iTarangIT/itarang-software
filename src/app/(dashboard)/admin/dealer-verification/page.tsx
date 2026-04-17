@@ -6,11 +6,12 @@ import { motion } from "framer-motion";
 import {
   Building2,
   Clock3,
-  FileCheck2,
   Search,
   ShieldCheck,
   ArrowRight,
   CheckCircle2,
+  CalendarDays,
+  X,
 } from "lucide-react";
 
 type DealerVerificationItem = {
@@ -60,6 +61,7 @@ function StatCard({
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
+    draft: "bg-slate-50 text-slate-600 border-slate-200",
     submitted: "bg-amber-50 text-amber-700 border-amber-200",
     pending_admin_review: "bg-amber-50 text-amber-700 border-amber-200",
     under_review: "bg-blue-50 text-blue-700 border-blue-200",
@@ -71,8 +73,7 @@ function StatusBadge({ status }: { status: string }) {
     rejected: "bg-rose-50 text-rose-700 border-rose-200",
   };
 
-  const classes =
-    map[status] || "bg-slate-50 text-slate-700 border-slate-200";
+  const classes = map[status] || "bg-slate-50 text-slate-700 border-slate-200";
 
   return (
     <span
@@ -84,45 +85,69 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function AgreementBadge({ value }: { value: string }) {
-  const normalized = value?.toLowerCase();
+  const normalized = (value ?? "").toLowerCase();
 
-  if (normalized === "required") {
+  if (normalized === "n/a")
     return (
-      <span className="inline-flex rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-        Required
+      <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-500">
+        N/A
       </span>
     );
-  }
 
-  if (normalized === "signed") {
+  if (normalized === "not_generated")
+    return (
+      <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+        Not Generated
+      </span>
+    );
+
+  if (normalized === "sent_for_signature")
+    return (
+      <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
+        Sent for Signing
+      </span>
+    );
+
+  if (normalized === "partially_signed")
+    return (
+      <span className="inline-flex rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+        Partially Signed
+      </span>
+    );
+
+  if (normalized === "completed")
     return (
       <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
         Signed
       </span>
     );
-  }
+
+  if (normalized === "failed" || normalized === "expired")
+    return (
+      <span className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">
+        {value.replaceAll("_", " ")}
+      </span>
+    );
 
   return (
     <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
-      {value || "N/A"}
+      {value || "—"}
     </span>
   );
 }
 
 function DocumentBadge({ value }: { value: string }) {
-  const lower = value.toLowerCase();
-
-  const classes = lower.includes("pending")
-    ? "border-amber-200 bg-amber-50 text-amber-700"
-    : lower.includes("/")
-    ? "border-blue-200 bg-blue-50 text-blue-700"
-    : "border-slate-200 bg-slate-50 text-slate-700";
+  const lower = (value ?? "").toLowerCase();
+  const classes =
+    lower === "none uploaded"
+      ? "border-slate-200 bg-slate-50 text-slate-500"
+      : lower.includes("uploaded")
+        ? "border-blue-200 bg-blue-50 text-blue-700"
+        : "border-slate-200 bg-slate-50 text-slate-700";
 
   return (
-    <span
-      className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${classes}`}
-    >
-      {value}
+    <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${classes}`}>
+      {value || "—"}
     </span>
   );
 }
@@ -131,48 +156,72 @@ export default function DealerVerificationPage() {
   const [applications, setApplications] = useState<DealerVerificationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  const isFilterActive = dateFrom !== "" || dateTo !== "";
 
   useEffect(() => {
     const loadApplications = async () => {
       try {
         const res = await fetch("/api/admin/dealer-verifications");
         const data = await res.json();
-
-        if (data.success) {
-          setApplications(data.applications || []);
-        }
+        if (data.success) setApplications(data.applications || []);
       } catch (error) {
         console.error("Failed to load dealer verifications", error);
       } finally {
         setLoading(false);
       }
     };
-
     loadApplications();
   }, []);
 
+  // Reactive filtering — no Apply button needed
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return applications;
+    let result = applications;
 
-    return applications.filter((item) =>
-      [
-        item.dealerName,
-        item.companyName,
-        item.gstNumber || "",
-        item.status,
-        item.companyType || "",
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(q)
-    );
-  }, [applications, query]);
+    if (dateFrom || dateTo) {
+      result = result.filter((item) => {
+        if (!item.submittedAt) return false;
+        const submitted = new Date(item.submittedAt);
+        submitted.setHours(0, 0, 0, 0);
+        if (dateFrom) {
+          const from = new Date(dateFrom);
+          from.setHours(0, 0, 0, 0);
+          if (submitted < from) return false;
+        }
+        if (dateTo) {
+          const to = new Date(dateTo);
+          to.setHours(23, 59, 59, 999);
+          if (submitted > to) return false;
+        }
+        return true;
+      });
+    }
+
+    const q = query.trim().toLowerCase();
+    if (q) {
+      result = result.filter((item) =>
+        [item.dealerName, item.companyName, item.gstNumber || "", item.status, item.companyType || ""]
+          .join(" ")
+          .toLowerCase()
+          .includes(q)
+      );
+    }
+
+    return result;
+  }, [applications, query, dateFrom, dateTo]);
 
   const stats = useMemo(() => {
     const total = applications.length;
     const pending = applications.filter((a) =>
-      ["submitted", "pending_admin_review", "under_review"].includes(a.status)
+      [
+        "submitted",
+        "pending_admin_review",
+        "pending_sales_head",
+        "under_review",
+        "agreement_in_progress",
+      ].includes(a.status)
     ).length;
     const approved = applications.filter((a) =>
       ["approved", "completed", "succeed"].includes(a.status)
@@ -180,12 +229,24 @@ export default function DealerVerificationPage() {
     const correction = applications.filter((a) =>
       ["under_correction", "correction_requested"].includes(a.status)
     ).length;
-
     return { total, pending, approved, correction };
   }, [applications]);
 
+  const formatDisplayDate = (d: string) =>
+    new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+
+  const activeFilterLabel =
+    dateFrom && dateTo
+      ? `${formatDisplayDate(dateFrom)} – ${formatDisplayDate(dateTo)}`
+      : dateFrom
+        ? `From ${formatDisplayDate(dateFrom)}`
+        : dateTo
+          ? `Until ${formatDisplayDate(dateTo)}`
+          : "";
+
   return (
     <div className="space-y-8 px-1">
+      {/* ── Page Header ── */}
       <motion.div
         initial={{ opacity: 0, y: 14 }}
         animate={{ opacity: 1, y: 0 }}
@@ -201,8 +262,8 @@ export default function DealerVerificationPage() {
               Dealer Verification Console
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-500">
-              Review dealer onboarding submissions, validate documents and agreement flow,
-              and activate approved dealer accounts with a controlled compliance workflow.
+              Review dealer onboarding submissions, validate documents and agreement flow, and
+              activate approved dealer accounts with a controlled compliance workflow.
             </p>
           </div>
 
@@ -218,81 +279,106 @@ export default function DealerVerificationPage() {
         </div>
       </motion.div>
 
+      {/* ── Stats Row ── */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Total Applications"
-          value={stats.total}
-          subtitle="All onboarding submissions"
-          icon={<Building2 className="h-5 w-5" />}
-        />
-        <StatCard
-          title="Pending Review"
-          value={stats.pending}
-          subtitle="Waiting for admin action"
-          icon={<Clock3 className="h-5 w-5" />}
-        />
-        <StatCard
-          title="Approved"
-          value={stats.approved}
-          subtitle="Dealer accounts activated"
-          icon={<CheckCircle2 className="h-5 w-5" />}
-        />
-        <StatCard
-          title="Correction Cases"
-          value={stats.correction}
-          subtitle="Need dealer clarification"
-          icon={<ShieldCheck className="h-5 w-5" />}
-        />
+        <StatCard title="Total Applications" value={stats.total} subtitle="All onboarding submissions" icon={<Building2 className="h-5 w-5" />} />
+        <StatCard title="Pending Review" value={stats.pending} subtitle="Waiting for admin action" icon={<Clock3 className="h-5 w-5" />} />
+        <StatCard title="Approved" value={stats.approved} subtitle="Dealer accounts activated" icon={<CheckCircle2 className="h-5 w-5" />} />
+        <StatCard title="Correction Cases" value={stats.correction} subtitle="Need dealer clarification" icon={<ShieldCheck className="h-5 w-5" />} />
       </div>
 
+      {/* ── Applications Table ── */}
       <motion.div
         initial={{ opacity: 0, y: 18 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.32 }}
         className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm"
       >
-        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-5">
-          <div>
-            <h2 className="text-xl font-semibold text-slate-900">
-              Applications Queue
-            </h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Pending admin review, correction cases, and approval actions.
-            </p>
+        {/* Table header + date filter */}
+        <div className="border-b border-slate-200 px-6 py-5">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-900">Applications Queue</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Pending admin review, correction cases, and approval actions.
+              </p>
+            </div>
+
+            {/* Date range inputs */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <CalendarDays className="h-3.5 w-3.5 text-slate-400" />
+                <span className="text-xs font-medium text-slate-500">Submitted date</span>
+              </div>
+
+              <input
+                type="date"
+                value={dateFrom}
+                max={dateTo || undefined}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              />
+
+              <span className="text-xs text-slate-400">—</span>
+
+              <input
+                type="date"
+                value={dateTo}
+                min={dateFrom || undefined}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              />
+
+              {isFilterActive && (
+                <button
+                  onClick={() => { setDateFrom(""); setDateTo(""); }}
+                  className="flex items-center gap-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500 transition hover:bg-slate-50"
+                >
+                  <X className="h-3 w-3" />
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Active filter summary badge */}
+          {isFilterActive && (
+            <div className="mt-3">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                <CalendarDays className="h-3 w-3" />
+                {activeFilterLabel}
+                <span className="mx-0.5 text-emerald-400">·</span>
+                <span className="font-normal text-emerald-600">
+                  {filtered.length} result{filtered.length !== 1 ? "s" : ""}
+                </span>
+              </span>
+            </div>
+          )}
         </div>
 
         {loading ? (
-          <div className="px-6 py-12 text-sm text-slate-500">
-            Loading dealer applications...
-          </div>
+          <div className="px-6 py-12 text-sm text-slate-500">Loading dealer applications...</div>
         ) : filtered.length === 0 ? (
           <div className="px-6 py-12 text-sm text-slate-500">
-            No dealer applications found.
+            {isFilterActive
+              ? `No applications found for ${activeFilterLabel}.`
+              : query
+                ? "No applications match your search."
+                : "No dealer applications found."}
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/80">
-                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Dealer
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Company
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Documents
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Agreement
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Status
-                  </th>
-                  <th className="px-6 py-4 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Actions
-                  </th>
+                  {["Dealer", "Company", "Documents", "Agreement", "Status", "Actions"].map((h, i) => (
+                    <th
+                      key={h}
+                      className={`px-6 py-4 text-xs font-semibold uppercase tracking-wide text-slate-500 ${i === 5 ? "text-right" : "text-left"}`}
+                    >
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
 
@@ -306,24 +392,24 @@ export default function DealerVerificationPage() {
                     className="border-b border-slate-100 transition hover:bg-slate-50/70"
                   >
                     <td className="px-6 py-5 align-top">
-                      <div>
-                        <p className="font-semibold text-slate-900">{item.dealerName}</p>
-                        <p className="mt-1 text-sm text-slate-500">
-                          ID: {item.dealerId.slice(0, 8)}...
+                      <p className="font-semibold text-slate-900">{item.dealerName}</p>
+                      <p className="mt-1 text-sm text-slate-500">ID: {item.dealerId.slice(0, 8)}...</p>
+                      {item.submittedAt && (
+                        <p className="mt-1 text-xs text-slate-400">
+                          Submitted:{" "}
+                          {new Date(item.submittedAt).toLocaleDateString("en-IN", {
+                            day: "numeric", month: "short", year: "numeric",
+                          })}
                         </p>
-                      </div>
+                      )}
                     </td>
 
                     <td className="px-6 py-5 align-top">
-                      <div>
-                        <p className="font-medium text-slate-800">{item.companyName}</p>
-                        <p className="mt-1 text-sm text-slate-500">
-                          GST: {item.gstNumber || "Not available"}
-                        </p>
-                        <p className="mt-1 text-sm capitalize text-slate-400">
-                          {(item.companyType || "Not available").replaceAll("_", " ")}
-                        </p>
-                      </div>
+                      <p className="font-medium text-slate-800">{item.companyName}</p>
+                      <p className="mt-1 text-sm text-slate-500">GST: {item.gstNumber || "Not available"}</p>
+                      <p className="mt-1 text-sm capitalize text-slate-400">
+                        {(item.companyType || "Not available").replaceAll("_", " ")}
+                      </p>
                     </td>
 
                     <td className="px-6 py-5 align-top">

@@ -5,6 +5,8 @@ import { eq } from "drizzle-orm";
 import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword";
 import { hashPassword } from "@/lib/auth/hashPassword";
 import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
+import { sendDealerApprovalNotificationEmail } from "@/lib/email/sendDealerApprovalNotificationEmail";
+import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification-recipients";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 type RouteContext = {
@@ -25,6 +27,7 @@ function resolveDealerLoginEmail(application: any) {
   return application?.ownerEmail?.trim?.() || null;
 }
 
+
 export async function POST(_req: NextRequest, context: RouteContext) {
   try {
     const { dealerId } = await context.params;
@@ -38,11 +41,25 @@ export async function POST(_req: NextRequest, context: RouteContext) {
 
     if (!application) {
       return NextResponse.json(
+        { success: false, message: "Dealer onboarding application not found" },
+        { status: 404 }
+      );
+    }
+
+    if (application.onboardingStatus === "approved") {
+      return NextResponse.json(
+        { success: false, message: "Dealer already approved" },
+        { status: 400 }
+      );
+    }
+
+    if (application.onboardingStatus !== "submitted") {
+      return NextResponse.json(
         {
           success: false,
-          message: "Dealer onboarding application not found",
+          message: "Dealer onboarding must be submitted before approval.",
         },
-        { status: 404 }
+        { status: 400 }
       );
     }
 
@@ -59,48 +76,28 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
+    if (application.financeEnabled) {
+      if (
+        application.agreementStatus !== "completed" ||
+        application.reviewStatus !== "agreement_completed" ||
+        !application.providerDocumentId
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            message:
+              "Finance-enabled dealers cannot be approved until the agreement is completed.",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     const temporaryPassword = generateTemporaryPassword();
     const passwordHash = await hashPassword(temporaryPassword);
 
-    await db
-      .update(dealerOnboardingApplications)
-      .set({
-        onboardingStatus: "approved",
-        reviewStatus: "approved",
-        dealerAccountStatus: "active",
-        approvedAt: new Date(),
-        rejectedAt: null,
-        rejectionReason: null,
-        correctionRemarks: null,
-        rejectionRemarks: null,
-        dealerCode,
-        updatedAt: new Date(),
-      })
-      .where(eq(dealerOnboardingApplications.id, dealerId));
-
-    // 0) Create dealer account in accounts table (required for leads FK constraint)
-    const existingAccount = await db
-      .select()
-      .from(accounts)
-      .where(eq(accounts.id, dealerCode))
-      .limit(1);
-
-    if (existingAccount.length === 0) {
-      await db.insert(accounts).values({
-        id: dealerCode,
-        business_entity_name: application.companyName || "Dealer",
-        contact_name: application.ownerName || application.companyName || "Dealer",
-        contact_email: dealerLoginEmail,
-        contact_phone: application.ownerPhone || null,
-        gstin: application.gstNumber || null,
-        dealer_code: dealerCode,
-        status: "active",
-        onboarding_status: "approved",
-      });
-    }
-
-    // 1) Create or update Supabase Auth user
-    const { data: authUsers, error: listError } = await supabaseAdmin.auth.admin.listUsers();
+    const { data: authUsers, error: listError } =
+      await supabaseAdmin.auth.admin.listUsers();
 
     if (listError) {
       console.error("SUPABASE AUTH LIST USERS ERROR:", listError);
@@ -168,7 +165,62 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       authUserId = createdAuthUser.user.id;
     }
 
-    // 2) Create or update local app user using THE SAME auth user id
+    await db
+      .update(dealerOnboardingApplications)
+      .set({
+        dealerUserId: authUserId,
+        onboardingStatus: "approved",
+        reviewStatus: "approved",
+        dealerAccountStatus: "active",
+        completionStatus: "completed",
+        approvedAt: new Date(),
+        signedAt:
+          application.agreementStatus === "completed"
+            ? application.signedAt || new Date()
+            : application.signedAt || null,
+        rejectedAt: null,
+        rejectionReason: null,
+        correctionRemarks: null,
+        rejectionRemarks: null,
+        dealerCode,
+        updatedAt: new Date(),
+      })
+      .where(eq(dealerOnboardingApplications.id, dealerId));
+
+    // Create account row so leads.dealer_id FK is satisfied
+    const existingAccount = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.id, dealerCode))
+      .limit(1);
+
+    if (existingAccount.length === 0) {
+      const addressObj = typeof application.businessAddress === "object" && application.businessAddress
+        ? application.businessAddress as Record<string, any>
+        : null;
+
+      await db.insert(accounts).values({
+        id: dealerCode,
+        business_entity_name: application.companyName || "Dealer Business",
+        gstin: application.gstNumber || "PENDING",
+        pan: application.panNumber || null,
+        dealer_code: dealerCode,
+        contact_name: application.ownerName || application.companyName || "Dealer",
+        contact_email: dealerLoginEmail,
+        contact_phone: application.ownerPhone || null,
+        address_line1: addressObj?.address || addressObj?.line1 || null,
+        city: addressObj?.city || null,
+        state: addressObj?.state || null,
+        pincode: addressObj?.pincode || null,
+        bank_name: application.bankName || null,
+        bank_account_number: application.accountNumber || null,
+        ifsc_code: application.ifscCode || null,
+        status: "active",
+        onboarding_status: "approved",
+        created_by: authUserId,
+      });
+    }
+
     const existingUserRows = await db
       .select()
       .from(users)
@@ -208,9 +260,66 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       });
     }
 
-    // 3) Send welcome email
     let emailSent = false;
     let emailError: string | null = null;
+
+    // Dealer gets the welcome email with credentials, not this one — includeDealer: false.
+    const notificationRecipients = await getDealerNotificationRecipients(application, {
+      includeDealer: false,
+    });
+
+    console.log("APPROVE MAIL DEBUG:", {
+      applicationId: application.id,
+      companyName: application.companyName,
+      salesManagerEmail: application.salesManagerEmail,
+      itarangSignatory1Email: application.itarangSignatory1Email,
+      itarangSignatory2Email: application.itarangSignatory2Email,
+      notificationRecipients,
+    });
+
+    let internalNotificationResult: {
+      success: boolean;
+      recipients: string[];
+      messageId?: string;
+      error?: string;
+    } = { success: false, recipients: notificationRecipients };
+
+    if (notificationRecipients.length === 0) {
+      internalNotificationResult = {
+        success: false,
+        recipients: [],
+        error: "No itarang signer / sales-manager emails on record",
+      };
+      console.warn(
+        "APPROVAL: No internal notification recipients. Sales manager + signatory emails are missing on the application."
+      );
+    } else {
+      try {
+        const notifyResult = await sendDealerApprovalNotificationEmail({
+          toEmails: notificationRecipients,
+          companyName: application.companyName || "Unknown Company",
+          dealerCode,
+          dealerName:
+            application.ownerName || application.companyName || "Dealer",
+          approvedAt: new Date().toISOString(),
+        });
+        internalNotificationResult = {
+          success: true,
+          recipients: notifyResult.recipients,
+          messageId: notifyResult.messageId,
+        };
+      } catch (notifyErr: any) {
+        internalNotificationResult = {
+          success: false,
+          recipients: notificationRecipients,
+          error: notifyErr?.message || "Unknown email error",
+        };
+        console.error(
+          "APPROVAL internal notification email failed:",
+          notifyErr?.message || notifyErr
+        );
+      }
+    }
 
     try {
       const mailResult = await sendDealerWelcomeEmail({
@@ -221,8 +330,10 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         userId: dealerLoginEmail,
         password: temporaryPassword,
         loginUrl: process.env.DEALER_LOGIN_URL || "http://localhost:3000/login",
-        supportEmail: process.env.DEALER_SUPPORT_EMAIL || "support@itarang.com",
-        supportPhone: process.env.DEALER_SUPPORT_PHONE || "+91-0000000000",
+        supportEmail:
+          process.env.DEALER_SUPPORT_EMAIL || "support@itarang.com",
+        supportPhone:
+          process.env.DEALER_SUPPORT_PHONE || "+91-0000000000",
       });
 
       console.log("DEALER WELCOME EMAIL SUCCESS:", mailResult);
@@ -231,6 +342,15 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       emailError = mailError?.message || "Unknown email error";
       console.error("DEALER WELCOME EMAIL ERROR:", mailError);
     }
+
+    console.log("DEALER APPROVED:", {
+      dealerId,
+      dealerCode,
+      authUserId,
+      email: dealerLoginEmail,
+      approvedAt: new Date().toISOString(),
+      notificationRecipients,
+    });
 
     return NextResponse.json({
       success: true,
@@ -242,6 +362,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       emailSent,
       emailTarget: dealerLoginEmail,
       emailError,
+      internalNotificationResult,
     });
   } catch (error: any) {
     console.error("APPROVE DEALER ERROR:", error);

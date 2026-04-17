@@ -18,6 +18,12 @@ function basicAuthHeader(clientId: string, clientSecret: string) {
   return `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
 }
 
+function isValidPdfBuffer(buffer: ArrayBuffer | null | undefined): buffer is ArrayBuffer {
+  if (!buffer || buffer.byteLength < 500) return false;
+  const head = new Uint8Array(buffer, 0, 5);
+  return head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46 && head[4] === 0x2d;
+}
+
 export async function GET(_req: NextRequest, context: RouteContext) {
   try {
     const { dealerId } = await context.params;
@@ -64,7 +70,16 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         .download(application.signedAgreementStoragePath);
 
       if (!error && data) {
-        pdfBuffer = await data.arrayBuffer();
+        const candidate = await data.arrayBuffer();
+        if (isValidPdfBuffer(candidate)) {
+          pdfBuffer = candidate;
+        } else {
+          console.warn(
+            "[DOWNLOAD SIGNED AGREEMENT] Supabase cache invalid (size=",
+            candidate.byteLength,
+            "), will re-fetch from Digio"
+          );
+        }
       } else {
         console.error(
           "[DOWNLOAD SIGNED AGREEMENT] Supabase download error:",
@@ -86,7 +101,16 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       });
 
       if (fileRes.ok) {
-        pdfBuffer = await fileRes.arrayBuffer();
+        const candidate = await fileRes.arrayBuffer();
+        if (isValidPdfBuffer(candidate)) {
+          pdfBuffer = candidate;
+        } else {
+          console.warn(
+            "[DOWNLOAD SIGNED AGREEMENT] signedAgreementUrl returned invalid PDF (size=",
+            candidate.byteLength,
+            "), will re-fetch from Digio"
+          );
+        }
       } else {
         console.error(
           "[DOWNLOAD SIGNED AGREEMENT] signedAgreementUrl fetch failed:",
@@ -218,13 +242,17 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
       pdfBuffer = await digioResponse!.arrayBuffer();
 
-      // Validate the PDF has actual content
-      if (pdfBuffer.byteLength < 100) {
-        console.error("[DOWNLOAD SIGNED AGREEMENT] Digio returned empty/tiny PDF:", pdfBuffer.byteLength, "bytes");
+      // Validate the PDF has actual content and starts with %PDF- magic bytes
+      if (!isValidPdfBuffer(pdfBuffer)) {
+        console.error(
+          "[DOWNLOAD SIGNED AGREEMENT] Digio returned invalid PDF (size=",
+          pdfBuffer.byteLength,
+          ")"
+        );
         return NextResponse.json(
           {
             success: false,
-            message: "Digio returned an empty document. Please try again later.",
+            message: "Digio returned an empty or corrupt document. Please try again later.",
           },
           { status: 502 }
         );
