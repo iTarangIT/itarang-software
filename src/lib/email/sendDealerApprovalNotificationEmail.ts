@@ -1,65 +1,104 @@
+import nodemailer from "nodemailer";
+
 export type DealerApprovalNotificationPayload = {
-  toEmail: string;
+  toEmails: string[];
   companyName: string;
   dealerCode: string;
   dealerName: string;
   approvedAt: string;
 };
 
+function getMailer() {
+  const host = process.env.SMTP_HOST;
+  const port = Number(process.env.SMTP_PORT || 587);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+
+  if (!host || !user || !pass) {
+    throw new Error("Missing SMTP configuration in environment variables");
+  }
+
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass },
+  });
+}
+
+function sanitizeEmails(emails: string[]) {
+  return Array.from(
+    new Set(
+      emails
+        .map((email) => (typeof email === "string" ? email.trim().toLowerCase() : ""))
+        .filter(Boolean)
+    )
+  );
+}
+
 export async function sendDealerApprovalNotificationEmail(
   payload: DealerApprovalNotificationPayload
 ) {
-  const serviceId = process.env.EMAILJS_SERVICE_ID;
-  const templateId =
-    process.env.EMAILJS_APPROVAL_NOTIFICATION_TEMPLATE_ID;
-  const publicKey = process.env.EMAILJS_PUBLIC_KEY;
-  const privateKey = process.env.EMAILJS_PRIVATE_KEY;
+  const recipients = sanitizeEmails(payload.toEmails);
 
-  if (!serviceId || !templateId || !publicKey) {
-    throw new Error(
-      "Missing EmailJS environment variables for approval notification"
-    );
+  if (!recipients.length) {
+    throw new Error("No approval notification recipients provided");
   }
 
-  const requestBody: Record<string, unknown> = {
-    service_id: serviceId,
-    template_id: templateId,
-    user_id: publicKey,
-    template_params: {
-      to_email: payload.toEmail,
-      company_name: payload.companyName,
-      dealer_code: payload.dealerCode,
-      dealer_name: payload.dealerName,
-      approved_at: payload.approvedAt,
-    },
-  };
+  const transporter = getMailer();
+  const approvedAtLabel = new Date(payload.approvedAt).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 
-  if (privateKey) {
-    requestBody.accessToken = privateKey;
-  }
+  const subject = `Dealer Onboarding Approved — ${payload.companyName} (${payload.dealerCode})`;
 
-  const response = await fetch(
-    "https://api.emailjs.com/api/v1.0/email/send",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
-      cache: "no-store",
-    }
-  );
+  const html = `
+    <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.6; max-width: 640px; margin: 0 auto;">
+      <div style="padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; background: #ffffff;">
+        <h2 style="margin: 0 0 12px; color: #065f46;">Dealer Onboarding Approved</h2>
 
-  const responseText = await response.text();
+        <p style="margin: 0 0 12px;">
+          A dealer onboarding application has been approved after admin review. The dealer has been notified separately with login credentials.
+        </p>
 
-  if (!response.ok) {
-    throw new Error(
-      `Approval notification send failed: ${response.status} ${responseText}`
-    );
-  }
+        <div style="margin-top: 16px; padding: 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px;">
+          <p style="margin: 0 0 8px;"><strong>Dealer / Company:</strong> ${payload.companyName}</p>
+          <p style="margin: 0 0 8px;"><strong>Primary Contact:</strong> ${payload.dealerName}</p>
+          <p style="margin: 0 0 8px;"><strong>Dealer Code:</strong> ${payload.dealerCode}</p>
+          <p style="margin: 0 0 8px;"><strong>Approved At:</strong> ${approvedAtLabel} IST</p>
+          <p style="margin: 0;"><strong>Status:</strong> Approved &amp; Active</p>
+        </div>
+
+        <div style="margin-top: 16px; padding: 16px; background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 12px;">
+          <p style="margin: 0;">The dealer account is now active. No further action is required from you.</p>
+        </div>
+
+        <p style="margin-top: 24px; margin-bottom: 0;">
+          Regards,<br/>
+          iTarang Compliance Team
+        </p>
+      </div>
+    </div>
+  `;
+
+  const info = await transporter.sendMail({
+    from: process.env.MAIL_FROM || process.env.SMTP_USER,
+    to: recipients.join(","),
+    subject,
+    html,
+  });
+
+  console.log("DEALER APPROVAL NOTIFICATION EMAIL SENT:", {
+    messageId: info.messageId,
+    recipients,
+    dealerCode: payload.dealerCode,
+  });
 
   return {
     ok: true,
-    responseText,
+    messageId: info.messageId,
+    recipients,
   };
 }

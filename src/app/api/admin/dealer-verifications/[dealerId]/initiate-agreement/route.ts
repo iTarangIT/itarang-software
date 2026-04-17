@@ -89,16 +89,13 @@ function buildSigner(params: {
   const mobile = normalizePhone(params.mobile);
 
   if (!name) return null;
-
-  const hasValidEmail = email && isValidEmail(email);
-  const hasValidMobile = mobile && isValidPhone(mobile);
-
-  if (!hasValidEmail && !hasValidMobile) return null;
+  if (!email || !isValidEmail(email)) return null;
+  if (!mobile || !isValidPhone(mobile)) return null;
 
   return {
     name,
-    email: hasValidEmail ? email : "",
-    mobile: hasValidMobile ? mobile : "",
+    email,
+    mobile,
     reason: params.reason,
     signingMethod: mapSigningMethod(params.signingMethod),
   };
