@@ -56,9 +56,18 @@ export default function BankCard({
     if (existingVerification?.status === "failed") return "failed";
     return "pending";
   });
-  const [result, setResult] = useState<Record<string, unknown> | null>(
-    existingVerification?.apiResponse || null,
-  );
+  // DB stores the raw flat Decentro v2 response under api_response. The fresh-verify
+  // path wraps it as { success, message, data: {...} }. Normalize the DB shape to match
+  // so the results table renders identically on reload.
+  const [result, setResult] = useState<Record<string, unknown> | null>(() => {
+    const saved = existingVerification?.apiResponse;
+    if (!saved) return null;
+    const nested = (saved as Record<string, unknown>).data as Record<string, unknown> | undefined;
+    return {
+      message: (saved as Record<string, unknown>).message,
+      data: nested ? { ...saved, ...nested } : { ...saved },
+    };
+  });
   const [verificationId, setVerificationId] = useState(existingVerification?.id || "");
   const [error, setError] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
@@ -397,6 +406,7 @@ export default function BankCard({
                     <td className="px-4 py-2 text-gray-800 font-mono text-xs">
                       {
                         (bankData.bank_reference_number ||
+                          bankData.bankReferenceNumber ||
                           bankData.bankTxnId ||
                           "—") as string
                       }

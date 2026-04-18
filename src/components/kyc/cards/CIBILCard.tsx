@@ -257,8 +257,8 @@ export default function CIBILCard({
         </div>
 
 
-        {/* VERIFICATION OPTIONS — show when pending or failed */}
-        {(status === "pending" || status === "failed") && (
+        {/* VERIFICATION OPTIONS — always visible so admin can re-run after a verify/accept/reject */}
+        {!isLoading && (
           <div>
             <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide mb-3">Verification Options</p>
             <div className="overflow-hidden rounded-lg border border-gray-200">

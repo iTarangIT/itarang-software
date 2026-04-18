@@ -160,6 +160,7 @@ export async function GET(
       adminActionNotes: v.admin_action_notes,
       submittedAt: v.submitted_at,
       completedAt: v.completed_at,
+      apiRequest: v.api_request,
       apiResponse: v.api_response,
     });
 
