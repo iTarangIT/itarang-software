@@ -29,7 +29,10 @@ const SIGNER_ROLE_TO_DIGIO_REASON: Record<string, string> = {
   itarang_signatory_2: "itarang signer 2",
 };
 
-/** Map Digio party-status strings to the values our UI renders. */
+/** Map Digio party-status strings to the values our UI renders.
+ *  Unknown values collapse to "sent" so an upstream Digio change can't
+ *  introduce arbitrary statuses into dealer_agreement_signers.signer_status
+ *  or emit unbounded `signer_${status}` event types. */
 export function normalizeSignerStatus(value: unknown) {
   const safe = String(value ?? "").trim().toLowerCase();
   if (!safe) return "sent";
@@ -38,7 +41,7 @@ export function normalizeSignerStatus(value: unknown) {
   if (["viewed", "opened", "document_viewed"].includes(safe)) return "viewed";
   if (["failed", "rejected", "cancelled", "declined"].includes(safe)) return "failed";
   if (["expired"].includes(safe)) return "expired";
-  return safe;
+  return "sent";
 }
 
 /**

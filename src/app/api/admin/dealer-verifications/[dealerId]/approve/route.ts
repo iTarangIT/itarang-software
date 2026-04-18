@@ -120,6 +120,32 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     let authUserId: string;
 
     if (existingAuthUser) {
+      // Prevent account takeover: only reuse an existing Supabase Auth user if
+      // it's already linked to a dealer (role=dealer) AND to THIS dealer code.
+      // Without this check, anyone who edits ownerEmail to a non-dealer user's
+      // address could force a password reset on that account.
+      const meta = (existingAuthUser.user_metadata || {}) as Record<string, unknown>;
+      const metaRole = typeof meta.role === "string" ? meta.role : null;
+      const metaDealerCode =
+        typeof meta.dealer_code === "string" ? meta.dealer_code : null;
+      const existingAppDealerUserId = application.dealerUserId || null;
+
+      const isThisDealer =
+        metaRole === "dealer" &&
+        (metaDealerCode === dealerCode ||
+          existingAuthUser.id === existingAppDealerUserId);
+
+      if (!isThisDealer) {
+        return NextResponse.json(
+          {
+            success: false,
+            message:
+              "An account with this email already exists for a different user. Resolve the email conflict before approving.",
+          },
+          { status: 409 }
+        );
+      }
+
       const { data: updatedAuthUser, error: updateAuthError } =
         await supabaseAdmin.auth.admin.updateUserById(existingAuthUser.id, {
           password: temporaryPassword,
@@ -168,100 +194,107 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       authUserId = createdAuthUser.user.id;
     }
 
-    await db
-      .update(dealerOnboardingApplications)
-      .set({
-        dealerUserId: authUserId,
-        onboardingStatus: "approved",
-        reviewStatus: "approved",
-        dealerAccountStatus: "active",
-        completionStatus: "completed",
-        approvedAt: new Date(),
-        signedAt:
-          application.agreementStatus === "completed"
-            ? application.signedAt || new Date()
-            : application.signedAt || null,
-        rejectedAt: null,
-        rejectionReason: null,
-        correctionRemarks: null,
-        rejectionRemarks: null,
-        dealerCode,
-        updatedAt: new Date(),
-      })
-      .where(eq(dealerOnboardingApplications.id, dealerId));
-
-    // Create account row so leads.dealer_id FK is satisfied
-    const existingAccount = await db
-      .select()
-      .from(accounts)
-      .where(eq(accounts.id, dealerCode))
-      .limit(1);
-
-    if (existingAccount.length === 0) {
-      const addressObj = typeof application.businessAddress === "object" && application.businessAddress
-        ? application.businessAddress as Record<string, any>
-        : null;
-
-      await db.insert(accounts).values({
-        id: dealerCode,
-        business_entity_name: application.companyName || "Dealer Business",
-        gstin: application.gstNumber || "PENDING",
-        pan: application.panNumber || null,
-        dealer_code: dealerCode,
-        contact_name: application.ownerName || application.companyName || "Dealer",
-        contact_email: dealerLoginEmail,
-        contact_phone: application.ownerPhone || null,
-        address_line1: addressObj?.address || addressObj?.line1 || null,
-        city: addressObj?.city || null,
-        state: addressObj?.state || null,
-        pincode: addressObj?.pincode || null,
-        bank_name: application.bankName || null,
-        bank_account_number: application.accountNumber || null,
-        ifsc_code: application.ifscCode || null,
-        status: "active",
-        onboarding_status: "approved",
-        created_by: authUserId,
-      });
-    }
-
-    const existingUserRows = await db
-      .select()
-      .from(users)
-      .where(eq(users.email, dealerLoginEmail));
-
-    const existingUser = existingUserRows[0];
-
-    if (existingUser) {
-      await db
-        .update(users)
+    // Run the local DB side of approval atomically: if any of the three
+    // writes fails we roll back so we don't leave an application flipped to
+    // "approved" without an accounts row or users row.
+    // (Supabase Auth is out of scope for a pg transaction — we handle that
+    // sequentially above, then commit the local state.)
+    await db.transaction(async (tx) => {
+      await tx
+        .update(dealerOnboardingApplications)
         .set({
+          dealerUserId: authUserId,
+          onboardingStatus: "approved",
+          reviewStatus: "approved",
+          dealerAccountStatus: "active",
+          completionStatus: "completed",
+          approvedAt: new Date(),
+          signedAt:
+            application.agreementStatus === "completed"
+              ? application.signedAt || new Date()
+              : application.signedAt || null,
+          rejectedAt: null,
+          rejectionReason: null,
+          correctionRemarks: null,
+          rejectionRemarks: null,
+          dealerCode,
+          updatedAt: new Date(),
+        })
+        .where(eq(dealerOnboardingApplications.id, dealerId));
+
+      // Create account row so leads.dealer_id FK is satisfied
+      const existingAccount = await tx
+        .select()
+        .from(accounts)
+        .where(eq(accounts.id, dealerCode))
+        .limit(1);
+
+      if (existingAccount.length === 0) {
+        const addressObj = typeof application.businessAddress === "object" && application.businessAddress
+          ? application.businessAddress as Record<string, any>
+          : null;
+
+        await tx.insert(accounts).values({
+          id: dealerCode,
+          business_entity_name: application.companyName || "Dealer Business",
+          gstin: application.gstNumber || "PENDING",
+          pan: application.panNumber || null,
+          dealer_code: dealerCode,
+          contact_name: application.ownerName || application.companyName || "Dealer",
+          contact_email: dealerLoginEmail,
+          contact_phone: application.ownerPhone || null,
+          address_line1: addressObj?.address || addressObj?.line1 || null,
+          city: addressObj?.city || null,
+          state: addressObj?.state || null,
+          pincode: addressObj?.pincode || null,
+          bank_name: application.bankName || null,
+          bank_account_number: application.accountNumber || null,
+          ifsc_code: application.ifscCode || null,
+          status: "active",
+          onboarding_status: "approved",
+          created_by: authUserId,
+        });
+      }
+
+      const existingUserRows = await tx
+        .select()
+        .from(users)
+        .where(eq(users.email, dealerLoginEmail));
+
+      const existingUser = existingUserRows[0];
+
+      if (existingUser) {
+        await tx
+          .update(users)
+          .set({
+            id: authUserId,
+            name: application.ownerName || application.companyName || "Dealer",
+            role: "dealer",
+            dealer_id: dealerCode,
+            phone: application.ownerPhone || null,
+            is_active: true,
+            password_hash: passwordHash,
+            must_change_password: true,
+            updated_at: new Date(),
+          })
+          .where(eq(users.email, dealerLoginEmail));
+      } else {
+        await tx.insert(users).values({
           id: authUserId,
+          email: dealerLoginEmail,
           name: application.ownerName || application.companyName || "Dealer",
           role: "dealer",
           dealer_id: dealerCode,
           phone: application.ownerPhone || null,
-          is_active: true,
+          avatar_url: null,
           password_hash: passwordHash,
           must_change_password: true,
+          is_active: true,
+          created_at: new Date(),
           updated_at: new Date(),
-        })
-        .where(eq(users.email, dealerLoginEmail));
-    } else {
-      await db.insert(users).values({
-        id: authUserId,
-        email: dealerLoginEmail,
-        name: application.ownerName || application.companyName || "Dealer",
-        role: "dealer",
-        dealer_id: dealerCode,
-        phone: application.ownerPhone || null,
-        avatar_url: null,
-        password_hash: passwordHash,
-        must_change_password: true,
-        is_active: true,
-        created_at: new Date(),
-        updated_at: new Date(),
-      });
-    }
+        });
+      }
+    });
 
     let emailSent = false;
     let emailError: string | null = null;

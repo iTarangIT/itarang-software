@@ -48,12 +48,19 @@ export async function requireAdmin(): Promise<RequireAdminResult> {
   }
 
   const [row] = await db
-    .select({ id: users.id, email: users.email, role: users.role })
+    .select({
+      id: users.id,
+      email: users.email,
+      role: users.role,
+      is_active: users.is_active,
+    })
     .from(users)
     .where(eq(users.id, user.id))
     .limit(1);
 
-  if (!row || !ADMIN_ROLES.has(row.role)) {
+  // Reject deactivated admins — is_active can be flipped to revoke access
+  // without also stripping the role.
+  if (!row || !row.is_active || !ADMIN_ROLES.has(row.role)) {
     return {
       ok: false,
       response: NextResponse.json(
@@ -63,5 +70,5 @@ export async function requireAdmin(): Promise<RequireAdminResult> {
     };
   }
 
-  return { ok: true, user: row };
+  return { ok: true, user: { id: row.id, email: row.email, role: row.role } };
 }

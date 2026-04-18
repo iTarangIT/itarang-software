@@ -173,8 +173,11 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     console.error("ADMIN DEALER VERIFICATION DETAIL ERROR CAUSE:", error?.cause);
     console.error("ADMIN DEALER VERIFICATION DETAIL ERROR DETAIL:", error?.cause?.detail);
 
+    // Never echo error.message to the client — it can leak DB column names,
+    // driver internals, or stack-like context. The server log above has the
+    // full detail for debugging.
     return NextResponse.json(
-      { success: false, message: error?.message || "Failed to fetch dealer verification detail" },
+      { success: false, message: "Failed to fetch dealer verification detail" },
       { status: 500 }
     );
   }
@@ -263,16 +266,24 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       );
     }
 
-    await db
+    const updated = await db
       .update(dealerOnboardingApplications)
       .set(updatePayload)
-      .where(eq(dealerOnboardingApplications.id, dealerId));
+      .where(eq(dealerOnboardingApplications.id, dealerId))
+      .returning({ id: dealerOnboardingApplications.id });
+
+    if (updated.length === 0) {
+      return NextResponse.json(
+        { success: false, message: "Dealer not found" },
+        { status: 404 }
+      );
+    }
 
     return NextResponse.json({ success: true, message: "Dealer details updated successfully" });
   } catch (error: any) {
     console.error("ADMIN DEALER PATCH ERROR:", error);
     return NextResponse.json(
-      { success: false, message: error?.message || "Failed to update dealer details" },
+      { success: false, message: "Failed to update dealer details" },
       { status: 500 }
     );
   }
