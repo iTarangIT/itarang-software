@@ -56,6 +56,9 @@ function getWebhookUrl(): string {
  * Payload for uploading a PDF for e-signing (consent flow)
  */
 export function buildUploadPdfPayload(data: DigioUploadPdfInput) {
+  const consentTemplateId =
+    data.templateId || process.env.DIGIO_CONSENT_TEMPLATE_ID?.trim() || undefined;
+
   return {
     file_name: data.fileName,
     file_data: data.fileData,
@@ -65,7 +68,7 @@ export function buildUploadPdfPayload(data: DigioUploadPdfInput) {
     include_authentication_url: true,
     sequential: data.sequential ?? true,
     notify_url: getWebhookUrl(),
-    ...(data.templateId ? { template_id: data.templateId } : {}),
+    ...(consentTemplateId ? { template_id: consentTemplateId } : {}),
     signers: data.signers.map((signer) => {
       const coords = signer.sign_coordinates_list
         || (signer.sign_coordinates

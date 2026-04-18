@@ -209,7 +209,7 @@ export async function GET(req: NextRequest) {
     const computedAgreementStatus = allSigned
       ? "completed"
       : anyViewed
-        ? "viewed_by_dealer"
+        ? "viewed"
         : baseAgreementStatus;
 
     const dealerParty =

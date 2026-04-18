@@ -9,6 +9,7 @@ export type DealerWelcomeEmailPayload = {
   supportEmail: string;
   supportPhone: string;
 };
+// hello world
 
 export async function sendDealerWelcomeEmail(
   payload: DealerWelcomeEmailPayload

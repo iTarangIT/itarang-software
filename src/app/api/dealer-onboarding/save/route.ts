@@ -1,120 +1,391 @@
 import { NextRequest, NextResponse } from "next/server";
+import { eq } from "drizzle-orm";
+import { createServerClient } from "@supabase/ssr";
+
 import { db } from "@/lib/db/index";
 import {
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
 
-function cleanString(value: unknown) {
+type NullableString = string | null;
+type SafeRecord = Record<string, unknown>;
+
+function cleanString(value: unknown): NullableString {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function cleanEmail(value: unknown): NullableString {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function cleanPhone(value: unknown): NullableString {
+  if (typeof value !== "string") return null;
+  const digits = value.replace(/\D/g, "");
+  return digits.length > 0 ? digits : null;
+}
+
+function cleanBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "yes";
+  }
+  return false;
+}
+
+function cleanObject(value: unknown): SafeRecord {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as SafeRecord)
+    : {};
+}
+
+function mergeCookies(from: NextResponse, to: NextResponse) {
+  from.cookies.getAll().forEach((cookie) => to.cookies.set(cookie));
+}
+
 export async function POST(req: NextRequest) {
+  const cookieCollector = new NextResponse();
+
   try {
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            return req.cookies.get(name)?.value;
+          },
+          set(name: string, value: string, options: Record<string, any>) {
+            cookieCollector.cookies.set({ name, value, ...options });
+          },
+          remove(name: string, options: Record<string, any>) {
+            cookieCollector.cookies.set({
+              name,
+              value: "",
+              ...options,
+              maxAge: 0,
+            });
+          },
+        },
+      }
+    );
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    // Middleware treats /api/* as public (src/middleware.ts), so enforce auth
+    // here. Without this, an unauthenticated caller could hit the ownerEmail /
+    // dealerCode fallback lookups below and claim/update another dealer's draft.
+    if (!user) {
+      const res = NextResponse.json(
+        { success: false, message: "Unauthorized" },
+        { status: 401 }
+      );
+      mergeCookies(cookieCollector, res);
+      return res;
+    }
+
     const body = await req.json();
 
-    const dealerUserId = body.dealerUserId ?? null;
+    const dealerUserId: string = user.id;
+    const dealerCode =
+      cleanString(body.dealerCode) ||
+      cleanString(body.dealer_id) ||
+      cleanString(body.dealerId) ||
+      null;
+
     const companyName = cleanString(body.companyName);
     const companyType = cleanString(body.companyType);
     const gstNumber = cleanString(body.gstNumber);
     const panNumber = cleanString(body.panNumber);
-    const cinNumber = cleanString(body.cinNumber);
-    const businessAddress = body.businessAddress ?? {};
-    const registeredAddress = body.registeredAddress ?? {};
-    const financeEnabled = body.financeEnabled ?? false;
-    const onboardingStatus = body.onboardingStatus ?? "draft";
+
+    const businessAddress = cleanObject(body.businessAddress);
+    const registeredAddress = cleanObject(body.registeredAddress);
+    const financeEnabled = cleanBoolean(body.financeEnabled);
+
+    const onboardingStatus =
+      body.onboardingStatus === "submitted" ? "submitted" : "draft";
+
+    const reviewStatus =
+      onboardingStatus === "submitted" ? "pending_admin_review" : "draft";
 
     const ownerName = cleanString(body.ownerName);
-    const ownerPhone = cleanString(body.ownerPhone);
-    const ownerEmail = cleanString(body.ownerEmail);
+    const ownerPhone = cleanPhone(body.ownerPhone);
+    const ownerEmail = cleanEmail(body.ownerEmail);
+
+    // ── Landline (optional) ──────────────────────────────────────────────────
+    const ownerLandline = cleanPhone(body.ownerLandline) || null;
+    // ────────────────────────────────────────────────────────────────────────
 
     const bankName = cleanString(body.bankName);
     const accountNumber = cleanString(body.accountNumber);
     const beneficiaryName = cleanString(body.beneficiaryName);
     const ifscCode = cleanString(body.ifscCode);
 
-    const documents = Array.isArray(body.documents) ? body.documents : [];
+    // Distinguish "client explicitly sent a (possibly empty) documents list"
+    // from "client omitted documents entirely" — the former is a replace; the
+    // latter must NOT touch existing document rows.
+    const documentsProvided = Array.isArray(body.documents);
+    const documents: SafeRecord[] = documentsProvided
+      ? (body.documents as SafeRecord[])
+      : [];
+
+    const agreementConfig = cleanObject(body.agreement);
+
+    const salesManager =
+      cleanObject(agreementConfig["salesManager"]) ||
+      cleanObject(body["salesManager"]);
+
+    const itarangSignatory1 =
+      cleanObject(agreementConfig["itarangSignatory1"]) ||
+      cleanObject(body["itarangSignatory1"]);
+
+    const itarangSignatory2 =
+      cleanObject(agreementConfig["itarangSignatory2"]) ||
+      cleanObject(body["itarangSignatory2"]);
+
+    const salesManagerName = cleanString(
+      salesManager["name"] ?? salesManager["salesManagerName"]
+    );
+
+    const salesManagerEmail = cleanEmail(
+      salesManager["email"] ??
+        salesManager["emailId"] ??
+        salesManager["salesManagerEmail"]
+    );
+
+    const salesManagerMobile = cleanPhone(
+      salesManager["mobile"] ??
+        salesManager["phone"] ??
+        salesManager["contactNumber"] ??
+        salesManager["salesManagerMobile"]
+    );
+
+    const itarangSignatory1Name = cleanString(itarangSignatory1["name"]);
+    const itarangSignatory1Email = cleanEmail(itarangSignatory1["email"]);
+    const itarangSignatory1Mobile = cleanPhone(itarangSignatory1["mobile"]);
+
+    const itarangSignatory2Name = cleanString(itarangSignatory2["name"]);
+    const itarangSignatory2Email = cleanEmail(itarangSignatory2["email"]);
+    const itarangSignatory2Mobile = cleanPhone(itarangSignatory2["mobile"]);
+
+    console.log("SAVE ROUTE AUTH USER ID:", dealerUserId);
+    console.log("SAVE ROUTE COMPANY NAME:", companyName);
+    console.log("SAVE ROUTE REVIEW STATUS:", reviewStatus);
 
     if (!companyName) {
-      return NextResponse.json(
+      const res = NextResponse.json(
         { success: false, message: "Company name is required" },
         { status: 400 }
       );
+      mergeCookies(cookieCollector, res);
+      return res;
     }
 
     if (onboardingStatus === "submitted") {
       if (!ownerName) {
-        return NextResponse.json(
+        const res = NextResponse.json(
           { success: false, message: "Primary contact name is required before submission" },
           { status: 400 }
         );
+        mergeCookies(cookieCollector, res);
+        return res;
       }
 
       if (!ownerPhone) {
-        return NextResponse.json(
+        const res = NextResponse.json(
           { success: false, message: "Primary contact phone is required before submission" },
           { status: 400 }
         );
+        mergeCookies(cookieCollector, res);
+        return res;
       }
 
       if (!ownerEmail) {
-        return NextResponse.json(
+        const res = NextResponse.json(
           { success: false, message: "Primary contact email is required before submission" },
           { status: 400 }
         );
+        mergeCookies(cookieCollector, res);
+        return res;
       }
     }
 
-    const insertedApplications = await db
-      .insert(dealerOnboardingApplications)
-      .values({
-        dealerUserId,
-        companyName,
-        companyType,
-        gstNumber,
-        panNumber,
-        cinNumber,
-        businessAddress,
-        registeredAddress,
-        financeEnabled,
-        onboardingStatus,
-        submittedAt: onboardingStatus === "submitted" ? new Date() : null,
-        ownerName,
-        ownerPhone,
-        ownerEmail,
-        bankName,
-        accountNumber,
-        beneficiaryName,
-        ifscCode,
-      })
-      .returning();
+    let application: typeof dealerOnboardingApplications.$inferSelect | null = null;
 
-    const application = insertedApplications[0];
+    // Only resolve rows owned by the authenticated dealer. Prior version
+    // matched on body.ownerEmail / body.dealerCode too — attacker-controlled
+    // keys with no ownership constraint — which could let one dealer take
+    // over another dealer's in-progress draft.
+    const existing = await db
+      .select()
+      .from(dealerOnboardingApplications)
+      .where(eq(dealerOnboardingApplications.dealerUserId, dealerUserId))
+      .limit(1);
 
-    if (documents.length > 0) {
+    if (existing.length > 0) application = existing[0];
+
+    if (application && application.onboardingStatus === "approved") {
+      // Don't modify approved applications via auto-save.
+      // Return success silently so the frontend doesn't show an error.
+      const res = NextResponse.json({
+        success: true,
+        data: { applicationId: application.id, onboardingStatus: "approved" },
+        message: "Application already approved.",
+      });
+      mergeCookies(cookieCollector, res);
+      return res;
+    }
+
+    // Transitioning to submitted (or an explicit agreement regen request)
+    // should reset the Digio workflow. On a plain draft autosave we must
+    // preserve the live provider document — otherwise every keystroke would
+    // blow away the signing URL, requestId, and stamp/completion status
+    // of an in-flight agreement.
+    const isSubmissionTransition = onboardingStatus === "submitted";
+    const shouldResetProviderWorkflow =
+      isSubmissionTransition ||
+      cleanString(agreementConfig["regenerate"]) === "true";
+
+    // Shared fields including ownerLandline
+    const sharedFields = {
+      dealerCode,
+      companyName,
+      companyType,
+      gstNumber,
+      panNumber,
+      businessAddress,
+      registeredAddress,
+      financeEnabled,
+      onboardingStatus,
+      reviewStatus,
+      ownerName,
+      ownerPhone,
+      ownerEmail,
+      ownerLandline,   // ← new field
+      bankName,
+      accountNumber,
+      beneficiaryName,
+      ifscCode,
+      salesManagerName,
+      salesManagerEmail,
+      salesManagerMobile,
+      itarangSignatory1Name,
+      itarangSignatory1Email,
+      itarangSignatory1Mobile,
+      itarangSignatory2Name,
+      itarangSignatory2Email,
+      itarangSignatory2Mobile,
+      providerRawResponse: { agreement: agreementConfig },
+      lastActionTimestamp: new Date(),
+    };
+
+    if (application) {
+      const updatePayload: Record<string, unknown> = {
+        ...sharedFields,
+        dealerUserId: dealerUserId || application.dealerUserId,
+        submittedAt: isSubmissionTransition ? new Date() : application.submittedAt,
+        updatedAt: new Date(),
+      };
+
+      if (shouldResetProviderWorkflow) {
+        updatePayload.agreementStatus = "not_generated";
+        updatePayload.providerSigningUrl = null;
+        updatePayload.providerDocumentId = null;
+        updatePayload.requestId = null;
+        updatePayload.stampStatus = "pending";
+        updatePayload.completionStatus = "pending";
+      } else {
+        // Autosave on a draft: keep whatever Digio state the row already has.
+        updatePayload.agreementStatus =
+          (typeof agreementConfig["agreementStatus"] === "string" &&
+            agreementConfig["agreementStatus"]) ||
+          application.agreementStatus ||
+          "not_generated";
+      }
+
+      const updatedApplications = await db
+        .update(dealerOnboardingApplications)
+        .set(updatePayload)
+        .where(eq(dealerOnboardingApplications.id, application.id))
+        .returning();
+
+      application = updatedApplications[0] ?? null;
+    } else {
+      const insertedApplications = await db
+        .insert(dealerOnboardingApplications)
+        .values({
+          ...sharedFields,
+          dealerUserId,
+          submittedAt: onboardingStatus === "submitted" ? new Date() : null,
+          agreementStatus: "not_generated",
+          // New rows start in the "pending" workflow states — these were
+          // previously in sharedFields but were moved out so autosave on
+          // existing rows doesn't overwrite live Digio state.
+          stampStatus: "pending",
+          completionStatus: "pending",
+        })
+        .returning();
+
+      application = insertedApplications[0] ?? null;
+    }
+
+    if (!application) {
+      const res = NextResponse.json(
+        { success: false, message: "Failed to create or update onboarding application" },
+        { status: 500 }
+      );
+      mergeCookies(cookieCollector, res);
+      return res;
+    }
+
+    // Only replace documents when the client explicitly sent a documents
+    // array. Omitting the field must leave existing rows untouched —
+    // otherwise any partial save (e.g. company-name edit) would wipe every
+    // uploaded KYC file for the applicationId.
+    if (documentsProvided) {
+      await db
+        .delete(dealerOnboardingDocuments)
+        .where(eq(dealerOnboardingDocuments.applicationId, application.id));
+    }
+
+    if (documentsProvided && documents.length > 0) {
       const validDocuments = documents
-        .filter(
-          (doc: any) =>
-            doc?.documentType &&
-            doc?.bucketName &&
-            doc?.storagePath &&
-            doc?.fileName
-        )
-        .map((doc: any) => ({
-          applicationId: application.id,
-          documentType: doc.documentType,
-          bucketName: doc.bucketName,
-          storagePath: doc.storagePath,
-          fileName: doc.fileName,
-          fileUrl: doc.fileUrl ?? null,
-          mimeType: doc.mimeType ?? null,
-          fileSize: typeof doc.fileSize === "number" ? doc.fileSize : null,
+        .filter((doc) => {
+          return (
+            typeof doc["documentType"] === "string" &&
+            typeof doc["bucketName"] === "string" &&
+            typeof doc["storagePath"] === "string" &&
+            typeof doc["fileName"] === "string"
+          );
+        })
+        .map((doc) => ({
+          applicationId: application!.id,
+          documentType: String(doc["documentType"]),
+          bucketName: String(doc["bucketName"]),
+          storagePath: String(doc["storagePath"]),
+          fileName: String(doc["fileName"]),
+          fileUrl: typeof doc["fileUrl"] === "string" ? doc["fileUrl"] : null,
+          mimeType: typeof doc["mimeType"] === "string" ? doc["mimeType"] : null,
+          fileSize: typeof doc["fileSize"] === "number" ? doc["fileSize"] : null,
           uploadedBy: dealerUserId,
-          docStatus: doc.docStatus ?? "uploaded",
-          verificationStatus: doc.verificationStatus ?? "pending",
-          metadata: doc.metadata ?? {},
+          docStatus: typeof doc["docStatus"] === "string" ? doc["docStatus"] : "uploaded",
+          verificationStatus:
+            typeof doc["verificationStatus"] === "string"
+              ? doc["verificationStatus"]
+              : "pending",
+          metadata:
+            doc["metadata"] &&
+            typeof doc["metadata"] === "object" &&
+            !Array.isArray(doc["metadata"])
+              ? (doc["metadata"] as Record<string, unknown>)
+              : {},
         }));
 
       if (validDocuments.length > 0) {
@@ -122,18 +393,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({
-      success: true,
-      application,
-    });
+    const res = NextResponse.json({ success: true, application });
+    mergeCookies(cookieCollector, res);
+    return res;
   } catch (error: any) {
     console.error("SAVE ONBOARDING ERROR FULL:", error);
     console.error("SAVE ONBOARDING ERROR MESSAGE:", error?.message);
     console.error("SAVE ONBOARDING ERROR CAUSE:", error?.cause);
-    console.error("SAVE ONBOARDING ERROR DETAIL:", error?.cause?.detail);
-    console.error("SAVE ONBOARDING ERROR CODE:", error?.cause?.code);
 
-    return NextResponse.json(
+    const res = NextResponse.json(
       {
         success: false,
         message:
@@ -143,5 +411,7 @@ export async function POST(req: NextRequest) {
       },
       { status: 500 }
     );
+    mergeCookies(cookieCollector, res);
+    return res;
   }
 }

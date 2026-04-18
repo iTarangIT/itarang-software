@@ -2780,6 +2780,9 @@ export const dealerOnboardingApplications = pgTable(
     dealerCode: text("dealer_code"),
 
     agreementStatus: varchar("agreement_status", { length: 50 }),
+    agreementLanguage: varchar("agreement_language", { length: 30 })
+      .default("english")
+      .notNull(),
     completionStatus: varchar("completion_status", { length: 30 }),
     providerDocumentId: text("provider_document_id"),
     requestId: text("request_id"),
@@ -2905,6 +2908,11 @@ export const dealerOnboardingDocuments = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
+  (table) => ({
+    applicationIdIdx: index("dealer_onboarding_documents_application_id_idx").on(
+      table.applicationId,
+    ),
+  }),
 );
 
 export const scrapeRuns = pgTable("scraper_runs", {

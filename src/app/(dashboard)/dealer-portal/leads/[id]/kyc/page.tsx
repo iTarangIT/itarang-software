@@ -39,6 +39,21 @@ function isFinalConsentStatus(status: string) {
     return ['admin_verified', 'manual_verified', 'verified'].includes((status || '').toLowerCase());
 }
 
+// Once the customer has signed (digitally or via uploaded PDF), further consent actions
+// must be blocked so the dealer can't fire a second SMS or regenerate a PDF.
+function isConsentSignedOrLater(status: string) {
+    return [
+        'esign_completed',
+        'consent_uploaded',
+        'admin_review_pending',
+        'admin_verified',
+        'manual_verified',
+        'verified',
+        'digitally_signed',
+        'manual_uploaded',
+    ].includes((status || '').toLowerCase());
+}
+
 function ConsentStatusBadge({ status }: { status: string }) {
     const s = (status || '').toLowerCase();
     if (isFinalConsentStatus(s)) {
@@ -660,10 +675,12 @@ export default function KYCPage() {
                                                         WhatsApp
                                                         <span className="text-[9px] font-normal">(Coming soon)</span>
                                                     </button>
-                                                    <button onClick={() => handleSendConsent('sms')} disabled={consentLoading}
-                                                        className="flex-1 px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                                    <button onClick={() => handleSendConsent('sms')}
+                                                        disabled={consentLoading || isConsentSignedOrLater(consentStatus)}
+                                                        title={isConsentSignedOrLater(consentStatus) ? 'Customer has already signed' : undefined}
+                                                        className="flex-1 px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5">
                                                         {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                                                        SMS
+                                                        {consentStatus === 'esign_completed' ? 'Signed' : 'SMS'}
                                                     </button>
                                                 </div>
                                                 {lead?.phone && (
@@ -681,6 +698,14 @@ export default function KYCPage() {
                                                 </span>
                                                 <p className="text-xs font-medium text-amber-700">
                                                     {consentStatus === 'link_opened' ? 'Customer opened the link. Waiting for signature...' : 'Consent link sent. Waiting for customer to sign...'}
+                                                </p>
+                                            </div>
+                                        )}
+                                        {consentStatus === 'esign_completed' && (
+                                            <div className="mt-3 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center gap-2">
+                                                <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                                                <p className="text-xs font-medium text-emerald-700">
+                                                    Customer has signed the consent. Submit for admin verification to proceed.
                                                 </p>
                                             </div>
                                         )}
@@ -706,8 +731,9 @@ export default function KYCPage() {
                                         {consentPath !== 'digital' && (
                                             <div className="space-y-2">
                                                 <button onClick={handleGenerateConsentPDF}
-                                                    disabled={consentLoading || consentStatus === 'consent_generated' || consentStatus === 'consent_uploaded'}
-                                                    className="w-full px-3 py-2 bg-teal-600 text-white rounded-lg text-xs font-bold hover:bg-teal-700 transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                                    disabled={consentLoading || consentStatus === 'consent_generated' || isConsentSignedOrLater(consentStatus)}
+                                                    title={isConsentSignedOrLater(consentStatus) ? 'Customer has already signed' : undefined}
+                                                    className="w-full px-3 py-2 bg-teal-600 text-white rounded-lg text-xs font-bold hover:bg-teal-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5">
                                                     {consentLoading && consentPath === 'manual' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
                                                     {consentStatus === 'consent_generated' ? 'PDF Generated' : 'Generate Consent PDF'}
                                                 </button>
@@ -719,9 +745,14 @@ export default function KYCPage() {
                                                                 <p className="text-xs text-green-700 font-medium"><CheckCircle2 className="w-3 h-3 inline mr-1" />PDF downloaded. Print, get signature, then upload scanned copy below.</p>
                                                             </div>
                                                         )}
-                                                        <label className="w-full px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all cursor-pointer flex items-center justify-center gap-1.5">
+                                                        <label className={`w-full px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                                                            isConsentSignedOrLater(consentStatus)
+                                                                ? 'opacity-50 cursor-not-allowed pointer-events-none'
+                                                                : 'hover:bg-[#003580] cursor-pointer'
+                                                        }`}>
                                                             <Upload className="w-3 h-3" /> Upload Signed Consent PDF
                                                             <input type="file" className="hidden" accept="application/pdf"
+                                                                disabled={isConsentSignedOrLater(consentStatus)}
                                                                 onChange={e => e.target.files?.[0] && handleUploadSignedConsent(e.target.files[0])} />
                                                         </label>
                                                     </>
