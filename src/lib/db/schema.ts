@@ -2780,6 +2780,9 @@ export const dealerOnboardingApplications = pgTable(
     dealerCode: text("dealer_code"),
 
     agreementStatus: varchar("agreement_status", { length: 50 }),
+    agreementLanguage: varchar("agreement_language", { length: 30 })
+      .default("english")
+      .notNull(),
     completionStatus: varchar("completion_status", { length: 30 }),
     providerDocumentId: text("provider_document_id"),
     requestId: text("request_id"),
