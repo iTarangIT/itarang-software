@@ -12,9 +12,9 @@ const BASE_URL = process.env.DECENTRO_BASE_URL || (
 );
 const CLIENT_ID = process.env.DECENTRO_CLIENT_ID!;
 const CLIENT_SECRET = process.env.DECENTRO_CLIENT_SECRET!;
-const MODULE_SECRET_KYC = process.env.DECENTRO_MODULE_SECRET_KYC;
 const MODULE_SECRET_BANKING = process.env.DECENTRO_MODULE_SECRET_BANKING;
 const MODULE_SECRET_CREDIT = process.env.DECENTRO_MODULE_SECRET_CREDIT;
+const PROVIDER_SECRET = process.env.DECENTRO_PROVIDER_SECRET;
 
 function genRefId(): string {
     const ts = Date.now().toString(36).toUpperCase();
@@ -27,14 +27,13 @@ function isRealSecret(val?: string): boolean {
 }
 
 function kycHeaders(): Record<string, string> {
-    const h: Record<string, string> = {
+    // Per Decentro: KYC endpoints authenticate with client_id + client_secret only.
+    return {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
         'Content-Type': 'application/json',
         'accept': 'application/json',
     };
-    if (isRealSecret(MODULE_SECRET_KYC)) h['module_secret'] = MODULE_SECRET_KYC!;
-    return h;
 }
 
 function bankingHeaders(): Record<string, string> {
@@ -117,11 +116,9 @@ export async function aadhaarValidateOtp(decentro_txn_id: string, otp: string) {
     return res.json();
 }
 
-// ─── Bank Account Verification (V3) ─────────────────────────────────────────
-// Staging: POST /v3/banking/money_transfer/validate_bank_account
-// Requires a consumer_urn provisioned against the merchant account.
-
-const CONSUMER_URN = (process.env.DECENTRO_CONSUMER_URN || '').trim();
+// ─── Bank Account Verification (V2) ─────────────────────────────────────────
+// POST /core_banking/money_transfer/validate_account
+// Auth: client_id + client_secret + module_secret (core banking) + provider_secret
 
 export interface BankVerifyParams {
     account_number: string;
@@ -132,33 +129,43 @@ export interface BankVerifyParams {
     validation_type?: 'penniless' | 'pennydrop' | 'hybrid';
 }
 
+function coreBankingHeaders(): Record<string, string> {
+    const h: Record<string, string> = {
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+        'Content-Type': 'application/json',
+        'accept': 'application/json',
+    };
+    if (isRealSecret(MODULE_SECRET_BANKING)) h['module_secret'] = MODULE_SECRET_BANKING!;
+    if (isRealSecret(PROVIDER_SECRET)) h['provider_secret'] = PROVIDER_SECRET!;
+    return h;
+}
+
 export async function verifyBankAccount(params: BankVerifyParams) {
-    if (!CONSUMER_URN) {
+    if (!isRealSecret(MODULE_SECRET_BANKING) || !isRealSecret(PROVIDER_SECRET)) {
         return {
             responseStatus: 'ERROR',
             status: 'ERROR',
             message:
-                'DECENTRO_CONSUMER_URN is not configured. Set it in .env.local to a valid staging consumer URN and restart the dev server.',
+                'DECENTRO_MODULE_SECRET_BANKING and DECENTRO_PROVIDER_SECRET must be set in .env.local for v2 bank verification.',
         };
     }
 
     const body: Record<string, unknown> = {
         reference_id: genRefId(),
         purpose_message: 'Account verification for loan application',
-        consumer_urn: CONSUMER_URN,
         validation_type: params.validation_type || 'penniless',
         perform_name_match: params.perform_name_match ?? !!params.name,
         beneficiary_details: {
             account_number: params.account_number,
             ifsc: params.ifsc,
             ...(params.name ? { name: params.name } : {}),
-            ...(params.mobile_number ? { mobile_number: params.mobile_number } : {}),
         },
     };
 
-    const res = await fetch(`${BASE_URL}/v3/banking/money_transfer/validate_bank_account`, {
+    const res = await fetch(`${BASE_URL}/core_banking/money_transfer/validate_account`, {
         method: 'POST',
-        headers: bankingHeaders(),
+        headers: coreBankingHeaders(),
         body: JSON.stringify(body),
     });
     return res.json();
@@ -178,7 +185,6 @@ export async function faceMatch(image1: Blob, image2: Blob) {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
     };
-    if (isRealSecret(MODULE_SECRET_KYC)) headers['module_secret'] = MODULE_SECRET_KYC!;
 
     const res = await fetch(`${BASE_URL}/v2/kyc/forensics/face_match`, {
         method: 'POST',
@@ -226,7 +232,6 @@ export async function classifyDocument(documentBlob: Blob, filename: string) {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
     };
-    if (isRealSecret(MODULE_SECRET_KYC)) headers['module_secret'] = MODULE_SECRET_KYC!;
 
     try {
         const res = await fetch(`${BASE_URL}/kyc/document/classify`, {
@@ -277,7 +282,6 @@ export async function extractDocumentOcr(
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
     };
-    if (isRealSecret(MODULE_SECRET_KYC)) headers['module_secret'] = MODULE_SECRET_KYC!;
 
     const url = `${BASE_URL}/kyc/scan_extract/ocr`;
     console.log(
@@ -538,9 +542,11 @@ function creditHeaders(): Record<string, string> {
         'Content-Type': 'application/json',
         'accept': 'application/json',
     };
-    // Credit bureau may use its own module secret, fall back to KYC secret
+    // Per Decentro: CIBIL/credit-bureau endpoints authenticate with client_id +
+    // client_secret only. Sending a module_secret scoped to a different module
+    // (e.g. KYC) triggers E00030 error_unauthorized_module. Only attach one if
+    // an explicit credit-module secret is configured.
     if (isRealSecret(MODULE_SECRET_CREDIT)) h['module_secret'] = MODULE_SECRET_CREDIT!;
-    else if (isRealSecret(MODULE_SECRET_KYC)) h['module_secret'] = MODULE_SECRET_KYC!;
     return h;
 }
 
@@ -550,14 +556,23 @@ export interface CibilParams {
     dob: string;      // YYYY-MM-DD
     phone: string;
     address: string;
+    pincode?: string;      // 6-digit Indian pincode — bureau lookup uses this
+    address_type?: 'H' | 'O' | 'X';   // H=Home, O=Office, X=Other (defaults to H)
 }
 
-/** Credit score via Bytes module (lightweight — mobile + name only) */
+/** Credit score via Bytes module (lightweight — mobile + name only).
+ *  Name is uppercased to match the canonical PAN-card format that CIBIL
+ *  typically stores against each PAN. */
 export async function fetchCibilScore(params: CibilParams) {
     const body = {
         mobile: params.phone.replace(/\D/g, '').slice(-10),
-        name: params.name,
+        name: params.name.trim().toUpperCase(),
     };
+
+    console.log('[CIBIL Score] Request body:', JSON.stringify({
+        ...body,
+        mobile: `******${body.mobile.slice(-4)}`,
+    }));
 
     const res = await fetch(`${BASE_URL}/v2/bytes/credit-score`, {
         method: 'POST',
@@ -567,15 +582,23 @@ export async function fetchCibilScore(params: CibilParams) {
     return res.json();
 }
 
-/** Full credit report summary — returns score + accounts + enquiries */
+/** Full credit report summary — returns score + accounts + enquiries
+ *  Decentro requires: reference_id, consent, consent_purpose, name, mobile,
+ *  inquiry_purpose, date_of_birth, address_type, address, pincode, document_type,
+ *  document_id. Missing pincode/address_type degrades the bureau match and often
+ *  returns "Consumer not found" even for leads that do exist on CIBIL. */
 export async function fetchCibilReport(params: CibilParams) {
+    const pincode = (params.pincode || '').replace(/\D/g, '').slice(0, 6)
+        || (params.address.match(/\b\d{6}\b/)?.[0] ?? '');
+
     const body: Record<string, unknown> = {
         reference_id: genRefId(),
         consent: true,
         consent_purpose: 'Credit report for loan application processing',
-        name: params.name,
+        name: params.name.trim().toUpperCase(),
         mobile: params.phone.replace(/\D/g, '').slice(-10),
         inquiry_purpose: 'PL',
+        address_type: params.address_type || 'H',
     };
 
     if (params.pan) {
@@ -584,6 +607,13 @@ export async function fetchCibilReport(params: CibilParams) {
     }
     if (params.dob) body.date_of_birth = params.dob;
     if (params.address) body.address = params.address;
+    if (pincode) body.pincode = pincode;
+
+    console.log('[CIBIL Report] Request body:', JSON.stringify({
+        ...body,
+        document_id: body.document_id ? `${String(body.document_id).slice(0, 3)}****${String(body.document_id).slice(-2)}` : undefined,
+        mobile: body.mobile ? `******${String(body.mobile).slice(-4)}` : undefined,
+    }));
 
     const res = await fetch(`${BASE_URL}/v2/financial_services/credit_bureau/credit_report/summary`, {
         method: 'POST',

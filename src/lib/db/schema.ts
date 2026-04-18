@@ -2936,7 +2936,21 @@ export const scrapeRuns = pgTable("scraper_runs", {
 
   searchQueries: json("search_queries"),
 
+  totalChunks: integer("total_chunks").default(0),
+  completedChunks: integer("completed_chunks").default(0),
+
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const scraperRunChunks = pgTable("scraper_run_chunks", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull(),
+  combinationQuery: text("combination_query").notNull(),
+  status: text("status").default("pending").notNull(),
+  leadsCount: integer("leads_count").default(0),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow(),
+  completedAt: timestamp("completed_at"),
 });
 
 export const scraperLeads = pgTable("scraper_leads", {

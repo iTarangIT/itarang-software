@@ -1,50 +1,106 @@
-// /lib/queue/dialerSession.ts
+// Redis-backed dialer session — must survive across serverless instances
+// on Vercel. In-memory module state is lost between invocations.
+
+import { connection as redis } from "./connection";
 
 type DialerSession = {
-  queue: string[]; // lead IDs in priority order
+  queue: string[];
   position: number;
   callsMade: number;
-  lastCallAt: number; // timestamp of when current call started
+  lastCallAt: number;
 };
 
-const CALL_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes max per call
+const SESSION_KEY = "dialer:session";
+const SESSION_TTL_SECONDS = 2 * 60 * 60;
+const CALL_TIMEOUT_MS = 3 * 60 * 1000;
 
-// In-memory store (survives across requests in the same process)
-let session: DialerSession | null = null;
+async function readSession(): Promise<DialerSession | null> {
+  const raw = await redis.get(SESSION_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as DialerSession;
+  } catch {
+    await redis.del(SESSION_KEY);
+    return null;
+  }
+}
+
+async function writeSession(session: DialerSession | null) {
+  if (!session) {
+    await redis.del(SESSION_KEY);
+    return;
+  }
+  await redis.set(
+    SESSION_KEY,
+    JSON.stringify(session),
+    "EX",
+    SESSION_TTL_SECONDS,
+  );
+}
+
+function emptyStatus() {
+  return {
+    active: false,
+    currentLeadId: null as string | null,
+    callsMade: 0,
+    total: 0,
+    remaining: 0,
+    timedOut: false,
+  };
+}
 
 export const dialerSession = {
-  start(queue: string[]) {
-    // position starts at 0 because the first call is triggered directly
-    session = { queue, position: 0, callsMade: 1, lastCallAt: Date.now() };
+  async start(queue: string[]) {
+    await writeSession({
+      queue,
+      position: 0,
+      callsMade: 1,
+      lastCallAt: Date.now(),
+    });
   },
-  getNext(): string | null {
+
+  async getNext(): Promise<string | null> {
+    const session = await readSession();
     if (!session) return null;
+
     session.position += 1;
     if (session.position >= session.queue.length) {
-      session = null; // queue exhausted
+      await writeSession(null);
       return null;
     }
+
     session.callsMade += 1;
     session.lastCallAt = Date.now();
+    await writeSession(session);
     return session.queue[session.position];
   },
-  current(): string | null {
+
+  async current(): Promise<string | null> {
+    const session = await readSession();
     if (!session) return null;
     return session.queue[session.position] ?? null;
   },
-  isActive(): boolean {
+
+  async isActive(): Promise<boolean> {
+    const session = await readSession();
     return session !== null;
   },
-  remaining(): number {
+
+  async remaining(): Promise<number> {
+    const session = await readSession();
     if (!session) return 0;
     return session.queue.length - session.position - 1;
   },
-  isCallTimedOut(): boolean {
+
+  async isCallTimedOut(): Promise<boolean> {
+    const session = await readSession();
     if (!session) return false;
     return Date.now() - session.lastCallAt > CALL_TIMEOUT_MS;
   },
-  status() {
-    if (!session) return { active: false, currentLeadId: null, callsMade: 0, total: 0, remaining: 0, timedOut: false };
+
+  async status() {
+    const session = await readSession();
+    if (!session) return emptyStatus();
     return {
       active: true,
       currentLeadId: session.queue[session.position] ?? null,
@@ -54,7 +110,8 @@ export const dialerSession = {
       timedOut: Date.now() - session.lastCallAt > CALL_TIMEOUT_MS,
     };
   },
-  stop() {
-    session = null;
+
+  async stop() {
+    await writeSession(null);
   },
 };

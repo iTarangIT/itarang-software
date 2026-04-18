@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { dealerLeads, scraperLeads } from "@/lib/db/schema";
-import { desc, ilike, or, sql } from "drizzle-orm";
+import { and, desc, ilike, isNotNull, ne, or, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 
@@ -63,14 +63,24 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get("search")?.trim() ?? "";
     const offset = (page - 1) * limit;
 
+    // Only surface leads with a phone — the AI dialer can't do anything with
+    // phoneless rows, and the Leads UI's Call button would be dead otherwise.
+    const phonePresent = and(
+      isNotNull(dealerLeads.phone),
+      ne(dealerLeads.phone, ""),
+    );
+
     const where = search
-      ? or(
-          ilike(dealerLeads.dealer_name, `%${search}%`),
-          ilike(dealerLeads.phone, `%${search}%`),
-          ilike(dealerLeads.location, `%${search}%`),
-          ilike(dealerLeads.shop_name, `%${search}%`),
+      ? and(
+          phonePresent,
+          or(
+            ilike(dealerLeads.dealer_name, `%${search}%`),
+            ilike(dealerLeads.phone, `%${search}%`),
+            ilike(dealerLeads.location, `%${search}%`),
+            ilike(dealerLeads.shop_name, `%${search}%`),
+          ),
         )
-      : undefined;
+      : phonePresent;
 
     const [rows, countResult] = await Promise.all([
       db
