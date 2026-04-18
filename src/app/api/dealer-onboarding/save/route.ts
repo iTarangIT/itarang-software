@@ -116,7 +116,11 @@ export async function POST(req: NextRequest) {
     const beneficiaryName = cleanString(body.beneficiaryName);
     const ifscCode = cleanString(body.ifscCode);
 
-    const documents: SafeRecord[] = Array.isArray(body.documents)
+    // Distinguish "client explicitly sent a (possibly empty) documents list"
+    // from "client omitted documents entirely" — the former is a replace; the
+    // latter must NOT touch existing document rows.
+    const documentsProvided = Array.isArray(body.documents);
+    const documents: SafeRecord[] = documentsProvided
       ? (body.documents as SafeRecord[])
       : [];
 
@@ -325,11 +329,17 @@ export async function POST(req: NextRequest) {
       return res;
     }
 
-    await db
-      .delete(dealerOnboardingDocuments)
-      .where(eq(dealerOnboardingDocuments.applicationId, application.id));
+    // Only replace documents when the client explicitly sent a documents
+    // array. Omitting the field must leave existing rows untouched —
+    // otherwise any partial save (e.g. company-name edit) would wipe every
+    // uploaded KYC file for the applicationId.
+    if (documentsProvided) {
+      await db
+        .delete(dealerOnboardingDocuments)
+        .where(eq(dealerOnboardingDocuments.applicationId, application.id));
+    }
 
-    if (documents.length > 0) {
+    if (documentsProvided && documents.length > 0) {
       const validDocuments = documents
         .filter((doc) => {
           return (

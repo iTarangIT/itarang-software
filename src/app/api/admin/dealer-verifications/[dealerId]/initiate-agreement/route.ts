@@ -9,6 +9,8 @@ import {
   insertAgreementEvent,
   insertAgreementSigners,
 } from "@/lib/agreement/tracking";
+import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 
 type AgreementParty = {
   name?: string | null;
@@ -227,6 +229,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ dealerId: string }> }
 ) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await params;
 
@@ -508,7 +512,10 @@ export async function POST(
         providerDocumentId: providerDocumentId || null,
         requestId,
         providerSigningUrl: signingUrl || null,
-        providerRawResponse: responseData,
+        providerRawResponse: mergeProviderRawResponse(
+          application.providerRawResponse,
+          responseData,
+        ),
         stampStatus,
         lastActionTimestamp: new Date(),
         updatedAt: new Date(),

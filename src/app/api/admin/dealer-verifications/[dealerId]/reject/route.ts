@@ -4,6 +4,7 @@ import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { sendDealerRejectionNotificationEmail } from "@/lib/email/sendDealerRejectionNotificationEmail";
 import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification-recipients";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -15,6 +16,8 @@ function cleanString(value: unknown) {
 }
 
 export async function POST(req: NextRequest, context: RouteContext) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
     const body = await req.json();
