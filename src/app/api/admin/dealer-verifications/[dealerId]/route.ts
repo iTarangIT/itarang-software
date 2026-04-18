@@ -5,6 +5,24 @@ import {
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import { z } from "zod";
+
+const PatchBodySchema = z.object({
+  companyName: z.string().optional(),
+  companyAddress: z.string().optional(),
+  gstNumber: z.string().optional(),
+  panNumber: z.string().optional(),
+  cinNumber: z.string().optional(),
+  companyType: z.string().optional(),
+  ownerName: z.string().optional(),
+  ownerPhone: z.string().optional(),
+  ownerEmail: z.string().optional(),
+  bankName: z.string().optional(),
+  accountNumber: z.string().optional(),
+  beneficiaryName: z.string().optional(),
+  ifscCode: z.string().optional(),
+  agreementLanguage: z.string().optional(),
+});
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -95,7 +113,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         ifscCode: row.ifscCode,
 
         // ✅ NEW — agreement language preference
-        agreementLanguage: (row as any).agreementLanguage || "english",
+        agreementLanguage: row.agreementLanguage,
 
         financeEnabled: row.financeEnabled,
         onboardingStatus: row.onboardingStatus,
@@ -164,7 +182,19 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 export async function PATCH(req: NextRequest, context: RouteContext) {
   try {
     const { dealerId } = await context.params;
-    const body = await req.json();
+    const rawBody = await req.json();
+
+    const parsed = PatchBodySchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Invalid request body",
+          errors: parsed.error.issues,
+        },
+        { status: 400 }
+      );
+    }
 
     const {
       companyName,
@@ -181,7 +211,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       beneficiaryName,
       ifscCode,
       agreementLanguage,
-    } = body;
+    } = parsed.data;
 
     // Only include fields that were actually sent
     const updatePayload: Record<string, any> = {};

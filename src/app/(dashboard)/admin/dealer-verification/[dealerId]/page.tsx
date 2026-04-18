@@ -685,35 +685,56 @@ export default function DealerReviewPage() {
   const handleApprove = async () => {
     setSubmitting(true);
     try {
-      const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/approve`, { method: "POST" });
-      const json = await res.json();
-      if (json.success) router.push("/admin/dealer-verification");
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/approve`, { method: "POST" });
+      let json: any = null;
+      try { json = await res.json(); } catch { /* non-JSON body */ }
+      if (!res.ok || !json?.success) {
+        alert(json?.message || `Approve failed (HTTP ${res.status})`);
+        return;
+      }
+      router.push("/admin/dealer-verification");
+    } catch (err: any) {
+      alert(err?.message || "Something went wrong while approving");
     } finally { setSubmitting(false); }
   };
 
   const handleCorrection = async () => {
     setSubmitting(true);
     try {
-      const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/request-correction`, {
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/request-correction`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ remarks }),
       });
-      const json = await res.json();
-      if (json.success) router.push("/admin/dealer-verification");
+      let json: any = null;
+      try { json = await res.json(); } catch { /* non-JSON body */ }
+      if (!res.ok || !json?.success) {
+        alert(json?.message || `Correction request failed (HTTP ${res.status})`);
+        return;
+      }
+      router.push("/admin/dealer-verification");
+    } catch (err: any) {
+      alert(err?.message || "Something went wrong while requesting correction");
     } finally { setSubmitting(false); }
   };
 
   const handleReject = async () => {
     setSubmitting(true);
     try {
-      const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/reject`, {
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/reject`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ remarks }),
       });
-      const json = await res.json();
-      if (json.success) router.push("/admin/dealer-verification");
+      let json: any = null;
+      try { json = await res.json(); } catch { /* non-JSON body */ }
+      if (!res.ok || !json?.success) {
+        alert(json?.message || `Reject failed (HTTP ${res.status})`);
+        return;
+      }
+      router.push("/admin/dealer-verification");
+    } catch (err: any) {
+      alert(err?.message || "Something went wrong while rejecting");
     } finally { setSubmitting(false); }
   };
 

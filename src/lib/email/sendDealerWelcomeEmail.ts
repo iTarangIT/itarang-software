@@ -11,7 +11,6 @@ export type DealerWelcomeEmailPayload = {
 };
 // hello world
 
-
 export async function sendDealerWelcomeEmail(
   payload: DealerWelcomeEmailPayload
 ) {
