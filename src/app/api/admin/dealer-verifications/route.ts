@@ -112,8 +112,7 @@ export async function GET() {
     return NextResponse.json(
       {
         success: false,
-        message:
-          error?.message || "Failed to fetch dealer verifications",
+        message: "Failed to fetch dealer verifications",
       },
       { status: 500 }
     );

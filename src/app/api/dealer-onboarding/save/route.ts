@@ -79,9 +79,21 @@ export async function POST(req: NextRequest) {
       data: { user },
     } = await supabase.auth.getUser();
 
+    // Middleware treats /api/* as public (src/middleware.ts), so enforce auth
+    // here. Without this, an unauthenticated caller could hit the ownerEmail /
+    // dealerCode fallback lookups below and claim/update another dealer's draft.
+    if (!user) {
+      const res = NextResponse.json(
+        { success: false, message: "Unauthorized" },
+        { status: 401 }
+      );
+      mergeCookies(cookieCollector, res);
+      return res;
+    }
+
     const body = await req.json();
 
-    const dealerUserId = user?.id || null;
+    const dealerUserId: string = user.id;
     const dealerCode =
       cleanString(body.dealerCode) ||
       cleanString(body.dealer_id) ||
@@ -207,35 +219,17 @@ export async function POST(req: NextRequest) {
 
     let application: typeof dealerOnboardingApplications.$inferSelect | null = null;
 
-    if (dealerUserId) {
-      const existing = await db
-        .select()
-        .from(dealerOnboardingApplications)
-        .where(eq(dealerOnboardingApplications.dealerUserId, dealerUserId))
-        .limit(1);
+    // Only resolve rows owned by the authenticated dealer. Prior version
+    // matched on body.ownerEmail / body.dealerCode too — attacker-controlled
+    // keys with no ownership constraint — which could let one dealer take
+    // over another dealer's in-progress draft.
+    const existing = await db
+      .select()
+      .from(dealerOnboardingApplications)
+      .where(eq(dealerOnboardingApplications.dealerUserId, dealerUserId))
+      .limit(1);
 
-      if (existing.length > 0) application = existing[0];
-    }
-
-    if (!application && ownerEmail) {
-      const existingByEmail = await db
-        .select()
-        .from(dealerOnboardingApplications)
-        .where(eq(dealerOnboardingApplications.ownerEmail, ownerEmail))
-        .limit(1);
-
-      if (existingByEmail.length > 0) application = existingByEmail[0];
-    }
-
-    if (!application && dealerCode) {
-      const existingByCode = await db
-        .select()
-        .from(dealerOnboardingApplications)
-        .where(eq(dealerOnboardingApplications.dealerCode, dealerCode))
-        .limit(1);
-
-      if (existingByCode.length > 0) application = existingByCode[0];
-    }
+    if (existing.length > 0) application = existing[0];
 
     if (application && application.onboardingStatus === "approved") {
       // Don't modify approved applications via auto-save.
@@ -248,6 +242,16 @@ export async function POST(req: NextRequest) {
       mergeCookies(cookieCollector, res);
       return res;
     }
+
+    // Transitioning to submitted (or an explicit agreement regen request)
+    // should reset the Digio workflow. On a plain draft autosave we must
+    // preserve the live provider document — otherwise every keystroke would
+    // blow away the signing URL, requestId, and stamp/completion status
+    // of an in-flight agreement.
+    const isSubmissionTransition = onboardingStatus === "submitted";
+    const shouldResetProviderWorkflow =
+      isSubmissionTransition ||
+      cleanString(agreementConfig["regenerate"]) === "true";
 
     // Shared fields including ownerLandline
     const sharedFields = {
@@ -279,29 +283,36 @@ export async function POST(req: NextRequest) {
       itarangSignatory2Email,
       itarangSignatory2Mobile,
       providerRawResponse: { agreement: agreementConfig },
-      stampStatus: "pending" as const,
-      completionStatus: "pending" as const,
       lastActionTimestamp: new Date(),
     };
 
     if (application) {
+      const updatePayload: Record<string, unknown> = {
+        ...sharedFields,
+        dealerUserId: dealerUserId || application.dealerUserId,
+        submittedAt: isSubmissionTransition ? new Date() : application.submittedAt,
+        updatedAt: new Date(),
+      };
+
+      if (shouldResetProviderWorkflow) {
+        updatePayload.agreementStatus = "not_generated";
+        updatePayload.providerSigningUrl = null;
+        updatePayload.providerDocumentId = null;
+        updatePayload.requestId = null;
+        updatePayload.stampStatus = "pending";
+        updatePayload.completionStatus = "pending";
+      } else {
+        // Autosave on a draft: keep whatever Digio state the row already has.
+        updatePayload.agreementStatus =
+          (typeof agreementConfig["agreementStatus"] === "string" &&
+            agreementConfig["agreementStatus"]) ||
+          application.agreementStatus ||
+          "not_generated";
+      }
+
       const updatedApplications = await db
         .update(dealerOnboardingApplications)
-        .set({
-          ...sharedFields,
-          dealerUserId: dealerUserId || application.dealerUserId,
-          submittedAt: onboardingStatus === "submitted" ? new Date() : null,
-          updatedAt: new Date(),
-          agreementStatus:
-            onboardingStatus === "submitted"
-              ? "not_generated"
-              : (typeof agreementConfig["agreementStatus"] === "string" &&
-                  agreementConfig["agreementStatus"]) ||
-                "not_generated",
-          providerSigningUrl: null,
-          providerDocumentId: null,
-          requestId: null,
-        })
+        .set(updatePayload)
         .where(eq(dealerOnboardingApplications.id, application.id))
         .returning();
 
@@ -314,6 +325,11 @@ export async function POST(req: NextRequest) {
           dealerUserId,
           submittedAt: onboardingStatus === "submitted" ? new Date() : null,
           agreementStatus: "not_generated",
+          // New rows start in the "pending" workflow states — these were
+          // previously in sharedFields but were moved out so autosave on
+          // existing rows doesn't overwrite live Digio state.
+          stampStatus: "pending",
+          completionStatus: "pending",
         })
         .returning();
 

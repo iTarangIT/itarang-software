@@ -418,10 +418,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Require strict boolean `true` — not just truthy — so strings like
+    // "false"/"0" / numbers / objects can't satisfy the gate accidentally.
     if (
-      !reviewChecks.confirmInfo ||
-      !reviewChecks.confirmDocs ||
-      !reviewChecks.agreeTerms
+      reviewChecks.confirmInfo !== true ||
+      reviewChecks.confirmDocs !== true ||
+      reviewChecks.agreeTerms !== true
     ) {
       return NextResponse.json(
         {

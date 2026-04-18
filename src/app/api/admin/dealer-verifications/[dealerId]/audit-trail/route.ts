@@ -89,7 +89,18 @@ function mergeSigner(
   invitationAt: Date | null,
 ): AuditSignerDetail {
   const email = normalizeEmail(localSigner.signerEmail);
-  const reasonKey = `reason:${(localSigner.signerRole || "").toLowerCase() === "dealer" ? "dealer signer" : ""}`;
+  // Map local signer roles to the `reason` strings Digio parties carry
+  // (see initiate-agreement/route.ts). Previously this only built a key for
+  // `dealer`, so iTarang / financier audit data never matched.
+  const role = (localSigner.signerRole || "").toLowerCase().trim();
+  const REASON_BY_ROLE: Record<string, string> = {
+    dealer: "dealer signer",
+    itarang_signatory_1: "itarang signer 1",
+    itarang_signatory_2: "itarang signer 2",
+    financier: "financier signer",
+  };
+  const reasonToken = REASON_BY_ROLE[role] || (role ? `${role.replace(/_/g, " ")} signer` : "");
+  const reasonKey = reasonToken ? `reason:${reasonToken}` : "";
   const party =
     (email ? partyMap.get(email) : null) ||
     (reasonKey ? partyMap.get(reasonKey) : null) ||
@@ -425,9 +436,17 @@ export async function GET(_req: NextRequest, context: RouteContext) {
             effectiveContentType = contentType || "application/pdf";
           }
         } catch (digioErr: any) {
+          // entityNotFound means Digio doesn't have the document — surface
+          // that to the outer catch so it can return a 404 + auditTrailAvailable:false
+          // instead of the generic 500 below. Other errors stay suppressed so
+          // we can still fall back to Puppeteer-generated PDF.
+          if (digioErr?.entityNotFound) {
+            console.warn("[AUDIT TRAIL] Digio direct-download: ENTITY_NOT_FOUND");
+            throw digioErr;
+          }
           console.warn(
             "[AUDIT TRAIL] Digio direct-download also failed.",
-            digioErr?.entityNotFound ? "(ENTITY_NOT_FOUND)" : digioErr?.message
+            digioErr?.message
           );
         }
       }

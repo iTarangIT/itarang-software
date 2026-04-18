@@ -43,9 +43,16 @@ function getField(data: Record<string, unknown>, ...keys: string[]): string | un
 
 /** Flatten address field that Decentro may return as an object {line1, line2, city, state, pincode}. */
 function getAddress(data: Record<string, unknown>): string | undefined {
+    // Traverse the same nesting levels as getField so addresses buried under
+    // `ocr_data` (e.g. data.ocr_data.address) are discoverable.
     const targets: Record<string, unknown>[] = [data];
-    for (const k of ['kycResult', 'extractedData', 'result', 'ocrResult', 'data']) {
+    for (const k of ['kycResult', 'extractedData', 'result', 'ocrResult', 'data', 'ocr_data']) {
         if (data[k] && typeof data[k] === 'object') targets.push(data[k] as Record<string, unknown>);
+    }
+    for (const t of [...targets]) {
+        for (const k of ['kycResult', 'extractedData', 'result', 'ocrResult', 'data', 'ocr_data']) {
+            if (t[k] && typeof t[k] === 'object') targets.push(t[k] as Record<string, unknown>);
+        }
     }
     for (const t of targets) {
         // Case 1: plain string
@@ -87,20 +94,42 @@ function normalizeAadhaar(raw: string | undefined): string | undefined {
     return undefined;
 }
 
-/** Parse various DOB formats Decentro may return into a Date, or null if unparseable. */
+/** Parse various DOB formats Decentro may return into a Date, or null if unparseable.
+ *  Rejects impossible calendar dates (e.g. 31-02-2024) via a round-trip check —
+ *  JS normally silently shifts those instead of failing. */
 function parseDob(raw: string | undefined): Date | null {
     if (!raw) return null;
     const s = raw.trim();
+
+    const buildUtc = (y: number, m: number, d: number): Date | null => {
+        if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+        if (y < 1900 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+        const date = new Date(Date.UTC(y, m - 1, d));
+        if (!Number.isFinite(date.getTime())) return null;
+        // Round-trip: if JS normalised the components, this isn't a real calendar date.
+        if (
+            date.getUTCFullYear() !== y ||
+            date.getUTCMonth() + 1 !== m ||
+            date.getUTCDate() !== d
+        ) return null;
+        return date;
+    };
+
     // DD-MM-YYYY or DD/MM/YYYY
     const ddmmyyyy = s.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
     if (ddmmyyyy) {
         const [, dd, mm, yyyy] = ddmmyyyy;
-        const d = new Date(`${yyyy}-${mm}-${dd}`);
-        return Number.isFinite(d.getTime()) ? d : null;
+        return buildUtc(Number(yyyy), Number(mm), Number(dd));
     }
+
     // YYYY-MM-DD ISO
-    const iso = new Date(s);
-    return Number.isFinite(iso.getTime()) ? iso : null;
+    const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) {
+        const [, yyyy, mm, dd] = isoMatch;
+        return buildUtc(Number(yyyy), Number(mm), Number(dd));
+    }
+
+    return null;
 }
 
 /** Upsert personalDetails — create if not exists, update only non-null fields */
@@ -406,8 +435,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             const gender = getField(ocrData, 'gender', 'sex');
             const parsedDob = parseDob(dobStr);
 
+            // Log only presence flags + non-PII context so server logs don't
+            // carry Aadhaar IDs, raw DOBs, pincodes, or gender.
             console.log(
-                `[Admin OCR] Aadhaar ${doc_type} extracted: aadhaar=${aadhaarNo ? 'Y' : 'N'}, name=${nameOnDoc ? 'Y' : 'N'}, father=${fatherName ? 'Y' : 'N'}, addr=${address ? 'Y' : 'N'}, dob=${parsedDob ? parsedDob.toISOString().slice(0, 10) : 'N'}, pincode=${pincode || '—'}, gender=${gender || '—'}`,
+                `[Admin OCR] Aadhaar ${doc_type} extracted: leadId=${leadId}, aadhaar=${aadhaarNo ? 'Y' : 'N'}, name=${nameOnDoc ? 'Y' : 'N'}, father=${fatherName ? 'Y' : 'N'}, addr=${address ? 'Y' : 'N'}, dob=${parsedDob ? 'Y' : 'N'}, pincode=${pincode ? 'Y' : 'N'}, gender=${gender ? 'Y' : 'N'}`,
             );
 
             await saveToPersonalDetails(leadId, {
