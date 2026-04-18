@@ -3,12 +3,15 @@ import { db } from "@/lib/db";
 import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { canReInitiateAgreement } from "@/lib/agreement/status";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 
 type Context = {
   params: Promise<{ dealerId: string }>;
 };
 
 export async function POST(req: NextRequest, context: Context) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
 
@@ -54,11 +57,20 @@ export async function POST(req: NextRequest, context: Context) {
       process.env.NEXT_PUBLIC_APP_URL ||
       "http://localhost:3000";
 
+    // Forward caller auth (cookies + Authorization) to the internal POST —
+    // without this, initiate-agreement's requireAdmin() gate returns 401 and
+    // the re-initiate flow appears broken for every authenticated admin.
+    const forwardHeaders: Record<string, string> = { "Content-Type": "application/json" };
+    const cookieHeader = req.headers.get("cookie");
+    if (cookieHeader) forwardHeaders.cookie = cookieHeader;
+    const authHeader = req.headers.get("authorization");
+    if (authHeader) forwardHeaders.authorization = authHeader;
+
     const response = await fetch(
       `${appBaseUrl}/api/admin/dealer-verifications/${dealerId}/initiate-agreement`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: forwardHeaders,
         body: JSON.stringify(body),
       }
     );

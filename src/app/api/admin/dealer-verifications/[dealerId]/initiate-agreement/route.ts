@@ -9,6 +9,8 @@ import {
   insertAgreementEvent,
   insertAgreementSigners,
 } from "@/lib/agreement/tracking";
+import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 
 type AgreementParty = {
   name?: string | null;
@@ -89,16 +91,13 @@ function buildSigner(params: {
   const mobile = normalizePhone(params.mobile);
 
   if (!name) return null;
-
-  const hasValidEmail = email && isValidEmail(email);
-  const hasValidMobile = mobile && isValidPhone(mobile);
-
-  if (!hasValidEmail && !hasValidMobile) return null;
+  if (!email || !isValidEmail(email)) return null;
+  if (!mobile || !isValidPhone(mobile)) return null;
 
   return {
     name,
-    email: hasValidEmail ? email : "",
-    mobile: hasValidMobile ? mobile : "",
+    email,
+    mobile,
     reason: params.reason,
     signingMethod: mapSigningMethod(params.signingMethod),
   };
@@ -230,6 +229,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ dealerId: string }> }
 ) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await params;
 
@@ -511,7 +512,10 @@ export async function POST(
         providerDocumentId: providerDocumentId || null,
         requestId,
         providerSigningUrl: signingUrl || null,
-        providerRawResponse: responseData,
+        providerRawResponse: mergeProviderRawResponse(
+          application.providerRawResponse,
+          responseData,
+        ),
         stampStatus,
         lastActionTimestamp: new Date(),
         updatedAt: new Date(),

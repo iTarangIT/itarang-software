@@ -249,8 +249,15 @@ export async function classifyDocument(documentBlob: Blob, filename: string) {
 // ─── Document OCR ─────────────────────────────────────────────────────────────
 
 export type OcrDocType = 'PAN' | 'AADHAAR' | 'DRIVING_LICENSE' | 'VOTERID' | 'PASSPORT';
+export type OcrDocSide = 'FRONT' | 'BACK' | undefined;
 
-export async function extractDocumentOcr(document_type: OcrDocType, documentBlob: Blob, filename: string) {
+export async function extractDocumentOcr(
+    document_type: OcrDocType,
+    documentBlob: Blob,
+    filename: string,
+    document_side?: OcrDocSide,
+    signal?: AbortSignal,
+) {
     // Decentro rejects filenames with multiple periods — sanitize by keeping only the last one (extension)
     const lastDot = filename.lastIndexOf('.');
     const sanitizedFilename = lastDot > 0
@@ -264,6 +271,12 @@ export async function extractDocumentOcr(document_type: OcrDocType, documentBlob
     form.append('consent_purpose', 'Document OCR extraction for KYC verification');
     form.append('kyc_validate', '1');
     form.append('document', documentBlob, sanitizedFilename);
+    // Tell Decentro which side of the document this is — needed for Aadhaar to know whether
+    // to prioritize name/DOB (front) or address/id-number (back) extraction.
+    if (document_side) {
+        form.append('document_side', document_side);
+        form.append('side', document_side.toLowerCase()); // alt key for older API versions
+    }
 
     const headers: Record<string, string> = {
         'client_id': CLIENT_ID,
@@ -271,16 +284,23 @@ export async function extractDocumentOcr(document_type: OcrDocType, documentBlob
     };
 
     const url = `${BASE_URL}/kyc/scan_extract/ocr`;
-    console.log(`[Decentro OCR] POST ${url} document_type=${document_type} file=${filename} size=${documentBlob.size}`);
+    console.log(
+        `[Decentro OCR] POST ${url} document_type=${document_type}${document_side ? ` side=${document_side}` : ''} file=${filename} size=${documentBlob.size}`,
+    );
 
     const res = await fetch(url, {
         method: 'POST',
         headers,
         body: form,
+        signal,
     });
 
     const json = await res.json();
-    console.log(`[Decentro OCR] Response status=${res.status}:`, JSON.stringify(json).slice(0, 500));
+    // Log full response so field-name mismatches are visible in dev server log
+    console.log(
+        `[Decentro OCR] Response status=${res.status}:`,
+        JSON.stringify(json).slice(0, 2000),
+    );
     return json;
 }
 
