@@ -363,10 +363,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             const panNo = getField(ocrData, 'pan_number', 'panNumber', 'id_number', 'idNumber', 'pan', 'panNo');
             const fatherName = getField(ocrData, 'fatherName', 'father_name', 'fatherOrHusbandName');
             const dob = getField(ocrData, 'dob', 'dateOfBirth', 'date_of_birth');
+            const parsedDob = parseDob(dob);
             await saveToPersonalDetails(leadId, {
                 pan_no: panNo?.toUpperCase(),
                 father_husband_name: fatherName,
-                ...(dob ? { dob: new Date(dob) } : {}),
+                ...(parsedDob ? { dob: parsedDob } : {}),
             });
         } else if (doc_type === 'aadhaar_front' || doc_type === 'aadhaar_back') {
             // Decentro's Aadhaar OCR returns idNumber / nameOnDocument / dateOfBirth / fatherName / address.

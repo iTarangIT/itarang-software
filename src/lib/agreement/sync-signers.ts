@@ -17,6 +17,18 @@ function normalizeEmail(value?: string | null): string {
   return (value || "").trim().toLowerCase();
 }
 
+// Map the local signerRole (stored in snake_case on dealer_agreement_signers)
+// to the Digio `reason` string used when the party was created at
+// src/app/api/admin/dealer-verifications/[dealerId]/initiate-agreement/route.ts.
+// Used by the email-less fallback match below — without this, naive
+// substring matching fails for itarang rows because 'itarang signer 1'
+// cannot contain the longer 'itarang signatory 1'.
+const SIGNER_ROLE_TO_DIGIO_REASON: Record<string, string> = {
+  dealer: "dealer signer",
+  itarang_signatory_1: "itarang signer 1",
+  itarang_signatory_2: "itarang signer 2",
+};
+
 /** Map Digio party-status strings to the values our UI renders. */
 export function normalizeSignerStatus(value: unknown) {
   const safe = String(value ?? "").trim().toLowerCase();
@@ -71,7 +83,13 @@ export async function syncSignersFromDigio(
       }) ||
       existing.find((s) => {
         if (!partyReason) return false;
-        const sigRole = String(s.signerRole || "").toLowerCase().replace(/_/g, " ");
+        const roleKey = String(s.signerRole || "").toLowerCase();
+        // Exact alias match covers the role/reason vocabulary gap
+        // (e.g. signerRole='itarang_signatory_1' ↔ reason='iTarang signer 1').
+        const expectedReason = SIGNER_ROLE_TO_DIGIO_REASON[roleKey];
+        if (expectedReason && partyReason === expectedReason) return true;
+        // Legacy substring fallback for any role not in the alias map.
+        const sigRole = roleKey.replace(/_/g, " ");
         return sigRole && partyReason.includes(sigRole);
       });
 

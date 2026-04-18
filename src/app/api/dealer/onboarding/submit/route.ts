@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import {
@@ -354,6 +354,17 @@ export async function POST(req: NextRequest) {
       data: { user },
     } = await supabase.auth.getUser();
 
+    // Middleware classifies /api/* as public, so enforce auth here. Without
+    // this, attacker-controlled body.applicationId / body.ownerEmail /
+    // body.dealerCode would let an unauthenticated caller overwrite another
+    // dealer's in-flight application and wipe its documents.
+    if (!user) {
+      return NextResponse.json(
+        { success: false, message: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
     const rawBody = (await req.json()) as SubmitPayload & Record<string, any>;
 
     const company = rawBody.company || {
@@ -435,11 +446,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const dealerUserId = user?.id || null;
-    const authEmail = user?.email || null;
-    const applicationId = isUuid(cleanString(body.applicationId))
+    const dealerUserId = user.id;
+    let applicationId = isUuid(cleanString(body.applicationId))
       ? cleanString(body.applicationId)
       : null;
+    // dealerCode is persisted on the row but is no longer used as a lookup
+    // key (it was an attacker-controlled path to another dealer's application).
     const dealerCode =
       cleanString(body.dealerCode) || cleanString(body.dealerId) || null;
     const financeEnabled =
@@ -450,18 +462,33 @@ export async function POST(req: NextRequest) {
       | typeof dealerOnboardingApplications.$inferSelect
       | null = null;
 
+    // Only match rows owned by the authenticated caller. Prior version also
+    // matched on body.ownerEmail / body.dealerCode — attacker-controlled keys
+    // with no ownership constraint — which let any caller target a victim's
+    // application. Those fallback branches are gone on purpose.
     if (applicationId) {
       existingApplication =
         (
           await db
             .select()
             .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.id, applicationId))
+            .where(
+              and(
+                eq(dealerOnboardingApplications.id, applicationId),
+                eq(dealerOnboardingApplications.dealerUserId, dealerUserId),
+              )
+            )
             .limit(1)
         )[0] ?? null;
+
+      // Silently ignore a UUID the caller doesn't own — fall through to
+      // either the dealerUserId lookup or a fresh INSERT.
+      if (!existingApplication) {
+        applicationId = null;
+      }
     }
 
-    if (!existingApplication && dealerUserId) {
+    if (!existingApplication) {
       existingApplication =
         (
           await db
@@ -473,48 +500,14 @@ export async function POST(req: NextRequest) {
         )[0] ?? null;
     }
 
-    if (!existingApplication && primaryOwner.ownerEmail) {
-      existingApplication =
-        (
-          await db
-            .select()
-            .from(dealerOnboardingApplications)
-            .where(
-              eq(dealerOnboardingApplications.ownerEmail, primaryOwner.ownerEmail)
-            )
-            .orderBy(desc(dealerOnboardingApplications.updatedAt))
-            .limit(1)
-        )[0] ?? null;
-    }
-
-    if (!existingApplication && authEmail) {
-      existingApplication =
-        (
-          await db
-            .select()
-            .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.ownerEmail, authEmail))
-            .orderBy(desc(dealerOnboardingApplications.updatedAt))
-            .limit(1)
-        )[0] ?? null;
-    }
-
-    if (!existingApplication && dealerCode) {
-      existingApplication =
-        (
-          await db
-            .select()
-            .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.dealerCode, dealerCode))
-            .orderBy(desc(dealerOnboardingApplications.updatedAt))
-            .limit(1)
-        )[0] ?? null;
-    }
-
     if (existingApplication?.onboardingStatus === "approved") {
       // Allow creating a brand-new application even if a previous one was approved.
-      // Reset so the code path below will INSERT instead of UPDATE.
+      // Reset BOTH locals so the code path below will INSERT instead of UPDATE.
+      // Clearing only existingApplication would leave finalApplicationId below
+      // falling back to the caller-supplied body.applicationId, which would
+      // overwrite the approved dealer's row and wipe its documents.
       existingApplication = null;
+      applicationId = null;
     }
 
     const providerRawResponse = {

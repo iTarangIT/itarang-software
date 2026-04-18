@@ -19,6 +19,7 @@ import {
   buildAuditTrailHtml,
   type AuditSignerDetail,
 } from "@/lib/agreement/audit-trail-template";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 
 function pickString(...values: unknown[]): string | null {
   for (const v of values) {
@@ -302,6 +303,8 @@ function isValidPdfBuffer(buffer: ArrayBuffer | null | undefined): buffer is Arr
 }
 
 export async function GET(_req: NextRequest, context: RouteContext) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
 

@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -25,6 +26,8 @@ function isValidPdfBuffer(buffer: ArrayBuffer | null | undefined): buffer is Arr
 }
 
 export async function GET(_req: NextRequest, context: RouteContext) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
 

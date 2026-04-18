@@ -8,6 +8,7 @@ import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
 import { sendDealerApprovalNotificationEmail } from "@/lib/email/sendDealerApprovalNotificationEmail";
 import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification-recipients";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -29,6 +30,8 @@ function resolveDealerLoginEmail(application: any) {
 
 
 export async function POST(_req: NextRequest, context: RouteContext) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
 

@@ -3,12 +3,15 @@ import { db } from "@/lib/db";
 import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { canReInitiateAgreement } from "@/lib/agreement/status";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 
 type Context = {
   params: Promise<{ dealerId: string }>;
 };
 
 export async function POST(req: NextRequest, context: Context) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
 

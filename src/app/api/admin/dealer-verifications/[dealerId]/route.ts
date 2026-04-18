@@ -6,6 +6,7 @@ import {
 } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 
 const PatchBodySchema = z.object({
   companyName: z.string().optional(),
@@ -54,6 +55,8 @@ function extractAddress(value: unknown) {
 // ─── GET ────────────────────────────────────────────────────────────────────
 
 export async function GET(_req: NextRequest, context: RouteContext) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
 
@@ -180,6 +183,8 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 // ─── PATCH — edit company details + agreement language ───────────────────────
 
 export async function PATCH(req: NextRequest, context: RouteContext) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
     const rawBody = await req.json();
@@ -228,7 +233,25 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
     if (accountNumber   !== undefined) updatePayload.accountNumber   = accountNumber;
     if (beneficiaryName !== undefined) updatePayload.beneficiaryName = beneficiaryName;
     if (ifscCode        !== undefined) updatePayload.ifscCode        = ifscCode;
-    if (companyAddress  !== undefined) updatePayload.businessAddress = companyAddress;
+
+    // businessAddress is a jsonb column holding { address, city, state, pincode, ... }.
+    // Merge into the existing object so admins editing the display string don't
+    // destroy the structured sub-fields downstream consumers (approve, Digio
+    // agreement payload) rely on.
+    if (companyAddress !== undefined) {
+      const [existing] = await db
+        .select({ businessAddress: dealerOnboardingApplications.businessAddress })
+        .from(dealerOnboardingApplications)
+        .where(eq(dealerOnboardingApplications.id, dealerId))
+        .limit(1);
+      const existingAddr =
+        existing?.businessAddress &&
+        typeof existing.businessAddress === "object" &&
+        !Array.isArray(existing.businessAddress)
+          ? (existing.businessAddress as Record<string, unknown>)
+          : {};
+      updatePayload.businessAddress = { ...existingAddr, address: companyAddress };
+    }
 
     // agreementLanguage stored in its own column (add to schema — see README below)
     if (agreementLanguage !== undefined) updatePayload.agreementLanguage = agreementLanguage;
