@@ -405,23 +405,28 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     });
   } catch (error: any) {
     console.error("APPROVE DEALER ERROR:", error);
+    if (error?.cause) console.error("APPROVE DEALER ERROR cause:", error.cause);
 
-    // Surface postgres error metadata so client-side diagnosis isn't blind.
-    // postgres-js attaches code/detail/constraint_name/column_name on the error.
-    const pgInfo = {
-      code: error?.code ?? null,
-      detail: error?.detail ?? null,
-      constraint: error?.constraint_name ?? null,
-      column: error?.column_name ?? null,
-      table: error?.table_name ?? null,
-      hint: error?.hint ?? null,
-    };
+    // Drizzle wraps postgres-js errors; the underlying error sits on `.cause`.
+    const root = error?.cause ?? error;
 
     return NextResponse.json(
       {
         success: false,
         message: error?.message || "Approve failed",
-        pg: pgInfo,
+        pg: {
+          code: root?.code ?? null,
+          detail: root?.detail ?? null,
+          constraint: root?.constraint_name ?? root?.constraint ?? null,
+          column: root?.column_name ?? root?.column ?? null,
+          table: root?.table_name ?? root?.table ?? null,
+          hint: root?.hint ?? null,
+          severity: root?.severity ?? null,
+          where: root?.where ?? null,
+          // Last-resort dump of all enumerable own keys so we never go blind on diagnosis.
+          keys: root && typeof root === "object" ? Object.keys(root) : null,
+          rootMessage: root?.message ?? null,
+        },
       },
       { status: 500 }
     );
