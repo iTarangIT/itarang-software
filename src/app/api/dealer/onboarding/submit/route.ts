@@ -354,16 +354,12 @@ export async function POST(req: NextRequest) {
       data: { user },
     } = await supabase.auth.getUser();
 
-    // Middleware classifies /api/* as public, so enforce auth here. Without
-    // this, attacker-controlled body.applicationId / body.ownerEmail /
-    // body.dealerCode would let an unauthenticated caller overwrite another
-    // dealer's in-flight application and wipe its documents.
-    if (!user) {
-      return NextResponse.json(
-        { success: false, message: "Unauthorized" },
-        { status: 401 }
-      );
-    }
+    // Dealer onboarding is open to the public — a dealer submits before they
+    // have an account, and an admin creates credentials after approval. An
+    // anonymous caller must NEVER be allowed to UPDATE an existing row via a
+    // caller-supplied applicationId/email/dealerCode (attacker-controlled
+    // keys), so the INSERT path below is forced when no authenticated user
+    // is present.
 
     const rawBody = (await req.json()) as SubmitPayload & Record<string, any>;
 
@@ -448,7 +444,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const dealerUserId = user.id;
+    const dealerUserId = user?.id ?? null;
     let applicationId = isUuid(cleanString(body.applicationId))
       ? cleanString(body.applicationId)
       : null;
@@ -467,8 +463,9 @@ export async function POST(req: NextRequest) {
     // Only match rows owned by the authenticated caller. Prior version also
     // matched on body.ownerEmail / body.dealerCode — attacker-controlled keys
     // with no ownership constraint — which let any caller target a victim's
-    // application. Those fallback branches are gone on purpose.
-    if (applicationId) {
+    // application. Those fallback branches are gone on purpose. When the
+    // caller is anonymous, skip lookups entirely and force an INSERT below.
+    if (dealerUserId && applicationId) {
       existingApplication =
         (
           await db
@@ -483,14 +480,14 @@ export async function POST(req: NextRequest) {
             .limit(1)
         )[0] ?? null;
 
-      // Silently ignore a UUID the caller doesn't own — fall through to
-      // either the dealerUserId lookup or a fresh INSERT.
       if (!existingApplication) {
         applicationId = null;
       }
+    } else if (!dealerUserId) {
+      applicationId = null;
     }
 
-    if (!existingApplication) {
+    if (dealerUserId && !existingApplication) {
       existingApplication =
         (
           await db

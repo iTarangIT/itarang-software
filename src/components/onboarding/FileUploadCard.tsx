@@ -64,7 +64,7 @@ function getBadgeLabel(status: VerificationState) {
     case "processing":
       return "Processing";
     case "verified":
-      return "Verified";
+      return "Uploaded";
     case "rejected":
       return "Rejected";
     case "reupload":
