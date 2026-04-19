@@ -188,6 +188,7 @@ const initialState: DealerOnboardingState = {
   ownership: {
     ownerName: "",
     ownerPhone: "",
+    ownerLandline: "",
     ownerEmail: "",
     ownerAge: "",
     ownerPhoto: makeUploadItem("Owner Photograph"),
@@ -455,11 +456,7 @@ export const useOnboardingStore = create<
         dealerSignerEmail: state.agreement.dealerSignerEmail,
         dealerSignerPhone: state.agreement.dealerSignerPhone,
         dealerSigningMethod: state.agreement.dealerSigningMethod,
-        salesManager: {
-          name: "",
-          email: "",
-          mobile: "",
-        },
+        salesManager: { ...state.agreement.salesManager },
         financierName: state.agreement.financierName,
         mouDate: state.agreement.mouDate,
         isOemFinancing: state.agreement.isOemFinancing,

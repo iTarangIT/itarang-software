@@ -5,6 +5,25 @@ import {
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import { z } from "zod";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
+
+const PatchBodySchema = z.object({
+  companyName: z.string().optional(),
+  companyAddress: z.string().optional(),
+  gstNumber: z.string().optional(),
+  panNumber: z.string().optional(),
+  cinNumber: z.string().optional(),
+  companyType: z.string().optional(),
+  ownerName: z.string().optional(),
+  ownerPhone: z.string().optional(),
+  ownerEmail: z.string().optional(),
+  bankName: z.string().optional(),
+  accountNumber: z.string().optional(),
+  beneficiaryName: z.string().optional(),
+  ifscCode: z.string().optional(),
+  agreementLanguage: z.string().optional(),
+});
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -36,6 +55,8 @@ function extractAddress(value: unknown) {
 // ─── GET ────────────────────────────────────────────────────────────────────
 
 export async function GET(_req: NextRequest, context: RouteContext) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
 
@@ -95,7 +116,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         ifscCode: row.ifscCode,
 
         // ✅ NEW — agreement language preference
-        agreementLanguage: (row as any).agreementLanguage || "english",
+        agreementLanguage: row.agreementLanguage,
 
         financeEnabled: row.financeEnabled,
         onboardingStatus: row.onboardingStatus,
@@ -152,8 +173,11 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     console.error("ADMIN DEALER VERIFICATION DETAIL ERROR CAUSE:", error?.cause);
     console.error("ADMIN DEALER VERIFICATION DETAIL ERROR DETAIL:", error?.cause?.detail);
 
+    // Never echo error.message to the client — it can leak DB column names,
+    // driver internals, or stack-like context. The server log above has the
+    // full detail for debugging.
     return NextResponse.json(
-      { success: false, message: error?.message || "Failed to fetch dealer verification detail" },
+      { success: false, message: "Failed to fetch dealer verification detail" },
       { status: 500 }
     );
   }
@@ -162,9 +186,23 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 // ─── PATCH — edit company details + agreement language ───────────────────────
 
 export async function PATCH(req: NextRequest, context: RouteContext) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
-    const body = await req.json();
+    const rawBody = await req.json();
+
+    const parsed = PatchBodySchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Invalid request body",
+          errors: parsed.error.issues,
+        },
+        { status: 400 }
+      );
+    }
 
     const {
       companyName,
@@ -181,7 +219,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       beneficiaryName,
       ifscCode,
       agreementLanguage,
-    } = body;
+    } = parsed.data;
 
     // Only include fields that were actually sent
     const updatePayload: Record<string, any> = {};
@@ -198,7 +236,25 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
     if (accountNumber   !== undefined) updatePayload.accountNumber   = accountNumber;
     if (beneficiaryName !== undefined) updatePayload.beneficiaryName = beneficiaryName;
     if (ifscCode        !== undefined) updatePayload.ifscCode        = ifscCode;
-    if (companyAddress  !== undefined) updatePayload.businessAddress = companyAddress;
+
+    // businessAddress is a jsonb column holding { address, city, state, pincode, ... }.
+    // Merge into the existing object so admins editing the display string don't
+    // destroy the structured sub-fields downstream consumers (approve, Digio
+    // agreement payload) rely on.
+    if (companyAddress !== undefined) {
+      const [existing] = await db
+        .select({ businessAddress: dealerOnboardingApplications.businessAddress })
+        .from(dealerOnboardingApplications)
+        .where(eq(dealerOnboardingApplications.id, dealerId))
+        .limit(1);
+      const existingAddr =
+        existing?.businessAddress &&
+        typeof existing.businessAddress === "object" &&
+        !Array.isArray(existing.businessAddress)
+          ? (existing.businessAddress as Record<string, unknown>)
+          : {};
+      updatePayload.businessAddress = { ...existingAddr, address: companyAddress };
+    }
 
     // agreementLanguage stored in its own column (add to schema — see README below)
     if (agreementLanguage !== undefined) updatePayload.agreementLanguage = agreementLanguage;
@@ -210,16 +266,24 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       );
     }
 
-    await db
+    const updated = await db
       .update(dealerOnboardingApplications)
       .set(updatePayload)
-      .where(eq(dealerOnboardingApplications.id, dealerId));
+      .where(eq(dealerOnboardingApplications.id, dealerId))
+      .returning({ id: dealerOnboardingApplications.id });
+
+    if (updated.length === 0) {
+      return NextResponse.json(
+        { success: false, message: "Dealer not found" },
+        { status: 404 }
+      );
+    }
 
     return NextResponse.json({ success: true, message: "Dealer details updated successfully" });
   } catch (error: any) {
     console.error("ADMIN DEALER PATCH ERROR:", error);
     return NextResponse.json(
-      { success: false, message: error?.message || "Failed to update dealer details" },
+      { success: false, message: "Failed to update dealer details" },
       { status: 500 }
     );
   }

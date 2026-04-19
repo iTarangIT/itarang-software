@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import puppeteer from "puppeteer";
+import { launchBrowser } from "@/lib/pdf/launch-browser";
 import { buildTarangDealerAgreementHtml } from "@/lib/agreement/dealer-agreement-template";
 
 type AgreementPayload = {
@@ -96,10 +96,7 @@ function findDuplicateIdentifiers(signers: SignerItem[]) {
 }
 
 async function renderPdfFromHtml(html: string) {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  const browser = await launchBrowser();
 
   try {
     const page = await browser.newPage();

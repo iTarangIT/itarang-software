@@ -47,7 +47,7 @@ export async function executeBankVerification(
     validation_type: validationType,
   });
 
-  console.log("[Decentro Bank V3] Response:", JSON.stringify(decentroRes));
+  console.log("[Decentro Bank V2] Response:", JSON.stringify(decentroRes));
 
   const success =
     decentroRes.api_status === "Success" ||
@@ -111,12 +111,16 @@ export async function executeBankVerification(
     });
   }
 
-  const data = (decentroRes.data || null) as Record<string, unknown> | null;
+  // Decentro v2 /core_banking returns fields at the top level (no `data` envelope).
+  // Pass the whole response through so the UI can read accountStatus, beneficiaryName,
+  // bankReferenceNumber, etc. directly.
+  const nested = (decentroRes.data || null) as Record<string, unknown> | null;
+  const data: Record<string, unknown> = { ...decentroRes, ...(nested || {}), verificationId };
 
   return {
     success,
     responseStatus: decentroRes.responseStatus,
     message: decentroRes.message as string | undefined,
-    data: data ? { ...data, verificationId } : { verificationId },
+    data,
   };
 }

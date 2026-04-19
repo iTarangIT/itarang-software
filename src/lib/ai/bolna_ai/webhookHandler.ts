@@ -4,10 +4,26 @@ import { db } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { updateLeadAfterCall } from "../storage/leadStore";
 import { dealerLeads } from "@/lib/db/schema";
-import { callQueue } from "@/lib/queue/callQueue";
+import { connection as redis } from "@/lib/queue/connection";
 import { dialerSession } from "@/lib/queue/dialerSession";
+import { scheduleCall } from "@/lib/queue/scheduler";
 import { appendSalesCallLog } from "@/lib/google/sheet";
 import { triggerBolnaCall } from "./triggerCall";
+
+const PROCESSED_CALL_TTL_SECONDS = 10 * 60;
+
+// Cross-instance dedupe for Bolna webhooks (serverless instances don't share memory).
+// Returns true if this is the first time we've seen this callId.
+async function claimCallForProcessing(callId: string): Promise<boolean> {
+  const result = await redis.set(
+    `bolna:processed-call:${callId}`,
+    "1",
+    "EX",
+    PROCESSED_CALL_TTL_SECONDS,
+    "NX",
+  );
+  return result === "OK";
+}
 
 function getValidDate(input: any): Date | null {
   if (!input) return null;
@@ -117,15 +133,12 @@ function resolveNextCallAt(
   return new Date(Date.now() + delayMs);
 }
 
-// Track which calls we've already processed to avoid double-advancing
-const processedCalls = new Set<string>();
-
 async function advanceDialerToNextLead() {
-  if (!dialerSession.isActive()) return;
+  if (!(await dialerSession.isActive())) return;
 
   let nextLead = null;
-  while (dialerSession.isActive()) {
-    const nextLeadId = dialerSession.getNext();
+  while (await dialerSession.isActive()) {
+    const nextLeadId = await dialerSession.getNext();
     if (!nextLeadId) {
       console.log("AI DIALER: queue complete, all leads called");
       break;
@@ -147,7 +160,7 @@ async function advanceDialerToNextLead() {
     console.log("AI DIALER: calling next lead", {
       id: nextLead.id,
       phone: nextLead.phone,
-      remaining: dialerSession.remaining(),
+      remaining: await dialerSession.remaining(),
     });
 
     await new Promise((r) => setTimeout(r, 5000));
@@ -173,18 +186,13 @@ export async function handleBolnaWebhook(body: any) {
       return;
     }
 
-    // Deduplicate: Bolna sends call-disconnected then completed for the same call
-    // Only process the first terminal event per call
-    if (callId && processedCalls.has(callId)) {
-      console.log("[WEBHOOK] Already processed call, skipping:", callId);
-      return;
-    }
+    // Deduplicate across serverless instances: Bolna sends call-disconnected
+    // then completed for the same call. Only process the first terminal event.
     if (callId) {
-      processedCalls.add(callId);
-      // Clean up old entries to prevent memory leak (keep last 200)
-      if (processedCalls.size > 200) {
-        const first = processedCalls.values().next().value;
-        if (first) processedCalls.delete(first);
+      const claimed = await claimCallForProcessing(callId);
+      if (!claimed) {
+        console.log("[WEBHOOK] Already processed call, skipping:", callId);
+        return;
       }
     }
 
@@ -220,22 +228,6 @@ export async function handleBolnaWebhook(body: any) {
       },
     );
 
-    if (decision.action === "schedule_call" && nextCallAt) {
-      const delay = new Date(nextCallAt).getTime() - Date.now();
-
-      await callQueue.add(
-        "call-lead",
-        { phone, leadId: lead.id },
-        {
-          delay: Math.max(delay, 0),
-          attempts: 3,
-          backoff: { type: "exponential", delay: 5000 },
-        },
-      );
-
-      console.log("JOB ADDED:", { phone, leadId: lead.id, delay });
-    }
-
     await db
       .update(dealerLeads)
       .set({
@@ -247,6 +239,17 @@ export async function handleBolnaWebhook(body: any) {
         next_call_at: nextCallAt,
       })
       .where(eq(dealerLeads.id, lead.id));
+
+    // Delay-based dispatch via QStash (works on Vercel serverless).
+    // The daily call-scheduler cron remains as a safety net for any
+    // next_call_at rows written outside this webhook flow.
+    if (decision.action === "schedule_call" && nextCallAt) {
+      await scheduleCall({
+        phone,
+        leadId: lead.id,
+        runAt: nextCallAt,
+      });
+    }
 
     if (decision.action === "push_to_crm") {
       await db

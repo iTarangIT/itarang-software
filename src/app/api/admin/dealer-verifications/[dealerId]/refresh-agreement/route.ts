@@ -5,6 +5,9 @@ import { db } from "@/lib/db";
 import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
+import { syncSignersFromDigio } from "@/lib/agreement/sync-signers";
+import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -131,6 +134,8 @@ function extractSignedAt(parsed: any) {
 }
 
 export async function POST(_req: NextRequest, context: RouteContext) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
 
@@ -205,6 +210,19 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     const normalizedStatus = normalizeAgreementStatus(
       parsed?.agreement_status || parsed?.status
     );
+
+    // Sync per-signer status from Digio's signing_parties array — this is what fixes the
+    // "Sent" badge never flipping to "Signed" after a signer completes the agreement.
+    try {
+      await syncSignersFromDigio(
+        dealerId,
+        application.providerDocumentId,
+        application.requestId,
+        parsed,
+      );
+    } catch (signerSyncErr) {
+      console.error("[REFRESH AGREEMENT] signer sync failed (non-blocking):", signerSyncErr);
+    }
 
     const signingUrl = extractSigningUrl(parsed);
     let signedAgreementUrl =
@@ -319,7 +337,10 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         providerSigningUrl: signingUrl,
         signedAgreementUrl,
         auditTrailUrl,
-        providerRawResponse: parsed || {},
+        providerRawResponse: mergeProviderRawResponse(
+          application.providerRawResponse,
+          parsed || {},
+        ),
         completionStatus: normalizedStatus === "completed" ? "completed" : "pending",
         reviewStatus:
           normalizedStatus === "completed"

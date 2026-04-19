@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db/index";
 import { dealerOnboardingApplications, dealerOnboardingDocuments } from "@/lib/db/schema";
 import { desc, sql } from "drizzle-orm";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 
 export async function GET() {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const applications = await db
       .select({
@@ -70,7 +73,7 @@ export async function GET() {
       // Otherwise, surface the real agreement status from the DB
       const agreementLabel = !item.financeEnabled
         ? "N/A"
-        : item.agreementStatus ?? "not_generated";
+        : item.agreementStatus?.trim() || "not_generated";
       const status =
         onboardingStatus === "approved" ||
         onboardingStatus === "rejected" ||
@@ -109,8 +112,7 @@ export async function GET() {
     return NextResponse.json(
       {
         success: false,
-        message:
-          error?.message || "Failed to fetch dealer verifications",
+        message: "Failed to fetch dealer verifications",
       },
       { status: 500 }
     );

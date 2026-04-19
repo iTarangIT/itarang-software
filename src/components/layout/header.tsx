@@ -3,30 +3,38 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Bell, LogOut, User, ChevronDown, Settings, CreditCard } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
-import { usePathname, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { GlobalSearchOverlay } from '@/components/search/GlobalSearchOverlay';
 import { useAuth } from '@/components/auth/AuthProvider';
-import { formatRoleLabel } from '@/lib/roles';
+import { toast } from 'sonner';
 
 export function Header() {
     const router = useRouter();
-    const pathname = usePathname();
     const supabase = createClient();
     const { user } = useAuth();
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
+    const [loggingOut, setLoggingOut] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
     const displayName = user?.name || user?.email?.split('@')[0] || 'User';
     const displayEmail = user?.email || '';
-    const displayRole = formatRoleLabel(user?.role, pathname);
+    const displayRole = user?.role || 'user';
     const initials = displayName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
 
-    const handleLogout = async () => {
-        await supabase.auth.signOut();
-        router.push('/login');
-        router.refresh();
+    const handleLogout = () => {
+        if (loggingOut) return;
+        setLoggingOut(true);
+        setIsProfileOpen(false);
+        toast.success('Signed out successfully. Redirecting...');
+        // Short delay so the user sees the toast before redirect
+        setTimeout(() => {
+            // Single round-trip: the /api/auth/logout route deletes sb-* cookies
+            // and 303-redirects to /login. No Supabase network call, no server
+            // action, no double session invalidation.
+            window.location.href = '/api/auth/logout';
+        }, 800);
     };
 
     // Close dropdown when clicking outside
@@ -110,10 +118,11 @@ export function Header() {
 
                             <button
                                 onClick={handleLogout}
-                                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                                disabled={loggingOut}
+                                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 <LogOut className="w-4 h-4" />
-                                Logout
+                                {loggingOut ? 'Signing out…' : 'Logout'}
                             </button>
                         </div>
                     )}

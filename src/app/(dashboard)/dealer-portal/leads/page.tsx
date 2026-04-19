@@ -1,23 +1,39 @@
 'use client';
 
 import Link from 'next/link';
-import { PlusCircle, Search, Filter, Loader2, Trash2, X, AlertTriangle, Pencil, Save } from 'lucide-react';
+import { PlusCircle, Search, Filter, Loader2, Eye, FileCheck, Trash2 } from 'lucide-react';
 import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { toast } from 'sonner';
 
 function DealerLeadsContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const [leads, setLeads] = useState([]);
+    const [leads, setLeads] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('All');
     const [typeFilter, setTypeFilter] = useState('All');
-    const [deleteTarget, setDeleteTarget] = useState<any>(null);
-    const [deleting, setDeleting] = useState(false);
-    const [editTarget, setEditTarget] = useState<any>(null);
-    const [editForm, setEditForm] = useState({ interest_level: '', payment_method: '', full_name: '', phone: '' });
-    const [saving, setSaving] = useState(false);
+    const [deletingId, setDeletingId] = useState<string | null>(null);
+
+    const handleDeleteLead = async (leadId: string, leadName: string) => {
+        if (!confirm(`Are you sure you want to delete "${leadName}"? This cannot be undone.`)) return;
+        setDeletingId(leadId);
+        try {
+            const res = await fetch(`/api/dealer/leads/${leadId}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (data.success) {
+                toast.success(`"${leadName}" deleted successfully`);
+                setLeads((prev: any[]) => prev.filter((l: any) => l.id !== leadId));
+            } else {
+                toast.error(data.error?.message || 'Failed to delete lead');
+            }
+        } catch {
+            toast.error('Failed to delete lead');
+        } finally {
+            setDeletingId(null);
+        }
+    };
 
     const fetchLeads = async () => {
         setLoading(true);
@@ -39,65 +55,20 @@ function DealerLeadsContent() {
         }
     };
 
-    const handleDelete = async () => {
-        if (!deleteTarget) return;
-        setDeleting(true);
-        try {
-            const res = await fetch(`/api/dealer/leads/${deleteTarget.id}`, { method: 'DELETE' });
-            const data = await res.json();
-            if (data.success) {
-                setDeleteTarget(null);
-                fetchLeads();
-            } else {
-                alert(data.error?.message || data.message || 'Failed to delete lead');
-            }
-        } catch {
-            alert('Failed to delete lead');
-        } finally {
-            setDeleting(false);
-        }
-    };
-
-    const openEdit = (lead: any) => {
-        setEditTarget(lead);
-        setEditForm({
-            interest_level: lead.interest_level || '',
-            payment_method: lead.payment_method || '',
-            full_name: lead.full_name || lead.owner_name || '',
-            phone: lead.phone || lead.owner_contact || '',
-        });
-    };
-
-    const handleSaveEdit = async () => {
-        if (!editTarget) return;
-        setSaving(true);
-        try {
-            const res = await fetch(`/api/dealer/leads/${editTarget.id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(editForm),
-            });
-            const data = await res.json();
-            if (data.success || (data.data && data.data.success)) {
-                setEditTarget(null);
-                fetchLeads();
-            } else {
-                const msg = data.error?.message || data.error || data.message || 'Failed to update lead';
-                alert(msg);
-            }
-        } catch {
-            alert('Failed to update lead');
-        } finally {
-            setSaving(false);
-        }
-    };
-
     // Debounce search
     useEffect(() => {
         const timer = setTimeout(() => {
             fetchLeads();
         }, 500);
         return () => clearTimeout(timer);
+    }, [search, statusFilter, typeFilter]);
+
+    // Auto-refresh leads every 30 seconds
+    useEffect(() => {
+        const interval = setInterval(() => {
+            fetchLeads();
+        }, 30000);
+        return () => clearInterval(interval);
     }, [search, statusFilter, typeFilter]);
 
     // Highlight new lead
@@ -177,22 +148,34 @@ function DealerLeadsContent() {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100 text-sm">
-                                {leads.map((lead: any) => (
-                                    <tr key={lead.id} className={`hover:bg-gray-50 transition-colors group ${newLeadId === lead.id ? 'bg-brand-50' : ''}`}>
+                                {leads.map((lead: any) => {
+                                    const isFinance = lead.payment_method && !['cash', 'upfront'].includes(lead.payment_method);
+                                    const leadUrl = `/dealer-portal/leads/${lead.id}`;
+
+                                    return (
+                                    <tr
+                                        key={lead.id}
+                                        onClick={() => router.push(leadUrl)}
+                                        className={`hover:bg-gray-50 transition-colors group cursor-pointer ${newLeadId === lead.id ? 'bg-brand-50' : ''}`}
+                                    >
                                         <td className="px-6 py-4">
-                                            <div className="font-medium text-gray-900">{lead.owner_name}</div>
-                                            <div className="text-gray-500 text-xs">{lead.owner_contact}</div>
+                                            <div className="font-medium text-gray-900">{lead.owner_name || lead.full_name}</div>
+                                            <div className="text-gray-500 text-xs">{lead.owner_contact || lead.phone}</div>
                                         </td>
                                         <td className="px-6 py-4">
-                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize
-                                                ${lead.lead_status === 'new' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}
-                                            `}>
+                                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${
+                                                lead.lead_status === 'new' ? 'bg-blue-100 text-blue-800' :
+                                                lead.lead_status === 'contacted' ? 'bg-amber-100 text-amber-800' :
+                                                lead.lead_status === 'qualified' ? 'bg-green-100 text-green-800' :
+                                                lead.lead_status === 'converted' ? 'bg-emerald-100 text-emerald-800' :
+                                                'bg-gray-100 text-gray-800'
+                                            }`}>
                                                 {lead.lead_status}
                                             </span>
                                         </td>
                                         <td className="px-6 py-4">
                                             <span className="inline-flex items-center gap-1.5 capitalize">
-                                                <span className={`w-2 h-2 rounded-full 
+                                                <span className={`w-2 h-2 rounded-full
                                                     ${lead.interest_level === 'hot' ? 'bg-red-500' : lead.interest_level === 'warm' ? 'bg-yellow-500' : 'bg-blue-500'}
                                                 `}></span>
                                                 {lead.interest_level}
@@ -205,166 +188,50 @@ function DealerLeadsContent() {
                                             {new Date(lead.created_at).toLocaleDateString()}
                                         </td>
                                         <td className="px-6 py-4 text-right">
-                                            <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <Link href={`/dealer-portal/leads/${lead.id}/kyc`} className="text-brand-600 hover:text-brand-800 font-medium text-xs">
-                                                    View Details
-                                                </Link>
+                                            <div className="flex items-center justify-end gap-2">
                                                 <button
-                                                    onClick={(e) => { e.stopPropagation(); openEdit(lead); }}
-                                                    className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
-                                                    title="Edit lead"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        router.push(leadUrl);
+                                                    }}
+                                                    className="inline-flex items-center gap-1 text-brand-600 hover:text-brand-800 font-medium text-xs opacity-0 group-hover:opacity-100 transition-opacity"
                                                 >
-                                                    <Pencil className="w-3.5 h-3.5" />
+                                                    <Eye className="w-3 h-3" />
+                                                    View
                                                 </button>
+                                                {isFinance && (
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            router.push(`/dealer-portal/leads/${lead.id}/kyc`);
+                                                        }}
+                                                        className="inline-flex items-center gap-1 text-emerald-600 hover:text-emerald-800 font-medium text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                                                    >
+                                                        <FileCheck className="w-3 h-3" />
+                                                        KYC
+                                                    </button>
+                                                )}
                                                 <button
-                                                    onClick={(e) => { e.stopPropagation(); setDeleteTarget(lead); }}
-                                                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                                                    title="Delete lead"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleDeleteLead(lead.id, lead.owner_name || lead.full_name || 'this lead');
+                                                    }}
+                                                    disabled={deletingId === lead.id}
+                                                    className="inline-flex items-center gap-1 text-red-500 hover:text-red-700 font-medium text-xs opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
                                                 >
-                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                    {deletingId === lead.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                                                    Delete
                                                 </button>
                                             </div>
                                         </td>
                                     </tr>
-                                ))}
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
                 )}
             </div>
-
-            {/* Edit Lead Modal */}
-            {editTarget && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-                    <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden">
-                        <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-5">
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-                                        <Pencil className="w-5 h-5 text-white" />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-lg font-bold text-white">Edit Lead</h3>
-                                        <p className="text-blue-100 text-xs mt-0.5">{editTarget.id}</p>
-                                    </div>
-                                </div>
-                                <button onClick={() => setEditTarget(null)} className="text-white/70 hover:text-white">
-                                    <X className="w-5 h-5" />
-                                </button>
-                            </div>
-                        </div>
-                        <div className="px-6 py-5 space-y-4">
-                            <div>
-                                <label className="block text-sm font-semibold text-gray-700 mb-1.5">Full Name</label>
-                                <input
-                                    type="text"
-                                    value={editForm.full_name}
-                                    onChange={e => setEditForm(prev => ({ ...prev, full_name: e.target.value }))}
-                                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-semibold text-gray-700 mb-1.5">Phone</label>
-                                <input
-                                    type="text"
-                                    value={editForm.phone}
-                                    onChange={e => setEditForm(prev => ({ ...prev, phone: e.target.value }))}
-                                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                />
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-semibold text-gray-700 mb-1.5">Interest Level</label>
-                                    <select
-                                        value={editForm.interest_level}
-                                        onChange={e => setEditForm(prev => ({ ...prev, interest_level: e.target.value }))}
-                                        className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                    >
-                                        <option value="">Select</option>
-                                        <option value="hot">Hot</option>
-                                        <option value="warm">Warm</option>
-                                        <option value="cold">Cold</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-semibold text-gray-700 mb-1.5">Payment Method</label>
-                                    <select
-                                        value={editForm.payment_method}
-                                        onChange={e => setEditForm(prev => ({ ...prev, payment_method: e.target.value }))}
-                                        className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                    >
-                                        <option value="">Select</option>
-                                        <option value="cash">Cash</option>
-                                        <option value="dealer_finance">Dealer Finance</option>
-                                        <option value="other_finance">Other Finance</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
-                        <div className="px-6 pb-5 flex gap-3">
-                            <button onClick={() => setEditTarget(null)} disabled={saving}
-                                className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl font-semibold text-sm text-gray-600 hover:bg-gray-50 transition-all">
-                                Cancel
-                            </button>
-                            <button onClick={handleSaveEdit} disabled={saving}
-                                className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-semibold text-sm hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
-                                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                                {saving ? 'Saving...' : 'Save Changes'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Delete Confirmation Modal */}
-            {deleteTarget && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
-                        <div className="bg-gradient-to-r from-red-500 to-red-600 px-6 py-5">
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-                                    <AlertTriangle className="w-5 h-5 text-white" />
-                                </div>
-                                <div>
-                                    <h3 className="text-lg font-bold text-white">Delete Lead</h3>
-                                    <p className="text-red-100 text-xs mt-0.5">This action cannot be undone</p>
-                                </div>
-                            </div>
-                        </div>
-                        <div className="px-6 py-5 space-y-4">
-                            <div className="bg-red-50 border border-red-100 rounded-xl p-4">
-                                <p className="text-sm text-gray-700">
-                                    Are you sure you want to permanently delete this lead?
-                                </p>
-                                <div className="mt-3 space-y-1.5">
-                                    <div className="flex justify-between text-sm">
-                                        <span className="text-gray-500">Customer</span>
-                                        <span className="font-semibold text-gray-900">{deleteTarget.owner_name || deleteTarget.full_name || 'Unknown'}</span>
-                                    </div>
-                                    <div className="flex justify-between text-sm">
-                                        <span className="text-gray-500">Lead ID</span>
-                                        <span className="font-semibold text-gray-900">{deleteTarget.id}</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <p className="text-xs text-gray-500">
-                                All associated data including KYC documents, verifications, and consent records will be permanently removed.
-                            </p>
-                        </div>
-                        <div className="px-6 pb-5 flex gap-3">
-                            <button onClick={() => setDeleteTarget(null)} disabled={deleting}
-                                className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl font-semibold text-sm text-gray-600 hover:bg-gray-50 transition-all">
-                                Cancel
-                            </button>
-                            <button onClick={handleDelete} disabled={deleting}
-                                className="flex-1 px-4 py-3 bg-red-600 text-white rounded-xl font-semibold text-sm hover:bg-red-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
-                                {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                                {deleting ? 'Deleting...' : 'Delete Lead'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }

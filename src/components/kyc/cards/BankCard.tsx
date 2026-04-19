@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import OcrAutofillButton from "./OcrAutofillButton";
-import ManualDecisionSection from "./ManualDecisionSection";
 import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface BankCardProps {
@@ -57,14 +56,24 @@ export default function BankCard({
     if (existingVerification?.status === "failed") return "failed";
     return "pending";
   });
-  const [result, setResult] = useState<Record<string, unknown> | null>(
-    existingVerification?.apiResponse || null,
-  );
+  // DB stores the raw flat Decentro v2 response under api_response. The fresh-verify
+  // path wraps it as { success, message, data: {...} }. Normalize the DB shape to match
+  // so the results table renders identically on reload.
+  const [result, setResult] = useState<Record<string, unknown> | null>(() => {
+    const saved = existingVerification?.apiResponse;
+    if (!saved) return null;
+    const nested = (saved as Record<string, unknown>).data as Record<string, unknown> | undefined;
+    return {
+      message: (saved as Record<string, unknown>).message,
+      data: nested ? { ...saved, ...nested } : { ...saved },
+    };
+  });
   const [verificationId, setVerificationId] = useState(existingVerification?.id || "");
   const [error, setError] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
   const [showMoreDocsModal, setShowMoreDocsModal] = useState(false);
+  const [actionResult, setActionResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const handleVerify = async () => {
     if (!accountNumber.trim()) {
@@ -109,31 +118,36 @@ export default function BankCard({
   const handleAdminAction = async (
     action: "accept" | "reject" | "request_more_docs",
   ) => {
-    const vid = verificationId || existingVerification?.id;
-    if (!vid) { setError("No verification record found. Please run verification first."); return; }
+    if (action === "request_more_docs") { setShowMoreDocsModal(true); return; }
     if (action === "reject" && !adminNotes.trim()) {
       setError("Please add rejection reason");
       return;
     }
     setActionLoading(action);
     setError("");
+    setActionResult(null);
     try {
-      const res = await fetch(
-        `/api/admin/kyc/${leadId}/verification/${vid}/action`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action,
-            notes: adminNotes,
-            rejection_reason: action === "reject" ? adminNotes : undefined,
-          }),
-        },
-      );
+      const vid = verificationId || existingVerification?.id;
+      const res = vid
+        ? await fetch(`/api/admin/kyc/${leadId}/verification/${vid}/action`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
+          })
+        : await fetch(`/api/admin/kyc/${leadId}/verification/manual`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action, verification_type: "bank", applicant, notes: adminNotes, rejection_reason: action === "reject" ? adminNotes : undefined }),
+          });
       const data = await res.json();
       if (data.success) {
-        if (action === "accept") setStatus("success");
-        else if (action === "reject") setStatus("failed");
+        if (action === "accept") {
+          setStatus("success");
+          setActionResult({ success: true, message: "Bank verification accepted successfully" });
+        } else if (action === "reject") {
+          setStatus("failed");
+          setActionResult({ success: true, message: "Bank verification rejected" });
+        }
         onActionComplete?.();
       } else {
         setError(data.error?.message || "Action failed");
@@ -304,15 +318,6 @@ export default function BankCard({
           {status === "loading" ? "Verifying..." : "Run Bank Verification"}
         </button>
 
-        {/* Manual Override — available until an admin decision is captured */}
-        {status === "pending" && !verificationId && !existingVerification?.id && (
-          <ManualDecisionSection
-            leadId={leadId}
-            verificationType="bank"
-            applicant={applicant}
-            onActionComplete={onActionComplete}
-          />
-        )}
 
         {/* Results */}
         {result && bankData && (
@@ -401,6 +406,7 @@ export default function BankCard({
                     <td className="px-4 py-2 text-gray-800 font-mono text-xs">
                       {
                         (bankData.bank_reference_number ||
+                          bankData.bankReferenceNumber ||
                           bankData.bankTxnId ||
                           "—") as string
                       }
@@ -426,47 +432,61 @@ export default function BankCard({
           </div>
         )}
 
-        {/* Admin Actions */}
-        {(status === "success" || status === "failed") &&
-          (verificationId || existingVerification?.id) && (
-            <div className="space-y-3 pt-3 border-t border-gray-100">
-              <div>
-                <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                  Admin Notes
-                </label>
-                <textarea
-                  value={adminNotes}
-                  onChange={(e) => setAdminNotes(e.target.value)}
-                  rows={2}
-                  placeholder="Verification remarks..."
-                  className="w-full mt-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-                />
+        {/* Admin Actions — Always visible */}
+        {status !== "loading" && (
+          <div className="space-y-3 pt-4 border-t border-gray-200">
+            {(existingVerification?.adminAction || actionResult) && (
+              <div className={`rounded-lg p-3 text-sm font-medium flex items-center gap-2 ${
+                (existingVerification?.adminAction === "accepted" || actionResult?.success)
+                  ? "bg-green-50 border border-green-200 text-green-700"
+                  : "bg-red-50 border border-red-200 text-red-700"
+              }`}>
+                <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  {(existingVerification?.adminAction === "accepted" || (actionResult?.success && actionResult.message.includes("accepted")))
+                    ? <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    : <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  }
+                </svg>
+                {actionResult?.message || `Bank verification ${existingVerification?.adminAction} by admin.`}
               </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleAdminAction("accept")}
-                  disabled={!!actionLoading}
-                  className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
-                >
-                  {actionLoading === "accept" ? "..." : "Accept"}
-                </button>
-                <button
-                  onClick={() => handleAdminAction("reject")}
-                  disabled={!!actionLoading}
-                  className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
-                >
-                  {actionLoading === "reject" ? "..." : "Reject"}
-                </button>
-                <button
-                  onClick={() => setShowMoreDocsModal(true)}
-                  disabled={!!actionLoading}
-                  className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
-                >
-                  Request Docs
-                </button>
-              </div>
+            )}
+            <div>
+              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                Admin Notes
+              </label>
+              <textarea
+                value={adminNotes}
+                onChange={(e) => setAdminNotes(e.target.value)}
+                rows={2}
+                placeholder="Verification remarks..."
+                className="w-full mt-1.5 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 resize-none"
+              />
             </div>
-          )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => handleAdminAction("accept")}
+                disabled={!!actionLoading}
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm"
+              >
+                {actionLoading === "accept" ? "Accepting..." : "Accept"}
+              </button>
+              <button
+                onClick={() => handleAdminAction("reject")}
+                disabled={!!actionLoading}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm"
+              >
+                {actionLoading === "reject" ? "Rejecting..." : "Reject"}
+              </button>
+              <button
+                onClick={() => handleAdminAction("request_more_docs")}
+                disabled={!!actionLoading}
+                className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm"
+              >
+                Request Docs
+              </button>
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">

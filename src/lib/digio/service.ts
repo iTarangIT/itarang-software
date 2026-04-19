@@ -1,8 +1,9 @@
 import { digioClient } from "./client";
-import { buildUploadPdfPayload, type DigioUploadPdfInput } from "./mapper";
+import { buildDigioPayload, buildUploadPdfPayload, type DigioUploadPdfInput } from "./mapper";
 
 /**
  * Upload a PDF to Digio for e-signing via /v2/client/document/uploadpdf
+ * Used by the consent flow — generates PDF, uploads, DigiO sends SMS to signer.
  */
 export async function createDigioAgreement(data: DigioUploadPdfInput) {
   const payload = buildUploadPdfPayload(data);

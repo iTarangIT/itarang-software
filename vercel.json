@@ -1,16 +1,14 @@
 {
   "crons": [
     {
-      "path": "/api/cron/ai-dialer",
+      "path": "/api/bolna/call-scheduler",
       "schedule": "0 3 * * *"
-    },
-    {
-      "path": "/api/scraper/cron",
-      "schedule": "0 4 * * *"
-    },
-    {
-      "path": "/api/cron/expire-coupons",
-      "schedule": "0 0 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "src/app/api/kyc/[leadId]/generate-consent-pdf/route.ts": {
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  }
 }

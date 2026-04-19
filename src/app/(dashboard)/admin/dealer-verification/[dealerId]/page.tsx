@@ -605,7 +605,36 @@ export default function DealerReviewPage() {
   const handleAuditTrailDownload = async () => {
     if (!hasInitiatedAgreement) { alert("Agreement has not been initiated yet."); return; }
     if (!isAgreementCompleted)  { alert("Audit trail available only after agreement completion."); return; }
-    window.open(`/api/admin/dealer-verifications/${dealerId}/audit-trail`, "_blank");
+
+    setAuditTrailLoading(true);
+    try {
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/audit-trail`);
+      const ct = res.headers.get("content-type") || "";
+
+      if (!res.ok) {
+        if (ct.includes("json")) {
+          const err = await res.json().catch(() => null);
+          alert(err?.message || `Audit trail download failed (HTTP ${res.status})`);
+        } else {
+          alert(`Audit trail download failed (HTTP ${res.status})`);
+        }
+        return;
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit-trail-${dealerId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err: any) {
+      alert(err?.message || "Failed to download audit trail");
+    } finally {
+      setAuditTrailLoading(false);
+    }
   };
 
   const handleAgreementAction = async (action: "initiate" | "refresh" | "reinitiate" | "retry") => {
@@ -656,35 +685,56 @@ export default function DealerReviewPage() {
   const handleApprove = async () => {
     setSubmitting(true);
     try {
-      const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/approve`, { method: "POST" });
-      const json = await res.json();
-      if (json.success) router.push("/admin/dealer-verification");
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/approve`, { method: "POST" });
+      let json: any = null;
+      try { json = await res.json(); } catch { /* non-JSON body */ }
+      if (!res.ok || !json?.success) {
+        alert(json?.message || `Approve failed (HTTP ${res.status})`);
+        return;
+      }
+      router.push("/admin/dealer-verification");
+    } catch (err: any) {
+      alert(err?.message || "Something went wrong while approving");
     } finally { setSubmitting(false); }
   };
 
   const handleCorrection = async () => {
     setSubmitting(true);
     try {
-      const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/request-correction`, {
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/request-correction`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ remarks }),
       });
-      const json = await res.json();
-      if (json.success) router.push("/admin/dealer-verification");
+      let json: any = null;
+      try { json = await res.json(); } catch { /* non-JSON body */ }
+      if (!res.ok || !json?.success) {
+        alert(json?.message || `Correction request failed (HTTP ${res.status})`);
+        return;
+      }
+      router.push("/admin/dealer-verification");
+    } catch (err: any) {
+      alert(err?.message || "Something went wrong while requesting correction");
     } finally { setSubmitting(false); }
   };
 
   const handleReject = async () => {
     setSubmitting(true);
     try {
-      const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}/reject`, {
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/reject`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ remarks }),
       });
-      const json = await res.json();
-      if (json.success) router.push("/admin/dealer-verification");
+      let json: any = null;
+      try { json = await res.json(); } catch { /* non-JSON body */ }
+      if (!res.ok || !json?.success) {
+        alert(json?.message || `Reject failed (HTTP ${res.status})`);
+        return;
+      }
+      router.push("/admin/dealer-verification");
+    } catch (err: any) {
+      alert(err?.message || "Something went wrong while rejecting");
     } finally { setSubmitting(false); }
   };
 
@@ -999,7 +1049,7 @@ export default function DealerReviewPage() {
                     {agreementActionLoading === "initiate" ? "Initiating…" : "Initiate Agreement"}
                   </button>
                 )}
-                {hasInitiatedAgreement && !isAgreementCompleted && (
+                {hasInitiatedAgreement && (
                   <button onClick={() => handleAgreementAction("refresh")}
                     disabled={agreementActionLoading !== null || isRejected}
                     className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
