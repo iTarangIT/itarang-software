@@ -26,7 +26,7 @@ module.exports = {
       name: "sandbox-worker",
       cwd: __dirname,
       script: "./node_modules/.bin/tsx",
-      args: "src/lib/queue/callWorker.ts",
+      args: "--env-file=.env src/lib/queue/callWorker.ts",
       instances: 1,
       exec_mode: "fork",
       env: {
