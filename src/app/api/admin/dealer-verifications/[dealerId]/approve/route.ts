@@ -19,8 +19,11 @@ function generateDealerCode() {
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, "0");
   const dd = String(now.getDate()).padStart(2, "0");
-  const random = Math.floor(100 + Math.random() * 900);
-
+  // Wider random suffix (6 hex = ~16M space) — the prior 3-digit space
+  // collided across approval retries on the same day.
+  const random = Math.floor(Math.random() * 0xffffff)
+    .toString(16)
+    .padStart(6, "0");
   return `ACC-ITARANG-${yyyy}${mm}${dd}-${random}`;
 }
 
@@ -403,10 +406,22 @@ export async function POST(_req: NextRequest, context: RouteContext) {
   } catch (error: any) {
     console.error("APPROVE DEALER ERROR:", error);
 
+    // Surface postgres error metadata so client-side diagnosis isn't blind.
+    // postgres-js attaches code/detail/constraint_name/column_name on the error.
+    const pgInfo = {
+      code: error?.code ?? null,
+      detail: error?.detail ?? null,
+      constraint: error?.constraint_name ?? null,
+      column: error?.column_name ?? null,
+      table: error?.table_name ?? null,
+      hint: error?.hint ?? null,
+    };
+
     return NextResponse.json(
       {
         success: false,
         message: error?.message || "Approve failed",
+        pg: pgInfo,
       },
       { status: 500 }
     );
