@@ -338,7 +338,7 @@ export default function StepAgreement() {
             onChange={(value) =>
               setField("agreement", "salesManager", {
                 ...(agreement.salesManager || {}),
-                name: value,
+                name: value.replace(/[0-9]/g, ""),
               })
             }
             placeholder="Sales Manager Name"
@@ -359,7 +359,7 @@ export default function StepAgreement() {
             onChange={(value) =>
               setField("agreement", "salesManager", {
                 ...(agreement.salesManager || {}),
-                mobile: value.replace(/[^0-9]/g, ""),
+                mobile: value.replace(/[^0-9]/g, "").slice(0, 10),
               })
             }
             placeholder="Sales Manager Contact Number"
@@ -383,7 +383,7 @@ export default function StepAgreement() {
               onChange={(value) =>
                 setField("agreement", "itarangSignatory1", {
                   ...(agreement.itarangSignatory1 || {}),
-                  name: value,
+                  name: value.replace(/[0-9]/g, ""),
                 })
               }
               placeholder="Signatory Name"
@@ -394,7 +394,7 @@ export default function StepAgreement() {
               onChange={(value) =>
                 setField("agreement", "itarangSignatory1", {
                   ...(agreement.itarangSignatory1 || {}),
-                  designation: value,
+                  designation: value.replace(/[0-9]/g, ""),
                 })
               }
               placeholder="Designation"
@@ -416,7 +416,7 @@ export default function StepAgreement() {
               onChange={(value) =>
                 setField("agreement", "itarangSignatory1", {
                   ...(agreement.itarangSignatory1 || {}),
-                  mobile: value.replace(/[^0-9]/g, ""),
+                  mobile: value.replace(/[^0-9]/g, "").slice(0, 10),
                 })
               }
               placeholder="Signatory Mobile"
@@ -468,7 +468,7 @@ export default function StepAgreement() {
                   onChange={(value) =>
                     setField("agreement", "itarangSignatory2", {
                       ...(agreement.itarangSignatory2 || {}),
-                      name: value,
+                      name: value.replace(/[0-9]/g, ""),
                     })
                   }
                   placeholder="Signatory Name"
@@ -479,7 +479,7 @@ export default function StepAgreement() {
                   onChange={(value) =>
                     setField("agreement", "itarangSignatory2", {
                       ...(agreement.itarangSignatory2 || {}),
-                      designation: value,
+                      designation: value.replace(/[0-9]/g, ""),
                     })
                   }
                   placeholder="Designation"
@@ -501,7 +501,7 @@ export default function StepAgreement() {
                   onChange={(value) =>
                     setField("agreement", "itarangSignatory2", {
                       ...(agreement.itarangSignatory2 || {}),
-                      mobile: value.replace(/[^0-9]/g, ""),
+                      mobile: value.replace(/[^0-9]/g, "").slice(0, 10),
                     })
                   }
                   placeholder="Signatory Mobile"
