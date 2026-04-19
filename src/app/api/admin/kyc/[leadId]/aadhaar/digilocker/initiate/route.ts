@@ -16,7 +16,7 @@ import {
 } from "@/lib/kyc/admin-workflow";
 
 const DIGILOCKER_CALLBACK_BASE =
-  process.env.NEXT_PUBLIC_APP_URL || "https://itarang.com";
+  process.env.NEXT_PUBLIC_APP_URL || "https://crm.itarang.com";
 
 export async function POST(
   req: NextRequest,

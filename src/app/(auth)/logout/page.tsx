@@ -1,15 +1,11 @@
-
 'use client';
 
 import { useEffect } from 'react';
-import { signOut } from './actions';
 
 export default function LogoutPage() {
     useEffect(() => {
-        const performLogout = async () => {
-            await signOut();
-        };
-        performLogout();
+        // Hand off to the fast cookie-clearing route.
+        window.location.href = '/api/auth/logout';
     }, []);
 
     return (

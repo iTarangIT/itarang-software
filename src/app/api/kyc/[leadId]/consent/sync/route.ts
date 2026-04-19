@@ -56,7 +56,20 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
             return NextResponse.json({ success: true, data: { synced: false, reason: 'no_record' } });
         }
 
+        // If already completed but missing signed PDF, try to backfill it
         if (!WAITING_STATUSES.includes(record.consent_status)) {
+            if (record.consent_status === 'esign_completed' && !record.signed_consent_url && record.esign_transaction_id) {
+                const stored = await fetchAndStoreSignedConsent(record.esign_transaction_id, leadId);
+                if (stored?.publicUrl) {
+                    await db.update(consentRecords)
+                        .set({ signed_consent_url: stored.publicUrl, updated_at: new Date() })
+                        .where(eq(consentRecords.id, record.id));
+                    return NextResponse.json({
+                        success: true,
+                        data: { synced: true, consent_status: record.consent_status, changed: false, pdf_backfilled: true },
+                    });
+                }
+            }
             return NextResponse.json({ success: true, data: { synced: false, reason: 'not_waiting', consent_status: record.consent_status } });
         }
 

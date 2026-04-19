@@ -47,7 +47,7 @@ export type AppUser = {
   dealer_id: string | null;
 };
 
-const ADMIN_ROLES = new Set(["admin", "ceo", "business_head", "sales_head"]);
+const ADMIN_ROLES = new Set(["admin", "ceo", "business_head", "sales_head", "sales_manager", "sales_executive"]);
 const DEALER_ROLES = new Set(["dealer"]);
 const CONSENT_COMPLETE_STATUSES = new Set([
   "verified",

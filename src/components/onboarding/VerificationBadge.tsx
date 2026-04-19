@@ -14,7 +14,7 @@ export default function VerificationBadge({ status }: { status: VerificationStat
     idle: "Not Uploaded",
     uploading: "Uploading",
     processing: "Processing",
-    verified: "Verified",
+    verified: "Uploaded",
     rejected: "Rejected",
     reupload: "Needs Re-upload",
   };

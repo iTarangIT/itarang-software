@@ -1,0 +1,77 @@
+name: Deploy Sandbox to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-sandbox
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH deploy to Hostinger VPS (sandbox)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          command_timeout: 25m
+          script_stop: true
+          script: |
+            set -eo pipefail
+            APP_DIR=/home/itarang-sandbox/htdocs/sandbox.itarang.com
+            cd "$APP_DIR"
+
+            echo "::group::Pull latest main"
+            git fetch origin main
+            git reset --hard origin/main
+            git log -1 --oneline
+            echo "::endgroup::"
+
+            echo "::group::Write .env from SANDBOX_ENV_FILE_B64"
+            umask 077
+            echo "${{ secrets.SANDBOX_ENV_FILE_B64 }}" | base64 -d > .env
+            chmod 600 .env
+            echo "Wrote .env ($(wc -l < .env) lines, $(wc -c < .env) bytes)"
+            echo "::endgroup::"
+
+            echo "::group::Install deps (incl dev for build)"
+            npm ci --no-audit --no-fund --include=dev
+            echo "::endgroup::"
+
+            echo "::group::Build (next build)"
+            mkdir -p logs
+            npm run build
+            echo "::endgroup::"
+
+            echo "::group::Load env and start/reload pm2"
+            if pm2 describe sandbox-web > /dev/null 2>&1; then
+              pm2 reload ecosystem.sandbox.config.js --update-env
+            else
+              pm2 start ecosystem.sandbox.config.js
+              pm2 save
+            fi
+            pm2 ls
+            echo "::endgroup::"
+
+            echo "::group::Health check 127.0.0.1:3003"
+            sleep 8
+            HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3003 || echo 000)
+            echo "HTTP $HTTP from http://127.0.0.1:3003"
+            if echo "$HTTP" | grep -qE "^(200|301|302|307)$"; then
+              echo "✅ Sandbox healthy"
+            else
+              echo "❌ Sandbox failed health check (HTTP $HTTP)"
+              echo '--- sandbox-web logs ---'
+              pm2 logs sandbox-web --lines 40 --nostream || true
+              echo '--- sandbox-worker logs ---'
+              pm2 logs sandbox-worker --lines 20 --nostream || true
+              exit 1
+            fi
+            echo "::endgroup::"

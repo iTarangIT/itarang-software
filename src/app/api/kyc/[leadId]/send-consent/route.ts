@@ -3,24 +3,41 @@ export const maxDuration = 30;
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { consentRecords, leads, users, personalDetails } from "@/lib/db/schema";
+import { consentRecords, leads, users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
 import { createDigioAgreement } from "@/lib/digio/service";
-import { uploadFileToStorage } from "@/lib/storage";
-import puppeteer from "puppeteer";
-
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 type RouteContext = {
   params: Promise<{ leadId: string }>;
 };
 
+const CHROMIUM_REMOTE_PACK =
+  "https://github.com/Sparticuz/chromium/releases/download/v147.0.0/chromium-v147.0.0-pack.x64.tar";
+
 async function renderPdfFromHtml(html: string): Promise<Buffer> {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  let browser;
   try {
+    if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+      const [{ default: puppeteerCore }, { default: chromium }] = await Promise.all([
+        import("puppeteer-core"),
+        import("@sparticuz/chromium-min"),
+      ]);
+      browser = await puppeteerCore.launch({
+        args: chromium.args,
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath(CHROMIUM_REMOTE_PACK),
+        headless: true,
+      });
+    } else {
+      const puppeteerFull = await import("puppeteer").then(m => m.default);
+      browser = await puppeteerFull.launch({
+        headless: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      });
+    }
+
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "networkidle0" });
     const pdf = await page.pdf({
@@ -30,18 +47,16 @@ async function renderPdfFromHtml(html: string): Promise<Buffer> {
     });
     return Buffer.from(pdf);
   } finally {
-    await browser.close();
+    if (browser) await browser.close();
   }
 }
 
 export async function POST(req: NextRequest, { params }: RouteContext) {
   try {
-    const user = await requireRole(["dealer"]);
+    const user = await requireRole(["dealer", "admin", "ceo", "sales_head"]);
     const { leadId } = await params;
     const body = await req.json().catch(() => ({}));
-    const channel = String(body?.channel || "whatsapp").toLowerCase();
-    const consentFor = String(body?.consent_for || "customer").toLowerCase();
-    const dbConsentFor = consentFor === "customer" ? "primary" : consentFor;
+    const channel = String(body?.channel || "sms").toLowerCase();
 
     if (!["sms", "whatsapp"].includes(channel)) {
       return NextResponse.json(
@@ -61,37 +76,9 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       );
     }
 
-    // For borrower consent, fetch personal_details (borrower-specific data)
-    let borrowerData: any = null;
-    if (consentFor === "borrower") {
-      const personalRows = await db.select()
-        .from(personalDetails)
-        .where(eq(personalDetails.lead_id, leadId))
-        .limit(1);
-      borrowerData = personalRows[0] || null;
-    }
-
-    // Resolve person data based on consent type
-    const customerPhone = lead.phone;
-    const customerName = consentFor === "borrower"
-      ? (lead.full_name || lead.owner_name || "Borrower")
-      : (lead.full_name || lead.owner_name || "Customer");
-    const personFather = consentFor === "borrower"
-      ? (borrowerData?.father_husband_name || lead.father_or_husband_name || "")
-      : (lead.father_or_husband_name || "");
-    const personAddress = consentFor === "borrower"
-      ? (borrowerData?.local_address || lead.current_address || "")
-      : (lead.current_address || "");
-    const personPermanentAddress = lead.permanent_address || personAddress;
-    const personDob = consentFor === "borrower"
-      ? (borrowerData?.dob || lead.dob)
-      : lead.dob;
-    const personAadhaar = consentFor === "borrower"
-      ? (borrowerData?.aadhaar_no || "")
-      : "";
-    const personPan = consentFor === "borrower"
-      ? (borrowerData?.pan_no || "")
-      : "";
+    const customerPhone = lead.phone || lead.owner_contact;
+    const customerName = lead.full_name || lead.owner_name || "Customer";
+    const customerEmail = lead.owner_email || "";
 
     if (!customerPhone) {
       return NextResponse.json(
@@ -117,21 +104,20 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
 
     // Format DOB
     let dobFormatted = "";
-    if (personDob) {
-      const d = new Date(personDob);
+    if (lead.dob) {
+      const d = new Date(lead.dob);
       dobFormatted = `${d.getDate().toString().padStart(2, "0")}/${(d.getMonth() + 1).toString().padStart(2, "0")}/${d.getFullYear()}`;
     }
 
     // 1. Generate consent PDF
     const html = generateConsentHtml({
       customerName,
-      fatherOrHusbandName: personFather,
+      fatherOrHusbandName: lead.father_or_husband_name || "",
       dob: dobFormatted,
       phone: customerPhone,
-      currentAddress: personAddress,
-      permanentAddress: personPermanentAddress,
-      aadhaarMasked: personAadhaar,
-      panNumber: personPan,
+      customerEmail,
+      currentAddress: lead.current_address || "",
+      permanentAddress: lead.permanent_address || lead.current_address || "",
       productName: lead.asset_model || "",
       productCategory: lead.asset_model || "",
       paymentMethod: lead.payment_method || "",
@@ -145,26 +131,31 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     const pdfBuffer = await renderPdfFromHtml(html);
     const pdfBase64 = pdfBuffer.toString("base64");
 
-    // Persist the generated (unsigned) PDF to our own storage so
-    // consent_records.generated_pdf_url is populated for the digital flow too.
-    // Failure here should not block the Digio handoff — log and continue.
+    // 1b. Store unsigned PDF in Supabase so admin can see it even before signing
     let generatedPdfUrl: string | null = null;
     try {
-      const uploadResult = await uploadFileToStorage({
-        fileBuffer: pdfBuffer,
-        fileName: `generated-${Date.now()}.pdf`,
-        folder: `kyc/${leadId}/consent`,
-        bucket: process.env.CONSENT_STORAGE_BUCKET || "documents",
-        contentType: "application/pdf",
-        upsert: true,
-      });
-      generatedPdfUrl = uploadResult.url;
+      const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+      const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+      if (supabaseUrl && serviceRoleKey) {
+        const supabase = createSupabaseClient(supabaseUrl, serviceRoleKey);
+        const bucket = (process.env.CONSENT_STORAGE_BUCKET || "documents").trim();
+        const storagePath = `kyc/${leadId}/consent/unsigned-${Date.now()}.pdf`;
+        const { error: upErr } = await supabase.storage
+          .from(bucket)
+          .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
+        if (!upErr) {
+          const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+          generatedPdfUrl = urlData?.publicUrl || null;
+        } else {
+          console.warn("[Send Consent] Failed to store unsigned PDF:", upErr.message);
+        }
+      }
     } catch (e) {
-      console.warn("[Send Consent] Failed to persist generated PDF to storage:", e);
+      console.warn("[Send Consent] Unsigned PDF storage error:", e);
     }
 
     // 2. Upload to Digio for Aadhaar eSign
-    // Clean phone number — Digio needs 10-digit mobile
+    // Digio needs 10-digit mobile number
     const cleanPhone = customerPhone.replace(/\D/g, "").slice(-10);
 
     const digioResponse = await createDigioAgreement({
@@ -178,7 +169,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
           sign_type: "aadhaar",
         },
       ],
-      expireInDays: 1, // 24 hours as per BRD
+      expireInDays: 1,
       sequential: false,
     });
 
@@ -186,51 +177,41 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
 
     // Extract Digio details
     const digioDocumentId = digioResponse?.id || digioResponse?.document_id || null;
-    const digioRequestId = digioResponse?.request_id || digioResponse?.requestId || null;
     const signingParties = digioResponse?.signing_parties || [];
     const customerSigningUrl = signingParties[0]?.authentication_url || signingParties[0]?.authenticationUrl || null;
 
     if (!digioDocumentId) {
       console.error("[Send Consent] Digio did not return document ID:", digioResponse);
       return NextResponse.json(
-        { success: false, error: { message: "Failed to create consent document with eSign provider" } },
+        { success: false, error: { message: "Failed to create consent document with eSign provider. Check DigiO credentials." } },
         { status: 500 }
       );
     }
 
     // 3. Insert consent record
-    const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-
     await db.insert(consentRecords).values({
       id: consentId,
       lead_id: leadId,
-      consent_for: dbConsentFor,
+      consent_for: "primary",
       consent_type: "digital",
       consent_status: "link_sent",
       consent_delivery_channel: channel,
       consent_link_url: customerSigningUrl,
       consent_link_sent_at: now,
-      consent_link_expires_at: expiresAt,
-      sign_method: "aadhaar_esign",
-      esign_provider: "digio",
       esign_transaction_id: digioDocumentId,
-      esign_certificate_id: digioRequestId,
       generated_pdf_url: generatedPdfUrl,
-      consent_attempt_count: 1,
       created_at: now,
       updated_at: now,
     });
 
     // 4. Update lead consent status
-    const leadUpdate = consentFor === "borrower"
-      ? { borrower_consent_status: "link_sent", updated_at: now }
-      : { consent_status: "link_sent", updated_at: now };
     await db.update(leads)
-      .set(leadUpdate)
+      .set({ consent_status: "link_sent", updated_at: now })
       .where(eq(leads.id, leadId));
 
     return NextResponse.json({
       success: true,
+      hasDigioIntegration: true,
       data: {
         consentId,
         leadId,
@@ -239,8 +220,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         customerSigningUrl,
         digioDocumentId,
         sentAt: now.toISOString(),
-        expiresAt: expiresAt.toISOString(),
-        message: `Consent form sent to customer via Digio. Signing link delivered to ${cleanPhone}.`,
+        message: `Consent form sent to customer via DigiO. Signing link delivered to ${cleanPhone}.`,
       },
     });
   } catch (error: any) {

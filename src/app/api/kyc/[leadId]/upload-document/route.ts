@@ -1,120 +1,105 @@
-export const runtime = "nodejs";
+import { NextRequest, NextResponse } from 'next/server';
+import { db } from '@/lib/db';
+import { kycDocuments } from '@/lib/db/schema';
+import { and, eq } from 'drizzle-orm';
+import { createClient } from '@/lib/supabase/server';
+import {
+    buildDealerEditLockMessage,
+    isDealerKycEditsLocked,
+} from '@/lib/kyc/admin-workflow';
 
-import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { kycDocuments, leads } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
-import { requireRole } from "@/lib/auth-utils";
-import { uploadFileToStorage } from "@/lib/storage"; // your storage helper
+export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
+    try {
+        const { leadId } = await params;
 
-type RouteContext = {
-  params: Promise<{ leadId: string }>;
-};
+        if (await isDealerKycEditsLocked(leadId)) {
+            return NextResponse.json(
+                { success: false, error: { message: buildDealerEditLockMessage() } },
+                { status: 409 }
+            );
+        }
 
-export async function POST(req: NextRequest, { params }: RouteContext) {
-  try {
-    const user = await requireRole(["dealer"]);
-    const { leadId } = await params;
+        const formData = await req.formData();
+        const file = formData.get('file') as File;
+        const docType = (formData.get('docType') || formData.get('documentType')) as string;
 
-    if (!leadId) {
-      return NextResponse.json(
-        { success: false, error: { message: "Lead id missing" } },
-        { status: 400 }
-      );
+        if (!file || !docType) {
+            return NextResponse.json(
+                { success: false, error: { message: 'File and docType are required' } },
+                { status: 400 }
+            );
+        }
+
+        if (file.size > 5 * 1024 * 1024) {
+            return NextResponse.json(
+                { success: false, error: { message: 'File size must be less than 5MB' } },
+                { status: 400 }
+            );
+        }
+
+        // Upload to Supabase Storage
+        const supabase = await createClient();
+        const ext = file.name.split('.').pop() || 'bin';
+        const fileName = `kyc/${leadId}/${docType}_${Date.now()}.${ext}`;
+        const buffer = Buffer.from(await file.arrayBuffer());
+
+        const { error: uploadError } = await supabase.storage
+            .from('documents')
+            .upload(fileName, buffer, { contentType: file.type, upsert: true });
+
+        if (uploadError) {
+            return NextResponse.json(
+                { success: false, error: { message: `Upload failed: ${uploadError.message}` } },
+                { status: 500 }
+            );
+        }
+
+        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
+        const fileUrl = urlData.publicUrl;
+
+        // Upsert document record — replace any prior upload of the same doc_type
+        const existing = await db
+            .select({ id: kycDocuments.id })
+            .from(kycDocuments)
+            .where(and(eq(kycDocuments.lead_id, leadId), eq(kycDocuments.doc_type, docType)))
+            .limit(1);
+
+        const now = new Date();
+
+        if (existing.length > 0) {
+            await db
+                .update(kycDocuments)
+                .set({
+                    file_url: fileUrl,
+                    file_name: file.name,
+                    file_size: file.size,
+                    verification_status: 'pending',
+                    failed_reason: null,
+                    updated_at: now,
+                })
+                .where(eq(kycDocuments.id, existing[0].id));
+        } else {
+            const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+            const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+            await db.insert(kycDocuments).values({
+                id: `KYCDOC-${dateStr}-${seq}`,
+                lead_id: leadId,
+                doc_type: docType,
+                file_url: fileUrl,
+                file_name: file.name,
+                file_size: file.size,
+                verification_status: 'pending',
+            });
+        }
+
+        return NextResponse.json({
+            success: true,
+            fileUrl,
+            file_url: fileUrl,
+        });
+    } catch (error) {
+        console.error('[KYC Upload] Error:', error);
+        const message = error instanceof Error ? error.message : 'Server error';
+        return NextResponse.json({ success: false, error: { message } }, { status: 500 });
     }
-
-    const formData = await req.formData();
-    const file = formData.get("file") as File;
-    const docType = String(formData.get("documentType") || formData.get("docType"));
-    const docFor = String(formData.get("docFor") || "customer");
-
-    if (!file || !docType) {
-      return NextResponse.json(
-        { success: false, error: { message: "File and documentType are required" } },
-        { status: 400 }
-      );
-    }
-
-    // ---------------------------
-    // Upload file to storage
-    // ---------------------------
-    const buffer = Buffer.from(await file.arrayBuffer());
-
-    const uploadResult = await uploadFileToStorage({
-      fileBuffer: buffer,
-      fileName: file.name,
-      folder: `kyc/${leadId}`,
-      contentType: file.type || "application/octet-stream",
-    });
-
-    const fileUrl = uploadResult.url;
-
-    // ---------------------------
-    // Upsert document row
-    // ---------------------------
-    const existingRows = await db
-      .select()
-      .from(kycDocuments)
-      .where(eq(kycDocuments.lead_id, leadId));
-
-    const existingDoc = existingRows.find((d) => d.doc_type === docType && d.doc_for === docFor);
-
-    const now = new Date();
-
-    if (existingDoc) {
-      await db
-        .update(kycDocuments)
-        .set({
-          file_url: fileUrl,
-          file_name: file.name,
-          file_size: file.size,
-          file_type: file.type || null,
-          doc_status: "uploaded",
-          verification_status: "pending",
-          failed_reason: null,
-          rejection_reason: null,
-          uploaded_at: now,
-          updated_at: now,
-        })
-        .where(eq(kycDocuments.id, existingDoc.id));
-    } else {
-      const dateStr = now.toISOString().slice(0, 10).replace(/-/g, "");
-      const seq = Math.floor(Math.random() * 10000)
-        .toString()
-        .padStart(4, "0");
-
-      const docId = `KYCDOC-${dateStr}-${seq}`;
-
-      await db.insert(kycDocuments).values({
-        id: docId,
-        lead_id: leadId,
-        doc_type: docType,
-        doc_for: docFor,
-        file_url: fileUrl,
-        file_name: file.name,
-        file_size: file.size,
-        file_type: file.type || null,
-        doc_status: "uploaded",
-        verification_status: "pending",
-        uploaded_at: now,
-        updated_at: now,
-      });
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: "Document uploaded successfully",
-      fileUrl,
-    });
-  } catch (error) {
-    console.error("[Upload Document] Error:", error);
-
-    const message =
-      error instanceof Error ? error.message : "Failed to upload document";
-
-    return NextResponse.json(
-      { success: false, error: { message } },
-      { status: 500 }
-    );
-  }
 }

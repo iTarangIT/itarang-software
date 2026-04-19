@@ -3,7 +3,7 @@
  */
 
 import { db } from "@/lib/db";
-import { scraperRuns } from "@/lib/db/schema";
+import { scrapeRuns } from "@/lib/db/schema";
 import {
   withErrorHandler,
   successResponse,
@@ -24,8 +24,8 @@ export const GET = withErrorHandler(async (req: Request) => {
 
   const run = await db
     .select()
-    .from(scraperRuns)
-    .where(eq(scraperRuns.id, runId))
+    .from(scrapeRuns)
+    .where(eq(scrapeRuns.id, runId))
     .limit(1)
     .then((res) => res[0]);
 

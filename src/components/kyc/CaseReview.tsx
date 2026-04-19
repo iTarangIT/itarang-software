@@ -15,6 +15,7 @@ import SupportingDocsPanel, {
 import CoBorrowerPanel, {
   type CoBorrowerData,
 } from "./step3/CoBorrowerPanel";
+import RequestCoBorrowerModal from "./step3/RequestCoBorrowerModal";
 
 interface CrossMatchResult {
   overallPass: boolean;
@@ -77,6 +78,7 @@ interface VerificationCard {
   adminActionNotes: string | null;
   submittedAt: string | null;
   completedAt: string | null;
+  apiRequest: Record<string, unknown> | null;
   apiResponse: Record<string, unknown> | null;
 }
 
@@ -191,9 +193,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<"verifications" | "documents">("verifications");
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
-  const [decision, setDecision] = useState<
-    "approved" | "rejected" | "dealer_action_required" | ""
-  >("");
+  const [decision, setDecision] = useState<"approved" | "rejected" | "">("");
   const [decisionNotes, setDecisionNotes] = useState("");
   const [rejectionReason, setRejectionReason] = useState("");
   const [decisionLoading, setDecisionLoading] = useState(false);
@@ -202,6 +202,10 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const [consentActionLoading, setConsentActionLoading] = useState<string | null>(null);
   const [consentActionError, setConsentActionError] = useState<string | null>(null);
   const [pendingRejectId, setPendingRejectId] = useState<string | null>(null);
+  const [fetchingPdfId, setFetchingPdfId] = useState<string | null>(null);
+  const [consentPdfOverrides, setConsentPdfOverrides] = useState<Record<string, string>>({});
+  const [consentExpanded, setConsentExpanded] = useState(false);
+  const [showCoBorrowerModal, setShowCoBorrowerModal] = useState(false);
 
   const handleConsentVerify = useCallback(
     async (c: Consent, action: "approve" | "reject") => {
@@ -246,11 +250,37 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
     [leadId],
   );
 
+  const handleFetchPdf = useCallback(async (c: Consent) => {
+    setFetchingPdfId(c.id);
+    try {
+      const res = await fetch(`/api/admin/kyc/${leadId}/consent/${c.id}/fetch-pdf`, { method: "POST" });
+      const json = await res.json();
+      if (json.success && json.pdfUrl) {
+        setConsentPdfOverrides(prev => ({ ...prev, [c.id]: json.pdfUrl }));
+        // Open PDF viewer immediately
+        setViewingConsent({ ...c, signedConsentUrl: json.pdfUrl });
+      } else {
+        setConsentActionError(json.error?.message || "Failed to fetch PDF from DigiO");
+      }
+    } catch {
+      setConsentActionError("Failed to fetch PDF");
+    } finally {
+      setFetchingPdfId(null);
+    }
+  }, [leadId]);
+
   const handleConsentClick = useCallback(async (c: Consent) => {
     if (c.consentFor !== "primary") return;
-    const pdfUrl = c.signedConsentUrl ?? c.generatedPdfUrl;
-    if (!pdfUrl) return;
-    setViewingConsent(c);
+    const pdfUrl = consentPdfOverrides[c.id] ?? c.signedConsentUrl ?? c.generatedPdfUrl;
+    if (!pdfUrl) {
+      // Try fetching from DigiO
+      if (c.consentStatus === "esign_completed" || c.consentStatus === "verified" || c.consentStatus === "admin_review_pending") {
+        handleFetchPdf(c);
+        return;
+      }
+      return;
+    }
+    setViewingConsent({ ...c, signedConsentUrl: pdfUrl });
     if (c.adminViewedAt) return;
     try {
       const res = await fetch(`/api/admin/kyc/${leadId}/consent/${c.id}/view`, {
@@ -301,6 +331,18 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   }, [leadId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Auto-fetch signed PDF from DigiO when consent is esign_completed but PDF is missing
+  useEffect(() => {
+    if (!data?.consent) return;
+    for (const c of data.consent) {
+      const pdfUrl = consentPdfOverrides[c.id] ?? c.signedConsentUrl ?? c.generatedPdfUrl;
+      if (!pdfUrl && c.consentFor === "primary" && c.consentStatus === "esign_completed" && !fetchingPdfId) {
+        handleFetchPdf(c);
+        break;
+      }
+    }
+  }, [data?.consent, consentPdfOverrides, fetchingPdfId, handleFetchPdf]);
 
   const getVerification = (type: string) =>
     data?.verificationCards.find((v) => v.type === type) || null;
@@ -557,7 +599,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
       </div>
 
       {/* Lead Info + Metadata Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
         {/* Lead Info */}
         <div className="lg:col-span-2 bg-white border border-gray-100 rounded-2xl p-6 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex items-center gap-2 mb-5">
@@ -670,203 +712,181 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
             </div>
           )}
 
-          {/* Consent */}
-          {consent.length > 0 && (
-            <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-50 to-blue-100 flex items-center justify-center ring-1 ring-blue-100">
-                    <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
-                  </div>
-                  <p className="text-sm font-bold text-gray-900">Consent</p>
-                </div>
-                <span className="text-[10px] font-semibold text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">{consent.length} record{consent.length > 1 ? "s" : ""}</span>
-              </div>
-              <div className="space-y-2">
-                {consent.map((c) => {
-                  const pdfUrl = c.signedConsentUrl ?? c.generatedPdfUrl;
-                  const isPrimary = c.consentFor === "primary";
-                  const isViewable = isPrimary && !!pdfUrl;
-                  const isVerified = c.consentStatus === "verified" || c.consentStatus === "digitally_signed";
-                  const isRejected = c.consentStatus === "rejected";
-                  const isViewed = !!c.adminViewedAt && !isVerified && !isRejected;
-                  const canDecide = isViewable && !isVerified && !isRejected;
-                  const isConfirmingReject = pendingRejectId === c.id;
-                  const isApprovingThis = consentActionLoading === `${c.id}:approve`;
-                  const isRejectingThis = consentActionLoading === `${c.id}:reject`;
-
-                  const statusConfig = isVerified
-                    ? { dot: "bg-green-500", badge: "bg-green-50 text-green-700 ring-green-600/20", label: "Verified" }
-                    : isRejected
-                      ? { dot: "bg-red-500", badge: "bg-red-50 text-red-700 ring-red-600/20", label: "Rejected" }
-                      : isViewed
-                        ? { dot: "bg-blue-500", badge: "bg-blue-50 text-blue-700 ring-blue-600/20", label: "Under Review" }
-                        : { dot: "bg-amber-500", badge: "bg-amber-50 text-amber-800 ring-amber-600/20", label: c.consentStatus.replace(/_/g, " ") };
-
-                  const cardBorder = isVerified
-                    ? "border-green-200 bg-green-50/30"
-                    : isRejected
-                      ? "border-red-200 bg-red-50/30"
-                      : "border-gray-200 bg-white";
-
-                  const signedRelative = formatRelativeTime(c.signedAt);
-                  const verifiedRelative = formatRelativeTime(c.verifiedAt);
-                  const viewedRelative = formatRelativeTime(c.adminViewedAt);
-
-                  const metaParts: string[] = [];
-                  if (c.consentType) metaParts.push(prettyConsentType(c.consentType));
-                  if (signedRelative) metaParts.push(`Signed ${signedRelative}`);
-                  if (!isVerified && !isRejected && viewedRelative) metaParts.push(`Viewed ${viewedRelative}`);
-
-                  return (
-                    <div
-                      key={c.id}
-                      className={`border rounded-lg p-3 transition-colors ${cardBorder}`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-3 min-w-0 flex-1">
-                          <div className="mt-0.5 flex-shrink-0 w-8 h-8 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center">
-                            <svg className="w-4 h-4 text-gray-600" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                              <path fillRule="evenodd" d="M4 4a2 2 0 012-2h5.586A2 2 0 0113 2.586L15.414 5A2 2 0 0116 6.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm6 2a.75.75 0 00-1.5 0v3.25H5.25a.75.75 0 000 1.5H8.5V14a.75.75 0 001.5 0v-3.25h3.25a.75.75 0 000-1.5H10V6z" clipRule="evenodd" />
-                            </svg>
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="font-medium text-sm text-gray-900 truncate">
-                                {prettyConsentFor(c.consentFor)}
-                              </p>
-                              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium ring-1 ring-inset capitalize ${statusConfig.badge}`}>
-                                <span className={`w-1.5 h-1.5 rounded-full ${statusConfig.dot}`} />
-                                {statusConfig.label}
-                              </span>
-                            </div>
-                            {metaParts.length > 0 && (
-                              <p className="mt-0.5 text-[11px] text-gray-500 truncate">
-                                {metaParts.join(" · ")}
-                              </p>
-                            )}
-                            {isVerified && verifiedRelative && (
-                              <p className="mt-0.5 text-[11px] text-green-700">
-                                Approved by admin {verifiedRelative}
-                              </p>
-                            )}
-                            {isRejected && verifiedRelative && (
-                              <p className="mt-0.5 text-[11px] text-red-700">
-                                Rejected by admin {verifiedRelative}
-                              </p>
-                            )}
-                            {isPrimary && !pdfUrl && (
-                              <p className="mt-0.5 text-[11px] text-gray-400 italic">
-                                PDF not yet generated
-                              </p>
-                            )}
-                          </div>
-                        </div>
+          {/* Consent — Collapsible */}
+          {consent.length > 0 && (() => {
+            const verifiedCount = consent.filter((c) => c.consentStatus === "verified" || c.consentStatus === "digitally_signed").length;
+            const pendingCount = consent.length - verifiedCount;
+            return (
+              <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+                {/* Clickable Header */}
+                <button
+                  type="button"
+                  onClick={() => setConsentExpanded(!consentExpanded)}
+                  className="w-full flex items-center justify-between p-4 hover:bg-gray-50/50 transition-colors"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-50 to-blue-100 flex items-center justify-center ring-1 ring-blue-100">
+                      <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
+                    </div>
+                    <div className="text-left">
+                      <p className="text-sm font-bold text-gray-900">Consent</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {verifiedCount > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-green-700">
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                            {verifiedCount} verified
+                          </span>
+                        )}
+                        {pendingCount > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                            {pendingCount} pending
+                          </span>
+                        )}
                       </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-semibold text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">{consent.length}</span>
+                    <svg className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${consentExpanded ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </button>
 
-                      {(isViewable || canDecide) && (
-                        <div className="mt-3 pt-3 border-t border-gray-100 flex items-center gap-2 flex-wrap">
-                          {isViewable && (
-                            <button
-                              type="button"
-                              onClick={() => handleConsentClick(c)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-                            >
-                              <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
-                                <path fillRule="evenodd" d="M.664 10.59a1.651 1.651 0 010-1.186A10.004 10.004 0 0110 3c4.257 0 7.893 2.66 9.336 6.41.147.381.147.804 0 1.186A10.004 10.004 0 0110 17c-4.257 0-7.893-2.66-9.336-6.41zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+                {/* Expandable Content */}
+                <div className={`transition-all duration-200 ease-in-out overflow-hidden ${consentExpanded ? "max-h-[2000px] opacity-100" : "max-h-0 opacity-0"}`}>
+                  <div className="px-4 pb-4 space-y-2 border-t border-gray-100">
+                    {consent.map((c) => {
+                      const pdfUrl = consentPdfOverrides[c.id] ?? c.signedConsentUrl ?? c.generatedPdfUrl;
+                      const isPrimary = c.consentFor === "primary";
+                      const isViewable = isPrimary && !!pdfUrl;
+                      const isVerified = c.consentStatus === "verified" || c.consentStatus === "digitally_signed";
+                      const isRejected = c.consentStatus === "rejected";
+                      const isViewed = !!c.adminViewedAt && !isVerified && !isRejected;
+                      const isEsignCompleted = c.consentStatus === "esign_completed" || c.consentStatus === "admin_review_pending";
+                      const canDecide = isPrimary && !isVerified && !isRejected && (isViewable || isEsignCompleted);
+                      const isConfirmingReject = pendingRejectId === c.id;
+                      const isApprovingThis = consentActionLoading === `${c.id}:approve`;
+                      const isRejectingThis = consentActionLoading === `${c.id}:reject`;
+
+                      const statusCfg = isVerified
+                        ? { dot: "bg-green-500", badge: "bg-green-50 text-green-700 ring-green-600/20", label: "Verified" }
+                        : isRejected
+                          ? { dot: "bg-red-500", badge: "bg-red-50 text-red-700 ring-red-600/20", label: "Rejected" }
+                          : isViewed
+                            ? { dot: "bg-blue-500", badge: "bg-blue-50 text-blue-700 ring-blue-600/20", label: "Under Review" }
+                            : { dot: "bg-amber-500", badge: "bg-amber-50 text-amber-800 ring-amber-600/20", label: c.consentStatus.replace(/_/g, " ") };
+
+                      const cardBorder = isVerified
+                        ? "border-green-200 bg-green-50/30"
+                        : isRejected
+                          ? "border-red-200 bg-red-50/30"
+                          : "border-gray-100 bg-white";
+
+                      const signedRelative = formatRelativeTime(c.signedAt);
+                      const verifiedRelative = formatRelativeTime(c.verifiedAt);
+                      const viewedRelative = formatRelativeTime(c.adminViewedAt);
+
+                      const metaParts: string[] = [];
+                      if (c.consentType) metaParts.push(prettyConsentType(c.consentType));
+                      if (signedRelative) metaParts.push(`Signed ${signedRelative}`);
+                      if (!isVerified && !isRejected && viewedRelative) metaParts.push(`Viewed ${viewedRelative}`);
+
+                      return (
+                        <div key={c.id} className={`border rounded-xl p-3 transition-colors ${cardBorder}`}>
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="flex-shrink-0 w-7 h-7 rounded-md bg-gray-50 border border-gray-200 flex items-center justify-center">
+                              <svg className="w-3.5 h-3.5 text-gray-500" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M4 4a2 2 0 012-2h5.586A2 2 0 0113 2.586L15.414 5A2 2 0 0116 6.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
                               </svg>
-                              View PDF
-                            </button>
-                          )}
-                          {canDecide && (
-                            <>
-                              <button
-                                type="button"
-                                disabled={consentActionLoading !== null}
-                                onClick={() => {
-                                  setPendingRejectId(null);
-                                  handleConsentVerify(c, "approve");
-                                }}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-green-600 text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                              >
-                                {isApprovingThis ? (
-                                  <>
-                                    <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                                      <circle className="opacity-25" cx="10" cy="10" r="8" stroke="currentColor" strokeWidth="3" />
-                                      <path className="opacity-75" fill="currentColor" d="M2 10a8 8 0 018-8v3a5 5 0 00-5 5H2z" />
-                                    </svg>
-                                    Approving…
-                                  </>
-                                ) : (
-                                  <>
-                                    <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                      <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
-                                    </svg>
-                                    Approve
-                                  </>
-                                )}
-                              </button>
-                              {isConfirmingReject ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    disabled={consentActionLoading !== null}
-                                    onClick={() => handleConsentVerify(c, "reject")}
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-red-700 text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                  >
-                                    {isRejectingThis ? (
-                                      <>
-                                        <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                                          <circle className="opacity-25" cx="10" cy="10" r="8" stroke="currentColor" strokeWidth="3" />
-                                          <path className="opacity-75" fill="currentColor" d="M2 10a8 8 0 018-8v3a5 5 0 00-5 5H2z" />
-                                        </svg>
-                                        Rejecting…
-                                      </>
-                                    ) : (
-                                      <>Confirm Reject</>
-                                    )}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={consentActionLoading !== null}
-                                    onClick={() => setPendingRejectId(null)}
-                                    className="px-2 py-1.5 text-xs font-medium text-gray-600 hover:text-gray-900 transition-colors"
-                                  >
-                                    Cancel
-                                  </button>
-                                </>
-                              ) : (
-                                <button
-                                  type="button"
-                                  disabled={consentActionLoading !== null}
-                                  onClick={() => setPendingRejectId(c.id)}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-red-300 text-red-700 bg-white hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                >
-                                  <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                    <path fillRule="evenodd" d="M4.28 3.22a.75.75 0 00-1.06 1.06L8.94 10l-5.72 5.72a.75.75 0 101.06 1.06L10 11.06l5.72 5.72a.75.75 0 101.06-1.06L11.06 10l5.72-5.72a.75.75 0 00-1.06-1.06L10 8.94 4.28 3.22z" clipRule="evenodd" />
-                                  </svg>
-                                  Reject
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <p className="font-medium text-[13px] text-gray-900 truncate">
+                                  {prettyConsentFor(c.consentFor)}
+                                </p>
+                                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ring-1 ring-inset capitalize ${statusCfg.badge}`}>
+                                  <span className={`w-1 h-1 rounded-full ${statusCfg.dot}`} />
+                                  {statusCfg.label}
+                                </span>
+                              </div>
+                              {metaParts.length > 0 && (
+                                <p className="text-[10px] text-gray-500 truncate">{metaParts.join(" · ")}</p>
+                              )}
+                              {isVerified && verifiedRelative && (
+                                <p className="text-[10px] text-green-700">Approved by admin {verifiedRelative}</p>
+                              )}
+                              {isRejected && verifiedRelative && (
+                                <p className="text-[10px] text-red-700">Rejected by admin {verifiedRelative}</p>
+                              )}
+                              {isPrimary && !pdfUrl && isEsignCompleted && (
+                                <button type="button"
+                                  disabled={fetchingPdfId === c.id}
+                                  onClick={(e) => { e.stopPropagation(); handleFetchPdf(c); }}
+                                  className="text-[10px] text-teal-600 hover:text-teal-800 italic underline cursor-pointer disabled:opacity-50">
+                                  {fetchingPdfId === c.id ? "Fetching PDF..." : "PDF not yet generated — click to fetch"}
                                 </button>
                               )}
-                            </>
+                              {isPrimary && !pdfUrl && !isEsignCompleted && (
+                                <p className="text-[10px] text-gray-400 italic">PDF not yet generated</p>
+                              )}
+                            </div>
+                          </div>
+
+                          {(isViewable || canDecide || isEsignCompleted) && (
+                            <div className="mt-2 pt-2 border-t border-gray-100 flex items-center gap-1.5 flex-wrap">
+                              {isViewable && (
+                                <button type="button" onClick={() => handleConsentClick(c)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md border border-gray-200 text-gray-700 bg-white hover:bg-gray-50 transition-colors">
+                                  <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fillRule="evenodd" d="M.664 10.59a1.651 1.651 0 010-1.186A10.004 10.004 0 0110 3c4.257 0 7.893 2.66 9.336 6.41.147.381.147.804 0 1.186A10.004 10.004 0 0110 17c-4.257 0-7.893-2.66-9.336-6.41zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" /></svg>
+                                  View PDF
+                                </button>
+                              )}
+                              {canDecide && (
+                                <>
+                                  <button type="button" disabled={consentActionLoading !== null}
+                                    onClick={() => { setPendingRejectId(null); handleConsentVerify(c, "approve"); }}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 transition-colors">
+                                    {isApprovingThis ? "Approving..." : "Approve"}
+                                  </button>
+                                  {isConfirmingReject ? (
+                                    <>
+                                      <button type="button" disabled={consentActionLoading !== null}
+                                        onClick={() => handleConsentVerify(c, "reject")}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 transition-colors">
+                                        {isRejectingThis ? "Rejecting..." : "Confirm"}
+                                      </button>
+                                      <button type="button" onClick={() => setPendingRejectId(null)}
+                                        className="px-1.5 py-1 text-[11px] text-gray-500 hover:text-gray-800">Cancel</button>
+                                    </>
+                                  ) : (
+                                    <button type="button" disabled={consentActionLoading !== null}
+                                      onClick={() => setPendingRejectId(c.id)}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md border border-red-200 text-red-700 bg-white hover:bg-red-50 disabled:opacity-50 transition-colors">
+                                      Reject
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                            </div>
                           )}
                         </div>
-                      )}
+                      );
+                    })}
+                  </div>
+                  {consentActionError && (
+                    <div className="mx-4 mb-4 flex items-start gap-2 p-2 rounded-lg bg-red-50 border border-red-200">
+                      <svg className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                      <p className="text-xs text-red-700">{consentActionError}</p>
                     </div>
-                  );
-                })}
-              </div>
-              {consentActionError && (
-                <div className="mt-3 flex items-start gap-2 p-2 rounded-md bg-red-50 border border-red-200">
-                  <svg className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                  </svg>
-                  <p className="text-xs text-red-700">{consentActionError}</p>
+                  )}
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            );
+          })()}
         </div>
       </div>
 
@@ -897,7 +917,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
 
       {/* Verification Cards */}
       {activeTab === "verifications" && (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
           {/* Aadhaar */}
           <AadhaarCard
             leadId={leadId}
@@ -962,7 +982,12 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           <CIBILCard
             leadId={leadId}
             leadName={lead.name}
-            panNumber={pd?.panNo || ocrPan || undefined}
+            panNumber={
+              pd?.panNo ||
+              ocrPan ||
+              ((getVerification("pan")?.apiRequest as Record<string, unknown> | undefined)?.pan_number as string | undefined) ||
+              undefined
+            }
             dob={pd?.dob || ocrDob || undefined}
             phone={lead.phone}
             address={pd?.localAddress || undefined}
@@ -1010,6 +1035,31 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           coBorrower={data.coBorrower}
           onRefresh={fetchData}
         />
+      )}
+
+      {/* Request Co-Borrower Banner — shown when no co-borrower exists yet */}
+      {activeTab === "verifications" && !data.coBorrower && (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+          <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center">
+            <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+            </svg>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-gray-900">Need a Co-Borrower?</p>
+            <p className="text-xs text-gray-600 mt-0.5">Request co-borrower KYC if CIBIL is low, income insufficient, high DTI ratio, or risk flags detected.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowCoBorrowerModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-sm flex-shrink-0"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+            </svg>
+            Request Co-Borrower KYC
+          </button>
+        </div>
       )}
 
       {/* Documents Tab */}
@@ -1121,9 +1171,26 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           )}
         </div>
 
+        {/* Co-Borrower Status Indicator */}
+        {data.coBorrower && (
+          <div className="flex items-center gap-2 mb-4 px-3 py-2 rounded-xl bg-blue-50 border border-blue-200 text-sm">
+            <svg className="w-4 h-4 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+            </svg>
+            <span className="text-blue-800 font-medium">
+              Co-Borrower: {data.coBorrower.fullName || "Pending submission"}
+              {data.coBorrower.kycStatus === "not_started" || data.coBorrower.kycStatus === "draft"
+                ? " — awaiting dealer submission"
+                : data.coBorrower.kycStatus === "completed"
+                  ? " — submitted for review"
+                  : ` — ${(data.coBorrower.kycStatus || "pending").replace(/_/g, " ")}`}
+            </span>
+          </div>
+        )}
+
         {!isFinalDecided ? (
           <div className="space-y-5">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {/* Approve */}
               <label className={`relative flex items-start gap-3 p-4 rounded-2xl border-2 cursor-pointer transition-all ${
                 decision === "approved"
@@ -1180,33 +1247,6 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                 )}
               </label>
 
-              {/* Dealer Action */}
-              {(data.coBorrower || data.supportingDocs.length > 0) && (
-                <label className={`relative flex items-start gap-3 p-4 rounded-2xl border-2 cursor-pointer transition-all ${
-                  decision === "dealer_action_required"
-                    ? "border-amber-500 bg-gradient-to-br from-amber-50 to-white shadow-md shadow-amber-500/10 scale-[1.02]"
-                    : "border-gray-200 hover:border-amber-300 hover:bg-amber-50/30"
-                }`}>
-                  <input type="radio" name="decision" value="dealer_action_required"
-                    checked={decision === "dealer_action_required"}
-                    onChange={() => setDecision("dealer_action_required")}
-                    className="sr-only" />
-                  <div className={`flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${
-                    decision === "dealer_action_required" ? "bg-amber-500 text-white" : "bg-amber-100 text-amber-600"
-                  }`}>
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-bold text-gray-900">Dealer Action</p>
-                    <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">Route back to dealer for fixes</p>
-                  </div>
-                  {decision === "dealer_action_required" && (
-                    <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center">
-                      <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
-                    </div>
-                  )}
-                </label>
-              )}
             </div>
 
             {decision === "rejected" && (
@@ -1238,9 +1278,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                     ? "bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 shadow-emerald-500/30"
                     : decision === "rejected"
                       ? "bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 shadow-red-500/30"
-                      : decision === "dealer_action_required"
-                        ? "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 shadow-amber-500/30"
-                        : "bg-gray-300 !text-gray-500 !shadow-none"
+                      : "bg-gray-300 !text-gray-500 !shadow-none"
                 }`}>
                 {decisionLoading ? (
                   <>
@@ -1287,6 +1325,14 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           </div>
         )}
       </div>
+
+      {/* Request Co-Borrower Modal */}
+      <RequestCoBorrowerModal
+        open={showCoBorrowerModal}
+        onClose={() => setShowCoBorrowerModal(false)}
+        leadId={leadId}
+        onSuccess={() => { setShowCoBorrowerModal(false); fetchData(); }}
+      />
     </div>
   );
 }

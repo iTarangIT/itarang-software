@@ -1,70 +1,167 @@
-import { db } from '@/lib/db';
-import { deployedAssets } from '@/lib/db/schema';
-import { eq, and, ilike, or, sql } from 'drizzle-orm';
-import { successResponse, withErrorHandler } from '@/lib/api-utils';
-import { requireRole } from '@/lib/auth-utils';
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import {
+  users,
+  dealerOnboardingApplications,
+  leads,
+  inventory,
+  loanApplications,
+} from "@/lib/db/schema";
+import { desc, eq, or, sql } from "drizzle-orm";
 
-export const GET = withErrorHandler(async (req: Request) => {
-    const user = await requireRole(['dealer']);
-    const { searchParams } = new URL(req.url);
+export async function GET() {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user: authUser },
+      error: authError,
+    } = await supabase.auth.getUser();
 
-    const status = searchParams.get('status') || 'all';
-    const payment = searchParams.get('payment') || 'all';
-    const category = searchParams.get('category') || 'all';
-    const search = searchParams.get('search') || '';
-
-    let rows: any[];
-    try {
-        const conditions: any[] = [eq(deployedAssets.dealer_id, user.dealer_id!)];
-
-        if (status !== 'all') {
-            conditions.push(eq(deployedAssets.status, status));
-        }
-        if (payment !== 'all') {
-            conditions.push(eq(deployedAssets.payment_type, payment));
-        }
-        if (category !== 'all') {
-            conditions.push(eq(deployedAssets.asset_category, category));
-        }
-        if (search) {
-            conditions.push(
-                or(
-                    ilike(deployedAssets.serial_number, `%${search}%`),
-                    ilike(deployedAssets.customer_name, `%${search}%`)
-                )
-            );
-        }
-
-        rows = await db
-            .select({
-                id: deployedAssets.id,
-                serial_number: deployedAssets.serial_number,
-                asset_category: deployedAssets.asset_category,
-                asset_type: deployedAssets.asset_type,
-                model_type: deployedAssets.model_type,
-                customer_name: deployedAssets.customer_name,
-                customer_phone: deployedAssets.customer_phone,
-                deployment_date: deployedAssets.deployment_date,
-                deployment_location: deployedAssets.deployment_location,
-                payment_type: deployedAssets.payment_type,
-                payment_status: deployedAssets.payment_status,
-                battery_health_percent: deployedAssets.battery_health_percent,
-                last_soc: deployedAssets.last_soc,
-                last_voltage: deployedAssets.last_voltage,
-                warranty_status: deployedAssets.warranty_status,
-                status: deployedAssets.status,
-                qr_code_url: deployedAssets.qr_code_url,
-                last_maintenance_at: deployedAssets.last_maintenance_at,
-                next_maintenance_due: deployedAssets.next_maintenance_due,
-            })
-            .from(deployedAssets)
-            .where(and(...conditions))
-            .orderBy(sql`${deployedAssets.deployment_date} DESC`)
-            .limit(100);
-    } catch {
-        // Table may not exist yet
-        rows = [];
+    if (authError || !authUser?.email) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Unauthorized",
+        },
+        { status: 401 }
+      );
     }
 
-    return successResponse(rows);
-});
+    const matchedUsers = await db
+      .select()
+      .from(users)
+      .where(
+        or(eq(users.id, authUser.id), eq(users.email, authUser.email))
+      )
+      .limit(1);
+
+    const appUser = matchedUsers[0];
+
+    if (!appUser) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "User record not found",
+        },
+        { status: 404 }
+      );
+    }
+
+    const applications = await db
+      .select()
+      .from(dealerOnboardingApplications)
+      .where(eq(dealerOnboardingApplications.ownerEmail, authUser.email))
+      .orderBy(desc(dealerOnboardingApplications.createdAt));
+
+    const dealerApp = applications[0] || null;
+
+    let totalLeads = 0;
+    let convertedLeads = 0;
+    let inventoryCount = 0;
+    let loanCount = 0;
+    let totalPayments = 0;
+    let recentLeads: any[] = [];
+
+    try {
+      const totalLeadsResult = await db
+        .select({ count: sql`count(*)` })
+        .from(leads);
+
+      totalLeads = Number(totalLeadsResult[0]?.count || 0);
+    } catch (error) {
+      console.error("[Dealer Stats] totalLeads failed:", error);
+    }
+
+    try {
+      const convertedLeadsResult = await db
+        .select({ count: sql`count(*)` })
+        .from(leads)
+        .where(eq(leads.lead_status, "converted"));
+
+      convertedLeads = Number(convertedLeadsResult[0]?.count || 0);
+    } catch (error) {
+      console.error("[Dealer Stats] convertedLeads failed:", error);
+    }
+
+    try {
+      const inventoryResult = await db
+        .select({ count: sql`count(*)` })
+        .from(inventory);
+
+      inventoryCount = Number(inventoryResult[0]?.count || 0);
+    } catch (error) {
+      console.error("[Dealer Stats] inventoryCount failed:", error);
+    }
+
+    try {
+      const loanResult = await db
+        .select({ count: sql`count(*)` })
+        .from(loanApplications);
+
+      loanCount = Number(loanResult[0]?.count || 0);
+    } catch (error) {
+      console.error("[Dealer Stats] loanCount failed:", error);
+    }
+
+    try {
+      recentLeads = await db
+        .select()
+        .from(leads)
+        .orderBy(desc(leads.created_at))
+        .limit(5);
+    } catch (error) {
+      console.error("[Dealer Stats] recentLeads failed:", error);
+      recentLeads = [];
+    }
+
+    const conversionRate =
+      totalLeads > 0
+        ? Number(((convertedLeads / totalLeads) * 100).toFixed(2))
+        : 0;
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        dealer: dealerApp
+          ? {
+              id: dealerApp.id,
+              companyName: dealerApp.companyName,
+              dealerCode: dealerApp.dealerCode,
+              onboardingStatus: dealerApp.onboardingStatus,
+              reviewStatus: dealerApp.reviewStatus,
+              dealerAccountStatus: dealerApp.dealerAccountStatus,
+              approvedAt: dealerApp.approvedAt,
+              submittedAt: dealerApp.submittedAt,
+              financeEnabled: dealerApp.financeEnabled ?? false,
+              isApproved:
+                dealerApp.onboardingStatus === "approved" ||
+                dealerApp.reviewStatus === "approved" ||
+                dealerApp.dealerAccountStatus === "active",
+            }
+          : null,
+        metrics: {
+          totalLeads,
+          convertedLeads,
+          conversionRate,
+          commission: 0,
+          inventoryCount,
+          totalPayments,
+          loanCount,
+          rewards: 0,
+        },
+        recentLeads,
+      },
+    });
+  } catch (error: any) {
+    console.error("DEALER STATS API ERROR:", error);
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: error?.message || "Failed to load dealer stats",
+      },
+      { status: 500 }
+    );
+  }
+}

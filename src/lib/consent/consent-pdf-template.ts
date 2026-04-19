@@ -8,6 +8,7 @@ type ConsentTemplateInput = {
     fatherOrHusbandName?: string;
     dob?: string;
     phone?: string;
+    customerEmail?: string;
     currentAddress?: string;
     permanentAddress?: string;
     aadhaarMasked?: string;
@@ -30,6 +31,7 @@ export function generateConsentHtml(input: ConsentTemplateInput): string {
         fatherOrHusbandName = '_______________',
         dob = '_______________',
         phone = '_______________',
+        customerEmail = '_______________',
         currentAddress = '_______________',
         permanentAddress = '_______________',
         aadhaarMasked = 'XXXX-XXXX-XXXX',
@@ -265,9 +267,9 @@ export function generateConsentHtml(input: ConsentTemplateInput): string {
     </ul>
     <p>To exercise these rights, you may contact us at:</p>
     <ul>
-        <li><strong>Email:</strong> support@itarang.com</li>
-        <li><strong>Phone:</strong> +91-XXXXXXXXXX</li>
-        <li><strong>Address:</strong> iTarang Technologies LLP, India</li>
+        <li><strong>Email:</strong> care@itarang.com</li>
+        <li><strong>Phone:</strong> +91-8076841497</li>
+        <li><strong>Address:</strong> iTarang Technologies LLP, 103, First Floor, Unitech Business Zone, Block B, Sector 50, South City 2, Gurugram, Haryana, 122018</li>
     </ul>
 </div>
 
@@ -287,19 +289,19 @@ export function generateConsentHtml(input: ConsentTemplateInput): string {
     <p>If you have any questions or concerns regarding this consent form or our data processing
     practices, please contact our Grievance Officer (GO) / Data Protection Officer (DPO):</p>
     <ul style="list-style: none; margin-left: 0; padding-left: 0;">
-        <li><strong>Name:</strong> Data Protection Officer, iTarang Technologies LLP</li>
-        <li><strong>Email:</strong> dpo@itarang.com</li>
-        <li><strong>Phone:</strong> +91-XXXXXXXXXX</li>
+        <li><strong>Name:</strong> Chirag Garg</li>
+        <li><strong>Email:</strong> care.itarang@gmail.com</li>
+        <li><strong>Phone:</strong> +91-8076841497</li>
     </ul>
 </div>
 
 <!-- ═══════ FOOTER ═══════ -->
 <div class="footer">
-    <span>iTarang Technologies LLP | support@itarang.com</span>
+    <span>iTarang Technologies LLP | care@itarang.com</span>
     <span>DPDPA 2023 Compliant | Ref: ${consentId}</span>
 </div>
 
-<!-- ═══════ SIGNATURE (bottom — right above e-sign stamp) ═══════ -->
+<!-- ═══════ SIGNATURE PAGE 1 (bottom — right above e-sign stamp) ═══════ -->
 <div class="sig-area">
     <div class="sig-item">
         <div class="sig-label">NAME</div>
@@ -313,6 +315,73 @@ export function generateConsentHtml(input: ConsentTemplateInput): string {
         <div class="sig-label">SIGNATURE</div>
         <div class="sig-value">___________________________</div>
     </div>
+</div>
+
+<!-- ═══════ PAGE 2: CONSUMER COMMUNICATION CONSENT ═══════ -->
+<div style="page-break-before: always;"></div>
+
+<div class="header">
+    <img src="data:image/png;base64,${ITARANG_LOGO_BASE64}" alt="iTarang Logo" />
+    <div class="header-title">Consumer Communication Consent</div>
+</div>
+<hr class="header-divider" />
+
+<p class="meta-line"><strong>Date:</strong> ${generatedDate}</p>
+<p class="meta-line"><strong>Ref:</strong> ${consentId} &nbsp;|&nbsp; <strong>Lead:</strong> ${leadId}</p>
+
+<div class="section-title">Consumer Communication Consent Clause</div>
+<div class="content-box">
+    <p>The Consumer hereby provides free, specific, informed, unconditional, and unambiguous consent,
+    through clear affirmative action, to <strong>iTarang Technologies LLP</strong>, its affiliates, agents,
+    service providers, channel partners, and authorised representatives (collectively, the &quot;Sender&quot;)
+    to send commercial communications to the Consumer via telephone calls (including automated dialling
+    where permitted), SMS, WhatsApp, RCS, email, app notifications, letters, or any other lawful
+    electronic or physical mode of communication to the Consumer&rsquo;s registered mobile number
+    <strong>${phone}</strong>, email ID <strong>${customerEmail}</strong>, or any updated contact details
+    provided by the Consumer.</p>
+
+    <p style="margin-top:4px;">This consent covers:</p>
+    <ol>
+        <li>Transactional, service, and account-related communications including onboarding updates, payment reminders, delivery notifications, service alerts, and account statements;</li>
+        <li>Promotional and marketing communications including product or service offers, seasonal campaigns, discount coupons, referral programmes, and new feature announcements;</li>
+        <li>Informational and educational content including newsletters, industry updates, tips, surveys, feedback requests, and event invitations;</li>
+        <li>Communications from or on behalf of third-party partners, co-branded entities, or affiliated service providers whose products or services may be of interest to the Consumer;</li>
+        <li>Any other category of commercial communication as may be permissible under the Telecom Commercial Communications Customer Preference Regulations, 2018 (TCCCPR), the Telecom Regulatory Authority of India Act, 1997, the Information Technology Act, 2000, the Digital Personal Data Protection Act, 2023, and any other applicable law.</li>
+    </ol>
+
+    <p style="margin-top:4px;">The Consumer further acknowledges and agrees that:</p>
+    <ul>
+        <li>This consent supersedes any prior Do Not Disturb (DND) / National Customer Preference Register (NCPR) registration to the extent permissible under law, and the Consumer hereby requests that the above communications not be treated as Unsolicited Commercial Communications (UCC).</li>
+        <li>The Sender may use automated systems, AI-based calling, pre-recorded messages, or manual processes for communication delivery.</li>
+        <li>This consent is valid from the date of execution and shall remain in force until expressly revoked by the Consumer in writing to <strong>care@itarang.com</strong> or by calling <strong>+91-8076841497</strong>.</li>
+        <li>Revocation of this consent shall not affect the lawfulness of communications sent prior to such revocation.</li>
+        <li>The Consumer&rsquo;s personal data shared for the purpose of communication shall be processed in accordance with the Sender&rsquo;s Privacy Policy and applicable data protection laws.</li>
+    </ul>
+
+    <p style="margin-top:4px;">The Consumer confirms that this consent is given voluntarily, without any coercion,
+    and with full understanding of its scope and implications.</p>
+</div>
+
+<!-- ═══════ SIGNATURE PAGE 2 (bottom — right above e-sign stamp) ═══════ -->
+<div class="sig-area">
+    <div class="sig-item">
+        <div class="sig-label">NAME</div>
+        <div class="sig-value">${customerName}</div>
+    </div>
+    <div class="sig-item">
+        <div class="sig-label">DATE</div>
+        <div class="sig-value">${generatedDate}</div>
+    </div>
+    <div class="sig-item">
+        <div class="sig-label">SIGNATURE</div>
+        <div class="sig-value">___________________________</div>
+    </div>
+</div>
+
+<!-- ═══════ FOOTER PAGE 2 ═══════ -->
+<div class="footer">
+    <span>iTarang Technologies LLP | care@itarang.com</span>
+    <span>DPDPA 2023 Compliant | Ref: ${consentId}</span>
 </div>
 
 </body>

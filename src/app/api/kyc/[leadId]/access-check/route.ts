@@ -1,68 +1,57 @@
-export const runtime = "nodejs";
+import { NextRequest, NextResponse } from 'next/server';
+import { db } from '@/lib/db';
+import { leads } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
 
-import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { leads } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
-import { requireRole } from "@/lib/auth-utils";
+const FINANCE_METHODS = ['other_finance', 'itarang_finance', 'bnpl'];
 
-type RouteContext = {
-  params: Promise<{ leadId: string }>;
-};
+export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
+    try {
+        const { leadId } = await params;
+        const lead = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
 
-export async function GET(_req: Request, context: RouteContext) {
-  try {
-    await requireRole(["dealer"]);
+        if (!lead.length) {
+            return NextResponse.json({ success: false, allowed: false, message: 'Lead not found' });
+        }
 
-    const { leadId } = await context.params;
+        const l = lead[0];
 
-    if (!leadId) {
-      return NextResponse.json(
-        { success: false, message: "Lead id missing" },
-        { status: 400 }
-      );
+        // Access condition: lead must not be abandoned, and must have a finance payment method
+        const isFinance = FINANCE_METHODS.includes(l.payment_method || '');
+        const isNotAbandoned = l.status !== 'ABANDONED';
+        const allowed = isNotAbandoned && isFinance;
+
+        const leadData = {
+            id: l.id,
+            reference_id: l.reference_id,
+            full_name: l.full_name,
+            owner_name: l.owner_name,
+            phone: l.phone,
+            owner_contact: l.owner_contact,
+            asset_model: l.asset_model,
+            asset_category: l.asset_category,
+            payment_method: l.payment_method,
+            interest_level: l.interest_level,
+            consent_status: l.consent_status,
+            kyc_status: l.kyc_status,
+            workflow_step: l.workflow_step,
+            coupon_code: l.coupon_code,
+            coupon_status: l.coupon_status,
+            lead_status: l.lead_status,
+            has_co_borrower: l.has_co_borrower,
+        };
+
+        return NextResponse.json({
+            success: true,
+            allowed,
+            lead: leadData,
+            message: !allowed
+                ? !isFinance
+                    ? 'KYC is only available for leads with a finance payment method.'
+                    : 'This lead has been abandoned.'
+                : undefined,
+        });
+    } catch (error) {
+        return NextResponse.json({ success: false, error: { message: 'Server error' } }, { status: 500 });
     }
-
-    const rows = await db
-      .select()
-      .from(leads)
-      .where(eq(leads.id, leadId))
-      .limit(1);
-
-    const lead = rows[0];
-
-    if (!lead) {
-      return NextResponse.json(
-        { success: false, message: "Lead not found" },
-        { status: 404 }
-      );
-    }
-
-    const interestLevel = (lead.interest_level || "").toLowerCase().trim();
-    const paymentMethod = (lead.payment_method || "").toLowerCase().trim();
-
-    // Access rule: lead exists AND hot interest AND payment method is not cash
-    const canAccess =
-      !!lead.id &&
-      interestLevel === "hot" &&
-      paymentMethod !== "cash";
-
-    return NextResponse.json({
-      success: true,
-      data: {
-        leadId,
-        canAccess,
-        lead,
-        reason: canAccess
-          ? null
-          : "Step 2 allowed only for hot leads with non-cash payment method",
-      },
-    });
-  } catch (error) {
-    console.error("KYC access-check error:", error);
-    return NextResponse.json(
-      { success: false, message: "Failed to check KYC access" },
-      { status: 500 }
-    );
-  }
 }

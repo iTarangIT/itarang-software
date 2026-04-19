@@ -1,44 +1,67 @@
 export const runtime = 'nodejs';
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 import { NextRequest, NextResponse } from 'next/server';
+import { eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { leads, consentRecords, users, personalDetails } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 import { uploadFileToStorage } from '@/lib/storage';
 import { generateConsentHtml } from '@/lib/consent/consent-pdf-template';
-import puppeteer from 'puppeteer';
 
-type RouteContext = {
-    params: Promise<{ leadId: string }>;
-};
+type RouteContext = { params: Promise<{ leadId: string }> };
 
-async function renderPdfFromHtml(html: string): Promise<Buffer> {
-    const browser = await puppeteer.launch({
+// Chromium for serverless (Vercel / Lambda). `@sparticuz/chromium-min` is a
+// tiny JS shim that downloads the actual Chromium binary from GitHub at
+// cold-start, keeping our function bundle well under Vercel's 50 MB zipped
+// limit. The binary URL must match the installed chromium-min version.
+const CHROMIUM_REMOTE_PACK =
+    'https://github.com/Sparticuz/chromium/releases/download/v147.0.0/chromium-v147.0.0-pack.x64.tar';
+
+async function launchBrowser() {
+    const isServerless = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+
+    if (isServerless) {
+        const [{ default: puppeteerCore }, { default: chromium }] = await Promise.all([
+            import('puppeteer-core'),
+            import('@sparticuz/chromium-min'),
+        ]);
+        return puppeteerCore.launch({
+            args: chromium.args,
+            defaultViewport: chromium.defaultViewport,
+            executablePath: await chromium.executablePath(CHROMIUM_REMOTE_PACK),
+            headless: true,
+        });
+    }
+
+    const { default: puppeteer } = await import('puppeteer');
+    return puppeteer.launch({
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
     });
+}
 
+async function renderPdfFromHtml(html: string): Promise<Buffer> {
+    const browser = await launchBrowser();
     try {
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0' });
-
         const pdf = await page.pdf({
             format: 'A4',
             printBackground: true,
-            margin: {
-                top: '10mm',
-                right: '10mm',
-                bottom: '10mm',
-                left: '10mm',
-            },
+            margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' },
         });
-
         return Buffer.from(pdf);
     } finally {
         await browser.close();
     }
+}
+
+function formatDob(value: unknown): string {
+    if (!value) return '';
+    const d = value instanceof Date ? value : new Date(value as string);
+    if (isNaN(d.getTime())) return '';
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
 }
 
 export async function POST(req: NextRequest, { params }: RouteContext) {
@@ -49,77 +72,50 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         const consentFor = String(body?.consent_for || 'customer').toLowerCase();
         const dbConsentFor = consentFor === 'customer' ? 'primary' : consentFor;
 
-        // Fetch lead data
         const leadRows = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
         if (!leadRows.length) {
             return NextResponse.json({ success: false, error: { message: 'Lead not found' } }, { status: 404 });
         }
-
         const lead = leadRows[0];
 
-        // Fetch dealer info
+        // Dealer info (for footer)
         let dealerName = '';
-        let dealerCompany = '';
         if (user.id) {
             const userRows = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
-            if (userRows.length) {
-                dealerName = userRows[0].name || '';
-            }
+            if (userRows.length) dealerName = userRows[0].name || '';
         }
 
-        // For borrower consent, fetch personal_details (borrower-specific data)
+        // Borrower-specific data if generating borrower consent
         let borrowerData: any = null;
         if (consentFor === 'borrower') {
-            const personalRows = await db.select()
+            const personalRows = await db
+                .select()
                 .from(personalDetails)
                 .where(eq(personalDetails.lead_id, leadId))
                 .limit(1);
             borrowerData = personalRows[0] || null;
         }
 
-        // Resolve person data based on consent type
-        const personName = consentFor === 'borrower'
-            ? (borrowerData?.father_husband_name ? lead.full_name : lead.full_name) || lead.owner_name || ''
-            : lead.full_name || lead.owner_name || '';
-        const personFather = consentFor === 'borrower'
-            ? (borrowerData?.father_husband_name || lead.father_or_husband_name || '')
-            : (lead.father_or_husband_name || '');
+        const personName = lead.full_name || lead.owner_name || '';
+        const personFather = borrowerData?.father_husband_name || lead.father_or_husband_name || '';
         const personPhone = lead.phone || '';
-        const personAddress = consentFor === 'borrower'
-            ? (borrowerData?.local_address || lead.current_address || '')
-            : (lead.current_address || '');
+        const personAddress = borrowerData?.local_address || lead.current_address || '';
         const personPermanentAddress = lead.permanent_address || personAddress;
-        const personDob = consentFor === 'borrower'
-            ? (borrowerData?.dob || lead.dob)
-            : lead.dob;
-        const personAadhaar = consentFor === 'borrower'
-            ? (borrowerData?.aadhaar_no || '')
-            : '';
-        const personPan = consentFor === 'borrower'
-            ? (borrowerData?.pan_no || '')
-            : '';
+        const personDob = borrowerData?.dob || lead.dob;
+        const personAadhaar = borrowerData?.aadhaar_no || '';
+        const personPan = borrowerData?.pan_no || '';
 
-        // Format DOB
-        let dobFormatted = '';
-        if (personDob) {
-            const d = new Date(personDob);
-            dobFormatted = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
-        }
-
-        // Generate consent ID
         const now = new Date();
         const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
         const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
         const consentId = `CONSENT-${dateStr}-${seq}`;
 
-        const generatedDate = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
-
-        // Generate HTML
         const html = generateConsentHtml({
             customerName: personName,
             fatherOrHusbandName: personFather,
-            dob: dobFormatted,
+            dob: formatDob(personDob),
             phone: personPhone,
+            customerEmail: lead.owner_email || '',
             currentAddress: personAddress,
             permanentAddress: personPermanentAddress,
             aadhaarMasked: personAadhaar,
@@ -128,16 +124,14 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             productCategory: lead.asset_model || '',
             paymentMethod: lead.payment_method || '',
             dealerName,
-            dealerCompany,
+            dealerCompany: '',
             leadId,
             consentId,
-            generatedDate,
+            generatedDate: `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`,
         });
 
-        // Render PDF
         const pdfBuffer = await renderPdfFromHtml(html);
 
-        // Upload to storage
         const fileName = `consent_${consentId}_${Date.now()}.pdf`;
         const uploadResult = await uploadFileToStorage({
             fileBuffer: pdfBuffer,
@@ -146,26 +140,20 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             contentType: 'application/pdf',
         });
 
-        // Insert consent record
         await db.insert(consentRecords).values({
             id: consentId,
             lead_id: leadId,
             consent_for: dbConsentFor,
             consent_type: 'manual',
             consent_status: 'consent_generated',
-            sign_method: 'manual',
             generated_pdf_url: uploadResult.url,
-            consent_attempt_count: 1,
             created_at: now,
             updated_at: now,
         });
 
-        // Update lead consent status
-        const leadUpdate = consentFor === 'borrower'
-            ? { borrower_consent_status: 'consent_generated' }
-            : { consent_status: 'consent_generated' };
-        await db.update(leads)
-            .set(leadUpdate)
+        await db
+            .update(leads)
+            .set({ consent_status: 'consent_generated' })
             .where(eq(leads.id, leadId));
 
         return NextResponse.json({
@@ -174,7 +162,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             pdfUrl: uploadResult.url,
             fileName,
             generatedAt: now.toISOString(),
-            message: 'Consent PDF generated. Please print, get customer signature, and upload scanned copy.',
+            message: 'Consent PDF generated. Print it, obtain customer signature, and upload the scanned copy.',
         });
     } catch (error) {
         console.error('[Generate Consent PDF] Error:', error);

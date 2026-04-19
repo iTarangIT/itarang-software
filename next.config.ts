@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
-const nextConfig = {
+// force-rebuild: vercel
+const nextConfig: NextConfig = {
   output: "standalone",
   images: {
     unoptimized: true,
@@ -8,13 +9,21 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  // Turbopack sometimes picks the parent user directory as the workspace
-  // because there is another lockfile in C:\Users\Aniket. Explicitly pin
-  // the project root so all app routes (including dynamic ones like
-  // /admin/dealer-verification/[dealerId]) are discovered and compiled.
-  turbo: {
-    root: __dirname,
-  }
+  // Don't try to bundle these into the serverless function — puppeteer-core
+  // loads the Chromium binary at runtime from @sparticuz/chromium, and the
+  // full `puppeteer` dep is only used for local Windows dev and must not be
+  // traced into Vercel's 50MB function bundle.
+  serverExternalPackages: [
+    "puppeteer",
+    "puppeteer-core",
+    "@sparticuz/chromium-min",
+  ],
+  outputFileTracingExcludes: {
+    "/api/kyc/*/generate-consent-pdf": [
+      "./node_modules/puppeteer/**/*",
+      "./node_modules/.cache/puppeteer/**/*",
+    ],
+  },
 };
 
 export default nextConfig;

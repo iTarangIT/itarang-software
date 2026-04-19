@@ -1,8 +1,9 @@
+import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { leads, personalDetails, auditLogs, kycDocuments, kycVerifications, consentRecords } from '@/lib/db/schema';
+import { leads, personalDetails, auditLogs, kycDocuments, consentRecords, kycVerifications } from '@/lib/db/schema';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
-import { requireRole } from '@/lib/auth-utils';
-import { eq, and, sql } from 'drizzle-orm';
+import { requireRole, requireAuth } from '@/lib/auth-utils';
+import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 
 const updateSchema = z.object({
@@ -17,7 +18,6 @@ const updateSchema = z.object({
     product_category_id: z.string().optional().nullable(),
     product_type_id: z.string().optional().nullable(),
     interest_level: z.enum(['hot', 'warm', 'cold']).optional().nullable(),
-    payment_method: z.string().optional().nullable(),
     vehicle_rc: z.string().optional().nullable(),
     vehicle_ownership: z.string().optional().nullable(),
     vehicle_owner_name: z.string().optional().nullable(),
@@ -34,9 +34,9 @@ const normalizePhone = (phone?: string | null) => {
     return phone.startsWith('+') ? phone : `+91${clean}`;
 };
 
-export const PATCH = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
+export const PATCH = withErrorHandler(async (req: Request, { params }: { params: { id: string } }) => {
     const user = await requireRole(['dealer']);
-    const { id } = await params;
+    const { id } = params;
     const body = await req.json();
 
     const result = updateSchema.safeParse(body);
@@ -52,10 +52,7 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
     }
 
     if (!lead) return errorResponse('Lead not found', 404);
-    // Allow edit if user is the uploader OR if the lead belongs to the same dealer
-    const isOwner = lead.uploader_id === user.id;
-    const isSameDealer = user.dealer_id && lead.dealer_id === user.dealer_id;
-    if (!isOwner && !isSameDealer) return errorResponse('Forbidden: You do not have permission to edit this lead', 403);
+    if (lead.uploader_id !== user.id) return errorResponse('Forbidden: You do not have permission to edit this lead', 403);
 
     if (data.commitStep) {
         if (!data.full_name || data.full_name.trim().length < 2) return errorResponse('Full name required', 400);
@@ -92,7 +89,7 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
             if (data.vehicle_rc !== undefined) leadUpdates.vehicle_rc = data.vehicle_rc?.toUpperCase().trim();
             if (data.vehicle_owner_phone !== undefined) leadUpdates.vehicle_owner_phone = normalizePhone(data.vehicle_owner_phone);
 
-            const fields = ['father_or_husband_name', 'current_address', 'permanent_address', 'is_current_same', 'primary_product_id', 'product_category_id', 'product_type_id', 'vehicle_ownership', 'vehicle_owner_name', 'interested_in', 'payment_method'];
+            const fields = ['father_or_husband_name', 'current_address', 'permanent_address', 'is_current_same', 'primary_product_id', 'product_category_id', 'product_type_id', 'vehicle_ownership', 'vehicle_owner_name', 'interested_in'];
             fields.forEach(f => {
                 if ((data as any)[f] !== undefined) leadUpdates[f] = (data as any)[f];
             });
@@ -128,65 +125,92 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
     }
 });
 
-export const DELETE = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
-    const user = await requireRole(['dealer']);
-    const { id } = await params;
+// ─── DELETE ────────────────────────────────────────────────────────────────
 
-    const [lead] = await db.select().from(leads).where(eq(leads.id, id)).limit(1);
-
-    if (!lead) return errorResponse('Lead not found', 404);
-    if (lead.uploader_id !== user.id) return errorResponse('Forbidden: You can only delete your own leads', 403);
-
+export async function DELETE(
+    _req: NextRequest,
+    { params }: { params: Promise<{ id: string }> }
+) {
     try {
-        await db.transaction(async (tx) => {
-            // approvals reference deals via (entity_type, entity_id) — clear those first,
-            // since the approvals table has no lead_id column.
-            await tx.execute(sql`
-                DELETE FROM approvals
-                WHERE entity_type = 'deal'
-                  AND entity_id IN (SELECT id FROM deals WHERE lead_id = ${id})
-            `);
+        const user = await requireAuth();
+        const { id } = await params;
 
-            await tx.execute(sql`DELETE FROM kyc_documents WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM kyc_verifications WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM consent_records WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM personal_details WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM co_borrower_documents WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM co_borrowers WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM admin_kyc_reviews WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM other_document_requests WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM loan_offers WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM loan_applications WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM loan_files WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM facilitation_payments WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM lead_assignments WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM assignment_change_logs WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM deals WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM bolna_calls WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM ai_call_logs WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM call_records WHERE lead_id = ${id}`);
-            await tx.execute(sql`DELETE FROM deployed_assets WHERE lead_id = ${id}`);
-            await tx.execute(sql`UPDATE coupon_codes SET reserved_for_lead_id = NULL WHERE reserved_for_lead_id = ${id}`);
-            await tx.execute(sql`UPDATE coupon_codes SET used_by_lead_id = NULL WHERE used_by_lead_id = ${id}`);
-            await tx.execute(sql`UPDATE coupon_audit_log SET lead_id = NULL WHERE lead_id = ${id}`);
-            await tx.execute(sql`UPDATE scraped_dealer_leads SET converted_lead_id = NULL WHERE converted_lead_id = ${id}`);
+        if (!id) {
+            return NextResponse.json(
+                { success: false, error: { message: 'Lead ID is required' } },
+                { status: 400 }
+            );
+        }
 
-            await tx.insert(auditLogs).values({
-                id: `AUDIT-${Date.now()}`,
+        // Verify the lead exists
+        const [lead] = await db
+            .select({
+                id: leads.id,
+                dealer_id: leads.dealer_id,
+                lead_status: leads.lead_status,
+                uploader_id: leads.uploader_id,
+            })
+            .from(leads)
+            .where(eq(leads.id, id))
+            .limit(1);
+
+        if (!lead) {
+            return NextResponse.json(
+                { success: false, error: { message: 'Lead not found' } },
+                { status: 404 }
+            );
+        }
+
+        // Only the owning dealer, or admin/ceo/sales_head can delete
+        const isAdmin = ['admin', 'ceo', 'sales_head'].includes(user.role);
+        const isOwner = lead.dealer_id === user.dealer_id || lead.uploader_id === user.id;
+        if (!isAdmin && !isOwner) {
+            return NextResponse.json(
+                { success: false, error: { message: 'You can only delete your own leads' } },
+                { status: 403 }
+            );
+        }
+
+        // Don't allow deleting converted leads without admin role
+        if (!isAdmin && lead.lead_status === 'converted') {
+            return NextResponse.json(
+                { success: false, error: { message: 'Cannot delete a converted lead. Contact admin.' } },
+                { status: 403 }
+            );
+        }
+
+        // Delete related records (cascade handles most, but clean up explicitly for safety)
+        await db.delete(kycDocuments).where(eq(kycDocuments.lead_id, id));
+        await db.delete(consentRecords).where(eq(consentRecords.lead_id, id));
+        await db.delete(kycVerifications).where(eq(kycVerifications.lead_id, id));
+        try { await db.delete(personalDetails).where(eq(personalDetails.lead_id, id)); } catch {}
+
+        // Delete the lead
+        await db.delete(leads).where(eq(leads.id, id));
+
+        // Audit log
+        try {
+            await db.insert(auditLogs).values({
+                id: `AUDIT-DEL-${Date.now()}`,
                 entity_type: 'lead',
                 entity_id: id,
                 action: 'LEAD_DELETED',
-                changes: { deleted_by: user.id, lead_name: lead.full_name || lead.owner_name },
+                changes: { deleted_by: user.id, deleted_at: new Date().toISOString() },
                 performed_by: user.id,
                 timestamp: new Date(),
             });
+        } catch {}
 
-            await tx.delete(leads).where(eq(leads.id, id));
+        return NextResponse.json({
+            success: true,
+            message: 'Lead and all related data deleted successfully',
         });
-
-        return successResponse({ success: true, message: 'Lead deleted successfully' });
-    } catch (err) {
-        console.error("Lead delete failed:", err);
-        return errorResponse("Failed to delete lead. Please try again.", 500);
+    } catch (error) {
+        console.error('[Delete Lead] Error:', error);
+        const message = error instanceof Error ? error.message : 'Failed to delete lead';
+        return NextResponse.json(
+            { success: false, error: { message } },
+            { status: 500 }
+        );
     }
-});
+}
