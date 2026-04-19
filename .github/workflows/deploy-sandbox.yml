@@ -51,7 +51,6 @@ jobs:
             echo "::endgroup::"
 
             echo "::group::Load env and start/reload pm2"
-            set -a; . ./.env; set +a
             if pm2 describe sandbox-web > /dev/null 2>&1; then
               pm2 reload ecosystem.sandbox.config.js --update-env
             else
