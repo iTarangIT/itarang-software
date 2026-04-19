@@ -18,7 +18,13 @@ export default function StepCompany() {
         <div>
           <input
             value={company.companyName}
-            onChange={(e) => setField("company", "companyName", e.target.value)}
+            onChange={(e) =>
+              setField(
+                "company",
+                "companyName",
+                e.target.value.replace(/[0-9]/g, "")
+              )
+            }
             placeholder="Company Name"
             className="w-full rounded-2xl border border-[#E3E8EF] px-4 py-4 focus:border-[#1F5C8F] focus:outline-none focus:ring-2 focus:ring-blue-100"
           />
