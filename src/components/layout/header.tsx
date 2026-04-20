@@ -30,9 +30,10 @@ export function Header() {
         toast.success('Signed out successfully. Redirecting...');
         // Short delay so the user sees the toast before redirect
         setTimeout(() => {
-            // Single round-trip: the /api/auth/logout route deletes sb-* cookies
-            // and 303-redirects to /login. No Supabase network call, no server
-            // action, no double session invalidation.
+            // Relative: hits /api/auth/logout on the current public host.
+            // The server route uses X-Forwarded-Host to build the correct
+            // absolute redirect Location, so we never ship users to the
+            // internal upstream (localhost:3003).
             window.location.href = '/api/auth/logout';
         }, 800);
     };
