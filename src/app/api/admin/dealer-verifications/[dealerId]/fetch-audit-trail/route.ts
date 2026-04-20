@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
-import { requireAdmin } from "@/lib/auth/requireAdmin";
+import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -20,7 +20,7 @@ function basicAuthHeader(clientId: string, clientSecret: string) {
 }
 
 export async function POST(_req: NextRequest, context: RouteContext) {
-  const auth = await requireAdmin();
+  const auth = await requireSalesHead();
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;

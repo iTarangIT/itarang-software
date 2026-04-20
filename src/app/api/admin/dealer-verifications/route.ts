@@ -2,10 +2,10 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db/index";
 import { dealerOnboardingApplications, dealerOnboardingDocuments } from "@/lib/db/schema";
 import { desc, sql } from "drizzle-orm";
-import { requireAdmin } from "@/lib/auth/requireAdmin";
+import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 
 export async function GET() {
-  const auth = await requireAdmin();
+  const auth = await requireSalesHead();
   if (!auth.ok) return auth.response;
   try {
     const applications = await db

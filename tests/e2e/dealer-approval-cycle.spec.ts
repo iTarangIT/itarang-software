@@ -50,7 +50,7 @@ test('dealer approval cycle: onboard → sales_head review → approve+mail → 
   const w1: BrowserContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const w2: BrowserContext = await browser.newContext({
     viewport: { width: 1280, height: 800 },
-    storageState: 'tests/.auth/sales_admin.json',
+    storageState: 'tests/.auth/sales_head.json',
   });
   const w3: BrowserContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 

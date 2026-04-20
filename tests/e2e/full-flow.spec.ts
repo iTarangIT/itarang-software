@@ -52,7 +52,7 @@ test('full flow: onboard → review → dealer lead → KYC review → scraper +
   const w2: BrowserContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const w3: BrowserContext = await browser.newContext({
     viewport: { width: 1280, height: 800 },
-    storageState: 'tests/.auth/sales_admin.json',
+    storageState: 'tests/.auth/sales_head.json',
   });
 
   const p1 = await w1.newPage();

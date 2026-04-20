@@ -9,7 +9,7 @@ fs.mkdirSync(AUTH_DIR, { recursive: true });
 // The new dealer (window 2) logs in fresh inside the test using credentials
 // minted by helpers/dealer-creds.ts — there is no pre-seeded dealer to auth.
 const rolesToAuth = [
-  { role: 'sales_admin', email: 'anirudh@itarang.com' },
+  { role: 'sales_head', email: 'anirudh@itarang.com' },
 ];
 
 for (const { role, email } of rolesToAuth) {
