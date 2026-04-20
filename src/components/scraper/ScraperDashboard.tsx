@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, AlertCircle, CheckCircle } from "lucide-react";
 import { ScraperRunsTable } from "./ScraperRunsTable";
 import { QueryManager } from "./QueryManager";
-import { ScheduleConfig } from "./ScheduleConfig";
 import { ScraperRunProgress } from "./ScraperRunProgress";
 
 const ACTIVE_RUN_KEY = "scraper:active-run-id";
@@ -34,54 +33,45 @@ export function ScraperDashboard({ onSelectRun }: ScraperDashboardProps) {
     if (stored) setActiveRunId(stored);
   }, []);
 
-  const triggerMutation = useMutation({
-    mutationFn: async () => {
-      const resQuery = await fetch("/api/scraper/queries");
-      const jsonQuery = await resQuery.json();
-
-      if (!jsonQuery.success) {
-        throw new Error("Failed to fetch queries");
-      }
-
-      const activeQuery = jsonQuery.data.find((q: any) => q.is_active);
-
-      if (!activeQuery) {
-        throw new Error("No active query found. Please enable one.");
-      }
-
-      const res = await fetch("/api/scraper/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: activeQuery.query_text }),
-      });
-
+  // On mount (and on any history refresh), check the server for any run
+  // currently in 'running' state — this surfaces a scrape that was started
+  // from another tab/session so the user always sees live progress.
+  const { data: runsList } = useQuery({
+    queryKey: ["scraper-runs", 1],
+    queryFn: async () => {
+      const res = await fetch(`/api/scraper/run?page=1`);
       const json = await res.json();
-
-      if (!json.success) {
-        throw new Error(json.error?.message ?? "Failed to start scraper");
-      }
-
-      return json.data as { run_id: string };
-    },
-
-    onSuccess: (data) => {
-      setToast({
-        type: "success",
-        msg: `Scraper started — tracking progress below`,
-      });
-      setActiveRunId(data.run_id);
-      if (typeof window !== "undefined") {
-        localStorage.setItem(ACTIVE_RUN_KEY, data.run_id);
-      }
-      queryClient.invalidateQueries({ queryKey: ["scraper-runs"] });
-      setTimeout(() => setToast(null), 4000);
-    },
-
-    onError: (err: Error) => {
-      setToast({ type: "error", msg: err.message });
-      setTimeout(() => setToast(null), 8000);
+      if (!json.success) throw new Error("Failed to load runs");
+      return json.data;
     },
   });
+
+  useEffect(() => {
+    if (activeRunId) return;
+    const activeRun = (runsList?.data ?? []).find(
+      (r: any) => r.status === "running" || r.status === "cancelling",
+    );
+    if (activeRun) {
+      setActiveRunId(activeRun.id);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(ACTIVE_RUN_KEY, activeRun.id);
+      }
+    }
+  }, [runsList, activeRunId]);
+
+  const showToast = (type: "success" | "error", msg: string) => {
+    setToast({ type, msg });
+    setTimeout(() => setToast(null), type === "success" ? 4000 : 8000);
+  };
+
+  const handleRunStarted = (runId: string) => {
+    setActiveRunId(runId);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(ACTIVE_RUN_KEY, runId);
+    }
+    queryClient.invalidateQueries({ queryKey: ["scraper-runs"] });
+    showToast("success", "Scraper started — tracking progress below");
+  };
 
   return (
     <div className="space-y-6">
@@ -101,7 +91,18 @@ export function ScraperDashboard({ onSelectRun }: ScraperDashboardProps) {
           </div>
         </div>
 
-        <QueryManager />
+        <QueryManager
+          disabled={
+            !!activeRunId &&
+            !!runsList?.data?.find(
+              (r: any) =>
+                r.id === activeRunId &&
+                (r.status === "running" || r.status === "cancelling"),
+            )
+          }
+          onRunStarted={handleRunStarted}
+          onError={(msg) => showToast("error", msg)}
+        />
       </div>
 
       {/* Live progress for active run */}

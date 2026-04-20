@@ -67,7 +67,15 @@ export async function POST(req: Request) {
     );
   }
 
-  await finalizeChunkedRun(payload.runId);
+  try {
+    await finalizeChunkedRun(payload.runId);
+  } catch (err: any) {
+    console.error(`[scraper:finalize] finalizeChunkedRun threw for ${payload.runId}`, err);
+    return NextResponse.json(
+      { success: false, error: err?.message ?? "finalize failed" },
+      { status: 500 },
+    );
+  }
 
   return NextResponse.json({ success: true });
 }

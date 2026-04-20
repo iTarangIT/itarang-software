@@ -8,7 +8,12 @@ import { processLeads } from "./processing";
 import { saveRawLeads } from "./storage/rawStore";
 import { saveCleanLeads, promoteLeadsToDealerLeads } from "./storage/leadStore";
 import { saveDuplicateLeads } from "./storage/duplicateStore";
-import { markRunCompleted, markRunFailed } from "./storage/runStore";
+import {
+  markRunCompleted,
+  markRunFailed,
+  markRunCancelled,
+} from "./storage/runStore";
+import { sanitizeDbError } from "@/lib/error-utils";
 import { scraperRaw } from "@/lib/db/schema";
 import { connection as redis } from "@/lib/queue/connection";
 import { publishToPath } from "@/lib/queue/scheduler";
@@ -78,17 +83,68 @@ export async function startChunkedRun(runId: string, baseQuery: string) {
       `[SCRAPER][${runId}] fanning out ${combinations.length} chunks`,
     );
 
-    for (const chunk of chunkRows) {
-      await publishToPath({
-        path: "/api/scraper/chunk",
-        body: { chunkId: chunk.id },
-      });
+    // Publish in parallel; record per-chunk publish results so we can mark
+    // failed chunks immediately. Without this, a failed publish leaves the
+    // chunk row stuck at "pending" and the run never finalizes.
+    const publishResults = await Promise.allSettled(
+      chunkRows.map((chunk) =>
+        publishToPath({
+          path: "/api/scraper/chunk",
+          body: { chunkId: chunk.id },
+        }),
+      ),
+    );
+
+    const failedChunkIds: string[] = [];
+    publishResults.forEach((res, idx) => {
+      if (res.status === "rejected") {
+        failedChunkIds.push(chunkRows[idx].id);
+        console.error(
+          `[SCRAPER][${runId}] publish failed for chunk ${chunkRows[idx].id}`,
+          res.reason,
+        );
+      }
+    });
+
+    if (failedChunkIds.length === chunkRows.length) {
+      // Every publish failed — the run cannot make progress. Fail it now
+      // instead of waiting for the stuck-run reaper.
+      await markRunFailed(
+        runId,
+        `QStash fan-out failed for all ${chunkRows.length} chunks. Check QSTASH_TOKEN, QSTASH_CURRENT_SIGNING_KEY, and the callback base URL (NEXT_PUBLIC_APP_URL or QSTASH_CALLBACK_BASE_URL).`,
+      );
+      return { totalChunks: combinations.length, failedPublishes: failedChunkIds.length };
     }
 
-    return { totalChunks: combinations.length };
+    if (failedChunkIds.length > 0) {
+      // Mark partial publish failures as failed chunks so completedChunks
+      // can still reach totalChunks and the run can finalize.
+      const failedAt = new Date();
+      for (const chunkId of failedChunkIds) {
+        await db
+          .update(scraperRunChunks)
+          .set({
+            status: "failed",
+            errorMessage: "QStash publish failed",
+            completedAt: failedAt,
+          })
+          .where(eq(scraperRunChunks.id, chunkId));
+      }
+      await db
+        .update(scrapeRuns)
+        .set({
+          completedChunks: sql`${scrapeRuns.completedChunks} + ${failedChunkIds.length}`,
+        })
+        .where(eq(scrapeRuns.id, runId));
+    }
+
+    return {
+      totalChunks: combinations.length,
+      failedPublishes: failedChunkIds.length,
+    };
   } catch (err: any) {
     console.error(`[SCRAPER][${runId}] startChunkedRun failed`, err);
-    await markRunFailed(runId, err.message ?? "startChunkedRun failed");
+    await markRunFailed(runId, sanitizeDbError(err) || "startChunkedRun failed");
     throw err;
   }
 }
@@ -110,8 +166,39 @@ export async function executeChunk(chunkId: string) {
     return;
   }
 
-  if (chunk.status === "done") {
-    console.log(`[SCRAPER][chunk] already done, skipping: ${chunkId}`);
+  if (chunk.status === "done" || chunk.status === "cancelled") {
+    console.log(
+      `[SCRAPER][chunk] already terminal (${chunk.status}), skipping: ${chunkId}`,
+    );
+    return;
+  }
+
+  // If the parent run was cancelled while this chunk was queued in QStash,
+  // skip the expensive Google Places fetch and mark the chunk cancelled.
+  // The cancel handler will have already finalized; we just no-op.
+  const [parentRun] = await db
+    .select({ status: scrapeRuns.status })
+    .from(scrapeRuns)
+    .where(eq(scrapeRuns.id, chunk.runId))
+    .limit(1);
+
+  if (
+    parentRun &&
+    (parentRun.status === "cancelled" ||
+      parentRun.status === "cancelling" ||
+      parentRun.status === "failed")
+  ) {
+    await db
+      .update(scraperRunChunks)
+      .set({
+        status: "cancelled",
+        completedAt: new Date(),
+        errorMessage: `run ${parentRun.status}`,
+      })
+      .where(eq(scraperRunChunks.id, chunkId));
+    console.log(
+      `[SCRAPER][chunk] parent run ${parentRun.status}, skipping chunk ${chunkId}`,
+    );
     return;
   }
 
@@ -150,7 +237,7 @@ export async function executeChunk(chunkId: string) {
       `[SCRAPER][chunk] ${chunkId} done — ${leadsCount} leads for "${chunk.combinationQuery}"`,
     );
   } catch (err: any) {
-    errorMessage = err.message ?? "chunk failed";
+    errorMessage = sanitizeDbError(err) || "chunk failed";
     await db
       .update(scraperRunChunks)
       .set({
@@ -180,22 +267,48 @@ export async function executeChunk(chunkId: string) {
     updated.completed >= updated.total
   ) {
     // Belt-and-suspenders: Redis NX lock so two concurrent completers
-    // can't both enqueue finalize.
-    const claimed = await redis.set(
-      `scraper:finalize-lock:${chunk.runId}`,
-      "1",
-      "EX",
-      60 * 60,
-      "NX",
-    );
-    if (claimed === "OK") {
+    // can't both enqueue finalize. If Redis is unavailable (quota
+    // exhausted, network blip), fall through to enqueue anyway —
+    // finalize is idempotent at the DB level, so a duplicate enqueue
+    // is far better than silently dropping the finalize.
+    let claimed = true;
+    try {
+      const result = await redis.set(
+        `scraper:finalize-lock:${chunk.runId}`,
+        "1",
+        "EX",
+        60 * 60,
+        "NX",
+      );
+      claimed = result === "OK";
+    } catch (err) {
+      console.warn(
+        `[SCRAPER][${chunk.runId}] Redis lock failed, proceeding without lock:`,
+        err,
+      );
+    }
+
+    if (claimed) {
       console.log(
         `[SCRAPER][${chunk.runId}] all chunks done, queueing finalize`,
       );
-      await publishToPath({
-        path: "/api/scraper/finalize",
-        body: { runId: chunk.runId },
-      });
+      // Try QStash first; if the publish fails (quota, callback URL not
+      // reachable, network blip), run finalize inline as a fallback. It's
+      // pure DB work and fits well inside the 60s budget. Without this
+      // fallback, a publish failure leaves the run stuck at status='running'
+      // with all chunks done — exactly the symptom we keep hitting.
+      try {
+        await publishToPath({
+          path: "/api/scraper/finalize",
+          body: { runId: chunk.runId },
+        });
+      } catch (publishErr) {
+        console.warn(
+          `[SCRAPER][${chunk.runId}] QStash finalize publish failed, running inline:`,
+          publishErr,
+        );
+        await finalizeChunkedRun(chunk.runId);
+      }
     }
   }
 }
@@ -260,7 +373,119 @@ export async function finalizeChunkedRun(runId: string) {
     );
   } catch (err: any) {
     console.error(`[SCRAPER][${runId}] finalize failed`, err);
-    await markRunFailed(runId, err.message ?? "finalize failed");
+    await markRunFailed(runId, sanitizeDbError(err) || "finalize failed");
+  }
+}
+
+// User-initiated cancel. Mark the run as 'cancelling' (so in-flight chunks
+// short-circuit), abandon any pending chunks, then process whatever raw
+// leads were already fetched and persist them. Mirrors finalize but ends
+// in status='cancelled' instead of 'completed'.
+export async function cancelChunkedRun(runId: string) {
+  const startTime = Date.now();
+
+  // Idempotency guard — refuse to cancel terminal runs.
+  const [run] = await db
+    .select({ status: scrapeRuns.status, startedAt: scrapeRuns.startedAt })
+    .from(scrapeRuns)
+    .where(eq(scrapeRuns.id, runId))
+    .limit(1);
+
+  if (!run) {
+    throw new Error("Run not found");
+  }
+  if (
+    run.status === "completed" ||
+    run.status === "failed" ||
+    run.status === "cancelled"
+  ) {
+    return { alreadyTerminal: true, status: run.status };
+  }
+
+  // 1) Flip the run flag first so any chunk that QStash delivers from now on
+  //    will see 'cancelling' and short-circuit before fetching.
+  await db
+    .update(scrapeRuns)
+    .set({ status: "cancelling" })
+    .where(eq(scrapeRuns.id, runId));
+
+  // 2) Mark any pending/running chunks as cancelled so the run's chunk
+  //    accounting reaches its total.
+  await db
+    .update(scraperRunChunks)
+    .set({
+      status: "cancelled",
+      completedAt: new Date(),
+      errorMessage: "cancelled by user",
+    })
+    .where(
+      and(
+        eq(scraperRunChunks.runId, runId),
+        sql`${scraperRunChunks.status} IN ('pending','running')`,
+      ),
+    );
+
+  // 3) Process & save whatever raw leads we already collected. Same logic
+  //    as finalize, but final status is 'cancelled'.
+  try {
+    const rawRows = await db
+      .select({ rawData: scraperRaw.rawData })
+      .from(scraperRaw)
+      .where(eq(scraperRaw.runId, runId));
+
+    const allLeads = rawRows
+      .map((r) => {
+        try {
+          return JSON.parse(r.rawData ?? "null");
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+
+    let savedCount = 0;
+    let cleanedCount = 0;
+    let duplicates = 0;
+    let promotedCount = 0;
+
+    if (allLeads.length) {
+      const result = await processLeads(allLeads);
+      const uniqueLeads = result.cleaned.filter((l: any) => !l.duplicate_of);
+      const duplicateLeads = result.cleaned.filter((l: any) => l.duplicate_of);
+
+      savedCount = await saveCleanLeads(uniqueLeads, runId);
+      await saveDuplicateLeads(duplicateLeads);
+      promotedCount = await promoteLeadsToDealerLeads(uniqueLeads);
+
+      cleanedCount = result.cleaned.length;
+      duplicates = result.duplicates;
+    }
+
+    await markRunCancelled(runId, {
+      total: allLeads.length,
+      cleaned: cleanedCount,
+      saved: savedCount,
+      duplicates,
+      duration_ms: Date.now() - startTime,
+    });
+
+    console.log(
+      `[SCRAPER][${runId}] cancelled — saved ${savedCount} leads (${promotedCount} promoted) from ${allLeads.length} raw in ${Date.now() - startTime}ms`,
+    );
+
+    return {
+      cancelled: true,
+      saved: savedCount,
+      total: allLeads.length,
+    };
+  } catch (err: any) {
+    console.error(`[SCRAPER][${runId}] cancel finalize failed`, err);
+    // Still mark as cancelled so the run doesn't stay stuck — but record the error.
+    await markRunFailed(
+      runId,
+      `Cancelled, but failed to save partial leads: ${sanitizeDbError(err)}`,
+    );
+    throw err;
   }
 }
 
@@ -286,21 +511,39 @@ export async function reconcileRun(runId: string) {
     return { finalized: false, pendingCount };
   }
 
-  const claimed = await redis.set(
-    `scraper:finalize-lock:${runId}`,
-    "1",
-    "EX",
-    60 * 60,
-    "NX",
-  );
-  if (claimed !== "OK") {
+  let claimed = true;
+  try {
+    const result = await redis.set(
+      `scraper:finalize-lock:${runId}`,
+      "1",
+      "EX",
+      60 * 60,
+      "NX",
+    );
+    claimed = result === "OK";
+  } catch (err) {
+    console.warn(
+      `[SCRAPER][${runId}] reconcile: Redis lock failed, proceeding without lock:`,
+      err,
+    );
+  }
+
+  if (!claimed) {
     return { finalized: false, alreadyClaimed: true };
   }
 
-  await publishToPath({
-    path: "/api/scraper/finalize",
-    body: { runId },
-  });
+  try {
+    await publishToPath({
+      path: "/api/scraper/finalize",
+      body: { runId },
+    });
+  } catch (publishErr) {
+    console.warn(
+      `[SCRAPER][${runId}] reconcile: QStash finalize publish failed, running inline:`,
+      publishErr,
+    );
+    await finalizeChunkedRun(runId);
+  }
 
   return { finalized: true };
 }
