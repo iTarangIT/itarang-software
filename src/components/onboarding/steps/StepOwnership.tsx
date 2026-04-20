@@ -7,6 +7,7 @@ type ContactRow = {
   id: string;
   name: string;
   phone: string;
+  landline?: string; // optional
   email: string;
   age?: string;
   photo?: any;
@@ -76,16 +77,31 @@ function ContactDetailCard({
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <TextInput
               value={row.name}
-              onChange={(value) => update(row.id, "name", value)}
+              onChange={(value) =>
+                update(row.id, "name", value.replace(/[0-9]/g, ""))
+              }
               placeholder={`${title} Name`}
             />
 
             <TextInput
               value={row.phone}
               onChange={(value) =>
-                update(row.id, "phone", value.replace(/[^0-9]/g, ""))
+                update(
+                  row.id,
+                  "phone",
+                  value.replace(/[^0-9]/g, "").slice(0, 10)
+                )
               }
               placeholder={`${title} Phone Number`}
+            />
+
+            {/* Landline Number — optional */}
+            <TextInput
+              value={row.landline || ""}
+              onChange={(value) =>
+                update(row.id, "landline", value.replace(/[^0-9]/g, ""))
+              }
+              placeholder={`${title} Landline Number (Optional)`}
             />
 
             <TextInput
@@ -97,7 +113,11 @@ function ContactDetailCard({
             <TextInput
               value={row.age || ""}
               onChange={(value) =>
-                update(row.id, "age", value.replace(/[^0-9]/g, ""))
+                update(
+                  row.id,
+                  "age",
+                  value.replace(/[^0-9]/g, "").slice(0, 2)
+                )
               }
               placeholder={`${title} Age`}
             />
@@ -128,19 +148,25 @@ function ContactDetailCard({
 
               <TextInput
                 value={row.city || ""}
-                onChange={(value) => update(row.id, "city", value)}
+                onChange={(value) =>
+                  update(row.id, "city", value.replace(/[^a-zA-Z\s]/g, ""))
+                }
                 placeholder="City"
               />
 
               <TextInput
                 value={row.district || ""}
-                onChange={(value) => update(row.id, "district", value)}
+                onChange={(value) =>
+                  update(row.id, "district", value.replace(/[^a-zA-Z\s]/g, ""))
+                }
                 placeholder="District"
               />
 
               <TextInput
                 value={row.state || ""}
-                onChange={(value) => update(row.id, "state", value)}
+                onChange={(value) =>
+                  update(row.id, "state", value.replace(/[^a-zA-Z\s]/g, ""))
+                }
                 placeholder="State"
               />
 
@@ -199,7 +225,13 @@ export default function StepOwnership() {
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <TextInput
                 value={ownership.ownerName}
-                onChange={(value) => setField("ownership", "ownerName", value)}
+                onChange={(value) =>
+                  setField(
+                    "ownership",
+                    "ownerName",
+                    value.replace(/[0-9]/g, "")
+                  )
+                }
                 placeholder="Owner Name"
               />
 
@@ -209,10 +241,23 @@ export default function StepOwnership() {
                   setField(
                     "ownership",
                     "ownerPhone",
-                    value.replace(/[^0-9]/g, "")
+                    value.replace(/[^0-9]/g, "").slice(0, 10)
                   )
                 }
                 placeholder="Owner Phone Number"
+              />
+
+              {/* Landline — optional */}
+              <TextInput
+                value={ownership.ownerLandline || ""}
+                onChange={(value) =>
+                  setField(
+                    "ownership",
+                    "ownerLandline",
+                    value.replace(/[^0-9]/g, "")
+                  )
+                }
+                placeholder="Owner Landline Number (Optional)"
               />
 
               <TextInput
@@ -227,7 +272,7 @@ export default function StepOwnership() {
                   setField(
                     "ownership",
                     "ownerAge",
-                    value.replace(/[^0-9]/g, "")
+                    value.replace(/[^0-9]/g, "").slice(0, 2)
                   )
                 }
                 placeholder="Owner Age"
@@ -261,21 +306,37 @@ export default function StepOwnership() {
 
                 <TextInput
                   value={(ownership as any).ownerCity || ""}
-                  onChange={(value) => setField("ownership", "ownerCity", value)}
+                  onChange={(value) =>
+                    setField(
+                      "ownership",
+                      "ownerCity",
+                      value.replace(/[^a-zA-Z\s]/g, "")
+                    )
+                  }
                   placeholder="City"
                 />
 
                 <TextInput
                   value={(ownership as any).ownerDistrict || ""}
                   onChange={(value) =>
-                    setField("ownership", "ownerDistrict", value)
+                    setField(
+                      "ownership",
+                      "ownerDistrict",
+                      value.replace(/[^a-zA-Z\s]/g, "")
+                    )
                   }
                   placeholder="District"
                 />
 
                 <TextInput
                   value={(ownership as any).ownerState || ""}
-                  onChange={(value) => setField("ownership", "ownerState", value)}
+                  onChange={(value) =>
+                    setField(
+                      "ownership",
+                      "ownerState",
+                      value.replace(/[^a-zA-Z\s]/g, "")
+                    )
+                  }
                   placeholder="State"
                 />
 

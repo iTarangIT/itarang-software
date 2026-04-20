@@ -9,12 +9,16 @@ import {
 } from "@/lib/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { canReInitiateAgreement } from "@/lib/agreement/status";
+import { fetchDigioAndSyncSigners } from "@/lib/agreement/sync-signers";
+import { requireAdmin } from "@/lib/auth/requireAdmin";
 
 type Context = {
   params: Promise<{ dealerId: string }>;
 };
 
 export async function GET(_req: NextRequest, context: Context) {
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
 
@@ -33,10 +37,36 @@ export async function GET(_req: NextRequest, context: Context) {
       );
     }
 
-    const signerRows = await db
+    let signerRows = await db
       .select()
       .from(dealerAgreementSigners)
       .where(eq(dealerAgreementSigners.applicationId, application.id));
+
+    // Auto-sync from Digio if we detect stale state — agreement is completed (or initiated
+    // at all) but any signer is still stuck at 'sent'. This catches the case where the
+    // agreement was signed but no manual refresh was ever triggered to sync per-signer rows.
+    const hasStaleSigner = signerRows.some((s) => {
+      const status = String(s.signerStatus || "").toLowerCase();
+      return status === "sent" || status === "pending";
+    });
+    if (application.providerDocumentId && signerRows.length > 0 && hasStaleSigner) {
+      try {
+        const parsed = await fetchDigioAndSyncSigners({
+          applicationId: application.id,
+          providerDocumentId: application.providerDocumentId,
+          requestId: application.requestId,
+        });
+        if (parsed) {
+          // Re-read signer rows after sync so the response reflects fresh data.
+          signerRows = await db
+            .select()
+            .from(dealerAgreementSigners)
+            .where(eq(dealerAgreementSigners.applicationId, application.id));
+        }
+      } catch (syncErr) {
+        console.warn("[AGREEMENT TRACKING] auto-sync failed (non-blocking):", syncErr);
+      }
+    }
 
     const signerOrder = [
       "dealer",
