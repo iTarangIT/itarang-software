@@ -43,16 +43,31 @@ export async function requireSalesHead(): Promise<RequireSalesHeadResult> {
     };
   }
 
-  const [row] = await db
-    .select({
-      id: users.id,
-      email: users.email,
-      role: users.role,
-      is_active: users.is_active,
-    })
+  // Try to match by Supabase auth user.id first. For users provisioned directly
+  // in the app DB (seed users, users created before Supabase sync was in place),
+  // the auth user.id will not match the app users.id column — fall back to an
+  // email lookup so they still resolve. This mirrors getAuthenticatedAppUser()
+  // in src/lib/kyc/admin-workflow.ts and the middleware's profileByEmail branch.
+  const selectCols = {
+    id: users.id,
+    email: users.email,
+    role: users.role,
+    is_active: users.is_active,
+  };
+
+  let [row] = await db
+    .select(selectCols)
     .from(users)
     .where(eq(users.id, user.id))
     .limit(1);
+
+  if (!row && user.email) {
+    [row] = await db
+      .select(selectCols)
+      .from(users)
+      .where(eq(users.email, user.email))
+      .limit(1);
+  }
 
   // Reject deactivated users — is_active can be flipped to revoke access
   // without also stripping the role.
