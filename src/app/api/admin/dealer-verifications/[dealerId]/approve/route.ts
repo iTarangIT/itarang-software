@@ -31,6 +31,31 @@ function resolveDealerLoginEmail(application: any) {
   return application?.ownerEmail?.trim?.() || null;
 }
 
+function resolveDealerLoginUrl(req: NextRequest): string {
+  // Explicit single-URL override (local dev / ad-hoc overrides) wins.
+  if (process.env.DEALER_LOGIN_URL) return process.env.DEALER_LOGIN_URL;
+
+  const appEnv = (process.env.APP_ENV || process.env.NEXT_PUBLIC_APP_ENV || "").toLowerCase();
+  const isProduction =
+    appEnv === "production" ||
+    (appEnv === "" && process.env.NODE_ENV === "production");
+
+  if (isProduction && process.env.DEALER_LOGIN_URL_PRODUCTION) {
+    return process.env.DEALER_LOGIN_URL_PRODUCTION;
+  }
+  if (!isProduction && process.env.DEALER_LOGIN_URL_SANDBOX) {
+    return process.env.DEALER_LOGIN_URL_SANDBOX;
+  }
+
+  // Last resort: derive from the request origin (respects proxies).
+  const forwardedProto = req.headers.get("x-forwarded-proto");
+  const forwardedHost = req.headers.get("x-forwarded-host");
+  const requestOrigin = forwardedHost
+    ? `${forwardedProto || "https"}://${forwardedHost}`
+    : req.nextUrl.origin;
+  return `${requestOrigin}/login`;
+}
+
 
 export async function POST(req: NextRequest, context: RouteContext) {
   const auth = await requireSalesHead();
@@ -38,14 +63,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
   try {
     const { dealerId } = await context.params;
 
-    const forwardedProto = req.headers.get("x-forwarded-proto");
-    const forwardedHost = req.headers.get("x-forwarded-host");
-    const requestOrigin =
-      forwardedHost
-        ? `${forwardedProto || "https"}://${forwardedHost}`
-        : req.nextUrl.origin;
-    const resolvedLoginUrl =
-      process.env.DEALER_LOGIN_URL || `${requestOrigin}/login`;
+    const resolvedLoginUrl = resolveDealerLoginUrl(req);
 
     const existing = await db
       .select()
