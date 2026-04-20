@@ -144,6 +144,9 @@ export async function GET(
             reference_id: `${txn.reference_id}-FETCH`,
             // Decentro caps consent_purpose at 50 chars.
             consent_purpose: "Aadhaar verification for lead creation",
+            // Ask for the full eAadhaar PDF so we can archive it on the
+            // transaction row — useful for later admin audits/disputes.
+            generate_pdf: true,
         });
 
         const responseStatus =
@@ -175,12 +178,41 @@ export async function GET(
             extractStructuredAadhaar(null),
         );
 
+        // Pull the PDF if Decentro returned one. Field name varies across
+        // their product versions — try the likely shapes, decode base64
+        // into a Buffer, then persist as bytea.
+        const pdfBase64 =
+            eaadhaarRes?.data?.pdf ??
+            eaadhaarRes?.data?.pdfBase64 ??
+            eaadhaarRes?.data?.eaadhaarPdf ??
+            eaadhaarRes?.data?.eaadhaarPdfBase64 ??
+            eaadhaarRes?.data?.aadhaarPdf ??
+            eaadhaarRes?.data?.pdf_base64 ??
+            null;
+        let pdfBuffer: Buffer | null = null;
+        if (typeof pdfBase64 === "string" && pdfBase64.length > 0) {
+            try {
+                // Some APIs prefix the base64 with a data-URL header; strip it.
+                const cleaned = pdfBase64.replace(
+                    /^data:application\/pdf;base64,/,
+                    "",
+                );
+                pdfBuffer = Buffer.from(cleaned, "base64");
+            } catch (pdfErr) {
+                console.error(
+                    "[leads/digilocker/callback] PDF base64 decode failed:",
+                    pdfErr,
+                );
+            }
+        }
+
         await db
             .update(digilockerTransactions)
             .set({
                 status: "document_fetched",
                 digilocker_raw_response: eaadhaarRes,
                 aadhaar_extracted_data: finalData,
+                aadhaar_pdf: pdfBuffer,
                 updated_at: now,
             })
             .where(eq(digilockerTransactions.id, transactionId));
