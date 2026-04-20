@@ -4,6 +4,7 @@ import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { canReInitiateAgreement } from "@/lib/agreement/status";
 import { requireAdmin } from "@/lib/auth/requireAdmin";
+import { POST as initiateAgreement } from "@/app/api/admin/dealer-verifications/[dealerId]/initiate-agreement/route";
 
 type Context = {
   params: Promise<{ dealerId: string }>;
@@ -52,28 +53,24 @@ export async function POST(req: NextRequest, context: Context) {
       );
     }
 
-    const appBaseUrl =
-      process.env.APP_URL ||
-      process.env.NEXT_PUBLIC_APP_URL ||
-      "http://localhost:3000";
-
-    // Forward caller auth (cookies + Authorization) to the internal POST —
-    // without this, initiate-agreement's requireAdmin() gate returns 401 and
-    // the re-initiate flow appears broken for every authenticated admin.
-    const forwardHeaders: Record<string, string> = { "Content-Type": "application/json" };
-    const cookieHeader = req.headers.get("cookie");
-    if (cookieHeader) forwardHeaders.cookie = cookieHeader;
-    const authHeader = req.headers.get("authorization");
-    if (authHeader) forwardHeaders.authorization = authHeader;
-
-    const response = await fetch(
-      `${appBaseUrl}/api/admin/dealer-verifications/${dealerId}/initiate-agreement`,
-      {
+    // Call initiate-agreement in-process. We previously did a self-fetch via
+    // APP_URL / NEXT_PUBLIC_APP_URL, which fails on Hostinger when those are
+    // unset or point somewhere unreachable (e.g. a stale ngrok tunnel).
+    // In-process avoids the network hop entirely and preserves the caller's
+    // auth context because requireAdmin() reads the same Supabase session
+    // cookies from the forwarded NextRequest.
+    const forwardHeaders = new Headers(req.headers);
+    forwardHeaders.set("Content-Type", "application/json");
+    const internalReq = new NextRequest(
+      new Request(`${req.nextUrl.origin}/api/admin/dealer-verifications/${dealerId}/initiate-agreement`, {
         method: "POST",
         headers: forwardHeaders,
         body: JSON.stringify(body),
-      }
+      })
     );
+    const response = await initiateAgreement(internalReq, {
+      params: Promise.resolve({ dealerId }),
+    });
 
     const json = await response.json();
 
