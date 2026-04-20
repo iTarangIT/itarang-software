@@ -597,12 +597,21 @@ function UploadBox({ label, file, onSelect, scanning }: {
 // ─── DigiLocker KYC Button ─────────────────────────────────────────────────
 //
 // Opens the Decentro DigiLocker SSO URL in a popup. The driver signs into
-// DigiLocker on the popup, authorises iTarang, and submits. Our callback
-// route fetches eAadhaar and postMessages the normalized fields back into
-// this window. Same onResult signature as OCRModal so the caller wires
-// both buttons to a single handleOCRResult.
+// DigiLocker, authorises iTarang, and submits. Our server-side callback
+// fetches eAadhaar and stores it on the digilocker_transactions row. The
+// parent window here polls /api/leads/digilocker/status/[txnId] every
+// couple of seconds; when status === "document_fetched" we prefill the
+// form. This approach is resilient to browser COOP rules that null
+// window.opener across the cross-origin DigiLocker navigations — those
+// rules make window.postMessage from the popup unreliable.
+//
+// Same onResult signature as OCRModal so the caller wires both buttons
+// to a single handleOCRResult.
 
 type DigilockerStatus = 'idle' | 'initiating' | 'awaiting' | 'success' | 'failed';
+
+const POLL_INTERVAL_MS = 2000;
+const POLL_MAX_DURATION_MS = 10 * 60 * 1000; // 10 min safety cap
 
 export function DigilockerKycButton({ leadId, phone, onResult, disabled }: {
     leadId: string | null;
@@ -614,15 +623,11 @@ export function DigilockerKycButton({ leadId, phone, onResult, disabled }: {
     const [error, setError] = useState<string | null>(null);
     const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
     const popupRef = useRef<Window | null>(null);
-    const txnIdRef = useRef<string | null>(null);
-    const handlerRef = useRef<((e: MessageEvent) => void) | null>(null);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const pollDeadlineRef = useRef<number>(0);
+    const txnIdRef = useRef<string | null>(null);
 
     const cleanup = () => {
-        if (handlerRef.current) {
-            window.removeEventListener('message', handlerRef.current);
-            handlerRef.current = null;
-        }
         if (pollRef.current) {
             clearInterval(pollRef.current);
             pollRef.current = null;
@@ -636,6 +641,48 @@ export function DigilockerKycButton({ leadId, phone, onResult, disabled }: {
     const openPopup = (url: string): Window | null => {
         const features = 'width=520,height=720,menubar=no,toolbar=no,location=yes,status=yes,resizable=yes,scrollbars=yes';
         return window.open(url, 'itarang-digilocker', features);
+    };
+
+    const startPolling = (transactionId: string) => {
+        pollDeadlineRef.current = Date.now() + POLL_MAX_DURATION_MS;
+        pollRef.current = setInterval(async () => {
+            if (!txnIdRef.current || txnIdRef.current !== transactionId) {
+                if (pollRef.current) clearInterval(pollRef.current);
+                return;
+            }
+            if (Date.now() > pollDeadlineRef.current) {
+                setError('Timed out waiting for DigiLocker authorization.');
+                setStatus('failed');
+                cleanup();
+                return;
+            }
+            try {
+                const res = await fetch(
+                    `/api/leads/digilocker/status/${encodeURIComponent(transactionId)}`,
+                    { cache: 'no-store' },
+                );
+                if (!res.ok) return;
+                const json = await res.json();
+                if (!json?.success) return;
+                const s = json.data?.status;
+                if (s === 'document_fetched' && json.data?.data) {
+                    onResult(json.data.data);
+                    setStatus('success');
+                    cleanup();
+                    // Best-effort: close the popup if it's still open.
+                    try { popupRef.current?.close(); } catch {}
+                    return;
+                }
+                if (s === 'failed' || s === 'expired') {
+                    setError(`DigiLocker authorization ${s}.`);
+                    setStatus('failed');
+                    cleanup();
+                    return;
+                }
+            } catch {
+                // transient — keep polling
+            }
+        }, POLL_INTERVAL_MS);
     };
 
     const handleClick = async () => {
@@ -669,61 +716,18 @@ export function DigilockerKycButton({ leadId, phone, onResult, disabled }: {
             };
             txnIdRef.current = transactionId;
 
-            // Register listener BEFORE opening the popup so we never miss
-            // a fast postMessage. Listener removes itself after handling.
-            const handler = (e: MessageEvent) => {
-                if (e.origin !== window.location.origin) return;
-                const data = e.data;
-                if (!data || typeof data !== 'object') return;
-                if (data.type !== 'itarang:digilocker') return;
-                if (data.transactionId !== txnIdRef.current) return;
-
-                if (data.ok && data.data) {
-                    onResult(data.data);
-                    setStatus('success');
-                } else {
-                    setError(data.error || 'DigiLocker authorization failed');
-                    setStatus('failed');
-                }
-                cleanup();
-            };
-            handlerRef.current = handler;
-            window.addEventListener('message', handler);
-
             const popup = openPopup(authorizationUrl);
             popupRef.current = popup;
 
             if (!popup) {
-                // Popup blocker kicked in — keep the listener, surface
-                // a fallback link the user can click (preserves the
-                // user-gesture requirement for most browsers).
+                // Popup blocker kicked in — surface a fallback link the
+                // user can click (preserves the user-gesture requirement
+                // for most browsers).
                 setFallbackUrl(authorizationUrl);
-                setStatus('awaiting');
-                return;
             }
 
             setStatus('awaiting');
-
-            // Detect user-closed popup without authorising. Poll the
-            // popup.closed flag; if it closes before success, reset.
-            pollRef.current = setInterval(() => {
-                if (popupRef.current && popupRef.current.closed) {
-                    if (pollRef.current) clearInterval(pollRef.current);
-                    pollRef.current = null;
-                    // Give any late postMessage ~1s to arrive before
-                    // giving up — the close event can race the message.
-                    setTimeout(() => {
-                        setStatus(prev => {
-                            if (prev === 'awaiting') {
-                                setError('DigiLocker window was closed before authorization completed.');
-                                cleanup();
-                                return 'failed';
-                            }
-                            return prev;
-                        });
-                    }, 1200);
-                }
-            }, 800);
+            startPolling(transactionId);
         } catch {
             setError('Network error. Please try again.');
             setStatus('failed');
