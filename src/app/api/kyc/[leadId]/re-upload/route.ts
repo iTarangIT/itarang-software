@@ -22,6 +22,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const formData = await req.formData();
         const file = formData.get('file') as File;
         const verificationType = formData.get('verificationType') as string;
+        const rawDocFor = (formData.get('docFor') as string) || 'customer';
+        const docFor = rawDocFor === 'borrower' ? 'borrower' : 'customer';
+        const applicant = docFor === 'borrower' ? 'co_borrower' : 'primary';
 
         if (!file || !verificationType) {
             return NextResponse.json({ success: false, error: { message: 'File and verificationType required' } }, { status: 400 });
@@ -54,7 +57,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const docType = docTypeMap[verificationType] || verificationType;
         const now = new Date();
 
-        // Update document
+        // Update document (scoped by doc_for so customer/borrower rows stay independent)
         await db.update(kycDocuments)
             .set({
                 file_url: urlData.publicUrl,
@@ -64,10 +67,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             })
             .where(and(
                 eq(kycDocuments.lead_id, leadId),
+                eq(kycDocuments.doc_for, docFor),
                 eq(kycDocuments.doc_type, docType)
             ));
 
-        // Reset verification status
+        // Reset verification status (scoped by applicant)
         await db.update(kycVerifications)
             .set({
                 status: 'awaiting_action',
@@ -76,6 +80,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             })
             .where(and(
                 eq(kycVerifications.lead_id, leadId),
+                eq(kycVerifications.applicant, applicant),
                 eq(kycVerifications.verification_type, verificationType)
             ));
 
