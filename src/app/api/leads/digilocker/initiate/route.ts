@@ -62,11 +62,11 @@ export async function POST(req: Request) {
         const referenceId = `LEAD-DIGI-${leadId}-${Date.now()}`;
         const redirectUrl = `${CALLBACK_BASE}/api/leads/digilocker/callback/${encodeURIComponent(digiId)}`;
 
+        // Decentro caps consent_purpose at 50 chars.
         const decentroRes = await digilockerInitiateSession({
             reference_id: referenceId,
             redirect_url: redirectUrl,
-            consent_purpose:
-                "Aadhaar verification via DigiLocker for lead creation",
+            consent_purpose: "Aadhaar verification for lead creation",
         });
 
         const resData = decentroRes?.data ?? {};
