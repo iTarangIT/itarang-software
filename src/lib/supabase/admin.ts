@@ -9,3 +9,7 @@ export const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
     persistSession: false,
   },
 });
+
+export function createAdminClient() {
+  return supabaseAdmin;
+}

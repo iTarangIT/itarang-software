@@ -1,9 +1,8 @@
 'use client';
 
-import { useState, useEffect, useRef, Suspense } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, X, AlertCircle, Scan, Info, ChevronRight, ChevronDown, Loader2, ShieldCheck, UserPlus, ArrowRight } from 'lucide-react';
-import { toast } from 'sonner';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { DatePicker } from '@/components/ui/date-picker';
 import {
@@ -116,10 +115,7 @@ function NewLeadWizardContent() {
         await initDraft(true);
     };
 
-    const initCalledRef = useRef(false);
     useEffect(() => {
-        if (initCalledRef.current) return;
-        initCalledRef.current = true;
         const params = new URLSearchParams(window.location.search);
         const fresh = params.get('fresh') === 'true';
         initDraft(fresh);
@@ -177,15 +173,7 @@ function NewLeadWizardContent() {
             // Strip all non-digits and cap at 10
             fin = String(value ?? '').replace(/\D/g, '').slice(0, 10);
         }
-        if (field === 'vehicle_rc') {
-            // Strip non-alphanumeric, uppercase, and auto-format RC: XX 00 XX 0000
-            fin = String(value ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 13);
-            // Auto-insert spaces for readability: STATE(2) RTO(1-2) SERIES(1-3) NUMBER(1-4)
-            const m = fin.match(/^([A-Z]{0,2})(\d{0,2})([A-Z]{0,3})(\d{0,4})$/);
-            if (m) {
-                fin = [m[1], m[2], m[3], m[4]].filter(Boolean).join(' ');
-            }
-        }
+        if (field === 'vehicle_rc') fin = value.toUpperCase();
 
         setFormData((prev: any) => {
             const next = { ...prev, [field]: fin };
@@ -251,14 +239,6 @@ function NewLeadWizardContent() {
         if (formData.permanent_address && formData.permanent_address.trim().length < 20) e.permanent_address = 'Minimum 20 characters required';
 
         const isVehicle = formData.is_vehicle_category;
-        // Validate RC format if provided: XX 00 XX 0000 (e.g., MH 01 AB 1234)
-        if (formData.vehicle_rc?.trim()) {
-            const rcClean = formData.vehicle_rc.replace(/\s/g, '');
-            const rcRegex = /^[A-Z]{2}\d{1,2}[A-Z]{1,3}\d{1,4}$/;
-            if (!rcRegex.test(rcClean)) {
-                e.vehicle_rc = 'Invalid RC format. Use format like MH 01 AB 1234';
-            }
-        }
         if (isVehicle && formData.vehicle_rc?.trim()) {
             if (!formData.vehicle_ownership) e.vehicle_ownership = 'Required';
             if (!formData.vehicle_owner_name?.trim()) e.vehicle_owner_name = 'Required';
@@ -300,7 +280,6 @@ function NewLeadWizardContent() {
 
             if (result.success) {
                 const { leadId: updatedLeadId } = result.data;
-                toast.success('Lead created successfully!');
                 if (fromScraped && updatedLeadId) {
                     fetch(`/api/scraper/leads/${fromScraped}/convert`, {
                         method: 'PATCH',
@@ -310,11 +289,11 @@ function NewLeadWizardContent() {
                 }
 
                 if (formData.payment_method === 'cash' || formData.payment_method === 'upfront') {
-                    router.push(`/dealer-portal/leads?new=${updatedLeadId}`);
+                    router.push('/dealer-portal/leads');
                 } else if (formData.interest_level === 'hot' && isFinanceMethod(formData.payment_method)) {
                     router.push(`/dealer-portal/leads/${updatedLeadId}/kyc`);
                 } else {
-                    router.push(`/dealer-portal/leads?new=${updatedLeadId}`);
+                    router.push('/dealer-portal/leads');
                 }
             } else {
                 const details = result.error?.details?.map((d: any) => `${d.path}: ${d.message}`).join(', ');
@@ -677,7 +656,7 @@ function NewLeadWizardContent() {
                                     <p className="text-sm text-gray-400 font-medium px-1 mb-4">Vehicle details are only applicable for 2W/3W/4W categories.</p>
                                 )}
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-6">
-                                    <InputField label="Vehicle Reg. Number" value={formData.vehicle_rc} onChange={v => updateField('vehicle_rc', v)} placeholder="MH 01 AB 1234" error={errors.vehicle_rc} />
+                                    <InputField label="Vehicle Reg. Number" value={formData.vehicle_rc} onChange={v => updateField('vehicle_rc', v)} placeholder="HR 35 A 78989" />
                                     <SelectField
                                         label={`Vehicle Ownership${formData.vehicle_rc?.trim() ? ' *' : ''}`}
                                         value={formData.vehicle_ownership}
