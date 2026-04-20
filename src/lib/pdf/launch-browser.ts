@@ -13,8 +13,14 @@ const CHROMIUM_REMOTE_PACK =
   "https://github.com/Sparticuz/chromium/releases/download/v147.0.0/chromium-v147.0.0-pack.x64.tar";
 
 export async function launchBrowser() {
+  // Use the self-contained @sparticuz/chromium-min bundle on Vercel/Lambda, or
+  // whenever USE_SPARTICUZ_CHROMIUM=1 is set (opt-in for VPS/Hostinger where
+  // the system Chromium is missing libatk / libgbm / libnss and we can't
+  // sudo apt-get install).
   const isServerless =
-    !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+    !!process.env.VERCEL ||
+    !!process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.USE_SPARTICUZ_CHROMIUM === "1";
 
   if (isServerless) {
     const [{ default: puppeteerCore }, { default: chromium }] = await Promise.all([
