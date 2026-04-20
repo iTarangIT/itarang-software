@@ -11,9 +11,18 @@ import {
   index,
   bigint,
   json,
+  customType,
 } from "drizzle-orm/pg-core";
 
 import { relations } from "drizzle-orm";
+
+// Postgres bytea column backed by Node Buffer. Used for binary blobs like
+// the DigiLocker eAadhaar PDF.
+const bytea = customType<{ data: Buffer; default: false }>({
+  dataType() {
+    return "bytea";
+  },
+});
 
 // --- FOUNDATION ---
 
@@ -1474,6 +1483,10 @@ export const digilockerTransactions = pgTable(
     digilocker_raw_response: jsonb("digilocker_raw_response"),
     aadhaar_extracted_data: jsonb("aadhaar_extracted_data"),
     cross_match_result: jsonb("cross_match_result"),
+    // Binary PDF of the eAadhaar returned by Decentro when we call the
+    // eAadhaar endpoint with generate_pdf=true. Stored alongside the
+    // structured data so admin review has everything in one row.
+    aadhaar_pdf: bytea("aadhaar_pdf"),
     expires_at: timestamp("expires_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
