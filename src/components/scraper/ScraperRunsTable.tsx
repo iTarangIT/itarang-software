@@ -20,8 +20,10 @@ export function ScraperRunsTable({ onSelectRun }: ScraperRunsTableProps) {
     },
     refetchInterval: (query) => {
       const runs = query.state.data?.data ?? [];
-      const hasRunning = runs.some((r: any) => r.status === "running");
-      return hasRunning ? 4000 : false;
+      const hasActive = runs.some(
+        (r: any) => r.status === "running" || r.status === "cancelling",
+      );
+      return hasActive ? 4000 : false;
     },
   });
 
@@ -73,7 +75,9 @@ export function ScraperRunsTable({ onSelectRun }: ScraperRunsTableProps) {
                         ? "bg-green-100 text-green-700"
                         : run.status === "failed"
                           ? "bg-red-100 text-red-700"
-                          : "bg-yellow-100 text-yellow-700"
+                          : run.status === "cancelled"
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-yellow-100 text-yellow-700"
                     }`}
                   >
                     {run.status}

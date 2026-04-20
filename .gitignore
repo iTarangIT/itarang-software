@@ -12,6 +12,11 @@
 
 # testing
 /coverage
+/test-results
+/playwright-report
+/playwright/.cache
+/tests/.auth
+.env.test.local
 
 # next.js
 /.next/
@@ -42,7 +47,8 @@ next-env.d.ts
 
 # secrets
 /secrets/
+sandbox.env
 node_modules
 
 # claude code — local, per-developer settings (must not be committed)
-.claude/settings.local.json
+.claude/

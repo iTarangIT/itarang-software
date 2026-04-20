@@ -36,32 +36,21 @@ const step1Schema = z.object({
     is_vehicle_category: z.boolean().optional(),
 }).passthrough();
 
-let sequenceReady = false;
-
-async function ensureLeadSequence() {
-    if (sequenceReady) return;
-    // Create the sequence if it doesn't exist, starting after the current max
-    await db.execute(sql`
-        DO $$
-        DECLARE
-            max_seq INTEGER;
-        BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'lead_reference_seq') THEN
-                SELECT COALESCE(MAX(CAST(SUBSTRING(reference_id FROM '#IT-[0-9]{4}-0*([0-9]+)') AS INTEGER)), 0)
-                INTO max_seq FROM leads WHERE reference_id LIKE '#IT-%';
-                EXECUTE format('CREATE SEQUENCE lead_reference_seq START WITH %s', max_seq + 1);
-            END IF;
-        END $$;
-    `);
-    sequenceReady = true;
-}
-
 async function generateLeadReference() {
-    await ensureLeadSequence();
     const year = new Date().getFullYear();
-    const [result] = await db.execute(sql`SELECT nextval('lead_reference_seq') as seq`);
-    const seq = Number((result as any).seq);
-    return `#IT-${year}-${seq.toString().padStart(7, '0')}`;
+    const prefix = `#IT-${year}`;
+    const [lastRecord] = await db.select({ reference_id: leads.reference_id })
+        .from(leads)
+        .where(sql`${leads.reference_id} LIKE ${prefix + '-%'}`)
+        .orderBy(desc(leads.reference_id))
+        .limit(1);
+
+    let sequenceNum = 1;
+    if (lastRecord?.reference_id) {
+        const lastSeq = lastRecord.reference_id.split('-').pop();
+        if (lastSeq) sequenceNum = parseInt(lastSeq) + 1;
+    }
+    return `${prefix}-${sequenceNum.toString().padStart(7, '0')}`;
 }
 
 const normalizePhone = (phone?: string | null) => {
@@ -212,7 +201,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                     uploader_id: user.id,
                     status: 'INCOMPLETE',
                     workflow_step: 1,
-                    lead_source: 'dealer_referral',
+                    lead_source: 'dealer_referral', // Default for dealer portal
                     owner_name: 'DRAFT',
                     owner_contact: 'DRAFT',
                 });
