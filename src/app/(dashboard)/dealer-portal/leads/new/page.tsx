@@ -9,6 +9,7 @@ import {
     SectionCard, InputField, SelectField, TextAreaField,
     ProgressHeader, StickyBottomBar, ErrorBanner,
     PrimaryButton, OutlineButton, OCRModal, FullPageLoader,
+    DigilockerKycButton,
 } from '@/components/dealer-portal/lead-wizard/shared';
 import {
     INTEREST_LEVELS, PAYMENT_METHODS, VEHICLE_OWNERSHIP_OPTIONS,
@@ -475,6 +476,11 @@ function NewLeadWizardContent() {
                             >
                                 <Scan className="w-4 h-4" /> Auto-fill from ID
                             </button>
+                            <DigilockerKycButton
+                                leadId={leadId}
+                                phone={formData.phone}
+                                onResult={handleOCRResult}
+                            />
                         </div>
                     }
                 />
