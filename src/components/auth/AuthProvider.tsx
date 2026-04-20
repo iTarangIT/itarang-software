@@ -99,9 +99,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = async () => {
     try {
       setLoading(true);
-      await supabase.auth.signOut();
       setUser(null);
-      window.location.href = "/login";
+      // Route through /api/auth/logout — relative, hits the current public
+      // host. Server clears sb-* cookies and redirects to /login using
+      // X-Forwarded-Host so browsers never land on the internal upstream.
+      window.location.href = "/api/auth/logout";
     } catch (error) {
       console.error("[AuthProvider] Logout failed:", error);
       setLoading(false);
