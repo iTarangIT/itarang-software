@@ -1,16 +1,21 @@
 /**
- * Finance-enabled dealer onboarding lifecycle:
+ * Finance-enabled dealer onboarding lifecycle (LIVE Digio):
  *   anonymous onboarding (finance=yes + Step 5 agreement) →
  *   sales_head visits detail page (Section 3 renders, Initiate button shown) →
- *   click Initiate Agreement with a mocked Digio response →
- *   assert the persisted agreementConfig round-tripped from Step 5 into the
- *   initiate-agreement POST body.
+ *   click Initiate Agreement → real POST fires to sandbox → sandbox calls the
+ *   live Digio sandbox API → assert both the outbound agreementConfig AND the
+ *   response contains a real providerDocumentId / requestId from Digio.
+ *
+ * Side effects of running: creates a real Digio agreement draft and fires
+ * e-sign invitation emails to the signer addresses (all @itarang.com test
+ * addresses). Sandbox Digio creds must be present in the deployed env.
  *
  * Scope note: this spec does NOT attempt final approval or dealer login. The
  * /approve endpoint hard-blocks finance-enabled applications until
- * agreementStatus === "completed" (approve/route.ts:94-109), which requires a
- * real Digio signed agreement and is not reproducible via a Playwright mock.
- * See dealer-approval-cycle.spec.ts for the finance=no end-to-end path.
+ * agreementStatus === "completed" (approve/route.ts:94-109), which requires
+ * all signers to actually sign in Digio — not something an automated test can
+ * finish on its own. See dealer-approval-cycle.spec.ts for the finance=no
+ * end-to-end path.
  *
  * Run:
  *   npx playwright test --project=setup                                     # once
@@ -42,7 +47,7 @@ const GSTIN       = `27AAGCS${RUN_ID.slice(-4)}F1Z5`;
 const PAN         = `AAGCS${RUN_ID.slice(-4)}F`;
 const ITARANG_S1_EMAIL = `itarang-sig1-${RUN_ID}@itarang.com`;
 
-test('dealer onboarding (finance=yes): onboard → admin Section 3 → initiate (mocked)', async ({ browser }) => {
+test('dealer onboarding (finance=yes): onboard → admin Section 3 → initiate (live Digio)', async ({ browser }) => {
   test.setTimeout(8 * 60_000);
 
   if (!E2E_PHONE || E2E_PHONE.length !== 10) {
@@ -104,22 +109,40 @@ test('dealer onboarding (finance=yes): onboard → admin Section 3 → initiate 
     await assertAdminFinanceView(p2, applicationId);
     console.log(`[Phase B] admin Section 3 + Initiate button OK`);
 
-    // ── PHASE C: intercept + click Initiate Agreement ──
-    const capturedBody = await interceptAndClickInitiateAgreement(p2, applicationId);
-    console.log(`[Phase C] initiate-agreement POST intercepted — payload keys=${Object.keys(capturedBody?.agreementConfig ?? {}).length}`);
+    // ── PHASE C: click Initiate Agreement and observe the live Digio round-trip ──
+    const { req, res } = await captureLiveInitiateAgreement(p2, applicationId);
+    console.log(`[Phase C] initiate-agreement req captured (${Object.keys(req?.agreementConfig ?? {}).length} keys), live Digio response: success=${res?.success} providerDocumentId=${res?.data?.providerDocumentId} requestId=${res?.data?.requestId}`);
 
-    // The agreementConfig payload is built by handleAgreementAction
+    // Outbound payload — the agreementConfig is built by handleAgreementAction
     // (page.tsx:644-665) from the detail-GET data, which in turn was written
     // by the submit route. Asserting on its contents proves Step 5 survived
     // the persistence round-trip.
-    const cfg = capturedBody?.agreementConfig;
+    const cfg = req?.agreementConfig;
     if (!cfg) {
-      throw new Error(`initiate-agreement body.agreementConfig missing: ${JSON.stringify(capturedBody).slice(0, 400)}`);
+      throw new Error(`initiate-agreement body.agreementConfig missing: ${JSON.stringify(req).slice(0, 400)}`);
     }
     expect(cfg.dealerSignerEmail, 'agreementConfig.dealerSignerEmail').toBe(OWNER_EMAIL);
     expect(cfg.itarangSignatory1?.email, 'agreementConfig.itarangSignatory1.email').toBe(ITARANG_S1_EMAIL);
     expect(String(cfg.dateOfSigning ?? ''), 'agreementConfig.dateOfSigning non-empty').not.toBe('');
     expect(String(cfg.mouDate ?? ''), 'agreementConfig.mouDate non-empty').not.toBe('');
+
+    // Live Digio response — confirms the server-to-server call in
+    // initiate-agreement/route.ts:434-469 actually reached Digio and returned
+    // a real document id + request id. Any failure upstream (Digio 5xx,
+    // Puppeteer crash, missing template, etc.) surfaces here as success:false.
+    if (!res?.success) {
+      throw new Error(`live Digio initiate-agreement FAILED: ${JSON.stringify(res).slice(0, 800)}`);
+    }
+    const data = res.data;
+    if (!data) {
+      throw new Error(`live Digio response missing data block: ${JSON.stringify(res).slice(0, 400)}`);
+    }
+    expect(data.providerDocumentId, 'Digio providerDocumentId present').toBeTruthy();
+    expect(data.requestId, 'Digio requestId present').toBeTruthy();
+    // Guard against accidental mock-path regression: ensure we're not seeing
+    // the old hard-coded mock identifiers.
+    expect(data.providerDocumentId).not.toBe('mock-doc-123');
+    expect(data.requestId).not.toBe('mock-req-123');
   } finally {
     await closeDealerCredsClients();
     await w1.close();
@@ -159,50 +182,79 @@ type InitiateBody = {
   };
 };
 
-async function interceptAndClickInitiateAgreement(
+type InitiateResponse = {
+  success: boolean;
+  message?: string;
+  data?: {
+    providerDocumentId?: string;
+    requestId?: string;
+    agreementStatus?: string;
+    providerSigningUrl?: string | null;
+    signerUrls?: unknown[];
+  };
+  raw?: unknown;
+  __unreadable?: boolean;
+  __status?: number;
+};
+
+async function captureLiveInitiateAgreement(
   page: Page,
   applicationId: string,
-): Promise<InitiateBody> {
-  let captured: InitiateBody | null = null;
+): Promise<{ req: InitiateBody; res: InitiateResponse }> {
+  let capturedReq: InitiateBody | null = null;
+  let capturedRes: InitiateResponse | null = null;
 
-  // handleAgreementAction (page.tsx:668) fires this from the browser via
-  // fetch(), so page.route intercepts cleanly. Contrast with the server-to-
-  // server call from initiate-agreement → /api/integrations/digio/create-
-  // agreement, which Playwright cannot intercept — that path is bypassed
-  // entirely when we fulfil here.
-  await page.route(`**/api/admin/dealer-verifications/${applicationId}/initiate-agreement`, async (route) => {
+  const urlMatch = `/api/admin/dealer-verifications/${applicationId}/initiate-agreement`;
+
+  // Route-level intercept — captures the outbound POST body BEFORE the browser
+  // flushes it, then continues so the real request hits the sandbox and flows
+  // through to the live Digio sandbox API (src/app/api/admin/dealer-
+  // verifications/[dealerId]/initiate-agreement/route.ts:434-441 makes an
+  // in-process call to /api/integrations/digio/create-agreement which hits
+  // DIGIO_BASE_URL). We do NOT fulfil here — the point of this spec is to
+  // exercise the real Digio integration.
+  await page.route(`**${urlMatch}`, async (route) => {
     try {
-      captured = route.request().postDataJSON() as InitiateBody;
+      capturedReq = route.request().postDataJSON() as InitiateBody;
     } catch {
-      captured = null;
+      capturedReq = null;
     }
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        success: true,
-        message: 'mocked',
-        data: {
-          providerDocumentId: 'mock-doc-123',
-          requestId: 'mock-req-123',
-          agreementStatus: 'sent_to_external_party',
-          providerSigningUrl: 'https://example.invalid/sign',
-          signerUrls: [],
-        },
-      }),
-    });
+    await route.continue();
   });
+
+  // Response-level listener — captures the sandbox's JSON response after the
+  // live Digio round-trip completes.
+  const onResponse = async (response: any) => {
+    if (
+      response.request().method() === 'POST' &&
+      response.url().includes(urlMatch)
+    ) {
+      try {
+        capturedRes = (await response.json()) as InitiateResponse;
+      } catch {
+        capturedRes = { success: false, __unreadable: true, __status: response.status() };
+      }
+    }
+  };
+  page.on('response', onResponse);
 
   await page.getByRole('button', { name: /initiate agreement/i }).click();
 
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline && !captured) {
-    await page.waitForTimeout(100);
+  // Live Digio path can take a while: sandbox does Puppeteer PDF generation
+  // from the agreement template + HTTP round-trip to Digio + upload + signer
+  // invitation dispatch. Give it up to 120 s.
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline && (!capturedReq || !capturedRes)) {
+    await page.waitForTimeout(250);
   }
+  page.off('response', onResponse);
 
-  if (!captured) {
+  if (!capturedReq) {
     throw new Error('initiate-agreement POST was never intercepted');
   }
+  if (!capturedRes) {
+    throw new Error('initiate-agreement response body never arrived (Digio round-trip may have timed out)');
+  }
 
-  return captured;
+  return { req: capturedReq, res: capturedRes };
 }
