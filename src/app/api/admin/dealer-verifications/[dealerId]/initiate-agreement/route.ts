@@ -11,6 +11,7 @@ import {
 } from "@/lib/agreement/tracking";
 import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
 import { requireAdmin } from "@/lib/auth/requireAdmin";
+import { POST as createDigioAgreement } from "@/app/api/integrations/digio/create-agreement/route";
 
 type AgreementParty = {
   name?: string | null;
@@ -365,8 +366,6 @@ export async function POST(
           ? ["dealer", "itarang_1", "itarang_2"]
           : ["dealer", "itarang_1"];
 
-    const appBaseUrl = req.nextUrl.origin;
-
     const createAgreementPayload = {
       applicationId: application.id,
       company: {
@@ -424,18 +423,22 @@ export async function POST(
       "[DIGIO INITIATE] createAgreementPayload:",
       JSON.stringify(createAgreementPayload, null, 2)
     );
-    console.log("[DIGIO INITIATE] internal base URL:", appBaseUrl);
 
-    const digioResponse = await fetch(
-      `${appBaseUrl}/api/integrations/digio/create-agreement`,
-      {
+    // Call the Digio integration handler in-process. Earlier we did an HTTP
+    // fetch to `${origin}/api/integrations/digio/create-agreement`, which is
+    // brittle behind reverse proxies (Hostinger returned "fetch failed"
+    // because the server can't dial its own public URL). Invoking the
+    // handler directly keeps it on the same Node process and surfaces the
+    // real downstream error (e.g. Puppeteer launch issues) instead of an
+    // opaque network failure.
+    const internalReq = new NextRequest(
+      new Request(`${req.nextUrl.origin}/api/integrations/digio/create-agreement`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(createAgreementPayload),
-      }
+      })
     );
+    const digioResponse = await createDigioAgreement(internalReq);
 
     let digioJson: any = null;
     try {
