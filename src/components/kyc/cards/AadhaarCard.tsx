@@ -102,6 +102,13 @@ export default function AadhaarCard({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [digilockerUrl, setDigilockerUrl] = useState("");
+  const [linkCopied, setLinkCopied] = useState(false);
+  const [smsStatus, setSmsStatus] = useState<
+    "delivered" | "failed" | "skipped" | "retrying" | null
+  >(null);
+  const [smsAttempts, setSmsAttempts] = useState(0);
+  const [smsStatusMessage, setSmsStatusMessage] = useState<string | null>(null);
+  const [resendingSms, setResendingSms] = useState(false);
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
   const [showMoreDocsModal, setShowMoreDocsModal] = useState(false);
@@ -134,6 +141,16 @@ export default function AadhaarCard({
         if (pollRef.current) clearInterval(pollRef.current);
       }
       setTimeRemaining(s.timeRemaining || "");
+
+      if (s.smsStatus !== undefined) {
+        // Don't overwrite "retrying" (an in-flight client-side mutation)
+        // with a stale server value until the resend settles.
+        setSmsStatus((prev) => (prev === "retrying" ? prev : s.smsStatus));
+      }
+      if (typeof s.smsAttempts === "number") setSmsAttempts(s.smsAttempts);
+      if (s.smsStatusMessage !== undefined) {
+        setSmsStatusMessage(s.smsStatusMessage);
+      }
     } catch {
       // silent
     }
@@ -180,6 +197,9 @@ export default function AadhaarCard({
       setTransactionId(data.data.transactionId);
       setLinkExpiry(data.data.linkExpiresAt);
       setDigilockerUrl(data.data.digilockerUrl || "");
+      setSmsStatus(data.data.smsStatus ?? null);
+      setSmsAttempts(data.data.smsAttempts ?? 0);
+      setSmsStatusMessage(data.data.smsStatusMessage ?? null);
       setDigiStatus("link_sent");
       setCardStatus("awaiting_consent");
     } catch {
@@ -187,6 +207,49 @@ export default function AadhaarCard({
       setCardStatus("failed");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Retry SMS against the existing DigiLocker session — does NOT create a
+  // new session (no new Decentro DigiLocker credit spent). If the session
+  // has expired, we fall back to a full re-initiate.
+  const handleResendSms = async () => {
+    if (resendingSms) return;
+    setResendingSms(true);
+    setSmsStatus("retrying");
+    setError("");
+    try {
+      const res = await fetch(`${apiBase}/aadhaar/digilocker/resend-sms`, {
+        method: "POST",
+      });
+      const data = await res.json();
+
+      if (res.status === 410) {
+        // Session expired — reset and trigger a fresh initiate.
+        setError("Session expired. Generating a new DigiLocker link…");
+        setTransactionId("");
+        setDigilockerUrl("");
+        setSmsStatus(null);
+        setSmsAttempts(0);
+        setCardStatus("pending");
+        setDigiStatus("idle");
+        await handleInitiate();
+        return;
+      }
+
+      if (data?.data) {
+        setSmsStatus(data.data.smsStatus ?? "failed");
+        setSmsAttempts(data.data.smsAttempts ?? smsAttempts + 1);
+        setSmsStatusMessage(data.data.smsStatusMessage ?? null);
+      }
+      if (!data.success) {
+        setError(data.error?.message ?? "SMS resend failed");
+      }
+    } catch {
+      setSmsStatus("failed");
+      setError("Network error while resending SMS. Please retry.");
+    } finally {
+      setResendingSms(false);
     }
   };
 
@@ -366,17 +429,77 @@ export default function AadhaarCard({
               <p className="text-xs text-blue-500 mt-3">Auto-refreshing every 10s...</p>
             </div>
             {digilockerUrl && (
-              <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
-                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">DigiLocker Link (share with customer)</p>
+              <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                    DigiLocker Link{smsAttempts > 1 ? ` · ${smsAttempts} send attempts` : ""}
+                  </p>
+                  {/* SMS delivery badge */}
+                  {smsStatus === "delivered" && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                      SMS sent to {phone}
+                    </span>
+                  )}
+                  {smsStatus === "failed" && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-red-700 bg-red-50 border border-red-200 rounded-full px-2 py-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                      SMS failed
+                    </span>
+                  )}
+                  {smsStatus === "retrying" && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                      Resending…
+                    </span>
+                  )}
+                  {smsStatus === "skipped" && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-full px-2 py-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+                      SMS not configured
+                    </span>
+                  )}
+                </div>
+
+                {/* Contextual note — only when SMS didn't land */}
+                {smsStatus !== "delivered" && (
+                  <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-100 rounded px-2 py-1">
+                    {smsStatus === "failed"
+                      ? `SMS delivery failed${smsStatusMessage ? `: ${smsStatusMessage}` : ""}. Tap Resend SMS below or copy the link and share it with the customer.`
+                      : smsStatus === "skipped"
+                        ? "Decentro SMS is not enabled on this deploy. Copy the link and share it with the customer."
+                        : "If the customer didn't receive the SMS, tap Resend SMS or copy the link and share it with them."}
+                  </p>
+                )}
+
                 <div className="flex items-center gap-2">
-                  <input type="text" readOnly value={digilockerUrl}
-                    className="flex-1 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 truncate" />
-                  <button onClick={() => { navigator.clipboard.writeText(digilockerUrl); }}
-                    className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded transition-colors whitespace-nowrap">
-                    Copy
+                  <input
+                    type="text"
+                    readOnly
+                    value={digilockerUrl}
+                    onClick={(e) => (e.target as HTMLInputElement).select()}
+                    className="flex-1 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1.5 truncate"
+                  />
+                  <button
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(digilockerUrl);
+                        setLinkCopied(true);
+                        setTimeout(() => setLinkCopied(false), 2000);
+                      } catch {
+                        setLinkCopied(false);
+                      }
+                    }}
+                    className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded transition-colors whitespace-nowrap"
+                  >
+                    {linkCopied ? "✓ Copied" : "Copy"}
                   </button>
-                  <a href={digilockerUrl} target="_blank" rel="noopener noreferrer"
-                    className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors whitespace-nowrap">
+                  <a
+                    href={digilockerUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors whitespace-nowrap"
+                  >
                     Open
                   </a>
                 </div>
@@ -384,13 +507,34 @@ export default function AadhaarCard({
             )}
             {transactionId && <p className="text-xs text-gray-400">Transaction: {transactionId}</p>}
             <div className="flex gap-2">
-              <button onClick={() => { setTransactionId(""); setDigiStatus("idle"); setCardStatus("pending"); setDigilockerUrl(""); setError(""); }}
-                className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors">
-                Resend Link
+              <button
+                onClick={handleResendSms}
+                disabled={resendingSms || !transactionId}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+              >
+                {resendingSms ? "Resending…" : "Resend SMS"}
               </button>
-              <button onClick={pollStatus}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors">
+              <button
+                onClick={pollStatus}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors"
+              >
                 Refresh
+              </button>
+              {/* Last-resort: destroy the session and start a fresh initiate */}
+              <button
+                onClick={() => {
+                  setTransactionId("");
+                  setDigiStatus("idle");
+                  setCardStatus("pending");
+                  setDigilockerUrl("");
+                  setSmsStatus(null);
+                  setSmsAttempts(0);
+                  setError("");
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-600 bg-transparent hover:bg-gray-100 rounded-lg transition-colors"
+                title="Discard this session and create a brand new DigiLocker link (uses a new Decentro credit)"
+              >
+                New Link
               </button>
             </div>
           </div>

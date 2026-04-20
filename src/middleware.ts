@@ -94,31 +94,32 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
-  let profile: { role?: string | null } | null = null;
+  // Role lives on AWS RDS, not Supabase — read it from app_metadata (synced by
+  // /api/user/profile on each login). Fallbacks: user_metadata, Supabase users
+  // table (legacy), default "user".
+  const appMetadataRole = (user.app_metadata as { role?: string } | undefined)?.role;
+  const userMetadataRole = (user.user_metadata as { role?: string } | undefined)?.role;
 
-  const { data: profileById } = await supabase
-    .from("users")
-    .select("role,email,id")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  if (profileById) {
-    profile = profileById;
-  } else if (user.email) {
-    const { data: profileByEmail } = await supabase
+  let legacyRole: string | undefined;
+  if (!appMetadataRole && !userMetadataRole) {
+    const { data: profileById } = await supabase
       .from("users")
-      .select("role,email,id")
-      .eq("email", user.email)
+      .select("role")
+      .eq("id", user.id)
       .maybeSingle();
+    legacyRole = profileById?.role ?? undefined;
 
-    if (profileByEmail) {
-      profile = profileByEmail;
+    if (!legacyRole && user.email) {
+      const { data: profileByEmail } = await supabase
+        .from("users")
+        .select("role")
+        .eq("email", user.email)
+        .maybeSingle();
+      legacyRole = profileByEmail?.role ?? undefined;
     }
   }
 
-  // Fall back to user_metadata.role from Supabase Auth if DB lookup found nothing
-  // (handles cases where users table is in a separate database accessed via Drizzle)
-  const rawRole = profile?.role || (user.user_metadata?.role as string) || "user";
+  const rawRole = appMetadataRole || userMetadataRole || legacyRole || "user";
   const role = rawRole.toLowerCase();
   const myDashboard = roleDashboards[role] || "/";
 
