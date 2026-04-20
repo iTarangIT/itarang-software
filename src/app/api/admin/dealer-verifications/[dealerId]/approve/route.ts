@@ -32,11 +32,20 @@ function resolveDealerLoginEmail(application: any) {
 }
 
 
-export async function POST(_req: NextRequest, context: RouteContext) {
+export async function POST(req: NextRequest, context: RouteContext) {
   const auth = await requireAdmin();
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
+
+    const forwardedProto = req.headers.get("x-forwarded-proto");
+    const forwardedHost = req.headers.get("x-forwarded-host");
+    const requestOrigin =
+      forwardedHost
+        ? `${forwardedProto || "https"}://${forwardedHost}`
+        : req.nextUrl.origin;
+    const resolvedLoginUrl =
+      process.env.DEALER_LOGIN_URL || `${requestOrigin}/login`;
 
     const existing = await db
       .select()
@@ -368,7 +377,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         dealerId: dealerCode,
         userId: dealerLoginEmail,
         password: temporaryPassword,
-        loginUrl: process.env.DEALER_LOGIN_URL || "http://localhost:3000/login",
+        loginUrl: resolvedLoginUrl,
         supportEmail:
           process.env.DEALER_SUPPORT_EMAIL || "support@itarang.com",
         supportPhone:
