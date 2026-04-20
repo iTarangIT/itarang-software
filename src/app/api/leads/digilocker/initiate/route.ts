@@ -4,7 +4,7 @@
 // UI so the dealer can open it in a popup while the customer is
 // sitting with them. No SMS/WhatsApp notification is sent.
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -13,11 +13,28 @@ import { digilockerInitiateSession } from "@/lib/decentro";
 import { createWorkflowId } from "@/lib/kyc/admin-workflow";
 import { requireRole } from "@/lib/auth-utils";
 
-const CALLBACK_BASE =
-    process.env.NEXT_PUBLIC_APP_URL || "https://crm.itarang.com";
 const LINK_VALIDITY_HOURS = 24;
 
-export async function POST(req: Request) {
+// Derive the public origin the browser sees from the incoming request.
+// Honours Vercel's x-forwarded-host/proto so the callback URL always
+// points back at the exact deployment that initiated the flow — sandbox,
+// preview, prod, or localhost — regardless of NEXT_PUBLIC_APP_URL
+// being set correctly in each env.
+function resolvePublicOrigin(req: NextRequest): string {
+    const forwardedHost = req.headers.get("x-forwarded-host");
+    const forwardedProto = req.headers.get("x-forwarded-proto");
+    if (forwardedHost) {
+        return `${forwardedProto || "https"}://${forwardedHost}`;
+    }
+    const host = req.headers.get("host");
+    if (host) {
+        const proto = host.startsWith("localhost") ? "http" : "https";
+        return `${proto}://${host}`;
+    }
+    return req.nextUrl.origin;
+}
+
+export async function POST(req: NextRequest) {
     try {
         const user = await requireRole(["dealer"]);
 
@@ -60,7 +77,8 @@ export async function POST(req: Request) {
         const now = new Date();
         const digiId = createWorkflowId("DIGI", now);
         const referenceId = `LEAD-DIGI-${leadId}-${Date.now()}`;
-        const redirectUrl = `${CALLBACK_BASE}/api/leads/digilocker/callback/${encodeURIComponent(digiId)}`;
+        const callbackBase = resolvePublicOrigin(req);
+        const redirectUrl = `${callbackBase}/api/leads/digilocker/callback/${encodeURIComponent(digiId)}`;
 
         // Decentro caps consent_purpose at 50 chars.
         const decentroRes = await digilockerInitiateSession({
