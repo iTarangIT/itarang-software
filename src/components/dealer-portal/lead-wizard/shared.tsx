@@ -1,9 +1,10 @@
 'use client';
 
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
     ChevronLeft, ChevronDown, Loader2, AlertCircle, X,
-    Upload, CheckCircle2, XCircle, Clock, Scan, Eye, FileText
+    Upload, CheckCircle2, XCircle, Clock, Scan, Eye, FileText,
+    ShieldCheck
 } from 'lucide-react';
 
 // ─── Section Card ───────────────────────────────────────────────────────────
@@ -590,6 +591,186 @@ function UploadBox({ label, file, onSelect, scanning }: {
                 {file ? file.name.slice(0, 20) : 'Click to upload'}
             </span>
         </label>
+    );
+}
+
+// ─── DigiLocker KYC Button ─────────────────────────────────────────────────
+//
+// Opens the Decentro DigiLocker SSO URL in a popup. The driver signs into
+// DigiLocker on the popup, authorises iTarang, and submits. Our callback
+// route fetches eAadhaar and postMessages the normalized fields back into
+// this window. Same onResult signature as OCRModal so the caller wires
+// both buttons to a single handleOCRResult.
+
+type DigilockerStatus = 'idle' | 'initiating' | 'awaiting' | 'success' | 'failed';
+
+export function DigilockerKycButton({ leadId, phone, onResult, disabled }: {
+    leadId: string | null;
+    phone?: string;
+    onResult: (data: Record<string, unknown>) => void;
+    disabled?: boolean;
+}) {
+    const [status, setStatus] = useState<DigilockerStatus>('idle');
+    const [error, setError] = useState<string | null>(null);
+    const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
+    const popupRef = useRef<Window | null>(null);
+    const txnIdRef = useRef<string | null>(null);
+    const handlerRef = useRef<((e: MessageEvent) => void) | null>(null);
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    const cleanup = () => {
+        if (handlerRef.current) {
+            window.removeEventListener('message', handlerRef.current);
+            handlerRef.current = null;
+        }
+        if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+        }
+        popupRef.current = null;
+        txnIdRef.current = null;
+    };
+
+    useEffect(() => () => cleanup(), []);
+
+    const openPopup = (url: string): Window | null => {
+        const features = 'width=520,height=720,menubar=no,toolbar=no,location=yes,status=yes,resizable=yes,scrollbars=yes';
+        return window.open(url, 'itarang-digilocker', features);
+    };
+
+    const handleClick = async () => {
+        if (disabled || status === 'initiating' || status === 'awaiting') return;
+        if (!leadId) {
+            setError('Please wait for the draft to initialize.');
+            setStatus('failed');
+            return;
+        }
+
+        setError(null);
+        setFallbackUrl(null);
+        setStatus('initiating');
+
+        try {
+            const res = await fetch('/api/leads/digilocker/initiate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ leadId, phone: phone || undefined }),
+            });
+            const json = await res.json();
+            if (!json.success) {
+                setError(json.error?.message || 'Failed to start DigiLocker session');
+                setStatus('failed');
+                return;
+            }
+
+            const { transactionId, authorizationUrl } = json.data as {
+                transactionId: string;
+                authorizationUrl: string;
+            };
+            txnIdRef.current = transactionId;
+
+            // Register listener BEFORE opening the popup so we never miss
+            // a fast postMessage. Listener removes itself after handling.
+            const handler = (e: MessageEvent) => {
+                if (e.origin !== window.location.origin) return;
+                const data = e.data;
+                if (!data || typeof data !== 'object') return;
+                if (data.type !== 'itarang:digilocker') return;
+                if (data.transactionId !== txnIdRef.current) return;
+
+                if (data.ok && data.data) {
+                    onResult(data.data);
+                    setStatus('success');
+                } else {
+                    setError(data.error || 'DigiLocker authorization failed');
+                    setStatus('failed');
+                }
+                cleanup();
+            };
+            handlerRef.current = handler;
+            window.addEventListener('message', handler);
+
+            const popup = openPopup(authorizationUrl);
+            popupRef.current = popup;
+
+            if (!popup) {
+                // Popup blocker kicked in — keep the listener, surface
+                // a fallback link the user can click (preserves the
+                // user-gesture requirement for most browsers).
+                setFallbackUrl(authorizationUrl);
+                setStatus('awaiting');
+                return;
+            }
+
+            setStatus('awaiting');
+
+            // Detect user-closed popup without authorising. Poll the
+            // popup.closed flag; if it closes before success, reset.
+            pollRef.current = setInterval(() => {
+                if (popupRef.current && popupRef.current.closed) {
+                    if (pollRef.current) clearInterval(pollRef.current);
+                    pollRef.current = null;
+                    // Give any late postMessage ~1s to arrive before
+                    // giving up — the close event can race the message.
+                    setTimeout(() => {
+                        setStatus(prev => {
+                            if (prev === 'awaiting') {
+                                setError('DigiLocker window was closed before authorization completed.');
+                                cleanup();
+                                return 'failed';
+                            }
+                            return prev;
+                        });
+                    }, 1200);
+                }
+            }, 800);
+        } catch {
+            setError('Network error. Please try again.');
+            setStatus('failed');
+        }
+    };
+
+    const label =
+        status === 'initiating' ? 'Starting...'
+        : status === 'awaiting' ? 'Waiting for authorization...'
+        : status === 'success' ? 'Aadhaar KYC ✓'
+        : 'Aadhaar KYC';
+
+    return (
+        <div className="flex items-center gap-2">
+            <button
+                type="button"
+                onClick={handleClick}
+                disabled={disabled || status === 'initiating' || status === 'awaiting'}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
+                    status === 'success'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : status === 'failed'
+                            ? 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100'
+                            : 'bg-white border border-gray-200 text-gray-800 hover:border-[#1D4ED8] hover:text-[#1D4ED8]'
+                }`}
+            >
+                {status === 'initiating' || status === 'awaiting'
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : status === 'success'
+                        ? <CheckCircle2 className="w-4 h-4" />
+                        : <ShieldCheck className="w-4 h-4" />}
+                {label}
+            </button>
+            {fallbackUrl && status === 'awaiting' && (
+                <a
+                    href={fallbackUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-semibold text-[#1D4ED8] underline"
+                >
+                    Popup blocked — open link
+                </a>
+            )}
+            {error && status === 'failed' && (
+                <span className="text-xs text-red-600 max-w-[280px] truncate" title={error}>{error}</span>
+            )}
+        </div>
     );
 }
 
