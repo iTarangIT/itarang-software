@@ -8,182 +8,15 @@ import { requireRole } from "@/lib/auth-utils";
 import { extractDocumentOcr } from "@/lib/decentro";
 import { extractTextFromImageBuffer } from "@/lib/ocr/tesseractOcr";
 import { parseAadhaarText } from "@/lib/ocr/parseAadhaarText";
+import {
+  buildFinalData,
+  extractStructuredAadhaar,
+  hasUsefulData,
+} from "@/lib/kyc/aadhaarNormalize";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { inArray } from "drizzle-orm";
 
-// ─── Helpers (shared with main-branch parsing quality) ──────────────────────
-
 const BUCKET = "private-documents";
-
-function clean(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeDate(value: string): string {
-  if (!value) return "";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  const m = value.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
-  if (m) {
-    const [, dd, mm, yyyy] = m;
-    return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
-  }
-  return value.trim();
-}
-
-function firstNonEmpty(...values: unknown[]): string {
-  for (const value of values) {
-    const v = clean(value);
-    if (v) return v;
-  }
-  return "";
-}
-
-function getDeep(obj: any, paths: string[]): string {
-  for (const path of paths) {
-    const value = path.split(".").reduce((acc: any, key) => acc?.[key], obj);
-    const cleaned = clean(value);
-    if (cleaned) return cleaned;
-  }
-  return "";
-}
-
-// Extract Aadhaar fields from a Decentro response that can be shaped in
-// many ways (older and newer API versions nest differently).
-function extractStructuredAadhaar(payload: any) {
-  return {
-    fullName: firstNonEmpty(
-      getDeep(payload, [
-        "ocrResult.name",
-        "data.full_name",
-        "data.name",
-        "data.customer_name",
-        "data.nameOnCard",
-        "response.full_name",
-        "response.name",
-        "result.full_name",
-        "result.name",
-      ]),
-    ),
-    fatherName: firstNonEmpty(
-      getDeep(payload, [
-        "ocrResult.fatherName",
-        "ocrResult.sonOf",
-        "ocrResult.husbandOf",
-        "data.father_name",
-        "data.fatherName",
-        "data.father_or_husband_name",
-        "data.fatherOrHusbandName",
-        "response.father_name",
-        "result.father_name",
-      ]),
-    ),
-    dob: normalizeDate(
-      firstNonEmpty(
-        getDeep(payload, [
-          "ocrResult.dateInfo",
-          "data.dob",
-          "data.date_of_birth",
-          "data.dateOfBirth",
-          "response.dob",
-          "result.dob",
-        ]),
-      ),
-    ),
-    phone: firstNonEmpty(
-      getDeep(payload, [
-        "data.phone",
-        "data.mobile",
-        "data.mobile_number",
-        "response.phone",
-        "result.phone",
-      ]),
-    ),
-    address: firstNonEmpty(
-      getDeep(payload, [
-        "ocrResult.address",
-        "data.address",
-        "data.full_address",
-        "data.current_address",
-        "data.currentAddress",
-        "response.address",
-        "result.address",
-      ]),
-    ),
-    aadhaarNumber: firstNonEmpty(
-      getDeep(payload, [
-        "ocrResult.aadhaarNumber",
-        "data.aadhaar_number",
-        "data.aadhaarNumber",
-        "data.uid",
-        "response.aadhaar_number",
-        "result.aadhaar_number",
-      ]),
-    ),
-    rawText: firstNonEmpty(
-      getDeep(payload, [
-        "data.ocr_text",
-        "data.raw_text",
-        "data.text",
-        "response.ocr_text",
-        "response.raw_text",
-        "response.text",
-        "ocr_text",
-        "raw_text",
-        "text",
-      ]),
-    ),
-  };
-}
-
-// If the structured OCR didn't give us a father name, some Aadhaars print
-// it inline in the address as "S/O: <name>, ...". Pick that out.
-function extractFatherFromAddress(address: string): string {
-  if (!address) return "";
-  const pattern = /[SDWC]\/[Oo]:?\s+([^,]+)/g;
-  const matches: string[] = [];
-  let m;
-  while ((m = pattern.exec(address)) !== null) {
-    const name = m[1].trim();
-    const latinChars = name.replace(/[^A-Za-z]/g, "").length;
-    const totalChars = name.replace(/[\s]/g, "").length;
-    if (totalChars > 0 && latinChars / totalChars > 0.7) {
-      const cleanedName = name.replace(/[^A-Za-z\s]/g, "").trim();
-      // Each word must be 3+ chars to filter OCR garbage
-      const words = cleanedName.split(" ").filter((w) => w.length >= 3);
-      if (words.length >= 1) {
-        matches.push(
-          words
-            .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-            .join(" "),
-        );
-      }
-    }
-  }
-  return matches.length > 0 ? matches[matches.length - 1] : "";
-}
-
-// Strip OCR garbage from address strings (UIDAI watermarks, URLs, the
-// Aadhaar number when it leaks in, stray pipes/punctuation).
-function cleanAddress(address: string): string {
-  if (!address) return "";
-  let cleaned = address.replace(/[SDWC]\/[Oo]:?\s+[^,]+,\s*/g, "");
-  cleaned = cleaned
-    .replace(/\b[|]\s*/g, "")
-    .replace(/[™®©]/g, "")
-    .replace(/\bwww\.[^\s,]+/gi, "")
-    .replace(/help@[^\s,]+/gi, "")
-    .replace(/\b\d{4}\s?\d{4}\s?\d{4}\b/g, "")
-    .replace(/,\s*,/g, ",")
-    .replace(/,\s*$/g, "")
-    .replace(/^\s*,\s*/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleaned;
-}
-
-function hasUsefulData(data: Record<string, string>) {
-  return Object.values(data).some((v) => clean(v) !== "");
-}
 
 // Decentro can "succeed" at the HTTP layer but return an error payload
 // (IP not whitelisted, credits exhausted, etc). Detect those.
@@ -208,74 +41,6 @@ async function fetchDocumentBuffer(
   const buffer = Buffer.from(await data.arrayBuffer());
   const contentType = data.type || "image/jpeg";
   return { buffer, contentType };
-}
-
-// Merge all OCR sources (Decentro structured, Aadhaar-text-regex of raw
-// OCR text) and preserve the strongest value per field. Prefer front of
-// card for identity, back for address.
-function buildFinalData(
-  frontStructured: ReturnType<typeof extractStructuredAadhaar>,
-  backStructured: ReturnType<typeof extractStructuredAadhaar>,
-  frontParsed: any,
-  backParsed: any,
-) {
-  const rawAddress = firstNonEmpty(
-    backStructured.address,
-    frontStructured.address,
-    backParsed?.address,
-    frontParsed?.address,
-  );
-  const fatherFromAddress = extractFatherFromAddress(rawAddress);
-  const cleanedAddress = rawAddress ? cleanAddress(rawAddress) : "";
-
-  const fullName = firstNonEmpty(
-    frontStructured.fullName,
-    backStructured.fullName,
-    frontParsed?.fullName,
-    backParsed?.fullName,
-  );
-  const fatherName = firstNonEmpty(
-    frontStructured.fatherName,
-    backStructured.fatherName,
-    frontParsed?.fatherName,
-    backParsed?.fatherName,
-    fatherFromAddress,
-  );
-  const phone = firstNonEmpty(
-    frontStructured.phone,
-    backStructured.phone,
-    frontParsed?.phone,
-    backParsed?.phone,
-  );
-  const dob = normalizeDate(
-    firstNonEmpty(
-      frontStructured.dob,
-      backStructured.dob,
-      frontParsed?.dob,
-      backParsed?.dob,
-    ),
-  );
-  const aadhaarNumber = firstNonEmpty(
-    frontStructured.aadhaarNumber,
-    backStructured.aadhaarNumber,
-  );
-  const address = cleanedAddress || rawAddress;
-
-  return {
-    // snake_case aliases the lead form consumes directly
-    full_name: fullName,
-    father_or_husband_name: fatherName,
-    current_address: address,
-    permanent_address: address,
-    phone,
-    dob,
-    aadhaar_number: aadhaarNumber,
-    // camelCase aliases that other call sites use
-    fullName,
-    fatherName,
-    address,
-    aadhaarNumber,
-  };
 }
 
 // ─── Route handler ──────────────────────────────────────────────────────────
@@ -502,9 +267,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     "dob",
     "current_address",
   ] as const;
-  const missing = expectedFields.filter(
-    (k) => !(finalData as Record<string, string>)[k],
-  );
+  const missing = expectedFields.filter((k) => !finalData[k]);
   const ocrStatus = missing.length === 0 ? "success" : "partial";
 
   try {
