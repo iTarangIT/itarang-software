@@ -355,12 +355,11 @@ export default function StepReview() {
       // Mark onboarding complete in Zustand store (also saves dealerId to localStorage)
       completeOnboarding();
 
-      // Derive login URL from public env (falls back to app-relative /login)
+      // After successful onboarding submission, send the dealer to the sandbox
+      // login portal. Override via NEXT_PUBLIC_DEALER_LOGIN_URL if needed.
       const redirectUrl =
         process.env.NEXT_PUBLIC_DEALER_LOGIN_URL ||
-        (process.env.NEXT_PUBLIC_APP_URL
-          ? `${process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "")}/login`
-          : "/login");
+        "https://sandbox.itarang.com";
 
       // Sign out in the background; don't block redirect if network is slow
       supabase.auth.signOut().catch(() => { });
