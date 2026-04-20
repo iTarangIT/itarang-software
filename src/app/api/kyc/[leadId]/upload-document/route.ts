@@ -22,6 +22,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const formData = await req.formData();
         const file = formData.get('file') as File;
         const docType = (formData.get('docType') || formData.get('documentType')) as string;
+        const rawDocFor = (formData.get('docFor') as string) || 'customer';
+        const docFor = rawDocFor === 'borrower' ? 'borrower' : 'customer';
 
         if (!file || !docType) {
             return NextResponse.json(
@@ -57,11 +59,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
         const fileUrl = urlData.publicUrl;
 
-        // Upsert document record — replace any prior upload of the same doc_type
+        // Upsert document record — replace any prior upload of the same (doc_for, doc_type)
         const existing = await db
             .select({ id: kycDocuments.id })
             .from(kycDocuments)
-            .where(and(eq(kycDocuments.lead_id, leadId), eq(kycDocuments.doc_type, docType)))
+            .where(and(
+                eq(kycDocuments.lead_id, leadId),
+                eq(kycDocuments.doc_for, docFor),
+                eq(kycDocuments.doc_type, docType),
+            ))
             .limit(1);
 
         const now = new Date();
@@ -84,6 +90,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             await db.insert(kycDocuments).values({
                 id: `KYCDOC-${dateStr}-${seq}`,
                 lead_id: leadId,
+                doc_for: docFor,
                 doc_type: docType,
                 file_url: fileUrl,
                 file_name: file.name,

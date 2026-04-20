@@ -1377,6 +1377,7 @@ export const kycDocuments = pgTable(
     lead_id: varchar("lead_id", { length: 255 })
       .references(() => dealerLeads.id, { onDelete: "cascade" })
       .notNull(),
+    doc_for: varchar("doc_for", { length: 20 }).default("customer").notNull(), // customer, borrower
     doc_type: varchar("doc_type", { length: 50 }).notNull(), // aadhaar_front, aadhaar_back, pan_card, passport_photo, address_proof, rc_copy, bank_statement, cheque_1, cheque_2, cheque_3, cheque_4
     file_url: text("file_url").notNull(),
     file_name: text("file_name"),
@@ -2764,7 +2765,20 @@ export const dealerOnboardingApplications = pgTable(
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
     ownerName: text("owner_name"),
     ownerPhone: text("owner_phone"),
+    ownerLandline: varchar("owner_landline", { length: 20 }),
     ownerEmail: text("owner_email"),
+
+    salesManagerName: text("sales_manager_name"),
+    salesManagerEmail: text("sales_manager_email"),
+    salesManagerMobile: varchar("sales_manager_mobile", { length: 20 }),
+
+    itarangSignatory1Name: text("itarang_signatory_1_name"),
+    itarangSignatory1Email: text("itarang_signatory_1_email"),
+    itarangSignatory1Mobile: varchar("itarang_signatory_1_mobile", { length: 20 }),
+
+    itarangSignatory2Name: text("itarang_signatory_2_name"),
+    itarangSignatory2Email: text("itarang_signatory_2_email"),
+    itarangSignatory2Mobile: varchar("itarang_signatory_2_mobile", { length: 20 }),
 
     bankName: text("bank_name"),
     accountNumber: text("account_number"),
@@ -2780,6 +2794,9 @@ export const dealerOnboardingApplications = pgTable(
     dealerCode: text("dealer_code"),
 
     agreementStatus: varchar("agreement_status", { length: 50 }),
+    agreementLanguage: varchar("agreement_language", { length: 30 })
+      .default("english")
+      .notNull(),
     completionStatus: varchar("completion_status", { length: 30 }),
     providerDocumentId: text("provider_document_id"),
     requestId: text("request_id"),
@@ -2905,6 +2922,11 @@ export const dealerOnboardingDocuments = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
+  (table) => ({
+    applicationIdIdx: index("dealer_onboarding_documents_application_id_idx").on(
+      table.applicationId,
+    ),
+  }),
 );
 
 export const scrapeRuns = pgTable("scraper_runs", {

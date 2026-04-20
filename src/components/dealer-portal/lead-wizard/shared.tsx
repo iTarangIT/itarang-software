@@ -153,9 +153,7 @@ function getDealerStatus(uploaded: boolean, status?: string): { label: string; c
     const s = (status || '').toLowerCase();
     if (s === 'success' || s === 'verified') return { label: 'Verified', color: 'text-green-600', dotColor: 'bg-green-500', icon: 'check' };
     if (s === 'failed' || s === 'rejected' || s === 'reupload_requested') return { label: 'Reupload Required', color: 'text-red-600', dotColor: 'bg-red-500', icon: 'reupload' };
-    if (s === 'in_progress' || s === 'initiating' || s === 'awaiting_action') return { label: 'Under Verification', color: 'text-blue-600', dotColor: 'bg-blue-500', icon: 'clock' };
-    // For 'uploaded', 'pending', or any other status on an uploaded doc — show as successfully uploaded
-    return { label: 'Uploaded', color: 'text-emerald-600', dotColor: 'bg-emerald-500', icon: 'check' };
+    return { label: 'Uploaded - Pending Review', color: 'text-blue-600', dotColor: 'bg-amber-500', icon: 'clock' };
 }
 
 export function DocumentCard({ label, required, uploaded, status, failedReason, onUpload, disabled, fileUrl }: {
@@ -186,10 +184,10 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
     const pill = !uploaded
         ? { bg: 'bg-gray-100', text: 'text-gray-500', label: required ? 'Required' : 'Optional' }
         : isVerified
-            ? { bg: 'bg-emerald-50', text: 'text-emerald-700', label: dealerStatus.label }
+            ? { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Verified' }
             : isRejected
                 ? { bg: 'bg-red-50', text: 'text-red-700', label: 'Re-upload' }
-                : { bg: 'bg-blue-50', text: 'text-blue-700', label: dealerStatus.label };
+                : { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Pending' };
 
     return (
         <div className={`group relative rounded-2xl border-2 bg-white transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5 overflow-hidden ${border} ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
