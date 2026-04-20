@@ -18,6 +18,43 @@ import {
 const DIGILOCKER_CALLBACK_BASE =
   process.env.NEXT_PUBLIC_APP_URL || "https://crm.itarang.com";
 
+// Decentro returns notification info in different shapes depending on the
+// product / version. Walk the response defensively and surface whatever
+// SMS-delivery signal we can find so the UI can show "sent" vs "needs
+// manual share". Never throws — unknown shape just returns smsDelivered:null.
+function extractNotificationStatus(decentroRes: any): {
+  smsAttempted: boolean;
+  smsDelivered: boolean | null;
+  message: string | null;
+} {
+  const data = decentroRes?.data ?? {};
+  const notif = data?.notifications ?? data?.notification ?? decentroRes?.notifications;
+  const sms = notif?.sms ?? notif?.SMS ?? null;
+
+  if (!sms) {
+    return { smsAttempted: false, smsDelivered: null, message: null };
+  }
+
+  const status = String(sms.status ?? sms.delivery_status ?? "").toLowerCase();
+  const delivered =
+    status === "sent" ||
+    status === "delivered" ||
+    status === "success" ||
+    sms.delivered === true;
+
+  const failed =
+    status === "failed" ||
+    status === "error" ||
+    status === "rejected" ||
+    sms.delivered === false;
+
+  return {
+    smsAttempted: true,
+    smsDelivered: delivered ? true : failed ? false : null,
+    message: sms.message ?? sms.error ?? sms.reason ?? null,
+  };
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ leadId: string }> },
@@ -106,6 +143,18 @@ export async function POST(
       ? new Date(resData.expires_at)
       : new Date(now.getTime() + linkValidityHours * 60 * 60 * 1000);
 
+    // Surface Decentro's notification delivery status. Decentro returns
+    // success on link generation regardless of whether SMS actually went
+    // out — so we have to peek into their response shape to see if the
+    // SMS sub-request succeeded. If they explicitly report a failure or
+    // skip it, we tell the UI so the rep can fall back to copying the link.
+    const notificationStatus = extractNotificationStatus(decentroRes);
+    if (notificationStatus.smsAttempted && !notificationStatus.smsDelivered) {
+      console.warn(
+        `[DigiLocker Initiate] SMS notification did NOT deliver for lead ${leadId}: ${notificationStatus.message ?? "no detail"}. Customer phone: ${customerPhone}`,
+      );
+    }
+
     const apiSuccess =
       (decentroRes?.status === "SUCCESS" || decentroRes?.responseStatus === "SUCCESS") &&
       (digilockerUrl || decentroTxnId);
@@ -188,14 +237,18 @@ export async function POST(
         sessionId,
         verificationId,
         digilockerUrl,
-        linkSent: true,
+        linkSent: notificationStatus.smsDelivered !== false,
+        smsStatus: notificationStatus.smsDelivered,
+        smsStatusMessage: notificationStatus.message,
         sentTo: {
           mobile: customerPhone,
           email: customerEmail,
         },
         linkExpiresAt: expiresAt.toISOString(),
         message:
-          "DigiLocker link sent to customer. Awaiting authorization.",
+          notificationStatus.smsDelivered === false
+            ? "DigiLocker link generated, but SMS delivery failed. Please share the link manually with the customer."
+            : "DigiLocker link sent to customer. Awaiting authorization.",
       },
     });
   } catch (error) {
