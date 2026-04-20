@@ -9,7 +9,11 @@ import {
   kycVerifications,
   personalDetails,
 } from "@/lib/db/schema";
-import { digilockerInitiateSession } from "@/lib/decentro";
+import {
+  digilockerInitiateSession,
+  sendDecentroSms,
+  buildDigilockerSmsMessage,
+} from "@/lib/decentro";
 import {
   createWorkflowId,
   requireAdminAppUser,
@@ -174,6 +178,31 @@ export async function POST(
       );
     }
 
+    // ── Send SMS via Decentro Communications API ──────────────────────
+    // If DECENTRO_SMS_ENABLED=false or the endpoint isn't configured, this
+    // skips cleanly and the admin falls back to Copy/Open on the UI. A
+    // failed send NEVER blocks session creation — the DigiLocker URL is
+    // still valid and the admin can share it manually.
+    const smsResult = digilockerUrl
+      ? await sendDecentroSms({
+          mobile_number: customerPhone,
+          message: buildDigilockerSmsMessage(digilockerUrl, linkValidityHours),
+          reference_id: `${referenceId}-SMS`,
+        })
+      : {
+          success: false,
+          skipped: true,
+          messageId: null,
+          error: "no_url",
+          raw: null,
+        };
+
+    const smsStatusLabel = smsResult.success
+      ? "delivered"
+      : smsResult.skipped
+        ? "skipped"
+        : "failed";
+
     // Create verification record
     const verificationId = createWorkflowId("KYCVER", now);
     await db.insert(kycVerifications).values({
@@ -206,6 +235,10 @@ export async function POST(
       digilocker_url: digilockerUrl,
       notification_channel: notificationChannel,
       link_sent_at: now,
+      sms_message_id: smsResult.messageId,
+      sms_delivered_at: smsResult.success ? now : null,
+      sms_failed_reason: smsResult.success ? null : smsResult.error ?? null,
+      sms_attempts: smsResult.skipped ? 0 : 1,
       expires_at: expiresAt,
     });
 
@@ -230,6 +263,18 @@ export async function POST(
         .where(eq(kycVerificationMetadata.lead_id, leadId));
     }
 
+    // smsStatus priority: our own Decentro-SMS result if attempted, else
+    // fall back to whatever the embedded notifications block reports.
+    const finalSmsStatus = smsResult.skipped
+      ? notificationStatus.smsDelivered === true
+        ? "delivered"
+        : notificationStatus.smsDelivered === false
+          ? "failed"
+          : "skipped"
+      : smsStatusLabel;
+
+    const finalSmsMessage = smsResult.error ?? notificationStatus.message;
+
     return NextResponse.json({
       success: true,
       data: {
@@ -237,18 +282,22 @@ export async function POST(
         sessionId,
         verificationId,
         digilockerUrl,
-        linkSent: notificationStatus.smsDelivered !== false,
-        smsStatus: notificationStatus.smsDelivered,
-        smsStatusMessage: notificationStatus.message,
+        linkSent: finalSmsStatus === "delivered",
+        smsStatus: finalSmsStatus, // "delivered" | "failed" | "skipped"
+        smsStatusMessage: finalSmsMessage,
+        smsMessageId: smsResult.messageId,
+        smsAttempts: smsResult.skipped ? 0 : 1,
         sentTo: {
           mobile: customerPhone,
           email: customerEmail,
         },
         linkExpiresAt: expiresAt.toISOString(),
         message:
-          notificationStatus.smsDelivered === false
-            ? "DigiLocker link generated, but SMS delivery failed. Please share the link manually with the customer."
-            : "DigiLocker link sent to customer. Awaiting authorization.",
+          finalSmsStatus === "failed"
+            ? "DigiLocker link generated, but SMS delivery failed. Tap Resend SMS or copy the link and share it with the customer."
+            : finalSmsStatus === "skipped"
+              ? "DigiLocker link generated. Copy the link and share it with the customer — Decentro SMS is not enabled yet."
+              : "DigiLocker link sent via SMS. Awaiting customer authorization.",
       },
     });
   } catch (error) {
