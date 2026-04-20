@@ -84,7 +84,14 @@ export default function BorrowerConsentPage() {
 
     // Documents & Verifications
     const [uploadedDocs, setUploadedDocs] = useState<Record<string, UploadedDoc>>({});
-    const [verifications, setVerifications] = useState<{ type: string; label: string; status: string; last_update?: string | null; failed_reason?: string | null }[]>([]);
+    const [verifications, setVerifications] = useState<{ type: string; label: string; status: string; last_update?: string | null; failed_reason?: string | null }[]>([
+        { type: 'aadhaar', label: 'Adhaar Verification', status: 'pending' },
+        { type: 'pan', label: 'Pan verification', status: 'pending' },
+        { type: 'bank', label: 'Bank Verification', status: 'pending' },
+        { type: 'address_proof', label: 'Address Proof', status: 'pending' },
+        { type: 'rc', label: 'RC Verification', status: 'pending' },
+        { type: 'mobile', label: 'Mobile Number', status: 'pending' },
+    ]);
 
     // Consent
     const [consentStatus, setConsentStatus] = useState<string>('awaiting_signature');
@@ -178,7 +185,9 @@ export default function BorrowerConsentPage() {
 
             if (verificationsRes.status === 'fulfilled') {
                 const verJson = await verificationsRes.value.json();
-                if (verJson?.success && Array.isArray(verJson.data)) setVerifications(verJson.data);
+                if (verJson?.success && Array.isArray(verJson.data) && verJson.data.length > 0) {
+                    setVerifications(verJson.data);
+                }
             }
         } catch {
             setApiError('Failed to load data');
@@ -190,20 +199,11 @@ export default function BorrowerConsentPage() {
 
     useEffect(() => { loadPageData(); }, [leadId]);
 
-    // Auto-poll consent when waiting — sync with DigiO then reload
+    // Auto-poll consent when waiting
     useEffect(() => {
-        const waitingStatuses = ['link_sent', 'link_opened', 'esign_in_progress', 'esign_completed', 'admin_review_pending'];
+        const waitingStatuses = ['link_sent', 'link_opened', 'esign_in_progress'];
         if (!waitingStatuses.includes(consentStatus)) return;
-        const tick = async () => {
-            // Sync consent status from DigiO first
-            const syncStatuses = ['link_sent', 'link_opened', 'esign_in_progress', 'esign_completed'];
-            if (syncStatuses.includes(consentStatus)) {
-                try { await fetch(`/api/kyc/${leadId}/consent/sync`, { method: 'POST', cache: 'no-store' }); } catch {}
-            }
-            // Then reload page data to pick up changes
-            loadPageData(true);
-        };
-        const interval = setInterval(tick, 8000);
+        const interval = setInterval(() => loadPageData(true), 10000);
         return () => clearInterval(interval);
     }, [consentStatus, leadId]);
 
@@ -786,8 +786,7 @@ export default function BorrowerConsentPage() {
                     </SectionCard>
 
                     {/* ─── Verification Status ────────────────────────── */}
-                    {verifications.length > 0 && (
-                        <SectionCard title="Verification Status (Borrower)">
+                    <SectionCard title="Verification Status (Borrower)">
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead>
@@ -832,8 +831,7 @@ export default function BorrowerConsentPage() {
                                 <span className="font-bold text-gray-500">Consent:</span>
                                 <ConsentStatusBadge status={consentStatus} />
                             </div>
-                        </SectionCard>
-                    )}
+                    </SectionCard>
                 </main>
 
                 {/* ─── Bottom Bar ────────────────────────────────────── */}
