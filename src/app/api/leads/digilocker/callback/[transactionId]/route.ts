@@ -181,8 +181,8 @@ export async function GET(
         const eaadhaarRes = await digilockerGetEaadhaar({
             initial_decentro_transaction_id: decentroTxnId,
             reference_id: `${txn.reference_id}-FETCH`,
-            consent_purpose:
-                "Aadhaar verification via DigiLocker for lead creation",
+            // Decentro caps consent_purpose at 50 chars.
+            consent_purpose: "Aadhaar verification for lead creation",
         });
 
         const responseStatus =
