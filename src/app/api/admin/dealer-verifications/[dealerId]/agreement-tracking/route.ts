@@ -10,14 +10,14 @@ import {
 import { eq, desc } from "drizzle-orm";
 import { canReInitiateAgreement } from "@/lib/agreement/status";
 import { fetchDigioAndSyncSigners } from "@/lib/agreement/sync-signers";
-import { requireAdmin } from "@/lib/auth/requireAdmin";
+import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 
 type Context = {
   params: Promise<{ dealerId: string }>;
 };
 
 export async function GET(_req: NextRequest, context: Context) {
-  const auth = await requireAdmin();
+  const auth = await requireSalesHead();
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;

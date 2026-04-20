@@ -10,7 +10,7 @@ import {
   insertAgreementSigners,
 } from "@/lib/agreement/tracking";
 import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
-import { requireAdmin } from "@/lib/auth/requireAdmin";
+import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { POST as createDigioAgreement } from "@/app/api/integrations/digio/create-agreement/route";
 
 type AgreementParty = {
@@ -230,7 +230,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ dealerId: string }> }
 ) {
-  const auth = await requireAdmin();
+  const auth = await requireSalesHead();
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await params;
