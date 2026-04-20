@@ -134,6 +134,10 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
         aadhaarNumber: firstNonEmpty(
             getDeep(payload, [
                 "ocrResult.aadhaarNumber",
+                // DigiLocker returns a masked UID like "xxxxxxxx8015" here.
+                // `aadhaarReferenceNumber` is usually empty unless full UID
+                // is consented to — we still check it as a fallback.
+                "data.aadhaarUid",
                 "data.aadhaarReferenceNumber",
                 "data.aadhaar_number",
                 "data.aadhaarNumber",
