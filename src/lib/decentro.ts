@@ -436,6 +436,117 @@ function normalizeDate(dateStr: string): string {
 // Export helpers for reuse in cross-match module
 export { stringSimilarity, normalizeString, normalizeDate };
 
+// ─── Decentro SMS (Communications module) ───────────────────────────────────
+// Env-driven so the exact endpoint path, module secret, DLT template, and
+// request field names can be tuned once Decentro confirms the shape for our
+// account. While DECENTRO_SMS_ENABLED is false or DECENTRO_SMS_ENDPOINT is
+// missing, sendDecentroSms() skips cleanly — the DigiLocker flow still works
+// via the admin's Copy/Open buttons.
+
+const SMS_ENDPOINT      = process.env.DECENTRO_SMS_ENDPOINT || '';
+const SMS_MODULE_SECRET = process.env.DECENTRO_SMS_MODULE_SECRET;
+const SMS_TEMPLATE_ID   = process.env.DECENTRO_SMS_TEMPLATE_ID;
+const SMS_SENDER_ID     = process.env.DECENTRO_SMS_SENDER_ID;
+
+function smsHeaders(): Record<string, string> {
+    const h: Record<string, string> = { ...kycHeaders() };
+    if (isRealSecret(SMS_MODULE_SECRET)) h['module_secret'] = SMS_MODULE_SECRET!;
+    return h;
+}
+
+// Shared builder for the DigiLocker SMS body. Keep a single source so the
+// initial send and any retry send identical text — DLT compliance in India
+// requires the carrier-approved template to match exactly, otherwise the
+// message is silently dropped.
+export function buildDigilockerSmsMessage(
+    digilockerUrl: string,
+    linkValidityHours: number,
+): string {
+    return `Complete Aadhaar KYC for your Itarang loan: ${digilockerUrl} (valid ${linkValidityHours}h)`;
+}
+
+export interface SendSmsParams {
+    mobile_number: string;
+    message: string;
+    reference_id?: string;
+}
+
+export interface SendSmsResult {
+    success: boolean;
+    skipped?: boolean;
+    messageId: string | null;
+    error: string | null;
+    raw: unknown;
+}
+
+export async function sendDecentroSms(p: SendSmsParams): Promise<SendSmsResult> {
+    // Re-read the enable flag on every call so flipping it in prod env
+    // doesn't require a server restart (the others can stay captured).
+    const smsEnabled = process.env.DECENTRO_SMS_ENABLED === 'true';
+    if (!smsEnabled || !SMS_ENDPOINT) {
+        return {
+            success: false,
+            skipped: true,
+            messageId: null,
+            error: 'sms_disabled',
+            raw: null,
+        };
+    }
+
+    const phone = (p.mobile_number || '').replace(/\D/g, '').slice(-10);
+    if (phone.length !== 10) {
+        return {
+            success: false,
+            messageId: null,
+            error: `invalid_mobile:${p.mobile_number}`,
+            raw: null,
+        };
+    }
+
+    const body: Record<string, unknown> = {
+        reference_id: p.reference_id || genRefId(),
+        mobile_number: phone,
+        message: p.message,
+        consent: 'Y',
+    };
+    if (SMS_TEMPLATE_ID) body.template_id = SMS_TEMPLATE_ID;
+    if (SMS_SENDER_ID)   body.sender_id   = SMS_SENDER_ID;
+
+    const url = `${BASE_URL}${SMS_ENDPOINT}`;
+    console.log(`[Decentro SMS] POST ${url} to=${phone.slice(0, 2)}XXXX${phone.slice(-2)} ref=${body.reference_id}`);
+
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                ...smsHeaders(),
+                'Content-Type': 'application/json',
+                'accept': 'application/json',
+            },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        const ok = res.ok && (data?.status === 'SUCCESS' || data?.responseStatus === 'SUCCESS');
+        const messageId =
+            data?.data?.messageId ||
+            data?.data?.message_id ||
+            data?.decentroTxnId ||
+            data?.data?.decentroTxnId ||
+            null;
+        const errorMsg = ok
+            ? null
+            : (data?.message || data?.error || `HTTP ${res.status}`);
+
+        console.log(`[Decentro SMS] Response status=${res.status} ok=${ok} messageId=${messageId ?? 'null'}`);
+
+        return { success: ok, messageId, error: errorMsg, raw: data };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : 'network_error';
+        console.error('[Decentro SMS] Send failed:', msg);
+        return { success: false, messageId: null, error: msg, raw: null };
+    }
+}
+
 // ─── DigiLocker eAadhaar (two-step flow) ────────────────────────────────────
 // Step 1: Initiate Session → get auth URL + decentro_transaction_id
 // Step 2: Get eAadhaar     → fetch Aadhaar data using transaction ID

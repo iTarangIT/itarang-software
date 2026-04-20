@@ -1474,6 +1474,11 @@ export const digilockerTransactions = pgTable(
     digilocker_raw_response: jsonb("digilocker_raw_response"),
     aadhaar_extracted_data: jsonb("aadhaar_extracted_data"),
     cross_match_result: jsonb("cross_match_result"),
+    // Decentro SMS delivery tracking (migration 0030)
+    sms_message_id: varchar("sms_message_id", { length: 255 }),
+    sms_delivered_at: timestamp("sms_delivered_at", { withTimezone: true }),
+    sms_failed_reason: text("sms_failed_reason"),
+    sms_attempts: integer("sms_attempts").default(0).notNull(),
     expires_at: timestamp("expires_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
