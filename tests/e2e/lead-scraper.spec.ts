@@ -3,7 +3,7 @@ import { test, expect } from './fixtures';
 // Scraper dashboard lives at /sales-head/scraper. Triggering a run POSTs to
 // /api/scraper/run after fetching /api/scraper/queries for the active query.
 // Firecrawl / Apify / Google Places must all be stubbed — they cost money per call.
-test.use({ storageState: 'tests/.auth/sales_admin.json' });
+test.use({ storageState: 'tests/.auth/sales_head.json' });
 
 test.describe('Lead scraper', () => {
   test('loads scraper dashboard', async ({ page }) => {

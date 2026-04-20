@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { syncSignersFromDigio } from "@/lib/agreement/sync-signers";
 import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
-import { requireAdmin } from "@/lib/auth/requireAdmin";
+import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -134,7 +134,7 @@ function extractSignedAt(parsed: any) {
 }
 
 export async function POST(_req: NextRequest, context: RouteContext) {
-  const auth = await requireAdmin();
+  const auth = await requireSalesHead();
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
