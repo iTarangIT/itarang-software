@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
 import crypto from 'crypto';
+import { sanitizeDbError } from '@/lib/error-utils';
 
 export function successResponse(data: any, status = 200) {
     return NextResponse.json({
@@ -42,7 +43,7 @@ export function withErrorHandler(handler: Function) {
                     timestamp: new Date().toISOString()
                 }, { status: 400 });
             }
-            return errorResponse(error.message || 'Internal error', 500);
+            return errorResponse(sanitizeDbError(error) || 'Internal error', 500);
         }
     };
 }

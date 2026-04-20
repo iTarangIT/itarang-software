@@ -1,8 +1,15 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { CheckCircle, AlertCircle, Loader2, Clock } from "lucide-react";
-import { useEffect } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  CheckCircle,
+  AlertCircle,
+  Loader2,
+  Clock,
+  StopCircle,
+  Ban,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 
 interface Progress {
   id: string;
@@ -32,6 +39,10 @@ interface Props {
 }
 
 export function ScraperRunProgress({ runId, onComplete, onDismiss }: Props) {
+  const queryClient = useQueryClient();
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
   const { data, isLoading } = useQuery<Progress>({
     queryKey: ["scraper-run-progress", runId],
     queryFn: async () => {
@@ -42,12 +53,43 @@ export function ScraperRunProgress({ runId, onComplete, onDismiss }: Props) {
     },
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      if (status === "completed" || status === "failed") return false;
+      if (
+        status === "completed" ||
+        status === "failed" ||
+        status === "cancelled"
+      ) {
+        return false;
+      }
       return 2500;
     },
   });
 
-  const isTerminal = data?.status === "completed" || data?.status === "failed";
+  const cancelMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/scraper/runs/${runId}/cancel`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (!json.success) {
+        throw new Error(json.error?.message ?? "Failed to cancel scrape");
+      }
+      return json.data as { saved: number; total: number };
+    },
+    onSuccess: () => {
+      setConfirmingCancel(false);
+      setCancelError(null);
+      queryClient.invalidateQueries({ queryKey: ["scraper-run-progress", runId] });
+      queryClient.invalidateQueries({ queryKey: ["scraper-runs"] });
+    },
+    onError: (err: Error) => {
+      setCancelError(err.message);
+    },
+  });
+
+  const isTerminal =
+    data?.status === "completed" ||
+    data?.status === "failed" ||
+    data?.status === "cancelled";
 
   useEffect(() => {
     if (isTerminal && onComplete) onComplete();
@@ -75,44 +117,62 @@ export function ScraperRunProgress({ runId, onComplete, onDismiss }: Props) {
       ? "border-green-200 bg-green-50"
       : data.status === "failed"
         ? "border-red-200 bg-red-50"
-        : "border-teal-200 bg-teal-50/60";
+        : data.status === "cancelled"
+          ? "border-amber-200 bg-amber-50"
+          : data.status === "cancelling"
+            ? "border-amber-200 bg-amber-50/60"
+            : "border-teal-200 bg-teal-50/60";
 
   const barColor =
     data.status === "completed"
       ? "bg-green-500"
       : data.status === "failed"
         ? "bg-red-500"
-        : "bg-teal-500";
+        : data.status === "cancelled" || data.status === "cancelling"
+          ? "bg-amber-500"
+          : "bg-teal-500";
 
   const statusLabel =
     data.status === "completed"
       ? "Completed"
       : data.status === "failed"
         ? "Failed"
-        : data.totalChunks === 0
-          ? "Preparing chunks…"
-          : `Processing ${data.completedChunks}/${data.totalChunks} chunks`;
+        : data.status === "cancelled"
+          ? `Cancelled — ${data.newLeadsSaved} leads saved`
+          : data.status === "cancelling"
+            ? "Cancelling…"
+            : data.totalChunks === 0
+              ? "Preparing chunks…"
+              : `Processing ${data.completedChunks}/${data.totalChunks} chunks`;
 
   const Icon =
     data.status === "completed"
       ? CheckCircle
       : data.status === "failed"
         ? AlertCircle
-        : Loader2;
+        : data.status === "cancelled"
+          ? Ban
+          : Loader2;
+
+  const iconColor =
+    data.status === "completed"
+      ? "text-green-600"
+      : data.status === "failed"
+        ? "text-red-600"
+        : data.status === "cancelled"
+          ? "text-amber-600"
+          : data.status === "cancelling"
+            ? "text-amber-600 animate-spin"
+            : "text-teal-600 animate-spin";
+
+  const isCancelling =
+    data.status === "cancelling" || cancelMutation.isPending;
 
   return (
     <div className={`rounded-xl border p-4 space-y-3 ${colorClasses}`}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Icon
-            className={`w-5 h-5 ${
-              data.status === "completed"
-                ? "text-green-600"
-                : data.status === "failed"
-                  ? "text-red-600"
-                  : "text-teal-600 animate-spin"
-            }`}
-          />
+          <Icon className={`w-5 h-5 ${iconColor}`} />
           <div>
             <p className="text-sm font-semibold text-gray-900">
               {statusLabel}
@@ -121,15 +181,62 @@ export function ScraperRunProgress({ runId, onComplete, onDismiss }: Props) {
           </div>
         </div>
 
-        {isTerminal && onDismiss && (
-          <button
-            onClick={onDismiss}
-            className="text-xs text-gray-500 hover:text-gray-800 px-2 py-1"
-          >
-            Dismiss
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {!isTerminal && !confirmingCancel && (
+            <button
+              onClick={() => setConfirmingCancel(true)}
+              disabled={isCancelling}
+              className="flex items-center gap-1 text-xs font-medium text-red-700 bg-white hover:bg-red-50 border border-red-200 rounded-md px-2.5 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <StopCircle className="w-3.5 h-3.5" />
+              Cancel
+            </button>
+          )}
+
+          {!isTerminal && confirmingCancel && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-700">Stop and save what's scraped?</span>
+              <button
+                onClick={() => cancelMutation.mutate()}
+                disabled={isCancelling}
+                className="flex items-center gap-1 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-md px-2.5 py-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isCancelling ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <StopCircle className="w-3.5 h-3.5" />
+                )}
+                {isCancelling ? "Stopping…" : "Yes, stop"}
+              </button>
+              <button
+                onClick={() => {
+                  setConfirmingCancel(false);
+                  setCancelError(null);
+                }}
+                disabled={isCancelling}
+                className="text-xs text-gray-600 hover:text-gray-900 px-2 py-1.5 disabled:opacity-50"
+              >
+                Keep running
+              </button>
+            </div>
+          )}
+
+          {isTerminal && onDismiss && (
+            <button
+              onClick={onDismiss}
+              className="text-xs text-gray-500 hover:text-gray-800 px-2 py-1"
+            >
+              Dismiss
+            </button>
+          )}
+        </div>
       </div>
+
+      {cancelError && (
+        <p className="text-xs text-red-700 bg-white/70 p-2 rounded-lg">
+          {cancelError}
+        </p>
+      )}
 
       {/* Progress bar */}
       <div className="space-y-1">
@@ -161,8 +268,10 @@ export function ScraperRunProgress({ runId, onComplete, onDismiss }: Props) {
       </div>
 
       {data.status === "failed" && data.errorMessage && (
-        <p className="text-xs text-red-700 bg-white/70 p-2 rounded-lg">
-          {data.errorMessage}
+        <p className="text-xs text-red-700 bg-white/70 p-2 rounded-lg break-words max-h-24 overflow-y-auto">
+          {data.errorMessage.length > 240
+            ? `${data.errorMessage.slice(0, 240)}…`
+            : data.errorMessage}
         </p>
       )}
     </div>
