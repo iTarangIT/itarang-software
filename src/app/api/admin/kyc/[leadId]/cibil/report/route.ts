@@ -151,7 +151,7 @@ export async function POST(
 
     // Name may be nested under personalInfo.name.fullName OR flat .fullName
     const fullName = personalInfo.name?.fullName?.trim() || personalInfo.fullName?.trim() || null;
-    const dob = personalInfo.dateOfBirth || personalInfo.dob || null;
+    const reportedDob = personalInfo.dateOfBirth || personalInfo.dob || null;
 
     // PAN may be under identityInfo.pANId[] (Decentro v2) or identityInfo.panNumber[]
     const panFromV2 = Array.isArray(identityInfo.pANId) ? identityInfo.pANId[0]?.idNumber : null;
@@ -209,7 +209,7 @@ export async function POST(
 
     const summary = {
       fullName,
-      dob,
+      dob: reportedDob,
       gender: personalInfo.gender || null,
       totalIncome: personalInfo.totalIncome || null,
       occupation: personalInfo.occupation || null,
