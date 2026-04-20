@@ -3,7 +3,10 @@
 // by the dealer. Fetches the eAadhaar, normalizes it into the same
 // shape the OCR autofill produces, persists a kyc_verifications row
 // tagged as government-verified, then returns a tiny HTML page that
-// postMessages the extracted data back to the opener and closes.
+// auto-closes. The parent window doesn't rely on postMessage — it
+// polls /api/leads/digilocker/status/[transactionId] instead (browser
+// COOP often nulls window.opener across cross-origin navigations, so
+// postMessage is unreliable here).
 
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
@@ -18,29 +21,12 @@ import { createWorkflowId } from "@/lib/kyc/admin-workflow";
 import {
     buildFinalData,
     extractStructuredAadhaar,
-    type FinalAadhaarData,
 } from "@/lib/kyc/aadhaarNormalize";
 
-// Escape </script> and </style> so injected JSON can't close the
-// surrounding <script> tag and break out.
-function safeJson(value: unknown): string {
-    return JSON.stringify(value).replace(/</g, "\\u003c");
-}
-
 function renderResultHtml(opts: {
-    origin: string;
     ok: boolean;
-    transactionId: string;
-    data?: FinalAadhaarData;
     error?: string;
 }): string {
-    const payload = {
-        type: "itarang:digilocker",
-        ok: opts.ok,
-        transactionId: opts.transactionId,
-        data: opts.data ?? null,
-        error: opts.error ?? null,
-    };
     return `<!doctype html>
 <html>
 <head>
@@ -60,18 +46,10 @@ function renderResultHtml(opts: {
   <div class="card">
     <div class="icon ${opts.ok ? "ok" : "err"}">${opts.ok ? "✓" : "!"}</div>
     <h1>${opts.ok ? "Aadhaar verified" : "Verification failed"}</h1>
-    <p>${opts.ok ? "You can close this window." : opts.error ?? "Please try again."}</p>
+    <p>${opts.ok ? "You can close this window — the form will update shortly." : opts.error ?? "Please try again."}</p>
   </div>
 <script>
-(function () {
-  var payload = ${safeJson(payload)};
-  try {
-    if (window.opener && !window.opener.closed) {
-      window.opener.postMessage(payload, ${safeJson(opts.origin)});
-    }
-  } catch (e) { /* noop */ }
-  setTimeout(function () { try { window.close(); } catch (e) {} }, 800);
-})();
+setTimeout(function () { try { window.close(); } catch (e) {} }, 1000);
 </script>
 </body>
 </html>`;
@@ -88,7 +66,6 @@ export async function GET(
     req: NextRequest,
     { params }: { params: Promise<{ transactionId: string }> },
 ) {
-    const origin = new URL(req.url).origin;
     const { transactionId } = await params;
     const url = new URL(req.url);
     const status = url.searchParams.get("status");
@@ -106,12 +83,7 @@ export async function GET(
         const txn = txnRows[0];
         if (!txn) {
             return htmlResponse(
-                renderResultHtml({
-                    origin,
-                    ok: false,
-                    transactionId,
-                    error: "Transaction not found.",
-                }),
+                renderResultHtml({ ok: false, error: "Transaction not found." }),
             );
         }
 
@@ -125,29 +97,20 @@ export async function GET(
                 .where(eq(digilockerTransactions.id, transactionId));
             return htmlResponse(
                 renderResultHtml({
-                    origin,
                     ok: false,
-                    transactionId,
                     error: `DigiLocker reported: ${status}`,
                 }),
             );
         }
 
-        // Idempotency — if we've already fetched eAadhaar for this txn,
-        // just re-post the stored data and close.
+        // Idempotency — the parent poll picks up on stored status, so
+        // just show the success page and close.
         if (
             txn.status === "document_fetched" &&
             txn.aadhaar_extracted_data &&
             typeof txn.aadhaar_extracted_data === "object"
         ) {
-            return htmlResponse(
-                renderResultHtml({
-                    origin,
-                    ok: true,
-                    transactionId,
-                    data: txn.aadhaar_extracted_data as FinalAadhaarData,
-                }),
-            );
+            return htmlResponse(renderResultHtml({ ok: true }));
         }
 
         const decentroTxnId = decentroTxnIdFromQuery || txn.decentro_txn_id;
@@ -158,9 +121,7 @@ export async function GET(
                 .where(eq(digilockerTransactions.id, transactionId));
             return htmlResponse(
                 renderResultHtml({
-                    origin,
                     ok: false,
-                    transactionId,
                     error: "Missing Decentro transaction id.",
                 }),
             );
@@ -198,9 +159,7 @@ export async function GET(
                 .where(eq(digilockerTransactions.id, transactionId));
             return htmlResponse(
                 renderResultHtml({
-                    origin,
                     ok: false,
-                    transactionId,
                     error:
                         eaadhaarRes?.message ||
                         "Decentro eAadhaar fetch failed.",
@@ -258,21 +217,12 @@ export async function GET(
             // Non-fatal — the form prefill still works.
         }
 
-        return htmlResponse(
-            renderResultHtml({
-                origin,
-                ok: true,
-                transactionId,
-                data: finalData,
-            }),
-        );
+        return htmlResponse(renderResultHtml({ ok: true }));
     } catch (error) {
         console.error("[leads/digilocker/callback] Error:", error);
         return htmlResponse(
             renderResultHtml({
-                origin,
                 ok: false,
-                transactionId,
                 error: "Unexpected error — please try again.",
             }),
         );

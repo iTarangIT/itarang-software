@@ -55,11 +55,20 @@ export interface StructuredAadhaar {
 // Decentro responses nest Aadhaar fields at different paths across API
 // versions and product lines (OCR vs DigiLocker eAadhaar). Walk every
 // known shape defensively.
+//
+// DigiLocker eAadhaar shape (observed from the prod API):
+//   data.proofOfIdentity.{name, dob, gender}
+//   data.proofOfAddress.{careOf, house, street, landmark, locality,
+//                        postOffice, district, state, pincode, country,
+//                        subDistrict}
+//   data.aadhaarReferenceNumber   // often empty — UIDAI rarely returns
+//                                 //   the full UID via DigiLocker
 export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
     return {
         fullName: firstNonEmpty(
             getDeep(payload, [
                 "ocrResult.name",
+                "data.proofOfIdentity.name",
                 "data.full_name",
                 "data.name",
                 "data.customer_name",
@@ -75,6 +84,7 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
                 "ocrResult.fatherName",
                 "ocrResult.sonOf",
                 "ocrResult.husbandOf",
+                "data.proofOfAddress.careOf",
                 "data.father_name",
                 "data.fatherName",
                 "data.father_or_husband_name",
@@ -89,6 +99,7 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
             firstNonEmpty(
                 getDeep(payload, [
                     "ocrResult.dateInfo",
+                    "data.proofOfIdentity.dob",
                     "data.dob",
                     "data.date_of_birth",
                     "data.dateOfBirth",
@@ -116,10 +127,14 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
                 "response.address",
                 "result.address",
             ]),
+            // DigiLocker returns address as nested components, not a
+            // flat string. Build one up from them as a fallback.
+            buildAddressFromDigilockerComponents(payload),
         ),
         aadhaarNumber: firstNonEmpty(
             getDeep(payload, [
                 "ocrResult.aadhaarNumber",
+                "data.aadhaarReferenceNumber",
                 "data.aadhaar_number",
                 "data.aadhaarNumber",
                 "data.uid",
@@ -141,6 +156,23 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
             ]),
         ),
     };
+}
+
+// Join proofOfAddress components into a single human-readable address.
+// Skips empty parts so we never emit ", , ," runs.
+function buildAddressFromDigilockerComponents(payload: unknown): string {
+    const parts = [
+        getDeep(payload, ["data.proofOfAddress.house"]),
+        getDeep(payload, ["data.proofOfAddress.street"]),
+        getDeep(payload, ["data.proofOfAddress.landmark"]),
+        getDeep(payload, ["data.proofOfAddress.locality"]),
+        getDeep(payload, ["data.proofOfAddress.postOffice"]),
+        getDeep(payload, ["data.proofOfAddress.subDistrict"]),
+        getDeep(payload, ["data.proofOfAddress.district"]),
+        getDeep(payload, ["data.proofOfAddress.state"]),
+        getDeep(payload, ["data.proofOfAddress.pincode"]),
+    ].filter((s) => s && s.trim());
+    return parts.join(", ");
 }
 
 // If the structured OCR didn't give us a father name, some Aadhaars print
