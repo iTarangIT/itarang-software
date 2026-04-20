@@ -10,6 +10,7 @@ import {
 import { requireRole } from "@/lib/auth-utils";
 import { startChunkedRun } from "@/lib/scraper/chunkedPipeline";
 import { reapStuckRuns } from "@/lib/scraper/storage/runStore";
+import { assertQStashConfigured } from "@/lib/queue/scheduler";
 import { eq, desc } from "drizzle-orm";
 
 export const maxDuration = 60;
@@ -22,6 +23,17 @@ export const POST = withErrorHandler(async (req: Request) => {
 
   if (!baseQuery) {
     return errorResponse("Query is required", 400);
+  }
+
+  // Fail fast if QStash isn't configured — otherwise we'd insert a run row
+  // that immediately becomes orphaned at status='running'.
+  try {
+    assertQStashConfigured();
+  } catch (err: any) {
+    return errorResponse(
+      `Scraper queue not configured: ${err?.message ?? "unknown"}`,
+      500,
+    );
   }
 
   await reapStuckRuns();
