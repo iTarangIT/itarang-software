@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { db } from '@/lib/db';
-import { loanFiles, accounts } from '@/lib/db/schema';
+import { loanFiles } from '@/lib/db/schema';
 import { eq, and, or, ilike, gt, sql } from 'drizzle-orm';
+import { resolveDealerProfile } from '@/lib/supabase/identity';
 
 export async function GET(req: NextRequest) {
     try {
@@ -10,8 +11,8 @@ export async function GET(req: NextRequest) {
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-        const { data: profile } = await supabase.from('users').select('role, dealer_id').eq('id', user.id).single();
-        if (profile?.role !== 'dealer' || !profile?.dealer_id) {
+        const profile = await resolveDealerProfile(supabase, user, 'id,email,role,dealer_id');
+        if (!profile) {
             return NextResponse.json({ success: false, error: 'Access denied' }, { status: 403 });
         }
 
