@@ -1,9 +1,10 @@
 'use client';
 
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
     ChevronLeft, ChevronDown, Loader2, AlertCircle, X,
-    Upload, CheckCircle2, XCircle, Clock, Scan, Eye, FileText
+    Upload, CheckCircle2, XCircle, Clock, Scan, Eye, FileText,
+    ShieldCheck
 } from 'lucide-react';
 
 // ─── Section Card ───────────────────────────────────────────────────────────
@@ -153,9 +154,7 @@ function getDealerStatus(uploaded: boolean, status?: string): { label: string; c
     const s = (status || '').toLowerCase();
     if (s === 'success' || s === 'verified') return { label: 'Verified', color: 'text-green-600', dotColor: 'bg-green-500', icon: 'check' };
     if (s === 'failed' || s === 'rejected' || s === 'reupload_requested') return { label: 'Reupload Required', color: 'text-red-600', dotColor: 'bg-red-500', icon: 'reupload' };
-    if (s === 'in_progress' || s === 'initiating' || s === 'awaiting_action') return { label: 'Under Verification', color: 'text-blue-600', dotColor: 'bg-blue-500', icon: 'clock' };
-    // For 'uploaded', 'pending', or any other status on an uploaded doc — show as successfully uploaded
-    return { label: 'Uploaded', color: 'text-emerald-600', dotColor: 'bg-emerald-500', icon: 'check' };
+    return { label: 'Uploaded - Pending Review', color: 'text-blue-600', dotColor: 'bg-amber-500', icon: 'clock' };
 }
 
 export function DocumentCard({ label, required, uploaded, status, failedReason, onUpload, disabled, fileUrl }: {
@@ -186,10 +185,10 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
     const pill = !uploaded
         ? { bg: 'bg-gray-100', text: 'text-gray-500', label: required ? 'Required' : 'Optional' }
         : isVerified
-            ? { bg: 'bg-emerald-50', text: 'text-emerald-700', label: dealerStatus.label }
+            ? { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Verified' }
             : isRejected
                 ? { bg: 'bg-red-50', text: 'text-red-700', label: 'Re-upload' }
-                : { bg: 'bg-blue-50', text: 'text-blue-700', label: dealerStatus.label };
+                : { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Pending' };
 
     return (
         <div className={`group relative rounded-2xl border-2 bg-white transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5 overflow-hidden ${border} ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -592,6 +591,190 @@ function UploadBox({ label, file, onSelect, scanning }: {
                 {file ? file.name.slice(0, 20) : 'Click to upload'}
             </span>
         </label>
+    );
+}
+
+// ─── DigiLocker KYC Button ─────────────────────────────────────────────────
+//
+// Opens the Decentro DigiLocker SSO URL in a popup. The driver signs into
+// DigiLocker, authorises iTarang, and submits. Our server-side callback
+// fetches eAadhaar and stores it on the digilocker_transactions row. The
+// parent window here polls /api/leads/digilocker/status/[txnId] every
+// couple of seconds; when status === "document_fetched" we prefill the
+// form. This approach is resilient to browser COOP rules that null
+// window.opener across the cross-origin DigiLocker navigations — those
+// rules make window.postMessage from the popup unreliable.
+//
+// Same onResult signature as OCRModal so the caller wires both buttons
+// to a single handleOCRResult.
+
+type DigilockerStatus = 'idle' | 'initiating' | 'awaiting' | 'success' | 'failed';
+
+const POLL_INTERVAL_MS = 2000;
+const POLL_MAX_DURATION_MS = 10 * 60 * 1000; // 10 min safety cap
+
+export function DigilockerKycButton({ leadId, phone, onResult, disabled }: {
+    leadId: string | null;
+    phone?: string;
+    onResult: (data: Record<string, unknown>) => void;
+    disabled?: boolean;
+}) {
+    const [status, setStatus] = useState<DigilockerStatus>('idle');
+    const [error, setError] = useState<string | null>(null);
+    const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
+    const popupRef = useRef<Window | null>(null);
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const pollDeadlineRef = useRef<number>(0);
+    const txnIdRef = useRef<string | null>(null);
+
+    const cleanup = () => {
+        if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+        }
+        popupRef.current = null;
+        txnIdRef.current = null;
+    };
+
+    useEffect(() => () => cleanup(), []);
+
+    const openPopup = (url: string): Window | null => {
+        const features = 'width=520,height=720,menubar=no,toolbar=no,location=yes,status=yes,resizable=yes,scrollbars=yes';
+        return window.open(url, 'itarang-digilocker', features);
+    };
+
+    const startPolling = (transactionId: string) => {
+        pollDeadlineRef.current = Date.now() + POLL_MAX_DURATION_MS;
+        pollRef.current = setInterval(async () => {
+            if (!txnIdRef.current || txnIdRef.current !== transactionId) {
+                if (pollRef.current) clearInterval(pollRef.current);
+                return;
+            }
+            if (Date.now() > pollDeadlineRef.current) {
+                setError('Timed out waiting for DigiLocker authorization.');
+                setStatus('failed');
+                cleanup();
+                return;
+            }
+            try {
+                const res = await fetch(
+                    `/api/leads/digilocker/status/${encodeURIComponent(transactionId)}`,
+                    { cache: 'no-store' },
+                );
+                if (!res.ok) return;
+                const json = await res.json();
+                if (!json?.success) return;
+                const s = json.data?.status;
+                if (s === 'document_fetched' && json.data?.data) {
+                    onResult(json.data.data);
+                    setStatus('success');
+                    cleanup();
+                    // Best-effort: close the popup if it's still open.
+                    try { popupRef.current?.close(); } catch {}
+                    return;
+                }
+                if (s === 'failed' || s === 'expired') {
+                    setError(`DigiLocker authorization ${s}.`);
+                    setStatus('failed');
+                    cleanup();
+                    return;
+                }
+            } catch {
+                // transient — keep polling
+            }
+        }, POLL_INTERVAL_MS);
+    };
+
+    const handleClick = async () => {
+        if (disabled || status === 'initiating' || status === 'awaiting') return;
+        if (!leadId) {
+            setError('Please wait for the draft to initialize.');
+            setStatus('failed');
+            return;
+        }
+
+        setError(null);
+        setFallbackUrl(null);
+        setStatus('initiating');
+
+        try {
+            const res = await fetch('/api/leads/digilocker/initiate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ leadId, phone: phone || undefined }),
+            });
+            const json = await res.json();
+            if (!json.success) {
+                setError(json.error?.message || 'Failed to start DigiLocker session');
+                setStatus('failed');
+                return;
+            }
+
+            const { transactionId, authorizationUrl } = json.data as {
+                transactionId: string;
+                authorizationUrl: string;
+            };
+            txnIdRef.current = transactionId;
+
+            const popup = openPopup(authorizationUrl);
+            popupRef.current = popup;
+
+            if (!popup) {
+                // Popup blocker kicked in — surface a fallback link the
+                // user can click (preserves the user-gesture requirement
+                // for most browsers).
+                setFallbackUrl(authorizationUrl);
+            }
+
+            setStatus('awaiting');
+            startPolling(transactionId);
+        } catch {
+            setError('Network error. Please try again.');
+            setStatus('failed');
+        }
+    };
+
+    const label =
+        status === 'initiating' ? 'Starting...'
+        : status === 'awaiting' ? 'Waiting for authorization...'
+        : status === 'success' ? 'Aadhaar KYC ✓'
+        : 'Aadhaar KYC';
+
+    return (
+        <div className="flex items-center gap-2">
+            <button
+                type="button"
+                onClick={handleClick}
+                disabled={disabled || status === 'initiating' || status === 'awaiting'}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
+                    status === 'success'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : status === 'failed'
+                            ? 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100'
+                            : 'bg-white border border-gray-200 text-gray-800 hover:border-[#1D4ED8] hover:text-[#1D4ED8]'
+                }`}
+            >
+                {status === 'initiating' || status === 'awaiting'
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : status === 'success'
+                        ? <CheckCircle2 className="w-4 h-4" />
+                        : <ShieldCheck className="w-4 h-4" />}
+                {label}
+            </button>
+            {fallbackUrl && status === 'awaiting' && (
+                <a
+                    href={fallbackUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-semibold text-[#1D4ED8] underline"
+                >
+                    Popup blocked — open link
+                </a>
+            )}
+            {error && status === 'failed' && (
+                <span className="text-xs text-red-600 max-w-[280px] truncate" title={error}>{error}</span>
+            )}
+        </div>
     );
 }
 

@@ -67,7 +67,16 @@ export async function POST(req: Request) {
     );
   }
 
-  await executeChunk(payload.chunkId);
+  try {
+    await executeChunk(payload.chunkId);
+  } catch (err: any) {
+    console.error(`[scraper:chunk] executeChunk threw for ${payload.chunkId}`, err);
+    // Return 500 so QStash retries the message according to its retry policy.
+    return NextResponse.json(
+      { success: false, error: err?.message ?? "executeChunk failed" },
+      { status: 500 },
+    );
+  }
 
   return NextResponse.json({ success: true });
 }

@@ -8,7 +8,7 @@ import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
 import { sendDealerApprovalNotificationEmail } from "@/lib/email/sendDealerApprovalNotificationEmail";
 import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification-recipients";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { requireAdmin } from "@/lib/auth/requireAdmin";
+import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -19,8 +19,11 @@ function generateDealerCode() {
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, "0");
   const dd = String(now.getDate()).padStart(2, "0");
-  const random = Math.floor(100 + Math.random() * 900);
-
+  // Wider random suffix (6 hex = ~16M space) — the prior 3-digit space
+  // collided across approval retries on the same day.
+  const random = Math.floor(Math.random() * 0xffffff)
+    .toString(16)
+    .padStart(6, "0");
   return `ACC-ITARANG-${yyyy}${mm}${dd}-${random}`;
 }
 
@@ -29,11 +32,20 @@ function resolveDealerLoginEmail(application: any) {
 }
 
 
-export async function POST(_req: NextRequest, context: RouteContext) {
-  const auth = await requireAdmin();
+export async function POST(req: NextRequest, context: RouteContext) {
+  const auth = await requireSalesHead();
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
+
+    const forwardedProto = req.headers.get("x-forwarded-proto");
+    const forwardedHost = req.headers.get("x-forwarded-host");
+    const requestOrigin =
+      forwardedHost
+        ? `${forwardedProto || "https"}://${forwardedHost}`
+        : req.nextUrl.origin;
+    const resolvedLoginUrl =
+      process.env.DEALER_LOGIN_URL || `${requestOrigin}/login`;
 
     const existing = await db
       .select()
@@ -365,7 +377,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         dealerId: dealerCode,
         userId: dealerLoginEmail,
         password: temporaryPassword,
-        loginUrl: process.env.DEALER_LOGIN_URL || "http://localhost:3000/login",
+        loginUrl: resolvedLoginUrl,
         supportEmail:
           process.env.DEALER_SUPPORT_EMAIL || "support@itarang.com",
         supportPhone:
@@ -402,11 +414,28 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     });
   } catch (error: any) {
     console.error("APPROVE DEALER ERROR:", error);
+    if (error?.cause) console.error("APPROVE DEALER ERROR cause:", error.cause);
+
+    // Drizzle wraps postgres-js errors; the underlying error sits on `.cause`.
+    const root = error?.cause ?? error;
 
     return NextResponse.json(
       {
         success: false,
         message: error?.message || "Approve failed",
+        pg: {
+          code: root?.code ?? null,
+          detail: root?.detail ?? null,
+          constraint: root?.constraint_name ?? root?.constraint ?? null,
+          column: root?.column_name ?? root?.column ?? null,
+          table: root?.table_name ?? root?.table ?? null,
+          hint: root?.hint ?? null,
+          severity: root?.severity ?? null,
+          where: root?.where ?? null,
+          // Last-resort dump of all enumerable own keys so we never go blind on diagnosis.
+          keys: root && typeof root === "object" ? Object.keys(root) : null,
+          rootMessage: root?.message ?? null,
+        },
       },
       { status: 500 }
     );

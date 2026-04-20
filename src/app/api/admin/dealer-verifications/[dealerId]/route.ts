@@ -6,7 +6,7 @@ import {
 } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth/requireAdmin";
+import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 
 const PatchBodySchema = z.object({
   companyName: z.string().optional(),
@@ -55,7 +55,7 @@ function extractAddress(value: unknown) {
 // ─── GET ────────────────────────────────────────────────────────────────────
 
 export async function GET(_req: NextRequest, context: RouteContext) {
-  const auth = await requireAdmin();
+  const auth = await requireSalesHead();
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
@@ -186,7 +186,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 // ─── PATCH — edit company details + agreement language ───────────────────────
 
 export async function PATCH(req: NextRequest, context: RouteContext) {
-  const auth = await requireAdmin();
+  const auth = await requireSalesHead();
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;

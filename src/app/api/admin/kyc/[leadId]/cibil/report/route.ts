@@ -129,28 +129,118 @@ export async function POST(
 
     const interpretation = score !== null && !isNaN(score) ? interpretCibilScore(score) : null;
 
-    // Build summary from credit report summary response
-    // Data may be at top level or nested under cCRResponse
-    const personalInfo = reportData.personalInfo || responseData.personalInfo || {};
-    const accountSummary = reportData.accountSummary || responseData.accountSummary || {};
+    // Build summary from credit report summary response.
+    //
+    // Decentro's actual V2 shape (confirmed from prod response 20-Apr-2026):
+    //   reportData.iDAndContactInfo.personalInfo.{name,dateOfBirth,gender}
+    //   reportData.iDAndContactInfo.identityInfo.pANId[]
+    //   reportData.iDAndContactInfo.{addressInfo,phoneInfo,emailAddressInfo}
+    //   reportData.retailAccountsSummary.{noOfActiveAccounts,totalBalanceAmount,...}
+    //   reportData.recentActivities.totalInquiries
+    //   reportData.otherKeyInd.ageOfOldestTrade (in months)
+    //
+    // We keep the old field names as fallbacks so older/alternate Decentro
+    // responses still work if they change shape again.
+    const idContact = reportData.iDAndContactInfo || {};
+    const personalInfo = idContact.personalInfo || reportData.personalInfo || responseData.personalInfo || {};
+    const identityInfo = idContact.identityInfo || reportData.identityInfo || responseData.identityInfo || {};
+    const retailSummary = reportData.retailAccountsSummary || reportData.accountSummary || responseData.accountSummary || {};
+    const recentActivities = reportData.recentActivities || {};
     const enquirySummary = reportData.enquirySummary || responseData.enquirySummary || {};
+    const otherKeyInd = reportData.otherKeyInd || {};
+
+    // Name may be nested under personalInfo.name.fullName OR flat .fullName
+    const fullName = personalInfo.name?.fullName?.trim() || personalInfo.fullName?.trim() || null;
+    const reportedDob = personalInfo.dateOfBirth || personalInfo.dob || null;
+
+    // PAN may be under identityInfo.pANId[] (Decentro v2) or identityInfo.panNumber[]
+    const panFromV2 = Array.isArray(identityInfo.pANId) ? identityInfo.pANId[0]?.idNumber : null;
+    const panFromOld = Array.isArray(identityInfo.panNumber) ? identityInfo.panNumber[0]?.idNumber : null;
+
+    // Credit utilization — Decentro doesn't return a ready-to-display percentage,
+    // but we can derive it when both total outstanding and total credit limit
+    // are present (this reflects how heavily the customer is using their
+    // revolving/credit limits). Returns null if either is missing or zero.
+    const totalBalance = Number(retailSummary.totalBalanceAmount ?? NaN);
+    const totalLimit = Number(retailSummary.totalCreditLimit ?? NaN);
+    const totalSanctioned = Number(retailSummary.totalSanctionAmount ?? NaN);
+    let creditUtilization: string | null = null;
+    if (!isNaN(totalBalance) && !isNaN(totalLimit) && totalLimit > 0) {
+      creditUtilization = `${Math.round((totalBalance / totalLimit) * 100)}%`;
+    } else if (!isNaN(totalBalance) && !isNaN(totalSanctioned) && totalSanctioned > 0) {
+      // Fallback: ratio against total sanctioned amount across all credit lines
+      creditUtilization = `${Math.round((totalBalance / totalSanctioned) * 100)}%`;
+    } else if (retailSummary.creditUtilization !== undefined) {
+      creditUtilization = String(retailSummary.creditUtilization);
+    }
+
+    // Oldest account age — Decentro returns months under otherKeyInd.ageOfOldestTrade.
+    // Convert to a human-friendly "X years Y months" string.
+    let oldestAccountAge: string | null = null;
+    const ageMonthsRaw = otherKeyInd.ageOfOldestTrade ?? retailSummary.oldestAccountAge;
+    if (ageMonthsRaw !== undefined && ageMonthsRaw !== null && String(ageMonthsRaw).trim() !== '') {
+      const months = Number(ageMonthsRaw);
+      if (!isNaN(months) && months > 0) {
+        const y = Math.floor(months / 12);
+        const m = months % 12;
+        oldestAccountAge = y > 0 ? (m > 0 ? `${y}y ${m}m` : `${y}y`) : `${m}m`;
+      } else {
+        oldestAccountAge = String(ageMonthsRaw);
+      }
+    }
+
+    // Credit mix — Decentro v2 doesn't surface a pre-computed mix label. Best we
+    // can do is expose the "X accounts (Y active)" shape that reviewers can
+    // interpret at a glance. Falls back to raw field if Decentro ever adds it.
+    const totalAccounts = retailSummary.noOfAccounts;
+    const activeAccounts = retailSummary.noOfActiveAccounts;
+    let creditMix: string | null = retailSummary.creditMix ?? null;
+    if (!creditMix && totalAccounts !== undefined && activeAccounts !== undefined) {
+      creditMix = `${totalAccounts} total · ${activeAccounts} active`;
+    }
+
+    // Format large currency numbers as rupees with thousands separators.
+    const formatAmount = (v: unknown): string | null => {
+      if (v === undefined || v === null || v === '') return null;
+      const n = Number(v);
+      if (isNaN(n)) return String(v);
+      return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+    };
+
     const summary = {
-      fullName: personalInfo.fullName || null,
-      dob: personalInfo.dob || null,
+      fullName,
+      dob: reportedDob,
       gender: personalInfo.gender || null,
       totalIncome: personalInfo.totalIncome || null,
       occupation: personalInfo.occupation || null,
-      panNumber: reportData.identityInfo?.panNumber?.[0]?.idNumber || responseData.identityInfo?.panNumber?.[0]?.idNumber || responseData.document_id || null,
-      addresses: reportData.addressInfo || responseData.addressInfo || [],
-      phones: reportData.phoneInfo || responseData.phoneInfo || [],
-      emails: reportData.emailInfo || responseData.emailInfo || [],
-      activeLoans: accountSummary.activeAccounts ?? accountSummary.noOfActiveAccounts ?? responseData.active_loans ?? null,
-      totalOutstanding: accountSummary.totalOutstanding ?? accountSummary.totalBalanceAmount ?? responseData.total_outstanding ?? null,
-      creditUtilization: accountSummary.creditUtilization ?? responseData.credit_utilization ?? null,
-      paymentDefaults: accountSummary.overdueAccounts ?? accountSummary.noOfPastDueAccounts ?? responseData.payment_defaults ?? null,
-      recentEnquiries: enquirySummary.last30Days ?? enquirySummary.numberOfEnquiries ?? responseData.recent_enquiries ?? null,
-      oldestAccountAge: accountSummary.oldestAccountAge ?? responseData.oldest_account_age ?? null,
-      creditMix: accountSummary.creditMix ?? responseData.credit_mix ?? null,
+      panNumber: panFromV2 || panFromOld || responseData.document_id || null,
+      addresses: idContact.addressInfo || reportData.addressInfo || responseData.addressInfo || [],
+      phones: idContact.phoneInfo || reportData.phoneInfo || responseData.phoneInfo || [],
+      emails: idContact.emailAddressInfo || reportData.emailInfo || responseData.emailInfo || [],
+      activeLoans:
+        retailSummary.noOfActiveAccounts ??
+        retailSummary.activeAccounts ??
+        responseData.active_loans ??
+        null,
+      totalOutstanding: formatAmount(
+        retailSummary.totalBalanceAmount ??
+          retailSummary.totalOutstanding ??
+          responseData.total_outstanding,
+      ),
+      creditUtilization,
+      paymentDefaults:
+        retailSummary.noOfPastDueAccounts ??
+        retailSummary.overdueAccounts ??
+        responseData.payment_defaults ??
+        null,
+      recentEnquiries:
+        recentActivities.totalInquiries ??
+        enquirySummary.last30Days ??
+        enquirySummary.numberOfEnquiries ??
+        responseData.recent_enquiries ??
+        null,
+      oldestAccountAge,
+      creditMix,
       accounts: reportData.retailAccountDetails || responseData.accounts || responseData.accountDetails || [],
       enquiries: reportData.enquiryDetails || responseData.enquiries || responseData.enquiryDetails || [],
     };

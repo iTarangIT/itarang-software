@@ -4,7 +4,19 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Plus, Loader2 } from "lucide-react";
 
-export function QueryManager({ showInput = true }: { showInput?: boolean }) {
+interface QueryManagerProps {
+  showInput?: boolean;
+  disabled?: boolean;
+  onRunStarted?: (runId: string) => void;
+  onError?: (message: string) => void;
+}
+
+export function QueryManager({
+  showInput = true,
+  disabled = false,
+  onRunStarted,
+  onError,
+}: QueryManagerProps) {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -28,20 +40,21 @@ export function QueryManager({ showInput = true }: { showInput?: boolean }) {
       const json = await res.json();
 
       if (!json.success) {
-        alert(json.error?.message || "Failed to start scraper");
+        onError?.(json.error?.message || "Failed to start scraper");
         return;
       }
 
-      alert("Scraper started successfully");
-
+      onRunStarted?.(json.data.run_id);
       setQuery("");
     } catch (err) {
       console.error(err);
-      alert("Something went wrong");
+      onError?.("Something went wrong");
     } finally {
       setLoading(false);
     }
   }
+
+  const isDisabled = loading || disabled || !query.trim();
 
   return (
     <div className="space-y-4">
@@ -51,14 +64,19 @@ export function QueryManager({ showInput = true }: { showInput?: boolean }) {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleRun()}
-            placeholder="Enter search query (e.g. 3w battery in mumbai)"
-            className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+            onKeyDown={(e) => e.key === "Enter" && !isDisabled && handleRun()}
+            disabled={disabled || loading}
+            placeholder={
+              disabled
+                ? "A scrape is already running…"
+                : "Enter search query (e.g. 3w battery in mumbai)"
+            }
+            className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:bg-gray-50 disabled:cursor-not-allowed"
           />
 
           <Button
             onClick={handleRun}
-            disabled={loading || !query.trim()}
+            disabled={isDisabled}
             className="bg-teal-600 hover:bg-teal-700 text-white gap-2"
           >
             {loading ? (
@@ -66,7 +84,7 @@ export function QueryManager({ showInput = true }: { showInput?: boolean }) {
             ) : (
               <Plus className="w-4 h-4" />
             )}
-            Run
+            {loading ? "Starting…" : "Run"}
           </Button>
         </div>
       )}

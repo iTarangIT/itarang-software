@@ -54,6 +54,30 @@ export async function markRunFailed(runId: string, error: string) {
     .where(eq(scrapeRuns.id, runId));
 }
 
+export async function markRunCancelled(
+  runId: string,
+  stats: {
+    total: number;
+    cleaned: number;
+    saved: number;
+    duplicates: number;
+    duration_ms: number;
+  },
+) {
+  await db
+    .update(scrapeRuns)
+    .set({
+      status: "cancelled",
+      completedAt: new Date(),
+      totalFound: stats.total,
+      newLeadsSaved: stats.saved,
+      duplicatesSkipped: stats.duplicates,
+      cleanedLeads: stats.cleaned,
+      durationMs: stats.duration_ms,
+    })
+    .where(eq(scrapeRuns.id, runId));
+}
+
 // Serverless functions can be terminated before the scraper finishes, leaving
 // rows stuck at status='running' forever. Reap any that exceed the threshold.
 export async function reapStuckRuns() {

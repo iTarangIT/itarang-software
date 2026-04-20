@@ -355,12 +355,14 @@ export default function StepReview() {
       // Mark onboarding complete in Zustand store (also saves dealerId to localStorage)
       completeOnboarding();
 
-      // Derive login URL from public env (falls back to app-relative /login)
+      // Always send submitted dealers to the sandbox login portal. A stale
+      // ngrok URL in NEXT_PUBLIC_DEALER_LOGIN_URL / NEXT_PUBLIC_APP_URL must
+      // not be able to override this — we ignore any value pointing at ngrok.
+      const envOverride = process.env.NEXT_PUBLIC_DEALER_LOGIN_URL;
       const redirectUrl =
-        process.env.NEXT_PUBLIC_DEALER_LOGIN_URL ||
-        (process.env.NEXT_PUBLIC_APP_URL
-          ? `${process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "")}/login`
-          : "/login");
+        envOverride && !/ngrok/i.test(envOverride)
+          ? envOverride
+          : "https://sandbox.itarang.com";
 
       // Sign out in the background; don't block redirect if network is slow
       supabase.auth.signOut().catch(() => { });

@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { kycVerifications } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const { leadId } = await params;
-        const verifications = await db.select().from(kycVerifications).where(eq(kycVerifications.lead_id, leadId));
+        const verificationFor = req.nextUrl.searchParams.get('verification_for') || 'customer';
+        const applicant = verificationFor === 'borrower' ? 'co_borrower' : 'primary';
+
+        const verifications = await db
+            .select()
+            .from(kycVerifications)
+            .where(and(eq(kycVerifications.lead_id, leadId), eq(kycVerifications.applicant, applicant)));
 
         const LABELS: Record<string, string> = {
             aadhaar: 'Aadhaar Verification',

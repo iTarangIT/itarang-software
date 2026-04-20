@@ -55,6 +55,25 @@ export async function GET(
       );
     }
 
+    // Derive a single smsStatus label from the row so every return branch
+    // can emit it consistently.
+    const smsAttempts = txn.sms_attempts ?? 0;
+    const smsStatus =
+      smsAttempts === 0
+        ? "skipped"
+        : txn.sms_delivered_at
+          ? "delivered"
+          : txn.sms_failed_reason
+            ? "failed"
+            : "skipped";
+    const smsBlock = {
+      smsStatus,
+      smsStatusMessage: txn.sms_failed_reason ?? null,
+      smsMessageId: txn.sms_message_id ?? null,
+      smsAttempts,
+      smsDeliveredAt: txn.sms_delivered_at?.toISOString() ?? null,
+    };
+
     // If already fetched, return cached data — but only if data is actually populated
     const cachedData = txn.aadhaar_extracted_data as Record<string, string | null> | null;
     const cachedCross = txn.cross_match_result as Record<string, unknown> | null;
@@ -75,6 +94,7 @@ export async function GET(
           crossMatchResult: txn.cross_match_result,
           linkExpiresAt: txn.expires_at?.toISOString(),
           timeRemaining: null,
+          ...smsBlock,
         },
       });
     }
@@ -99,6 +119,7 @@ export async function GET(
           documentFetched: false,
           linkExpiresAt: txn.expires_at?.toISOString(),
           timeRemaining: "0",
+          ...smsBlock,
         },
       });
     }
@@ -293,6 +314,7 @@ export async function GET(
         crossMatchResult,
         linkExpiresAt: txn.expires_at?.toISOString(),
         timeRemaining,
+        ...smsBlock,
       },
     });
   } catch (error) {

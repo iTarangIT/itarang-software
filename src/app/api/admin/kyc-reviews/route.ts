@@ -7,6 +7,7 @@ import {
   coBorrowers,
   leads,
   kycDocuments,
+  users,
 } from "@/lib/db/schema";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
@@ -38,15 +39,32 @@ async function requireAdmin(
 
   if (error || !user) return null;
 
-  const { data: profile } = await supabase
-    .from("users")
-    .select("id, role, name")
-    .eq("id", user.id)
-    .single();
+  // Users live on AWS RDS, not Supabase — look up via Drizzle
+  let dbUser =
+    (
+      await db
+        .select({ id: users.id, role: users.role, name: users.name })
+        .from(users)
+        .where(eq(users.id, user.id))
+        .limit(1)
+    )[0] ?? null;
 
-  if (!profile || !ADMIN_ROLES.includes(profile.role)) return null;
+  if (!dbUser && user.email) {
+    dbUser =
+      (
+        await db
+          .select({ id: users.id, role: users.role, name: users.name })
+          .from(users)
+          .where(eq(users.email, user.email))
+          .limit(1)
+      )[0] ?? null;
+  }
 
-  return profile;
+  if (!dbUser || !ADMIN_ROLES.includes(dbUser.role as typeof ADMIN_ROLES[number])) {
+    return null;
+  }
+
+  return dbUser;
 }
 
 function parseReviewFilter(value: string | null): ReviewFilter {
