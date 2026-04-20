@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { canReInitiateAgreement } from "@/lib/agreement/status";
-import { requireAdmin } from "@/lib/auth/requireAdmin";
+import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { POST as initiateAgreement } from "@/app/api/admin/dealer-verifications/[dealerId]/initiate-agreement/route";
 
 type Context = {
@@ -11,7 +11,7 @@ type Context = {
 };
 
 export async function POST(req: NextRequest, context: Context) {
-  const auth = await requireAdmin();
+  const auth = await requireSalesHead();
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest, context: Context) {
     // APP_URL / NEXT_PUBLIC_APP_URL, which fails on Hostinger when those are
     // unset or point somewhere unreachable (e.g. a stale ngrok tunnel).
     // In-process avoids the network hop entirely and preserves the caller's
-    // auth context because requireAdmin() reads the same Supabase session
+    // auth context because requireSalesHead() reads the same Supabase session
     // cookies from the forwarded NextRequest.
     const forwardHeaders = new Headers(req.headers);
     forwardHeaders.set("Content-Type", "application/json");

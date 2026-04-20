@@ -3,7 +3,7 @@ import { test, expect } from './fixtures';
 // AI dialer lives at /ceo/ai-dialer. Calls pass through internal /api/ceo/ai-dialer/*
 // proxies which wrap Bolna. Always stub the internal routes — the BullMQ worker
 // running alongside `next dev` will otherwise try to dispatch real jobs.
-test.use({ storageState: 'tests/.auth/sales_admin.json' });
+test.use({ storageState: 'tests/.auth/sales_head.json' });
 
 test.describe('AI dialer', () => {
   test('loads dialer page with stubbed settings + empty queue', async ({ page }) => {

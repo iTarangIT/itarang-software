@@ -2,7 +2,7 @@ import { test, expect } from './fixtures';
 
 // Runs as sales_head. /leads/new posts to /api/dealer-leads.
 // On success the app flashes a card and redirects to /leads after ~1.2s.
-test.use({ storageState: 'tests/.auth/sales_admin.json' });
+test.use({ storageState: 'tests/.auth/sales_head.json' });
 
 test.describe('Lead creation', () => {
   test('creates a new dealer lead via the form', async ({ page }, testInfo) => {

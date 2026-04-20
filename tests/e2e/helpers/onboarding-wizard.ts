@@ -2,6 +2,30 @@ import { expect, type Page } from '@playwright/test';
 import { preloadAllSamples } from './sample-docs';
 import { findApplicationIdByCompanyName } from './dealer-creds';
 
+export type SigningMethod =
+  | "aadhaar_esign"
+  | "electronic_signature"
+  | "dsc_signature";
+
+export type AgreementInputs = {
+  dateOfSigning: string;
+  mouDate: string;
+  dealerSigningMethod: SigningMethod;
+  itarangSignatory1: {
+    name: string;
+    designation: string;
+    email: string;
+    mobile: string;
+    address: string;
+    signingMethod: SigningMethod;
+  };
+  salesManager?: {
+    name: string;
+    email: string;
+    mobile: string;
+  };
+};
+
 export type OnboardingWizardInputs = {
   companyName: string;
   ownerName: string;
@@ -9,16 +33,33 @@ export type OnboardingWizardInputs = {
   ownerPhone: string;
   gstin: string;
   pan: string;
+  /**
+   * Controls the Step 4 (Finance Enablement) branch.
+   * - "no" (default): click "No, continue without finance" → Step 5 is skipped
+   *   and the wizard jumps straight to Review. Matches the historical behavior.
+   * - "yes": click "Yes, enable finance" → Step 5 (Agreement) is rendered and
+   *   must be filled via `agreement`. Required fields mirror
+   *   onboardingSchemas.ts:283-345.
+   */
+  enableFinance?: "yes" | "no";
+  /**
+   * Required when enableFinance === "yes". Feeds Step 5.
+   * The dealer signatory dropdown auto-populates from the owner fields
+   * already captured on Step 3, so no dealer-signer name/email/phone is
+   * needed here — only the signing method.
+   */
+  agreement?: AgreementInputs;
 };
 
 /**
  * Drives the 6-step public dealer-onboarding wizard at /dealer-onboarding
- * end-to-end: Company → Documents → Ownership (sole-prop) → Finance (no) →
- * Review → Submit. Returns the applicationId from the submit response (or
- * via DB lookup fallback when the page redirect eats the response body).
+ * end-to-end: Company → Documents → Ownership (sole-prop) → Finance →
+ * [Agreement if finance=yes] → Review → Submit. Returns the applicationId
+ * from the submit response (or via DB lookup fallback when the page redirect
+ * eats the response body).
  *
- * The fillers always select Company Type = sole_proprietorship and
- * Finance = No so Step 5 (Agreement) is skipped.
+ * The fillers always select Company Type = sole_proprietorship. The finance
+ * branch is controlled by `inputs.enableFinance` (default "no").
  */
 export async function fillDealerOnboardingWizard(
   page: Page,
@@ -106,12 +147,75 @@ export async function fillDealerOnboardingWizard(
 
   await page.getByRole('button', { name: /next/i }).click();
 
-  // STEP 4 — Finance: choose "No, continue without finance"
+  // STEP 4 — Finance Enablement: branch on inputs.enableFinance
   await expect(page.getByRole('heading', { name: /finance enablement/i })).toBeVisible({ timeout: 15_000 });
-  await page.getByRole('button', { name: /no, continue without finance/i }).click();
-  await page.getByRole('button', { name: /next/i }).click();
 
-  // STEP 6 — Review (Step 5 skipped because finance=no)
+  const enableFinance = inputs.enableFinance ?? 'no';
+
+  if (enableFinance === 'yes') {
+    if (!inputs.agreement) {
+      throw new Error('fillDealerOnboardingWizard: enableFinance="yes" requires `agreement` inputs for Step 5');
+    }
+    await page.getByRole('button', { name: /yes, enable finance/i }).click();
+    await page.getByRole('button', { name: /next/i }).click();
+
+    // STEP 5 — Dealer Finance Agreement Setup
+    await expect(page.getByRole('heading', { name: /dealer finance agreement setup/i })).toBeVisible({ timeout: 15_000 });
+
+    const agreementInputs = inputs.agreement;
+
+    // Agreement Meta: the only two `<input type="date">` fields on Step 5 are
+    // dateOfSigning (index 0) and mouDate (index 1) — see StepAgreement.tsx:257-270.
+    const dateInputs = page.locator('input[type="date"]');
+    await dateInputs.nth(0).fill(agreementInputs.dateOfSigning);
+    await dateInputs.nth(1).fill(agreementInputs.mouDate);
+
+    // Dealer Signatory dropdown. For a sole-proprietorship the options are
+    // [{ value: "", label: "Choose Dealer Signatory" }, { value: ownerName, label: ownerName }]
+    // (see dealerSignatoryOptions memo in StepAgreement.tsx:149-160). Picking the
+    // owner option fires onDealerSignatoryChange which auto-fills the readOnly
+    // designation / email / phone inputs, so no further action is needed there.
+    await page
+      .locator('select')
+      .filter({ has: page.locator('option', { hasText: 'Choose Dealer Signatory' }) })
+      .selectOption({ label: inputs.ownerName });
+
+    // Dealer signing method — the next `<select>` after the signatory dropdown
+    // (inside the same SectionCard). Without iTarang Signatory 2, Step 5 has
+    // exactly 3 selects in DOM order: [0] dealer signatory, [1] dealer signing
+    // method, [2] iTarang Signatory 1 signing method.
+    await page.locator('select').nth(1).selectOption(agreementInputs.dealerSigningMethod);
+
+    // Sales Manager — optional per schema but filled when provided so the
+    // persisted agreementConfig reaching /initiate-agreement is realistic.
+    if (agreementInputs.salesManager) {
+      await page.locator('input[placeholder="Sales Manager Name"]').fill(agreementInputs.salesManager.name);
+      await page.locator('input[placeholder="Sales Manager Email"]').fill(agreementInputs.salesManager.email);
+      await page.locator('input[placeholder="Sales Manager Contact Number"]').fill(agreementInputs.salesManager.mobile);
+    }
+
+    // iTarang Signatory 1 PartyCard — scope by the h4 inside the card so the
+    // generic placeholders ("Signatory Name" / "Designation" / ...) resolve to
+    // the correct signatory. We deliberately skip the "+ Add iTarang
+    // Signatory 2" button: Signatory 2 is optional (onboardingSchemas.ts:347-380),
+    // leaving it absent keeps the DOM with a single PartyCard on this step.
+    const itarangS1 = page.locator('div.rounded-2xl').filter({ hasText: 'iTarang Signatory 1' });
+    await itarangS1.locator('input[placeholder="Signatory Name"]').fill(agreementInputs.itarangSignatory1.name);
+    await itarangS1.locator('input[placeholder="Designation"]').fill(agreementInputs.itarangSignatory1.designation);
+    await itarangS1.locator('input[placeholder="Signatory Email"]').fill(agreementInputs.itarangSignatory1.email);
+    await itarangS1.locator('input[placeholder="Signatory Mobile"]').fill(agreementInputs.itarangSignatory1.mobile);
+    await itarangS1.locator('input[placeholder="Signatory Address"]').fill(agreementInputs.itarangSignatory1.address);
+    await itarangS1.locator('select').selectOption(agreementInputs.itarangSignatory1.signingMethod);
+
+    // Step 5 has its own submit button distinct from the Step 4 "Next →"
+    // (StepAgreement.tsx:580-595 uses "Continue to Review").
+    await page.getByRole('button', { name: /continue to review/i }).click();
+  } else {
+    await page.getByRole('button', { name: /no, continue without finance/i }).click();
+    await page.getByRole('button', { name: /next/i }).click();
+  }
+
+  // STEP 6 — Review
   await expect(page.getByRole('heading', { name: /review dealer application/i })).toBeVisible({ timeout: 15_000 });
 
   const checkboxes = page.locator('input[type="checkbox"]');

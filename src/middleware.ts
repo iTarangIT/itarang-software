@@ -139,12 +139,7 @@ export async function middleware(request: NextRequest) {
 
   // Shared access routes
   const sharedRouteAccess: Record<string, string[]> = {
-    "/admin/dealer-verification": [
-      "admin",
-      "sales_head",
-      "business_head",
-      "ceo",
-    ],
+    "/admin/dealer-verification": ["sales_head"],
     "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
   };
 
