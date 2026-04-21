@@ -292,6 +292,38 @@ export function validateStep(
     ) {
       errors.financeContactEmail = "Valid finance contact email required";
     }
+
+    // When finance is disabled, step 5 (agreement) is skipped, so the sales
+    // manager block moves into step 4 and must be fully validated here.
+    if (state.finance.enableFinance === "no") {
+      const sm = (state.agreement?.salesManager || {}) as {
+        name?: string;
+        email?: string;
+        mobile?: string;
+        age?: string;
+      };
+
+      if (!sm.name?.trim()) {
+        errors.salesManager_name = "Sales manager name is required";
+      }
+
+      if (!sm.email?.trim()) {
+        errors.salesManager_email = "Sales manager email is required";
+      } else if (!EMAIL_REGEX.test(sm.email.trim())) {
+        errors.salesManager_email = "Enter a valid sales manager email";
+      }
+
+      if (!sm.mobile?.trim()) {
+        errors.salesManager_mobile = "Sales manager mobile is required";
+      } else if (!PHONE_REGEX.test(sm.mobile.trim())) {
+        errors.salesManager_mobile = "Enter a valid sales manager mobile";
+      }
+
+      {
+        const msg = validateAge(sm.age);
+        if (msg) errors.salesManager_age = msg.replace("Age", "Sales manager age");
+      }
+    }
   }
 
   if (state.step === 5 && state.finance.enableFinance === "yes") {
