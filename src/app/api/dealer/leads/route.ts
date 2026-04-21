@@ -4,7 +4,7 @@ import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-util
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { leads, loanDetails, personalDetails, documents, auditLogs, accounts } from '@/lib/db/schema'; // Added accounts
-import { eq, and, desc, ilike, or, ne } from 'drizzle-orm';
+import { eq, and, desc, ilike, or, ne, isNull } from 'drizzle-orm';
 import { resolveDealerProfile } from '@/lib/supabase/identity';
 
 // Extended Zod Schema
@@ -111,6 +111,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                 lead_source: 'dealer_referral',
                 interest_level: data.interest_level, // Keep specifically for compatibility
                 lead_status: 'new',
+                status: 'ACTIVE',
                 uploader_id: user.id,
 
                 // Required defaults
@@ -206,7 +207,13 @@ export const GET = withErrorHandler(async (req: Request) => {
 
     const conditions = [
         eq(leads.dealer_id, profile.dealer_id),
-        ne(leads.status, 'INCOMPLETE'), // Hide drafts
+        or(
+            isNull(leads.status),
+            and(
+                ne(leads.status, 'INCOMPLETE'),
+                ne(leads.status, 'ABANDONED'),
+            ),
+        )!,
     ];
 
     if (status && status !== 'All') {
