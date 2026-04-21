@@ -560,33 +560,35 @@ export default function StepReview() {
         </div>
       </ReviewCard>
 
-      {/* ── Sales Manager (only when finance disabled, captured in Step 4) ── */}
-      {!agreementRequired && (
-        <ReviewCard
-          title="Sales Manager"
-          subtitle="Captured in Step 4 since finance is disabled"
-          icon={<ShieldCheck className="h-5 w-5" />}
-        >
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <InfoRow
-              label="Name"
-              value={state.agreement?.salesManager?.name || "—"}
-            />
-            <InfoRow
-              label="Email"
-              value={state.agreement?.salesManager?.email || "—"}
-            />
-            <InfoRow
-              label="Mobile"
-              value={state.agreement?.salesManager?.mobile || "—"}
-            />
-            <InfoRow
-              label="Age"
-              value={(state.agreement?.salesManager as any)?.age || "—"}
-            />
-          </div>
-        </ReviewCard>
-      )}
+      {/* ── Sales Manager (shown for both finance=yes and finance=no paths) ── */}
+      <ReviewCard
+        title="Sales Manager"
+        subtitle={
+          agreementRequired
+            ? "Captured in Step 5 alongside the agreement"
+            : "Captured in Step 4 since finance is disabled"
+        }
+        icon={<ShieldCheck className="h-5 w-5" />}
+      >
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <InfoRow
+            label="Name"
+            value={state.agreement?.salesManager?.name || "—"}
+          />
+          <InfoRow
+            label="Email"
+            value={state.agreement?.salesManager?.email || "—"}
+          />
+          <InfoRow
+            label="Mobile"
+            value={state.agreement?.salesManager?.mobile || "—"}
+          />
+          <InfoRow
+            label="Age"
+            value={(state.agreement?.salesManager as any)?.age || "—"}
+          />
+        </div>
+      </ReviewCard>
 
       {/* ── Agreement sections (only when finance enabled) ── */}
       {agreementRequired && (
