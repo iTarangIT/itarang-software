@@ -23,6 +23,7 @@ import {
   requireAdminAppUser,
 } from "@/lib/kyc/admin-workflow";
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
+import { syncConsentStatusFromDigio } from "@/lib/digio/sync-consent-status";
 
 function formatDob(dob: Date | string | null | undefined): string | null {
   if (!dob) return null;
@@ -236,13 +237,29 @@ export async function GET(
         })),
         verificationCards,
         consent: await Promise.all(consentRows.map(async (c) => {
+          let consentStatus = c.consent_status;
           let signedUrl = c.signed_consent_url;
+          let signedAt = c.signed_at;
+
+          // Pull latest status from DigiO if the record is still waiting.
+          // Catches cases where the DigiO webhook never reached the server
+          // (e.g. localhost dev, transient delivery failure).
+          try {
+            const synced = await syncConsentStatusFromDigio(c);
+            if (synced) {
+              consentStatus = synced.consent_status;
+              signedUrl = synced.signed_consent_url;
+              signedAt = synced.signed_at;
+            }
+          } catch (e) {
+            console.error("[Case Review] DigiO status sync failed:", e);
+          }
 
           // Auto-fetch signed PDF from DigiO if consent is completed but PDF is missing
           if (
             !signedUrl &&
             c.esign_transaction_id &&
-            ['esign_completed', 'admin_review_pending'].includes(c.consent_status)
+            ['esign_completed', 'admin_review_pending'].includes(consentStatus)
           ) {
             try {
               const stored = await fetchAndStoreSignedConsent(c.esign_transaction_id, leadId);
@@ -262,10 +279,10 @@ export async function GET(
             id: c.id,
             consentFor: c.consent_for,
             consentType: c.consent_type,
-            consentStatus: c.consent_status,
+            consentStatus,
             generatedPdfUrl: c.generated_pdf_url,
             signedConsentUrl: signedUrl,
-            signedAt: c.signed_at,
+            signedAt,
             verifiedAt: c.verified_at,
             adminViewedBy: c.admin_viewed_by,
             adminViewedAt: c.admin_viewed_at,

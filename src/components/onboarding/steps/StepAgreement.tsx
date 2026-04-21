@@ -342,6 +342,7 @@ export default function StepAgreement() {
               })
             }
             placeholder="Sales Manager Name"
+            error={errors.salesManager_name}
           />
           <InputField
             value={agreement.salesManager?.email || ""}
@@ -353,6 +354,7 @@ export default function StepAgreement() {
             }
             placeholder="Sales Manager Email"
             type="email"
+            error={errors.salesManager_email}
           />
           <InputField
             value={agreement.salesManager?.mobile || ""}
@@ -363,6 +365,7 @@ export default function StepAgreement() {
               })
             }
             placeholder="Sales Manager Contact Number"
+            error={errors.salesManager_mobile}
           />
           <InputField
             value={(agreement.salesManager as any)?.age || ""}
