@@ -3,10 +3,8 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { digilockerTransactions } from "@/lib/db/schema";
-import {
-  buildDigilockerSmsMessage,
-  sendDecentroSms,
-} from "@/lib/decentro";
+import { buildDigilockerSmsMessage } from "@/lib/decentro";
+import { sendKycSms } from "@/lib/sms";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
 
 /**
@@ -102,14 +100,16 @@ export async function POST(
     const remainingHours = Math.max(1, Math.ceil(remainingMs / (60 * 60 * 1000)));
 
     const attempt = (txn.sms_attempts ?? 0) + 1;
-    const smsResult = await sendDecentroSms({
+    const smsResult = await sendKycSms({
       mobile_number: txn.customer_phone,
       message: buildDigilockerSmsMessage(txn.digilocker_url, remainingHours),
       reference_id: `${txn.reference_id}-RESEND-${attempt}`,
+      // Matches the approved Gupshup template body: {{1}} = link, {{2}} = hours.
+      templateParams: [txn.digilocker_url, String(remainingHours)],
     });
 
     // Always bump the counter so the UI reflects that a retry occurred even
-    // if Decentro failed to deliver. Keeps retry accounting accurate.
+    // if the provider failed to deliver. Keeps retry accounting accurate.
     await db
       .update(digilockerTransactions)
       .set({
@@ -145,7 +145,7 @@ export async function POST(
             error: {
               message:
                 smsResult.skipped
-                  ? "Decentro SMS is not enabled on this deploy. Copy the link and share manually."
+                  ? "SMS provider is not enabled on this deploy. Copy the link and share manually."
                   : smsResult.error ?? "SMS resend failed",
             },
           }),
