@@ -488,13 +488,13 @@ export function Sidebar() {
 
   return (
     <div className="w-64 bg-slate-50/50 h-screen border-r border-gray-100 flex-col fixed left-0 top-0 z-10 hidden md:flex">
-      <div className="p-6 flex items-center gap-3">
-        <div className="w-8 h-8 bg-brand-600 rounded-xl shadow-lg shadow-brand-500/20 flex items-center justify-center">
-          <div className="w-4 h-4 bg-white rounded-sm opacity-50 rotate-45"></div>
-        </div>
-        <span className="text-xl font-bold text-gray-800 tracking-tight">
-          iTarang
-        </span>
+      <div className="px-5 py-5 flex items-center">
+        <img
+          src="/itarang-logo.png"
+          alt="iTarang"
+          className="w-full max-w-[200px] h-auto object-contain select-none"
+          draggable={false}
+        />
       </div>
 
       <div className="flex-1 overflow-y-auto py-4 px-4 space-y-8">
