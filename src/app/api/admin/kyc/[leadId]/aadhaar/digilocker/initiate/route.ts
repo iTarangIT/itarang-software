@@ -11,9 +11,9 @@ import {
 } from "@/lib/db/schema";
 import {
   digilockerInitiateSession,
-  sendDecentroSms,
   buildDigilockerSmsMessage,
 } from "@/lib/decentro";
+import { sendKycSms } from "@/lib/sms";
 import {
   createWorkflowId,
   requireAdminAppUser,
@@ -178,16 +178,18 @@ export async function POST(
       );
     }
 
-    // ── Send SMS via Decentro Communications API ──────────────────────
-    // If DECENTRO_SMS_ENABLED=false or the endpoint isn't configured, this
+    // ── Send SMS via configured provider (SMS_PROVIDER env) ───────────
+    // Defaults to Gupshup; flip to Decentro with SMS_PROVIDER=decentro.
+    // If the chosen provider is disabled or misconfigured, sendKycSms()
     // skips cleanly and the admin falls back to Copy/Open on the UI. A
-    // failed send NEVER blocks session creation — the DigiLocker URL is
-    // still valid and the admin can share it manually.
+    // failed send NEVER blocks session creation.
     const smsResult = digilockerUrl
-      ? await sendDecentroSms({
+      ? await sendKycSms({
           mobile_number: customerPhone,
           message: buildDigilockerSmsMessage(digilockerUrl, linkValidityHours),
           reference_id: `${referenceId}-SMS`,
+          // Matches the approved Gupshup template body: {{1}} = link, {{2}} = hours.
+          templateParams: [digilockerUrl, String(linkValidityHours)],
         })
       : {
           success: false,
@@ -296,7 +298,7 @@ export async function POST(
           finalSmsStatus === "failed"
             ? "DigiLocker link generated, but SMS delivery failed. Tap Resend SMS or copy the link and share it with the customer."
             : finalSmsStatus === "skipped"
-              ? "DigiLocker link generated. Copy the link and share it with the customer — Decentro SMS is not enabled yet."
+              ? "DigiLocker link generated. Copy the link and share it with the customer — SMS provider is not enabled yet."
               : "DigiLocker link sent via SMS. Awaiting customer authorization.",
       },
     });
