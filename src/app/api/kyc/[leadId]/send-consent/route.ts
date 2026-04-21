@@ -15,10 +15,14 @@ type RouteContext = {
 };
 
 async function renderPdfFromHtml(html: string): Promise<Buffer> {
+  // Browser is pooled across requests by launchBrowser(); we only close the
+  // per-request Page. The consent HTML has no external resources (logo is
+  // inlined as base64), so 'domcontentloaded' is sufficient — 'networkidle0'
+  // would idle-wait ~500ms for traffic that never arrives.
   const browser = await launchBrowser();
+  const page = await browser.newPage();
   try {
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "networkidle0" });
+    await page.setContent(html, { waitUntil: "domcontentloaded" });
     const pdf = await page.pdf({
       format: "A4",
       printBackground: true,
@@ -26,7 +30,7 @@ async function renderPdfFromHtml(html: string): Promise<Buffer> {
     });
     return Buffer.from(pdf);
   } finally {
-    await browser.close();
+    await page.close().catch(() => {});
   }
 }
 
@@ -110,34 +114,42 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     const pdfBuffer = await renderPdfFromHtml(html);
     const pdfBase64 = pdfBuffer.toString("base64");
 
-    // 1b. Store unsigned PDF in Supabase so admin can see it even before signing
-    let generatedPdfUrl: string | null = null;
-    try {
-      const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
-      const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-      if (supabaseUrl && serviceRoleKey) {
-        const supabase = createSupabaseClient(supabaseUrl, serviceRoleKey);
-        const bucket = (process.env.CONSENT_STORAGE_BUCKET || "documents").trim();
-        const storagePath = `kyc/${leadId}/consent/unsigned-${Date.now()}.pdf`;
-        const { error: upErr } = await supabase.storage
-          .from(bucket)
-          .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
-        if (!upErr) {
-          const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(storagePath);
-          generatedPdfUrl = urlData?.publicUrl || null;
-        } else {
-          console.warn("[Send Consent] Failed to store unsigned PDF:", upErr.message);
-        }
-      }
-    } catch (e) {
-      console.warn("[Send Consent] Unsigned PDF storage error:", e);
-    }
-
-    // 2. Upload to Digio for Aadhaar eSign
     // Digio needs 10-digit mobile number
     const cleanPhone = customerPhone.replace(/\D/g, "").slice(-10);
 
-    const digioResponse = await createDigioAgreement({
+    // Run the unsigned-PDF Supabase upload and the Digio agreement creation in
+    // parallel — both are network-bound and independent, so overlapping them
+    // roughly halves the post-render latency.
+    const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+    const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+    const bucket = (process.env.CONSENT_STORAGE_BUCKET || "documents").trim();
+
+    const storageUploadPromise: Promise<string | null> =
+      supabaseUrl && serviceRoleKey
+        ? (async () => {
+            try {
+              const supabase = createSupabaseClient(supabaseUrl, serviceRoleKey);
+              const storagePath = `kyc/${leadId}/consent/unsigned-${Date.now()}.pdf`;
+              const { error: upErr } = await supabase.storage
+                .from(bucket)
+                .upload(storagePath, pdfBuffer, {
+                  contentType: "application/pdf",
+                  upsert: true,
+                });
+              if (upErr) {
+                console.warn("[Send Consent] Failed to store unsigned PDF:", upErr.message);
+                return null;
+              }
+              const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+              return urlData?.publicUrl || null;
+            } catch (e) {
+              console.warn("[Send Consent] Unsigned PDF storage error:", e);
+              return null;
+            }
+          })()
+        : Promise.resolve(null);
+
+    const digioPromise = createDigioAgreement({
       fileData: pdfBase64,
       fileName: `consent_${leadId}_${consentId}.pdf`,
       signers: [
@@ -151,6 +163,11 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       expireInDays: 1,
       sequential: false,
     });
+
+    const [generatedPdfUrl, digioResponse] = await Promise.all([
+      storageUploadPromise,
+      digioPromise,
+    ]);
 
     console.log("[Send Consent] Digio response:", JSON.stringify(digioResponse, null, 2));
 
