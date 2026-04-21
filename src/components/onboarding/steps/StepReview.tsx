@@ -8,6 +8,10 @@ import {
   FileText,
   Landmark,
   ShieldCheck,
+  Eye,
+  X,
+  Download,
+  Image as ImageIcon,
 } from "lucide-react";
 import { useOnboardingStore } from "@/store/onboardingStore";
 import { createClient } from "@/lib/supabase/client";
@@ -38,6 +42,196 @@ function ReviewCard({
         </div>
       </div>
       <div className="p-5">{children}</div>
+    </div>
+  );
+}
+
+type PreviewDoc = {
+  label: string;
+  fileName: string;
+  url: string;
+  isImage: boolean;
+  isPdf: boolean;
+};
+
+function resolveDocUrl(item: UploadItemLike) {
+  if (!item) return null;
+  return item.uploadedUrl || (item as any).previewUrl || null;
+}
+
+function inferKindFromUrl(url: string, fileName?: string) {
+  const lower = (url + " " + (fileName || "")).toLowerCase();
+  const isPdf = /\.pdf(\?|$)/.test(lower) || lower.includes("application/pdf");
+  const isImage =
+    !isPdf &&
+    (/\.(png|jpe?g|webp|gif|bmp|svg)(\?|$)/.test(lower) || lower.startsWith("blob:") || lower.startsWith("data:image/"));
+  return { isPdf, isImage };
+}
+
+function DocumentTile({
+  label,
+  item,
+  onOpen,
+}: {
+  label: string;
+  item: UploadItemLike;
+  onOpen: (doc: PreviewDoc) => void;
+}) {
+  const url = resolveDocUrl(item);
+  const fileName = item?.file?.name || "";
+  const uploaded = Boolean(url);
+
+  if (!uploaded) {
+    return (
+      <div className="relative overflow-hidden rounded-2xl border border-dashed border-[#E3E8EF] bg-white/70 p-4">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+          {label}
+        </p>
+        <p className="mt-2 text-sm font-medium text-slate-400">Not uploaded</p>
+      </div>
+    );
+  }
+
+  const { isPdf, isImage } = inferKindFromUrl(url!, fileName);
+
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        onOpen({
+          label,
+          fileName: fileName || label,
+          url: url!,
+          isImage,
+          isPdf,
+        })
+      }
+      className="group relative overflow-hidden rounded-2xl border border-[#E3E8EF] bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-[#1F5C8F]/60 hover:shadow-md"
+    >
+      {/* Gradient accent bar */}
+      <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#1F5C8F] via-sky-400 to-emerald-400 opacity-80" />
+
+      <div className="flex items-start gap-3">
+        <div
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${
+            isPdf
+              ? "bg-red-50 text-red-500"
+              : isImage
+              ? "bg-emerald-50 text-emerald-600"
+              : "bg-[#F4F8FC] text-[#1F5C8F]"
+          }`}
+        >
+          {isPdf ? (
+            <FileText className="h-5 w-5" />
+          ) : isImage ? (
+            <ImageIcon className="h-5 w-5" />
+          ) : (
+            <FileText className="h-5 w-5" />
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            {label}
+          </p>
+          <p className="mt-1 truncate text-sm font-semibold text-slate-800">
+            {fileName || "Uploaded file"}
+          </p>
+          <p className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-[#1F5C8F] opacity-80 group-hover:opacity-100">
+            <Eye className="h-3.5 w-3.5" />
+            Click to preview
+          </p>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function DocumentPreviewModal({
+  doc,
+  onClose,
+}: {
+  doc: PreviewDoc | null;
+  onClose: () => void;
+}) {
+  if (!doc) return null;
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-md"
+      onClick={onClose}
+    >
+      <div
+        className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-white/20"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3 bg-gradient-to-r from-[#173F63] via-[#1F5C8F] to-sky-500 px-6 py-4 text-white">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15">
+              {doc.isPdf ? (
+                <FileText className="h-5 w-5" />
+              ) : doc.isImage ? (
+                <ImageIcon className="h-5 w-5" />
+              ) : (
+                <FileText className="h-5 w-5" />
+              )}
+            </div>
+            <div className="min-w-0">
+              <p className="text-[11px] uppercase tracking-[0.2em] text-white/70">
+                {doc.label}
+              </p>
+              <p className="truncate text-base font-semibold">{doc.fileName}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <a
+              href={doc.url}
+              download={doc.fileName}
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white/15 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur transition hover:bg-white/25"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Download
+            </a>
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/15 text-white transition hover:bg-white/25"
+              aria-label="Close preview"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-auto bg-slate-50">
+          {doc.isImage ? (
+            <div className="flex h-full items-center justify-center p-6">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={doc.url}
+                alt={doc.fileName}
+                className="max-h-[75vh] max-w-full rounded-2xl object-contain shadow-lg ring-1 ring-slate-200"
+              />
+            </div>
+          ) : doc.isPdf ? (
+            <iframe
+              src={doc.url}
+              title={doc.fileName}
+              className="h-[75vh] w-full border-0"
+            />
+          ) : (
+            <div className="flex h-[40vh] flex-col items-center justify-center gap-3 p-6 text-slate-500">
+              <FileText className="h-10 w-10 text-slate-400" />
+              <p className="text-sm">
+                Inline preview is not available for this file type. Use the
+                Download button above to save a copy.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -164,6 +358,7 @@ function getPrimaryContact(
 export default function StepReview() {
   const supabase = createClient();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [previewDoc, setPreviewDoc] = useState<PreviewDoc | null>(null);
   const router = useRouter();
 
   const state = useOnboardingStore();
@@ -467,49 +662,170 @@ export default function StepReview() {
         </div>
       </ReviewCard>
 
+      {/* ── Ownership Details (address per company type) ── */}
+      {state.company?.companyType === "sole_proprietorship" && (
+        <ReviewCard
+          title="Owner Details"
+          subtitle="Owner identity and residential address"
+          icon={<ShieldCheck className="h-5 w-5" />}
+        >
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <InfoRow label="Owner Name" value={state.ownership?.ownerName} />
+            <InfoRow label="Phone" value={state.ownership?.ownerPhone} />
+            <InfoRow
+              label="Landline"
+              value={state.ownership?.ownerLandline || "—"}
+            />
+            <InfoRow label="Email" value={state.ownership?.ownerEmail} />
+            <InfoRow
+              label="Age"
+              value={state.ownership?.ownerAge || "—"}
+            />
+            <div className="md:col-span-2">
+              <InfoRow
+                label="Address Line 1"
+                value={state.ownership?.ownerAddressLine1}
+              />
+            </div>
+            <InfoRow label="City" value={state.ownership?.ownerCity} />
+            <InfoRow
+              label="District"
+              value={state.ownership?.ownerDistrict}
+            />
+            <InfoRow label="State" value={state.ownership?.ownerState} />
+            <InfoRow
+              label="Pin Code"
+              value={state.ownership?.ownerPinCode}
+            />
+          </div>
+        </ReviewCard>
+      )}
+
+      {state.company?.companyType === "partnership_firm" &&
+        (state.ownership?.partners?.length || 0) > 0 && (
+          <ReviewCard
+            title="Partner Details"
+            subtitle="Each partner's contact and residential address"
+            icon={<ShieldCheck className="h-5 w-5" />}
+          >
+            <div className="space-y-4">
+              {state.ownership.partners.map((partner: any, index: number) => (
+                <div
+                  key={partner?.id || index}
+                  className="rounded-2xl border border-[#E3E8EF] bg-[#FAFBFC] p-4"
+                >
+                  <h4 className="mb-3 text-sm font-semibold text-[#173F63]">
+                    Partner {index + 1}
+                  </h4>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <InfoRow label="Name" value={partner?.name} />
+                    <InfoRow label="Phone" value={partner?.phone} />
+                    <InfoRow
+                      label="Landline"
+                      value={partner?.landline || "—"}
+                    />
+                    <InfoRow label="Email" value={partner?.email} />
+                    <InfoRow label="Age" value={partner?.age || "—"} />
+                    <div className="md:col-span-2">
+                      <InfoRow
+                        label="Address Line 1"
+                        value={partner?.addressLine1}
+                      />
+                    </div>
+                    <InfoRow label="City" value={partner?.city} />
+                    <InfoRow label="District" value={partner?.district} />
+                    <InfoRow label="State" value={partner?.state} />
+                    <InfoRow label="Pin Code" value={partner?.pinCode} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ReviewCard>
+        )}
+
+      {state.company?.companyType === "private_limited_firm" &&
+        (state.ownership?.directors?.length || 0) > 0 && (
+          <ReviewCard
+            title="Director Details"
+            subtitle="Each director's contact and residential address"
+            icon={<ShieldCheck className="h-5 w-5" />}
+          >
+            <div className="space-y-4">
+              {state.ownership.directors.map((director: any, index: number) => (
+                <div
+                  key={director?.id || index}
+                  className="rounded-2xl border border-[#E3E8EF] bg-[#FAFBFC] p-4"
+                >
+                  <h4 className="mb-3 text-sm font-semibold text-[#173F63]">
+                    Director {index + 1}
+                  </h4>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <InfoRow label="Name" value={director?.name} />
+                    <InfoRow label="Phone" value={director?.phone} />
+                    <InfoRow
+                      label="Landline"
+                      value={director?.landline || "—"}
+                    />
+                    <InfoRow label="Email" value={director?.email} />
+                    <InfoRow label="Age" value={director?.age || "—"} />
+                    <div className="md:col-span-2">
+                      <InfoRow
+                        label="Address Line 1"
+                        value={director?.addressLine1}
+                      />
+                    </div>
+                    <InfoRow label="City" value={director?.city} />
+                    <InfoRow label="District" value={director?.district} />
+                    <InfoRow label="State" value={director?.state} />
+                    <InfoRow label="Pin Code" value={director?.pinCode} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ReviewCard>
+        )}
+
       {/* ── Compliance Documents ── */}
       <ReviewCard
         title="Compliance Documents"
-        subtitle="Uploaded files available for admin verification"
+        subtitle="Click any tile to preview the document right here — no new tab"
         icon={<FileText className="h-5 w-5" />}
       >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <InfoRow
-            label="ITR"
-            value={state.compliance?.itr3Years?.file?.name || "Not uploaded"}
-          />
-          <InfoRow
-            label="Bank Statement"
-            value={
-              state.compliance?.bankStatement3Months?.file?.name ||
-              "Not uploaded"
-            }
-          />
-          <InfoRow
-            label="Undated Cheques"
-            value={
-              state.compliance?.undatedCheques?.file?.name || "Not uploaded"
-            }
-          />
-          <InfoRow
-            label="Passport Photo"
-            value={
-              state.compliance?.passportPhoto?.file?.name || "Not uploaded"
-            }
-          />
-          <InfoRow
-            label="Udyam Certificate"
-            value={
-              state.compliance?.udyamCertificate?.file?.name || "Not uploaded"
-            }
-          />
-          <InfoRow
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <DocumentTile
             label="GST Certificate"
-            value={state.company?.gstCertificate?.file?.name || "Not uploaded"}
+            item={state.company?.gstCertificate as UploadItemLike}
+            onOpen={setPreviewDoc}
           />
-          <InfoRow
-            label="Company PAN File"
-            value={state.company?.companyPanFile?.file?.name || "Not uploaded"}
+          <DocumentTile
+            label="Company PAN"
+            item={state.company?.companyPanFile as UploadItemLike}
+            onOpen={setPreviewDoc}
+          />
+          <DocumentTile
+            label="ITR (Last 3 Years)"
+            item={state.compliance?.itr3Years as UploadItemLike}
+            onOpen={setPreviewDoc}
+          />
+          <DocumentTile
+            label="Bank Statement"
+            item={state.compliance?.bankStatement3Months as UploadItemLike}
+            onOpen={setPreviewDoc}
+          />
+          <DocumentTile
+            label="Undated Cheques"
+            item={state.compliance?.undatedCheques as UploadItemLike}
+            onOpen={setPreviewDoc}
+          />
+          <DocumentTile
+            label="Passport Photo"
+            item={state.compliance?.passportPhoto as UploadItemLike}
+            onOpen={setPreviewDoc}
+          />
+          <DocumentTile
+            label="Udyam Certificate"
+            item={state.compliance?.udyamCertificate as UploadItemLike}
+            onOpen={setPreviewDoc}
           />
         </div>
       </ReviewCard>
@@ -530,6 +846,18 @@ export default function StepReview() {
           <InfoRow
             label="Beneficiary Name"
             value={state.ownership?.beneficiaryName}
+          />
+          <InfoRow label="Branch" value={state.ownership?.branch || "—"} />
+          <InfoRow
+            label="Account Type"
+            value={
+              state.ownership?.accountType
+                ? state.ownership.accountType
+                    .charAt(0)
+                    .toUpperCase() +
+                  state.ownership.accountType.slice(1)
+                : "—"
+            }
           />
         </div>
       </ReviewCard>
@@ -556,6 +884,36 @@ export default function StepReview() {
           <InfoRow
             label="Finance Contact Email"
             value={state.finance?.financeContactEmail || "—"}
+          />
+        </div>
+      </ReviewCard>
+
+      {/* ── Sales Manager (shown for both finance=yes and finance=no paths) ── */}
+      <ReviewCard
+        title="Sales Manager"
+        subtitle={
+          agreementRequired
+            ? "Captured in Step 5 alongside the agreement"
+            : "Captured in Step 4 since finance is disabled"
+        }
+        icon={<ShieldCheck className="h-5 w-5" />}
+      >
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <InfoRow
+            label="Name"
+            value={state.agreement?.salesManager?.name || "—"}
+          />
+          <InfoRow
+            label="Email"
+            value={state.agreement?.salesManager?.email || "—"}
+          />
+          <InfoRow
+            label="Mobile"
+            value={state.agreement?.salesManager?.mobile || "—"}
+          />
+          <InfoRow
+            label="Age"
+            value={(state.agreement?.salesManager as any)?.age || "—"}
           />
         </div>
       </ReviewCard>
@@ -810,6 +1168,12 @@ export default function StepReview() {
           {isSubmitting ? "Submitting..." : "Submit for Admin Review"}
         </button>
       </div>
+
+      {/* Document preview modal — rendered last so it overlays everything */}
+      <DocumentPreviewModal
+        doc={previewDoc}
+        onClose={() => setPreviewDoc(null)}
+      />
     </div>
   );
 }

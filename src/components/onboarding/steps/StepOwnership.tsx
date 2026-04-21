@@ -150,7 +150,7 @@ function ContactDetailCard({
                   value.replace(/[^0-9]/g, "").slice(0, 2)
                 )
               }
-              placeholder="Age in years"
+              placeholder="Age (18 – 90)"
               error={errors[`${errKey}_age_${index}`]}
             />
           </div>
@@ -335,7 +335,7 @@ export default function StepOwnership() {
                     value.replace(/[^0-9]/g, "").slice(0, 2)
                   )
                 }
-                placeholder="Age in years"
+                placeholder="Age (18 – 90)"
                 error={errors.ownerAge}
               />
             </div>
