@@ -120,6 +120,7 @@ export type AgreementParty = {
   email: string;
   mobile: string;
   address: string;
+  age?: string;
   signingMethod: SigningMethod;
 };
 
@@ -156,6 +157,7 @@ export type AgreementData = {
     name: string;
     email: string;
     mobile: string;
+    age?: string;
   };
 
   financierName: string;
