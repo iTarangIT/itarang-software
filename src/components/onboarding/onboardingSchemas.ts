@@ -139,6 +139,10 @@ export function validateStep(
         errors.partners = "Add at least one partner";
       }
 
+      const seenPartnerNames = new Map<string, number>();
+      const seenPartnerPhones = new Map<string, number>();
+      const seenPartnerEmails = new Map<string, number>();
+
       state.ownership.partners.forEach((partner, index) => {
         if (!partner.name?.trim()) {
           errors[`partner_name_${index}`] = "Partner name required";
@@ -181,6 +185,34 @@ export function validateStep(
         if (!PINCODE_REGEX.test(partner.pinCode || "")) {
           errors[`partner_pinCode_${index}`] = "Valid partner pin code required";
         }
+
+        // Uniqueness across partners — no two partners may share name, phone, or email.
+        const nameKey = partner.name?.trim().toLowerCase();
+        if (nameKey && !errors[`partner_name_${index}`]) {
+          if (seenPartnerNames.has(nameKey)) {
+            errors[`partner_name_${index}`] = "Partner name must be unique";
+          } else {
+            seenPartnerNames.set(nameKey, index);
+          }
+        }
+
+        const phoneKey = partner.phone?.trim();
+        if (phoneKey && !errors[`partner_phone_${index}`]) {
+          if (seenPartnerPhones.has(phoneKey)) {
+            errors[`partner_phone_${index}`] = "Partner phone must be unique";
+          } else {
+            seenPartnerPhones.set(phoneKey, index);
+          }
+        }
+
+        const emailKey = partner.email?.trim().toLowerCase();
+        if (emailKey && !errors[`partner_email_${index}`]) {
+          if (seenPartnerEmails.has(emailKey)) {
+            errors[`partner_email_${index}`] = "Partner email must be unique";
+          } else {
+            seenPartnerEmails.set(emailKey, index);
+          }
+        }
       });
     }
 
@@ -196,6 +228,10 @@ export function validateStep(
       if (state.ownership.directors.length === 0) {
         errors.directors = "Add at least one director";
       }
+
+      const seenDirectorNames = new Map<string, number>();
+      const seenDirectorPhones = new Map<string, number>();
+      const seenDirectorEmails = new Map<string, number>();
 
       state.ownership.directors.forEach((director, index) => {
         if (!director.name?.trim()) {
@@ -239,6 +275,34 @@ export function validateStep(
         if (!PINCODE_REGEX.test(director.pinCode || "")) {
           errors[`director_pinCode_${index}`] =
             "Valid director pin code required";
+        }
+
+        // Uniqueness across directors — no two directors may share name, phone, or email.
+        const nameKey = director.name?.trim().toLowerCase();
+        if (nameKey && !errors[`director_name_${index}`]) {
+          if (seenDirectorNames.has(nameKey)) {
+            errors[`director_name_${index}`] = "Director name must be unique";
+          } else {
+            seenDirectorNames.set(nameKey, index);
+          }
+        }
+
+        const phoneKey = director.phone?.trim();
+        if (phoneKey && !errors[`director_phone_${index}`]) {
+          if (seenDirectorPhones.has(phoneKey)) {
+            errors[`director_phone_${index}`] = "Director phone must be unique";
+          } else {
+            seenDirectorPhones.set(phoneKey, index);
+          }
+        }
+
+        const emailKey = director.email?.trim().toLowerCase();
+        if (emailKey && !errors[`director_email_${index}`]) {
+          if (seenDirectorEmails.has(emailKey)) {
+            errors[`director_email_${index}`] = "Director email must be unique";
+          } else {
+            seenDirectorEmails.set(emailKey, index);
+          }
         }
       });
     }
