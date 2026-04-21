@@ -662,6 +662,129 @@ export default function StepReview() {
         </div>
       </ReviewCard>
 
+      {/* ── Ownership Details (address per company type) ── */}
+      {state.company?.companyType === "sole_proprietorship" && (
+        <ReviewCard
+          title="Owner Details"
+          subtitle="Owner identity and residential address"
+          icon={<ShieldCheck className="h-5 w-5" />}
+        >
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <InfoRow label="Owner Name" value={state.ownership?.ownerName} />
+            <InfoRow label="Phone" value={state.ownership?.ownerPhone} />
+            <InfoRow
+              label="Landline"
+              value={state.ownership?.ownerLandline || "—"}
+            />
+            <InfoRow label="Email" value={state.ownership?.ownerEmail} />
+            <InfoRow
+              label="Age"
+              value={state.ownership?.ownerAge || "—"}
+            />
+            <div className="md:col-span-2">
+              <InfoRow
+                label="Address Line 1"
+                value={state.ownership?.ownerAddressLine1}
+              />
+            </div>
+            <InfoRow label="City" value={state.ownership?.ownerCity} />
+            <InfoRow
+              label="District"
+              value={state.ownership?.ownerDistrict}
+            />
+            <InfoRow label="State" value={state.ownership?.ownerState} />
+            <InfoRow
+              label="Pin Code"
+              value={state.ownership?.ownerPinCode}
+            />
+          </div>
+        </ReviewCard>
+      )}
+
+      {state.company?.companyType === "partnership_firm" &&
+        (state.ownership?.partners?.length || 0) > 0 && (
+          <ReviewCard
+            title="Partner Details"
+            subtitle="Each partner's contact and residential address"
+            icon={<ShieldCheck className="h-5 w-5" />}
+          >
+            <div className="space-y-4">
+              {state.ownership.partners.map((partner: any, index: number) => (
+                <div
+                  key={partner?.id || index}
+                  className="rounded-2xl border border-[#E3E8EF] bg-[#FAFBFC] p-4"
+                >
+                  <h4 className="mb-3 text-sm font-semibold text-[#173F63]">
+                    Partner {index + 1}
+                  </h4>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <InfoRow label="Name" value={partner?.name} />
+                    <InfoRow label="Phone" value={partner?.phone} />
+                    <InfoRow
+                      label="Landline"
+                      value={partner?.landline || "—"}
+                    />
+                    <InfoRow label="Email" value={partner?.email} />
+                    <InfoRow label="Age" value={partner?.age || "—"} />
+                    <div className="md:col-span-2">
+                      <InfoRow
+                        label="Address Line 1"
+                        value={partner?.addressLine1}
+                      />
+                    </div>
+                    <InfoRow label="City" value={partner?.city} />
+                    <InfoRow label="District" value={partner?.district} />
+                    <InfoRow label="State" value={partner?.state} />
+                    <InfoRow label="Pin Code" value={partner?.pinCode} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ReviewCard>
+        )}
+
+      {state.company?.companyType === "private_limited_firm" &&
+        (state.ownership?.directors?.length || 0) > 0 && (
+          <ReviewCard
+            title="Director Details"
+            subtitle="Each director's contact and residential address"
+            icon={<ShieldCheck className="h-5 w-5" />}
+          >
+            <div className="space-y-4">
+              {state.ownership.directors.map((director: any, index: number) => (
+                <div
+                  key={director?.id || index}
+                  className="rounded-2xl border border-[#E3E8EF] bg-[#FAFBFC] p-4"
+                >
+                  <h4 className="mb-3 text-sm font-semibold text-[#173F63]">
+                    Director {index + 1}
+                  </h4>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <InfoRow label="Name" value={director?.name} />
+                    <InfoRow label="Phone" value={director?.phone} />
+                    <InfoRow
+                      label="Landline"
+                      value={director?.landline || "—"}
+                    />
+                    <InfoRow label="Email" value={director?.email} />
+                    <InfoRow label="Age" value={director?.age || "—"} />
+                    <div className="md:col-span-2">
+                      <InfoRow
+                        label="Address Line 1"
+                        value={director?.addressLine1}
+                      />
+                    </div>
+                    <InfoRow label="City" value={director?.city} />
+                    <InfoRow label="District" value={director?.district} />
+                    <InfoRow label="State" value={director?.state} />
+                    <InfoRow label="Pin Code" value={director?.pinCode} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ReviewCard>
+        )}
+
       {/* ── Compliance Documents ── */}
       <ReviewCard
         title="Compliance Documents"
@@ -723,6 +846,18 @@ export default function StepReview() {
           <InfoRow
             label="Beneficiary Name"
             value={state.ownership?.beneficiaryName}
+          />
+          <InfoRow label="Branch" value={state.ownership?.branch || "—"} />
+          <InfoRow
+            label="Account Type"
+            value={
+              state.ownership?.accountType
+                ? state.ownership.accountType
+                    .charAt(0)
+                    .toUpperCase() +
+                  state.ownership.accountType.slice(1)
+                : "—"
+            }
           />
         </div>
       </ReviewCard>
