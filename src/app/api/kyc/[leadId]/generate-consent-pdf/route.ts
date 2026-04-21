@@ -13,10 +13,14 @@ import { launchBrowser } from '@/lib/pdf/launch-browser';
 type RouteContext = { params: Promise<{ leadId: string }> };
 
 async function renderPdfFromHtml(html: string): Promise<Buffer> {
+    // Browser is pooled across requests by launchBrowser(); we only close the
+    // per-request Page. The consent HTML has no external resources, so
+    // 'domcontentloaded' is sufficient — 'networkidle0' would idle-wait ~500ms
+    // for traffic that never arrives.
     const browser = await launchBrowser();
+    const page = await browser.newPage();
     try {
-        const page = await browser.newPage();
-        await page.setContent(html, { waitUntil: 'networkidle0' });
+        await page.setContent(html, { waitUntil: 'domcontentloaded' });
         const pdf = await page.pdf({
             format: 'A4',
             printBackground: true,
@@ -24,7 +28,7 @@ async function renderPdfFromHtml(html: string): Promise<Buffer> {
         });
         return Buffer.from(pdf);
     } finally {
-        await browser.close();
+        await page.close().catch(() => {});
     }
 }
 
