@@ -364,6 +364,17 @@ export default function StepAgreement() {
             }
             placeholder="Sales Manager Contact Number"
           />
+          <InputField
+            value={(agreement.salesManager as any)?.age || ""}
+            onChange={(value) =>
+              setField("agreement", "salesManager", {
+                ...(agreement.salesManager || {}),
+                age: value.replace(/[^0-9]/g, "").slice(0, 2),
+              })
+            }
+            placeholder="Sales Manager Age (18 – 90)"
+            error={errors.salesManager_age}
+          />
         </div>
       </SectionCard>
 
@@ -421,6 +432,17 @@ export default function StepAgreement() {
               }
               placeholder="Signatory Mobile"
               error={errors.itarangSignatory1_mobile}
+            />
+            <InputField
+              value={(agreement.itarangSignatory1 as any)?.age || ""}
+              onChange={(value) =>
+                setField("agreement", "itarangSignatory1", {
+                  ...(agreement.itarangSignatory1 || {}),
+                  age: value.replace(/[^0-9]/g, "").slice(0, 2),
+                })
+              }
+              placeholder="Signatory Age (18 – 90)"
+              error={errors.itarangSignatory1_age}
             />
             <InputField
               value={agreement.itarangSignatory1?.address || ""}
@@ -506,6 +528,17 @@ export default function StepAgreement() {
                   }
                   placeholder="Signatory Mobile"
                   error={errors.itarangSignatory2_mobile}
+                />
+                <InputField
+                  value={(agreement.itarangSignatory2 as any)?.age || ""}
+                  onChange={(value) =>
+                    setField("agreement", "itarangSignatory2", {
+                      ...(agreement.itarangSignatory2 || {}),
+                      age: value.replace(/[^0-9]/g, "").slice(0, 2),
+                    })
+                  }
+                  placeholder="Signatory Age (18 – 90)"
+                  error={errors.itarangSignatory2_age}
                 />
                 <InputField
                   value={agreement.itarangSignatory2?.address || ""}

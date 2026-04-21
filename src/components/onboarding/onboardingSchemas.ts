@@ -358,6 +358,17 @@ export function validateStep(
         "iTarang signatory 1 signing method is required";
     }
 
+    {
+      const msg = validateAge((state.agreement.itarangSignatory1 as any).age);
+      if (msg) errors.itarangSignatory1_age = msg.replace("Age", "iTarang signatory 1 age");
+    }
+
+    // Sales Manager — age required in [18, 90]
+    {
+      const msg = validateAge((state.agreement.salesManager as any)?.age);
+      if (msg) errors.salesManager_age = msg.replace("Age", "Sales manager age");
+    }
+
     // iTarang Signatory 2 — OPTIONAL
     // Only validate if the user has started filling it in
     const s2 = state.agreement.itarangSignatory2;
@@ -390,6 +401,10 @@ export function validateStep(
       if (!s2.signingMethod) {
         errors.itarangSignatory2_signingMethod =
           "iTarang signatory 2 signing method is required";
+      }
+      {
+        const msg = validateAge((s2 as any).age);
+        if (msg) errors.itarangSignatory2_age = msg.replace("Age", "iTarang signatory 2 age");
       }
     }
 
