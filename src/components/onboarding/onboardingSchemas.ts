@@ -8,6 +8,17 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const PINCODE_REGEX = /^\d{6}$/;
 
+const AGE_MIN = 18;
+const AGE_MAX = 90;
+function validateAge(raw: string | undefined | null): string | null {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return "Age is required";
+  if (!/^\d+$/.test(trimmed)) return "Age must be a number";
+  const n = Number(trimmed);
+  if (n < AGE_MIN || n > AGE_MAX) return `Age must be between ${AGE_MIN} and ${AGE_MAX}`;
+  return null;
+}
+
 export function validateStep(
   state: DealerOnboardingState
 ): Record<string, string> {
@@ -89,8 +100,9 @@ export function validateStep(
         errors.ownerEmail = "Enter valid owner email";
       }
 
-      if (!state.ownership.ownerAge?.trim()) {
-        errors.ownerAge = "Owner age is required";
+      {
+        const msg = validateAge(state.ownership.ownerAge);
+        if (msg) errors.ownerAge = msg.replace("Age", "Owner age");
       }
 
       if (!state.ownership.ownerPhoto?.file) {
@@ -140,8 +152,9 @@ export function validateStep(
           errors[`partner_email_${index}`] = "Valid partner email required";
         }
 
-        if (!partner.age?.trim()) {
-          errors[`partner_age_${index}`] = "Partner age required";
+        {
+          const msg = validateAge(partner.age);
+          if (msg) errors[`partner_age_${index}`] = msg.replace("Age", "Partner age");
         }
 
         if (!partner.photo?.file) {
@@ -197,8 +210,9 @@ export function validateStep(
           errors[`director_email_${index}`] = "Valid director email required";
         }
 
-        if (!director.age?.trim()) {
-          errors[`director_age_${index}`] = "Director age required";
+        {
+          const msg = validateAge(director.age);
+          if (msg) errors[`director_age_${index}`] = msg.replace("Age", "Director age");
         }
 
         if (!director.photo?.file) {
