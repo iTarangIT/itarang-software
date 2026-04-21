@@ -395,10 +395,33 @@ export function validateStep(
       if (msg) errors.itarangSignatory1_age = msg.replace("Age", "iTarang signatory 1 age");
     }
 
-    // Sales Manager — age required in [18, 90]
+    // Sales Manager — required when the agreement step is active (finance = yes).
     {
-      const msg = validateAge((state.agreement.salesManager as any)?.age);
-      if (msg) errors.salesManager_age = msg.replace("Age", "Sales manager age");
+      const sm = (state.agreement.salesManager || {}) as {
+        name?: string;
+        email?: string;
+        mobile?: string;
+        age?: string;
+      };
+
+      if (!sm.name?.trim()) {
+        errors.salesManager_name = "Sales manager name is required";
+      }
+
+      if (!sm.email?.trim()) {
+        errors.salesManager_email = "Sales manager email is required";
+      } else if (!EMAIL_REGEX.test(sm.email.trim())) {
+        errors.salesManager_email = "Enter a valid sales manager email";
+      }
+
+      if (!sm.mobile?.trim()) {
+        errors.salesManager_mobile = "Sales manager mobile is required";
+      } else if (!PHONE_REGEX.test(sm.mobile.trim())) {
+        errors.salesManager_mobile = "Enter a valid sales manager mobile";
+      }
+
+      const ageMsg = validateAge(sm.age);
+      if (ageMsg) errors.salesManager_age = ageMsg.replace("Age", "Sales manager age");
     }
 
     // iTarang Signatory 2 — OPTIONAL
