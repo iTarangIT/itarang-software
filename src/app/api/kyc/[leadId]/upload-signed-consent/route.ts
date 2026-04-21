@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { leads, consentRecords } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
 import {
     buildDealerEditLockMessage,
@@ -21,6 +21,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         const formData = await req.formData();
         const file = formData.get('file') as File;
+        const consentForRaw = String(formData.get('consent_for') || 'customer').toLowerCase();
+        const dbConsentFor = consentForRaw === 'customer' ? 'primary' : consentForRaw;
 
         if (!file) {
             return NextResponse.json({ success: false, error: { message: 'File is required' } }, { status: 400 });
@@ -48,27 +50,53 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         }
 
         const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
-
-        // Update consent record
         const now = new Date();
-        const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
-        const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
 
-        await db.insert(consentRecords).values({
-            id: `CONSENT-${dateStr}-${seq}`,
-            lead_id: leadId,
-            consent_for: 'primary',
-            consent_type: 'manual',
-            consent_status: 'manual_uploaded',
-            signed_consent_url: urlData.publicUrl,
-            signed_at: now,
-            created_at: now,
-            updated_at: now,
-        });
+        // Prefer updating the row that generate-consent-pdf already created for
+        // this lead — otherwise we end up with two consent_records per lead and
+        // the UI picks up whichever the status query returns first. Insert a new
+        // one only if no row exists yet (edge case: dealer uploads a pre-signed
+        // PDF without clicking "Generate Consent PDF" first).
+        const [existing] = await db
+            .select({ id: consentRecords.id })
+            .from(consentRecords)
+            .where(and(
+                eq(consentRecords.lead_id, leadId),
+                eq(consentRecords.consent_for, dbConsentFor),
+            ))
+            .orderBy(desc(consentRecords.created_at))
+            .limit(1);
 
-        // Update lead
+        if (existing) {
+            await db.update(consentRecords)
+                .set({
+                    consent_type: 'manual',
+                    consent_status: 'admin_review_pending',
+                    signed_consent_url: urlData.publicUrl,
+                    signed_at: now,
+                    updated_at: now,
+                })
+                .where(eq(consentRecords.id, existing.id));
+        } else {
+            const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+            const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+            await db.insert(consentRecords).values({
+                id: `CONSENT-${dateStr}-${seq}`,
+                lead_id: leadId,
+                consent_for: dbConsentFor,
+                consent_type: 'manual',
+                consent_status: 'admin_review_pending',
+                signed_consent_url: urlData.publicUrl,
+                signed_at: now,
+                created_at: now,
+                updated_at: now,
+            });
+        }
+
+        // Mirror the same status onto the lead so the dealer UI shows
+        // "Pending Review" instead of falling through to "Awaiting Signature".
         await db.update(leads)
-            .set({ consent_status: 'manual_uploaded', updated_at: now })
+            .set({ consent_status: 'admin_review_pending', updated_at: now })
             .where(eq(leads.id, leadId));
 
         return NextResponse.json({ success: true, fileUrl: urlData.publicUrl });
