@@ -8,38 +8,9 @@ import { leads, consentRecords, users, personalDetails } from '@/lib/db/schema';
 import { requireRole } from '@/lib/auth-utils';
 import { uploadFileToStorage } from '@/lib/storage';
 import { generateConsentHtml } from '@/lib/consent/consent-pdf-template';
+import { launchBrowser } from '@/lib/pdf/launch-browser';
 
 type RouteContext = { params: Promise<{ leadId: string }> };
-
-// Chromium for serverless (Vercel / Lambda). `@sparticuz/chromium-min` is a
-// tiny JS shim that downloads the actual Chromium binary from GitHub at
-// cold-start, keeping our function bundle well under Vercel's 50 MB zipped
-// limit. The binary URL must match the installed chromium-min version.
-const CHROMIUM_REMOTE_PACK =
-    'https://github.com/Sparticuz/chromium/releases/download/v147.0.0/chromium-v147.0.0-pack.x64.tar';
-
-async function launchBrowser() {
-    const isServerless = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
-
-    if (isServerless) {
-        const [{ default: puppeteerCore }, { default: chromium }] = await Promise.all([
-            import('puppeteer-core'),
-            import('@sparticuz/chromium-min'),
-        ]);
-        return puppeteerCore.launch({
-            args: chromium.args,
-            defaultViewport: chromium.defaultViewport,
-            executablePath: await chromium.executablePath(CHROMIUM_REMOTE_PACK),
-            headless: true,
-        });
-    }
-
-    const { default: puppeteer } = await import('puppeteer');
-    return puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-}
 
 async function renderPdfFromHtml(html: string): Promise<Buffer> {
     const browser = await launchBrowser();
