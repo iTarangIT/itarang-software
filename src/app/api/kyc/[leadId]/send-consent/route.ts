@@ -9,35 +9,14 @@ import { requireRole } from "@/lib/auth-utils";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
 import { createDigioAgreement } from "@/lib/digio/service";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { launchBrowser } from "@/lib/pdf/launch-browser";
 type RouteContext = {
   params: Promise<{ leadId: string }>;
 };
 
-const CHROMIUM_REMOTE_PACK =
-  "https://github.com/Sparticuz/chromium/releases/download/v147.0.0/chromium-v147.0.0-pack.x64.tar";
-
 async function renderPdfFromHtml(html: string): Promise<Buffer> {
-  let browser;
+  const browser = await launchBrowser();
   try {
-    if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
-      const [{ default: puppeteerCore }, { default: chromium }] = await Promise.all([
-        import("puppeteer-core"),
-        import("@sparticuz/chromium-min"),
-      ]);
-      browser = await puppeteerCore.launch({
-        args: chromium.args,
-        defaultViewport: chromium.defaultViewport,
-        executablePath: await chromium.executablePath(CHROMIUM_REMOTE_PACK),
-        headless: true,
-      });
-    } else {
-      const puppeteerFull = await import("puppeteer").then(m => m.default);
-      browser = await puppeteerFull.launch({
-        headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
-      });
-    }
-
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "networkidle0" });
     const pdf = await page.pdf({
@@ -47,7 +26,7 @@ async function renderPdfFromHtml(html: string): Promise<Buffer> {
     });
     return Buffer.from(pdf);
   } finally {
-    if (browser) await browser.close();
+    await browser.close();
   }
 }
 
