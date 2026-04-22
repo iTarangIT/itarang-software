@@ -485,7 +485,10 @@ export function OCRModal({ open, onClose, onResult }: {
                     onClose();
                 }
             } else {
-                setError(data.error?.message || 'Could not read document. Please ensure image is clear.');
+                const details = data.error?.details as { frontMessage?: string; backMessage?: string } | undefined;
+                const decentroDiag = details?.frontMessage || details?.backMessage;
+                const base = data.error?.message || 'Could not read document. Please ensure image is clear.';
+                setError(decentroDiag ? `${base}  [Decentro: ${decentroDiag}]` : base);
             }
         } catch {
             setError('Scanning failed. Please check your connection and try again.');
