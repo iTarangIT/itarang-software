@@ -60,7 +60,7 @@ export async function sendDealerWelcomeEmail(
   if (!response.ok) {
     throw new Error(`EmailJS send failed: ${response.status} ${responseText}`);
   }
-
+  
   return {
     ok: true,
     responseText,
