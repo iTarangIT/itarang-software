@@ -345,6 +345,72 @@ export async function extractDocumentOcr(
     return json;
 }
 
+// Aadhaar-specific OCR call that follows the documented Decentro interface
+// (https://docs.decentro.tech — Document Extraction body params). The docs
+// say:
+//   - kyc_validate is "Not applicable when document_type is aadhaar"
+//   - document_back is an officially-supported field for sending the back
+//     image in the SAME request, so Decentro extracts both sides in one
+//     call. There is no `document_side` / `side` parameter in the docs.
+// Our older extractDocumentOcr() path fired two parallel requests, one per
+// side with an undocumented `document_side` form field. That apparently
+// behaves differently on the itarang_prod SKU — the dealer flow returned
+// empty / failure responses while the single-request admin flow
+// (extractDocumentOcr without both sides) works fine for PAN.
+export async function extractAadhaarOcr(
+    frontBlob: Blob,
+    frontFilename: string,
+    backBlob: Blob,
+    backFilename: string,
+    signal?: AbortSignal,
+) {
+    const sanitize = (n: string): string => {
+        const lastDot = n.lastIndexOf('.');
+        return lastDot > 0
+            ? n.slice(0, lastDot).replace(/\./g, '_') + n.slice(lastDot)
+            : n;
+    };
+
+    const form = new FormData();
+    form.append('reference_id', genRefId());
+    form.append('document_type', 'AADHAAR');
+    form.append('consent', 'Y');
+    form.append('consent_purpose', 'Document OCR extraction for KYC verification');
+    // kyc_validate is N/A for Aadhaar per Decentro docs (offline verification).
+    // We omit it entirely rather than send 0 or 1 — the docs say default is 1
+    // when absent, but since it's ignored for Aadhaar either way, we rely on
+    // the documented "not applicable" behavior.
+    form.append('document', frontBlob, sanitize(frontFilename));
+    form.append('document_back', backBlob, sanitize(backFilename));
+
+    const headers: Record<string, string> = {
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+    };
+    if (isRealSecret(MODULE_SECRET_KYC)) {
+        headers['module_secret'] = MODULE_SECRET_KYC!;
+    }
+
+    const url = `${BASE_URL}/kyc/scan_extract/ocr`;
+    console.log(
+        `[Decentro OCR] POST ${url} document_type=AADHAAR both-sides front=${frontFilename} (${frontBlob.size}B) back=${backFilename} (${backBlob.size}B)`,
+    );
+
+    const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: form,
+        signal,
+    });
+
+    const json = await res.json();
+    console.log(
+        `[Decentro OCR] Response status=${res.status}:`,
+        JSON.stringify(json).slice(0, 2000),
+    );
+    return json;
+}
+
 // ─── OCR Data Comparison Helpers ──────────────────────────────────────────────
 
 export interface OcrComparisonField {

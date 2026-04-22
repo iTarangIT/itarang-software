@@ -92,8 +92,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         const finalAmount = BASE_FEE - discountAmount;
 
+        // Reserve this coupon on the lead so the Submit-for-Verification button
+        // remains visible after a page reload (the UI reads lead.coupon_status).
+        try {
+            await db.update(leads)
+                .set({
+                    coupon_code: coupon.code,
+                    coupon_status: 'reserved',
+                    updated_at: new Date(),
+                })
+                .where(eq(leads.id, leadId));
+        } catch (updateErr) {
+            console.error('[Validate Coupon] Failed to reserve coupon on lead:', updateErr);
+            return NextResponse.json({ valid: false, message: 'Coupon unavailable' });
+        }
+
         return NextResponse.json({
             valid: true,
+            success: true,
             coupon_id: coupon.id,
             coupon_code: coupon.code,
             discount_type: coupon.discount_type,
