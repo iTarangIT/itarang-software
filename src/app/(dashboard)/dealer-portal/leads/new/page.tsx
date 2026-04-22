@@ -462,7 +462,7 @@ function NewLeadWizardContent() {
                 {/* Header */}
                 <ProgressHeader
                     title="Create New Lead"
-                    subtitle={`Reference ID: ${referenceId || '#IT-XXXX-XXXXXXX'}`}
+                    subtitle={`Lead ID: ${referenceId || '#IT-XXXX-XXXXXXX'}`}
                     step={1}
                     onBack={() => router.back()}
                     rightAction={
