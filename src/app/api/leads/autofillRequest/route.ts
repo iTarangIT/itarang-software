@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { auditLogs, leadDocuments } from "@/lib/db/schema";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
-import { extractDocumentOcr } from "@/lib/decentro";
+import { extractAadhaarOcr } from "@/lib/decentro";
 import {
   buildFinalData,
   extractStructuredAadhaar,
@@ -207,7 +207,16 @@ export const POST = withErrorHandler(async (req: Request) => {
     );
   }
 
-  // ── Decentro OCR: front + back in parallel ──────────────────────────
+  // ── Decentro OCR: single request with both sides ───────────────────
+  //
+  // The documented Decentro API (see body params on the Document
+  // Extraction reference page) sends `document` + `document_back` in one
+  // multipart request and returns extraction from both sides together.
+  // Earlier versions of this route fired two parallel requests, one per
+  // side, adding an undocumented `document_side` form field. That shape
+  // apparently doesn't match what the itarang_prod SKU expects — admin
+  // single-side PAN works fine, but the two-sided dealer flow was
+  // returning failures.
   const frontBlob = new Blob([new Uint8Array(frontBuffer)], {
     type: frontContentType,
   });
@@ -215,29 +224,17 @@ export const POST = withErrorHandler(async (req: Request) => {
     type: backContentType,
   });
 
-  // Decentro's Aadhaar OCR prioritises different fields depending on
-  // document_side (front → name/DOB, back → UID/address).
-  // We call extractDocumentOcr with the same defaults (kyc_validate=1)
-  // that the admin PAN/Aadhaar flow uses at
-  // src/app/api/admin/kyc/[leadId]/ocr/route.ts:348 — that flow works
-  // end-to-end on the itarang_prod account, so matching its call shape
-  // is the most reliable way to get a green response here too. An older
-  // iteration of this route set kyc_validate=0 to dodge an "OTP required"
-  // rejection from Decentro; that was tuned against staging and the
-  // production SKU no longer requires it.
-  const [frontOCR, backOCR] = await Promise.all([
-    extractDocumentOcr("AADHAAR", frontBlob, frontName, "FRONT").catch((e) => {
-      console.error("[AutoFill] Decentro front OCR threw:", e?.message);
-      return null;
-    }),
-    extractDocumentOcr("AADHAAR", backBlob, backName, "BACK").catch((e) => {
-      console.error("[AutoFill] Decentro back OCR threw:", e?.message);
-      return null;
-    }),
-  ]);
+  const decentroResponse = await extractAadhaarOcr(
+    frontBlob,
+    frontName,
+    backBlob,
+    backName,
+  ).catch((e) => {
+    console.error("[AutoFill] Decentro call threw:", e?.message);
+    return null;
+  });
 
-  const frontFailed = isDecentroFailure(frontOCR);
-  const backFailed = isDecentroFailure(backOCR);
+  const decentroFailed = isDecentroFailure(decentroResponse);
 
   // Extract a human-readable diagnostic from Decentro's response so we
   // can see WHY the call failed (IP not whitelisted, credits exhausted,
@@ -264,9 +261,16 @@ export const POST = withErrorHandler(async (req: Request) => {
     console.log("[AutoFill] Invoking Tesseract fallback…");
     const { front: frontFallback, back: backFallback } =
       await extractWithTesseract({ front: frontBuffer, back: backBuffer });
+    // Treat the whole Decentro response as the "front" structured source
+    // — extractStructuredAadhaar walks every known nested path so it
+    // discovers fields regardless of whether Decentro merged both sides
+    // into a single ocrResult or split them.
+    const decentroStructured = decentroFailed
+      ? extractStructuredAadhaar(null)
+      : extractStructuredAadhaar(decentroResponse);
     const fallbackFinalData = buildFinalData(
-      frontFailed ? extractStructuredAadhaar(null) : extractStructuredAadhaar(frontOCR),
-      backFailed ? extractStructuredAadhaar(null) : extractStructuredAadhaar(backOCR),
+      decentroStructured,
+      extractStructuredAadhaar(null),
       frontFallback,
       backFallback,
     );
@@ -305,18 +309,13 @@ export const POST = withErrorHandler(async (req: Request) => {
     return fallbackFinalData;
   };
 
-  if (frontFailed && backFailed) {
-    const frontMessage = extractDecentroMessage(frontOCR);
-    const backMessage = extractDecentroMessage(backOCR);
+  if (decentroFailed) {
+    const decentroMessage = extractDecentroMessage(decentroResponse);
     console.warn(
-      "[AutoFill] Decentro failed on both sides — front:",
-      frontMessage,
-      "| back:",
-      backMessage,
-      "| rawFront:",
-      JSON.stringify(frontOCR).slice(0, 500),
-      "| rawBack:",
-      JSON.stringify(backOCR).slice(0, 500),
+      "[AutoFill] Decentro failed —",
+      decentroMessage,
+      "| raw:",
+      JSON.stringify(decentroResponse).slice(0, 800),
     );
     try {
       await db.insert(auditLogs).values({
@@ -326,10 +325,8 @@ export const POST = withErrorHandler(async (req: Request) => {
         action: "OCR_FAILED",
         changes: {
           reason: "decentro_unavailable",
-          frontMessage,
-          backMessage,
-          frontResponse: frontOCR ?? null,
-          backResponse: backOCR ?? null,
+          decentroMessage,
+          decentroResponse: decentroResponse ?? null,
         },
         performed_by: user.id,
         timestamp: new Date(),
@@ -361,10 +358,9 @@ export const POST = withErrorHandler(async (req: Request) => {
       });
     }
 
-    const reason =
-      isAccountConfigFailure(frontOCR) || isAccountConfigFailure(backOCR)
-        ? "account_config"
-        : "extraction_failed";
+    const reason = isAccountConfigFailure(decentroResponse)
+      ? "account_config"
+      : "extraction_failed";
     const userMessage =
       reason === "account_config"
         ? "Auto-fill is temporarily unavailable. Please enter details manually."
@@ -372,30 +368,30 @@ export const POST = withErrorHandler(async (req: Request) => {
     return errorResponseWithDetails(userMessage, 422, {
       provider: "decentro",
       reason,
-      frontMessage,
-      backMessage,
+      frontMessage: decentroMessage,
     });
   }
 
-  const frontStructured = frontFailed
-    ? extractStructuredAadhaar(null)
-    : extractStructuredAadhaar(frontOCR);
-  const backStructured = backFailed
-    ? extractStructuredAadhaar(null)
-    : extractStructuredAadhaar(backOCR);
-
-  // Start with Decentro structured only. If it turns out to be useful
-  // we return as-is (Tier-1 happy path). If not, we re-merge with the
-  // Tesseract fallback below.
-  let finalData = buildFinalData(frontStructured, backStructured, {}, {});
+  // Single Decentro response — walk every nested path to find fields.
+  // extractStructuredAadhaar is defensive against variant shapes, so a
+  // merged-both-sides response resolves identically to a single-side one.
+  const decentroStructured = extractStructuredAadhaar(decentroResponse);
+  // `buildFinalData` signature still expects (front, back, frontParsed,
+  // backParsed). Feed the combined Decentro result as the "front" source
+  // and pass empty for the unused "back" slot — the merge logic uses
+  // firstNonEmpty across all four so this flattens cleanly.
+  let finalData = buildFinalData(
+    decentroStructured,
+    extractStructuredAadhaar(null),
+    {},
+    {},
+  );
   let source: "decentro" | "tesseract" | "decentro+tesseract" = "decentro";
 
   if (!hasUsefulData(finalData)) {
     console.warn(
-      "[AutoFill] Decentro returned success but no parseable fields — front:",
-      JSON.stringify(frontOCR).slice(0, 800),
-      "| back:",
-      JSON.stringify(backOCR).slice(0, 800),
+      "[AutoFill] Decentro returned success but no parseable fields — raw:",
+      JSON.stringify(decentroResponse).slice(0, 1500),
     );
 
     // Try Tier-2 before surfacing the hard error. Decentro returning
@@ -414,8 +410,7 @@ export const POST = withErrorHandler(async (req: Request) => {
           action: "OCR_FAILED",
           changes: {
             reason: "decentro_empty_fields",
-            frontResponse: frontFailed ? null : frontOCR,
-            backResponse: backFailed ? null : backOCR,
+            decentroResponse: decentroResponse,
           },
           performed_by: user.id,
           timestamp: new Date(),
@@ -428,8 +423,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         422,
         {
           provider: "decentro",
-          frontMessage: extractDecentroMessage(frontOCR),
-          backMessage: extractDecentroMessage(backOCR),
+          frontMessage: extractDecentroMessage(decentroResponse),
         },
       );
     }
