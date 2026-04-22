@@ -30,12 +30,9 @@ export const POST = withErrorHandler(async (req: Request) => {
     }
     const data = result.data;
 
-    // Use a temporary mock for generateId or keep using it if it doesn't strictly depend on Drizzle for everything
-    // Actually generateId usually needs the table to check for collisions.
-    // Let's assume we can still use it if it's imported.
-    const leadId = `LEAD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    const slaId = `SLA-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    const auditId = `AUDIT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const leadId = await generateId('LEAD');
+    const slaId = await generateId('SLA');
+    const auditId = await generateId('AUDIT');
 
     const supabase = await createClient();
     const { error: leadError } = await supabase.from('leads').insert({

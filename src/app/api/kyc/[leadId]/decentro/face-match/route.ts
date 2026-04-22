@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { faceMatch } from '@/lib/decentro';
+import { db } from '@/lib/db';
+import { kycVerifications } from '@/lib/db/schema';
+import { createWorkflowId } from '@/lib/kyc/admin-workflow';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+        const { leadId } = await params;
 
         const formData = await req.formData();
         const image1 = formData.get('image1') as File | null;
@@ -24,6 +29,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         const decentroRes = await faceMatch(blob1, blob2);
         const success = decentroRes.responseStatus === 'SUCCESS';
+
+        // Persist raw Decentro response for audit. Non-fatal.
+        try {
+            const now = new Date();
+            const score = decentroRes.data?.match_score;
+            await db.insert(kycVerifications).values({
+                id: createWorkflowId('KYCVER', now),
+                lead_id: leadId,
+                verification_type: 'face_match',
+                applicant: 'primary',
+                status: success ? 'success' : 'failed',
+                api_provider: 'decentro_face_match',
+                match_score: typeof score === 'number' ? String(score) : null,
+                api_response: decentroRes as unknown as Record<string, unknown>,
+                submitted_at: now,
+                completed_at: now,
+            });
+        } catch (persistErr) {
+            console.error('[kyc/face-match] kyc_verifications insert failed:', persistErr);
+        }
 
         return NextResponse.json({
             success,

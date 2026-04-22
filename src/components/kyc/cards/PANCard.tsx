@@ -318,19 +318,28 @@ export default function PANCard({
                       <td className="px-3 py-2.5 font-semibold text-gray-800">
                         {f.field}
                       </td>
-                      <td className="px-3 py-2.5 text-gray-600 max-w-[140px] truncate">
+                      <td
+                        className="px-3 py-2.5 text-gray-600 max-w-[140px] truncate"
+                        title={f.leadValue || undefined}
+                      >
                         {f.leadValue || (
                           <span className="text-gray-300">—</span>
                         )}
                       </td>
-                      <td className="px-3 py-2.5 text-gray-600 max-w-[140px] truncate font-mono text-xs">
+                      <td
+                        className="px-3 py-2.5 text-gray-600 max-w-[140px] truncate font-mono text-xs"
+                        title={(f.panValue ?? f.apiValue) || undefined}
+                      >
                         {(f.panValue ?? f.apiValue) || (
                           <span className="text-gray-300 italic text-[10px]">
                             Not in response
                           </span>
                         )}
                       </td>
-                      <td className="px-3 py-2.5 text-gray-600 max-w-[140px] truncate font-mono text-xs">
+                      <td
+                        className="px-3 py-2.5 text-gray-600 max-w-[140px] truncate font-mono text-xs"
+                        title={f.aadhaarValue || undefined}
+                      >
                         {f.aadhaarValue || (
                           <span className="text-gray-300">—</span>
                         )}
