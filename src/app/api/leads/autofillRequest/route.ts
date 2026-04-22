@@ -194,12 +194,15 @@ export const POST = withErrorHandler(async (req: Request) => {
 
   // Decentro's Aadhaar OCR prioritises different fields depending on
   // document_side (front → name/DOB, back → UID/address).
+  // kycValidate=false: dealer auto-fill is pure extraction — no OTP/consent
+  // flow yet, so Decentro must skip UIDAI validation or it rejects with
+  // "Aadhaar Document cannot be validated without an OTP".
   const [frontOCR, backOCR] = await Promise.all([
-    extractDocumentOcr("AADHAAR", frontBlob, frontName, "FRONT").catch((e) => {
+    extractDocumentOcr("AADHAAR", frontBlob, frontName, "FRONT", undefined, false).catch((e) => {
       console.error("[AutoFill] Decentro front OCR threw:", e?.message);
       return null;
     }),
-    extractDocumentOcr("AADHAAR", backBlob, backName, "BACK").catch((e) => {
+    extractDocumentOcr("AADHAAR", backBlob, backName, "BACK", undefined, false).catch((e) => {
       console.error("[AutoFill] Decentro back OCR threw:", e?.message);
       return null;
     }),
