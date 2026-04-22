@@ -22,7 +22,28 @@ import {
   X,
   Save,
   Languages,
+  AlertTriangle,
+  GitBranch,
 } from "lucide-react";
+
+type DuplicateFlag = "none" | "branch" | "duplicate" | "pan-mismatch";
+
+type DuplicateExistingAccount = {
+  dealerCode: string;
+  companyName: string | null;
+  pan: string | null;
+  addressLine1: string | null;
+  city: string | null;
+  state: string | null;
+  pincode: string | null;
+};
+
+type DuplicateCheckResult = {
+  conflict: DuplicateFlag;
+  existing: DuplicateExistingAccount | null;
+  message: string | null;
+  isBranchDealer?: boolean;
+};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -396,6 +417,7 @@ function ActionCard({
   remarks, setRemarks, submitting,
   onApprove, onCorrection, onReject, onBack,
   financeEnabled, agreementStatus,
+  duplicate,
 }: {
   remarks: string;
   setRemarks: (value: string) => void;
@@ -406,8 +428,14 @@ function ActionCard({
   onBack: () => void;
   financeEnabled?: boolean;
   agreementStatus?: string | null;
+  duplicate?: DuplicateCheckResult | null;
 }) {
-  const approvalBlocked = !!financeEnabled && (agreementStatus || "").toLowerCase() !== "completed";
+  const financeGateBlock =
+    !!financeEnabled && (agreementStatus || "").toLowerCase() !== "completed";
+  const duplicateBlock =
+    duplicate?.conflict === "duplicate" ||
+    duplicate?.conflict === "pan-mismatch";
+  const approvalBlocked = financeGateBlock || duplicateBlock;
 
   return (
     <motion.aside
@@ -437,13 +465,63 @@ function ActionCard({
         </div>
       </div>
 
-      {approvalBlocked && (
+      {financeGateBlock && (
         <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
           <div className="flex items-start gap-3">
             <Clock3 className="mt-0.5 h-4 w-4 text-amber-600" />
             <p className="text-sm text-amber-800">
               Approval is blocked until the finance agreement reaches completed status.
             </p>
+          </div>
+        </div>
+      )}
+
+      {duplicate?.conflict === "branch" && duplicate.existing && (
+        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <GitBranch className="mt-0.5 h-4 w-4 text-amber-600" />
+            <div className="text-sm text-amber-900">
+              <p className="font-semibold">Branch dealer — will link to existing account</p>
+              <p className="mt-1 text-amber-800">
+                This GSTIN already belongs to{" "}
+                <strong>{duplicate.existing.companyName || duplicate.existing.dealerCode}</strong>{" "}
+                (<code className="text-xs">{duplicate.existing.dealerCode}</code>). Addresses differ —
+                approving will link this dealer as an additional location under the existing legal
+                entity. Shared fields (GSTIN, PAN, bank details) will be read-only for this dealer.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {duplicate?.conflict === "duplicate" && duplicate.existing && (
+        <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 text-rose-600" />
+            <div className="text-sm text-rose-900">
+              <p className="font-semibold">Approval blocked — duplicate dealer</p>
+              <p className="mt-1 text-rose-800">
+                Another dealer with the same GSTIN, PAN, and address already exists (
+                <code className="text-xs">{duplicate.existing.dealerCode}</code>
+                {duplicate.existing.companyName ? ` — ${duplicate.existing.companyName}` : ""}).
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {duplicate?.conflict === "pan-mismatch" && duplicate.existing && (
+        <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 text-rose-600" />
+            <div className="text-sm text-rose-900">
+              <p className="font-semibold">Approval blocked — PAN mismatch</p>
+              <p className="mt-1 text-rose-800">
+                This GSTIN is registered under a different PAN (
+                <code className="text-xs">{duplicate.existing.pan || "unknown"}</code>). The data
+                appears inconsistent — verify the applicant's PAN before approving.
+              </p>
+            </div>
           </div>
         </div>
       )}
@@ -512,6 +590,7 @@ export default function DealerReviewPage() {
   const [tracking, setTracking]             = useState<AgreementTrackingResponse | null>(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
   const [auditTrailLoading, setAuditTrailLoading] = useState(false);
+  const [duplicate, setDuplicate] = useState<DuplicateCheckResult | null>(null);
 
   // ─── loaders ───────────────────────────────────────────────────────────────
 
@@ -571,6 +650,25 @@ export default function DealerReviewPage() {
         }
 
         await loadAgreementTracking();
+
+        // Duplicate detection — non-blocking. If this errors we still show
+        // the review page, just without the alert card.
+        try {
+          const dupRes = await fetch(
+            `/api/admin/dealer-verifications/${dealerId}/duplicate-check`
+          );
+          const dupJson = await dupRes.json();
+          if (dupJson?.success) {
+            setDuplicate({
+              conflict: dupJson.conflict,
+              existing: dupJson.existing,
+              message: dupJson.message,
+              isBranchDealer: dupJson.isBranchDealer,
+            });
+          }
+        } catch (dupErr) {
+          console.error("Failed to load duplicate-check", dupErr);
+        }
       } catch (error) {
         console.error("Failed to load dealer review data", error);
         setData(null);
@@ -1401,6 +1499,7 @@ export default function DealerReviewPage() {
           onBack={() => router.push("/admin/dealer-verification")}
           financeEnabled={data.financeEnabled}
           agreementStatus={agreementStatusForUi}
+          duplicate={duplicate}
         />
       </div>
     </div>
