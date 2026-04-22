@@ -16,6 +16,24 @@ import { inArray } from "drizzle-orm";
 
 const BUCKET = "private-documents";
 
+// errorResponse with a diagnostic `details` payload for debugging
+// Decentro failures (IP not whitelisted, credentials bad, etc.) on
+// environments where we don't have log access.
+function errorResponseWithDetails(
+  message: string,
+  status: number,
+  details: Record<string, unknown>,
+) {
+  return NextResponse.json(
+    {
+      success: false,
+      error: { message, details },
+      timestamp: new Date().toISOString(),
+    },
+    { status },
+  );
+}
+
 // Decentro can return HTTP 200 with a failure payload (IP not whitelisted,
 // credits exhausted, malformed image). Detect those so we can surface a
 // clear error instead of silently auto-filling nothing.
@@ -156,6 +174,16 @@ export const POST = withErrorHandler(async (req: Request) => {
     console.error("Initial OCR log failed:", logErr);
   }
 
+  // Decentro rejects files >6MB — fail fast with a clear error rather
+  // than eating the round-trip and getting a confusing Decentro response.
+  const MAX_BYTES = 6 * 1024 * 1024;
+  if (frontBuffer.length > MAX_BYTES || backBuffer.length > MAX_BYTES) {
+    return errorResponse(
+      "Aadhaar images must be under 6 MB each. Please compress or re-take the photo.",
+      413,
+    );
+  }
+
   // ── Decentro OCR: front + back in parallel ──────────────────────────
   const frontBlob = new Blob([new Uint8Array(frontBuffer)], {
     type: frontContentType,
@@ -180,8 +208,34 @@ export const POST = withErrorHandler(async (req: Request) => {
   const frontFailed = isDecentroFailure(frontOCR);
   const backFailed = isDecentroFailure(backOCR);
 
+  // Extract a human-readable diagnostic from Decentro's response so we
+  // can see WHY the call failed (IP not whitelisted, credits exhausted,
+  // unsupported document, etc.) without needing server-log access.
+  const extractDecentroMessage = (res: any): string | null => {
+    if (!res) return "No response from Decentro";
+    return (
+      res.message ||
+      res.error?.message ||
+      res.error?.responseMessage ||
+      res.responseMessage ||
+      (typeof res.status === "string" ? res.status : null) ||
+      null
+    );
+  };
+
   if (frontFailed && backFailed) {
-    console.warn("[AutoFill] Decentro failed on both sides");
+    const frontMessage = extractDecentroMessage(frontOCR);
+    const backMessage = extractDecentroMessage(backOCR);
+    console.warn(
+      "[AutoFill] Decentro failed on both sides — front:",
+      frontMessage,
+      "| back:",
+      backMessage,
+      "| rawFront:",
+      JSON.stringify(frontOCR).slice(0, 500),
+      "| rawBack:",
+      JSON.stringify(backOCR).slice(0, 500),
+    );
     try {
       await db.insert(auditLogs).values({
         id: `AUDIT-FAIL-${requestId}`,
@@ -190,8 +244,10 @@ export const POST = withErrorHandler(async (req: Request) => {
         action: "OCR_FAILED",
         changes: {
           reason: "decentro_unavailable",
-          frontMessage: frontOCR?.message ?? null,
-          backMessage: backOCR?.message ?? null,
+          frontMessage,
+          backMessage,
+          frontResponse: frontOCR ?? null,
+          backResponse: backOCR ?? null,
         },
         performed_by: user.id,
         timestamp: new Date(),
@@ -199,9 +255,11 @@ export const POST = withErrorHandler(async (req: Request) => {
     } catch {
       /* ignore */
     }
-    return errorResponse(
-      "We couldn't read this Aadhaar. Please upload clearer, well-lit photos or enter details manually.",
+    const diagnostic = frontMessage || backMessage || "Decentro OCR returned no data";
+    return errorResponseWithDetails(
+      `We couldn't read this Aadhaar. (${diagnostic})`,
       422,
+      { provider: "decentro", frontMessage, backMessage },
     );
   }
 
@@ -217,22 +275,37 @@ export const POST = withErrorHandler(async (req: Request) => {
   const finalData = buildFinalData(frontStructured, backStructured, {}, {});
 
   if (!hasUsefulData(finalData)) {
+    console.warn(
+      "[AutoFill] Decentro returned success but no parseable fields — front:",
+      JSON.stringify(frontOCR).slice(0, 800),
+      "| back:",
+      JSON.stringify(backOCR).slice(0, 800),
+    );
     try {
       await db.insert(auditLogs).values({
         id: `AUDIT-FAIL-${requestId}`,
         entity_type: "system",
         entity_id: requestId,
         action: "OCR_FAILED",
-        changes: { reason: "decentro_empty_fields" },
+        changes: {
+          reason: "decentro_empty_fields",
+          frontResponse: frontFailed ? null : frontOCR,
+          backResponse: backFailed ? null : backOCR,
+        },
         performed_by: user.id,
         timestamp: new Date(),
       });
     } catch {
       /* ignore */
     }
-    return errorResponse(
+    return errorResponseWithDetails(
       "Decentro could not extract any fields from the Aadhaar. Please upload clearer photos or enter details manually.",
       422,
+      {
+        provider: "decentro",
+        frontMessage: extractDecentroMessage(frontOCR),
+        backMessage: extractDecentroMessage(backOCR),
+      },
     );
   }
 
