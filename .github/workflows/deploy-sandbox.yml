@@ -41,6 +41,11 @@ jobs:
             echo "Wrote .env ($(wc -l < .env) lines, $(wc -c < .env) bytes)"
             echo "::endgroup::"
 
+            echo "::group::Install/verify Chromium system libs"
+            chmod +x scripts/sandbox-system-setup.sh
+            ./scripts/sandbox-system-setup.sh
+            echo "::endgroup::"
+
             echo "::group::Install deps (incl dev for build)"
             npm ci --no-audit --no-fund --include=dev
             echo "::endgroup::"
