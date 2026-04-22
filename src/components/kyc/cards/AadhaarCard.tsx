@@ -8,6 +8,9 @@ interface AadhaarCardProps {
   leadName: string;
   phone: string;
   email?: string;
+  leadDob?: string;
+  leadFatherName?: string;
+  leadAddress?: string;
   applicant?: "primary" | "co_borrower";
   existingTransaction?: {
     id: string;
@@ -63,11 +66,103 @@ const PROGRESS_STEPS: { key: DigilockerStep; label: string }[] = [
   { key: "document_fetched", label: "Document Fetched" },
 ];
 
+interface AadhaarTableRow {
+  label: string;
+  leadValue: string | null;
+  aadhaarValue: string | null;
+  match: { similarity: number; threshold: number; pass: boolean } | null;
+}
+
+function buildAadhaarTableRows({
+  aadhaarData,
+  crossMatch,
+  leadName,
+  leadDob,
+  leadFatherName,
+  leadAddress,
+}: {
+  aadhaarData: Record<string, string | null>;
+  crossMatch: CrossMatchResult | null;
+  leadName: string;
+  leadDob?: string;
+  leadFatherName?: string;
+  leadAddress?: string;
+}): AadhaarTableRow[] {
+  const cmByField = new Map<string, CrossMatchField>();
+  crossMatch?.fields?.forEach((f) => {
+    if (f.field) cmByField.set(f.field.toLowerCase(), f);
+  });
+
+  const toMatch = (f: CrossMatchField | undefined) => {
+    if (!f) return null;
+    const pass = f.pass ?? (f.matchResult === "strong" || f.matchResult === "moderate");
+    return { similarity: f.similarity, threshold: f.threshold, pass };
+  };
+
+  const cmLead = (f: CrossMatchField | undefined) => f?.leadValue ?? f?.inputValue ?? null;
+  const cmAadhaar = (f: CrossMatchField | undefined) => f?.aadhaarValue ?? f?.documentValue ?? null;
+
+  const gender = aadhaarData.gender === "M" ? "Male" : aadhaarData.gender === "F" ? "Female" : aadhaarData.gender || null;
+  const maskedUid = aadhaarData.uid ? `XXXX-XXXX-${aadhaarData.uid.slice(-4)}` : null;
+
+  const rows: AadhaarTableRow[] = [
+    {
+      label: "Name",
+      leadValue: cmLead(cmByField.get("name")) || leadName || null,
+      aadhaarValue: cmAadhaar(cmByField.get("name")) || aadhaarData.name || null,
+      match: toMatch(cmByField.get("name")),
+    },
+    {
+      label: "Aadhaar Number",
+      leadValue: null,
+      aadhaarValue: maskedUid,
+      match: null,
+    },
+    {
+      label: "Date of Birth",
+      leadValue: cmLead(cmByField.get("dob")) || leadDob || null,
+      aadhaarValue: cmAadhaar(cmByField.get("dob")) || aadhaarData.dob || null,
+      match: toMatch(cmByField.get("dob")),
+    },
+    {
+      label: "Gender",
+      leadValue: cmLead(cmByField.get("gender")),
+      aadhaarValue: cmAadhaar(cmByField.get("gender")) || gender,
+      match: toMatch(cmByField.get("gender")),
+    },
+    {
+      label: "Father / Husband",
+      leadValue:
+        cmLead(cmByField.get("careof")) ||
+        cmLead(cmByField.get("father_name")) ||
+        leadFatherName ||
+        null,
+      aadhaarValue:
+        cmAadhaar(cmByField.get("careof")) ||
+        cmAadhaar(cmByField.get("father_name")) ||
+        aadhaarData.careof ||
+        null,
+      match: toMatch(cmByField.get("careof") || cmByField.get("father_name")),
+    },
+    {
+      label: "Address",
+      leadValue: cmLead(cmByField.get("address")) || leadAddress || null,
+      aadhaarValue: cmAadhaar(cmByField.get("address")) || aadhaarData.address || null,
+      match: toMatch(cmByField.get("address")),
+    },
+  ];
+
+  return rows.filter((r) => r.aadhaarValue || r.leadValue);
+}
+
 export default function AadhaarCard({
   leadId,
   leadName,
   phone,
   email,
+  leadDob,
+  leadFatherName,
+  leadAddress,
   applicant = "primary",
   existingTransaction,
   existingVerification,
@@ -101,6 +196,12 @@ export default function AadhaarCard({
   const [linkValidity, setLinkValidity] = useState(24);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // When the admin explicitly wants to re-run a verification that already has
+  // data on file (from dealer lead-creation or a prior admin run), flipping
+  // this reveals the initiation UI without discarding the already-displayed
+  // extracted data. Stays false by default so the default view is the
+  // extracted-data panel, not a "Re-send DigiLocker link" prompt.
+  const [rerunMode, setRerunMode] = useState(false);
   const [digilockerUrl, setDigilockerUrl] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
   const [smsStatus, setSmsStatus] = useState<
@@ -540,69 +641,105 @@ export default function AadhaarCard({
           </div>
         )}
 
-        {/* Document Fetched / Success / Failed with results */}
-        {(cardStatus === "document_fetched" || cardStatus === "success" || (cardStatus === "failed" && crossMatch)) && (
+        {/* Document Fetched / Success / Failed — always render on a terminal
+            state so the admin can re-run, even if no DigiLocker data is yet
+            on file (e.g. dealer skipped step 1 or prior run failed). The
+            data and crossmatch sub-blocks gate themselves on their own data. */}
+        {(cardStatus === "document_fetched" || cardStatus === "success" || cardStatus === "failed") && (
           <div className="space-y-4">
-            {aadhaarData && (
-              <div className="bg-gray-50 rounded-lg p-4">
-                <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide mb-3">Aadhaar Data (DigiLocker)</p>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  {aadhaarData.name && <div><p className="text-xs text-gray-400">Name</p><p className="font-medium text-gray-800">{aadhaarData.name}</p></div>}
-                  {aadhaarData.uid && <div><p className="text-xs text-gray-400">Aadhaar</p><p className="font-medium text-gray-800">XXXX-XXXX-{aadhaarData.uid.slice(-4)}</p></div>}
-                  {aadhaarData.gender && <div><p className="text-xs text-gray-400">Gender</p><p className="font-medium text-gray-800">{aadhaarData.gender === "M" ? "Male" : aadhaarData.gender === "F" ? "Female" : aadhaarData.gender}</p></div>}
-                  {aadhaarData.dob && <div><p className="text-xs text-gray-400">DOB</p><p className="font-medium text-gray-800">{aadhaarData.dob}</p></div>}
-                  {aadhaarData.careof && <div className="col-span-2"><p className="text-xs text-gray-400">Father/Husband</p><p className="font-medium text-gray-800">{aadhaarData.careof}</p></div>}
-                  {aadhaarData.address && <div className="col-span-2"><p className="text-xs text-gray-400">Address</p><p className="font-medium text-gray-800">{aadhaarData.address}</p></div>}
-                </div>
-              </div>
-            )}
-
-            {/* Re-initiate DigiLocker — always available so admin can re-run after verify/accept/reject */}
-            <button
-              onClick={handleInitiate}
-              disabled={loading}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
-            >
-              {loading ? "Sending..." : "Re-send DigiLocker Link via SMS"}
-            </button>
-
-            {crossMatch && (
+            {aadhaarData ? (
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide">Cross-Match Results</p>
-                  <span className={`px-3 py-1 rounded-full text-xs font-semibold ${crossMatch.overallPass ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
-                    {crossMatch.overallPass ? "Pass" : "Fail"}
-                  </span>
+                  <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide">
+                    Aadhaar Verification Results
+                  </p>
+                  {crossMatch && (
+                    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${crossMatch.overallPass ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                      {crossMatch.overallPass ? "Overall Pass" : "Overall Fail"}
+                    </span>
+                  )}
                 </div>
                 <div className="overflow-x-auto rounded-lg border border-gray-200">
-                  <table className="w-full text-sm min-w-[600px]">
+                  <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-gray-50 border-b border-gray-200">
-                        <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500">#</th>
-                        <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500">Field</th>
-                        <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500">Lead Data</th>
-                        <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500">Aadhaar Data</th>
-                        <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500">Match</th>
+                        <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase">Field Name</th>
+                        <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase">As per Lead</th>
+                        <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase">As per Aadhaar (DigiLocker)</th>
+                        <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase">Match</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {crossMatch.fields.map((f, i) => {
-                        const lead = f.leadValue || f.inputValue || null;
-                        const aadhaar = f.aadhaarValue || f.documentValue || null;
-                        const passed = f.pass ?? (f.matchResult === "strong" || f.matchResult === "moderate");
+                      {buildAadhaarTableRows({
+                        aadhaarData,
+                        crossMatch,
+                        leadName,
+                        leadDob,
+                        leadFatherName,
+                        leadAddress,
+                      }).map((row, i) => {
+                        const rowFailed = row.match && !row.match.pass && row.match.similarity !== null;
                         return (
-                          <tr key={f.field} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-2 text-gray-400">{i + 1}</td>
-                            <td className="px-4 py-2 font-medium text-gray-700 capitalize">{(f.label || f.field).replace(/_/g, " ")}</td>
-                            <td className="px-4 py-2 text-gray-600 max-w-[160px] truncate">{lead || "—"}</td>
-                            <td className="px-4 py-2 text-gray-600 max-w-[160px] truncate">{aadhaar || "—"}</td>
-                            <td className="px-4 py-2">{getMatchBadge(f.similarity, f.threshold, passed)}</td>
+                          <tr key={`${row.label}-${i}`} className={`hover:bg-gray-50/50 ${rowFailed ? "bg-red-50/30" : ""}`}>
+                            <td className="px-3 py-2.5 font-semibold text-gray-800">{row.label}</td>
+                            <td
+                              className="px-3 py-2.5 text-gray-600 max-w-[160px] truncate"
+                              title={row.leadValue || undefined}
+                            >
+                              {row.leadValue || <span className="text-gray-300">—</span>}
+                            </td>
+                            <td
+                              className="px-3 py-2.5 text-gray-600 max-w-[160px] truncate font-mono text-xs"
+                              title={row.aadhaarValue || undefined}
+                            >
+                              {row.aadhaarValue || <span className="text-gray-300">—</span>}
+                            </td>
+                            <td className="px-3 py-2.5">
+                              {row.match
+                                ? getMatchBadge(row.match.similarity, row.match.threshold, row.match.pass)
+                                : <span className="text-gray-400 text-xs">N/A</span>}
+                            </td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
                 </div>
+              </div>
+            ) : (
+              <div className="bg-gray-50 border border-dashed border-gray-200 rounded-lg p-4 text-center">
+                <p className="text-sm text-gray-500">No Aadhaar data on file yet.</p>
+                <p className="text-xs text-gray-400 mt-0.5">Re-run the verification below to fetch it from DigiLocker.</p>
+              </div>
+            )}
+
+            {/* Re-run toggle — default shows extracted data; admin opts into
+                a fresh DigiLocker flow only if the document needs re-fetching. */}
+            {!rerunMode ? (
+              <button
+                onClick={() => setRerunMode(true)}
+                className="w-full bg-teal-600 hover:bg-teal-700 text-white py-2.5 rounded-lg text-sm font-medium transition-colors"
+              >
+                Re-run Aadhaar Verification
+              </button>
+            ) : (
+              <div className="space-y-2 bg-blue-50 border border-blue-100 rounded-lg p-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-blue-800 uppercase tracking-wide">Send a new DigiLocker link</p>
+                  <button
+                    onClick={() => setRerunMode(false)}
+                    className="text-xs text-gray-500 hover:text-gray-700"
+                  >
+                    Cancel
+                  </button>
+                </div>
+                <button
+                  onClick={handleInitiate}
+                  disabled={loading}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
+                >
+                  {loading ? "Sending..." : "Re-send DigiLocker Link via SMS"}
+                </button>
               </div>
             )}
 

@@ -87,6 +87,7 @@ interface Consent {
   consentFor: string;
   consentType: string;
   consentStatus: string;
+  esignTransactionId: string | null;
   generatedPdfUrl: string | null;
   signedConsentUrl: string | null;
   signedAt: string | null;
@@ -204,6 +205,10 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const [pendingRejectId, setPendingRejectId] = useState<string | null>(null);
   const [fetchingPdfId, setFetchingPdfId] = useState<string | null>(null);
   const [consentPdfOverrides, setConsentPdfOverrides] = useState<Record<string, string>>({});
+  // Track consents we've already auto-attempted to fetch so we don't loop on
+  // 'customer hasn't signed yet' errors. The admin can still click "Pull
+  // signed PDF" manually to retry.
+  const [autoFetchAttempted, setAutoFetchAttempted] = useState<Set<string>>(new Set());
   const [consentExpanded, setConsentExpanded] = useState(false);
   const [showCoBorrowerModal, setShowCoBorrowerModal] = useState(false);
 
@@ -250,37 +255,53 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
     [leadId],
   );
 
-  const handleFetchPdf = useCallback(async (c: Consent) => {
+  const handleFetchPdf = useCallback(async (c: Consent, opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
     setFetchingPdfId(c.id);
     try {
       const res = await fetch(`/api/admin/kyc/${leadId}/consent/${c.id}/fetch-pdf`, { method: "POST" });
       const json = await res.json();
       if (json.success && json.pdfUrl) {
         setConsentPdfOverrides(prev => ({ ...prev, [c.id]: json.pdfUrl }));
-        // Open PDF viewer immediately
-        setViewingConsent({ ...c, signedConsentUrl: json.pdfUrl });
-      } else {
+        // Open PDF viewer only on user-initiated clicks; auto-fetches just
+        // cache the URL quietly so the "View PDF" button appears.
+        if (!silent) setViewingConsent({ ...c, signedConsentUrl: json.pdfUrl });
+      } else if (!silent) {
         setConsentActionError(json.error?.message || "Failed to fetch PDF from DigiO");
       }
     } catch {
-      setConsentActionError("Failed to fetch PDF");
+      if (!silent) setConsentActionError("Failed to fetch PDF");
     } finally {
       setFetchingPdfId(null);
+      setAutoFetchAttempted(prev => {
+        const next = new Set(prev);
+        next.add(c.id);
+        return next;
+      });
     }
   }, [leadId]);
 
   const handleConsentClick = useCallback(async (c: Consent) => {
     if (c.consentFor !== "primary") return;
-    const pdfUrl = consentPdfOverrides[c.id] ?? c.signedConsentUrl ?? c.generatedPdfUrl;
-    if (!pdfUrl) {
-      // Try fetching from DigiO
-      if (c.consentStatus === "esign_completed" || c.consentStatus === "verified" || c.consentStatus === "admin_review_pending") {
+
+    // Admin must only ever view the signed PDF — never the unsigned draft at
+    // generated_pdf_url (that's the pre-sign template, not what the customer
+    // actually signed). If a DigiO eSign transaction exists and we don't have
+    // the signed URL on file yet, pull it straight from DigiO. This covers
+    // the common case where the DigiO webhook never reached the server
+    // (local dev without a public callback URL, dropped packet, etc.).
+    const signedUrl = consentPdfOverrides[c.id] ?? c.signedConsentUrl;
+
+    if (!signedUrl) {
+      if (c.esignTransactionId) {
         handleFetchPdf(c);
-        return;
+      } else {
+        setConsentActionError("Consent hasn't been sent for signature yet — no signed PDF to review.");
       }
       return;
     }
-    setViewingConsent({ ...c, signedConsentUrl: pdfUrl });
+
+    setViewingConsent({ ...c, signedConsentUrl: signedUrl });
     if (c.adminViewedAt) return;
     try {
       const res = await fetch(`/api/admin/kyc/${leadId}/consent/${c.id}/view`, {
@@ -332,17 +353,38 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Auto-fetch signed PDF from DigiO when consent is esign_completed but PDF is missing
+  // Auto-fetch signed PDF from DigiO whenever we have a pending eSign
+  // transaction but no signed URL cached yet. Covers the webhook-didn't-fire
+  // case so admins don't need to click "Fetch" manually. Skips terminal
+  // non-signable states to avoid pointless DigiO calls.
+  // We track attempted consents so a 'customer hasn't signed yet' response
+  // doesn't re-fire the fetch on every re-render. The admin can still
+  // manually retry via the "Pull signed PDF" button.
   useEffect(() => {
     if (!data?.consent) return;
+    const SKIP_AUTO_FETCH = new Set([
+      "rejected",
+      "esign_failed",
+      "esign_blocked",
+      "expired",
+      "manual_uploaded",
+      "verified",
+    ]);
     for (const c of data.consent) {
-      const pdfUrl = consentPdfOverrides[c.id] ?? c.signedConsentUrl ?? c.generatedPdfUrl;
-      if (!pdfUrl && c.consentFor === "primary" && c.consentStatus === "esign_completed" && !fetchingPdfId) {
-        handleFetchPdf(c);
+      const signedUrl = consentPdfOverrides[c.id] ?? c.signedConsentUrl;
+      if (
+        !signedUrl &&
+        c.consentFor === "primary" &&
+        c.esignTransactionId &&
+        !SKIP_AUTO_FETCH.has(c.consentStatus) &&
+        !fetchingPdfId &&
+        !autoFetchAttempted.has(c.id)
+      ) {
+        handleFetchPdf(c, { silent: true });
         break;
       }
     }
-  }, [data?.consent, consentPdfOverrides, fetchingPdfId, handleFetchPdf]);
+  }, [data?.consent, consentPdfOverrides, fetchingPdfId, handleFetchPdf, autoFetchAttempted]);
 
   const getVerification = (type: string) =>
     data?.verificationCards.find((v) => v.type === type) || null;
@@ -493,7 +535,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                     <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" /></svg>
                     KYC Case Review
                   </span>
-                  <span className="text-[11px] text-gray-400 font-mono">#{lead.id.slice(0, 8)}</span>
+                  <span className="text-[11px] text-gray-400 font-mono">#{lead.id}</span>
                 </div>
                 <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{lead.name || "Unnamed Lead"}</h1>
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-gray-500">
@@ -758,13 +800,20 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                 <div className={`transition-all duration-200 ease-in-out overflow-hidden ${consentExpanded ? "max-h-[2000px] opacity-100" : "max-h-0 opacity-0"}`}>
                   <div className="px-4 pb-4 space-y-2 border-t border-gray-100">
                     {consent.map((c) => {
-                      const pdfUrl = consentPdfOverrides[c.id] ?? c.signedConsentUrl ?? c.generatedPdfUrl;
+                      // Only consider the signed PDF here — never the unsigned
+                      // generated_pdf_url. Admin must approve against the
+                      // customer's actual signed document.
+                      const pdfUrl = consentPdfOverrides[c.id] ?? c.signedConsentUrl;
                       const isPrimary = c.consentFor === "primary";
                       const isViewable = isPrimary && !!pdfUrl;
                       const isVerified = c.consentStatus === "verified" || c.consentStatus === "digitally_signed";
                       const isRejected = c.consentStatus === "rejected";
                       const isViewed = !!c.adminViewedAt && !isVerified && !isRejected;
                       const isEsignCompleted = c.consentStatus === "esign_completed" || c.consentStatus === "admin_review_pending";
+                      // Signed PDF is pullable any time an eSign transaction
+                      // exists — covers the case where the webhook didn't fire
+                      // but DigiO already has the signed document.
+                      const canFetchSigned = isPrimary && !pdfUrl && !!c.esignTransactionId;
                       const canDecide = isPrimary && !isVerified && !isRejected && (isViewable || isEsignCompleted);
                       const isConfirmingReject = pendingRejectId === c.id;
                       const isApprovingThis = consentActionLoading === `${c.id}:approve`;
@@ -820,16 +869,16 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                               {isRejected && verifiedRelative && (
                                 <p className="text-[10px] text-red-700">Rejected by admin {verifiedRelative}</p>
                               )}
-                              {isPrimary && !pdfUrl && isEsignCompleted && (
+                              {canFetchSigned && (
                                 <button type="button"
                                   disabled={fetchingPdfId === c.id}
                                   onClick={(e) => { e.stopPropagation(); handleFetchPdf(c); }}
                                   className="text-[10px] text-teal-600 hover:text-teal-800 italic underline cursor-pointer disabled:opacity-50">
-                                  {fetchingPdfId === c.id ? "Fetching PDF..." : "PDF not yet generated — click to fetch"}
+                                  {fetchingPdfId === c.id ? "Fetching signed PDF..." : "Pull signed PDF from DigiO"}
                                 </button>
                               )}
-                              {isPrimary && !pdfUrl && !isEsignCompleted && (
-                                <p className="text-[10px] text-gray-400 italic">PDF not yet generated</p>
+                              {isPrimary && !pdfUrl && !c.esignTransactionId && (
+                                <p className="text-[10px] text-gray-400 italic">Consent not yet sent for signature</p>
                               )}
                             </div>
                           </div>
@@ -924,6 +973,9 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
             leadName={lead.name}
             phone={lead.phone}
             email={pd?.email || undefined}
+            leadDob={pd?.dob || undefined}
+            leadFatherName={pd?.fatherHusbandName || undefined}
+            leadAddress={pd?.localAddress || undefined}
             existingTransaction={latestDigilocker ? {
               id: latestDigilocker.id,
               status: latestDigilocker.status,
@@ -1129,12 +1181,13 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
         </div>
       )}
 
-      {/* Consent PDF Viewer */}
-      {viewingConsent && (
+      {/* Consent PDF Viewer — only open with a signed URL; handleConsentClick
+          is responsible for resolving it before opening the modal. */}
+      {viewingConsent && viewingConsent.signedConsentUrl && (
         <ConsentPdfViewerModal
           open
           onClose={() => setViewingConsent(null)}
-          pdfUrl={viewingConsent.signedConsentUrl ?? viewingConsent.generatedPdfUrl ?? ""}
+          pdfUrl={viewingConsent.signedConsentUrl}
           title={`Consent — ${viewingConsent.consentFor}`}
         />
       )}

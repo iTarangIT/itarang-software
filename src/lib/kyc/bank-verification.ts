@@ -22,7 +22,7 @@ export type BankVerificationResult = {
 export type BankVerificationError = {
   success: false;
   status: number;
-  error: string;
+  error: string | { message: string; code?: string };
 };
 
 export async function executeBankVerification(
@@ -48,6 +48,24 @@ export async function executeBankVerification(
   });
 
   console.log("[Decentro Bank V2] Response:", JSON.stringify(decentroRes));
+
+  // Decentro client signals missing env vars via an explicit "must be set"
+  // message. Translate that into a 503 with a stable error code so the UI
+  // can render a configuration banner (instead of exposing env var names).
+  const isMisconfig =
+    typeof decentroRes.message === "string" &&
+    /must be set in \.env/i.test(decentroRes.message);
+  if (isMisconfig) {
+    return {
+      success: false,
+      status: 503,
+      error: {
+        message:
+          "Bank verification is not available on this server — contact the administrator to configure it.",
+        code: "bank_verify_misconfigured",
+      },
+    };
+  }
 
   const success =
     decentroRes.api_status === "Success" ||

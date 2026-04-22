@@ -27,6 +27,8 @@ export function sanitizeDbError(err: unknown): string {
     "23502": "Required field missing",
     "22001": "Value too long for field",
     "22P02": "Invalid value for field",
+    "42703": "Database is out of sync — run `npm run db:push` and retry",
+    "42P01": "Database is out of sync — run `npm run db:push` and retry",
     "54000": "Data too large — try a smaller batch",
     "57014": "Query timed out",
     "53300": "Database connection limit reached",
@@ -43,12 +45,12 @@ export function sanitizeDbError(err: unknown): string {
 
   // The postgres-js driver prefixes errors with "Failed query: <SQL>" — strip it.
   if (/^failed query:/i.test(raw)) {
-    return "Database write failed — check server logs for details";
+    return "Something went wrong loading this data — check server logs for details";
   }
 
   // Strip parenthesised parameter lists ($1, $2, ...) — usually noise.
   if (raw.includes("$1") && raw.length > 200) {
-    return "Database write failed — check server logs for details";
+    return "Something went wrong loading this data — check server logs for details";
   }
 
   // Network / driver errors
