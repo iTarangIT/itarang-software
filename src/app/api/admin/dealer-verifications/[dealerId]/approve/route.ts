@@ -7,6 +7,8 @@ import { hashPassword } from "@/lib/auth/hashPassword";
 import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
 import { sendDealerApprovalNotificationEmail } from "@/lib/email/sendDealerApprovalNotificationEmail";
 import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification-recipients";
+import { downloadPdfBuffer } from "@/lib/email/downloadPdfBuffer";
+import { ensureDealerAuditTrailUrl } from "@/lib/digio/ensure-audit-trail";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 
@@ -387,8 +389,35 @@ export async function POST(req: NextRequest, context: RouteContext) {
       }
     }
 
+    // If the agreement is signed, gather the signed agreement + audit trail
+    // PDFs so we can attach them to the welcome email. Each step is isolated
+    // so a single failure never blocks the welcome email itself.
+    let signedAgreementPdf: Buffer | null = null;
+    let auditTrailPdf: Buffer | null = null;
+    const agreementSigned =
+      (application.agreementStatus || "").toLowerCase() === "completed";
+
+    if (agreementSigned) {
+      let auditTrailUrl: string | null = application.auditTrailUrl || null;
+      try {
+        auditTrailUrl = await ensureDealerAuditTrailUrl(application);
+      } catch (auditErr: any) {
+        console.error("ENSURE AUDIT TRAIL ERROR:", auditErr);
+      }
+
+      const signedAgreementUrl = application.signedAgreementUrl || null;
+
+      const [signedBuf, auditBuf] = await Promise.all([
+        downloadPdfBuffer(signedAgreementUrl),
+        downloadPdfBuffer(auditTrailUrl),
+      ]);
+      signedAgreementPdf = signedBuf;
+      auditTrailPdf = auditBuf;
+    }
+
+    let mailResult: Awaited<ReturnType<typeof sendDealerWelcomeEmail>> | null = null;
     try {
-      const mailResult = await sendDealerWelcomeEmail({
+      mailResult = await sendDealerWelcomeEmail({
         toEmail: dealerLoginEmail,
         dealerName: application.ownerName || application.companyName || "Dealer",
         companyName: application.companyName || "iTarang Dealer",
@@ -397,9 +426,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
         password: temporaryPassword,
         loginUrl: resolvedLoginUrl,
         supportEmail:
-          process.env.DEALER_SUPPORT_EMAIL || "support@itarang.com",
+          process.env.DEALER_SUPPORT_EMAIL || "care@itarang.com",
         supportPhone:
-          process.env.DEALER_SUPPORT_PHONE || "+91-0000000000",
+          process.env.DEALER_SUPPORT_PHONE || "+91-8076841497",
+        signedAgreementPdf,
+        auditTrailPdf,
       });
 
       console.log("DEALER WELCOME EMAIL SUCCESS:", mailResult);
@@ -429,6 +460,8 @@ export async function POST(req: NextRequest, context: RouteContext) {
       emailTarget: dealerLoginEmail,
       emailError,
       internalNotificationResult,
+      attachedSignedAgreement: Boolean(mailResult?.attachedSignedAgreement),
+      attachedAuditTrail: Boolean(mailResult?.attachedAuditTrail),
     });
   } catch (error: any) {
     console.error("APPROVE DEALER ERROR:", error);
