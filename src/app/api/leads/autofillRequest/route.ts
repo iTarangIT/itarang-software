@@ -177,12 +177,15 @@ export const POST = withErrorHandler(async (req: Request) => {
       type: backContentType,
     });
 
+    // Decentro's Aadhaar OCR prioritises different fields depending on which
+    // side is being scanned (front → name/DOB/gender, back → UID/address).
+    // Without document_side, the back-side address often comes back empty.
     const [frontOCR, backOCR] = await Promise.all([
-      extractDocumentOcr("AADHAAR", frontBlob, frontName).catch((e) => {
+      extractDocumentOcr("AADHAAR", frontBlob, frontName, "FRONT").catch((e) => {
         console.error("[AutoFill] Decentro front OCR threw:", e?.message);
         return null;
       }),
-      extractDocumentOcr("AADHAAR", backBlob, backName).catch((e) => {
+      extractDocumentOcr("AADHAAR", backBlob, backName, "BACK").catch((e) => {
         console.error("[AutoFill] Decentro back OCR threw:", e?.message);
         return null;
       }),

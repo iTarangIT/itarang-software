@@ -23,6 +23,7 @@ import {
   requireAdminAppUser,
 } from "@/lib/kyc/admin-workflow";
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
+import { syncConsentStatusFromDigio } from "@/lib/digio/sync-consent-status";
 import { sanitizeDbError } from "@/lib/error-utils";
 
 function formatDob(dob: Date | string | null | undefined): string | null {
@@ -237,7 +238,23 @@ export async function GET(
         })),
         verificationCards,
         consent: await Promise.all(consentRows.map(async (c) => {
+          let consentStatus = c.consent_status;
           let signedUrl = c.signed_consent_url;
+          let signedAt = c.signed_at;
+
+          // Pull latest status from DigiO if the record is still waiting.
+          // Catches cases where the DigiO webhook never reached the server
+          // (e.g. localhost dev, transient delivery failure).
+          try {
+            const synced = await syncConsentStatusFromDigio(c);
+            if (synced) {
+              consentStatus = synced.consent_status;
+              signedUrl = synced.signed_consent_url;
+              signedAt = synced.signed_at;
+            }
+          } catch (e) {
+            console.error("[Case Review] DigiO status sync failed:", e);
+          }
 
           // Auto-fetch signed PDF from DigiO any time the customer may have
           // signed — including statuses where the DigiO webhook hasn't fired
@@ -256,7 +273,7 @@ export async function GET(
           if (
             !signedUrl &&
             c.esign_transaction_id &&
-            !SKIP_BACKFILL_STATUSES.has(c.consent_status)
+            !SKIP_BACKFILL_STATUSES.has(consentStatus)
           ) {
             try {
               const stored = await fetchAndStoreSignedConsent(c.esign_transaction_id, leadId);
@@ -276,11 +293,11 @@ export async function GET(
             id: c.id,
             consentFor: c.consent_for,
             consentType: c.consent_type,
-            consentStatus: c.consent_status,
+            consentStatus,
             esignTransactionId: c.esign_transaction_id,
             generatedPdfUrl: c.generated_pdf_url,
             signedConsentUrl: signedUrl,
-            signedAt: c.signed_at,
+            signedAt,
             verifiedAt: c.verified_at,
             adminViewedBy: c.admin_viewed_by,
             adminViewedAt: c.admin_viewed_at,

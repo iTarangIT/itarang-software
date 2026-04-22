@@ -11,7 +11,9 @@ import {
   ArrowRight,
   CheckCircle2,
   CalendarDays,
+  Download,
   X,
+  UserCog,
 } from "lucide-react";
 
 type DealerVerificationItem = {
@@ -25,6 +27,9 @@ type DealerVerificationItem = {
   gstNumber?: string | null;
   financeEnabled?: boolean | null;
   companyType?: string | null;
+  salesManagerName?: string | null;
+  salesManagerEmail?: string | null;
+  salesManagerMobile?: string | null;
 };
 
 function StatCard({
@@ -215,7 +220,15 @@ export default function DealerVerificationPage() {
     const q = query.trim().toLowerCase();
     if (q) {
       result = result.filter((item) =>
-        [item.dealerName, item.companyName, item.gstNumber || "", item.status, item.companyType || ""]
+        [
+          item.dealerName,
+          item.companyName,
+          item.gstNumber || "",
+          item.status,
+          item.companyType || "",
+          item.salesManagerName || "",
+          item.salesManagerEmail || "",
+        ]
           .join(" ")
           .toLowerCase()
           .includes(q)
@@ -259,6 +272,20 @@ export default function DealerVerificationPage() {
           ? `Until ${formatDisplayDate(dateTo)}`
           : "";
 
+  const exportHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (dateFrom) params.set("dateFrom", dateFrom);
+    if (dateTo) params.set("dateTo", dateTo);
+    const trimmedQuery = query.trim();
+    if (trimmedQuery) params.set("q", trimmedQuery);
+    const qs = params.toString();
+    return qs
+      ? `/api/admin/dealer-verifications/export?${qs}`
+      : `/api/admin/dealer-verifications/export`;
+  }, [dateFrom, dateTo, query]);
+
+  const exportDisabled = loading || filtered.length === 0;
+
   return (
     <div className="space-y-8 px-1">
       {/* ── Page Header ── */}
@@ -287,7 +314,7 @@ export default function DealerVerificationPage() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search dealer, GST, company type, status..."
+              placeholder="Search dealer, GST, sales manager, status..."
               className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-11 pr-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white"
             />
           </div>
@@ -353,6 +380,24 @@ export default function DealerVerificationPage() {
                   Clear
                 </button>
               )}
+
+              <a
+                href={exportDisabled ? undefined : exportHref}
+                aria-disabled={exportDisabled}
+                title={
+                  exportDisabled
+                    ? "No applications to export"
+                    : "Download the current queue as CSV"
+                }
+                className={`flex items-center gap-1.5 rounded-2xl border px-3 py-2 text-xs font-semibold transition ${
+                  exportDisabled
+                    ? "pointer-events-none border-slate-200 bg-slate-50 text-slate-400"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                }`}
+              >
+                <Download className="h-3.5 w-3.5" />
+                Export CSV
+              </a>
             </div>
           </div>
 
@@ -386,10 +431,10 @@ export default function DealerVerificationPage() {
             <table className="min-w-full">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/80">
-                  {["Dealer", "Company", "Documents", "Agreement", "Status", "Actions"].map((h, i) => (
+                  {["Dealer", "Company", "Sales Manager", "Documents", "Agreement", "Status", "Actions"].map((h, i, arr) => (
                     <th
                       key={h}
-                      className={`px-6 py-4 text-xs font-semibold uppercase tracking-wide text-slate-500 ${i === 5 ? "text-right" : "text-left"}`}
+                      className={`px-6 py-4 text-xs font-semibold uppercase tracking-wide text-slate-500 ${i === arr.length - 1 ? "text-right" : "text-left"}`}
                     >
                       {h}
                     </th>
@@ -415,6 +460,10 @@ export default function DealerVerificationPage() {
                           {new Date(item.submittedAt).toLocaleDateString("en-IN", {
                             day: "numeric", month: "short", year: "numeric",
                           })}
+                          {" · "}
+                          {new Date(item.submittedAt).toLocaleTimeString("en-IN", {
+                            hour: "numeric", minute: "2-digit", hour12: true,
+                          })}
                         </p>
                       )}
                     </td>
@@ -425,6 +474,33 @@ export default function DealerVerificationPage() {
                       <p className="mt-1 text-sm capitalize text-slate-400">
                         {(item.companyType || "Not available").replaceAll("_", " ")}
                       </p>
+                    </td>
+
+                    <td className="px-6 py-5 align-top">
+                      {item.salesManagerName ? (
+                        <div className="flex items-start gap-2">
+                          <div className="mt-0.5 rounded-xl bg-slate-50 p-1.5 text-slate-500">
+                            <UserCog className="h-3.5 w-3.5" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate font-medium text-slate-800">
+                              {item.salesManagerName}
+                            </p>
+                            {item.salesManagerEmail && (
+                              <p className="mt-0.5 truncate text-xs text-slate-500">
+                                {item.salesManagerEmail}
+                              </p>
+                            )}
+                            {item.salesManagerMobile && (
+                              <p className="mt-0.5 truncate text-xs text-slate-400">
+                                {item.salesManagerMobile}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-slate-400">Not assigned</span>
+                      )}
                     </td>
 
                     <td className="px-6 py-5 align-top">

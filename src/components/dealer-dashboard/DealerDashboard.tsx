@@ -314,6 +314,15 @@ export default function DealerDashboard() {
           ? 'Yes'
           : 'No';
 
+  const isFinanceEnabled = financeEnabledValue === 'Yes';
+  const financeOnlyMetricTitles = new Set([
+    'Delayed Payment',
+    'On-time Payment',
+    'Loan Applied',
+    'Loan Cleared',
+    'KYC Rejected',
+  ]);
+
   const submittedAtValue =
     dealer?.submittedAt ||
     currentUser?.submitted_at ||
@@ -397,7 +406,7 @@ export default function DealerDashboard() {
       subtext: 'discrepancies',
       trendColor: 'text-gray-400',
     },
-  ];
+  ].filter((m) => isFinanceEnabled || !financeOnlyMetricTitles.has(m.title));
 
   return (
     <div className="animate-in space-y-8 fade-in duration-500 pb-10">
@@ -578,7 +587,7 @@ export default function DealerDashboard() {
       </div>
 
       {/* ─── Coupon Credits Widget ──────────────────────────────────────── */}
-      {couponStats && (
+      {isFinanceEnabled && couponStats && (
         <div className="rounded-2xl border border-[#E3E8EF] bg-white p-6 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <p className="text-sm font-semibold uppercase tracking-wide text-[#1F5C8F]">
@@ -618,11 +627,13 @@ export default function DealerDashboard() {
             description="Lead creation will unlock after dealer verification is completed."
           />
 
-          <LockedActionCard
-            icon={<FileCheck className="h-6 w-6" />}
-            title="Process Loan"
-            description="Loan processing will unlock after iTarang approves your documents."
-          />
+          {isFinanceEnabled && (
+            <LockedActionCard
+              icon={<FileCheck className="h-6 w-6" />}
+              title="Process Loan"
+              description="Loan processing will unlock after iTarang approves your documents."
+            />
+          )}
 
           <LockedActionCard
             icon={<Battery className="h-6 w-6" />}
@@ -653,7 +664,7 @@ export default function DealerDashboard() {
               <div className="absolute -right-4 -bottom-4 h-32 w-32 rounded-full bg-white/5 blur-2xl transition-colors group-hover:bg-white/10" />
             </Link>
 
-            <ProcessLoanCard />
+            {isFinanceEnabled && <ProcessLoanCard />}
 
             <Link
               href="/dealer-portal/assets"

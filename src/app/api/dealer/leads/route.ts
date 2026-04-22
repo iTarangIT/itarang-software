@@ -3,9 +3,11 @@ import { createClient } from '@/lib/supabase/server';
 import { withErrorHandler, successResponse, errorResponse, generateId } from '@/lib/api-utils';
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { leads, loanDetails, personalDetails, documents, auditLogs, accounts } from '@/lib/db/schema'; // Added accounts
-import { eq, and, desc, ilike, or, ne } from 'drizzle-orm';
+import { leads, loanDetails, personalDetails, documents, auditLogs, accounts, dealerOnboardingApplications } from '@/lib/db/schema'; // Added accounts
+import { eq, and, desc, ilike, or, ne, isNull } from 'drizzle-orm';
 import { resolveDealerProfile } from '@/lib/supabase/identity';
+import { requireRole } from '@/lib/auth-utils';
+
 
 // Extended Zod Schema
 const dealerLeadSchema = z.object({
@@ -111,6 +113,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                 lead_source: 'dealer_referral',
                 interest_level: data.interest_level, // Keep specifically for compatibility
                 lead_status: 'new',
+                status: 'ACTIVE',
                 uploader_id: user.id,
 
                 // Required defaults
@@ -187,15 +190,27 @@ export const POST = withErrorHandler(async (req: Request) => {
 });
 
 export const GET = withErrorHandler(async (req: Request) => {
-    const supabase = await createClient();
+    // Use Drizzle-backed auth (same path as lead creation / check-duplicate) so
+    // the dealer_id used for filtering matches the dealer_id written on insert.
+    // Supabase-client lookups hit RLS and sometimes return a different view of
+    // the users row, which caused the list to miss freshly-created leads.
+    const user = await requireRole(['dealer']);
+    let dealer_id = user.dealer_id;
 
-    // 1. Authenticate & Verify Dealer
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return errorResponse('Unauthorized', 401);
+    // Same fallback as /api/leads/create: resolve from onboarding.dealerCode
+    if (!dealer_id) {
+        const onboardingRows = await db.select({ dealerCode: dealerOnboardingApplications.dealerCode })
+            .from(dealerOnboardingApplications)
+            .where(eq(dealerOnboardingApplications.dealerUserId, user.id))
+            .orderBy(desc(dealerOnboardingApplications.updatedAt))
+            .limit(1);
+        if (onboardingRows[0]?.dealerCode) {
+            dealer_id = onboardingRows[0].dealerCode;
+        }
+    }
 
-    const profile = await resolveDealerProfile(supabase, user, 'id,email,role,dealer_id');
-    if (!profile) {
-        return errorResponse('Access denied', 403);
+    if (!dealer_id) {
+        return errorResponse('User not associated with a dealer', 403);
     }
 
     // 2. Query Leads using Drizzle (same DB as lead creation)
@@ -205,8 +220,14 @@ export const GET = withErrorHandler(async (req: Request) => {
     const type = searchParams.get('type');
 
     const conditions = [
-        eq(leads.dealer_id, profile.dealer_id),
-        ne(leads.status, 'INCOMPLETE'), // Hide drafts
+        eq(leads.dealer_id, dealer_id),
+        or(
+            isNull(leads.status),
+            and(
+                ne(leads.status, 'INCOMPLETE'),
+                ne(leads.status, 'ABANDONED'),
+            ),
+        )!,
     ];
 
     if (status && status !== 'All') {

@@ -126,19 +126,10 @@ export default function BorrowerConsentPage() {
             setLead(fetchedLead);
             if (fetchedLead?.borrower_consent_status) setConsentStatus(fetchedLead.borrower_consent_status);
 
-            // Populate borrower form from lead data (only on initial load)
-            if (!soft && fetchedLead) {
-                setBorrowerForm(prev => ({
-                    ...prev,
-                    full_name: fetchedLead.full_name || '',
-                    father_or_husband_name: fetchedLead.father_or_husband_name || '',
-                    dob: fetchedLead.dob ? new Date(fetchedLead.dob).toISOString().split('T')[0] : '',
-                    phone: fetchedLead.phone || fetchedLead.contact_phone || '',
-                    email: fetchedLead.email || '',
-                    current_address: fetchedLead.current_address || '',
-                    permanent_address: fetchedLead.permanent_address || '',
-                }));
-            }
+            // Borrower is treated as independent from the customer. We do NOT
+            // prefill the borrower form from lead (customer) fields — only
+            // borrower-specific details persisted under this lead should
+            // populate the form.
 
             const [personalRes, docsRes, verificationsRes, consentRes] = await Promise.allSettled([
                 fetch(`/api/kyc/${leadId}/borrower-details`, { cache: 'no-store' }),
@@ -147,21 +138,24 @@ export default function BorrowerConsentPage() {
                 fetch(`/api/kyc/${leadId}/consent/status?consent_for=borrower`, { cache: 'no-store' }),
             ]);
 
-            // Merge personal details into form (only on initial load)
+            // Populate borrower form only from saved borrower-specific details.
             if (!soft && personalRes.status === 'fulfilled') {
                 const personalJson = await personalRes.value.json();
                 if (personalJson?.success && personalJson.data) {
                     const pd = personalJson.data;
                     setBorrowerForm(prev => ({
                         ...prev,
-                        aadhaar_no: pd.aadhaar_no || prev.aadhaar_no,
-                        pan_no: pd.pan_no || prev.pan_no,
-                        email: pd.email || prev.email,
-                        income: pd.income || prev.income,
-                        marital_status: pd.marital_status || prev.marital_status,
-                        father_or_husband_name: pd.father_husband_name || prev.father_or_husband_name,
-                        current_address: pd.local_address || prev.current_address,
-                        dob: pd.dob ? new Date(pd.dob).toISOString().split('T')[0] : prev.dob,
+                        full_name: pd.full_name || pd.borrower_name || '',
+                        phone: pd.phone || pd.borrower_phone || '',
+                        permanent_address: pd.permanent_address || '',
+                        aadhaar_no: pd.aadhaar_no || '',
+                        pan_no: pd.pan_no || '',
+                        email: pd.email || '',
+                        income: pd.income || '',
+                        marital_status: pd.marital_status || '',
+                        father_or_husband_name: pd.father_husband_name || '',
+                        current_address: pd.local_address || '',
+                        dob: pd.dob ? new Date(pd.dob).toISOString().split('T')[0] : '',
                     }));
                 }
             }

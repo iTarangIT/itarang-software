@@ -23,6 +23,9 @@ export async function GET() {
         createdAt: dealerOnboardingApplications.createdAt,
         ownerName: dealerOnboardingApplications.ownerName,
         ownerEmail: dealerOnboardingApplications.ownerEmail,
+        salesManagerName: dealerOnboardingApplications.salesManagerName,
+        salesManagerEmail: dealerOnboardingApplications.salesManagerEmail,
+        salesManagerMobile: dealerOnboardingApplications.salesManagerMobile,
       })
       .from(dealerOnboardingApplications)
       .orderBy(
@@ -99,6 +102,9 @@ export async function GET() {
         gstNumber: item.gstNumber,
         financeEnabled: item.financeEnabled,
         companyType: item.companyType,
+        salesManagerName: item.salesManagerName,
+        salesManagerEmail: item.salesManagerEmail,
+        salesManagerMobile: item.salesManagerMobile,
       };
     });
 
