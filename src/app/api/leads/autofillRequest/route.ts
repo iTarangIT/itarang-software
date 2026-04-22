@@ -11,6 +11,7 @@ import {
   extractStructuredAadhaar,
   hasUsefulData,
 } from "@/lib/kyc/aadhaarNormalize";
+import { extractWithTesseract } from "@/lib/ocr/aadhaarFallback";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { inArray } from "drizzle-orm";
 
@@ -248,6 +249,57 @@ export const POST = withErrorHandler(async (req: Request) => {
     );
   };
 
+  // Helper: run the Tesseract + validated-regex fallback and return a
+  // populated finalData, or null if the fallback also produced nothing
+  // usable. Only called when Decentro has failed or returned blanks —
+  // Tier-1 (Decentro) output is never mixed with Tier-2 (Tesseract)
+  // output for the same field; fallback values fill the gap, they don't
+  // overwrite a valid Decentro value.
+  const runTesseractFallback = async () => {
+    console.log("[AutoFill] Invoking Tesseract fallback…");
+    const { front: frontFallback, back: backFallback } =
+      await extractWithTesseract({ front: frontBuffer, back: backBuffer });
+    const fallbackFinalData = buildFinalData(
+      frontFailed ? extractStructuredAadhaar(null) : extractStructuredAadhaar(frontOCR),
+      backFailed ? extractStructuredAadhaar(null) : extractStructuredAadhaar(backOCR),
+      frontFallback,
+      backFallback,
+    );
+    if (!hasUsefulData(fallbackFinalData)) {
+      console.warn("[AutoFill] Tesseract fallback also produced nothing useful");
+      return null;
+    }
+    console.log(
+      "[AutoFill] Tesseract fallback filled fields:",
+      Object.entries(fallbackFinalData)
+        .filter(([, v]) => !!v)
+        .map(([k]) => k)
+        .join(", "),
+    );
+    try {
+      await db.insert(auditLogs).values({
+        id: `AUDIT-FALLBACK-${requestId}`,
+        entity_type: "system",
+        entity_id: requestId,
+        action: "OCR_FALLBACK_USED",
+        changes: {
+          provider: "tesseract",
+          frontFallbackFields: Object.keys(frontFallback).filter(
+            (k) => (frontFallback as Record<string, unknown>)[k],
+          ),
+          backFallbackFields: Object.keys(backFallback).filter(
+            (k) => (backFallback as Record<string, unknown>)[k],
+          ),
+        },
+        performed_by: user.id,
+        timestamp: new Date(),
+      });
+    } catch (logErr) {
+      console.error("Fallback audit log failed:", logErr);
+    }
+    return fallbackFinalData;
+  };
+
   if (frontFailed && backFailed) {
     const frontMessage = extractDecentroMessage(frontOCR);
     const backMessage = extractDecentroMessage(backOCR);
@@ -280,6 +332,30 @@ export const POST = withErrorHandler(async (req: Request) => {
     } catch {
       /* ignore */
     }
+
+    // Before surfacing the hard error, try Tier-2 (Tesseract). Dealers
+    // upload photos in all kinds of lighting; losing the whole flow on
+    // one Decentro reject is a bigger UX regression than filling a few
+    // fields the dealer has to verify.
+    const fallbackData = await runTesseractFallback();
+    if (fallbackData) {
+      const expectedFields = [
+        "full_name",
+        "father_or_husband_name",
+        "dob",
+        "current_address",
+      ] as const;
+      const missing = expectedFields.filter((k) => !fallbackData[k]);
+      return successResponse({
+        requestId,
+        ocrStatus: "partial",
+        missingFields: missing.length > 0 ? missing : undefined,
+        source: "tesseract",
+        auto_filled: true,
+        ...fallbackData,
+      });
+    }
+
     const reason =
       isAccountConfigFailure(frontOCR) || isAccountConfigFailure(backOCR)
         ? "account_config"
@@ -303,9 +379,11 @@ export const POST = withErrorHandler(async (req: Request) => {
     ? extractStructuredAadhaar(null)
     : extractStructuredAadhaar(backOCR);
 
-  // No local regex fallback — pass empty `parsed` objects. Decentro's
-  // structured fields are the only source of truth.
-  const finalData = buildFinalData(frontStructured, backStructured, {}, {});
+  // Start with Decentro structured only. If it turns out to be useful
+  // we return as-is (Tier-1 happy path). If not, we re-merge with the
+  // Tesseract fallback below.
+  let finalData = buildFinalData(frontStructured, backStructured, {}, {});
+  let source: "decentro" | "tesseract" | "decentro+tesseract" = "decentro";
 
   if (!hasUsefulData(finalData)) {
     console.warn(
@@ -314,32 +392,42 @@ export const POST = withErrorHandler(async (req: Request) => {
       "| back:",
       JSON.stringify(backOCR).slice(0, 800),
     );
-    try {
-      await db.insert(auditLogs).values({
-        id: `AUDIT-FAIL-${requestId}`,
-        entity_type: "system",
-        entity_id: requestId,
-        action: "OCR_FAILED",
-        changes: {
-          reason: "decentro_empty_fields",
-          frontResponse: frontFailed ? null : frontOCR,
-          backResponse: backFailed ? null : backOCR,
+
+    // Try Tier-2 before surfacing the hard error. Decentro returning
+    // SUCCESS with an empty ocrResult is a known sandbox failure mode;
+    // local Tesseract often recovers on the same image.
+    const fallbackData = await runTesseractFallback();
+    if (fallbackData) {
+      finalData = fallbackData;
+      source = "tesseract";
+    } else {
+      try {
+        await db.insert(auditLogs).values({
+          id: `AUDIT-FAIL-${requestId}`,
+          entity_type: "system",
+          entity_id: requestId,
+          action: "OCR_FAILED",
+          changes: {
+            reason: "decentro_empty_fields",
+            frontResponse: frontFailed ? null : frontOCR,
+            backResponse: backFailed ? null : backOCR,
+          },
+          performed_by: user.id,
+          timestamp: new Date(),
+        });
+      } catch {
+        /* ignore */
+      }
+      return errorResponseWithDetails(
+        "We couldn't read this Aadhaar. Please ensure the image is clear and try again.",
+        422,
+        {
+          provider: "decentro",
+          frontMessage: extractDecentroMessage(frontOCR),
+          backMessage: extractDecentroMessage(backOCR),
         },
-        performed_by: user.id,
-        timestamp: new Date(),
-      });
-    } catch {
-      /* ignore */
+      );
     }
-    return errorResponseWithDetails(
-      "Decentro could not extract any fields from the Aadhaar. Please upload clearer photos or enter details manually.",
-      422,
-      {
-        provider: "decentro",
-        frontMessage: extractDecentroMessage(frontOCR),
-        backMessage: extractDecentroMessage(backOCR),
-      },
-    );
   }
 
   const expectedFields = [
@@ -358,7 +446,7 @@ export const POST = withErrorHandler(async (req: Request) => {
       entity_id: requestId,
       action: "OCR_SUCCESS",
       changes: {
-        provider: "decentro",
+        provider: source,
         missing,
         fields_found: Object.entries(finalData)
           .filter(([, v]) => !!v)
@@ -372,7 +460,7 @@ export const POST = withErrorHandler(async (req: Request) => {
   }
 
   console.log(
-    `[AutoFill] Decentro OCR ${ocrStatus} — fields:`,
+    `[AutoFill] ${source} OCR ${ocrStatus} — fields:`,
     Object.entries(finalData)
       .filter(([, v]) => !!v)
       .map(([k]) => k)
@@ -383,7 +471,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     requestId,
     ocrStatus,
     missingFields: missing.length > 0 ? missing : undefined,
-    source: "decentro",
+    source,
     auto_filled: true,
     ...finalData,
   });

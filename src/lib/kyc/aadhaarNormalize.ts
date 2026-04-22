@@ -49,6 +49,11 @@ export interface StructuredAadhaar {
     phone: string;
     address: string;
     aadhaarNumber: string;
+    // Aadhaar cards print gender (Male / Female / Transgender) on the
+    // front. Decentro returns it in data.ocrResult.gender; the Tesseract
+    // fallback extracts it via a regex. Auto-filling the lead form's
+    // gender field when available saves the dealer one click.
+    gender: string;
     rawText: string;
 }
 
@@ -201,6 +206,20 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
                 "result.aadhaar_number",
             ]),
         ),
+        gender: firstNonEmpty(
+            getDeep(payload, [
+                // Decentro
+                "data.ocrResult.gender",
+                "data.ocrResult.sex",
+                "ocrResult.gender",
+                // DigiLocker
+                "data.proofOfIdentity.gender",
+                // Other fallbacks
+                "data.gender",
+                "response.gender",
+                "result.gender",
+            ]),
+        ),
         rawText: firstNonEmpty(
             getDeep(payload, [
                 "data.ocrResult.ocrText",
@@ -295,6 +314,7 @@ export interface FinalAadhaarData {
     phone: string;
     dob: string;
     aadhaar_number: string;
+    gender: string;
     // camelCase aliases for other call sites
     fullName: string;
     fatherName: string;
@@ -352,6 +372,14 @@ export function buildFinalData(
     const aadhaarNumber = firstNonEmpty(
         frontStructured.aadhaarNumber,
         backStructured.aadhaarNumber,
+        frontParsed?.aadhaarNumber,
+        backParsed?.aadhaarNumber,
+    );
+    const gender = firstNonEmpty(
+        frontStructured.gender,
+        backStructured.gender,
+        frontParsed?.gender,
+        backParsed?.gender,
     );
     const address = cleanedAddress || rawAddress;
 
@@ -363,6 +391,7 @@ export function buildFinalData(
         phone,
         dob,
         aadhaar_number: aadhaarNumber,
+        gender,
         fullName,
         fatherName,
         address,
