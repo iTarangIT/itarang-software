@@ -277,6 +277,46 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       salesManagerMobile,
     } = parsed.data;
 
+    // If this application is a branch dealer (approved against an existing
+    // shared accounts row), legal-entity fields are read-only — they live
+    // on the parent account and must not be mutated from here.
+    const [branchCheck] = await db
+      .select({
+        isBranchDealer: dealerOnboardingApplications.isBranchDealer,
+      })
+      .from(dealerOnboardingApplications)
+      .where(eq(dealerOnboardingApplications.id, dealerId))
+      .limit(1);
+
+    if (branchCheck?.isBranchDealer) {
+      const sharedFieldUpdates: Record<string, unknown> = {
+        companyName,
+        companyAddress,
+        gstNumber,
+        panNumber,
+        companyType,
+        bankName,
+        accountNumber,
+        beneficiaryName,
+        ifscCode,
+      };
+      const attemptedSharedFields = Object.entries(sharedFieldUpdates)
+        .filter(([, v]) => v !== undefined)
+        .map(([k]) => k);
+
+      if (attemptedSharedFields.length > 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            message:
+              "These fields are shared with the primary dealer account and cannot be edited for a branch dealer.",
+            readOnlyFields: attemptedSharedFields,
+          },
+          { status: 403 }
+        );
+      }
+    }
+
     // Only include fields that were actually sent
     const updatePayload: Record<string, any> = {};
 
