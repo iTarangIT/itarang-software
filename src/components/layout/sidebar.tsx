@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -484,7 +484,39 @@ export function Sidebar() {
     return "user";
   })();
 
-  const menuItems = roleNavigation[inferredRole] || roleNavigation["user"] || [];
+  const rawMenuItems = roleNavigation[inferredRole] || roleNavigation["user"] || [];
+
+  // For the dealer role, loan-related entries must hide when the dealer's
+  // onboarding application has financeEnabled=false. Source the flag from
+  // /api/dealer/stats (already the authoritative finance-enabled endpoint).
+  const [dealerFinanceEnabled, setDealerFinanceEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (inferredRole !== "dealer") return;
+    let cancelled = false;
+    fetch("/api/dealer/stats", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        const flag = json?.data?.dealer?.financeEnabled;
+        setDealerFinanceEnabled(typeof flag === "boolean" ? flag : false);
+      })
+      .catch(() => {
+        if (!cancelled) setDealerFinanceEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inferredRole]);
+
+  const financeGatedItemIds = new Set(["loans", "loan-mgmt"]);
+  const menuItems =
+    inferredRole === "dealer" && dealerFinanceEnabled === false
+      ? rawMenuItems.map((group: any) => ({
+          ...group,
+          items: group.items.filter((item: any) => !financeGatedItemIds.has(item.id)),
+        }))
+      : rawMenuItems;
 
   return (
     <div className="w-64 bg-slate-50/50 h-screen border-r border-gray-100 flex-col fixed left-0 top-0 z-10 hidden md:flex">
