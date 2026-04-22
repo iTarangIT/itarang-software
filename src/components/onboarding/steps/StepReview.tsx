@@ -511,6 +511,11 @@ export default function StepReview() {
             dealerSigningMethod: state.agreement?.dealerSigningMethod || "",
             financierSignatory:
               state.agreement?.financierSignatory || null,
+            // Sales manager details are captured in StepAgreement when finance
+            // is enabled. They must be forwarded to the submit route so the
+            // admin queue / detail view can show them; otherwise the DB row
+            // keeps NULLs and the UI renders "Not available".
+            salesManager: state.agreement?.salesManager || null,
             itarangSignatory1: state.agreement?.itarangSignatory1 || null,
             itarangSignatory2: state.agreement?.itarangSignatory2 || null,
             signingOrder: (() => {
@@ -523,7 +528,13 @@ export default function StepReview() {
               return order;
             })(),
           }
-          : null,
+          : {
+            // Finance disabled: no Digio agreement, but the dealer still
+            // captures sales-manager info in StepFinance. Pass it through so
+            // the submit route can persist it to the columns the admin UI
+            // reads.
+            salesManager: state.agreement?.salesManager || null,
+          },
       };
 
       const response = await fetch("/api/dealer/onboarding/submit", {
