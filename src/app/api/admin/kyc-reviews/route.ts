@@ -5,11 +5,12 @@ import {
   adminKycReviews,
   coBorrowerDocuments,
   coBorrowers,
+  consentRecords,
   leads,
   kycDocuments,
   users,
 } from "@/lib/db/schema";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 
 const ADMIN_ROLES = ["admin", "ceo", "business_head", "sales_head", "sales_manager", "sales_executive"] as const;
 const REVIEW_OUTCOMES = ["verified", "rejected", "request_additional"] as const;
@@ -174,6 +175,82 @@ function toReviewDocument(doc: DocumentRow, reviewFor: ReviewFor) {
   };
 }
 
+// Pull consents that have been signed (via DigiO) or manually uploaded and
+// are now awaiting admin verification. These don't live in kyc_documents, so
+// without surfacing them here the admin list never shows leads whose only
+// pending item is a signed consent. The list UI treats them as a virtual
+// "signed_consent" document; the actual verify action is handled in the
+// per-lead case review page (/admin/kyc-review/[leadId]).
+async function fetchPendingConsentsForFilter(filter: ReviewFilter) {
+  const baseQuery = db
+    .select({
+      id: consentRecords.id,
+      lead_id: consentRecords.lead_id,
+      consent_for: consentRecords.consent_for,
+      consent_status: consentRecords.consent_status,
+      signed_consent_url: consentRecords.signed_consent_url,
+      generated_pdf_url: consentRecords.generated_pdf_url,
+      signed_at: consentRecords.signed_at,
+      verified_at: consentRecords.verified_at,
+    })
+    .from(consentRecords);
+
+  if (filter === "pending") {
+    return baseQuery
+      .where(
+        and(
+          inArray(consentRecords.consent_status, [
+            "esign_completed",
+            "admin_review_pending",
+          ]),
+          isNull(consentRecords.verified_at),
+        ),
+      )
+      .orderBy(desc(consentRecords.signed_at))
+      .limit(200);
+  }
+
+  if (filter === "verified") {
+    return baseQuery
+      .where(isNotNull(consentRecords.verified_at))
+      .orderBy(desc(consentRecords.verified_at))
+      .limit(200);
+  }
+
+  if (filter === "rejected") {
+    return baseQuery
+      .where(eq(consentRecords.consent_status, "admin_rejected"))
+      .orderBy(desc(consentRecords.updated_at))
+      .limit(200);
+  }
+
+  // "all"
+  return baseQuery.orderBy(desc(consentRecords.updated_at)).limit(200);
+}
+
+type ConsentRow = Awaited<ReturnType<typeof fetchPendingConsentsForFilter>>[number];
+
+function consentToReviewDocument(c: ConsentRow) {
+  let status: ApiDocumentStatus = "pending";
+  if (c.verified_at) status = "verified";
+  else if (c.consent_status === "admin_rejected") status = "rejected";
+
+  const url = c.signed_consent_url || c.generated_pdf_url || "";
+  const uploadedAt = c.signed_at || new Date(0);
+  const reviewFor: ReviewFor = c.consent_for === "co_borrower" ? "co_borrower" : "primary";
+
+  return {
+    id: c.id,
+    lead_id: c.lead_id,
+    document_type: "signed_consent",
+    document_url: url,
+    status,
+    uploaded_at: uploadedAt,
+    ocr_data: null,
+    review_for: reviewFor,
+  };
+}
+
 export async function GET(req: NextRequest) {
   try {
     const supabase = await createClient();
@@ -190,9 +267,10 @@ export async function GET(req: NextRequest) {
     const filter = parseReviewFilter(searchParams.get("status"));
     const search = searchParams.get("search")?.trim().toLowerCase() ?? "";
 
-    const [primaryDocumentRows, coBorrowerDocumentRows] = await Promise.all([
+    const [primaryDocumentRows, coBorrowerDocumentRows, pendingConsentRows] = await Promise.all([
       fetchPrimaryDocuments(filter),
       fetchCoBorrowerDocuments(filter),
+      fetchPendingConsentsForFilter(filter),
     ]);
 
     const allDocuments = [
@@ -200,6 +278,7 @@ export async function GET(req: NextRequest) {
       ...coBorrowerDocumentRows.map((doc) =>
         toReviewDocument(doc, "co_borrower"),
       ),
+      ...pendingConsentRows.map(consentToReviewDocument),
     ].sort(
       (left, right) =>
         new Date(right.uploaded_at).getTime() -
