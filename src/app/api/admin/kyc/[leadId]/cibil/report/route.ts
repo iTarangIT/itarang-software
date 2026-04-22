@@ -280,6 +280,28 @@ export async function POST(
       report_type: "full_report",
     };
 
+    // Enrich the raw Decentro response with the *computed* summary /
+    // interpretation so CIBILCard can rehydrate the full report view after
+    // a page refresh (it reads `apiResponse.data.summary`, etc.). Storing
+    // only the raw Decentro response meant those fields existed in the POST
+    // response body but disappeared on reload.
+    const existingData =
+      (decentroRes as Record<string, unknown>)?.data &&
+      typeof (decentroRes as Record<string, unknown>).data === "object"
+        ? ((decentroRes as Record<string, unknown>).data as Record<string, unknown>)
+        : {};
+    const apiResponseEnriched = {
+      ...(decentroRes as Record<string, unknown>),
+      data: {
+        ...existingData,
+        summary: overallSuccess ? summary : null,
+        interpretation,
+        reportId: decentroRes?.decentroTxnId || responseData.report_id || null,
+        generatedAt: now.toISOString(),
+        consumerNotFound,
+      },
+    };
+
     if (existingRows.length > 0) {
       await db
         .update(kycVerifications)
@@ -287,7 +309,7 @@ export async function POST(
           status: dbStatus,
           api_provider: "decentro",
           api_request: apiRequest,
-          api_response: decentroRes,
+          api_response: apiResponseEnriched,
           failed_reason: failedReason,
           match_score: score ? String(score) : null,
           completed_at: now,
@@ -302,7 +324,7 @@ export async function POST(
         status: dbStatus,
         api_provider: "decentro",
         api_request: apiRequest,
-        api_response: decentroRes,
+        api_response: apiResponseEnriched,
         failed_reason: failedReason,
         match_score: score ? String(score) : null,
         submitted_at: now,
