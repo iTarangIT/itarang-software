@@ -2779,6 +2779,12 @@ export const dealerOnboardingApplications = pgTable(
     rejectedAt: timestamp("rejected_at"),
     rejectionReason: text("rejection_reason"),
     adminNotes: text("admin_notes"),
+
+    // Set when this dealer was approved as a branch of an existing accounts row
+    // (same GSTIN+PAN, different address). Branch dealers share the parent
+    // account's legal-entity fields (company, GSTIN, PAN, bank) and are
+    // blocked from editing those via the admin correction endpoint.
+    isBranchDealer: boolean("is_branch_dealer").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
     ownerName: text("owner_name"),
