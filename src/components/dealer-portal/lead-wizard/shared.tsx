@@ -447,6 +447,7 @@ export function OCRModal({ open, onClose, onResult }: {
     const [aadhaarBack, setAadhaarBack] = useState<File | null>(null);
     const [scanning, setScanning] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
     const [scanStatus, setScanStatus] = useState<string>('');
 
     if (!open) return null;
@@ -459,7 +460,8 @@ export function OCRModal({ open, onClose, onResult }: {
 
         setScanning(true);
         setError(null);
-        setScanStatus('Connecting to OCR service...');
+        setNotice(null);
+        setScanStatus('Connecting to Decentro OCR...');
 
         try {
             const formData = new FormData();
@@ -476,12 +478,20 @@ export function OCRModal({ open, onClose, onResult }: {
 
             if (data.success) {
                 onResult(data.data);
-                onClose();
+                if (data.data?.ocrStatus === 'partial' && Array.isArray(data.data?.missingFields) && data.data.missingFields.length > 0) {
+                    setNotice('Decentro extracted partial data — please verify the remaining fields after closing.');
+                    setTimeout(() => onClose(), 1500);
+                } else {
+                    onClose();
+                }
             } else {
-                setError(data.error?.message || 'Could not read document. Please ensure image is clear');
+                const details = data.error?.details as { frontMessage?: string; backMessage?: string } | undefined;
+                const decentroDiag = details?.frontMessage || details?.backMessage;
+                const base = data.error?.message || 'Could not read document. Please ensure image is clear.';
+                setError(decentroDiag ? `${base}  [Decentro: ${decentroDiag}]` : base);
             }
         } catch {
-            setError('Scanning failed. Please try again.');
+            setError('Scanning failed. Please check your connection and try again.');
         } finally {
             setScanning(false);
             setScanStatus('');
@@ -492,6 +502,7 @@ export function OCRModal({ open, onClose, onResult }: {
         setAadhaarFront(null);
         setAadhaarBack(null);
         setError(null);
+        setNotice(null);
         onClose();
     };
 
@@ -531,12 +542,18 @@ export function OCRModal({ open, onClose, onResult }: {
                             <Loader2 className="w-4 h-4 animate-spin" />
                             {scanStatus || 'Processing...'}
                         </div>
-                        <p className="text-xs text-gray-400">This may take up to 30 seconds</p>
+                        <p className="text-xs text-gray-400">Usually under 5 seconds</p>
                     </div>
                 )}
 
                 {error && (
                     <p className="mt-4 text-sm text-red-600 font-medium">{error}</p>
+                )}
+
+                {notice && (
+                    <p className="mt-4 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 font-medium">
+                        {notice}
+                    </p>
                 )}
 
                 <div className="mt-6 space-y-3">

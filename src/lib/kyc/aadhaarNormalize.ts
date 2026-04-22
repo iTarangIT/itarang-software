@@ -72,10 +72,13 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
                 "data.ocrResult.name",
                 "data.ocrResult.fullName",
                 "data.ocrResult.holderName",
+                "data.ocrResult.personName",
+                "data.ocrResult.nameOnCard",
                 // Legacy / alternate nesting
                 "ocrResult.nameOnDocument",
                 "ocrResult.name",
                 "ocrResult.fullName",
+                "ocrResult.personName",
                 // DigiLocker eAadhaar
                 "data.proofOfIdentity.name",
                 // Other fallbacks
@@ -156,9 +159,12 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
                 "data.ocrResult.fullAddress",
                 "data.ocrResult.currentAddress",
                 "data.ocrResult.localAddress",
+                "data.ocrResult.permanentAddress",
+                "data.ocrResult.presentAddress",
                 // Legacy / top-level
                 "ocrResult.address",
                 "ocrResult.fullAddress",
+                "ocrResult.permanentAddress",
                 // Other fallbacks
                 "data.address",
                 "data.full_address",
