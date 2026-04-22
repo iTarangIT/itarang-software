@@ -31,8 +31,12 @@ export async function POST(
     });
 
     if ("error" in result) {
+      const err =
+        typeof result.error === "string"
+          ? { message: result.error }
+          : result.error;
       return NextResponse.json(
-        { success: false, error: { message: result.error } },
+        { success: false, error: err },
         { status: result.status },
       );
     }

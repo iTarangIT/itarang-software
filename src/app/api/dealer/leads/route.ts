@@ -1,6 +1,6 @@
 
 import { createClient } from '@/lib/supabase/server';
-import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
+import { withErrorHandler, successResponse, errorResponse, generateId } from '@/lib/api-utils';
 import { z } from 'zod';
 import { db } from '@/lib/db';
 import { leads, loanDetails, personalDetails, documents, auditLogs, accounts, dealerOnboardingApplications } from '@/lib/db/schema'; // Added accounts
@@ -88,7 +88,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         const data = result.data;
 
         // 3. Database Transaction
-        const leadId = `LEAD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const leadId = await generateId('LEAD', leads);
 
         await db.transaction(async (tx) => {
             // A. Insert Lead
@@ -167,7 +167,7 @@ export const POST = withErrorHandler(async (req: Request) => {
 
             // E. Audit Log
             await tx.insert(auditLogs).values({
-                id: `AUDIT-${Date.now()}`,
+                id: await generateId('AUDIT', auditLogs),
                 entity_type: 'lead',
                 entity_id: leadId,
                 action: 'create',
