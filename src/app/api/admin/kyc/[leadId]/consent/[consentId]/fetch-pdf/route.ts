@@ -55,21 +55,6 @@ export async function POST(
             }, { status: 400 });
         }
 
-        // Try the standard fetch + store flow first
-        const stored = await fetchAndStoreSignedConsent(documentId, leadId);
-        if (stored?.publicUrl) {
-            await db.update(consentRecords)
-                .set({ signed_consent_url: stored.publicUrl, updated_at: new Date() })
-                .where(eq(consentRecords.id, consentId));
-
-            return NextResponse.json({
-                success: true,
-                pdfUrl: stored.publicUrl,
-                source: "digio_stored",
-            });
-        }
-
-        // Fallback: try to proxy the PDF directly from DigiO
         const digioClientId = cleanEnv(process.env.DIGIO_CLIENT_ID);
         const digioClientSecret = cleanEnv(process.env.DIGIO_CLIENT_SECRET);
         const digioBaseUrl = cleanEnv(process.env.DIGIO_BASE_URL) || "https://api.digio.in";
@@ -83,7 +68,104 @@ export async function POST(
 
         const auth = basicAuthHeader(digioClientId, digioClientSecret);
 
-        // Try download endpoint
+        // Pre-flight: check DigiO's current status for this document. DigiO's
+        // /download endpoint returns an opaque 500 when the document isn't
+        // signed yet, which makes debugging painful. The status endpoint tells
+        // us the real state (requested / in_progress / signed / expired / ...)
+        // so we can give the admin a precise error and also sync our local
+        // consent_status row to match what DigiO believes.
+        const statusUrl = `${digioBaseUrl}/v2/client/document/${encodeURIComponent(documentId)}`;
+        let digioStatus: string | null = null;
+        let digioStatusPayload: Record<string, unknown> | null = null;
+        try {
+            const statusRes = await fetch(statusUrl, {
+                method: "GET",
+                headers: { Authorization: auth, Accept: "application/json" },
+                cache: "no-store",
+            });
+            if (statusRes.ok) {
+                digioStatusPayload = (await statusRes.json().catch(() => null)) as Record<string, unknown> | null;
+                const parties = Array.isArray(digioStatusPayload?.signing_parties)
+                    ? (digioStatusPayload?.signing_parties as Array<Record<string, unknown>>)
+                    : [];
+                const raw =
+                    (digioStatusPayload?.agreement_status as string | undefined) ||
+                    (digioStatusPayload?.status as string | undefined) ||
+                    (parties[0]?.status as string | undefined) ||
+                    null;
+                digioStatus = raw ? String(raw).toLowerCase() : null;
+            } else {
+                console.warn("[fetch-pdf] DigiO status check failed:", statusRes.status);
+            }
+        } catch (e) {
+            console.warn("[fetch-pdf] DigiO status check error:", e);
+        }
+
+        const SIGNED_STATES = new Set(["signed", "completed", "executed", "success"]);
+        const PENDING_STATES = new Set([
+            "requested",
+            "pending",
+            "sent",
+            "in_progress",
+            "opened",
+            "viewed",
+            "link_sent",
+            "link_opened",
+            "esign_in_progress",
+        ]);
+        const FAILED_STATES = new Set(["expired", "failed", "rejected", "declined", "cancelled", "error"]);
+
+        // If DigiO says the document isn't signed, don't bother hitting the
+        // download endpoint — tell the admin exactly what's happening and
+        // sync our local consent_status so the badge stops lying.
+        if (digioStatus && !SIGNED_STATES.has(digioStatus)) {
+            const isFailed = FAILED_STATES.has(digioStatus);
+            const isPending = PENDING_STATES.has(digioStatus);
+
+            // Mirror DigiO's state into our DB so the UI badge reflects reality.
+            try {
+                let localStatus: string | null = null;
+                if (digioStatus === "expired") localStatus = "expired";
+                else if (isFailed) localStatus = "esign_failed";
+                else if (digioStatus === "viewed" || digioStatus === "opened") localStatus = "link_opened";
+
+                if (localStatus && localStatus !== record.consent_status) {
+                    await db.update(consentRecords)
+                        .set({ consent_status: localStatus, updated_at: new Date() })
+                        .where(eq(consentRecords.id, consentId));
+                }
+            } catch (e) {
+                console.warn("[fetch-pdf] Failed to sync local consent_status:", e);
+            }
+
+            const message = isFailed
+                ? `DigiO reports this consent as '${digioStatus}'. No signed PDF will be available.`
+                : isPending
+                    ? `Customer has not completed signing yet. DigiO status: '${digioStatus}'. Try again after the customer signs.`
+                    : `DigiO reports status '${digioStatus}' — no signed PDF available yet.`;
+
+            return NextResponse.json({
+                success: false,
+                error: { message, digioStatus, documentId },
+            }, { status: 409 });
+        }
+
+        // At this point either the status check confirmed signed, or the
+        // status check itself failed and we proceed optimistically.
+        const stored = await fetchAndStoreSignedConsent(documentId, leadId);
+        if (stored?.publicUrl) {
+            await db.update(consentRecords)
+                .set({ signed_consent_url: stored.publicUrl, updated_at: new Date() })
+                .where(eq(consentRecords.id, consentId));
+
+            return NextResponse.json({
+                success: true,
+                pdfUrl: stored.publicUrl,
+                source: "digio_stored",
+            });
+        }
+
+        // Fallback: proxy the PDF directly from DigiO and persist on the fly.
         const downloadUrl = `${digioBaseUrl}/v2/client/document/download?document_id=${encodeURIComponent(documentId)}`;
         console.log("[fetch-pdf] Trying DigiO download:", downloadUrl);
 
@@ -97,22 +179,13 @@ export async function POST(
             const errorText = await res.text().catch(() => "");
             console.error("[fetch-pdf] DigiO download failed:", res.status, errorText.slice(0, 300));
 
-            // Try getting document status to see what's available
-            const statusUrl = `${digioBaseUrl}/v2/client/document/${encodeURIComponent(documentId)}`;
-            const statusRes = await fetch(statusUrl, {
-                method: "GET",
-                headers: { Authorization: auth, Accept: "application/json" },
-                cache: "no-store",
-            });
-            const statusData = statusRes.ok ? await statusRes.json().catch(() => null) : null;
+            const message = digioStatus && SIGNED_STATES.has(digioStatus)
+                ? `DigiO says the document is '${digioStatus}' but the download endpoint returned ${res.status}. This looks like a DigiO-side issue — please retry in a minute.`
+                : `DigiO returned ${res.status} when downloading PDF. The document may not be fully signed yet.`;
 
             return NextResponse.json({
                 success: false,
-                error: {
-                    message: `DigiO returned ${res.status} when downloading PDF. The document may not be fully signed yet.`,
-                    digioStatus: statusData?.status || statusData?.agreement_status || "unknown",
-                    documentId,
-                },
+                error: { message, digioStatus: digioStatus || "unknown", documentId },
             }, { status: 502 });
         }
 

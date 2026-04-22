@@ -3,12 +3,13 @@ export const maxDuration = 30;
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { consentRecords, leads, users } from "@/lib/db/schema";
+import { consentRecords, kycVerifications, leads, users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
 import { createDigioAgreement } from "@/lib/digio/service";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { createWorkflowId } from "@/lib/kyc/admin-workflow";
 import { launchBrowser } from "@/lib/pdf/launch-browser";
 type RouteContext = {
   params: Promise<{ leadId: string }>;
@@ -199,6 +200,26 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       created_at: now,
       updated_at: now,
     });
+
+    // Persist raw DigiO provider response for audit. consent_records has no
+    // jsonb column, so we fold the raw response into kyc_verifications with a
+    // dedicated verification_type marker. Non-fatal.
+    try {
+      await db.insert(kycVerifications).values({
+        id: createWorkflowId("KYCVER", now),
+        lead_id: leadId,
+        verification_type: "esign_consent",
+        applicant: "primary",
+        status: "success",
+        api_provider: "digio",
+        api_request: { consent_id: consentId, channel, phone: cleanPhone },
+        api_response: digioResponse as unknown as Record<string, unknown>,
+        submitted_at: now,
+        completed_at: now,
+      });
+    } catch (persistErr) {
+      console.error("[send-consent] kyc_verifications insert failed:", persistErr);
+    }
 
     // 4. Update lead consent status
     await db.update(leads)

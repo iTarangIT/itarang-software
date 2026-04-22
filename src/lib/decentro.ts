@@ -26,6 +26,21 @@ function isRealSecret(val?: string): boolean {
     return !!val && !val.startsWith('your_') && val.length > 5;
 }
 
+// Surface missing bank-verification secrets once at module load so deployment
+// misconfig is visible in logs/Vercel without waiting for the first admin
+// attempt to fail. Keep as warn (not throw) so unrelated KYC paths still work
+// when only banking is unconfigured (e.g. a preview env without Decentro).
+if (!isRealSecret(MODULE_SECRET_BANKING) || !isRealSecret(PROVIDER_SECRET)) {
+    const missing = [
+        !isRealSecret(MODULE_SECRET_BANKING) && 'DECENTRO_MODULE_SECRET_BANKING',
+        !isRealSecret(PROVIDER_SECRET) && 'DECENTRO_PROVIDER_SECRET',
+    ].filter(Boolean).join(', ');
+    console.warn(
+        `[decentro] Bank account verification is disabled — missing env var(s): ${missing}. ` +
+        `Set these in the deployment environment to enable v2 bank verification.`,
+    );
+}
+
 function kycHeaders(): Record<string, string> {
     // Per Decentro: KYC endpoints authenticate with client_id + client_secret only.
     return {

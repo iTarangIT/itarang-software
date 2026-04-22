@@ -130,6 +130,23 @@ export async function POST(
 
     const apiRequest = { name, pan: personal?.pan_no || "", dob, phone, address };
 
+    // Enrich the raw Decentro response so CIBILCard can rehydrate score /
+    // interpretation / report metadata after a page refresh.
+    const existingData =
+      (decentroRes as Record<string, unknown>)?.data &&
+      typeof (decentroRes as Record<string, unknown>).data === "object"
+        ? ((decentroRes as Record<string, unknown>).data as Record<string, unknown>)
+        : {};
+    const apiResponseEnriched = {
+      ...(decentroRes as Record<string, unknown>),
+      data: {
+        ...existingData,
+        interpretation,
+        reportId: decentroRes?.decentroTxnId || responseData.report_id || null,
+        generatedAt: now.toISOString(),
+      },
+    };
+
     if (existingRows.length > 0) {
       await db
         .update(kycVerifications)
@@ -137,7 +154,7 @@ export async function POST(
           status: overallSuccess ? "success" : "failed",
           api_provider: "decentro",
           api_request: apiRequest,
-          api_response: decentroRes,
+          api_response: apiResponseEnriched,
           failed_reason: overallSuccess
             ? null
             : decentroRes?.message || "CIBIL score fetch failed",
@@ -154,7 +171,7 @@ export async function POST(
         status: overallSuccess ? "success" : "failed",
         api_provider: "decentro",
         api_request: apiRequest,
-        api_response: decentroRes,
+        api_response: apiResponseEnriched,
         failed_reason: overallSuccess
           ? null
           : decentroRes?.message || "CIBIL score fetch failed",
