@@ -217,15 +217,20 @@ export const POST = withErrorHandler(async (req: Request) => {
 
   // Decentro's Aadhaar OCR prioritises different fields depending on
   // document_side (front → name/DOB, back → UID/address).
-  // kycValidate=false: dealer auto-fill is pure extraction — no OTP/consent
-  // flow yet, so Decentro must skip UIDAI validation or it rejects with
-  // "Aadhaar Document cannot be validated without an OTP".
+  // We call extractDocumentOcr with the same defaults (kyc_validate=1)
+  // that the admin PAN/Aadhaar flow uses at
+  // src/app/api/admin/kyc/[leadId]/ocr/route.ts:348 — that flow works
+  // end-to-end on the itarang_prod account, so matching its call shape
+  // is the most reliable way to get a green response here too. An older
+  // iteration of this route set kyc_validate=0 to dodge an "OTP required"
+  // rejection from Decentro; that was tuned against staging and the
+  // production SKU no longer requires it.
   const [frontOCR, backOCR] = await Promise.all([
-    extractDocumentOcr("AADHAAR", frontBlob, frontName, "FRONT", undefined, false).catch((e) => {
+    extractDocumentOcr("AADHAAR", frontBlob, frontName, "FRONT").catch((e) => {
       console.error("[AutoFill] Decentro front OCR threw:", e?.message);
       return null;
     }),
-    extractDocumentOcr("AADHAAR", backBlob, backName, "BACK", undefined, false).catch((e) => {
+    extractDocumentOcr("AADHAAR", backBlob, backName, "BACK").catch((e) => {
       console.error("[AutoFill] Decentro back OCR threw:", e?.message);
       return null;
     }),

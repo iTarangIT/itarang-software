@@ -447,6 +447,7 @@ export function OCRModal({ open, onClose, onResult }: {
     const [aadhaarBack, setAadhaarBack] = useState<File | null>(null);
     const [scanning, setScanning] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [errorDiag, setErrorDiag] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
     const [scanStatus, setScanStatus] = useState<string>('');
 
@@ -460,6 +461,7 @@ export function OCRModal({ open, onClose, onResult }: {
 
         setScanning(true);
         setError(null);
+        setErrorDiag(null);
         setNotice(null);
         setScanStatus('Scanning Aadhaar...');
 
@@ -509,13 +511,13 @@ export function OCRModal({ open, onClose, onResult }: {
                     const base =
                         data.error?.message ||
                         'Could not read document. Please ensure image is clear.';
-                    const diag = details?.frontMessage || details?.backMessage;
-                    // Only surface raw provider diagnostics to developers.
-                    setError(
-                        process.env.NODE_ENV === 'development' && diag
-                            ? `${base}  [Decentro: ${diag}]`
-                            : base,
-                    );
+                    setError(base);
+                    // Always surface the provider diagnostic in a muted sub-line.
+                    // Not sensitive (same info the public Decentro endpoint returns
+                    // to any IP allowlisted caller), and without it admins have to
+                    // SSH to the VPS to diagnose real failures like "IP not
+                    // allowed", "OTP required", or "pricing configuration".
+                    setErrorDiag(details?.frontMessage || details?.backMessage || null);
                 }
             }
         } catch {
@@ -530,6 +532,7 @@ export function OCRModal({ open, onClose, onResult }: {
         setAadhaarFront(null);
         setAadhaarBack(null);
         setError(null);
+        setErrorDiag(null);
         setNotice(null);
         onClose();
     };
@@ -576,6 +579,12 @@ export function OCRModal({ open, onClose, onResult }: {
 
                 {error && (
                     <p className="mt-4 text-sm text-red-600 font-medium">{error}</p>
+                )}
+
+                {errorDiag && (
+                    <p className="mt-1 text-xs text-gray-500 font-mono break-all">
+                        Details: {errorDiag}
+                    </p>
                 )}
 
                 {notice && (
