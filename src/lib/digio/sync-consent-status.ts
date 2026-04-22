@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { consentRecords, leads } from "@/lib/db/schema";
 import { fetchAndStoreSignedConsent } from "./fetch-signed-consent";
+import { getDigioBaseUrl, getDigioBasicAuth } from "./client";
 
 export const CONSENT_WAITING_STATUSES = [
   "link_sent",
@@ -10,14 +11,6 @@ export const CONSENT_WAITING_STATUSES = [
 ];
 
 const SIGNED_STATUSES = ["signed", "completed", "executed", "success"];
-
-function cleanEnv(value?: string) {
-  return (value || "").trim().replace(/^["']|["']$/g, "");
-}
-
-function basicAuthHeader(clientId: string, clientSecret: string) {
-  return `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
-}
 
 async function fetchDigioDocument(
   baseUrl: string,
@@ -80,13 +73,10 @@ export async function syncConsentStatusFromDigio(
   if (!record.esign_transaction_id) return null;
   if (!CONSENT_WAITING_STATUSES.includes(record.consent_status)) return null;
 
-  const clientId = cleanEnv(process.env.DIGIO_CLIENT_ID);
-  const clientSecret = cleanEnv(process.env.DIGIO_CLIENT_SECRET);
-  const baseUrl =
-    cleanEnv(process.env.DIGIO_BASE_URL) || "https://ext.digio.in:444";
-  if (!clientId || !clientSecret) return null;
+  const auth = getDigioBasicAuth();
+  if (!auth) return null;
 
-  const auth = basicAuthHeader(clientId, clientSecret);
+  const baseUrl = getDigioBaseUrl();
   const parsed = await fetchDigioDocument(
     baseUrl,
     auth,
@@ -117,7 +107,15 @@ export async function syncConsentStatusFromDigio(
       record.esign_transaction_id,
       record.lead_id,
     );
-    if (stored?.publicUrl) signedUrl = stored.publicUrl;
+    if (stored?.publicUrl) {
+      signedUrl = stored.publicUrl;
+    } else {
+      console.warn("[sync-consent-status] Failed to fetch/store signed PDF", {
+        documentId: record.esign_transaction_id,
+        leadId: record.lead_id,
+        consentId: record.id,
+      });
+    }
   }
 
   const updates = {
