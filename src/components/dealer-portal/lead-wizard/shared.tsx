@@ -478,7 +478,17 @@ export function OCRModal({ open, onClose, onResult }: {
 
             if (data.success) {
                 onResult(data.data);
-                if (data.data?.ocrStatus === 'partial' && Array.isArray(data.data?.missingFields) && data.data.missingFields.length > 0) {
+                const isFallback = data.data?.source === 'tesseract';
+                const isPartial = data.data?.ocrStatus === 'partial'
+                    && Array.isArray(data.data?.missingFields)
+                    && data.data.missingFields.length > 0;
+                if (isFallback) {
+                    // Tesseract fallback — lower confidence than Decentro,
+                    // dealer must verify each auto-filled field before
+                    // submitting the form.
+                    setNotice('Auto-filled with local OCR (lower confidence). Please verify each field before submitting.');
+                    setTimeout(() => onClose(), 2200);
+                } else if (isPartial) {
                     setNotice('Partial data extracted — please verify the remaining fields after closing.');
                     setTimeout(() => onClose(), 1500);
                 } else {
