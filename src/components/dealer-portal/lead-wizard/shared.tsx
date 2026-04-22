@@ -461,7 +461,7 @@ export function OCRModal({ open, onClose, onResult }: {
         setScanning(true);
         setError(null);
         setNotice(null);
-        setScanStatus('Connecting to Decentro OCR...');
+        setScanStatus('Scanning Aadhaar...');
 
         try {
             const formData = new FormData();
@@ -479,16 +479,34 @@ export function OCRModal({ open, onClose, onResult }: {
             if (data.success) {
                 onResult(data.data);
                 if (data.data?.ocrStatus === 'partial' && Array.isArray(data.data?.missingFields) && data.data.missingFields.length > 0) {
-                    setNotice('Decentro extracted partial data — please verify the remaining fields after closing.');
+                    setNotice('Partial data extracted — please verify the remaining fields after closing.');
                     setTimeout(() => onClose(), 1500);
                 } else {
                     onClose();
                 }
             } else {
-                const details = data.error?.details as { frontMessage?: string; backMessage?: string } | undefined;
-                const decentroDiag = details?.frontMessage || details?.backMessage;
-                const base = data.error?.message || 'Could not read document. Please ensure image is clear.';
-                setError(decentroDiag ? `${base}  [Decentro: ${decentroDiag}]` : base);
+                const details = data.error?.details as
+                    | { reason?: string; frontMessage?: string; backMessage?: string }
+                    | undefined;
+
+                if (details?.reason === 'account_config') {
+                    // Decentro pricing/credits issue — not recoverable by the dealer.
+                    // Close the modal and show a friendly notice so the dealer can
+                    // proceed to fill the form manually.
+                    setNotice('Auto-fill is temporarily unavailable. Please enter details manually below.');
+                    setTimeout(() => onClose(), 1800);
+                } else {
+                    const base =
+                        data.error?.message ||
+                        'Could not read document. Please ensure image is clear.';
+                    const diag = details?.frontMessage || details?.backMessage;
+                    // Only surface raw provider diagnostics to developers.
+                    setError(
+                        process.env.NODE_ENV === 'development' && diag
+                            ? `${base}  [Decentro: ${diag}]`
+                            : base,
+                    );
+                }
             }
         } catch {
             setError('Scanning failed. Please check your connection and try again.');
