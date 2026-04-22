@@ -46,6 +46,28 @@ function isDecentroFailure(response: any): boolean {
   return false;
 }
 
+// Decentro's account-config errors ("pricing configuration", "credits exhausted",
+// "API not enabled") are operational — the account's SKU/billing is the fix, not
+// a better image. Classify these so the UI can tell dealers to enter details
+// manually instead of showing a scary technical string.
+function isAccountConfigFailure(response: any): boolean {
+  if (!response) return false;
+  const msg = String(
+    response.message ??
+      response.error?.message ??
+      response.error?.responseMessage ??
+      response.responseMessage ??
+      "",
+  ).toLowerCase();
+  return (
+    msg.includes("pricing") ||
+    msg.includes("disallowed") ||
+    msg.includes("credits") ||
+    msg.includes("not enabled") ||
+    msg.includes("unauthorized")
+  );
+}
+
 async function fetchDocumentBuffer(
   storagePath: string,
 ): Promise<{ buffer: Buffer; contentType: string }> {
@@ -258,12 +280,20 @@ export const POST = withErrorHandler(async (req: Request) => {
     } catch {
       /* ignore */
     }
-    const diagnostic = frontMessage || backMessage || "Decentro OCR returned no data";
-    return errorResponseWithDetails(
-      `We couldn't read this Aadhaar. (${diagnostic})`,
-      422,
-      { provider: "decentro", frontMessage, backMessage },
-    );
+    const reason =
+      isAccountConfigFailure(frontOCR) || isAccountConfigFailure(backOCR)
+        ? "account_config"
+        : "extraction_failed";
+    const userMessage =
+      reason === "account_config"
+        ? "Auto-fill is temporarily unavailable. Please enter details manually."
+        : "We couldn't read this Aadhaar. Please ensure the image is clear and try again.";
+    return errorResponseWithDetails(userMessage, 422, {
+      provider: "decentro",
+      reason,
+      frontMessage,
+      backMessage,
+    });
   }
 
   const frontStructured = frontFailed
