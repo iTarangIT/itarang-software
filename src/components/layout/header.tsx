@@ -56,7 +56,13 @@ export function Header() {
             <GlobalSearchOverlay isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
             {/* Search Bar */}
             <div className="flex items-center gap-4 flex-1 max-w-2xl">
-                <h2 className="text-xl font-bold text-brand-600 md:hidden">iTarang</h2>
+                <img
+                    src="/itarang-logo.png"
+                    alt="iTarang"
+                    className="h-10 w-auto object-contain md:hidden"
+                    draggable={false}
+                />
+                <h2 className="sr-only md:hidden">iTarang</h2>
                 <button
                     type="button"
                     onClick={() => setIsSearchOpen(true)}
