@@ -14,7 +14,50 @@ import {
   Download,
   X,
   UserCog,
+  AlertTriangle,
+  GitBranch,
 } from "lucide-react";
+
+type DuplicateFlag = "none" | "branch" | "duplicate" | "pan-mismatch";
+
+function DuplicateBadge({ flag }: { flag?: DuplicateFlag | null }) {
+  if (!flag || flag === "none") return null;
+
+  if (flag === "branch") {
+    return (
+      <span
+        title="Shares GSTIN with another dealer — will be approved as an additional location."
+        className="ml-2 inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700"
+      >
+        <GitBranch className="h-3 w-3" />
+        Branch
+      </span>
+    );
+  }
+
+  if (flag === "duplicate") {
+    return (
+      <span
+        title="Another dealer with same GSTIN + PAN + address already exists. Approval is blocked."
+        className="ml-2 inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700"
+      >
+        <AlertTriangle className="h-3 w-3" />
+        Duplicate
+      </span>
+    );
+  }
+
+  // pan-mismatch
+  return (
+    <span
+      title="GSTIN registered under a different PAN. Verify data before approving."
+      className="ml-2 inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700"
+    >
+      <AlertTriangle className="h-3 w-3" />
+      PAN mismatch
+    </span>
+  );
+}
 
 type DealerVerificationItem = {
   dealerId: string;
@@ -30,6 +73,8 @@ type DealerVerificationItem = {
   salesManagerName?: string | null;
   salesManagerEmail?: string | null;
   salesManagerMobile?: string | null;
+  duplicateFlag?: DuplicateFlag | null;
+  isBranchDealer?: boolean | null;
 };
 
 function StatCard({
@@ -469,7 +514,10 @@ export default function DealerVerificationPage() {
                     </td>
 
                     <td className="px-6 py-5 align-top">
-                      <p className="font-medium text-slate-800">{item.companyName}</p>
+                      <p className="font-medium text-slate-800">
+                        {item.companyName}
+                        <DuplicateBadge flag={item.duplicateFlag} />
+                      </p>
                       <p className="mt-1 text-sm text-slate-500">GST: {item.gstNumber || "Not available"}</p>
                       <p className="mt-1 text-sm capitalize text-slate-400">
                         {(item.companyType || "Not available").replaceAll("_", " ")}
