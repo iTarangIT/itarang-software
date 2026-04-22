@@ -12,6 +12,7 @@ const BASE_URL = process.env.DECENTRO_BASE_URL || (
 );
 const CLIENT_ID = process.env.DECENTRO_CLIENT_ID!;
 const CLIENT_SECRET = process.env.DECENTRO_CLIENT_SECRET!;
+const MODULE_SECRET_KYC = process.env.DECENTRO_MODULE_SECRET_KYC;
 const MODULE_SECRET_BANKING = process.env.DECENTRO_MODULE_SECRET_BANKING;
 const MODULE_SECRET_CREDIT = process.env.DECENTRO_MODULE_SECRET_CREDIT;
 const PROVIDER_SECRET = process.env.DECENTRO_PROVIDER_SECRET;
@@ -38,6 +39,17 @@ if (!isRealSecret(MODULE_SECRET_BANKING) || !isRealSecret(PROVIDER_SECRET)) {
     console.warn(
         `[decentro] Bank account verification is disabled — missing env var(s): ${missing}. ` +
         `Set these in the deployment environment to enable v2 bank verification.`,
+    );
+}
+
+// Prod Decentro tiers require `module_secret` on KYC scan/extract endpoints
+// (Aadhaar OCR). Staging doesn't. Warn if we appear to be pointed at prod
+// without the KYC module secret configured.
+if (BASE_URL.includes('in.decentro.tech') && !BASE_URL.includes('staging') && !isRealSecret(MODULE_SECRET_KYC)) {
+    console.warn(
+        `[decentro] KYC OCR (Aadhaar auto-fill, doc extraction) may fail with "pricing configuration" ` +
+        `errors — DECENTRO_MODULE_SECRET_KYC is not set but BASE_URL points to production. ` +
+        `Set DECENTRO_MODULE_SECRET_KYC in the deployment environment.`,
     );
 }
 
@@ -247,6 +259,9 @@ export async function classifyDocument(documentBlob: Blob, filename: string) {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
     };
+    if (isRealSecret(MODULE_SECRET_KYC)) {
+        headers['module_secret'] = MODULE_SECRET_KYC!;
+    }
 
     try {
         const res = await fetch(`${BASE_URL}/kyc/document/classify`, {
@@ -302,6 +317,12 @@ export async function extractDocumentOcr(
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
     };
+    // Production Decentro tiers scope KYC OCR on a separate pricing SKU gated by
+    // `module_secret`. Staging doesn't require it; prod rejects with
+    // "API usage disallowed due to missing pricing configuration" when absent.
+    if (isRealSecret(MODULE_SECRET_KYC)) {
+        headers['module_secret'] = MODULE_SECRET_KYC!;
+    }
 
     const url = `${BASE_URL}/kyc/scan_extract/ocr`;
     console.log(
