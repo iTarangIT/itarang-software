@@ -2,7 +2,7 @@
 
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
-    ChevronLeft, ChevronDown, Loader2, AlertCircle, X,
+    ChevronLeft, ChevronRight, ChevronDown, Loader2, AlertCircle, X,
     Upload, CheckCircle2, XCircle, Clock, Scan, Eye, FileText,
     ShieldCheck
 } from 'lucide-react';
@@ -154,6 +154,7 @@ function getDealerStatus(uploaded: boolean, status?: string): { label: string; c
     const s = (status || '').toLowerCase();
     if (s === 'success' || s === 'verified') return { label: 'Verified', color: 'text-green-600', dotColor: 'bg-green-500', icon: 'check' };
     if (s === 'failed' || s === 'rejected' || s === 'reupload_requested') return { label: 'Reupload Required', color: 'text-red-600', dotColor: 'bg-red-500', icon: 'reupload' };
+    if (s === 'uploaded' || s === '') return { label: 'Uploaded', color: 'text-emerald-600', dotColor: 'bg-emerald-500', icon: 'check' };
     return { label: 'Uploaded - Pending Review', color: 'text-blue-600', dotColor: 'bg-amber-500', icon: 'clock' };
 }
 
@@ -170,13 +171,15 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
     const dealerStatus = getDealerStatus(uploaded, status);
     const isPdf = !!fileUrl && /\.pdf($|\?)/i.test(fileUrl);
     const isImage = !!fileUrl && !isPdf;
-    const isVerified = dealerStatus.icon === 'check';
+    const s = (status || '').toLowerCase();
+    const isFullyVerified = s === 'success' || s === 'verified';
     const isRejected = dealerStatus.icon === 'reupload' || dealerStatus.icon === 'error';
-    const isPending = uploaded && !isVerified && !isRejected;
+    const isUploadedOnly = uploaded && dealerStatus.icon === 'check' && !isFullyVerified;
+    const isPending = uploaded && !isFullyVerified && !isRejected && !isUploadedOnly;
 
     const border = !uploaded
         ? 'border-dashed border-gray-200 hover:border-[#0047AB]/60'
-        : isVerified
+        : isFullyVerified || isUploadedOnly
             ? 'border-emerald-200 hover:border-emerald-400'
             : isRejected
                 ? 'border-red-200 hover:border-red-400'
@@ -184,11 +187,13 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
 
     const pill = !uploaded
         ? { bg: 'bg-gray-100', text: 'text-gray-500', label: required ? 'Required' : 'Optional' }
-        : isVerified
+        : isFullyVerified
             ? { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Verified' }
-            : isRejected
-                ? { bg: 'bg-red-50', text: 'text-red-700', label: 'Re-upload' }
-                : { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Pending' };
+            : isUploadedOnly
+                ? { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Uploaded' }
+                : isRejected
+                    ? { bg: 'bg-red-50', text: 'text-red-700', label: 'Re-upload' }
+                    : { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Pending' };
 
     return (
         <div className={`group relative rounded-2xl border-2 bg-white transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5 overflow-hidden ${border} ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -258,7 +263,7 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
                     <p className="text-xs font-bold text-gray-900 truncate leading-tight">{label}</p>
                     <div className="flex items-center gap-1.5 mt-1.5">
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${pill.bg} ${pill.text}`}>
-                            {isVerified && <CheckCircle2 className="w-2.5 h-2.5" />}
+                            {(isFullyVerified || isUploadedOnly) && <CheckCircle2 className="w-2.5 h-2.5" />}
                             {isRejected && <XCircle className="w-2.5 h-2.5" />}
                             {isPending && <Clock className="w-2.5 h-2.5" />}
                             {pill.label}
@@ -296,18 +301,31 @@ export function StatusBadge({ status }: { status: string }) {
 
 // ─── Progress Header ────────────────────────────────────────────────────────
 
-export function ProgressHeader({ title, subtitle, step, totalSteps = 5, onBack, rightAction }: {
+export function ProgressHeader({
+    title, subtitle, step, totalSteps = 5,
+    onBack, onPrev, onNext, onStepClick,
+    rightAction,
+}: {
     title: string;
     subtitle?: string;
     step: number;
     totalSteps?: number;
     onBack: () => void;
+    onPrev?: () => void;
+    onNext?: () => void;
+    onStepClick?: (targetStep: number) => void;
     rightAction?: ReactNode;
 }) {
+    const canGoPrev = step > 1;
+    const canGoNext = step < totalSteps;
     return (
         <header className="mb-8 flex justify-between items-start gap-4">
             <div className="flex gap-4">
-                <button onClick={onBack} className="mt-1 p-2 hover:bg-white transition-colors rounded-lg">
+                <button
+                    onClick={onBack}
+                    aria-label="Back to lead creation"
+                    className="mt-1 p-2 hover:bg-white transition-colors rounded-lg"
+                >
                     <ChevronLeft className="w-6 h-6 text-gray-900" />
                 </button>
                 <div>
@@ -320,19 +338,49 @@ export function ProgressHeader({ title, subtitle, step, totalSteps = 5, onBack, 
                     <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest text-right mb-1.5">
                         Workflow Progress
                     </p>
-                    <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-4">
                         <span className="text-xs font-bold text-[#1D4ED8] whitespace-nowrap">
                             Step {step} of {totalSteps}
                         </span>
-                        <div className="flex gap-2.5">
-                            {Array.from({ length: totalSteps }, (_, i) => (
-                                <div
-                                    key={i}
-                                    className={`h-[6px] w-[50px] rounded-full transition-all duration-300 ${
-                                        i < step ? 'bg-[#0047AB]' : 'bg-gray-200'
-                                    }`}
-                                />
-                            ))}
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={onPrev}
+                                disabled={!canGoPrev || !onPrev}
+                                aria-label="Previous step"
+                                className="p-1 rounded-md text-gray-600 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors"
+                            >
+                                <ChevronLeft className="w-4 h-4" />
+                            </button>
+                            <div className="flex gap-2.5">
+                                {Array.from({ length: totalSteps }, (_, i) => {
+                                    const idx = i + 1;
+                                    const reached = idx <= step;
+                                    const clickable = !!onStepClick;
+                                    return (
+                                        <button
+                                            type="button"
+                                            key={idx}
+                                            onClick={clickable ? () => onStepClick?.(idx) : undefined}
+                                            disabled={!clickable}
+                                            aria-label={`Jump to step ${idx}`}
+                                            aria-current={idx === step ? 'step' : undefined}
+                                            className={`h-[6px] w-[50px] rounded-full transition-all duration-300 ${
+                                                reached ? 'bg-[#0047AB]' : 'bg-gray-200'
+                                            } ${clickable ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
+                                        />
+                                    );
+                                })}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={onNext}
+                                disabled={!canGoNext || !onNext}
+                                aria-label="Next step"
+                                className="p-1 rounded-md text-gray-600 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors"
+                            >
+                                <ChevronRight className="w-4 h-4" />
+                            </button>
                         </div>
                     </div>
                 </div>
