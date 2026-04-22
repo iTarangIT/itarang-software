@@ -13,7 +13,7 @@ const steps = [
 
 export default function ProgressStepper() {
   const currentStep = useOnboardingStore((s) => s.step);
-  const completion = Math.round((currentStep / 6) * 100);
+  const completion = Math.round(((currentStep - 1) / 5) * 100);
 
   return (
     <div className="rounded-3xl border border-[#E3E8EF] bg-white p-6 shadow-sm">
