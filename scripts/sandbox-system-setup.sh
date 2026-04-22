@@ -7,19 +7,37 @@
 # GTK/ATK/NSS libraries that headless Chromium links against, so Puppeteer's
 # downloaded Chromium aborts with "libatk-1.0.so.0: cannot open shared object
 # file" (exit code 127) the first time any PDF route is hit.
+#
+# The deploy user may not have passwordless sudo. In a non-interactive SSH
+# session `sudo` cannot prompt for a password, so we detect that up front
+# and skip with a warning rather than failing the whole deploy. Install the
+# libs once manually as root (or add a NOPASSWD apt-get rule to sudoers) to
+# get the self-healing behavior.
 
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
-sudo apt-get update -y
+
+if [ "$(id -u)" = "0" ]; then
+  SUDO=""
+elif command -v sudo >/dev/null 2>&1 && sudo -n apt-get --version >/dev/null 2>&1; then
+  SUDO="sudo -n"
+else
+  echo "::warning::Skipping Chromium system-lib install — deploy user cannot run apt-get without a password."
+  echo "::warning::To enable auto-install, add this sudoers rule on the VPS (visudo): deploy-user ALL=(ALL) NOPASSWD: /usr/bin/apt-get"
+  echo "::warning::Or run scripts/sandbox-system-setup.sh once manually as root."
+  exit 0
+fi
+
+$SUDO apt-get update -y
 
 # Package names shifted to the t64 suffix in Ubuntu 24.04 (libc6-time64
 # transition). Install the t64 variant where available, otherwise fall back
 # to the legacy name so this works across Debian/Ubuntu releases.
 install_pkg() {
   local pkg="$1"
-  if ! sudo apt-get install -y "${pkg}t64" 2>/dev/null; then
-    sudo apt-get install -y "$pkg"
+  if ! $SUDO apt-get install -y "${pkg}t64" 2>/dev/null; then
+    $SUDO apt-get install -y "$pkg"
   fi
 }
 
@@ -31,6 +49,6 @@ for p in \
   install_pkg "$p"
 done
 
-sudo apt-get install -y fonts-liberation ca-certificates
+$SUDO apt-get install -y fonts-liberation ca-certificates
 
 echo "Chromium system deps installed"
