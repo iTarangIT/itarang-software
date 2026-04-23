@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
+import { extractDigioDocumentId } from "./parse-status";
 
 type Application = typeof dealerOnboardingApplications.$inferSelect;
 
@@ -36,6 +37,45 @@ export async function ensureDealerAuditTrailUrl(
     return null;
   }
 
+  const authHeader = basicAuthHeader(clientId, clientSecret);
+
+  // Cross-contamination breadcrumb: verify DigiO's status response echoes the
+  // same document_id we're about to request an audit trail for. A mismatch
+  // means the providerDocumentId on this application row is stale / wrong —
+  // log it loudly but don't hard-block, since DigiO response shapes vary.
+  try {
+    const statusRes = await fetch(
+      `${baseUrl}/v2/client/document/${encodeURIComponent(
+        application.providerDocumentId
+      )}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: authHeader,
+          Accept: "application/json",
+        },
+        cache: "no-store",
+      }
+    );
+
+    if (statusRes.ok) {
+      const parsed = await statusRes.json().catch(() => null);
+      const remoteId = extractDigioDocumentId(parsed);
+      if (remoteId && remoteId !== application.providerDocumentId) {
+        console.warn(
+          "[ensureDealerAuditTrailUrl] DigiO document_id mismatch",
+          {
+            applicationId: application.id,
+            expected: application.providerDocumentId,
+            digioReturned: remoteId,
+          }
+        );
+      }
+    }
+  } catch (err) {
+    console.warn("[ensureDealerAuditTrailUrl] status pre-check failed (non-blocking):", err);
+  }
+
   const digioUrl = `${baseUrl}/v2/client/document/download_audit_trail?document_id=${encodeURIComponent(
     application.providerDocumentId
   )}`;
@@ -43,7 +83,7 @@ export async function ensureDealerAuditTrailUrl(
   const response = await fetch(digioUrl, {
     method: "GET",
     headers: {
-      Authorization: basicAuthHeader(clientId, clientSecret),
+      Authorization: authHeader,
       Accept: "application/pdf",
     },
     cache: "no-store",

@@ -9,6 +9,7 @@ import { sendDealerApprovalNotificationEmail } from "@/lib/email/sendDealerAppro
 import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification-recipients";
 import { downloadPdfBuffer } from "@/lib/email/downloadPdfBuffer";
 import { ensureDealerAuditTrailUrl } from "@/lib/digio/ensure-audit-trail";
+import { ensureDealerSignedAgreementUrl } from "@/lib/digio/ensure-signed-agreement";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
@@ -163,6 +164,58 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // points at the shared legal entity.
     const dealerCode =
       sharedAccountId || application.dealerCode || generateDealerCode();
+
+    // Pre-flight: for finance-enabled dealers, guarantee BOTH the signed
+    // agreement PDF and the audit trail PDF are available before we create
+    // any auth user or touch the DB. If either is unavailable, hard-block
+    // with 409 so the admin retries instead of a dealer being activated
+    // with an empty welcome email.
+    let signedAgreementPdf: Buffer | null = null;
+    let auditTrailPdf: Buffer | null = null;
+
+    if (application.financeEnabled) {
+      const [signedUrl, auditUrl] = await Promise.all([
+        ensureDealerSignedAgreementUrl(application).catch((err) => {
+          console.error("ENSURE SIGNED AGREEMENT ERROR:", err);
+          return null;
+        }),
+        ensureDealerAuditTrailUrl(application).catch((err) => {
+          console.error("ENSURE AUDIT TRAIL ERROR:", err);
+          return null;
+        }),
+      ]);
+
+      const [signedBuf, auditBuf] = await Promise.all([
+        downloadPdfBuffer(signedUrl),
+        downloadPdfBuffer(auditUrl),
+      ]);
+
+      if (!signedBuf || !auditBuf) {
+        console.warn("APPROVE BLOCKED — agreement PDFs not ready", {
+          applicationId: application.id,
+          hasSignedUrl: Boolean(signedUrl),
+          hasAuditUrl: Boolean(auditUrl),
+          hasSignedBuf: Boolean(signedBuf),
+          hasAuditBuf: Boolean(auditBuf),
+        });
+
+        return NextResponse.json(
+          {
+            success: false,
+            message:
+              "Agreement PDFs are not ready yet — please retry once signing is fully complete.",
+            details: {
+              signedAgreementAvailable: Boolean(signedBuf),
+              auditTrailAvailable: Boolean(auditBuf),
+            },
+          },
+          { status: 409 }
+        );
+      }
+
+      signedAgreementPdf = signedBuf;
+      auditTrailPdf = auditBuf;
+    }
 
     const temporaryPassword = generateTemporaryPassword();
     const passwordHash = await hashPassword(temporaryPassword);
@@ -432,32 +485,8 @@ export async function POST(req: NextRequest, context: RouteContext) {
       }
     }
 
-    // If the agreement is signed, gather the signed agreement + audit trail
-    // PDFs so we can attach them to the welcome email. Each step is isolated
-    // so a single failure never blocks the welcome email itself.
-    let signedAgreementPdf: Buffer | null = null;
-    let auditTrailPdf: Buffer | null = null;
-    const agreementSigned =
-      (application.agreementStatus || "").toLowerCase() === "completed";
-
-    if (agreementSigned) {
-      let auditTrailUrl: string | null = application.auditTrailUrl || null;
-      try {
-        auditTrailUrl = await ensureDealerAuditTrailUrl(application);
-      } catch (auditErr: any) {
-        console.error("ENSURE AUDIT TRAIL ERROR:", auditErr);
-      }
-
-      const signedAgreementUrl = application.signedAgreementUrl || null;
-
-      const [signedBuf, auditBuf] = await Promise.all([
-        downloadPdfBuffer(signedAgreementUrl),
-        downloadPdfBuffer(auditTrailUrl),
-      ]);
-      signedAgreementPdf = signedBuf;
-      auditTrailPdf = auditBuf;
-    }
-
+    // signedAgreementPdf + auditTrailPdf were resolved in the pre-flight block
+    // above (or left null for non-finance dealers, which is expected).
     let mailResult: Awaited<ReturnType<typeof sendDealerWelcomeEmail>> | null = null;
     try {
       mailResult = await sendDealerWelcomeEmail({
