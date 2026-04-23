@@ -191,6 +191,7 @@ export default function StepAgreement() {
     if (!selected) return;
 
     setField("agreement", "dealerSignerName", selected.name);
+    // hello
     setField("agreement", "dealerSignerDesignation", selected.designation);
     setField("agreement", "dealerSignerEmail", selected.email);
     setField("agreement", "dealerSignerPhone", selected.mobile);
