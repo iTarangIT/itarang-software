@@ -12,27 +12,9 @@ import { leads, digilockerTransactions } from "@/lib/db/schema";
 import { digilockerInitiateSession } from "@/lib/decentro";
 import { createWorkflowId } from "@/lib/kyc/admin-workflow";
 import { requireRole } from "@/lib/auth-utils";
+import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
 
 const LINK_VALIDITY_HOURS = 24;
-
-// Derive the public origin the browser sees from the incoming request.
-// Honours Vercel's x-forwarded-host/proto so the callback URL always
-// points back at the exact deployment that initiated the flow — sandbox,
-// preview, prod, or localhost — regardless of NEXT_PUBLIC_APP_URL
-// being set correctly in each env.
-function resolvePublicOrigin(req: NextRequest): string {
-    const forwardedHost = req.headers.get("x-forwarded-host");
-    const forwardedProto = req.headers.get("x-forwarded-proto");
-    if (forwardedHost) {
-        return `${forwardedProto || "https"}://${forwardedHost}`;
-    }
-    const host = req.headers.get("host");
-    if (host) {
-        const proto = host.startsWith("localhost") ? "http" : "https";
-        return `${proto}://${host}`;
-    }
-    return req.nextUrl.origin;
-}
 
 export async function POST(req: NextRequest) {
     try {
@@ -77,7 +59,29 @@ export async function POST(req: NextRequest) {
         const now = new Date();
         const digiId = createWorkflowId("DIGI", now);
         const referenceId = `LEAD-DIGI-${leadId}-${Date.now()}`;
-        const callbackBase = resolvePublicOrigin(req);
+        // publicOrigin enforces the safe-host allow-list so a teammate's
+        // local ngrok tunnel can't leak into a transaction stored with
+        // Decentro. See 2026-04-23 incident write-up in src/lib/public-origin.ts.
+        let callbackBase: string;
+        try {
+            callbackBase = publicOrigin({ req });
+        } catch (err) {
+            if (err instanceof PublicOriginError) {
+                return NextResponse.json(
+                    {
+                        success: false,
+                        error: {
+                            message:
+                                "Cannot initiate DigiLocker: no safe callback URL available. " +
+                                "Ask ops to set NEXT_PUBLIC_APP_URL to the deployed origin.",
+                            code: err.code,
+                        },
+                    },
+                    { status: 500 },
+                );
+            }
+            throw err;
+        }
         const redirectUrl = `${callbackBase}/api/leads/digilocker/callback/${encodeURIComponent(digiId)}`;
 
         // Decentro caps consent_purpose at 50 chars.
