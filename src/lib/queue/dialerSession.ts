@@ -2,6 +2,7 @@
 // on Vercel. In-memory module state is lost between invocations.
 
 import { connection as redis } from "./connection";
+import { safeRedis } from "./safeRedis";
 
 type DialerSession = {
   queue: string[];
@@ -14,27 +15,43 @@ const SESSION_KEY = "dialer:session";
 const SESSION_TTL_SECONDS = 2 * 60 * 60;
 const CALL_TIMEOUT_MS = 3 * 60 * 1000;
 
+// safeRedis() returns `fallback` on Upstash quota exhaustion. For reads that
+// means the session looks empty → `isActive()` returns false, `status()`
+// returns emptyStatus(). Callers see a clean "idle" state instead of a throw,
+// and the dialer UI degrades gracefully until quota resets.
 async function readSession(): Promise<DialerSession | null> {
-  const raw = await redis.get(SESSION_KEY);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as DialerSession;
-  } catch {
-    await redis.del(SESSION_KEY);
-    return null;
-  }
+  return safeRedis(
+    async () => {
+      const raw = await redis.get(SESSION_KEY);
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw) as DialerSession;
+      } catch {
+        await redis.del(SESSION_KEY);
+        return null;
+      }
+    },
+    null,
+    "dialer:readSession",
+  );
 }
 
 async function writeSession(session: DialerSession | null) {
-  if (!session) {
-    await redis.del(SESSION_KEY);
-    return;
-  }
-  await redis.set(
-    SESSION_KEY,
-    JSON.stringify(session),
-    "EX",
-    SESSION_TTL_SECONDS,
+  await safeRedis(
+    async () => {
+      if (!session) {
+        await redis.del(SESSION_KEY);
+        return;
+      }
+      await redis.set(
+        SESSION_KEY,
+        JSON.stringify(session),
+        "EX",
+        SESSION_TTL_SECONDS,
+      );
+    },
+    undefined,
+    "dialer:writeSession",
   );
 }
 

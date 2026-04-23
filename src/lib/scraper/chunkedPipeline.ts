@@ -15,7 +15,7 @@ import {
 } from "./storage/runStore";
 import { sanitizeDbError } from "@/lib/error-utils";
 import { scraperRaw } from "@/lib/db/schema";
-import { connection as redis } from "@/lib/queue/connection";
+import { safeRedisLock } from "@/lib/queue/safeRedis";
 import { publishToPath } from "@/lib/queue/scheduler";
 
 const MAX_PAGES_PER_QUERY = 3;
@@ -271,22 +271,16 @@ export async function executeChunk(chunkId: string) {
     // exhausted, network blip), fall through to enqueue anyway —
     // finalize is idempotent at the DB level, so a duplicate enqueue
     // is far better than silently dropping the finalize.
-    let claimed = true;
-    try {
-      const result = await redis.set(
-        `scraper:finalize-lock:${chunk.runId}`,
-        "1",
-        "EX",
-        60 * 60,
-        "NX",
-      );
-      claimed = result === "OK";
-    } catch (err) {
-      console.warn(
-        `[SCRAPER][${chunk.runId}] Redis lock failed, proceeding without lock:`,
-        err,
-      );
-    }
+    // safeRedisLock encodes the "proceed without lock on Redis failure"
+    // intent explicitly: when Redis is degraded (quota exhausted), it
+    // returns claimed=true so the scraper still enqueues finalize. The
+    // finalize step is idempotent at the DB level, so a duplicate is
+    // strictly better than a dropped finalize.
+    const { claimed } = await safeRedisLock(
+      `scraper:finalize-lock:${chunk.runId}`,
+      60 * 60,
+      "scraper:finalize-lock",
+    );
 
     if (claimed) {
       console.log(
@@ -511,22 +505,11 @@ export async function reconcileRun(runId: string) {
     return { finalized: false, pendingCount };
   }
 
-  let claimed = true;
-  try {
-    const result = await redis.set(
-      `scraper:finalize-lock:${runId}`,
-      "1",
-      "EX",
-      60 * 60,
-      "NX",
-    );
-    claimed = result === "OK";
-  } catch (err) {
-    console.warn(
-      `[SCRAPER][${runId}] reconcile: Redis lock failed, proceeding without lock:`,
-      err,
-    );
-  }
+  const { claimed } = await safeRedisLock(
+    `scraper:finalize-lock:${runId}`,
+    60 * 60,
+    "scraper:finalize-lock",
+  );
 
   if (!claimed) {
     return { finalized: false, alreadyClaimed: true };
