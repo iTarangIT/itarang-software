@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import {
     AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Clock,
     Download, Eye, Loader2, Phone, RefreshCw, Send, Shield, Upload, X, FileText,
@@ -103,6 +104,8 @@ export default function KYCPage() {
     const [savingDraft, setSavingDraft] = useState(false);
     const [lastSaved, setLastSaved] = useState<string | null>(null);
     const [submitting, setSubmitting] = useState(false);
+    const [draftResumedAt, setDraftResumedAt] = useState<string | null>(null);
+    const [draftBannerDismissed, setDraftBannerDismissed] = useState(false);
 
     // Consent flow state
     const [consentPath, setConsentPath] = useState<'none' | 'digital' | 'manual'>('none'); // mutually exclusive
@@ -153,6 +156,11 @@ export default function KYCPage() {
             setAccessDenied(false);
             setLead(fetchedLead);
             if (fetchedLead?.consent_status) setConsentStatus(fetchedLead.consent_status);
+
+            // Surface the "resumed from draft" banner when arriving at a draft-state lead
+            if (!soft && fetchedLead?.kyc_status === 'draft' && fetchedLead?.draft_updated_at) {
+                setDraftResumedAt(fetchedLead.draft_updated_at);
+            }
 
             // Restore coupon state from lead
             if (fetchedLead?.coupon_code && fetchedLead?.coupon_status === 'reserved') {
@@ -346,15 +354,37 @@ export default function KYCPage() {
     const handleSaveDraft = async (auto = false) => {
         try {
             setSavingDraft(true);
+            const docsUploaded = Object.values(uploadedDocs).filter((d) => d?.file_url).length;
+            const docsRequired = requiredDocs.filter((d) => d.required).length;
+            const consentComplete = isFinalConsentStatus(consentStatus);
+            const progress = { docsUploaded, docsRequired, consentComplete };
+
             const res = await fetch(`/api/kyc/${leadId}/save-draft`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ step: 2, data: { documents: uploadedDocs, consentStatus } }),
+                body: JSON.stringify({
+                    step: 2,
+                    data: { documents: uploadedDocs, consentStatus, progress },
+                }),
             });
-            if (!res.ok) throw new Error('Failed to save draft');
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok || json?.success === false) {
+                throw new Error(json?.error?.message || 'Failed to save draft');
+            }
             setLastSaved(`${auto ? 'Auto-saved' : 'Saved'} at ${new Date().toLocaleTimeString()}`);
+            if (!auto) {
+                toast.success('Draft saved', {
+                    description: `Progress: ${docsUploaded}/${docsRequired} documents${consentComplete ? ', consent verified' : ''}`,
+                });
+            }
         } catch (err: any) {
-            setApiError(err?.message || 'Failed to save draft');
+            const message = err?.message || 'Failed to save draft';
+            if (auto) {
+                // Auto-save failures surface quietly in the error banner only
+                setApiError(message);
+            } else {
+                toast.error(message);
+            }
         } finally {
             setSavingDraft(false);
         }
@@ -597,7 +627,7 @@ export default function KYCPage() {
                 {/* Header */}
                 <ProgressHeader
                     title="KYC"
-                    subtitle={`Reference ID: ${lead?.reference_id || leadId}${lead?.full_name ? ` — ${lead.full_name}` : ''}`}
+                    subtitle={`Lead ID: ${leadId}${lead?.full_name ? ` — ${lead.full_name}` : ''}`}
                     step={2}
                     onBack={() => router.push('/dealer-portal/leads/new')}
                     onPrev={() => jumpToStep(1)}
@@ -614,6 +644,24 @@ export default function KYCPage() {
                 />
 
                 <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
+
+                {draftResumedAt && !draftBannerDismissed && (
+                    <div className="mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-blue-50 border border-blue-200">
+                        <div className="flex items-center gap-3 text-sm">
+                            <FileText className="w-4 h-4 text-blue-700 flex-shrink-0" />
+                            <span className="text-blue-900">
+                                Resumed from your saved draft — last updated {new Date(draftResumedAt).toLocaleString()}. Continue where you left off.
+                            </span>
+                        </div>
+                        <button
+                            onClick={() => setDraftBannerDismissed(true)}
+                            className="text-blue-700/60 hover:text-blue-900 flex-shrink-0"
+                            aria-label="Dismiss"
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
+                    </div>
+                )}
 
                 <main className="grid grid-cols-1 gap-6">
                     {/* ─── Customer Consent ───────────────────────────── */}
