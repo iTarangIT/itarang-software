@@ -390,6 +390,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/dealer-portal/leads",
         },
         {
+          id: "drafts",
+          label: "My Drafts",
+          icon: FileText,
+          href: "/dealer-portal/leads/drafts",
+        },
+        {
           id: "loans",
           label: "Loan Processing",
           icon: Landmark,
