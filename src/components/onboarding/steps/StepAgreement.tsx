@@ -7,14 +7,12 @@ import { useOnboardingStore } from "@/store/onboardingStore";
 type SigningMethod =
   | ""
   | "aadhaar_esign"
-  | "electronic_signature"
-  | "dsc_signature";
+  | "electronic_signature";
 
 const SIGNING_METHOD_OPTIONS: { value: SigningMethod; label: string }[] = [
   { value: "", label: "Select signing method" },
   { value: "aadhaar_esign", label: "Aadhaar eSign" },
   { value: "electronic_signature", label: "Electronic Signature" },
-  { value: "dsc_signature", label: "DSC Signature" },
 ];
 
 function FieldError({ message }: { message?: string }) {
@@ -193,6 +191,7 @@ export default function StepAgreement() {
     if (!selected) return;
 
     setField("agreement", "dealerSignerName", selected.name);
+    // hello
     setField("agreement", "dealerSignerDesignation", selected.designation);
     setField("agreement", "dealerSignerEmail", selected.email);
     setField("agreement", "dealerSignerPhone", selected.mobile);
