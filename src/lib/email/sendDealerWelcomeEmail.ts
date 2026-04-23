@@ -128,8 +128,6 @@ export async function sendDealerWelcomeEmail(
     <h3 style="color: #2c3e50;">📎 Important Documents</h3>
     <p style="font-size: 14px; color: #333;">Please find the following documents for your reference:</p>
     <ol style="font-size: 14px; color: #333; padding-left: 20px;">
-      <li>Dealer Onboarding Confirmation Summary (Phase 1)</li>
-      <li>iTarang Dealer Operating Guidelines (Phase 2)</li>
       ${extraAttachmentItems.join("\n      ")}
     </ol>
 
