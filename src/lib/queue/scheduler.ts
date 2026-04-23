@@ -1,4 +1,6 @@
 import { Client } from "@upstash/qstash";
+import { quotaCircuit } from "./connection";
+import { log } from "@/lib/log";
 
 // Lazy singleton — QStash client is only needed server-side for scheduling
 // follow-up Bolna calls. Constructed on first use so we don't crash at
@@ -72,6 +74,17 @@ export async function scheduleCall(params: {
   leadId: string;
   runAt: Date;
 }): Promise<string | null> {
+  // Upstash quota circuit — when open, skip the publish. QStash would
+  // otherwise deliver the callback to /api/bolna/dispatch-call which fails
+  // at its Redis-backed webhook dedup anyway. Better to skip scheduling
+  // cleanly than to fan out jobs destined to fail.
+  if (quotaCircuit.tick()) {
+    log.warn("[QSTASH] scheduleCall skipped: upstash quota circuit open", {
+      leadId: params.leadId,
+    });
+    return null;
+  }
+
   const delayMs = params.runAt.getTime() - Date.now();
   const delaySeconds = Math.max(0, Math.round(delayMs / 1000));
 
@@ -81,16 +94,16 @@ export async function scheduleCall(params: {
       body: { phone: params.phone, leadId: params.leadId },
       delaySeconds,
     });
-    console.log("[QSTASH] scheduled call", {
+    log.info("[QSTASH] scheduled call", {
       leadId: params.leadId,
       delaySeconds,
       messageId,
     });
     return messageId;
   } catch (err) {
-    console.error("[QSTASH] scheduleCall failed", {
+    log.error("[QSTASH] scheduleCall failed", {
       leadId: params.leadId,
-      err,
+      message: (err as Error).message,
     });
     return null;
   }

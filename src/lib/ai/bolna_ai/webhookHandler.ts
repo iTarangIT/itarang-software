@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { updateLeadAfterCall } from "../storage/leadStore";
 import { dealerLeads } from "@/lib/db/schema";
-import { connection as redis } from "@/lib/queue/connection";
+import { safeRedisLock } from "@/lib/queue/safeRedis";
 import { dialerSession } from "@/lib/queue/dialerSession";
 import { scheduleCall } from "@/lib/queue/scheduler";
 import { appendSalesCallLog } from "@/lib/google/sheet";
@@ -14,15 +14,16 @@ const PROCESSED_CALL_TTL_SECONDS = 10 * 60;
 
 // Cross-instance dedupe for Bolna webhooks (serverless instances don't share memory).
 // Returns true if this is the first time we've seen this callId.
+// When Redis is degraded (quota exhaustion) safeRedisLock returns claimed=true
+// with degraded=true — we bias toward processing rather than dropping a
+// terminal call event.
 async function claimCallForProcessing(callId: string): Promise<boolean> {
-  const result = await redis.set(
+  const { claimed } = await safeRedisLock(
     `bolna:processed-call:${callId}`,
-    "1",
-    "EX",
     PROCESSED_CALL_TTL_SECONDS,
-    "NX",
+    "bolna:webhook-dedup",
   );
-  return result === "OK";
+  return claimed;
 }
 
 function getValidDate(input: any): Date | null {
