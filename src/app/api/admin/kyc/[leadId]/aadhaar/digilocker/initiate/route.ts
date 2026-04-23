@@ -18,9 +18,7 @@ import {
   createWorkflowId,
   requireAdminAppUser,
 } from "@/lib/kyc/admin-workflow";
-
-const DIGILOCKER_CALLBACK_BASE =
-  process.env.NEXT_PUBLIC_APP_URL || "https://crm.itarang.com";
+import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
 
 // Decentro returns notification info in different shapes depending on the
 // product / version. Walk the response defensively and surface whatever
@@ -123,7 +121,30 @@ export async function POST(
     const now = new Date();
     const digiId = createWorkflowId("DIGI", now);
     const referenceId = `DIGI-${leadId}-${Date.now()}`;
-    const callbackUrl = `${DIGILOCKER_CALLBACK_BASE}/api/kyc/digilocker/callback/${encodeURIComponent(digiId)}`;
+    // publicOrigin applies a safe-host allow-list. Refuses ngrok / localhost
+    // in production so a teammate's local dev tunnel can't get stored as a
+    // Decentro callback URL (see 2026-04-23 incident in src/lib/public-origin.ts).
+    let callbackBase: string;
+    try {
+      callbackBase = publicOrigin({ req });
+    } catch (err) {
+      if (err instanceof PublicOriginError) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              message:
+                "Cannot initiate DigiLocker: no safe callback URL available. " +
+                "Ask ops to set NEXT_PUBLIC_APP_URL to the deployed origin.",
+              code: err.code,
+            },
+          },
+          { status: 500 },
+        );
+      }
+      throw err;
+    }
+    const callbackUrl = `${callbackBase}/api/kyc/digilocker/callback/${encodeURIComponent(digiId)}`;
 
     // Step 1: Initiate DigiLocker session → get auth URL + transaction ID
     // Pass customer phone so Decentro sends the DigiLocker link via SMS
