@@ -169,7 +169,12 @@ jobs:
             # exist on disk. If they don't match, fail loudly so the deploy
             # doesn't silently lie about success.
             DISK_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null || echo "missing")
-            SERVED_BUILD_ID=$(curl -s http://127.0.0.1:3003 2>/dev/null | grep -oE '"b":"[a-f0-9]+"' | head -1 | cut -d'"' -f4)
+            # Hit /login directly — / may 307 with no body so grep finds
+            # nothing. -L follows redirects either way. Wrap the pipeline in
+            # `|| true` so a no-match grep doesn't abort the script under
+            # set -eo pipefail.
+            HTML=$(curl -s -L http://127.0.0.1:3003/login 2>/dev/null || true)
+            SERVED_BUILD_ID=$(printf '%s' "$HTML" | grep -oE '"b":"[a-f0-9]+"' | head -1 | cut -d'"' -f4 || true)
             echo "Disk BUILD_ID:   $DISK_BUILD_ID"
             echo "Served BUILD_ID: ${SERVED_BUILD_ID:-<not found>}"
             if [ -n "$SERVED_BUILD_ID" ] && [ "$DISK_BUILD_ID" != "$SERVED_BUILD_ID" ]; then
