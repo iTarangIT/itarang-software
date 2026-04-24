@@ -55,3 +55,24 @@ export function extractSignedAt(parsed: any): string | null {
     null
   );
 }
+
+export function extractAttachedEstampDetails(
+  parsed: any,
+): Record<string, string[]> | null {
+  return (
+    parsed?.attached_estamp_details ||
+    parsed?.attachedEstampDetails ||
+    parsed?.agreement?.attached_estamp_details ||
+    parsed?.data?.attached_estamp_details ||
+    parsed?.raw?.attached_estamp_details ||
+    null
+  );
+}
+
+export function extractStampCertificateIds(parsed: any): string[] {
+  const details = extractAttachedEstampDetails(parsed);
+  if (!details || typeof details !== "object") return [];
+  return Object.values(details)
+    .flat()
+    .filter((value): value is string => typeof value === "string" && !!value);
+}

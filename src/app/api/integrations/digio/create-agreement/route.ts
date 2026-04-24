@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { launchBrowser } from "@/lib/pdf/launch-browser";
 import { buildTarangDealerAgreementHtml } from "@/lib/agreement/dealer-agreement-template";
+import {
+  extractAttachedEstampDetails,
+  extractStampCertificateIds,
+} from "@/lib/digio/parse-status";
 
 type AgreementPayload = {
   company?: any;
@@ -93,6 +97,50 @@ function findDuplicateIdentifiers(signers: SignerItem[]) {
   }
 
   return Array.from(duplicates);
+}
+
+/**
+ * Count pages in a PDF buffer by matching /Type /Page (not /Pages) entries.
+ * Works reliably for Puppeteer-generated PDFs, which use standard structure.
+ */
+function countPdfPages(pdf: Buffer): number {
+  const content = pdf.toString("latin1");
+  const matches = content.match(/\/Type\s*\/Page(?![a-zA-Z])/g);
+  return matches && matches.length > 0 ? matches.length : 1;
+}
+
+/**
+ * Build explicit sign coordinates for a single signer across every page of the
+ * final stamped document. Page 1 (the DigiO-prepended e-stamp) gets coords in
+ * the empty middle area of the stamp certificate, so signatures don't overlap
+ * the "Statutory Alert:" text at the bottom. Pages 2..N (the agreement pages)
+ * get standard footer coords.
+ *
+ * Coordinate system: DigiO uses top-left origin on an A4 canvas (~595 x 842 pt).
+ */
+function buildSignerCoordinatesList(
+  signerIndex: number,
+  agreementPageCount: number,
+  estampEnabled: boolean,
+) {
+  const xPositions = [70, 230, 390];
+  const x = xPositions[signerIndex] ?? 70 + signerIndex * 160;
+  const w = 140;
+
+  const coords: Array<{ page_no: number; x: number; y: number; w: number; h: number }> = [];
+
+  const agreementStartPage = estampEnabled ? 2 : 1;
+  const totalPages = estampEnabled ? agreementPageCount + 1 : agreementPageCount;
+
+  if (estampEnabled) {
+    coords.push({ page_no: 1, x, y: 600, w, h: 50 });
+  }
+
+  for (let p = agreementStartPage; p <= totalPages; p++) {
+    coords.push({ page_no: p, x, y: 780, w, h: 40 });
+  }
+
+  return coords;
 }
 
 async function renderPdfFromHtml(html: string) {
@@ -229,14 +277,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Use the signing method configured per signer (aadhaar, electronic, or dsc)
-    const digioSigners = signers.map(s => ({
-      identifier: s.identifier,
-      name: s.name,
-      reason: s.reason,
-      sign_type: s.sign_type,
-    }));
-
     // Generate agreement PDF from HTML template
     const html = buildTarangDealerAgreementHtml({
       company: {
@@ -310,7 +350,44 @@ export async function POST(req: NextRequest) {
     const agreementBase64 = pdfBuffer.toString("base64");
     console.log("DIGIO DEBUG -> PDF generated, size:", pdfBuffer.length, "bytes");
 
-    const digioPayload = {
+    const estampEnabled =
+      cleanEnv(process.env.DIGIO_ESTAMP_ENABLED) === "true";
+    const estampTag =
+      cleanEnv(process.env.DIGIO_ESTAMP_TAG) || "KA-100-General";
+    const estampQuantity =
+      Number(cleanEnv(process.env.DIGIO_ESTAMP_QUANTITY)) || 1;
+
+    const agreementPageCount = countPdfPages(pdfBuffer);
+    console.log(
+      "DIGIO DEBUG -> agreement PDF page count:",
+      agreementPageCount,
+      "| stamp prepended:",
+      estampEnabled,
+    );
+
+    // Use the signing method configured per signer (aadhaar, electronic, or dsc),
+    // with explicit per-page sign_coordinates so DigiO places signatures in the
+    // empty middle area of the e-stamp (page 1) instead of overlapping the
+    // Statutory Alert text, while keeping footer placement on agreement pages.
+    const digioSigners = signers.map((s, idx) => {
+      const coords = buildSignerCoordinatesList(
+        idx,
+        agreementPageCount,
+        estampEnabled,
+      );
+      return {
+        identifier: s.identifier,
+        name: s.name,
+        reason: s.reason,
+        sign_type: s.sign_type,
+        sign_coordinates: coords[0],
+        ...(coords.length > 1
+          ? { additional_sign_coordinates: coords.slice(1) }
+          : {}),
+      };
+    });
+
+    const digioPayload: Record<string, unknown> = {
       file_name: `${cleanString(company.companyName) || "dealer"}-agreement.pdf`,
       file_data: agreementBase64,
       expire_in_days: 5,
@@ -321,10 +398,29 @@ export async function POST(req: NextRequest) {
       signers: digioSigners,
     };
 
+    if (estampEnabled) {
+      // sign_on_page is intentionally omitted — signer-level sign_coordinates
+      // below control signature placement on every page (including the stamp
+      // page 1 in the empty middle area). Setting sign_on_page would risk
+      // DigiO double-placing signatures on page 1.
+      digioPayload.estamp_request = {
+        tags: { [estampTag]: estampQuantity },
+        note_content: "",
+        note_on_page: "first",
+      };
+    }
+
     const requestUrl = `${baseUrl}/v2/client/document/uploadpdf`;
 
     console.log("DIGIO DEBUG -> REQUEST URL:", requestUrl);
     console.log("DIGIO DEBUG -> SIGNERS:", digioSigners);
+    console.log("DIGIO DEBUG -> ESTAMP ENABLED:", estampEnabled);
+    if (estampEnabled) {
+      console.log(
+        "DIGIO DEBUG -> ESTAMP REQUEST:",
+        JSON.stringify(digioPayload.estamp_request),
+      );
+    }
 
     const digioResponse = await fetch(requestUrl, {
       method: "POST",
@@ -383,6 +479,17 @@ export async function POST(req: NextRequest) {
       "";
 
     const normalizedStatus = normalizeDigioAgreementStatus(parsed);
+    const attachedEstampDetails = extractAttachedEstampDetails(parsed);
+    const stampCertificateIds = extractStampCertificateIds(parsed);
+
+    console.log(
+      "DIGIO DEBUG -> ATTACHED ESTAMP DETAILS:",
+      JSON.stringify(attachedEstampDetails),
+    );
+    console.log(
+      "DIGIO DEBUG -> STAMP CERTIFICATE IDS:",
+      JSON.stringify(stampCertificateIds),
+    );
 
     return NextResponse.json({
       success: true,
@@ -398,6 +505,8 @@ export async function POST(req: NextRequest) {
           status: party?.status || "",
         })),
         status: normalizedStatus,
+        attachedEstampDetails,
+        stampCertificateIds,
         rawResponse: rawText,
       },
     });
