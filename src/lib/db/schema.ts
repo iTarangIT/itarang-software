@@ -192,6 +192,13 @@ export const inventory = pgTable("inventory", {
   status: varchar("status", { length: 20 }).default("in_transit").notNull(), // in_transit, pdi_pending, pdi_failed, available, reserved, sold, damaged, returned
   warehouse_location: text("warehouse_location"),
 
+  // Step 4/5 integration: reservation/dispatch tracking (BRD V2)
+  dealer_id: varchar("dealer_id", { length: 255 }),
+  linked_lead_id: varchar("linked_lead_id", { length: 255 }),
+  dispatch_date: timestamp("dispatch_date", { withTimezone: true }),
+  soc_percent: decimal("soc_percent", { precision: 5, scale: 2 }),
+  soc_last_sync_at: timestamp("soc_last_sync_at", { withTimezone: true }),
+
   // Metadata
   created_by: uuid("created_by")
     .references(() => users.id)
@@ -309,6 +316,11 @@ export const leads = pgTable("leads", {
   sm_review_status: varchar("sm_review_status", { length: 30 }),
   submitted_to_sm_at: timestamp("submitted_to_sm_at", { withTimezone: true }),
   sm_assigned_to: uuid("sm_assigned_to"),
+
+  // Step 4/5 lifecycle (BRD V2 Parts E & F)
+  // kyc_status extended values: pending_itarang_reverification, pending_final_approval,
+  // loan_sanctioned, loan_rejected, sold, closed_loan_rejected
+  sold_at: timestamp("sold_at", { withTimezone: true }),
 
   created_at: timestamp("created_at", { withTimezone: true })
     .defaultNow()
@@ -2827,6 +2839,9 @@ export const dealerOnboardingApplications = pgTable(
     providerSigningUrl: text("provider_signing_url"),
     providerRawResponse: jsonb("provider_raw_response"),
     stampStatus: varchar("stamp_status", { length: 30 }),
+    stampCertificateIds: jsonb("stamp_certificate_ids")
+      .$type<string[]>()
+      .default([]),
     lastActionTimestamp: timestamp("last_action_timestamp"),
     signedAt: timestamp("signed_at"),
     signedAgreementUrl: text("signed_agreement_url"),
@@ -3091,4 +3106,123 @@ export const scraperCityQueue = pgTable("scraper_city_queue", {
   duplicates: integer("duplicates").default(0),
   scraped_at: timestamp("scraped_at"),
   created_at: timestamp("created_at").defaultNow(),
+});
+
+// --- STEP 4: PRODUCT SELECTION (BRD V2 Part E) ---
+
+export const productSelections = pgTable("product_selections", {
+  id: varchar("id", { length: 255 }).primaryKey(), // PS-YYYYMMDD-NNN
+  lead_id: varchar("lead_id", { length: 255 })
+    .references(() => leads.id, { onDelete: "cascade" })
+    .notNull(),
+
+  // Selected inventory
+  battery_serial: varchar("battery_serial", { length: 255 }),
+  charger_serial: varchar("charger_serial", { length: 255 }),
+  paraphernalia: jsonb("paraphernalia"), // { digital_soc: 2, volt_soc: 0, harness: "type_b", accessories: [...] }
+
+  // Classification (may differ from Step 1 if dealer changed category)
+  category: varchar("category", { length: 100 }),
+  sub_category: varchar("sub_category", { length: 100 }),
+
+  // Pricing (snapshot at submission time)
+  battery_price: decimal("battery_price", { precision: 12, scale: 2 }),
+  charger_price: decimal("charger_price", { precision: 12, scale: 2 }),
+  paraphernalia_cost: decimal("paraphernalia_cost", { precision: 12, scale: 2 }),
+  dealer_margin: decimal("dealer_margin", { precision: 12, scale: 2 }),
+  final_price: decimal("final_price", { precision: 12, scale: 2 }),
+
+  // Lifecycle
+  payment_mode: varchar("payment_mode", { length: 20 }), // cash, finance
+  admin_decision: varchar("admin_decision", { length: 30 }).default("pending"), // pending, dealer_confirmed, sanctioned, rejected
+  submitted_by: uuid("submitted_by"),
+  submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow(),
+
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// --- STEP 4: LOAN SANCTION (Admin-created, distinct from loanOffers) ---
+
+export const loanSanctions = pgTable("loan_sanctions", {
+  id: varchar("id", { length: 255 }).primaryKey(), // LS-YYYYMMDD-NNN
+  lead_id: varchar("lead_id", { length: 255 })
+    .references(() => leads.id, { onDelete: "cascade" })
+    .notNull(),
+  product_selection_id: varchar("product_selection_id", { length: 255 }),
+
+  // 10 BRD fields for sanction
+  loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }),
+  down_payment: decimal("down_payment", { precision: 12, scale: 2 }),
+  file_charge: decimal("file_charge", { precision: 12, scale: 2 }),
+  subvention: decimal("subvention", { precision: 12, scale: 2 }),
+  disbursement_amount: decimal("disbursement_amount", { precision: 12, scale: 2 }),
+  emi: decimal("emi", { precision: 12, scale: 2 }),
+  tenure_months: integer("tenure_months"),
+  roi: decimal("roi", { precision: 5, scale: 2 }),
+  loan_approved_by: text("loan_approved_by"), // lender/NBFC name
+  loan_file_number: varchar("loan_file_number", { length: 100 }),
+
+  // Status
+  status: varchar("status", { length: 30 }).default("sanctioned").notNull(), // sanctioned, rejected, dealer_approved
+  rejection_reason: text("rejection_reason"),
+
+  // Admin audit
+  sanctioned_by: uuid("sanctioned_by"),
+  sanctioned_at: timestamp("sanctioned_at", { withTimezone: true }).defaultNow(),
+
+  // Dealer/customer approval (Step 5 OTP)
+  dealer_approved: boolean("dealer_approved").default(false),
+  dealer_approved_at: timestamp("dealer_approved_at", { withTimezone: true }),
+  dealer_approved_by: uuid("dealer_approved_by"),
+
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// --- STEP 5: OTP CONFIRMATION (dispatch authorisation) ---
+
+export const otpConfirmations = pgTable("otp_confirmations", {
+  id: varchar("id", { length: 255 }).primaryKey(), // OTP-YYYYMMDD-NNN
+  lead_id: varchar("lead_id", { length: 255 })
+    .references(() => leads.id, { onDelete: "cascade" })
+    .notNull(),
+  otp_type: varchar("otp_type", { length: 50 }).default("dispatch_confirmation").notNull(),
+  otp_hash: varchar("otp_hash", { length: 255 }).notNull(),
+  phone_sent_to: varchar("phone_sent_to", { length: 20 }),
+
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+
+  send_count: integer("send_count").default(1).notNull(),
+  attempt_count: integer("attempt_count").default(0).notNull(),
+  locked_until: timestamp("locked_until", { withTimezone: true }),
+
+  is_used: boolean("is_used").default(false).notNull(),
+  used_at: timestamp("used_at", { withTimezone: true }),
+  used_by: uuid("used_by"),
+
+  // Admin override path (BRD §4220) — stubbed for now
+  override_by_admin: boolean("override_by_admin").default(false),
+  override_reason: text("override_reason"),
+  override_by: uuid("override_by"),
+});
+
+// --- STEP 5: AFTER-SALES RECORDS (post-dispatch service handle) ---
+
+export const afterSalesRecords = pgTable("after_sales_records", {
+  id: varchar("id", { length: 255 }).primaryKey(), // AS-YYYY-NNN
+  lead_id: varchar("lead_id", { length: 255 })
+    .references(() => leads.id, { onDelete: "set null" }),
+  warranty_id: varchar("warranty_id", { length: 255 }),
+  battery_serial: varchar("battery_serial", { length: 255 }),
+  customer_id: varchar("customer_id", { length: 255 }),
+  dealer_id: varchar("dealer_id", { length: 255 }),
+  payment_mode: varchar("payment_mode", { length: 20 }), // cash, finance
+  opened_at: timestamp("opened_at", { withTimezone: true }).defaultNow().notNull(),
+  status: varchar("status", { length: 20 }).default("active").notNull(), // active, closed
+  closed_at: timestamp("closed_at", { withTimezone: true }),
+
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import {
     ChevronLeft, ChevronRight, Loader2, Upload, CheckCircle2, XCircle,
     AlertCircle, Clock, X, Send, Shield, RefreshCw, User, UserX,
-    Scan, FileText, Sparkles, ArrowRight,
+    Scan, FileText, Sparkles,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -235,17 +235,14 @@ export default function InterimStepPage() {
                             <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
                                 <CheckCircle2 className="w-10 h-10 text-green-600" />
                             </div>
-                            <h2 className="text-2xl font-black text-green-900">Submitted to iTarang Team</h2>
+                            <h2 className="text-2xl font-black text-green-900">Submitted for Verification</h2>
                             <p className="text-sm text-green-700 mt-2 max-w-md mx-auto">
-                                Your application has been sent to <strong>sales.head@itarang.com</strong> for review.
-                                Our sales team will review all documents and get back to you with financing options.
+                                Your application has been sent to the <strong>iTarang admin team</strong> for re-verification.
+                                You will be notified once the review is complete — Product Selection will unlock after approval.
                             </p>
                             <div className="mt-6 flex justify-center gap-4">
                                 <button onClick={() => router.push('/dealer-portal/leads')} className="px-8 py-3 bg-[#0047AB] text-white rounded-xl font-bold text-sm hover:bg-[#003580] transition-all">
                                     Back to Leads
-                                </button>
-                                <button onClick={() => router.push(`/dealer-portal/leads/${leadId}/options`)} className="px-8 py-3 border-2 border-[#0047AB] text-[#0047AB] rounded-xl font-bold text-sm hover:bg-blue-50 transition-all flex items-center gap-2">
-                                    View Loan Options <ArrowRight className="w-4 h-4" />
                                 </button>
                             </div>
                         </div>
@@ -501,8 +498,8 @@ export default function InterimStepPage() {
                                     <div className="flex items-center gap-3 px-4 py-3 bg-blue-50 rounded-xl border border-blue-100 mb-6">
                                         <FileText className="w-5 h-5 text-[#0047AB] flex-shrink-0" />
                                         <p className="text-xs text-gray-600">
-                                            Submitting sends this application to <strong>iTarang Sales Team</strong> (sales.head@itarang.com) for review.
-                                            You will be notified once loan options are ready.
+                                            Submitting sends this application to the <strong>iTarang admin team</strong> for re-verification.
+                                            You will be notified once the review is complete and Product Selection unlocks.
                                         </p>
                                     </div>
                                 </div>
@@ -517,7 +514,7 @@ export default function InterimStepPage() {
                         <OutlineButton onClick={() => router.back()}>Back</OutlineButton>
                         <SecondaryButton onClick={() => handleSaveDraft(false)} loading={saving}>Save Draft</SecondaryButton>
                         <PrimaryButton onClick={handleSubmitToSM} loading={submitting} disabled={submitting || hasCoBorrower === null}>
-                            Submit to Itarang Team <ChevronRight className="w-4 h-4" />
+                            Submit for Verification <ChevronRight className="w-4 h-4" />
                         </PrimaryButton>
                     </StickyBottomBar>
                 )}
