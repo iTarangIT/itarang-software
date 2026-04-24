@@ -88,6 +88,47 @@ jobs:
               echo "Archive now holds $(ls -1d "$ARCHIVE_DIR"/*/ 2>/dev/null | wc -l) builds"
             fi
 
+            echo "=== Verify every chunk referenced by the build manifest exists on disk ==="
+            # Catches builds that emit a manifest referencing chunk files that
+            # don't exist under .next/static/. Without this, the deploy
+            # succeeds but every page 404s on a layout-level chunk and shows
+            # the global error boundary.
+            node -e '
+              const fs = require("fs");
+              const path = require("path");
+              const root = ".next";
+              const manifests = [
+                "build-manifest.json",
+                "app-build-manifest.json",
+                "react-loadable-manifest.json",
+              ];
+              const referenced = new Set();
+              for (const m of manifests) {
+                const p = path.join(root, m);
+                if (!fs.existsSync(p)) continue;
+                const walk = (v) => {
+                  if (!v) return;
+                  if (typeof v === "string") {
+                    if (v.startsWith("static/chunks/") || v.startsWith("static/css/")) referenced.add(v);
+                  } else if (Array.isArray(v)) v.forEach(walk);
+                  else if (typeof v === "object") Object.values(v).forEach(walk);
+                };
+                try { walk(JSON.parse(fs.readFileSync(p, "utf8"))); }
+                catch (e) { console.error("Could not parse", p, e.message); }
+              }
+              const missing = [];
+              for (const rel of referenced) {
+                if (!fs.existsSync(path.join(root, rel))) missing.push(rel);
+              }
+              console.log("Manifest references " + referenced.size + " static files; " + missing.length + " missing on disk.");
+              if (missing.length) {
+                console.error("Missing:");
+                missing.slice(0, 50).forEach(m => console.error("  " + m));
+                if (missing.length > 50) console.error("  ... and " + (missing.length - 50) + " more");
+                process.exit(1);
+              }
+            '
+
             echo "=== Assembling standalone bundle ==="
             cp .env.production .next/standalone/.env.production
             cp .env.production .next/standalone/.env
@@ -96,31 +137,23 @@ jobs:
             rm -rf .next/standalone/public
             if [ -d public ]; then cp -r public .next/standalone/public; fi
 
-            echo "=== Stop pm2 + wait for port 3002 to release ==="
-            # pm2 reload on a fork-mode app is effectively a restart, but Next
-            # can be slow to release the port. The new process EADDRINUSEs,
-            # crash-loops, pm2 gives up, and the OLD process keeps serving the
-            # PREVIOUS build's HTML against the NEW build's static files —
-            # that's how chunk hashes get stranded and pages 404 on assets.
-            # Cycle deterministically: delete (kills PID), wait for port,
-            # start fresh.
+            echo "=== Stop pm2 + guarantee port 3002 is free ==="
+            # Previous "poll for port free" logic was unreliable — the ss
+            # filter syntax could silently return empty, the loop would
+            # declare the port free while the old process was still holding
+            # it, pm2 start would EADDRINUSE, crash-loop, give up, and the
+            # OLD process kept serving stale HTML against the new .next.
+            # Do it deterministically: delete the pm2 entries, then
+            # unconditionally fuser -k the port, then sleep. Whatever was
+            # listening is guaranteed dead before pm2 start runs.
             for app in itarang-crm-new itarang-crm-web; do
               if pm2 describe "$app" > /dev/null 2>&1; then
                 pm2 delete "$app" 2>/dev/null || true
               fi
             done
-            for i in $(seq 1 30); do
-              if ! ss -ltn 'sport = :3002' 2>/dev/null | grep -q ':3002'; then
-                echo "Port 3002 free after ${i}s"
-                break
-              fi
-              if [ "$i" -eq 30 ]; then
-                echo "Port 3002 still bound after 30s — force-killing whatever holds it"
-                fuser -k 3002/tcp 2>/dev/null || true
-                sleep 2
-              fi
-              sleep 1
-            done
+            fuser -k 3002/tcp 2>/dev/null || true
+            sleep 3
+            echo "Port 3002 cleared"
 
             echo "=== Start pm2 fresh ==="
             pm2 start ecosystem.prod.config.js
