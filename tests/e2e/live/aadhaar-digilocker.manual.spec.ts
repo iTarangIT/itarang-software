@@ -22,14 +22,14 @@
 import type { Page, Request as PwRequest } from '@playwright/test';
 import { eq } from 'drizzle-orm';
 
-import { test, expect } from './fixtures';
-import { closeDealerCredsClients } from './helpers/dealer-creds';
+import { test, expect } from '../fixtures';
+import { closeDealerCredsClients } from '../helpers/dealer-creds';
 
 // Inlined here (not exported from dealer-creds) because the test wants direct
 // DB access for a read-only assertion and we don't need to mutate anything.
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import * as schema from '../../src/lib/db/schema';
+import * as schema from '../../../src/lib/db/schema';
 
 const TEST_PHONE = '7838597709';
 const OTP_WAIT_MS = 5 * 60 * 1000; // user has 5 min to complete DigiLocker
@@ -50,7 +50,7 @@ test.describe('Dealer lead creation — Aadhaar KYC via DigiLocker', () => {
         await closeDealerCredsClients().catch(() => {});
     });
 
-    test('opens DigiLocker popup, receives eAadhaar, prefills form, records verification', async ({
+    test('opens DigiLocker popup, receives eAadhaar, prefills form, records verification [kyc-review] [manual]', async ({
         page,
     }) => {
         test.setTimeout(OTP_WAIT_MS + 60_000);
