@@ -50,14 +50,22 @@ jobs:
             npm ci --no-audit --no-fund --include=dev
             echo "::endgroup::"
 
-            echo "::group::Snapshot previous .next/static (stale-tab grace period)"
-            rm -rf .next_prev_static
-            if [ -d .next/static ]; then
-              cp -a .next/static .next_prev_static
-              echo "Snapshotted $(find .next_prev_static -type f | wc -l) files"
+            ARCHIVE_DIR=/home/itarang-sandbox/static_archive
+            ARCHIVE_KEEP=10
+
+            echo "::group::Snapshot previous .next/static into archive ring"
+            mkdir -p "$ARCHIVE_DIR"
+            OLD_BUILD_ID=""
+            if [ -f .next/BUILD_ID ]; then OLD_BUILD_ID=$(cat .next/BUILD_ID); fi
+            if [ -n "$OLD_BUILD_ID" ] && [ -d .next/static ]; then
+              rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID"
+              cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"
+              echo "Archived $OLD_BUILD_ID ($(find "$ARCHIVE_DIR/$OLD_BUILD_ID" -type f | wc -l) files)"
             else
-              echo "No previous .next/static — first build or clean checkout"
+              echo "No previous BUILD_ID/.next/static — first build or clean checkout"
             fi
+            # Drop legacy single-snapshot dir from earlier deploys
+            rm -rf .next_prev_static
             echo "::endgroup::"
 
             echo "::group::Build (next build)"
@@ -67,21 +75,34 @@ jobs:
             npm run build
             echo "::endgroup::"
 
-            echo "::group::Merge prior chunks into new build (stale-tab grace period)"
-            if [ -d .next_prev_static ]; then
+            echo "::group::Merge archived chunks into new build (stale-tab grace period)"
+            NEW_BUILD_ID=""
+            if [ -f .next/BUILD_ID ]; then NEW_BUILD_ID=$(cat .next/BUILD_ID); fi
+            if [ -d "$ARCHIVE_DIR" ]; then
               # Only chunks/css/media — never manifests, BUILD_ID, or server/.
               # --ignore-existing guarantees new build artifacts always win;
               # we only fill in filenames the new build no longer emits so
-              # browser tabs from the previous deploy can still fetch their
-              # old chunk hashes instead of getting a 500.
-              for sub in chunks css media; do
-                if [ -d ".next_prev_static/$sub" ]; then
-                  mkdir -p ".next/static/$sub"
-                  rsync -a --ignore-existing ".next_prev_static/$sub/" ".next/static/$sub/"
-                fi
+              # browser tabs from previous deploys can still fetch their
+              # old chunk hashes instead of getting a 404.
+              for archived in "$ARCHIVE_DIR"/*/; do
+                [ -d "$archived" ] || continue
+                archived_id=$(basename "$archived")
+                if [ "$archived_id" = "$NEW_BUILD_ID" ]; then continue; fi
+                for sub in chunks css media; do
+                  if [ -d "$archived/$sub" ]; then
+                    mkdir -p ".next/static/$sub"
+                    rsync -a --ignore-existing "$archived/$sub/" ".next/static/$sub/"
+                  fi
+                done
               done
               echo "After merge: $(find .next/static -type f | wc -l) files in .next/static"
-              rm -rf .next_prev_static
+            fi
+            echo "::endgroup::"
+
+            echo "::group::Prune archive ring (keep $ARCHIVE_KEEP newest)"
+            if [ -d "$ARCHIVE_DIR" ]; then
+              ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf
+              echo "Archive now holds $(ls -1d "$ARCHIVE_DIR"/*/ 2>/dev/null | wc -l) builds"
             fi
             echo "::endgroup::"
 
