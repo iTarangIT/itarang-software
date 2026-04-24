@@ -89,45 +89,16 @@ jobs:
             fi
 
             echo "=== Verify every chunk referenced by the build manifest exists on disk ==="
-            # Catches builds that emit a manifest referencing chunk files that
-            # don't exist under .next/static/. Without this, the deploy
-            # succeeds but every page 404s on a layout-level chunk and shows
-            # the global error boundary.
-            node -e '
-              const fs = require("fs");
-              const path = require("path");
-              const root = ".next";
-              const manifests = [
-                "build-manifest.json",
-                "app-build-manifest.json",
-                "react-loadable-manifest.json",
-              ];
-              const referenced = new Set();
-              for (const m of manifests) {
-                const p = path.join(root, m);
-                if (!fs.existsSync(p)) continue;
-                const walk = (v) => {
-                  if (!v) return;
-                  if (typeof v === "string") {
-                    if (v.startsWith("static/chunks/") || v.startsWith("static/css/")) referenced.add(v);
-                  } else if (Array.isArray(v)) v.forEach(walk);
-                  else if (typeof v === "object") Object.values(v).forEach(walk);
-                };
-                try { walk(JSON.parse(fs.readFileSync(p, "utf8"))); }
-                catch (e) { console.error("Could not parse", p, e.message); }
-              }
-              const missing = [];
-              for (const rel of referenced) {
-                if (!fs.existsSync(path.join(root, rel))) missing.push(rel);
-              }
-              console.log("Manifest references " + referenced.size + " static files; " + missing.length + " missing on disk.");
-              if (missing.length) {
-                console.error("Missing:");
-                missing.slice(0, 50).forEach(m => console.error("  " + m));
-                if (missing.length > 50) console.error("  ... and " + (missing.length - 50) + " more");
-                process.exit(1);
-              }
-            '
+            # Catches the failure mode where a build emits a manifest that
+            # points at chunk files the build (or a subsequent step) didn't
+            # actually write to disk — which silently succeeds the deploy
+            # but 404s every page.
+            #
+            # Intentionally run via a committed script, not node -e: drone-ssh
+            # appends shell boilerplate for exit-code propagation, and with
+            # a multi-line `node -e '...'` argument that boilerplate gets
+            # injected into the -e string and Node tries to parse it as JS.
+            node scripts/verify-chunk-manifest.js
 
             echo "=== Assembling standalone bundle ==="
             cp .env.production .next/standalone/.env.production
