@@ -96,29 +96,64 @@ jobs:
             rm -rf .next/standalone/public
             if [ -d public ]; then cp -r public .next/standalone/public; fi
 
-            echo "=== Reloading pm2 ==="
-            if pm2 describe itarang-crm-new > /dev/null 2>&1; then
-              pm2 delete itarang-crm-new || true
-            fi
-
-            if pm2 describe itarang-crm-web > /dev/null 2>&1; then
-              pm2 reload ecosystem.prod.config.js --update-env
-            else
-              pm2 start ecosystem.prod.config.js
-              pm2 save
-            fi
-
-            echo "=== Health check ==="
-            sleep 3
-            for i in 1 2 3 4 5; do
-              if curl -fsS -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:3002/; then
-                echo "Health check passed on attempt $i"
-                exit 0
+            echo "=== Stop pm2 + wait for port 3002 to release ==="
+            # pm2 reload on a fork-mode app is effectively a restart, but Next
+            # can be slow to release the port. The new process EADDRINUSEs,
+            # crash-loops, pm2 gives up, and the OLD process keeps serving the
+            # PREVIOUS build's HTML against the NEW build's static files —
+            # that's how chunk hashes get stranded and pages 404 on assets.
+            # Cycle deterministically: delete (kills PID), wait for port,
+            # start fresh.
+            for app in itarang-crm-new itarang-crm-web; do
+              if pm2 describe "$app" > /dev/null 2>&1; then
+                pm2 delete "$app" 2>/dev/null || true
               fi
-              echo "Attempt $i failed, retrying in 3s..."
-              sleep 3
+            done
+            for i in $(seq 1 30); do
+              if ! ss -ltn 'sport = :3002' 2>/dev/null | grep -q ':3002'; then
+                echo "Port 3002 free after ${i}s"
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "Port 3002 still bound after 30s — force-killing whatever holds it"
+                fuser -k 3002/tcp 2>/dev/null || true
+                sleep 2
+              fi
+              sleep 1
             done
 
-            echo "Health check failed after 5 attempts"
-            pm2 logs itarang-crm-web --lines 50 --nostream || true
-            exit 1
+            echo "=== Start pm2 fresh ==="
+            pm2 start ecosystem.prod.config.js
+            pm2 save
+            pm2 ls
+
+            echo "=== Health check ==="
+            HTTP=000
+            for i in $(seq 1 30); do
+              sleep 2
+              HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3002/ || echo 000)
+              if echo "$HTTP" | grep -qE "^(200|301|302|307)$"; then
+                echo "HTTP $HTTP after ${i} polls"
+                break
+              fi
+            done
+            if ! echo "$HTTP" | grep -qE "^(200|301|302|307)$"; then
+              echo "❌ Production failed health check (HTTP $HTTP)"
+              pm2 logs itarang-crm-web --lines 50 --nostream || true
+              exit 1
+            fi
+            echo "✅ Production healthy"
+
+            echo "=== Verify served BUILD_ID matches disk ==="
+            # Detects a stale-process deploy: disk has a new BUILD_ID but the
+            # running process still serves HTML tagged with the previous
+            # build's id, so chunk references don't exist on disk. Fail loudly
+            # rather than letting the deploy lie about success.
+            DISK_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null || echo "missing")
+            SERVED_BUILD_ID=$(curl -s http://127.0.0.1:3002 2>/dev/null | grep -oE '"b":"[a-f0-9]+"' | head -1 | cut -d'"' -f4)
+            echo "Disk BUILD_ID:   $DISK_BUILD_ID"
+            echo "Served BUILD_ID: ${SERVED_BUILD_ID:-<not found>}"
+            if [ -n "$SERVED_BUILD_ID" ] && [ "$DISK_BUILD_ID" != "$SERVED_BUILD_ID" ]; then
+              echo "❌ BUILD_ID mismatch — running process is stale"
+              exit 1
+            fi
