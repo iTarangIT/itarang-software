@@ -149,31 +149,23 @@ jobs:
             '
             echo "::endgroup::"
 
-            echo "::group::Stop existing pm2 apps + wait for port 3003 to release"
-            # pm2 reload on a fork-mode app behaves like restart, but Next can
-            # be slow to release the port. The new process then EADDRINUSEs,
-            # crash-loops, pm2 gives up, and the OLD process keeps serving the
-            # PREVIOUS build's HTML against the NEW build's static files —
-            # that's how chunk hashes get stranded and pages 404 on assets.
-            # Cycle deterministically: delete (kills PID), wait for port,
-            # start fresh.
+            echo "::group::Stop existing pm2 apps + guarantee port 3003 is free"
+            # Previous "poll for port free" logic was unreliable — the ss
+            # filter syntax could silently return empty, the loop would
+            # declare the port free while the old process was still holding
+            # it, pm2 start would EADDRINUSE, crash-loop, give up, and the
+            # OLD process kept serving stale HTML against the new .next.
+            # Do it deterministically: delete the pm2 entries, then
+            # unconditionally fuser -k the port, then sleep. Whatever was
+            # listening is guaranteed dead before pm2 start runs.
             for app in sandbox-web sandbox-worker; do
               if pm2 describe "$app" > /dev/null 2>&1; then
                 pm2 delete "$app" 2>/dev/null || true
               fi
             done
-            for i in $(seq 1 30); do
-              if ! ss -ltn 'sport = :3003' 2>/dev/null | grep -q ':3003'; then
-                echo "Port 3003 free after ${i}s"
-                break
-              fi
-              if [ "$i" -eq 30 ]; then
-                echo "Port 3003 still bound after 30s — force-killing whatever holds it"
-                fuser -k 3003/tcp 2>/dev/null || true
-                sleep 2
-              fi
-              sleep 1
-            done
+            fuser -k 3003/tcp 2>/dev/null || true
+            sleep 3
+            echo "Port 3003 cleared"
             echo "::endgroup::"
 
             echo "::group::Start pm2 apps fresh"
