@@ -27,9 +27,9 @@
  */
 
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
-import { preloadAllSamples } from './helpers/sample-docs';
-import { fillDealerOnboardingWizard } from './helpers/onboarding-wizard';
-import { closeDealerCredsClients } from './helpers/dealer-creds';
+import { preloadAllSamples } from '../helpers/sample-docs';
+import { fillDealerOnboardingWizard } from '../helpers/onboarding-wizard';
+import { closeDealerCredsClients } from '../helpers/dealer-creds';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -47,7 +47,7 @@ const GSTIN       = `27AAGCS${RUN_ID.slice(-4)}F1Z5`;
 const PAN         = `AAGCS${RUN_ID.slice(-4)}F`;
 const ITARANG_S1_EMAIL = `itarang-sig1-${RUN_ID}@itarang.com`;
 
-test('dealer onboarding (finance=yes): onboard → admin Section 3 → initiate (live Digio)', async ({ browser }) => {
+test('dealer onboarding (finance=yes): onboard → admin Section 3 → initiate (live Digio) [onboarding] [live] [critical]', async ({ browser }) => {
   test.setTimeout(8 * 60_000);
 
   if (!E2E_PHONE || E2E_PHONE.length !== 10) {

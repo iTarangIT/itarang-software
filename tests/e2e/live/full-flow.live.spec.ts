@@ -13,15 +13,15 @@
  */
 
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
-import { preloadAllSamples } from './helpers/sample-docs';
-import { fillDealerOnboardingWizard } from './helpers/onboarding-wizard';
+import { preloadAllSamples } from '../helpers/sample-docs';
+import { fillDealerOnboardingWizard } from '../helpers/onboarding-wizard';
 import {
   provisionKnownDealerPassword,
   closeDealerCredsClients,
   seedDealerLeadForPhone,
   getDealerLeadByPhone,
   type NewDealerCreds,
-} from './helpers/dealer-creds';
+} from '../helpers/dealer-creds';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -37,7 +37,7 @@ const CUSTOMER_NAME = `PW Customer ${RUN_ID}`;
 const GSTIN = `27ABCDE${RUN_ID.slice(-4)}F1Z5`;
 const PAN = `ABCDE${RUN_ID.slice(-4)}F`;
 
-test('full flow: onboard → review → dealer lead → KYC review → scraper + AI dialer', async ({ browser }) => {
+test('full flow: onboard → review → dealer lead → KYC review → scraper + AI dialer [onboarding] [live] [critical]', async ({ browser }) => {
   test.setTimeout(15 * 60_000);
 
   if (!E2E_PHONE || E2E_PHONE.length !== 10) {

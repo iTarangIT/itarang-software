@@ -1,10 +1,21 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig, devices, type ReporterDescription } from '@playwright/test';
 import dotenv from 'dotenv';
 import path from 'node:path';
 
 dotenv.config({ path: path.resolve(__dirname, '.env.test.local'), override: true });
 
 const baseURL = process.env.E2E_BASE_URL ?? 'https://sandbox.itarang.com';
+
+const reporters: ReporterDescription[] = process.env.CI
+  ? [['github']]
+  : [['list'], ['html', { open: 'never' }]];
+
+if (process.env.EXCEL_REPORT === '1') {
+  reporters.push([
+    './tests/reporters/excel-reporter.ts',
+    { outputDir: 'eval-reports' },
+  ]);
+}
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -14,14 +25,15 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: 1,
-  reporter: process.env.CI ? 'github' : [['list'], ['html', { open: 'never' }]],
+  reporter: reporters,
   use: {
     baseURL,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
-    headless: false,
-    launchOptions: { slowMo: 200 },
+    // Eval + CI runs want fast headless. Flip to headed debug with HEADED=1.
+    headless: process.env.HEADED !== '1',
+    launchOptions: process.env.HEADED === '1' ? { slowMo: 200 } : {},
   },
   projects: [
     {
@@ -32,6 +44,20 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
       dependencies: ['setup'],
+      // Default run: exclude opt-in [live] and [manual] tagged tests.
+      grepInvert: /\[(live|manual)\]/,
+    },
+    {
+      name: 'chromium-live',
+      use: { ...devices['Desktop Chrome'] },
+      dependencies: ['setup'],
+      grep: /\[live\]/,
+    },
+    {
+      name: 'chromium-manual',
+      use: { ...devices['Desktop Chrome'] },
+      dependencies: ['setup'],
+      grep: /\[manual\]/,
     },
   ],
 });

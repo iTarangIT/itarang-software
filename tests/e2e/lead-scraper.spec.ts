@@ -6,7 +6,7 @@ import { test, expect } from './fixtures';
 test.use({ storageState: 'tests/.auth/sales_head.json' });
 
 test.describe('Lead scraper', () => {
-  test('loads scraper dashboard', async ({ page }) => {
+  test('loads scraper dashboard [other] [smoke]', async ({ page }) => {
     await page.route('**/api/scraper/queries', (route) =>
       route.fulfill({
         status: 200,
@@ -32,7 +32,7 @@ test.describe('Lead scraper', () => {
     await expect(page.getByRole('heading', { name: /dealer lead scraper/i })).toBeVisible();
   });
 
-  test('triggers a scraper run with stubbed Firecrawl backend', async ({ page }) => {
+  test('triggers a scraper run with stubbed Firecrawl backend [other]', async ({ page }) => {
     await page.route('**/api/scraper/queries', (route) =>
       route.fulfill({
         status: 200,
@@ -87,7 +87,7 @@ test.describe('Lead scraper', () => {
     await expect(page.getByText(/scraper started/i)).toBeVisible({ timeout: 10_000 });
   });
 
-  test('surfaces error when no active query is configured', async ({ page }) => {
+  test('surfaces error when no active query is configured [other]', async ({ page }) => {
     await page.route('**/api/scraper/queries', (route) =>
       route.fulfill({
         status: 200,
