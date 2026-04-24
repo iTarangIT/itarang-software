@@ -18,7 +18,10 @@ import {
   createWorkflowId,
   requireAdminAppUser,
 } from "@/lib/kyc/admin-workflow";
-import { notifyKycFinalDecision } from "@/lib/notifications";
+import {
+  notifyKycFinalDecision,
+  notifyStep3DealerActionRequired,
+} from "@/lib/notifications";
 
 // BRD §2.9.3 Panel 4 "Step 3 Final Decision Panel" — three actions:
 //   1. approved            → step_3_cleared, unlock Step 4
@@ -398,9 +401,9 @@ export async function POST(
       });
     });
 
-    // Notify dealer only on terminal decisions. For dealer_action_required
-    // the dealer already sees the updated lead state via the dashboard push;
-    // admin does not send customer SMS/WhatsApp from Step 3.
+    // Notify dealer on every terminal decision. The dashboard push helpers
+    // each map to a specific notification type so the dealer UI can render
+    // the correct banner (step_3_cleared vs kyc_approved_final vs action-required).
     if (decision === "approved" || decision === "rejected") {
       notifyKycFinalDecision({
         leadId,
@@ -408,6 +411,14 @@ export async function POST(
         notes,
         rejectionReason,
         adminId: appUser.id,
+        leadStatus,
+      }).catch(() => {});
+    } else if (decision === "dealer_action_required") {
+      notifyStep3DealerActionRequired({
+        leadId,
+        leadStatus,
+        notes,
+        rejectionReason,
       }).catch(() => {});
     }
 
