@@ -88,6 +88,47 @@ jobs:
               echo "Archive now holds $(ls -1d "$ARCHIVE_DIR"/*/ 2>/dev/null | wc -l) builds"
             fi
 
+            echo "=== Verify every chunk referenced by the build manifest exists on disk ==="
+            # Catches builds that emit a manifest referencing chunk files that
+            # don't exist under .next/static/. Without this, the deploy
+            # succeeds but every page 404s on a layout-level chunk and shows
+            # the global error boundary.
+            node -e '
+              const fs = require("fs");
+              const path = require("path");
+              const root = ".next";
+              const manifests = [
+                "build-manifest.json",
+                "app-build-manifest.json",
+                "react-loadable-manifest.json",
+              ];
+              const referenced = new Set();
+              for (const m of manifests) {
+                const p = path.join(root, m);
+                if (!fs.existsSync(p)) continue;
+                const walk = (v) => {
+                  if (!v) return;
+                  if (typeof v === "string") {
+                    if (v.startsWith("static/chunks/") || v.startsWith("static/css/")) referenced.add(v);
+                  } else if (Array.isArray(v)) v.forEach(walk);
+                  else if (typeof v === "object") Object.values(v).forEach(walk);
+                };
+                try { walk(JSON.parse(fs.readFileSync(p, "utf8"))); }
+                catch (e) { console.error("Could not parse", p, e.message); }
+              }
+              const missing = [];
+              for (const rel of referenced) {
+                if (!fs.existsSync(path.join(root, rel))) missing.push(rel);
+              }
+              console.log("Manifest references " + referenced.size + " static files; " + missing.length + " missing on disk.");
+              if (missing.length) {
+                console.error("Missing:");
+                missing.slice(0, 50).forEach(m => console.error("  " + m));
+                if (missing.length > 50) console.error("  ... and " + (missing.length - 50) + " more");
+                process.exit(1);
+              }
+            '
+
             echo "=== Assembling standalone bundle ==="
             cp .env.production .next/standalone/.env.production
             cp .env.production .next/standalone/.env

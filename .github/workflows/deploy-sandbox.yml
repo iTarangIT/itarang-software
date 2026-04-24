@@ -106,6 +106,49 @@ jobs:
             fi
             echo "::endgroup::"
 
+            echo "::group::Verify every chunk referenced by the build manifest exists on disk"
+            # The actual root cause we kept missing: builds were emitting a
+            # manifest that references chunk files (e.g. AuthProvider's chunk)
+            # that don't exist under .next/static/. Fail the deploy here so
+            # we never hand the user a build with broken references again.
+            node -e '
+              const fs = require("fs");
+              const path = require("path");
+              const root = ".next";
+              const staticDir = path.join(root, "static");
+              const manifests = [
+                "build-manifest.json",
+                "app-build-manifest.json",
+                "react-loadable-manifest.json",
+              ];
+              const referenced = new Set();
+              for (const m of manifests) {
+                const p = path.join(root, m);
+                if (!fs.existsSync(p)) continue;
+                const walk = (v) => {
+                  if (!v) return;
+                  if (typeof v === "string") {
+                    if (v.startsWith("static/chunks/") || v.startsWith("static/css/")) referenced.add(v);
+                  } else if (Array.isArray(v)) v.forEach(walk);
+                  else if (typeof v === "object") Object.values(v).forEach(walk);
+                };
+                try { walk(JSON.parse(fs.readFileSync(p, "utf8"))); }
+                catch (e) { console.error("Could not parse", p, e.message); }
+              }
+              const missing = [];
+              for (const rel of referenced) {
+                if (!fs.existsSync(path.join(root, rel))) missing.push(rel);
+              }
+              console.log("Manifest references " + referenced.size + " static files; " + missing.length + " missing on disk.");
+              if (missing.length) {
+                console.error("Missing:");
+                missing.slice(0, 50).forEach(m => console.error("  " + m));
+                if (missing.length > 50) console.error("  ... and " + (missing.length - 50) + " more");
+                process.exit(1);
+              }
+            '
+            echo "::endgroup::"
+
             echo "::group::Stop existing pm2 apps + wait for port 3003 to release"
             # pm2 reload on a fork-mode app behaves like restart, but Next can
             # be slow to release the port. The new process then EADDRINUSEs,
