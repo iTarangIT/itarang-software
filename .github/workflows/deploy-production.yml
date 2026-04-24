@@ -42,8 +42,51 @@ jobs:
             echo "=== Preparing logs directory ==="
             mkdir -p logs
 
+            ARCHIVE_DIR=/home/itarang-crm/static_archive
+            ARCHIVE_KEEP=10
+
+            echo "=== Snapshot previous .next/static into archive ring ==="
+            mkdir -p "$ARCHIVE_DIR"
+            OLD_BUILD_ID=""
+            if [ -f .next/BUILD_ID ]; then OLD_BUILD_ID=$(cat .next/BUILD_ID); fi
+            if [ -n "$OLD_BUILD_ID" ] && [ -d .next/static ]; then
+              rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID"
+              cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"
+              echo "Archived $OLD_BUILD_ID ($(find "$ARCHIVE_DIR/$OLD_BUILD_ID" -type f | wc -l) files)"
+            else
+              echo "No previous BUILD_ID/.next/static — first build or clean checkout"
+            fi
+
             echo "=== Building Next.js (standalone) ==="
+            export GITHUB_SHA=$(git rev-parse HEAD)
+            echo "Building with GITHUB_SHA=$GITHUB_SHA"
             npm run build
+
+            echo "=== Merge archived chunks into new build (stale-tab grace period) ==="
+            NEW_BUILD_ID=""
+            if [ -f .next/BUILD_ID ]; then NEW_BUILD_ID=$(cat .next/BUILD_ID); fi
+            if [ -d "$ARCHIVE_DIR" ]; then
+              for archived in "$ARCHIVE_DIR"/*/; do
+                [ -d "$archived" ] || continue
+                archived_id=$(basename "$archived")
+                if [ "$archived_id" = "$NEW_BUILD_ID" ]; then continue; fi
+                # chunks/css/media only — never manifests, BUILD_ID, or server/.
+                # --ignore-existing guarantees new build artifacts always win.
+                for sub in chunks css media; do
+                  if [ -d "$archived/$sub" ]; then
+                    mkdir -p ".next/static/$sub"
+                    rsync -a --ignore-existing "$archived/$sub/" ".next/static/$sub/"
+                  fi
+                done
+              done
+              echo "After merge: $(find .next/static -type f | wc -l) files in .next/static"
+            fi
+
+            echo "=== Prune archive ring (keep $ARCHIVE_KEEP newest) ==="
+            if [ -d "$ARCHIVE_DIR" ]; then
+              ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf
+              echo "Archive now holds $(ls -1d "$ARCHIVE_DIR"/*/ 2>/dev/null | wc -l) builds"
+            fi
 
             echo "=== Assembling standalone bundle ==="
             cp .env.production .next/standalone/.env.production
