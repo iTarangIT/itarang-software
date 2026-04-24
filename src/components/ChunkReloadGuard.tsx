@@ -25,8 +25,24 @@ function tryReload(signature: string): void {
   }
 }
 
+async function cleanupStaleCaches(): Promise<void> {
+  try {
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if ("caches" in window) {
+      const names = await caches.keys();
+      await Promise.all(names.map((n) => caches.delete(n)));
+    }
+  } catch {
+    // Best-effort cleanup — ignore failures.
+  }
+}
+
 export default function ChunkReloadGuard() {
   useEffect(() => {
+    void cleanupStaleCaches();
     const onError = (e: ErrorEvent) => {
       const tgt = e.target as HTMLScriptElement | HTMLLinkElement | null;
       const src =
