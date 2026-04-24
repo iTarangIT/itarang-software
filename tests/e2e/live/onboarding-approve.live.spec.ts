@@ -15,13 +15,13 @@
  */
 
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
-import { preloadAllSamples } from './helpers/sample-docs';
-import { fillDealerOnboardingWizard } from './helpers/onboarding-wizard';
+import { preloadAllSamples } from '../helpers/sample-docs';
+import { fillDealerOnboardingWizard } from '../helpers/onboarding-wizard';
 import {
   provisionKnownDealerPassword,
   closeDealerCredsClients,
   type NewDealerCreds,
-} from './helpers/dealer-creds';
+} from '../helpers/dealer-creds';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -36,7 +36,7 @@ const OWNER_EMAIL = `dealer-${RUN_ID}@itarang.com`;
 const GSTIN       = `27AAGCS${RUN_ID.slice(-4)}F1Z5`;
 const PAN         = `AAGCS${RUN_ID.slice(-4)}F`;
 
-test('dealer approval cycle: onboard → sales_head review → approve+mail → dealer login', async ({ browser }) => {
+test('dealer approval cycle: onboard → sales_head review → approve+mail → dealer login [onboarding] [live] [critical]', async ({ browser }) => {
   test.setTimeout(8 * 60_000);
 
   if (!E2E_PHONE || E2E_PHONE.length !== 10) {
