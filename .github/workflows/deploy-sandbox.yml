@@ -106,20 +106,50 @@ jobs:
             fi
             echo "::endgroup::"
 
-            echo "::group::Load env and start/reload pm2"
-            if pm2 describe sandbox-web > /dev/null 2>&1; then
-              pm2 reload ecosystem.sandbox.config.js --update-env
-            else
-              pm2 start ecosystem.sandbox.config.js
-              pm2 save
-            fi
+            echo "::group::Stop existing pm2 apps + wait for port 3003 to release"
+            # pm2 reload on a fork-mode app behaves like restart, but Next can
+            # be slow to release the port. The new process then EADDRINUSEs,
+            # crash-loops, pm2 gives up, and the OLD process keeps serving the
+            # PREVIOUS build's HTML against the NEW build's static files —
+            # that's how chunk hashes get stranded and pages 404 on assets.
+            # Cycle deterministically: delete (kills PID), wait for port,
+            # start fresh.
+            for app in sandbox-web sandbox-worker; do
+              if pm2 describe "$app" > /dev/null 2>&1; then
+                pm2 delete "$app" 2>/dev/null || true
+              fi
+            done
+            for i in $(seq 1 30); do
+              if ! ss -ltn 'sport = :3003' 2>/dev/null | grep -q ':3003'; then
+                echo "Port 3003 free after ${i}s"
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "Port 3003 still bound after 30s — force-killing whatever holds it"
+                fuser -k 3003/tcp 2>/dev/null || true
+                sleep 2
+              fi
+              sleep 1
+            done
+            echo "::endgroup::"
+
+            echo "::group::Start pm2 apps fresh"
+            pm2 start ecosystem.sandbox.config.js
+            pm2 save
             pm2 ls
             echo "::endgroup::"
 
             echo "::group::Health check 127.0.0.1:3003"
-            sleep 8
-            HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3003 || echo 000)
-            echo "HTTP $HTTP from http://127.0.0.1:3003"
+            # Poll for up to 60s — first start can take longer than reload.
+            HTTP=000
+            for i in $(seq 1 30); do
+              sleep 2
+              HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3003 || echo 000)
+              if echo "$HTTP" | grep -qE "^(200|301|302|307)$"; then
+                echo "HTTP $HTTP after ${i} polls"
+                break
+              fi
+            done
             if echo "$HTTP" | grep -qE "^(200|301|302|307)$"; then
               echo "✅ Sandbox healthy"
             else
@@ -128,6 +158,22 @@ jobs:
               pm2 logs sandbox-web --lines 40 --nostream || true
               echo '--- sandbox-worker logs ---'
               pm2 logs sandbox-worker --lines 20 --nostream || true
+              exit 1
+            fi
+            echo "::endgroup::"
+
+            echo "::group::Verify served BUILD_ID matches disk"
+            # Detects the exact failure that caused the chunk-404 cascade:
+            # disk had a new BUILD_ID but the running process was serving HTML
+            # tagged with the previous build's id, so chunk references didn't
+            # exist on disk. If they don't match, fail loudly so the deploy
+            # doesn't silently lie about success.
+            DISK_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null || echo "missing")
+            SERVED_BUILD_ID=$(curl -s http://127.0.0.1:3003 2>/dev/null | grep -oE '"b":"[a-f0-9]+"' | head -1 | cut -d'"' -f4)
+            echo "Disk BUILD_ID:   $DISK_BUILD_ID"
+            echo "Served BUILD_ID: ${SERVED_BUILD_ID:-<not found>}"
+            if [ -n "$SERVED_BUILD_ID" ] && [ "$DISK_BUILD_ID" != "$SERVED_BUILD_ID" ]; then
+              echo "❌ BUILD_ID mismatch — running process is stale"
               exit 1
             fi
             echo "::endgroup::"
