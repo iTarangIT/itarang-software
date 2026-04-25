@@ -80,14 +80,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event) => {
-      // Only show loading state on sign-out; other events (TOKEN_REFRESHED,
-      // USER_UPDATED, INITIAL_SESSION) fire on every navigation and should
-      // refresh silently so the sidebar/header don't flash their skeleton.
       if (event === "SIGNED_OUT") {
         setUser(null);
         return;
       }
-      await fetchUser({ silent: true });
+      // INITIAL_SESSION fires immediately on subscribe and races the
+      // initial fetchUser() above — both call supabase.auth.getUser(),
+      // which serializes through the GoTrue auth lock and can deadlock,
+      // leaving the dashboard stuck on its loading state. TOKEN_REFRESHED
+      // doesn't change identity, so re-fetching the profile on it is
+      // wasted work. Only refetch on real identity changes.
+      if (event === "SIGNED_IN" || event === "USER_UPDATED") {
+        await fetchUser({ silent: true });
+      }
     });
 
     return () => {
