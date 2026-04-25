@@ -19,11 +19,63 @@ const FALLBACK_PDF = Buffer.from(
   'hex',
 );
 
-// 1×1 transparent PNG — used as a fallback if downloads fail.
-const FALLBACK_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgAAIAAAUAAen63NgAAAAASUVORK5CYII=',
-  'base64',
-);
+// 100×100 solid-colour PNG (~440 bytes) — generated programmatically so we
+// don't ship a binary. Some prod upload validators reject suspiciously small
+// images (the previous 70-byte 1×1 fallback got bounced).
+const FALLBACK_PNG: Buffer = (() => {
+  // Minimal hand-rolled PNG with one IDAT chunk containing a deflated 100×100
+  // image of solid mid-grey. We use zlib synchronously to keep the module
+  // load order clean.
+  const zlib = require('node:zlib') as typeof import('node:zlib');
+  const W = 100, H = 100;
+  const raw = Buffer.alloc(H * (1 + W * 3));
+  for (let y = 0; y < H; y++) {
+    const row = y * (1 + W * 3);
+    raw[row] = 0; // filter byte: None
+    for (let x = 0; x < W; x++) {
+      const off = row + 1 + x * 3;
+      raw[off] = 0xCC;
+      raw[off + 1] = 0xCC;
+      raw[off + 2] = 0xCC;
+    }
+  }
+  const idat = zlib.deflateSync(raw);
+
+  function chunk(type: string, data: Buffer): Buffer {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    const typeBuf = Buffer.from(type, 'ascii');
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])) >>> 0, 0);
+    return Buffer.concat([len, typeBuf, data, crc]);
+  }
+
+  function crc32(buf: Buffer): number {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < buf.length; i++) {
+      c ^= buf[i];
+      for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xEDB88320 & -(c & 1));
+    }
+    return c ^ 0xFFFFFFFF;
+  }
+
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(W, 0);
+  ihdr.writeUInt32BE(H, 4);
+  ihdr[8] = 8;   // bit depth
+  ihdr[9] = 2;   // color type: RGB
+  ihdr[10] = 0;  // compression
+  ihdr[11] = 0;  // filter
+  ihdr[12] = 0;  // interlace
+
+  return Buffer.concat([
+    sig,
+    chunk('IHDR', ihdr),
+    chunk('IDAT', idat),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+})();
 
 function download(url: string, destPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -55,7 +107,9 @@ function download(url: string, destPath: string): Promise<void> {
 
 async function fetchOrFallback(name: string, fallback: Buffer): Promise<string> {
   const dest = path.join(CACHE_DIR, name);
-  if (fs.existsSync(dest) && fs.statSync(dest).size > 0) return dest;
+  // Treat anything under 200 bytes as a stale fallback from before the
+  // larger-PNG fix and re-fetch. Real PDFs and PNGs are always larger.
+  if (fs.existsSync(dest) && fs.statSync(dest).size > 200) return dest;
   const url = SOURCES[name];
   if (url) {
     try {
