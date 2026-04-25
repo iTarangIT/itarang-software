@@ -1,17 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-const KEY = "chunk-reload-guard";
-const TTL_MS = 60_000;
-
-function isChunkError(msg: string | undefined): boolean {
-  if (!msg) return false;
-  if (/ChunkLoadError/.test(msg)) return true;
-  if (/Loading (CSS )?chunk \d+ failed/.test(msg)) return true;
-  if (/\/_next\/static\/(chunks|css)\//.test(msg)) return true;
-  return false;
-}
+import {
+  clearReloadGuard,
+  hardReload,
+  isChunkErrorMessage,
+  shouldGuardReload,
+} from "@/lib/chunk-recovery";
 
 function reportToServer(error: Error & { digest?: string }, chunkError: boolean): void {
   try {
@@ -51,27 +46,19 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  const chunk = isChunkError(error?.message);
+  const chunk = isChunkErrorMessage(error?.message);
   const [reloadGuarded, setReloadGuarded] = useState(false);
 
   useEffect(() => {
     reportToServer(error, chunk);
     if (!chunk) return;
-    try {
-      const raw = sessionStorage.getItem(KEY);
-      const prev = raw ? (JSON.parse(raw) as { sig: string; at: number }) : null;
-      const sig = error.message;
-      if (prev && prev.sig === sig && Date.now() - prev.at < TTL_MS) {
-        // Already auto-reloaded once for this signature — don't loop. Show the
-        // diagnostic UI so the user can see what actually broke.
-        setReloadGuarded(true);
-        return;
-      }
-      sessionStorage.setItem(KEY, JSON.stringify({ sig, at: Date.now() }));
-      window.location.reload();
-    } catch {
-      window.location.reload();
+    if (shouldGuardReload(error.message)) {
+      // Already auto-reloaded once for this signature — don't loop. Show the
+      // diagnostic UI so the user can see what actually broke.
+      setReloadGuarded(true);
+      return;
     }
+    void hardReload();
   }, [error, chunk]);
 
   return (
@@ -155,9 +142,7 @@ export default function GlobalError({
             <div style={{ backgroundColor: "#f9fafb", borderTop: "1px solid #e5e7eb", padding: "0.875rem 1.5rem", display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
               <button
                 onClick={() => {
-                  try {
-                    sessionStorage.removeItem(KEY);
-                  } catch {}
+                  clearReloadGuard();
                   reset();
                 }}
                 style={{
@@ -174,7 +159,10 @@ export default function GlobalError({
                 Retry
               </button>
               <button
-                onClick={() => window.location.reload()}
+                onClick={() => {
+                  clearReloadGuard();
+                  void hardReload();
+                }}
                 style={{
                   padding: "0.5rem 1rem",
                   fontSize: "0.875rem",
