@@ -1,11 +1,26 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
+// Prevents browsers from serving stale HTML across deploys. Applied to HTML
+// responses only — _next/static assets are excluded by the matcher and keep
+// their default long-lived, immutable caching (they're content-hashed).
+function addNoStoreHeaders(response: NextResponse): NextResponse {
+  response.headers.set(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+  );
+  response.headers.set("Pragma", "no-cache");
+  response.headers.set("Expires", "0");
+  return response;
+}
+
 export async function middleware(request: NextRequest) {
   // Logout route clears cookies itself and must not pay for getUser() / DB
   // profile lookups — short-circuit before any Supabase calls.
   if (request.nextUrl.pathname === "/api/auth/logout") {
-    return NextResponse.next({ request: { headers: request.headers } });
+    return addNoStoreHeaders(
+      NextResponse.next({ request: { headers: request.headers } }),
+    );
   }
 
   let response = NextResponse.next({
@@ -83,15 +98,15 @@ export async function middleware(request: NextRequest) {
     path === "/dashboard";
 
   if (!user) {
-    if (isPublicRoute) return response;
+    if (isPublicRoute) return addNoStoreHeaders(response);
 
     if (isProtectedRoute) {
       const url = request.nextUrl.clone();
       url.pathname = "/login";
-      return NextResponse.redirect(url);
+      return addNoStoreHeaders(NextResponse.redirect(url));
     }
 
-    return response;
+    return addNoStoreHeaders(response);
   }
 
   // Role lives on AWS RDS, not Supabase — read it from app_metadata (synced by
@@ -133,9 +148,11 @@ export async function middleware(request: NextRequest) {
 
   if (path === "/login" || path === "/" || path === "/dashboard") {
     if (myDashboard !== "/") {
-      return NextResponse.redirect(new URL(myDashboard, request.url));
+      return addNoStoreHeaders(
+        NextResponse.redirect(new URL(myDashboard, request.url)),
+      );
     }
-    return response;
+    return addNoStoreHeaders(response);
   }
 
   // Shared access routes
@@ -149,7 +166,7 @@ export async function middleware(request: NextRequest) {
   )?.[1];
 
   if (allowedSharedRoles && allowedSharedRoles.includes(role)) {
-    return response;
+    return addNoStoreHeaders(response);
   }
 
   const matchedRole = Object.entries(roleDashboards).find(([, dashboardPath]) =>
@@ -157,10 +174,12 @@ export async function middleware(request: NextRequest) {
   )?.[0];
 
   if (matchedRole && matchedRole !== role && role !== "ceo") {
-    return NextResponse.redirect(new URL(myDashboard, request.url));
+    return addNoStoreHeaders(
+      NextResponse.redirect(new URL(myDashboard, request.url)),
+    );
   }
 
-  return response;
+  return addNoStoreHeaders(response);
 }
 
 export const config = {

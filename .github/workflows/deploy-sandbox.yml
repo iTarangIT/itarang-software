@@ -50,33 +50,111 @@ jobs:
             npm ci --no-audit --no-fund --include=dev
             echo "::endgroup::"
 
+            ARCHIVE_DIR=/home/itarang-sandbox/static_archive
+            ARCHIVE_KEEP=10
+
+            echo "::group::Snapshot previous .next/static into archive ring"
+            mkdir -p "$ARCHIVE_DIR"
+            OLD_BUILD_ID=""
+            if [ -f .next/BUILD_ID ]; then OLD_BUILD_ID=$(cat .next/BUILD_ID); fi
+            if [ -n "$OLD_BUILD_ID" ] && [ -d .next/static ]; then
+              rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID"
+              cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"
+              echo "Archived $OLD_BUILD_ID ($(find "$ARCHIVE_DIR/$OLD_BUILD_ID" -type f | wc -l) files)"
+            else
+              echo "No previous BUILD_ID/.next/static — first build or clean checkout"
+            fi
+            # Drop legacy single-snapshot dir from earlier deploys
+            rm -rf .next_prev_static
+            echo "::endgroup::"
+
             echo "::group::Build (next build)"
             mkdir -p logs
+            export GITHUB_SHA=$(git rev-parse HEAD)
+            echo "Building with GITHUB_SHA=$GITHUB_SHA"
             npm run build
             echo "::endgroup::"
 
-            echo "::group::Assemble standalone bundle"
-            cp .env .next/standalone/.env
-            rm -rf .next/standalone/.next/static
-            cp -r .next/static .next/standalone/.next/static
-            rm -rf .next/standalone/public
-            if [ -d public ]; then cp -r public .next/standalone/public; fi
+            echo "::group::Merge archived chunks into new build (stale-tab grace period)"
+            NEW_BUILD_ID=""
+            if [ -f .next/BUILD_ID ]; then NEW_BUILD_ID=$(cat .next/BUILD_ID); fi
+            if [ -d "$ARCHIVE_DIR" ]; then
+              # Only chunks/css/media — never manifests, BUILD_ID, or server/.
+              # --ignore-existing guarantees new build artifacts always win;
+              # we only fill in filenames the new build no longer emits so
+              # browser tabs from previous deploys can still fetch their
+              # old chunk hashes instead of getting a 404.
+              for archived in "$ARCHIVE_DIR"/*/; do
+                [ -d "$archived" ] || continue
+                archived_id=$(basename "$archived")
+                if [ "$archived_id" = "$NEW_BUILD_ID" ]; then continue; fi
+                for sub in chunks css media; do
+                  if [ -d "$archived/$sub" ]; then
+                    mkdir -p ".next/static/$sub"
+                    rsync -a --ignore-existing "$archived/$sub/" ".next/static/$sub/"
+                  fi
+                done
+              done
+              echo "After merge: $(find .next/static -type f | wc -l) files in .next/static"
+            fi
             echo "::endgroup::"
 
-            echo "::group::Load env and start/reload pm2"
-            if pm2 describe sandbox-web > /dev/null 2>&1; then
-              pm2 reload ecosystem.sandbox.config.js --update-env
-            else
-              pm2 start ecosystem.sandbox.config.js
-              pm2 save
+            echo "::group::Prune archive ring (keep $ARCHIVE_KEEP newest)"
+            if [ -d "$ARCHIVE_DIR" ]; then
+              ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf
+              echo "Archive now holds $(ls -1d "$ARCHIVE_DIR"/*/ 2>/dev/null | wc -l) builds"
             fi
+            echo "::endgroup::"
+
+            echo "::group::Verify every chunk referenced by the build manifest exists on disk"
+            # Catches the failure mode where a build emits a manifest that
+            # points at chunk files the build (or a subsequent step) didn't
+            # actually write to disk — which silently succeeds the deploy
+            # but 404s every page.
+            #
+            # Intentionally run via a committed script, not node -e: drone-ssh
+            # appends shell boilerplate for exit-code propagation, and with
+            # a multi-line `node -e '...'` argument that boilerplate gets
+            # injected into the -e string and Node tries to parse it as JS.
+            node scripts/verify-chunk-manifest.js
+            echo "::endgroup::"
+
+            echo "::group::Stop existing pm2 apps + guarantee port 3003 is free"
+            # Previous "poll for port free" logic was unreliable — the ss
+            # filter syntax could silently return empty, the loop would
+            # declare the port free while the old process was still holding
+            # it, pm2 start would EADDRINUSE, crash-loop, give up, and the
+            # OLD process kept serving stale HTML against the new .next.
+            # Do it deterministically: delete the pm2 entries, then
+            # unconditionally fuser -k the port, then sleep. Whatever was
+            # listening is guaranteed dead before pm2 start runs.
+            for app in sandbox-web sandbox-worker; do
+              if pm2 describe "$app" > /dev/null 2>&1; then
+                pm2 delete "$app" 2>/dev/null || true
+              fi
+            done
+            fuser -k 3003/tcp 2>/dev/null || true
+            sleep 3
+            echo "Port 3003 cleared"
+            echo "::endgroup::"
+
+            echo "::group::Start pm2 apps fresh"
+            pm2 start ecosystem.sandbox.config.js
+            pm2 save
             pm2 ls
             echo "::endgroup::"
 
             echo "::group::Health check 127.0.0.1:3003"
-            sleep 8
-            HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3003 || echo 000)
-            echo "HTTP $HTTP from http://127.0.0.1:3003"
+            # Poll for up to 60s — first start can take longer than reload.
+            HTTP=000
+            for i in $(seq 1 30); do
+              sleep 2
+              HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3003 || echo 000)
+              if echo "$HTTP" | grep -qE "^(200|301|302|307)$"; then
+                echo "HTTP $HTTP after ${i} polls"
+                break
+              fi
+            done
             if echo "$HTTP" | grep -qE "^(200|301|302|307)$"; then
               echo "✅ Sandbox healthy"
             else
@@ -87,4 +165,36 @@ jobs:
               pm2 logs sandbox-worker --lines 20 --nostream || true
               exit 1
             fi
+            echo "::endgroup::"
+
+            echo "::group::Verify served BUILD_ID matches disk"
+            # Detects the exact failure that caused the chunk-404 cascade:
+            # disk had a new BUILD_ID but the running process was serving HTML
+            # tagged with the previous build's id, so chunk references didn't
+            # exist on disk. If they don't match, fail loudly so the deploy
+            # doesn't silently lie about success.
+            DISK_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null || echo "missing")
+            # Hit /login directly — / may 307 with no body so grep finds
+            # nothing. -L follows redirects either way. Wrap the pipeline in
+            # `|| true` so a no-match grep doesn't abort the script under
+            # set -eo pipefail.
+            HTML=$(curl -s -L http://127.0.0.1:3003/login 2>/dev/null || true)
+            SERVED_BUILD_ID=$(printf '%s' "$HTML" | grep -oE '"b":"[a-f0-9]+"' | head -1 | cut -d'"' -f4 || true)
+            echo "Disk BUILD_ID:   $DISK_BUILD_ID"
+            echo "Served BUILD_ID: ${SERVED_BUILD_ID:-<not found>}"
+            if [ -n "$SERVED_BUILD_ID" ] && [ "$DISK_BUILD_ID" != "$SERVED_BUILD_ID" ]; then
+              echo "❌ BUILD_ID mismatch — running process is stale"
+              exit 1
+            fi
+            echo "::endgroup::"
+
+            echo "::group::Verify served assets reachable (HEAD on every chunk in served HTML)"
+            # Catches the failure mode that verify-chunk-manifest.js can miss:
+            # the build manifest reference walker walks .next/ on disk, but
+            # if a chunk is referenced by some manifest format we don't walk
+            # AND not on disk, it's invisible to that check. This step hits
+            # the running app and HEAD-checks every asset referenced by the
+            # actual served HTML — so 404s become deploy failures instead
+            # of runtime ChunkLoadError on real users.
+            PORT=3003 node scripts/verify-served-assets.js
             echo "::endgroup::"

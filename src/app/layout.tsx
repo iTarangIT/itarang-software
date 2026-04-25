@@ -4,6 +4,7 @@ import "./globals.css";
 
 import Providers from "@/components/Providers";
 import { AuthProvider } from "@/components/auth/AuthProvider";
+import ChunkReloadGuard from "@/components/ChunkReloadGuard";
 import { Toaster } from "sonner";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -21,6 +22,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
+        <ChunkReloadGuard />
         <Providers>
           <AuthProvider>{children}</AuthProvider>
         </Providers>
