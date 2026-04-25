@@ -187,3 +187,14 @@ jobs:
               exit 1
             fi
             echo "::endgroup::"
+
+            echo "::group::Verify served assets reachable (HEAD on every chunk in served HTML)"
+            # Catches the failure mode that verify-chunk-manifest.js can miss:
+            # the build manifest reference walker walks .next/ on disk, but
+            # if a chunk is referenced by some manifest format we don't walk
+            # AND not on disk, it's invisible to that check. This step hits
+            # the running app and HEAD-checks every asset referenced by the
+            # actual served HTML — so 404s become deploy failures instead
+            # of runtime ChunkLoadError on real users.
+            PORT=3003 node scripts/verify-served-assets.js
+            echo "::endgroup::"
