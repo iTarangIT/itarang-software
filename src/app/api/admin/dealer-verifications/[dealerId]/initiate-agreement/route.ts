@@ -12,6 +12,7 @@ import {
 import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { POST as createDigioAgreement } from "@/app/api/integrations/digio/create-agreement/route";
+import { extractStampCertificateIds } from "@/lib/digio/parse-status";
 
 type AgreementParty = {
   name?: string | null;
@@ -474,7 +475,12 @@ export async function POST(
     const providerDocumentId =
       extractProviderDocumentId(responseData) || requestId || null;
     const signingUrl = extractSigningUrl(responseData);
-    const stampStatus = extractStampStatus(responseData) || "pending";
+    const rawStampStatus = extractStampStatus(responseData);
+    const stampCertificateIds = extractStampCertificateIds(responseData);
+    const stampStatus =
+      stampCertificateIds.length > 0
+        ? "attached"
+        : rawStampStatus || "pending";
     const agreementStatus = extractAgreementStatus(responseData);
     const signerUrls = extractSignerUrls(responseData);
 
@@ -489,6 +495,10 @@ export async function POST(
     console.log(
       "[DIGIO INITIATE] extracted signerUrls:",
       JSON.stringify(signerUrls, null, 2)
+    );
+    console.log(
+      "[DIGIO INITIATE] extracted stampCertificateIds:",
+      JSON.stringify(stampCertificateIds)
     );
 
     if (!requestId) {
@@ -520,6 +530,7 @@ export async function POST(
           responseData,
         ),
         stampStatus,
+        stampCertificateIds,
         lastActionTimestamp: new Date(),
         updatedAt: new Date(),
       })

@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -390,6 +390,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/dealer-portal/leads",
         },
         {
+          id: "drafts",
+          label: "My Drafts",
+          icon: FileText,
+          href: "/dealer-portal/leads/drafts",
+        },
+        {
           id: "loans",
           label: "Loan Processing",
           icon: Landmark,
@@ -484,17 +490,49 @@ export function Sidebar() {
     return "user";
   })();
 
-  const menuItems = roleNavigation[inferredRole] || roleNavigation["user"] || [];
+  const rawMenuItems = roleNavigation[inferredRole] || roleNavigation["user"] || [];
+
+  // For the dealer role, loan-related entries must hide when the dealer's
+  // onboarding application has financeEnabled=false. Source the flag from
+  // /api/dealer/stats (already the authoritative finance-enabled endpoint).
+  const [dealerFinanceEnabled, setDealerFinanceEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (inferredRole !== "dealer") return;
+    let cancelled = false;
+    fetch("/api/dealer/stats", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        const flag = json?.data?.dealer?.financeEnabled;
+        setDealerFinanceEnabled(typeof flag === "boolean" ? flag : false);
+      })
+      .catch(() => {
+        if (!cancelled) setDealerFinanceEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inferredRole]);
+
+  const financeGatedItemIds = new Set(["loans", "loan-mgmt"]);
+  const menuItems =
+    inferredRole === "dealer" && dealerFinanceEnabled === false
+      ? rawMenuItems.map((group: any) => ({
+          ...group,
+          items: group.items.filter((item: any) => !financeGatedItemIds.has(item.id)),
+        }))
+      : rawMenuItems;
 
   return (
     <div className="w-64 bg-slate-50/50 h-screen border-r border-gray-100 flex-col fixed left-0 top-0 z-10 hidden md:flex">
-      <div className="p-6 flex items-center gap-3">
-        <div className="w-8 h-8 bg-brand-600 rounded-xl shadow-lg shadow-brand-500/20 flex items-center justify-center">
-          <div className="w-4 h-4 bg-white rounded-sm opacity-50 rotate-45"></div>
-        </div>
-        <span className="text-xl font-bold text-gray-800 tracking-tight">
-          iTarang
-        </span>
+      <div className="px-5 py-5 flex items-center">
+        <img
+          src="/itarang-logo.png"
+          alt="iTarang"
+          className="w-full max-w-[200px] h-auto object-contain select-none"
+          draggable={false}
+        />
       </div>
 
       <div className="flex-1 overflow-y-auto py-4 px-4 space-y-8">

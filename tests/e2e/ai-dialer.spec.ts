@@ -6,7 +6,7 @@ import { test, expect } from './fixtures';
 test.use({ storageState: 'tests/.auth/sales_head.json' });
 
 test.describe('AI dialer', () => {
-  test('loads dialer page with stubbed settings + empty queue', async ({ page }) => {
+  test('loads dialer page with stubbed settings + empty queue [other] [smoke]', async ({ page }) => {
     await page.route('**/api/ceo/ai-dialer/settings', (route) =>
       route.fulfill({
         status: 200,
@@ -46,7 +46,7 @@ test.describe('AI dialer', () => {
     await expect(page.getByRole('button', { name: /call queue/i })).toBeVisible();
   });
 
-  test('toggles the AI caller off and shows the paused banner', async ({ page }) => {
+  test('toggles the AI caller off and shows the paused banner [other]', async ({ page }) => {
     let enabled = true;
     await page.route('**/api/ceo/ai-dialer/settings', async (route) => {
       const method = route.request().method();
@@ -78,7 +78,7 @@ test.describe('AI dialer', () => {
     await expect(page.getByText(/ai caller\s+off/i)).toBeVisible();
   });
 
-  test('manual "Call Now" hits stubbed Bolna endpoint', async ({ page }) => {
+  test('manual "Call Now" hits stubbed Bolna endpoint [other]', async ({ page }) => {
     await page.route('**/api/ceo/ai-dialer/settings', (route) =>
       route.fulfill({
         status: 200,

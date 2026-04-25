@@ -8,6 +8,7 @@ import { createClient } from "@supabase/supabase-js";
 import { syncSignersFromDigio } from "@/lib/agreement/sync-signers";
 import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { extractStampCertificateIds } from "@/lib/digio/parse-status";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -230,6 +231,22 @@ export async function POST(_req: NextRequest, context: RouteContext) {
 
     let auditTrailUrl = application.auditTrailUrl || null;
 
+    const refreshedStampCertificateIds = extractStampCertificateIds(parsed);
+    const existingStampCertificateIds = Array.isArray(application.stampCertificateIds)
+      ? application.stampCertificateIds
+      : [];
+    const mergedStampCertificateIds =
+      refreshedStampCertificateIds.length > 0
+        ? refreshedStampCertificateIds
+        : existingStampCertificateIds;
+
+    console.log(
+      "[REFRESH AGREEMENT] refreshed stampCertificateIds:",
+      JSON.stringify(refreshedStampCertificateIds),
+      "merged:",
+      JSON.stringify(mergedStampCertificateIds),
+    );
+
     if (normalizedStatus === "completed") {
       try {
         const signedStoragePath = `agreements/${dealerId}/signed-agreement.pdf`;
@@ -341,6 +358,11 @@ export async function POST(_req: NextRequest, context: RouteContext) {
           application.providerRawResponse,
           parsed || {},
         ),
+        stampCertificateIds: mergedStampCertificateIds,
+        stampStatus:
+          mergedStampCertificateIds.length > 0
+            ? "attached"
+            : application.stampStatus || null,
         completionStatus: normalizedStatus === "completed" ? "completed" : "pending",
         reviewStatus:
           normalizedStatus === "completed"
@@ -360,6 +382,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       agreementStatus: normalizedStatus,
       signedAgreementUrl,
       auditTrailUrl,
+      stampCertificateIds: mergedStampCertificateIds,
     });
   } catch (error: any) {
     console.error("REFRESH AGREEMENT ERROR:", error);

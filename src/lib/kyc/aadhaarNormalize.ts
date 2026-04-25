@@ -49,6 +49,11 @@ export interface StructuredAadhaar {
     phone: string;
     address: string;
     aadhaarNumber: string;
+    // Aadhaar cards print gender (Male / Female / Transgender) on the
+    // front. Decentro returns it in data.ocrResult.gender; the Tesseract
+    // fallback extracts it via a regex. Auto-filling the lead form's
+    // gender field when available saves the dealer one click.
+    gender: string;
     rawText: string;
 }
 
@@ -67,8 +72,21 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
     return {
         fullName: firstNonEmpty(
             getDeep(payload, [
+                // Decentro Aadhaar OCR (actual response shape)
+                "data.ocrResult.nameOnDocument",
+                "data.ocrResult.name",
+                "data.ocrResult.fullName",
+                "data.ocrResult.holderName",
+                "data.ocrResult.personName",
+                "data.ocrResult.nameOnCard",
+                // Legacy / alternate nesting
+                "ocrResult.nameOnDocument",
                 "ocrResult.name",
+                "ocrResult.fullName",
+                "ocrResult.personName",
+                // DigiLocker eAadhaar
                 "data.proofOfIdentity.name",
+                // Other fallbacks
                 "data.full_name",
                 "data.name",
                 "data.customer_name",
@@ -81,10 +99,19 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
         ),
         fatherName: firstNonEmpty(
             getDeep(payload, [
+                // Decentro
+                "data.ocrResult.fatherName",
+                "data.ocrResult.fathersName",
+                "data.ocrResult.fatherOrHusbandName",
+                "data.ocrResult.careOf",
+                "data.ocrResult.guardianName",
+                // Legacy / top-level
                 "ocrResult.fatherName",
                 "ocrResult.sonOf",
                 "ocrResult.husbandOf",
+                // DigiLocker
                 "data.proofOfAddress.careOf",
+                // Other fallbacks
                 "data.father_name",
                 "data.fatherName",
                 "data.father_or_husband_name",
@@ -98,8 +125,18 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
         dob: normalizeDate(
             firstNonEmpty(
                 getDeep(payload, [
+                    // Decentro
+                    "data.ocrResult.dateOfBirth",
+                    "data.ocrResult.dob",
+                    "data.ocrResult.dateInfo",
+                    "data.ocrResult.DOB",
+                    // Legacy / top-level
+                    "ocrResult.dateOfBirth",
+                    "ocrResult.dob",
                     "ocrResult.dateInfo",
+                    // DigiLocker
                     "data.proofOfIdentity.dob",
+                    // Other fallbacks
                     "data.dob",
                     "data.date_of_birth",
                     "data.dateOfBirth",
@@ -110,6 +147,9 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
         ),
         phone: firstNonEmpty(
             getDeep(payload, [
+                "data.ocrResult.phone",
+                "data.ocrResult.mobile",
+                "data.ocrResult.mobileNumber",
                 "data.phone",
                 "data.mobile",
                 "data.mobile_number",
@@ -119,7 +159,18 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
         ),
         address: firstNonEmpty(
             getDeep(payload, [
+                // Decentro
+                "data.ocrResult.address",
+                "data.ocrResult.fullAddress",
+                "data.ocrResult.currentAddress",
+                "data.ocrResult.localAddress",
+                "data.ocrResult.permanentAddress",
+                "data.ocrResult.presentAddress",
+                // Legacy / top-level
                 "ocrResult.address",
+                "ocrResult.fullAddress",
+                "ocrResult.permanentAddress",
+                // Other fallbacks
                 "data.address",
                 "data.full_address",
                 "data.current_address",
@@ -133,6 +184,15 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
         ),
         aadhaarNumber: firstNonEmpty(
             getDeep(payload, [
+                // Decentro Aadhaar OCR uses idNumber for the UID
+                "data.ocrResult.idNumber",
+                "data.ocrResult.id_number",
+                "data.ocrResult.aadhaarNumber",
+                "data.ocrResult.maskedAadhaar",
+                "data.ocrResult.uid",
+                "data.ocrResult.uidNumber",
+                // Legacy / top-level
+                "ocrResult.idNumber",
                 "ocrResult.aadhaarNumber",
                 // DigiLocker returns a masked UID like "xxxxxxxx8015" here.
                 // `aadhaarReferenceNumber` is usually empty unless full UID
@@ -146,8 +206,24 @@ export function extractStructuredAadhaar(payload: unknown): StructuredAadhaar {
                 "result.aadhaar_number",
             ]),
         ),
+        gender: firstNonEmpty(
+            getDeep(payload, [
+                // Decentro
+                "data.ocrResult.gender",
+                "data.ocrResult.sex",
+                "ocrResult.gender",
+                // DigiLocker
+                "data.proofOfIdentity.gender",
+                // Other fallbacks
+                "data.gender",
+                "response.gender",
+                "result.gender",
+            ]),
+        ),
         rawText: firstNonEmpty(
             getDeep(payload, [
+                "data.ocrResult.ocrText",
+                "data.ocrResult.rawText",
                 "data.ocr_text",
                 "data.raw_text",
                 "data.text",
@@ -238,6 +314,7 @@ export interface FinalAadhaarData {
     phone: string;
     dob: string;
     aadhaar_number: string;
+    gender: string;
     // camelCase aliases for other call sites
     fullName: string;
     fatherName: string;
@@ -295,6 +372,14 @@ export function buildFinalData(
     const aadhaarNumber = firstNonEmpty(
         frontStructured.aadhaarNumber,
         backStructured.aadhaarNumber,
+        frontParsed?.aadhaarNumber,
+        backParsed?.aadhaarNumber,
+    );
+    const gender = firstNonEmpty(
+        frontStructured.gender,
+        backStructured.gender,
+        frontParsed?.gender,
+        backParsed?.gender,
     );
     const address = cleanedAddress || rawAddress;
 
@@ -306,6 +391,7 @@ export function buildFinalData(
         phone,
         dob,
         aadhaar_number: aadhaarNumber,
+        gender,
         fullName,
         fatherName,
         address,

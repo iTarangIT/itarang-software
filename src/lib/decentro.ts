@@ -12,6 +12,7 @@ const BASE_URL = process.env.DECENTRO_BASE_URL || (
 );
 const CLIENT_ID = process.env.DECENTRO_CLIENT_ID!;
 const CLIENT_SECRET = process.env.DECENTRO_CLIENT_SECRET!;
+const MODULE_SECRET_KYC = process.env.DECENTRO_MODULE_SECRET_KYC;
 const MODULE_SECRET_BANKING = process.env.DECENTRO_MODULE_SECRET_BANKING;
 const MODULE_SECRET_CREDIT = process.env.DECENTRO_MODULE_SECRET_CREDIT;
 const PROVIDER_SECRET = process.env.DECENTRO_PROVIDER_SECRET;
@@ -24,6 +25,32 @@ function genRefId(): string {
 
 function isRealSecret(val?: string): boolean {
     return !!val && !val.startsWith('your_') && val.length > 5;
+}
+
+// Surface missing bank-verification secrets once at module load so deployment
+// misconfig is visible in logs/Vercel without waiting for the first admin
+// attempt to fail. Keep as warn (not throw) so unrelated KYC paths still work
+// when only banking is unconfigured (e.g. a preview env without Decentro).
+if (!isRealSecret(MODULE_SECRET_BANKING) || !isRealSecret(PROVIDER_SECRET)) {
+    const missing = [
+        !isRealSecret(MODULE_SECRET_BANKING) && 'DECENTRO_MODULE_SECRET_BANKING',
+        !isRealSecret(PROVIDER_SECRET) && 'DECENTRO_PROVIDER_SECRET',
+    ].filter(Boolean).join(', ');
+    console.warn(
+        `[decentro] Bank account verification is disabled — missing env var(s): ${missing}. ` +
+        `Set these in the deployment environment to enable v2 bank verification.`,
+    );
+}
+
+// Prod Decentro tiers require `module_secret` on KYC scan/extract endpoints
+// (Aadhaar OCR). Staging doesn't. Warn if we appear to be pointed at prod
+// without the KYC module secret configured.
+if (BASE_URL.includes('in.decentro.tech') && !BASE_URL.includes('staging') && !isRealSecret(MODULE_SECRET_KYC)) {
+    console.warn(
+        `[decentro] KYC OCR (Aadhaar auto-fill, doc extraction) may fail with "pricing configuration" ` +
+        `errors — DECENTRO_MODULE_SECRET_KYC is not set but BASE_URL points to production. ` +
+        `Set DECENTRO_MODULE_SECRET_KYC in the deployment environment.`,
+    );
 }
 
 function kycHeaders(): Record<string, string> {
@@ -232,6 +259,9 @@ export async function classifyDocument(documentBlob: Blob, filename: string) {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
     };
+    if (isRealSecret(MODULE_SECRET_KYC)) {
+        headers['module_secret'] = MODULE_SECRET_KYC!;
+    }
 
     try {
         const res = await fetch(`${BASE_URL}/kyc/document/classify`, {
@@ -257,6 +287,7 @@ export async function extractDocumentOcr(
     filename: string,
     document_side?: OcrDocSide,
     signal?: AbortSignal,
+    kycValidate: boolean = true,
 ) {
     // Decentro rejects filenames with multiple periods — sanitize by keeping only the last one (extension)
     const lastDot = filename.lastIndexOf('.');
@@ -269,7 +300,11 @@ export async function extractDocumentOcr(
     form.append('document_type', document_type);
     form.append('consent', 'Y');
     form.append('consent_purpose', 'Document OCR extraction for KYC verification');
-    form.append('kyc_validate', '1');
+    // kyc_validate=1 makes Decentro cross-check the doc against UIDAI/NSDL
+    // (requires OTP for Aadhaar → fails for plain extraction flows). Pure OCR
+    // auto-fill must pass kycValidate=false so Decentro returns just the
+    // extracted fields.
+    form.append('kyc_validate', kycValidate ? '1' : '0');
     form.append('document', documentBlob, sanitizedFilename);
     // Tell Decentro which side of the document this is — needed for Aadhaar to know whether
     // to prioritize name/DOB (front) or address/id-number (back) extraction.
@@ -282,6 +317,12 @@ export async function extractDocumentOcr(
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
     };
+    // Production Decentro tiers scope KYC OCR on a separate pricing SKU gated by
+    // `module_secret`. Staging doesn't require it; prod rejects with
+    // "API usage disallowed due to missing pricing configuration" when absent.
+    if (isRealSecret(MODULE_SECRET_KYC)) {
+        headers['module_secret'] = MODULE_SECRET_KYC!;
+    }
 
     const url = `${BASE_URL}/kyc/scan_extract/ocr`;
     console.log(
@@ -297,6 +338,72 @@ export async function extractDocumentOcr(
 
     const json = await res.json();
     // Log full response so field-name mismatches are visible in dev server log
+    console.log(
+        `[Decentro OCR] Response status=${res.status}:`,
+        JSON.stringify(json).slice(0, 2000),
+    );
+    return json;
+}
+
+// Aadhaar-specific OCR call that follows the documented Decentro interface
+// (https://docs.decentro.tech — Document Extraction body params). The docs
+// say:
+//   - kyc_validate is "Not applicable when document_type is aadhaar"
+//   - document_back is an officially-supported field for sending the back
+//     image in the SAME request, so Decentro extracts both sides in one
+//     call. There is no `document_side` / `side` parameter in the docs.
+// Our older extractDocumentOcr() path fired two parallel requests, one per
+// side with an undocumented `document_side` form field. That apparently
+// behaves differently on the itarang_prod SKU — the dealer flow returned
+// empty / failure responses while the single-request admin flow
+// (extractDocumentOcr without both sides) works fine for PAN.
+export async function extractAadhaarOcr(
+    frontBlob: Blob,
+    frontFilename: string,
+    backBlob: Blob,
+    backFilename: string,
+    signal?: AbortSignal,
+) {
+    const sanitize = (n: string): string => {
+        const lastDot = n.lastIndexOf('.');
+        return lastDot > 0
+            ? n.slice(0, lastDot).replace(/\./g, '_') + n.slice(lastDot)
+            : n;
+    };
+
+    const form = new FormData();
+    form.append('reference_id', genRefId());
+    form.append('document_type', 'AADHAAR');
+    form.append('consent', 'Y');
+    form.append('consent_purpose', 'Document OCR extraction for KYC verification');
+    // kyc_validate is N/A for Aadhaar per Decentro docs (offline verification).
+    // We omit it entirely rather than send 0 or 1 — the docs say default is 1
+    // when absent, but since it's ignored for Aadhaar either way, we rely on
+    // the documented "not applicable" behavior.
+    form.append('document', frontBlob, sanitize(frontFilename));
+    form.append('document_back', backBlob, sanitize(backFilename));
+
+    const headers: Record<string, string> = {
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+    };
+    if (isRealSecret(MODULE_SECRET_KYC)) {
+        headers['module_secret'] = MODULE_SECRET_KYC!;
+    }
+
+    const url = `${BASE_URL}/kyc/scan_extract/ocr`;
+    console.log(
+        `[Decentro OCR] POST ${url} document_type=AADHAAR both-sides front=${frontFilename} (${frontBlob.size}B) back=${backFilename} (${backBlob.size}B)`,
+    );
+
+    const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: form,
+        signal,
+    });
+
+    const json = await res.json();
     console.log(
         `[Decentro OCR] Response status=${res.status}:`,
         JSON.stringify(json).slice(0, 2000),

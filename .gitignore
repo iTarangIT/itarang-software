@@ -52,3 +52,7 @@ node_modules
 
 # claude code — local, per-developer settings (must not be committed)
 .claude/
+
+prod.txt
+env.txt
+/eval-reports

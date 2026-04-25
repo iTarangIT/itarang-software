@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { consentRecords, leads } from '@/lib/db/schema';
+import { consentRecords, kycVerifications, leads } from '@/lib/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 import { fetchAndStoreSignedConsent } from '@/lib/digio/fetch-signed-consent';
+import { createWorkflowId } from '@/lib/kyc/admin-workflow';
 
 type RouteContext = { params: Promise<{ leadId: string }> };
 
@@ -87,6 +88,27 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
 
         const auth = basicAuthHeader(clientId, clientSecret);
         const parsed = await fetchDigioDocument(baseUrl, auth, record.esign_transaction_id);
+
+        // Persist the raw DigiO document-status response for audit. Non-fatal.
+        if (parsed) {
+            try {
+                const syncNow = new Date();
+                await db.insert(kycVerifications).values({
+                    id: createWorkflowId('KYCVER', syncNow),
+                    lead_id: leadId,
+                    verification_type: 'esign_consent_sync',
+                    applicant: 'primary',
+                    status: 'success',
+                    api_provider: 'digio',
+                    api_request: { document_id: record.esign_transaction_id, consent_id: record.id },
+                    api_response: parsed as Record<string, unknown>,
+                    submitted_at: syncNow,
+                    completed_at: syncNow,
+                });
+            } catch (persistErr) {
+                console.error('[consent/sync] kyc_verifications insert failed:', persistErr);
+            }
+        }
 
         if (!parsed) {
             return NextResponse.json({ success: true, data: { synced: false, reason: 'digio_fetch_failed' } });

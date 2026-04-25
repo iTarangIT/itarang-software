@@ -3,20 +3,32 @@ import { db } from "@/lib/db";
 import { consentRecords } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
+import { getDigioBaseUrl, getDigioBasicAuth } from "@/lib/digio/client";
 
-function cleanEnv(value?: string) {
-    return (value || "").trim().replace(/^["']|["']$/g, "");
-}
-
-function basicAuthHeader(clientId: string, clientSecret: string) {
-    return `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
-}
+const SIGNED_STATES = new Set(["signed", "completed", "executed", "success"]);
+const PENDING_STATES = new Set([
+    "requested",
+    "pending",
+    "sent",
+    "in_progress",
+    "opened",
+    "viewed",
+    "link_sent",
+    "link_opened",
+    "esign_in_progress",
+]);
+const FAILED_STATES = new Set(["expired", "failed", "rejected", "declined", "cancelled", "error"]);
 
 /**
  * POST — Fetches the signed consent PDF from DigiO, stores in Supabase,
  * and updates the consent record. Returns the PDF URL.
  *
- * If Supabase storage fails, falls back to returning a direct DigiO proxy URL.
+ * Flow:
+ *   1. If signed_consent_url already cached, return it.
+ *   2. Probe DigiO status; if not signed, surface a precise error and mirror
+ *      state into consent_records so the UI badge stops lying.
+ *   3. Delegate to fetchAndStoreSignedConsent (3-variant download + status-chase
+ *      fallback + %PDF- validation). On success, persist the Supabase URL.
  */
 export async function POST(
     _req: NextRequest,
@@ -38,7 +50,6 @@ export async function POST(
             );
         }
 
-        // If we already have the PDF URL, return it
         if (record.signed_consent_url) {
             return NextResponse.json({
                 success: true,
@@ -55,11 +66,87 @@ export async function POST(
             }, { status: 400 });
         }
 
-        // Try the standard fetch + store flow first
+        const auth = getDigioBasicAuth();
+        if (!auth) {
+            return NextResponse.json({
+                success: false,
+                error: { message: "DigiO credentials not configured" },
+            }, { status: 500 });
+        }
+
+        const digioBaseUrl = getDigioBaseUrl();
+
+        // Pre-flight: check DigiO's current status for this document. The
+        // /download endpoint returns an opaque 500 when the document isn't
+        // signed yet, which makes debugging painful. The status endpoint tells
+        // us the real state so we can give the admin a precise error and also
+        // sync our local consent_status row to match what DigiO believes.
+        const statusUrl = `${digioBaseUrl}/v2/client/document/${encodeURIComponent(documentId)}`;
+        let digioStatus: string | null = null;
+        try {
+            const statusRes = await fetch(statusUrl, {
+                method: "GET",
+                headers: { Authorization: auth, Accept: "application/json" },
+                cache: "no-store",
+            });
+            if (statusRes.ok) {
+                const payload = (await statusRes.json().catch(() => null)) as Record<string, unknown> | null;
+                const parties = Array.isArray(payload?.signing_parties)
+                    ? (payload?.signing_parties as Array<Record<string, unknown>>)
+                    : [];
+                const raw =
+                    (payload?.agreement_status as string | undefined) ||
+                    (payload?.status as string | undefined) ||
+                    (parties[0]?.status as string | undefined) ||
+                    null;
+                digioStatus = raw ? String(raw).toLowerCase() : null;
+            } else {
+                console.warn("[fetch-pdf] DigiO status check failed:", statusRes.status);
+            }
+        } catch (e) {
+            console.warn("[fetch-pdf] DigiO status check error:", e);
+        }
+
+        if (digioStatus && !SIGNED_STATES.has(digioStatus)) {
+            const isFailed = FAILED_STATES.has(digioStatus);
+            const isPending = PENDING_STATES.has(digioStatus);
+
+            try {
+                let localStatus: string | null = null;
+                if (digioStatus === "expired") localStatus = "expired";
+                else if (isFailed) localStatus = "esign_failed";
+                else if (digioStatus === "viewed" || digioStatus === "opened") localStatus = "link_opened";
+
+                if (localStatus && localStatus !== record.consent_status) {
+                    await db.update(consentRecords)
+                        .set({ consent_status: localStatus, updated_at: new Date() })
+                        .where(eq(consentRecords.id, consentId));
+                }
+            } catch (e) {
+                console.warn("[fetch-pdf] Failed to sync local consent_status:", e);
+            }
+
+            const message = isFailed
+                ? `DigiO reports this consent as '${digioStatus}'. No signed PDF will be available.`
+                : isPending
+                    ? `Customer has not completed signing yet. DigiO status: '${digioStatus}'. Try again after the customer signs.`
+                    : `DigiO reports status '${digioStatus}' — no signed PDF available yet.`;
+
+            return NextResponse.json({
+                success: false,
+                error: { message, digioStatus, documentId },
+            }, { status: 409 });
+        }
+
         const stored = await fetchAndStoreSignedConsent(documentId, leadId);
         if (stored?.publicUrl) {
+            const now = new Date();
             await db.update(consentRecords)
-                .set({ signed_consent_url: stored.publicUrl, updated_at: new Date() })
+                .set({
+                    signed_consent_url: stored.publicUrl,
+                    signed_at: record.signed_at || now,
+                    updated_at: now,
+                })
                 .where(eq(consentRecords.id, consentId));
 
             return NextResponse.json({
@@ -69,101 +156,14 @@ export async function POST(
             });
         }
 
-        // Fallback: try to proxy the PDF directly from DigiO
-        const digioClientId = cleanEnv(process.env.DIGIO_CLIENT_ID);
-        const digioClientSecret = cleanEnv(process.env.DIGIO_CLIENT_SECRET);
-        const digioBaseUrl = cleanEnv(process.env.DIGIO_BASE_URL) || "https://api.digio.in";
+        const message = digioStatus && SIGNED_STATES.has(digioStatus)
+            ? `DigiO reports the document as '${digioStatus}' but every download variant failed. Check server logs for [fetchAndStoreSignedConsent] entries — most likely DIGIO_BASE_URL points at the wrong environment (sandbox vs prod) for this document.`
+            : `Unable to download the signed PDF from DigiO. Check server logs for [fetchAndStoreSignedConsent] entries.`;
 
-        if (!digioClientId || !digioClientSecret) {
-            return NextResponse.json({
-                success: false,
-                error: { message: "DigiO credentials not configured" },
-            }, { status: 500 });
-        }
-
-        const auth = basicAuthHeader(digioClientId, digioClientSecret);
-
-        // Try download endpoint
-        const downloadUrl = `${digioBaseUrl}/v2/client/document/download?document_id=${encodeURIComponent(documentId)}`;
-        console.log("[fetch-pdf] Trying DigiO download:", downloadUrl);
-
-        const res = await fetch(downloadUrl, {
-            method: "GET",
-            headers: { Authorization: auth, Accept: "application/pdf" },
-            cache: "no-store",
-        });
-
-        if (!res.ok) {
-            const errorText = await res.text().catch(() => "");
-            console.error("[fetch-pdf] DigiO download failed:", res.status, errorText.slice(0, 300));
-
-            // Try getting document status to see what's available
-            const statusUrl = `${digioBaseUrl}/v2/client/document/${encodeURIComponent(documentId)}`;
-            const statusRes = await fetch(statusUrl, {
-                method: "GET",
-                headers: { Authorization: auth, Accept: "application/json" },
-                cache: "no-store",
-            });
-            const statusData = statusRes.ok ? await statusRes.json().catch(() => null) : null;
-
-            return NextResponse.json({
-                success: false,
-                error: {
-                    message: `DigiO returned ${res.status} when downloading PDF. The document may not be fully signed yet.`,
-                    digioStatus: statusData?.status || statusData?.agreement_status || "unknown",
-                    documentId,
-                },
-            }, { status: 502 });
-        }
-
-        // We got the PDF — return it as a data URL so the admin can view it
-        const pdfBuffer = await res.arrayBuffer();
-        const pdfBase64 = Buffer.from(pdfBuffer).toString("base64");
-        const dataUrl = `data:application/pdf;base64,${pdfBase64}`;
-
-        // Also try to persist to Supabase in the background
-        try {
-            const { createClient } = await import("@supabase/supabase-js");
-            const supabaseUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
-            const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
-            const bucket = cleanEnv(process.env.CONSENT_STORAGE_BUCKET) || "documents";
-
-            if (supabaseUrl && serviceRoleKey) {
-                const supabase = createClient(supabaseUrl, serviceRoleKey);
-                const storagePath = `kyc/${leadId}/consent/signed-${Date.now()}.pdf`;
-
-                const { error: upErr } = await supabase.storage
-                    .from(bucket)
-                    .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
-
-                if (!upErr) {
-                    const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(storagePath);
-                    if (urlData?.publicUrl) {
-                        await db.update(consentRecords)
-                            .set({ signed_consent_url: urlData.publicUrl, updated_at: new Date() })
-                            .where(eq(consentRecords.id, consentId));
-                        console.log("[fetch-pdf] PDF persisted to Supabase:", urlData.publicUrl);
-
-                        return NextResponse.json({
-                            success: true,
-                            pdfUrl: urlData.publicUrl,
-                            source: "digio_fresh_stored",
-                        });
-                    }
-                } else {
-                    console.warn("[fetch-pdf] Supabase upload failed:", upErr.message);
-                }
-            }
-        } catch (e) {
-            console.warn("[fetch-pdf] Background storage failed:", e);
-        }
-
-        // Return the data URL as fallback
         return NextResponse.json({
-            success: true,
-            pdfUrl: dataUrl,
-            source: "digio_direct",
-        });
+            success: false,
+            error: { message, digioStatus: digioStatus || "unknown", documentId },
+        }, { status: 502 });
     } catch (error) {
         console.error("[fetch-pdf] Error:", error);
         const message = error instanceof Error ? error.message : "Server error";

@@ -2,7 +2,7 @@
 
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
-    ChevronLeft, ChevronDown, Loader2, AlertCircle, X,
+    ChevronLeft, ChevronRight, ChevronDown, Loader2, AlertCircle, X,
     Upload, CheckCircle2, XCircle, Clock, Scan, Eye, FileText,
     ShieldCheck
 } from 'lucide-react';
@@ -154,6 +154,7 @@ function getDealerStatus(uploaded: boolean, status?: string): { label: string; c
     const s = (status || '').toLowerCase();
     if (s === 'success' || s === 'verified') return { label: 'Verified', color: 'text-green-600', dotColor: 'bg-green-500', icon: 'check' };
     if (s === 'failed' || s === 'rejected' || s === 'reupload_requested') return { label: 'Reupload Required', color: 'text-red-600', dotColor: 'bg-red-500', icon: 'reupload' };
+    if (s === 'uploaded' || s === '') return { label: 'Uploaded', color: 'text-emerald-600', dotColor: 'bg-emerald-500', icon: 'check' };
     return { label: 'Uploaded - Pending Review', color: 'text-blue-600', dotColor: 'bg-amber-500', icon: 'clock' };
 }
 
@@ -170,13 +171,15 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
     const dealerStatus = getDealerStatus(uploaded, status);
     const isPdf = !!fileUrl && /\.pdf($|\?)/i.test(fileUrl);
     const isImage = !!fileUrl && !isPdf;
-    const isVerified = dealerStatus.icon === 'check';
+    const s = (status || '').toLowerCase();
+    const isFullyVerified = s === 'success' || s === 'verified';
     const isRejected = dealerStatus.icon === 'reupload' || dealerStatus.icon === 'error';
-    const isPending = uploaded && !isVerified && !isRejected;
+    const isUploadedOnly = uploaded && dealerStatus.icon === 'check' && !isFullyVerified;
+    const isPending = uploaded && !isFullyVerified && !isRejected && !isUploadedOnly;
 
     const border = !uploaded
         ? 'border-dashed border-gray-200 hover:border-[#0047AB]/60'
-        : isVerified
+        : isFullyVerified || isUploadedOnly
             ? 'border-emerald-200 hover:border-emerald-400'
             : isRejected
                 ? 'border-red-200 hover:border-red-400'
@@ -184,11 +187,13 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
 
     const pill = !uploaded
         ? { bg: 'bg-gray-100', text: 'text-gray-500', label: required ? 'Required' : 'Optional' }
-        : isVerified
+        : isFullyVerified
             ? { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Verified' }
-            : isRejected
-                ? { bg: 'bg-red-50', text: 'text-red-700', label: 'Re-upload' }
-                : { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Pending' };
+            : isUploadedOnly
+                ? { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Uploaded' }
+                : isRejected
+                    ? { bg: 'bg-red-50', text: 'text-red-700', label: 'Re-upload' }
+                    : { bg: 'bg-amber-50', text: 'text-amber-700', label: 'Pending' };
 
     return (
         <div className={`group relative rounded-2xl border-2 bg-white transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5 overflow-hidden ${border} ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -258,7 +263,7 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
                     <p className="text-xs font-bold text-gray-900 truncate leading-tight">{label}</p>
                     <div className="flex items-center gap-1.5 mt-1.5">
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${pill.bg} ${pill.text}`}>
-                            {isVerified && <CheckCircle2 className="w-2.5 h-2.5" />}
+                            {(isFullyVerified || isUploadedOnly) && <CheckCircle2 className="w-2.5 h-2.5" />}
                             {isRejected && <XCircle className="w-2.5 h-2.5" />}
                             {isPending && <Clock className="w-2.5 h-2.5" />}
                             {pill.label}
@@ -296,18 +301,31 @@ export function StatusBadge({ status }: { status: string }) {
 
 // ─── Progress Header ────────────────────────────────────────────────────────
 
-export function ProgressHeader({ title, subtitle, step, totalSteps = 5, onBack, rightAction }: {
+export function ProgressHeader({
+    title, subtitle, step, totalSteps = 5,
+    onBack, onPrev, onNext, onStepClick,
+    rightAction,
+}: {
     title: string;
     subtitle?: string;
     step: number;
     totalSteps?: number;
     onBack: () => void;
+    onPrev?: () => void;
+    onNext?: () => void;
+    onStepClick?: (targetStep: number) => void;
     rightAction?: ReactNode;
 }) {
+    const canGoPrev = step > 1;
+    const canGoNext = step < totalSteps;
     return (
         <header className="mb-8 flex justify-between items-start gap-4">
             <div className="flex gap-4">
-                <button onClick={onBack} className="mt-1 p-2 hover:bg-white transition-colors rounded-lg">
+                <button
+                    onClick={onBack}
+                    aria-label="Back to lead creation"
+                    className="mt-1 p-2 hover:bg-white transition-colors rounded-lg"
+                >
                     <ChevronLeft className="w-6 h-6 text-gray-900" />
                 </button>
                 <div>
@@ -320,19 +338,49 @@ export function ProgressHeader({ title, subtitle, step, totalSteps = 5, onBack, 
                     <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest text-right mb-1.5">
                         Workflow Progress
                     </p>
-                    <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-4">
                         <span className="text-xs font-bold text-[#1D4ED8] whitespace-nowrap">
                             Step {step} of {totalSteps}
                         </span>
-                        <div className="flex gap-2.5">
-                            {Array.from({ length: totalSteps }, (_, i) => (
-                                <div
-                                    key={i}
-                                    className={`h-[6px] w-[50px] rounded-full transition-all duration-300 ${
-                                        i < step ? 'bg-[#0047AB]' : 'bg-gray-200'
-                                    }`}
-                                />
-                            ))}
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={onPrev}
+                                disabled={!canGoPrev || !onPrev}
+                                aria-label="Previous step"
+                                className="p-1 rounded-md text-gray-600 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors"
+                            >
+                                <ChevronLeft className="w-4 h-4" />
+                            </button>
+                            <div className="flex gap-2.5">
+                                {Array.from({ length: totalSteps }, (_, i) => {
+                                    const idx = i + 1;
+                                    const reached = idx <= step;
+                                    const clickable = !!onStepClick;
+                                    return (
+                                        <button
+                                            type="button"
+                                            key={idx}
+                                            onClick={clickable ? () => onStepClick?.(idx) : undefined}
+                                            disabled={!clickable}
+                                            aria-label={`Jump to step ${idx}`}
+                                            aria-current={idx === step ? 'step' : undefined}
+                                            className={`h-[6px] w-[50px] rounded-full transition-all duration-300 ${
+                                                reached ? 'bg-[#0047AB]' : 'bg-gray-200'
+                                            } ${clickable ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
+                                        />
+                                    );
+                                })}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={onNext}
+                                disabled={!canGoNext || !onNext}
+                                aria-label="Next step"
+                                className="p-1 rounded-md text-gray-600 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors"
+                            >
+                                <ChevronRight className="w-4 h-4" />
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -447,6 +495,8 @@ export function OCRModal({ open, onClose, onResult }: {
     const [aadhaarBack, setAadhaarBack] = useState<File | null>(null);
     const [scanning, setScanning] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [errorDiag, setErrorDiag] = useState<string | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
     const [scanStatus, setScanStatus] = useState<string>('');
 
     if (!open) return null;
@@ -459,7 +509,9 @@ export function OCRModal({ open, onClose, onResult }: {
 
         setScanning(true);
         setError(null);
-        setScanStatus('Connecting to OCR service...');
+        setErrorDiag(null);
+        setNotice(null);
+        setScanStatus('Scanning Aadhaar...');
 
         try {
             const formData = new FormData();
@@ -476,12 +528,48 @@ export function OCRModal({ open, onClose, onResult }: {
 
             if (data.success) {
                 onResult(data.data);
-                onClose();
+                const isFallback = data.data?.source === 'tesseract';
+                const isPartial = data.data?.ocrStatus === 'partial'
+                    && Array.isArray(data.data?.missingFields)
+                    && data.data.missingFields.length > 0;
+                if (isFallback) {
+                    // Tesseract fallback — lower confidence than Decentro,
+                    // dealer must verify each auto-filled field before
+                    // submitting the form.
+                    setNotice('Auto-filled with local OCR (lower confidence). Please verify each field before submitting.');
+                    setTimeout(() => onClose(), 2200);
+                } else if (isPartial) {
+                    setNotice('Partial data extracted — please verify the remaining fields after closing.');
+                    setTimeout(() => onClose(), 1500);
+                } else {
+                    onClose();
+                }
             } else {
-                setError(data.error?.message || 'Could not read document. Please ensure image is clear');
+                const details = data.error?.details as
+                    | { reason?: string; frontMessage?: string; backMessage?: string }
+                    | undefined;
+
+                if (details?.reason === 'account_config') {
+                    // Decentro pricing/credits issue — not recoverable by the dealer.
+                    // Close the modal and show a friendly notice so the dealer can
+                    // proceed to fill the form manually.
+                    setNotice('Auto-fill is temporarily unavailable. Please enter details manually below.');
+                    setTimeout(() => onClose(), 1800);
+                } else {
+                    const base =
+                        data.error?.message ||
+                        'Could not read document. Please ensure image is clear.';
+                    setError(base);
+                    // Always surface the provider diagnostic in a muted sub-line.
+                    // Not sensitive (same info the public Decentro endpoint returns
+                    // to any IP allowlisted caller), and without it admins have to
+                    // SSH to the VPS to diagnose real failures like "IP not
+                    // allowed", "OTP required", or "pricing configuration".
+                    setErrorDiag(details?.frontMessage || details?.backMessage || null);
+                }
             }
         } catch {
-            setError('Scanning failed. Please try again.');
+            setError('Scanning failed. Please check your connection and try again.');
         } finally {
             setScanning(false);
             setScanStatus('');
@@ -492,6 +580,8 @@ export function OCRModal({ open, onClose, onResult }: {
         setAadhaarFront(null);
         setAadhaarBack(null);
         setError(null);
+        setErrorDiag(null);
+        setNotice(null);
         onClose();
     };
 
@@ -531,12 +621,24 @@ export function OCRModal({ open, onClose, onResult }: {
                             <Loader2 className="w-4 h-4 animate-spin" />
                             {scanStatus || 'Processing...'}
                         </div>
-                        <p className="text-xs text-gray-400">This may take up to 30 seconds</p>
+                        <p className="text-xs text-gray-400">Usually under 5 seconds</p>
                     </div>
                 )}
 
                 {error && (
                     <p className="mt-4 text-sm text-red-600 font-medium">{error}</p>
+                )}
+
+                {errorDiag && (
+                    <p className="mt-1 text-xs text-gray-500 font-mono break-all">
+                        Details: {errorDiag}
+                    </p>
+                )}
+
+                {notice && (
+                    <p className="mt-4 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 font-medium">
+                        {notice}
+                    </p>
                 )}
 
                 <div className="mt-6 space-y-3">

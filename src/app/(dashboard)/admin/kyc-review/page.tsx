@@ -191,14 +191,19 @@ export default function AdminKYCReviewPage() {
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                {lead.documents.map(doc => (
+                                                {lead.documents.map(doc => {
+                                                    const isSignedConsent = doc.document_type === 'signed_consent';
+                                                    const displayLabel = isSignedConsent
+                                                        ? 'Signed Consent (DigiO)'
+                                                        : doc.document_type.replace(/_/g, ' ');
+                                                    return (
                                                     <tr key={doc.id} className="border-b border-gray-50">
                                                         <td className="py-3 px-3">
-                                                            <div className="font-medium capitalize">{doc.document_type.replace(/_/g, ' ')}</div>
+                                                            <div className="font-medium capitalize">{displayLabel}</div>
                                                             <div className="text-[10px] text-gray-400">{doc.review_for === 'co_borrower' ? 'Co-Borrower' : 'Primary'}</div>
                                                         </td>
                                                         <td className="py-3 px-3 text-xs text-gray-500">{doc.review_for}</td>
-                                                        <td className="py-3 px-3 text-xs text-gray-500">{new Date(doc.uploaded_at).toLocaleDateString()}</td>
+                                                        <td className="py-3 px-3 text-xs text-gray-500">{doc.uploaded_at ? new Date(doc.uploaded_at).toLocaleDateString() : '—'}</td>
                                                         <td className="py-3 px-3">
                                                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${doc.status === 'verified' ? 'bg-green-50 text-green-700' : doc.status === 'rejected' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
                                                                 {doc.status}
@@ -211,15 +216,28 @@ export default function AdminKYCReviewPage() {
                                                                         <Eye className="w-3.5 h-3.5" />
                                                                     </a>
                                                                 )}
-                                                                {doc.status !== 'verified' && (
-                                                                    <button onClick={() => { setReviewingDoc(doc.id); setReviewAction('verified'); }} className="px-3 py-1 bg-[#0047AB] text-white rounded-lg text-[10px] font-bold hover:bg-[#003580]">
-                                                                        Review
-                                                                    </button>
+                                                                {isSignedConsent ? (
+                                                                    doc.status !== 'verified' && (
+                                                                        <a
+                                                                            href={`/admin/kyc-review/${lead.lead_id}`}
+                                                                            onClick={(e) => e.stopPropagation()}
+                                                                            className="px-3 py-1 bg-[#0047AB] text-white rounded-lg text-[10px] font-bold hover:bg-[#003580]"
+                                                                        >
+                                                                            Review Consent
+                                                                        </a>
+                                                                    )
+                                                                ) : (
+                                                                    doc.status !== 'verified' && (
+                                                                        <button onClick={() => { setReviewingDoc(doc.id); setReviewAction('verified'); }} className="px-3 py-1 bg-[#0047AB] text-white rounded-lg text-[10px] font-bold hover:bg-[#003580]">
+                                                                            Review
+                                                                        </button>
+                                                                    )
                                                                 )}
                                                             </div>
                                                         </td>
                                                     </tr>
-                                                ))}
+                                                    );
+                                                })}
                                             </tbody>
                                         </table>
 

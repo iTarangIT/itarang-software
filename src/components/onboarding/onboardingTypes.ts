@@ -111,8 +111,7 @@ export type AgreementStatus =
 export type SigningMethod =
   | ""
   | "aadhaar_esign"
-  | "electronic_signature"
-  | "dsc_signature";
+  | "electronic_signature";
 
 export type AgreementParty = {
   name: string;
@@ -120,6 +119,7 @@ export type AgreementParty = {
   email: string;
   mobile: string;
   address: string;
+  age?: string;
   signingMethod: SigningMethod;
 };
 
@@ -156,6 +156,7 @@ export type AgreementData = {
     name: string;
     email: string;
     mobile: string;
+    age?: string;
   };
 
   financierName: string;

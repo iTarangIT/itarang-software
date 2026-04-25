@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
     AlertCircle, CheckCircle2, ChevronRight, Clock, Download,
-    FileText, Loader2, RefreshCw, Send, Shield, Upload,
+    FileText, Loader2, Phone, RefreshCw, Send, Shield, Upload,
 } from 'lucide-react';
 import {
     SectionCard, InputField, DocumentCard, StatusBadge, ProgressHeader,
@@ -122,23 +122,20 @@ export default function BorrowerConsentPage() {
 
             if (!canAccess) { setAccessDenied(true); setLead(fetchedLead); return; }
 
+            if (!fetchedLead) {
+                setAccessDenied(true);
+                setApiError('Lead record could not be loaded. Please return to lead creation and try again.');
+                return;
+            }
+
             setAccessDenied(false);
             setLead(fetchedLead);
             if (fetchedLead?.borrower_consent_status) setConsentStatus(fetchedLead.borrower_consent_status);
 
-            // Populate borrower form from lead data (only on initial load)
-            if (!soft && fetchedLead) {
-                setBorrowerForm(prev => ({
-                    ...prev,
-                    full_name: fetchedLead.full_name || '',
-                    father_or_husband_name: fetchedLead.father_or_husband_name || '',
-                    dob: fetchedLead.dob ? new Date(fetchedLead.dob).toISOString().split('T')[0] : '',
-                    phone: fetchedLead.phone || fetchedLead.contact_phone || '',
-                    email: fetchedLead.email || '',
-                    current_address: fetchedLead.current_address || '',
-                    permanent_address: fetchedLead.permanent_address || '',
-                }));
-            }
+            // Borrower is treated as independent from the customer. We do NOT
+            // prefill the borrower form from lead (customer) fields — only
+            // borrower-specific details persisted under this lead should
+            // populate the form.
 
             const [personalRes, docsRes, verificationsRes, consentRes] = await Promise.allSettled([
                 fetch(`/api/kyc/${leadId}/borrower-details`, { cache: 'no-store' }),
@@ -147,21 +144,24 @@ export default function BorrowerConsentPage() {
                 fetch(`/api/kyc/${leadId}/consent/status?consent_for=borrower`, { cache: 'no-store' }),
             ]);
 
-            // Merge personal details into form (only on initial load)
+            // Populate borrower form only from saved borrower-specific details.
             if (!soft && personalRes.status === 'fulfilled') {
                 const personalJson = await personalRes.value.json();
                 if (personalJson?.success && personalJson.data) {
                     const pd = personalJson.data;
                     setBorrowerForm(prev => ({
                         ...prev,
-                        aadhaar_no: pd.aadhaar_no || prev.aadhaar_no,
-                        pan_no: pd.pan_no || prev.pan_no,
-                        email: pd.email || prev.email,
-                        income: pd.income || prev.income,
-                        marital_status: pd.marital_status || prev.marital_status,
-                        father_or_husband_name: pd.father_husband_name || prev.father_or_husband_name,
-                        current_address: pd.local_address || prev.current_address,
-                        dob: pd.dob ? new Date(pd.dob).toISOString().split('T')[0] : prev.dob,
+                        full_name: pd.full_name || pd.borrower_name || '',
+                        phone: pd.phone || pd.borrower_phone || '',
+                        permanent_address: pd.permanent_address || '',
+                        aadhaar_no: pd.aadhaar_no || '',
+                        pan_no: pd.pan_no || '',
+                        email: pd.email || '',
+                        income: pd.income || '',
+                        marital_status: pd.marital_status || '',
+                        father_or_husband_name: pd.father_husband_name || '',
+                        current_address: pd.local_address || '',
+                        dob: pd.dob ? new Date(pd.dob).toISOString().split('T')[0] : '',
                     }));
                 }
             }
@@ -281,17 +281,18 @@ export default function BorrowerConsentPage() {
 
             if (!res.ok || !data?.success) throw new Error(data?.message || data?.error?.message || 'Upload failed');
 
+            const serverDoc = data?.document || data?.data || null;
             setUploadedDocs(prev => ({
                 ...prev,
                 [documentType]: {
                     ...(prev[documentType] || {}),
                     doc_type: documentType,
-                    verification_status: 'pending',
-                    doc_status: 'uploaded',
-                    file_url: data?.fileUrl || prev[documentType]?.file_url || null,
-                    file_name: file.name,
-                    file_size: file.size,
-                    uploaded_at: new Date().toISOString(),
+                    doc_status: serverDoc?.doc_status || 'uploaded',
+                    verification_status: serverDoc?.verification_status || 'uploaded',
+                    file_url: serverDoc?.file_url || data?.fileUrl || prev[documentType]?.file_url || null,
+                    file_name: serverDoc?.file_name || file.name,
+                    file_size: serverDoc?.file_size || file.size,
+                    uploaded_at: serverDoc?.uploaded_at || new Date().toISOString(),
                 },
             }));
             await loadPageData(true);
@@ -443,12 +444,39 @@ export default function BorrowerConsentPage() {
                 <div className="text-center max-w-md">
                     <Shield className="w-14 h-14 text-red-400 mx-auto mb-4" />
                     <h2 className="text-2xl font-bold text-gray-900">Access Denied</h2>
-                    <p className="mt-2 text-sm text-gray-500">Step 3 is only available for hot leads with non-cash payment method.</p>
-                    <button onClick={() => router.push('/dealer-portal/leads')} className="mt-6 px-6 py-3 bg-[#0047AB] text-white rounded-xl font-bold">Back to Leads</button>
+                    <p className="mt-2 text-sm text-gray-500">
+                        {apiError || 'Step 3 is only available for hot leads with non-cash payment method.'}
+                    </p>
+                    <button onClick={() => router.push('/dealer-portal/leads/new')} className="mt-6 px-6 py-3 bg-[#0047AB] text-white rounded-xl font-bold">Back to Lead Creation</button>
                 </div>
             </div>
         );
     }
+
+    // ─── Gating & Stepper ───────────────────────────────────────────────────
+    const isConsentVerified = ['verified', 'admin_verified', 'manual_verified'].includes((consentStatus || '').toLowerCase());
+    const allDocsUploaded = requiredDocs.filter(d => d.required).every(d => !!uploadedDocs[d.key]?.file_url);
+    const pendingRequirements: string[] = [];
+    if (!isConsentVerified) pendingRequirements.push('borrower consent verification');
+    if (!allDocsUploaded) pendingRequirements.push(`${docStats.pending.length} pending document${docStats.pending.length === 1 ? '' : 's'}`);
+    const canProceed = isConsentVerified && allDocsUploaded;
+
+    const stepRoutes: Record<number, string> = {
+        1: '/dealer-portal/leads/new',
+        2: `/dealer-portal/leads/${leadId}/kyc`,
+        3: `/dealer-portal/leads/${leadId}/borrower-consent`,
+        4: `/dealer-portal/leads/${leadId}/kyc/interim`,
+        5: `/dealer-portal/leads/${leadId}/options`,
+    };
+    const jumpToStep = (target: number) => {
+        if (target === 3) return;
+        if (target > 3 && !canProceed) {
+            setApiError('Complete this step before jumping ahead.');
+            return;
+        }
+        const route = stepRoutes[target];
+        if (route) router.push(route);
+    };
 
     return (
         <div className="min-h-screen bg-[#F8F9FB]">
@@ -458,7 +486,10 @@ export default function BorrowerConsentPage() {
                     title="Borrower & Consent"
                     subtitle={`Reference ID: ${lead?.reference_id || leadId}${lead?.full_name ? ` — ${lead.full_name}` : ''}`}
                     step={3}
-                    onBack={() => router.back()}
+                    onBack={() => router.push('/dealer-portal/leads/new')}
+                    onPrev={() => jumpToStep(2)}
+                    onNext={() => jumpToStep(4)}
+                    onStepClick={jumpToStep}
                     rightAction={
                         <button onClick={() => loadPageData(true)} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold">
                             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
@@ -509,6 +540,11 @@ export default function BorrowerConsentPage() {
                     <SectionCard title="Borrower Consent" action={
                         <ConsentStatusBadge status={consentStatus} />
                     }>
+                        <div className="mb-4 flex items-center gap-2 text-sm">
+                            <Phone className="w-4 h-4 text-gray-500" />
+                            <span className="text-gray-500">Consent link will be sent to:</span>
+                            <span className="font-bold text-gray-900">{borrowerForm.phone || '—'}</span>
+                        </div>
                         {isFinalConsentStatus(consentStatus) ? (
                             <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
                                 <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
@@ -534,11 +570,17 @@ export default function BorrowerConsentPage() {
                                         <p className="text-xs text-red-600 mt-0.5">Borrower eSign was unsuccessful. You can resend the consent link or switch to manual consent.</p>
                                     </div>
                                 </div>
-                                <div className="flex gap-3">
-                                    <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
-                                        className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center gap-2">
-                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend via WhatsApp
-                                    </button>
+                                <div className="flex gap-3 items-start">
+                                    <div className="flex flex-col">
+                                        <button
+                                            onClick={() => handleSendConsent('whatsapp')}
+                                            disabled={true}
+                                            className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            <Send className="w-4 h-4" /> Resend via WhatsApp
+                                        </button>
+                                        <span className="text-[10px] text-gray-500 font-medium text-center mt-1">Coming Soon</span>
+                                    </div>
                                     <button onClick={handleGenerateConsentPDF} disabled={consentLoading}
                                         className="px-5 py-2.5 bg-white border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all disabled:opacity-50 flex items-center gap-2">
                                         <FileText className="w-4 h-4" /> Switch to Manual
@@ -568,11 +610,17 @@ export default function BorrowerConsentPage() {
                                         <p className="text-xs text-amber-600 mt-0.5">The consent link has expired (24 hours). Please resend.</p>
                                     </div>
                                 </div>
-                                <div className="flex gap-3">
-                                    <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
-                                        className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center gap-2">
-                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend via WhatsApp
-                                    </button>
+                                <div className="flex gap-3 items-start">
+                                    <div className="flex flex-col">
+                                        <button
+                                            onClick={() => handleSendConsent('whatsapp')}
+                                            disabled={true}
+                                            className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            <Send className="w-4 h-4" /> Resend via WhatsApp
+                                        </button>
+                                        <span className="text-[10px] text-gray-500 font-medium text-center mt-1">Coming Soon</span>
+                                    </div>
                                     <button onClick={() => handleSendConsent('sms')} disabled={consentLoading}
                                         className="px-5 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2">
                                         {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend via SMS
@@ -630,11 +678,17 @@ export default function BorrowerConsentPage() {
                                         <p className="text-xs text-red-600 mt-0.5">Please re-generate and re-upload the consent form, or resend digital consent.</p>
                                     </div>
                                 </div>
-                                <div className="flex gap-3">
-                                    <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
-                                        className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center gap-2">
-                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend Digital
-                                    </button>
+                                <div className="flex gap-3 items-start">
+                                    <div className="flex flex-col">
+                                        <button
+                                            onClick={() => handleSendConsent('whatsapp')}
+                                            disabled={true}
+                                            className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            <Send className="w-4 h-4" /> Resend Digital
+                                        </button>
+                                        <span className="text-[10px] text-gray-500 font-medium text-center mt-1">Coming Soon</span>
+                                    </div>
                                     <button onClick={handleGenerateConsentPDF} disabled={consentLoading}
                                         className="px-5 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2">
                                         {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
@@ -666,12 +720,18 @@ export default function BorrowerConsentPage() {
                                             </div>
                                         </div>
                                         {consentPath !== 'manual' && (
-                                            <div className="flex gap-2">
-                                                <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading || consentPath === 'digital'}
-                                                    className="flex-1 px-3 py-2 bg-[#25D366] text-white rounded-lg text-xs font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
-                                                    {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                                                    WhatsApp
-                                                </button>
+                                            <div className="flex gap-2 items-start">
+                                                <div className="flex-1 flex flex-col">
+                                                    <button
+                                                        onClick={() => handleSendConsent('whatsapp')}
+                                                        disabled={true}
+                                                        className="w-full px-3 py-2 bg-[#25D366] text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    >
+                                                        <Send className="w-3 h-3" />
+                                                        WhatsApp
+                                                    </button>
+                                                    <span className="text-[10px] text-gray-500 font-medium text-center mt-1">Coming Soon</span>
+                                                </div>
                                                 <button onClick={() => handleSendConsent('sms')} disabled={consentLoading || consentPath === 'digital'}
                                                     className="flex-1 px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
                                                     {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
@@ -835,10 +895,17 @@ export default function BorrowerConsentPage() {
                 </main>
 
                 {/* ─── Bottom Bar ────────────────────────────────────── */}
+                {!canProceed && pendingRequirements.length > 0 && (
+                    <div className="mt-6 flex items-center justify-end">
+                        <p className="text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                            Complete to proceed: {pendingRequirements.join(', ')}
+                        </p>
+                    </div>
+                )}
                 <StickyBottomBar lastSaved={lastSaved}>
-                    <OutlineButton onClick={() => router.push(`/dealer-portal/leads/${leadId}/kyc`)}>Back</OutlineButton>
+                    <OutlineButton onClick={() => router.push('/dealer-portal/leads/new')}>Back</OutlineButton>
                     <SecondaryButton onClick={() => handleSaveDraft(false)} loading={savingDraft}>Save Draft</SecondaryButton>
-                    <PrimaryButton onClick={handleSaveAndNext} loading={submitting} disabled={submitting}>
+                    <PrimaryButton onClick={handleSaveAndNext} loading={submitting} disabled={submitting || !canProceed}>
                         Next <ChevronRight className="w-4 h-4" />
                     </PrimaryButton>
                 </StickyBottomBar>
