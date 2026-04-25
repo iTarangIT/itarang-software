@@ -91,25 +91,31 @@ export async function fillDealerOnboardingWizard(
 
   await page.goto('/dealer-onboarding');
   await expect(page.getByRole('heading', { name: /business details/i })).toBeVisible({ timeout: 30_000 });
+  console.log('[wizard] step 1 heading visible');
 
-  // STEP 1 — Company
-  await page.locator('input[placeholder="Company Name"]').fill(inputs.companyName);
-  await page.locator('select').first().selectOption('sole_proprietorship');
-  await page.locator('input[placeholder="Company Address"]').fill('221B Test Street, Mumbai, Maharashtra 400001');
-  await page.locator('input[placeholder="GST Number"]').fill(inputs.gstin);
-  await page.locator('input[placeholder="Company PAN Number"]').fill(inputs.pan);
-  await page.locator('textarea[placeholder="Business Details - Summary"]').fill('E2E sole-prop test dealer.');
+  // STEP 1 — Company. Use #id selectors which are stable across builds; the
+  // placeholder text changed between sandbox and prod (was "Company Name",
+  // is "e.g. iTarang Pvt Ltd").
+  await page.locator('#companyName').fill(inputs.companyName);
+  await page.locator('#companyType').selectOption('sole_proprietorship');
+  await page.locator('#companyAddress').fill('221B Test Street, Mumbai, Maharashtra 400001');
+  await page.locator('#gstNumber').fill(inputs.gstin);
+  await page.locator('#companyPanNumber').fill(inputs.pan);
+  await page.locator('#businessSummary').fill('E2E sole-prop test dealer.');
 
   // 2 file uploads on Step 1: GST cert + Company PAN
   const step1FileInputs = page.locator('input[type="file"]');
   await step1FileInputs.nth(0).setInputFiles(samples.pdfs.gst);
   await step1FileInputs.nth(1).setInputFiles(samples.pdfs.panFile);
 
+  console.log('[wizard] step 1 fields filled, waiting for 2 uploads');
   await waitForUploadsToReach(2, 'step 1');
+  console.log('[wizard] step 1 uploads done, clicking Next');
   await page.getByRole('button', { name: /next/i }).click();
 
   // STEP 2 — Documents (5 uploads)
   await expect(page.getByRole('heading', { name: /financial.*compliance documents/i })).toBeVisible({ timeout: 15_000 });
+  console.log('[wizard] step 2 heading visible');
   const step2FileInputs = page.locator('input[type="file"]');
   await step2FileInputs.nth(0).setInputFiles(samples.pdfs.itr);
   await step2FileInputs.nth(1).setInputFiles(samples.pdfs.bank);
@@ -117,11 +123,14 @@ export async function fillDealerOnboardingWizard(
   await step2FileInputs.nth(3).setInputFiles(samples.pngs.photo);
   await step2FileInputs.nth(4).setInputFiles(samples.pdfs.udyam);
 
+  console.log('[wizard] step 2 fields filled, waiting for 7 total uploads');
   await waitForUploadsToReach(2 + 5, 'step 2');
+  console.log('[wizard] step 2 uploads done, clicking Next');
   await page.getByRole('button', { name: /next/i }).click();
 
   // STEP 3 — Ownership (sole prop branch)
   await expect(page.getByRole('heading', { name: /ownership.*banking/i })).toBeVisible({ timeout: 15_000 });
+  console.log('[wizard] step 3 heading visible');
 
   await page.locator('input[placeholder="Owner Name"]').fill(inputs.ownerName);
   await page.locator('input[placeholder="Owner Phone Number"]').fill(inputs.ownerPhone);
