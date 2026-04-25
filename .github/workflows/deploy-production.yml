@@ -166,3 +166,11 @@ jobs:
               echo "❌ BUILD_ID mismatch — running process is stale"
               exit 1
             fi
+
+            echo "=== Verify served assets reachable (HEAD on every chunk in served HTML) ==="
+            # Catches the failure mode that verify-chunk-manifest.js can miss:
+            # the static walker only sees chunks referenced from .next/ files
+            # on disk; this step hits the running app and HEAD-checks every
+            # asset referenced by actual served HTML, so 404s become deploy
+            # failures instead of runtime ChunkLoadError on real users.
+            PORT=3002 node scripts/verify-served-assets.js
