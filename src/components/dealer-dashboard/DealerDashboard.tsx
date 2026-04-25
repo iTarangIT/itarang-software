@@ -190,6 +190,62 @@ function DealerApprovalModal({
   );
 }
 
+function DealerDashboardSkeleton() {
+  return (
+    <div className="space-y-6 p-6 animate-pulse">
+      <div className="space-y-3">
+        <div className="h-7 w-80 max-w-full rounded-md bg-slate-200" />
+        <div className="h-4 w-96 max-w-full rounded-md bg-slate-100" />
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
+        <div className="flex items-start gap-3">
+          <div className="h-9 w-9 rounded-xl bg-slate-200" />
+          <div className="flex-1 space-y-2">
+            <div className="h-4 w-40 rounded-md bg-slate-200" />
+            <div className="h-3 w-full max-w-xl rounded-md bg-slate-100" />
+            <div className="h-3 w-2/3 max-w-lg rounded-md bg-slate-100" />
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="rounded-2xl border border-[#E3E8EF] bg-white p-6 shadow-sm lg:col-span-2 space-y-6">
+          <div className="space-y-2">
+            <div className="h-3 w-32 rounded-md bg-slate-100" />
+            <div className="h-6 w-64 max-w-full rounded-md bg-slate-200" />
+            <div className="h-3 w-80 max-w-full rounded-md bg-slate-100" />
+          </div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="rounded-2xl border border-gray-100 bg-gray-50 p-4 space-y-2">
+                <div className="h-3 w-24 rounded-md bg-slate-200" />
+                <div className="h-5 w-40 rounded-md bg-slate-100" />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-[#E3E8EF] bg-white p-6 shadow-sm space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="h-11 w-11 rounded-2xl bg-slate-200" />
+            <div className="space-y-2">
+              <div className="h-4 w-32 rounded-md bg-slate-200" />
+              <div className="h-3 w-24 rounded-md bg-slate-100" />
+            </div>
+          </div>
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 space-y-2">
+              <div className="h-3 w-24 rounded-md bg-slate-200" />
+              <div className="h-4 w-32 rounded-md bg-slate-100" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function DealerDashboard() {
   const { user, loading: authLoading } = useAuth();
   const currentUser = (user ?? null) as ExtendedAuthUser | null;
@@ -277,6 +333,10 @@ export default function DealerDashboard() {
     return <div className="p-8 text-sm text-slate-500">Loading dashboard...</div>;
   }
 
+  if (loading) {
+    return <DealerDashboardSkeleton />;
+  }
+
   const currentDealerName =
     dealer?.companyName ||
     currentUser?.full_name ||
@@ -313,6 +373,15 @@ export default function DealerDashboard() {
         : dealerData?.financeEnabled?.toLowerCase() === 'yes'
           ? 'Yes'
           : 'No';
+
+  const isFinanceEnabled = financeEnabledValue === 'Yes';
+  const financeOnlyMetricTitles = new Set([
+    'Delayed Payment',
+    'On-time Payment',
+    'Loan Applied',
+    'Loan Cleared',
+    'KYC Rejected',
+  ]);
 
   const submittedAtValue =
     dealer?.submittedAt ||
@@ -397,7 +466,7 @@ export default function DealerDashboard() {
       subtext: 'discrepancies',
       trendColor: 'text-gray-400',
     },
-  ];
+  ].filter((m) => isFinanceEnabled || !financeOnlyMetricTitles.has(m.title));
 
   return (
     <div className="animate-in space-y-8 fade-in duration-500 pb-10">
@@ -578,7 +647,7 @@ export default function DealerDashboard() {
       </div>
 
       {/* ─── Coupon Credits Widget ──────────────────────────────────────── */}
-      {couponStats && (
+      {isFinanceEnabled && couponStats && (
         <div className="rounded-2xl border border-[#E3E8EF] bg-white p-6 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <p className="text-sm font-semibold uppercase tracking-wide text-[#1F5C8F]">
@@ -618,11 +687,13 @@ export default function DealerDashboard() {
             description="Lead creation will unlock after dealer verification is completed."
           />
 
-          <LockedActionCard
-            icon={<FileCheck className="h-6 w-6" />}
-            title="Process Loan"
-            description="Loan processing will unlock after iTarang approves your documents."
-          />
+          {isFinanceEnabled && (
+            <LockedActionCard
+              icon={<FileCheck className="h-6 w-6" />}
+              title="Process Loan"
+              description="Loan processing will unlock after iTarang approves your documents."
+            />
+          )}
 
           <LockedActionCard
             icon={<Battery className="h-6 w-6" />}
@@ -653,7 +724,7 @@ export default function DealerDashboard() {
               <div className="absolute -right-4 -bottom-4 h-32 w-32 rounded-full bg-white/5 blur-2xl transition-colors group-hover:bg-white/10" />
             </Link>
 
-            <ProcessLoanCard />
+            {isFinanceEnabled && <ProcessLoanCard />}
 
             <Link
               href="/dealer-portal/assets"

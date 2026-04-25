@@ -4,7 +4,7 @@ import { useOnboardingStore } from "@/store/onboardingStore";
 
 export default function SummaryPanel() {
   const step = useOnboardingStore((s) => s.step);
-  const completion = Math.round((step / 6) * 100);
+  const completion = Math.round(((step - 1) / 5) * 100);
   const companyName = useOnboardingStore((s) => s.company.companyName);
   const gst = useOnboardingStore((s) => s.company.gstNumber);
   const finance = useOnboardingStore((s) => s.finance.enableFinance);

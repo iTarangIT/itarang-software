@@ -60,7 +60,11 @@ export async function POST(req: NextRequest) {
           updates.signed_consent_url = stored.publicUrl;
           console.log("[DigiO Webhook] Signed PDF stored:", stored.publicUrl);
         } else {
-          console.warn("[DigiO Webhook] Failed to fetch/store signed PDF");
+          console.warn("[DigiO Webhook] Failed to fetch/store signed PDF", {
+            documentId,
+            leadId: record.lead_id,
+            consentId: record.id,
+          });
         }
       }
 

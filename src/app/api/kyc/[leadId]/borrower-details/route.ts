@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { leads, personalDetails } from "@/lib/db/schema";
+import { leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 
@@ -22,7 +22,6 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
             );
         }
 
-        // Load lead
         const leadRows = await db
             .select()
             .from(leads)
@@ -38,7 +37,6 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
             );
         }
 
-        // Ownership check
         const ownerUserId = (lead as any)?.created_by ?? (lead as any)?.uploader_id ?? null;
         if (ownerUserId && ownerUserId !== user.id) {
             return NextResponse.json(
@@ -47,30 +45,27 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
             );
         }
 
-        // Load personal details
-        const personalRows = await db
-            .select()
-            .from(personalDetails)
-            .where(eq(personalDetails.lead_id, leadId))
-            .limit(1);
-
-        const personal = personalRows[0] || null;
+        // Borrower details are stored independently of the customer. The
+        // borrower draft lives in leads.kyc_draft_data.borrowerForm (written by
+        // /api/kyc/[leadId]/save-draft at step 3). Return only that — do not
+        // leak the customer's personal_details into the borrower form.
+        const draft = (lead as any)?.kyc_draft_data || {};
+        const borrowerForm = draft?.borrowerForm || {};
 
         return NextResponse.json({
             success: true,
             data: {
-                // From personal_details table
-                aadhaar_no: personal?.aadhaar_no || null,
-                pan_no: personal?.pan_no || null,
-                dob: personal?.dob || lead.dob || null,
-                email: personal?.email || null,
-                income: personal?.income || null,
-                finance_type: personal?.finance_type || null,
-                financier: personal?.financier || null,
-                father_husband_name: personal?.father_husband_name || null,
-                marital_status: personal?.marital_status || null,
-                spouse_name: personal?.spouse_name || null,
-                local_address: personal?.local_address || null,
+                full_name: borrowerForm.full_name || null,
+                phone: borrowerForm.phone || null,
+                father_husband_name: borrowerForm.father_or_husband_name || null,
+                dob: borrowerForm.dob || null,
+                email: borrowerForm.email || null,
+                pan_no: borrowerForm.pan_no || null,
+                aadhaar_no: borrowerForm.aadhaar_no || null,
+                income: borrowerForm.income || null,
+                marital_status: borrowerForm.marital_status || null,
+                local_address: borrowerForm.current_address || null,
+                permanent_address: borrowerForm.permanent_address || null,
             },
         });
     } catch (error) {

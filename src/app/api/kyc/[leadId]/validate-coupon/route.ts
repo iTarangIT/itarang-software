@@ -6,6 +6,11 @@ import { calculateDiscount } from '@/lib/razorpay';
 
 const BASE_FEE = Number(process.env.FACILITATION_FEE_BASE_AMOUNT) || 1500;
 
+// Master coupon — always valid, 100% discount, works for every lead and
+// every dealer. Short-circuits the couponCodes table lookup so there is no
+// stock to exhaust or expiry to worry about.
+const HARDCODED_FREE_COUPON = 'ITARANG-FREE';
+
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
         const { leadId } = await params;
@@ -21,6 +26,34 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         if (!leadRows.length) {
             return NextResponse.json({ valid: false, message: 'Lead not found' }, { status: 404 });
+        }
+
+        const normalizedCode = String(couponCode).toUpperCase().trim();
+
+        // ── Hardcoded free coupon ─────────────────────────────────────────
+        // Reserve it directly on the lead so page reload, release-coupon, and
+        // the submit-for-verification checks all behave the same as with a
+        // real DB-backed coupon.
+        if (normalizedCode === HARDCODED_FREE_COUPON) {
+            await db.update(leads)
+                .set({
+                    coupon_code: HARDCODED_FREE_COUPON,
+                    coupon_status: 'reserved',
+                    updated_at: new Date(),
+                })
+                .where(eq(leads.id, leadId));
+
+            return NextResponse.json({
+                valid: true,
+                success: true,
+                coupon_code: HARDCODED_FREE_COUPON,
+                discount_type: 'percent',
+                discount_value: 100,
+                discount_amount: BASE_FEE,
+                base_amount: BASE_FEE,
+                final_amount: 0,
+                message: 'Free verification coupon applied — no charge for this lead',
+            });
         }
 
         // Find coupon
@@ -59,8 +92,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         const finalAmount = BASE_FEE - discountAmount;
 
+        // Reserve this coupon on the lead so the Submit-for-Verification button
+        // remains visible after a page reload (the UI reads lead.coupon_status).
+        try {
+            await db.update(leads)
+                .set({
+                    coupon_code: coupon.code,
+                    coupon_status: 'reserved',
+                    updated_at: new Date(),
+                })
+                .where(eq(leads.id, leadId));
+        } catch (updateErr) {
+            console.error('[Validate Coupon] Failed to reserve coupon on lead:', updateErr);
+            return NextResponse.json({ valid: false, message: 'Coupon unavailable' });
+        }
+
         return NextResponse.json({
             valid: true,
+            success: true,
             coupon_id: coupon.id,
             coupon_code: coupon.code,
             discount_type: coupon.discount_type,

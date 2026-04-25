@@ -19,23 +19,38 @@ type ContactRow = {
 };
 
 function TextInput({
+  label,
   value,
   onChange,
   placeholder,
   className = "",
+  error,
+  required,
 }: {
+  label?: string;
   value?: string;
   onChange: (value: string) => void;
   placeholder: string;
   className?: string;
+  error?: string;
+  required?: boolean;
 }) {
   return (
-    <input
-      value={value || ""}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-      className={`w-full rounded-xl border border-[#E3E8EF] px-4 py-3 focus:border-[#1F5C8F] focus:outline-none focus:ring-2 focus:ring-blue-100 ${className}`}
-    />
+    <div>
+      {label ? (
+        <label className="mb-1.5 block text-sm font-semibold text-[#173F63]">
+          {label}
+          {required ? <span className="ml-0.5 text-red-500">*</span> : null}
+        </label>
+      ) : null}
+      <input
+        value={value || ""}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={`w-full rounded-xl border border-[#E3E8EF] px-4 py-3 focus:border-[#1F5C8F] focus:outline-none focus:ring-2 focus:ring-blue-100 ${className}`}
+      />
+      {error ? <p className="mt-1.5 text-sm text-red-600">{error}</p> : null}
+    </div>
   );
 }
 
@@ -45,13 +60,17 @@ function ContactDetailCard({
   update,
   remove,
   uploadPathPrefix,
+  errors,
 }: {
   title: string;
   rows: ContactRow[];
   update: (id: string, field: string, value: string) => void;
   remove: (id: string) => void;
   uploadPathPrefix: "ownership.partners" | "ownership.directors";
+  errors: Record<string, string>;
 }) {
+  // Error keys are emitted as `partner_<field>_<index>` / `director_<field>_<index>`.
+  const errKey = uploadPathPrefix === "ownership.partners" ? "partner" : "director";
   return (
     <div className="space-y-5">
       {rows.map((row, index) => (
@@ -76,14 +95,19 @@ function ContactDetailCard({
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <TextInput
+              label={`${title} Name`}
+              required
               value={row.name}
               onChange={(value) =>
                 update(row.id, "name", value.replace(/[0-9]/g, ""))
               }
-              placeholder={`${title} Name`}
+              placeholder={`Enter ${title.toLowerCase()}'s full name`}
+              error={errors[`${errKey}_name_${index}`]}
             />
 
             <TextInput
+              label={`${title} Phone Number`}
+              required
               value={row.phone}
               onChange={(value) =>
                 update(
@@ -92,25 +116,32 @@ function ContactDetailCard({
                   value.replace(/[^0-9]/g, "").slice(0, 10)
                 )
               }
-              placeholder={`${title} Phone Number`}
+              placeholder="10-digit mobile number"
+              error={errors[`${errKey}_phone_${index}`]}
             />
 
             {/* Landline Number — optional */}
             <TextInput
+              label={`${title} Landline Number`}
               value={row.landline || ""}
               onChange={(value) =>
                 update(row.id, "landline", value.replace(/[^0-9]/g, ""))
               }
-              placeholder={`${title} Landline Number (Optional)`}
+              placeholder="Landline (optional)"
             />
 
             <TextInput
+              label={`${title} Email ID`}
+              required
               value={row.email}
               onChange={(value) => update(row.id, "email", value)}
-              placeholder={`${title} Email ID`}
+              placeholder="name@example.com"
+              error={errors[`${errKey}_email_${index}`]}
             />
 
             <TextInput
+              label={`${title} Age`}
+              required
               value={row.age || ""}
               onChange={(value) =>
                 update(
@@ -119,7 +150,8 @@ function ContactDetailCard({
                   value.replace(/[^0-9]/g, "").slice(0, 2)
                 )
               }
-              placeholder={`${title} Age`}
+              placeholder="Age (18 – 90)"
+              error={errors[`${errKey}_age_${index}`]}
             />
           </div>
 
@@ -129,6 +161,7 @@ function ContactDetailCard({
               hint="Drag image or click to upload"
               value={(row as any).photo || null}
               onChange={(item) => update(row.id, "photo", item as any)}
+              error={errors[`${errKey}_photo_${index}`]}
             />
           </div>
 
@@ -140,42 +173,57 @@ function ContactDetailCard({
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="md:col-span-2">
                 <TextInput
+                  label="Address Line 1"
+                  required
                   value={row.addressLine1 || ""}
                   onChange={(value) => update(row.id, "addressLine1", value)}
-                  placeholder="Address Line 1"
+                  placeholder="House / Street / Area"
+                  error={errors[`${errKey}_addressLine1_${index}`]}
                 />
               </div>
 
               <TextInput
+                label="City"
+                required
                 value={row.city || ""}
                 onChange={(value) =>
                   update(row.id, "city", value.replace(/[^a-zA-Z\s]/g, ""))
                 }
                 placeholder="City"
+                error={errors[`${errKey}_city_${index}`]}
               />
 
               <TextInput
+                label="District"
+                required
                 value={row.district || ""}
                 onChange={(value) =>
                   update(row.id, "district", value.replace(/[^a-zA-Z\s]/g, ""))
                 }
                 placeholder="District"
+                error={errors[`${errKey}_district_${index}`]}
               />
 
               <TextInput
+                label="State"
+                required
                 value={row.state || ""}
                 onChange={(value) =>
                   update(row.id, "state", value.replace(/[^a-zA-Z\s]/g, ""))
                 }
                 placeholder="State"
+                error={errors[`${errKey}_state_${index}`]}
               />
 
               <TextInput
+                label="Pin Code"
+                required
                 value={row.pinCode || ""}
                 onChange={(value) =>
                   update(row.id, "pinCode", value.replace(/[^0-9]/g, ""))
                 }
-                placeholder="Pin Code"
+                placeholder="6-digit pin code"
+                error={errors[`${errKey}_pinCode_${index}`]}
               />
             </div>
           </div>
@@ -224,6 +272,8 @@ export default function StepOwnership() {
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <TextInput
+                label="Owner Name"
+                required
                 value={ownership.ownerName}
                 onChange={(value) =>
                   setField(
@@ -232,10 +282,13 @@ export default function StepOwnership() {
                     value.replace(/[0-9]/g, "")
                   )
                 }
-                placeholder="Owner Name"
+                placeholder="Full name as on PAN"
+                error={errors.ownerName}
               />
 
               <TextInput
+                label="Owner Phone Number"
+                required
                 value={ownership.ownerPhone}
                 onChange={(value) =>
                   setField(
@@ -244,11 +297,13 @@ export default function StepOwnership() {
                     value.replace(/[^0-9]/g, "").slice(0, 10)
                   )
                 }
-                placeholder="Owner Phone Number"
+                placeholder="10-digit mobile number"
+                error={errors.ownerPhone}
               />
 
               {/* Landline — optional */}
               <TextInput
+                label="Owner Landline Number"
                 value={ownership.ownerLandline || ""}
                 onChange={(value) =>
                   setField(
@@ -257,16 +312,21 @@ export default function StepOwnership() {
                     value.replace(/[^0-9]/g, "")
                   )
                 }
-                placeholder="Owner Landline Number (Optional)"
+                placeholder="Landline (optional)"
               />
 
               <TextInput
+                label="Owner Email ID"
+                required
                 value={ownership.ownerEmail}
                 onChange={(value) => setField("ownership", "ownerEmail", value)}
-                placeholder="Owner Email ID"
+                placeholder="name@example.com"
+                error={errors.ownerEmail}
               />
 
               <TextInput
+                label="Owner Age"
+                required
                 value={(ownership as any).ownerAge || ""}
                 onChange={(value) =>
                   setField(
@@ -275,7 +335,8 @@ export default function StepOwnership() {
                     value.replace(/[^0-9]/g, "").slice(0, 2)
                   )
                 }
-                placeholder="Owner Age"
+                placeholder="Age (18 – 90)"
+                error={errors.ownerAge}
               />
             </div>
 
@@ -285,6 +346,7 @@ export default function StepOwnership() {
                 hint="Drag image or click to upload"
                 value={(ownership as any).ownerPhoto || null}
                 onChange={(item) => setUpload("ownership.ownerPhoto", item)}
+                error={errors.ownerPhoto}
               />
             </div>
 
@@ -296,15 +358,20 @@ export default function StepOwnership() {
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="md:col-span-2">
                   <TextInput
+                    label="Address Line 1"
+                    required
                     value={(ownership as any).ownerAddressLine1 || ""}
                     onChange={(value) =>
                       setField("ownership", "ownerAddressLine1", value)
                     }
-                    placeholder="Address Line 1"
+                    placeholder="House / Street / Area"
+                    error={errors.ownerAddressLine1}
                   />
                 </div>
 
                 <TextInput
+                  label="City"
+                  required
                   value={(ownership as any).ownerCity || ""}
                   onChange={(value) =>
                     setField(
@@ -314,9 +381,12 @@ export default function StepOwnership() {
                     )
                   }
                   placeholder="City"
+                  error={errors.ownerCity}
                 />
 
                 <TextInput
+                  label="District"
+                  required
                   value={(ownership as any).ownerDistrict || ""}
                   onChange={(value) =>
                     setField(
@@ -326,9 +396,12 @@ export default function StepOwnership() {
                     )
                   }
                   placeholder="District"
+                  error={errors.ownerDistrict}
                 />
 
                 <TextInput
+                  label="State"
+                  required
                   value={(ownership as any).ownerState || ""}
                   onChange={(value) =>
                     setField(
@@ -338,9 +411,12 @@ export default function StepOwnership() {
                     )
                   }
                   placeholder="State"
+                  error={errors.ownerState}
                 />
 
                 <TextInput
+                  label="Pin Code"
+                  required
                   value={(ownership as any).ownerPinCode || ""}
                   onChange={(value) =>
                     setField(
@@ -349,7 +425,8 @@ export default function StepOwnership() {
                       value.replace(/[^0-9]/g, "")
                     )
                   }
-                  placeholder="Pin Code"
+                  placeholder="6-digit pin code"
+                  error={errors.ownerPinCode}
                 />
               </div>
             </div>
@@ -364,6 +441,7 @@ export default function StepOwnership() {
             hint="Drag file or click to upload"
             value={ownership.partnershipDeed}
             onChange={(item) => setUpload("ownership.partnershipDeed", item)}
+            error={errors.partnershipDeed}
           />
 
           <div className="flex items-center justify-between">
@@ -385,6 +463,7 @@ export default function StepOwnership() {
             update={updatePartner}
             remove={removePartner}
             uploadPathPrefix="ownership.partners"
+            errors={errors}
           />
         </>
       )}
@@ -397,12 +476,14 @@ export default function StepOwnership() {
               hint="Drag file or click to upload"
               value={ownership.mouDocument}
               onChange={(item) => setUpload("ownership.mouDocument", item)}
+              error={errors.mouDocument}
             />
             <FileUploadCard
               label="AoA (Articles of Association)"
               hint="Drag file or click to upload"
               value={ownership.aoaDocument}
               onChange={(item) => setUpload("ownership.aoaDocument", item)}
+              error={errors.aoaDocument}
             />
           </div>
 
@@ -425,6 +506,7 @@ export default function StepOwnership() {
             update={updateDirector}
             remove={removeDirector}
             uploadPathPrefix="ownership.directors"
+            errors={errors}
           />
         </>
       )}
@@ -436,6 +518,8 @@ export default function StepOwnership() {
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <TextInput
+            label="Bank Name"
+            required
             value={ownership.bankName}
             onChange={(value) =>
               setField(
@@ -444,10 +528,13 @@ export default function StepOwnership() {
                 value.replace(/[^a-zA-Z\s]/g, "")
               )
             }
-            placeholder="Bank Name"
+            placeholder="e.g. HDFC Bank"
+            error={errors.bankName}
           />
 
           <TextInput
+            label="Account Number"
+            required
             value={ownership.accountNumber}
             onChange={(value) =>
               setField(
@@ -456,10 +543,13 @@ export default function StepOwnership() {
                 value.replace(/[^0-9]/g, "")
               )
             }
-            placeholder="Account Number"
+            placeholder="Bank account number"
+            error={errors.accountNumber}
           />
 
           <TextInput
+            label="IFSC"
+            required
             value={ownership.ifsc}
             onChange={(value) =>
               setField(
@@ -468,11 +558,14 @@ export default function StepOwnership() {
                 value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 11)
               )
             }
-            placeholder="IFSC"
+            placeholder="11-character IFSC"
             className="uppercase"
+            error={errors.ifsc}
           />
 
           <TextInput
+            label="Beneficiary Name"
+            required
             value={ownership.beneficiaryName}
             onChange={(value) =>
               setField(
@@ -481,10 +574,13 @@ export default function StepOwnership() {
                 value.replace(/[^a-zA-Z0-9\s]/g, "")
               )
             }
-            placeholder="Beneficiary Name"
+            placeholder="As per bank records"
+            error={errors.beneficiaryName}
           />
 
           <TextInput
+            label="Branch"
+            required
             value={(ownership as any).branch || ""}
             onChange={(value) =>
               setField(
@@ -493,33 +589,32 @@ export default function StepOwnership() {
                 value.replace(/[^a-zA-Z0-9\s]/g, "")
               )
             }
-            placeholder="Branch"
+            placeholder="Branch name"
+            error={errors.branch}
           />
 
-          <select
-            value={(ownership as any).accountType || ""}
-            onChange={(e) =>
-              setField("ownership", "accountType", e.target.value)
-            }
-            className="w-full rounded-xl border border-[#E3E8EF] bg-white px-4 py-3 focus:border-[#1F5C8F] focus:outline-none focus:ring-2 focus:ring-blue-100"
-          >
-            <option value="">Account Type</option>
-            <option value="current">Current</option>
-            <option value="savings">Savings</option>
-            <option value="od">OD</option>
-          </select>
+          <div>
+            <label className="mb-1.5 block text-sm font-semibold text-[#173F63]">
+              Account Type<span className="ml-0.5 text-red-500">*</span>
+            </label>
+            <select
+              value={(ownership as any).accountType || ""}
+              onChange={(e) =>
+                setField("ownership", "accountType", e.target.value)
+              }
+              className="w-full rounded-xl border border-[#E3E8EF] bg-white px-4 py-3 focus:border-[#1F5C8F] focus:outline-none focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="">Select account type</option>
+              <option value="current">Current</option>
+              <option value="savings">Savings</option>
+              <option value="od">OD</option>
+            </select>
+            {errors.accountType ? (
+              <p className="mt-1.5 text-sm text-red-600">{errors.accountType}</p>
+            ) : null}
+          </div>
         </div>
       </div>
-
-      {Object.values(errors).length > 0 && (
-        <div className="space-y-2">
-          {Object.values(errors).map((error, index) => (
-            <p key={index} className="text-sm text-red-600">
-              {String(error)}
-            </p>
-          ))}
-        </div>
-      )}
 
       <div className="flex justify-between">
         <button

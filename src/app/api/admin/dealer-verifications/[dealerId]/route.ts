@@ -23,6 +23,23 @@ const PatchBodySchema = z.object({
   beneficiaryName: z.string().optional(),
   ifscCode: z.string().optional(),
   agreementLanguage: z.string().optional(),
+
+  // Owner residential address (sole proprietorship) — persisted in
+  // providerRawResponse.submissionSnapshot.ownership
+  ownerAddressLine1: z.string().optional(),
+  ownerCity: z.string().optional(),
+  ownerDistrict: z.string().optional(),
+  ownerState: z.string().optional(),
+  ownerPinCode: z.string().optional(),
+
+  // Bank extras — also persisted in submissionSnapshot.ownership
+  bankBranch: z.string().optional(),
+  accountType: z.string().optional(),
+
+  // Sales manager — stored in columns AND in providerRawResponse.agreement.salesManager
+  salesManagerName: z.string().optional(),
+  salesManagerEmail: z.string().optional(),
+  salesManagerMobile: z.string().optional(),
 });
 
 type RouteContext = {
@@ -92,6 +109,15 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
     const providerData = parseProviderRawResponse(row.providerRawResponse);
     const agreementData = providerData?.agreement || {};
+    const ownershipSnapshot =
+      (providerData as any)?.submissionSnapshot?.ownership || {};
+    const salesManagerSnapshot = agreementData?.salesManager || {};
+    const partnersSnapshot = Array.isArray(ownershipSnapshot?.partners)
+      ? ownershipSnapshot.partners
+      : [];
+    const directorsSnapshot = Array.isArray(ownershipSnapshot?.directors)
+      ? ownershipSnapshot.directors
+      : [];
 
     return NextResponse.json({
       success: true,
@@ -114,6 +140,26 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         accountNumber: row.accountNumber,
         beneficiaryName: row.beneficiaryName,
         ifscCode: row.ifscCode,
+
+        // Bank extras captured in onboarding step 3 — live in snapshot JSON
+        bankBranch: ownershipSnapshot?.branch || "",
+        accountType: ownershipSnapshot?.accountType || "",
+
+        // Owner residential address for sole-proprietorship — snapshot JSON
+        ownerAddressLine1: ownershipSnapshot?.ownerAddressLine1 || "",
+        ownerCity: ownershipSnapshot?.ownerCity || "",
+        ownerDistrict: ownershipSnapshot?.ownerDistrict || "",
+        ownerState: ownershipSnapshot?.ownerState || "",
+        ownerPinCode: ownershipSnapshot?.ownerPinCode || "",
+
+        // Partner / director lists — read-only reference for admins
+        partners: partnersSnapshot,
+        directors: directorsSnapshot,
+
+        // Sales manager — prefer structured columns; fall back to snapshot
+        salesManagerName: row.salesManagerName || salesManagerSnapshot?.name || "",
+        salesManagerEmail: row.salesManagerEmail || salesManagerSnapshot?.email || "",
+        salesManagerMobile: row.salesManagerMobile || salesManagerSnapshot?.mobile || "",
 
         // ✅ NEW — agreement language preference
         agreementLanguage: row.agreementLanguage,
@@ -219,7 +265,57 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       beneficiaryName,
       ifscCode,
       agreementLanguage,
+      ownerAddressLine1,
+      ownerCity,
+      ownerDistrict,
+      ownerState,
+      ownerPinCode,
+      bankBranch,
+      accountType,
+      salesManagerName,
+      salesManagerEmail,
+      salesManagerMobile,
     } = parsed.data;
+
+    // If this application is a branch dealer (approved against an existing
+    // shared accounts row), legal-entity fields are read-only — they live
+    // on the parent account and must not be mutated from here.
+    const [branchCheck] = await db
+      .select({
+        isBranchDealer: dealerOnboardingApplications.isBranchDealer,
+      })
+      .from(dealerOnboardingApplications)
+      .where(eq(dealerOnboardingApplications.id, dealerId))
+      .limit(1);
+
+    if (branchCheck?.isBranchDealer) {
+      const sharedFieldUpdates: Record<string, unknown> = {
+        companyName,
+        companyAddress,
+        gstNumber,
+        panNumber,
+        companyType,
+        bankName,
+        accountNumber,
+        beneficiaryName,
+        ifscCode,
+      };
+      const attemptedSharedFields = Object.entries(sharedFieldUpdates)
+        .filter(([, v]) => v !== undefined)
+        .map(([k]) => k);
+
+      if (attemptedSharedFields.length > 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            message:
+              "These fields are shared with the primary dealer account and cannot be edited for a branch dealer.",
+            readOnlyFields: attemptedSharedFields,
+          },
+          { status: 403 }
+        );
+      }
+    }
 
     // Only include fields that were actually sent
     const updatePayload: Record<string, any> = {};
@@ -236,6 +332,77 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
     if (accountNumber   !== undefined) updatePayload.accountNumber   = accountNumber;
     if (beneficiaryName !== undefined) updatePayload.beneficiaryName = beneficiaryName;
     if (ifscCode        !== undefined) updatePayload.ifscCode        = ifscCode;
+    if (salesManagerName   !== undefined) updatePayload.salesManagerName   = salesManagerName;
+    if (salesManagerEmail  !== undefined) updatePayload.salesManagerEmail  = salesManagerEmail;
+    if (salesManagerMobile !== undefined) updatePayload.salesManagerMobile = salesManagerMobile;
+
+    // Fields that live inside providerRawResponse.submissionSnapshot.ownership
+    // (bank branch, account type, owner residential address) or inside
+    // providerRawResponse.agreement.salesManager. We need to merge rather than
+    // overwrite so other snapshot keys — partners[], directors[], finance,
+    // reviewChecks — survive admin edits.
+    const ownershipSnapshotKeys = {
+      branch: bankBranch,
+      accountType: accountType,
+      ownerAddressLine1: ownerAddressLine1,
+      ownerCity: ownerCity,
+      ownerDistrict: ownerDistrict,
+      ownerState: ownerState,
+      ownerPinCode: ownerPinCode,
+    };
+    const salesManagerSnapshotKeys = {
+      name: salesManagerName,
+      email: salesManagerEmail,
+      mobile: salesManagerMobile,
+    };
+    const touchesOwnershipSnapshot = Object.values(ownershipSnapshotKeys).some(
+      (v) => v !== undefined,
+    );
+    const touchesSalesManagerSnapshot = Object.values(salesManagerSnapshotKeys).some(
+      (v) => v !== undefined,
+    );
+
+    if (touchesOwnershipSnapshot || touchesSalesManagerSnapshot) {
+      const [existingRow] = await db
+        .select({ providerRawResponse: dealerOnboardingApplications.providerRawResponse })
+        .from(dealerOnboardingApplications)
+        .where(eq(dealerOnboardingApplications.id, dealerId))
+        .limit(1);
+      const existingProvider = parseProviderRawResponse(existingRow?.providerRawResponse);
+      const existingSnapshot =
+        (existingProvider as any)?.submissionSnapshot &&
+        typeof (existingProvider as any).submissionSnapshot === "object"
+          ? { ...(existingProvider as any).submissionSnapshot }
+          : {};
+      const existingOwnership =
+        existingSnapshot?.ownership && typeof existingSnapshot.ownership === "object"
+          ? { ...existingSnapshot.ownership }
+          : {};
+      const existingAgreement =
+        (existingProvider as any)?.agreement && typeof (existingProvider as any).agreement === "object"
+          ? { ...(existingProvider as any).agreement }
+          : {};
+      const existingSalesManager =
+        existingAgreement?.salesManager && typeof existingAgreement.salesManager === "object"
+          ? { ...existingAgreement.salesManager }
+          : {};
+
+      for (const [key, value] of Object.entries(ownershipSnapshotKeys)) {
+        if (value !== undefined) existingOwnership[key] = value;
+      }
+      for (const [key, value] of Object.entries(salesManagerSnapshotKeys)) {
+        if (value !== undefined) existingSalesManager[key] = value;
+      }
+
+      existingSnapshot.ownership = existingOwnership;
+      existingAgreement.salesManager = existingSalesManager;
+
+      updatePayload.providerRawResponse = {
+        ...(existingProvider as Record<string, any>),
+        submissionSnapshot: existingSnapshot,
+        agreement: existingAgreement,
+      };
+    }
 
     // businessAddress is a jsonb column holding { address, city, state, pincode, ... }.
     // Merge into the existing object so admins editing the display string don't

@@ -7,8 +7,12 @@ import { hashPassword } from "@/lib/auth/hashPassword";
 import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
 import { sendDealerApprovalNotificationEmail } from "@/lib/email/sendDealerApprovalNotificationEmail";
 import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification-recipients";
+import { downloadPdfBuffer } from "@/lib/email/downloadPdfBuffer";
+import { ensureDealerAuditTrailUrl } from "@/lib/digio/ensure-audit-trail";
+import { ensureDealerSignedAgreementUrl } from "@/lib/digio/ensure-signed-agreement";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -96,7 +100,6 @@ export async function POST(req: NextRequest, context: RouteContext) {
       );
     }
 
-    const dealerCode = application.dealerCode || generateDealerCode();
     const dealerLoginEmail = resolveDealerLoginEmail(application);
 
     if (!dealerLoginEmail) {
@@ -124,6 +127,94 @@ export async function POST(req: NextRequest, context: RouteContext) {
           { status: 400 }
         );
       }
+    }
+
+    // GSTIN duplicate detection. We classify BEFORE any auth-user work so a
+    // hard block doesn't leave a Supabase Auth user orphaned.
+    //   - duplicate / pan-mismatch → 409, stop here.
+    //   - branch → reuse the existing accounts row (skip insert below),
+    //     override dealerCode to the shared account's id, mark application
+    //     as a branch so admin PATCH can enforce read-only on shared fields.
+    //   - none → insert a new accounts row as today.
+    const classification = await classifyGstinConflict(application);
+
+    if (
+      classification.conflict === "duplicate" ||
+      classification.conflict === "pan-mismatch"
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: classification.message,
+          conflict: classification.conflict,
+          existing: classification.existing,
+        },
+        { status: 409 }
+      );
+    }
+
+    const isBranchDealer = classification.conflict === "branch";
+    const sharedAccountId =
+      isBranchDealer && classification.existing
+        ? classification.existing.dealerCode
+        : null;
+
+    // For branch approvals, adopt the existing account's id as this dealer's
+    // code so all downstream FK-style linkage (users.dealer_id, leads, etc.)
+    // points at the shared legal entity.
+    const dealerCode =
+      sharedAccountId || application.dealerCode || generateDealerCode();
+
+    // Pre-flight: for finance-enabled dealers, guarantee BOTH the signed
+    // agreement PDF and the audit trail PDF are available before we create
+    // any auth user or touch the DB. If either is unavailable, hard-block
+    // with 409 so the admin retries instead of a dealer being activated
+    // with an empty welcome email.
+    let signedAgreementPdf: Buffer | null = null;
+    let auditTrailPdf: Buffer | null = null;
+
+    if (application.financeEnabled) {
+      const [signedUrl, auditUrl] = await Promise.all([
+        ensureDealerSignedAgreementUrl(application).catch((err) => {
+          console.error("ENSURE SIGNED AGREEMENT ERROR:", err);
+          return null;
+        }),
+        ensureDealerAuditTrailUrl(application).catch((err) => {
+          console.error("ENSURE AUDIT TRAIL ERROR:", err);
+          return null;
+        }),
+      ]);
+
+      const [signedBuf, auditBuf] = await Promise.all([
+        downloadPdfBuffer(signedUrl),
+        downloadPdfBuffer(auditUrl),
+      ]);
+
+      if (!signedBuf || !auditBuf) {
+        console.warn("APPROVE BLOCKED — agreement PDFs not ready", {
+          applicationId: application.id,
+          hasSignedUrl: Boolean(signedUrl),
+          hasAuditUrl: Boolean(auditUrl),
+          hasSignedBuf: Boolean(signedBuf),
+          hasAuditBuf: Boolean(auditBuf),
+        });
+
+        return NextResponse.json(
+          {
+            success: false,
+            message:
+              "Agreement PDFs are not ready yet — please retry once signing is fully complete.",
+            details: {
+              signedAgreementAvailable: Boolean(signedBuf),
+              auditTrailAvailable: Boolean(auditBuf),
+            },
+          },
+          { status: 409 }
+        );
+      }
+
+      signedAgreementPdf = signedBuf;
+      auditTrailPdf = auditBuf;
     }
 
     const temporaryPassword = generateTemporaryPassword();
@@ -248,10 +339,16 @@ export async function POST(req: NextRequest, context: RouteContext) {
           correctionRemarks: null,
           rejectionRemarks: null,
           dealerCode,
+          isBranchDealer,
           updatedAt: new Date(),
         })
         .where(eq(dealerOnboardingApplications.id, dealerId));
 
+      // Branch dealers reuse the existing accounts row — skip the insert
+      // entirely (a new insert would violate UNIQUE(gstin) + UNIQUE(id)).
+      // The user-row insert below still runs so the branch dealer gets
+      // their own login.
+      if (!isBranchDealer) {
       // Create account row so leads.dealer_id FK is satisfied
       const existingAccount = await tx
         .select()
@@ -285,6 +382,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
           created_by: authUserId,
         });
       }
+      } // end: if (!isBranchDealer)
 
       const existingUserRows = await tx
         .select()
@@ -387,8 +485,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
       }
     }
 
+    // signedAgreementPdf + auditTrailPdf were resolved in the pre-flight block
+    // above (or left null for non-finance dealers, which is expected).
+    let mailResult: Awaited<ReturnType<typeof sendDealerWelcomeEmail>> | null = null;
     try {
-      const mailResult = await sendDealerWelcomeEmail({
+      mailResult = await sendDealerWelcomeEmail({
         toEmail: dealerLoginEmail,
         dealerName: application.ownerName || application.companyName || "Dealer",
         companyName: application.companyName || "iTarang Dealer",
@@ -397,9 +498,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
         password: temporaryPassword,
         loginUrl: resolvedLoginUrl,
         supportEmail:
-          process.env.DEALER_SUPPORT_EMAIL || "support@itarang.com",
+          process.env.DEALER_SUPPORT_EMAIL || "care@itarang.com",
         supportPhone:
-          process.env.DEALER_SUPPORT_PHONE || "+91-0000000000",
+          process.env.DEALER_SUPPORT_PHONE || "+91-8076841497",
+        signedAgreementPdf,
+        auditTrailPdf,
       });
 
       console.log("DEALER WELCOME EMAIL SUCCESS:", mailResult);
@@ -429,6 +532,9 @@ export async function POST(req: NextRequest, context: RouteContext) {
       emailTarget: dealerLoginEmail,
       emailError,
       internalNotificationResult,
+      attachedSignedAgreement: Boolean(mailResult?.attachedSignedAgreement),
+      attachedAuditTrail: Boolean(mailResult?.attachedAuditTrail),
+      isBranchDealer,
     });
   } catch (error: any) {
     console.error("APPROVE DEALER ERROR:", error);
@@ -437,10 +543,30 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // Drizzle wraps postgres-js errors; the underlying error sits on `.cause`.
     const root = error?.cause ?? error;
 
+    // Translate the known unique-constraint violations into user-readable
+    // messages. Without this, the admin sees the raw SQL in a toast.
+    let friendlyMessage = error?.message || "Approve failed";
+    if (root?.code === "23505") {
+      const constraint = root?.constraint_name || root?.constraint || "";
+      if (constraint === "accounts_gstin_key") {
+        friendlyMessage =
+          "Another dealer account already exists with this GSTIN. Please refresh and try again — the duplicate check should flag this.";
+      } else if (constraint === "accounts_pkey") {
+        friendlyMessage =
+          "Dealer account id collision. Please retry — a new code will be generated.";
+      } else {
+        friendlyMessage =
+          "A duplicate record exists for this dealer. Please verify GSTIN, PAN, and email.";
+      }
+    } else if (root?.code === "23502") {
+      friendlyMessage =
+        "Required dealer account fields are missing. Ensure GSTIN, PAN, and bank details are filled before approving.";
+    }
+
     return NextResponse.json(
       {
         success: false,
-        message: error?.message || "Approve failed",
+        message: friendlyMessage,
         pg: {
           code: root?.code ?? null,
           detail: root?.detail ?? null,

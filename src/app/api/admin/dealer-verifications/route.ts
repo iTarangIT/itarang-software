@@ -3,6 +3,7 @@ import { db } from "@/lib/db/index";
 import { dealerOnboardingApplications, dealerOnboardingDocuments } from "@/lib/db/schema";
 import { desc, sql } from "drizzle-orm";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { classifyApplicationsBatch } from "@/lib/dealer/duplicate-check";
 
 export async function GET() {
   const auth = await requireSalesHead();
@@ -14,15 +15,22 @@ export async function GET() {
         companyName: dealerOnboardingApplications.companyName,
         companyType: dealerOnboardingApplications.companyType,
         gstNumber: dealerOnboardingApplications.gstNumber,
+        panNumber: dealerOnboardingApplications.panNumber,
+        businessAddress: dealerOnboardingApplications.businessAddress,
+        dealerCode: dealerOnboardingApplications.dealerCode,
         financeEnabled: dealerOnboardingApplications.financeEnabled,
         onboardingStatus: dealerOnboardingApplications.onboardingStatus,
         reviewStatus: dealerOnboardingApplications.reviewStatus,
         agreementStatus: dealerOnboardingApplications.agreementStatus,
+        isBranchDealer: dealerOnboardingApplications.isBranchDealer,
         submittedAt: dealerOnboardingApplications.submittedAt,
         updatedAt: dealerOnboardingApplications.updatedAt,
         createdAt: dealerOnboardingApplications.createdAt,
         ownerName: dealerOnboardingApplications.ownerName,
         ownerEmail: dealerOnboardingApplications.ownerEmail,
+        salesManagerName: dealerOnboardingApplications.salesManagerName,
+        salesManagerEmail: dealerOnboardingApplications.salesManagerEmail,
+        salesManagerMobile: dealerOnboardingApplications.salesManagerMobile,
       })
       .from(dealerOnboardingApplications)
       .orderBy(
@@ -56,9 +64,16 @@ export async function GET() {
       docCountMap.set(row.applicationId, row.count);
     }
 
+    // Batch-classify GSTIN conflicts in a SINGLE accounts query (no N+1).
+    // Rows already approved as branches of another account are deliberately
+    // kept flagged as `branch` so admins can see the linkage.
+    const classificationMap = await classifyApplicationsBatch(applications);
+
     // Shape the response for the admin dashboard table
     const formatted = applications.map((item) => {
       const docCount = docCountMap.get(item.id) ?? 0;
+      const classification = classificationMap.get(item.id);
+      const duplicateFlag = classification?.conflict ?? "none";
       const onboardingStatus = (item.onboardingStatus || "draft").toLowerCase();
       const reviewStatus = (item.reviewStatus || "").toLowerCase();
 
@@ -99,6 +114,11 @@ export async function GET() {
         gstNumber: item.gstNumber,
         financeEnabled: item.financeEnabled,
         companyType: item.companyType,
+        salesManagerName: item.salesManagerName,
+        salesManagerEmail: item.salesManagerEmail,
+        salesManagerMobile: item.salesManagerMobile,
+        duplicateFlag,
+        isBranchDealer: item.isBranchDealer,
       };
     });
 

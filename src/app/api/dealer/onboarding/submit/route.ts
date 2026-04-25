@@ -650,13 +650,24 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error("DEALER ONBOARDING SUBMIT ERROR:", error);
+    console.error("CAUSE:", error?.cause);
+
+    const causeMessage =
+      error?.cause instanceof Error ? error.cause.message : undefined;
 
     return NextResponse.json(
       {
         success: false,
-        message: error?.message || "Failed to submit dealer onboarding",
+        message:
+          causeMessage ||
+          error?.message ||
+          "Failed to submit dealer onboarding",
       },
       { status: 500 }
     );
   }
 }
+
+// hello
+
+// hello

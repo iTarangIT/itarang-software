@@ -70,6 +70,7 @@ export default function BankCard({
   });
   const [verificationId, setVerificationId] = useState(existingVerification?.id || "");
   const [error, setError] = useState("");
+  const [configError, setConfigError] = useState(false);
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
   const [showMoreDocsModal, setShowMoreDocsModal] = useState(false);
@@ -86,6 +87,7 @@ export default function BankCard({
     }
     setStatus("loading");
     setError("");
+    setConfigError(false);
     setResult(null);
 
     try {
@@ -104,11 +106,17 @@ export default function BankCard({
         }),
       });
       const data = await res.json();
+      // Server signals env-misconfig via HTTP 503 + error.code === "bank_verify_misconfigured".
+      if (res.status === 503 && data?.error?.code === "bank_verify_misconfigured") {
+        setConfigError(true);
+        setStatus("pending");
+        return;
+      }
       setResult(data);
       if (data.data?.verificationId) setVerificationId(data.data.verificationId);
       setStatus(data.success ? "success" : "failed");
       if (!data.success)
-        setError(data.message || data.error || "Bank verification failed");
+        setError(data.message || data.error?.message || data.error || "Bank verification failed");
     } catch {
       setStatus("failed");
       setError("Network error. Please try again.");
@@ -315,8 +323,21 @@ export default function BankCard({
           disabled={status === "loading"}
           className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
         >
-          {status === "loading" ? "Verifying..." : "Run Bank Verification"}
+          {status === "loading"
+            ? "Verifying..."
+            : status === "success" || status === "failed"
+              ? "Re-run Bank Verification"
+              : "Run Bank Verification"}
         </button>
+
+        {configError && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800 text-sm">
+            <p className="font-semibold">Bank verification is not configured on this server.</p>
+            <p className="text-xs mt-1 text-amber-700">
+              The server is missing Decentro bank-verification credentials. Please contact the admin to set the required environment variables, then retry.
+            </p>
+          </div>
+        )}
 
 
         {/* Results */}

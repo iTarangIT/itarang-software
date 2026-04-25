@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import {
     AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Clock,
-    Download, Eye, Loader2, RefreshCw, Send, Shield, Upload, X, FileText,
+    Download, Eye, Loader2, Phone, RefreshCw, Send, Shield, Upload, X, FileText,
 } from 'lucide-react';
 import {
     SectionCard, DocumentCard, StatusBadge, ProgressHeader,
@@ -103,6 +104,8 @@ export default function KYCPage() {
     const [savingDraft, setSavingDraft] = useState(false);
     const [lastSaved, setLastSaved] = useState<string | null>(null);
     const [submitting, setSubmitting] = useState(false);
+    const [draftResumedAt, setDraftResumedAt] = useState<string | null>(null);
+    const [draftBannerDismissed, setDraftBannerDismissed] = useState(false);
 
     // Consent flow state
     const [consentPath, setConsentPath] = useState<'none' | 'digital' | 'manual'>('none'); // mutually exclusive
@@ -144,9 +147,20 @@ export default function KYCPage() {
                 return;
             }
 
+            if (!fetchedLead) {
+                setAccessDenied(true);
+                setApiError('Lead record could not be loaded. Please return to lead creation and try again.');
+                return;
+            }
+
             setAccessDenied(false);
             setLead(fetchedLead);
             if (fetchedLead?.consent_status) setConsentStatus(fetchedLead.consent_status);
+
+            // Surface the "resumed from draft" banner when arriving at a draft-state lead
+            if (!soft && fetchedLead?.kyc_status === 'draft' && fetchedLead?.draft_updated_at) {
+                setDraftResumedAt(fetchedLead.draft_updated_at);
+            }
 
             // Restore coupon state from lead
             if (fetchedLead?.coupon_code && fetchedLead?.coupon_status === 'reserved') {
@@ -271,17 +285,18 @@ export default function KYCPage() {
 
             if (!res.ok || !data?.success) throw new Error(data?.message || data?.error?.message || 'Upload failed');
 
+            const serverDoc = data?.document || data?.data || null;
             setUploadedDocs(prev => ({
                 ...prev,
                 [documentType]: {
                     ...(prev[documentType] || {}),
                     doc_type: documentType,
-                    verification_status: 'pending',
-                    doc_status: 'uploaded',
-                    file_url: data?.fileUrl || prev[documentType]?.file_url || null,
-                    file_name: file.name,
-                    file_size: file.size,
-                    uploaded_at: new Date().toISOString(),
+                    doc_status: serverDoc?.doc_status || 'uploaded',
+                    verification_status: serverDoc?.verification_status || 'uploaded',
+                    file_url: serverDoc?.file_url || data?.fileUrl || prev[documentType]?.file_url || null,
+                    file_name: serverDoc?.file_name || file.name,
+                    file_size: serverDoc?.file_size || file.size,
+                    uploaded_at: serverDoc?.uploaded_at || new Date().toISOString(),
                 },
             }));
             await loadPageData(true);
@@ -339,15 +354,37 @@ export default function KYCPage() {
     const handleSaveDraft = async (auto = false) => {
         try {
             setSavingDraft(true);
+            const docsUploaded = Object.values(uploadedDocs).filter((d) => d?.file_url).length;
+            const docsRequired = requiredDocs.filter((d) => d.required).length;
+            const consentComplete = isFinalConsentStatus(consentStatus);
+            const progress = { docsUploaded, docsRequired, consentComplete };
+
             const res = await fetch(`/api/kyc/${leadId}/save-draft`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ step: 2, data: { documents: uploadedDocs, consentStatus } }),
+                body: JSON.stringify({
+                    step: 2,
+                    data: { documents: uploadedDocs, consentStatus, progress },
+                }),
             });
-            if (!res.ok) throw new Error('Failed to save draft');
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok || json?.success === false) {
+                throw new Error(json?.error?.message || 'Failed to save draft');
+            }
             setLastSaved(`${auto ? 'Auto-saved' : 'Saved'} at ${new Date().toLocaleTimeString()}`);
+            if (!auto) {
+                toast.success('Draft saved', {
+                    description: `Progress: ${docsUploaded}/${docsRequired} documents${consentComplete ? ', consent verified' : ''}`,
+                });
+            }
         } catch (err: any) {
-            setApiError(err?.message || 'Failed to save draft');
+            const message = err?.message || 'Failed to save draft';
+            if (auto) {
+                // Auto-save failures surface quietly in the error banner only
+                setApiError(message);
+            } else {
+                toast.error(message);
+            }
         } finally {
             setSavingDraft(false);
         }
@@ -548,12 +585,41 @@ export default function KYCPage() {
                 <div className="text-center max-w-md">
                     <Shield className="w-14 h-14 text-red-400 mx-auto mb-4" />
                     <h2 className="text-2xl font-bold text-gray-900">Access Denied</h2>
-                    <p className="mt-2 text-sm text-gray-500">Step 2 is only available for hot leads with non-cash payment method.</p>
-                    <button onClick={() => router.push('/dealer-portal/leads')} className="mt-6 px-6 py-3 bg-[#0047AB] text-white rounded-xl font-bold">Back to Leads</button>
+                    <p className="mt-2 text-sm text-gray-500">
+                        {apiError || 'Step 2 is only available for hot leads with non-cash payment method.'}
+                    </p>
+                    <button onClick={() => router.push('/dealer-portal/leads/new')} className="mt-6 px-6 py-3 bg-[#0047AB] text-white rounded-xl font-bold">Back to Lead Creation</button>
                 </div>
             </div>
         );
     }
+
+    // ─── Gating & Stepper ───────────────────────────────────────────────────
+    const isConsentVerified = ['verified', 'admin_verified', 'manual_verified'].includes((consentStatus || '').toLowerCase());
+    const allDocsUploaded = requiredDocs.filter(d => d.required).every(d => !!uploadedDocs[d.key]?.file_url);
+    const isCouponSubmitted = lead?.coupon_status === 'used' || submittedForVerification;
+    const pendingRequirements: string[] = [];
+    if (!isConsentVerified) pendingRequirements.push('consent verification');
+    if (!allDocsUploaded) pendingRequirements.push(`${docStats.pending.length} pending document${docStats.pending.length === 1 ? '' : 's'}`);
+    if (!isCouponSubmitted) pendingRequirements.push('coupon submission');
+    const canProceed = isConsentVerified && allDocsUploaded && isCouponSubmitted;
+
+    const stepRoutes: Record<number, string> = {
+        1: '/dealer-portal/leads/new',
+        2: `/dealer-portal/leads/${leadId}/kyc`,
+        3: `/dealer-portal/leads/${leadId}/borrower-consent`,
+        4: `/dealer-portal/leads/${leadId}/kyc/interim`,
+        5: `/dealer-portal/leads/${leadId}/options`,
+    };
+    const jumpToStep = (target: number) => {
+        if (target === 2) return; // already here
+        if (target > 2 && !canProceed) {
+            setApiError('Complete this step before jumping ahead.');
+            return;
+        }
+        const route = stepRoutes[target];
+        if (route) router.push(route);
+    };
 
     return (
         <div className="min-h-screen bg-[#F8F9FB]">
@@ -561,9 +627,12 @@ export default function KYCPage() {
                 {/* Header */}
                 <ProgressHeader
                     title="KYC"
-                    subtitle={`Reference ID: ${lead?.reference_id || leadId}${lead?.full_name ? ` — ${lead.full_name}` : ''}`}
+                    subtitle={`Lead ID: ${leadId}${lead?.full_name ? ` — ${lead.full_name}` : ''}`}
                     step={2}
-                    onBack={() => router.back()}
+                    onBack={() => router.push('/dealer-portal/leads/new')}
+                    onPrev={() => jumpToStep(1)}
+                    onNext={() => jumpToStep(3)}
+                    onStepClick={jumpToStep}
                     rightAction={
                         <button onClick={async () => {
                             try { await fetch(`/api/kyc/${leadId}/consent/sync`, { method: 'POST', cache: 'no-store' }); } catch {}
@@ -576,11 +645,34 @@ export default function KYCPage() {
 
                 <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
 
+                {draftResumedAt && !draftBannerDismissed && (
+                    <div className="mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-blue-50 border border-blue-200">
+                        <div className="flex items-center gap-3 text-sm">
+                            <FileText className="w-4 h-4 text-blue-700 flex-shrink-0" />
+                            <span className="text-blue-900">
+                                Resumed from your saved draft — last updated {new Date(draftResumedAt).toLocaleString()}. Continue where you left off.
+                            </span>
+                        </div>
+                        <button
+                            onClick={() => setDraftBannerDismissed(true)}
+                            className="text-blue-700/60 hover:text-blue-900 flex-shrink-0"
+                            aria-label="Dismiss"
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
+                    </div>
+                )}
+
                 <main className="grid grid-cols-1 gap-6">
                     {/* ─── Customer Consent ───────────────────────────── */}
                     <SectionCard title="Customer Consent" action={
                         <ConsentStatusBadge status={consentStatus} />
                     }>
+                        <div className="mb-4 flex items-center gap-2 text-sm">
+                            <Phone className="w-4 h-4 text-gray-500" />
+                            <span className="text-gray-500">Consent link will be sent to:</span>
+                            <span className="font-bold text-gray-900">{lead?.phone || lead?.owner_contact || '—'}</span>
+                        </div>
                         {isFinalConsentStatus(consentStatus) ? (
                             /* ── Admin Verified Successfully ─────────────── */
                             <div className="space-y-3">
@@ -630,11 +722,17 @@ export default function KYCPage() {
                                         <p className="text-xs text-red-600 mt-0.5">Customer eSign was unsuccessful. You can resend the consent link or switch to manual consent.</p>
                                     </div>
                                 </div>
-                                <div className="flex gap-3">
-                                    <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
-                                        className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center gap-2">
-                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend via WhatsApp
-                                    </button>
+                                <div className="flex gap-3 items-start">
+                                    <div className="flex flex-col">
+                                        <button
+                                            onClick={() => handleSendConsent('whatsapp')}
+                                            disabled={true}
+                                            className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            <Send className="w-4 h-4" /> Resend via WhatsApp
+                                        </button>
+                                        <span className="text-[10px] text-gray-500 font-medium text-center mt-1">Coming Soon</span>
+                                    </div>
                                     <button onClick={handleGenerateConsentPDF} disabled={consentLoading}
                                         className="px-5 py-2.5 bg-white border-2 border-gray-200 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all disabled:opacity-50 flex items-center gap-2">
                                         <FileText className="w-4 h-4" /> Switch to Manual
@@ -666,11 +764,17 @@ export default function KYCPage() {
                                         <p className="text-xs text-amber-600 mt-0.5">The consent link has expired (24 hours). Please resend.</p>
                                     </div>
                                 </div>
-                                <div className="flex gap-3">
-                                    <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
-                                        className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center gap-2">
-                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend via WhatsApp
-                                    </button>
+                                <div className="flex gap-3 items-start">
+                                    <div className="flex flex-col">
+                                        <button
+                                            onClick={() => handleSendConsent('whatsapp')}
+                                            disabled={true}
+                                            className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            <Send className="w-4 h-4" /> Resend via WhatsApp
+                                        </button>
+                                        <span className="text-[10px] text-gray-500 font-medium text-center mt-1">Coming Soon</span>
+                                    </div>
                                     <button onClick={() => handleSendConsent('sms')} disabled={consentLoading}
                                         className="px-5 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2">
                                         {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend via SMS
@@ -731,11 +835,17 @@ export default function KYCPage() {
                                         <p className="text-xs text-red-600 mt-0.5">Please re-generate and re-upload the consent form, or resend digital consent.</p>
                                     </div>
                                 </div>
-                                <div className="flex gap-3">
-                                    <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading}
-                                        className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center gap-2">
-                                        {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} Resend Digital
-                                    </button>
+                                <div className="flex gap-3 items-start">
+                                    <div className="flex flex-col">
+                                        <button
+                                            onClick={() => handleSendConsent('whatsapp')}
+                                            disabled={true}
+                                            className="px-5 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            <Send className="w-4 h-4" /> Resend Digital
+                                        </button>
+                                        <span className="text-[10px] text-gray-500 font-medium text-center mt-1">Coming Soon</span>
+                                    </div>
                                     <button onClick={handleGenerateConsentPDF} disabled={consentLoading}
                                         className="px-5 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2">
                                         {consentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
@@ -767,12 +877,18 @@ export default function KYCPage() {
                                             </div>
                                         </div>
                                         {consentPath !== 'manual' && (
-                                            <div className="flex gap-2">
-                                                <button onClick={() => handleSendConsent('whatsapp')} disabled={consentLoading || consentPath === 'digital'}
-                                                    className="flex-1 px-3 py-2 bg-[#25D366] text-white rounded-lg text-xs font-bold hover:bg-[#1da851] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
-                                                    {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                                                    WhatsApp
-                                                </button>
+                                            <div className="flex gap-2 items-start">
+                                                <div className="flex-1 flex flex-col">
+                                                    <button
+                                                        onClick={() => handleSendConsent('whatsapp')}
+                                                        disabled={true}
+                                                        className="w-full px-3 py-2 bg-[#25D366] text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    >
+                                                        <Send className="w-3 h-3" />
+                                                        WhatsApp
+                                                    </button>
+                                                    <span className="text-[10px] text-gray-500 font-medium text-center mt-1">Coming Soon</span>
+                                                </div>
                                                 <button onClick={() => handleSendConsent('sms')} disabled={consentLoading || consentPath === 'digital'}
                                                     className="flex-1 px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
                                                     {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
@@ -905,7 +1021,7 @@ export default function KYCPage() {
                                     <p className="text-xs text-emerald-600 mt-0.5">Coupon <span className="font-mono font-bold">{couponCode}</span> consumed. Verification is in progress.</p>
                                 </div>
                             </div>
-                        ) : (couponResult?.valid || couponResult?.success) && lead?.coupon_status === 'reserved' ? (
+                        ) : lead?.coupon_status === 'reserved' ? (
                             /* ── Coupon Reserved ──────────────────────── */
                             <div className="space-y-3">
                                 <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
@@ -914,7 +1030,7 @@ export default function KYCPage() {
                                         <p className="text-sm font-bold text-blue-800">
                                             Coupon Reserved: <span className="font-mono">{couponCode}</span>
                                         </p>
-                                        {couponResult.discount_amount > 0 && (
+                                        {couponResult?.discount_amount > 0 && (
                                             <p className="text-xs text-blue-600 mt-0.5">Discount: ₹{couponResult.discount_amount} off (Final: ₹{couponResult.final_amount})</p>
                                         )}
                                         <p className="text-xs text-blue-500 mt-0.5">This coupon is locked to this lead. Click Submit to start verification.</p>
@@ -1043,10 +1159,17 @@ export default function KYCPage() {
                 </main>
 
                 {/* ─── Bottom Bar ────────────────────────────────────── */}
+                {!canProceed && pendingRequirements.length > 0 && (
+                    <div className="mt-6 flex items-center justify-end">
+                        <p className="text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                            Complete to proceed: {pendingRequirements.join(', ')}
+                        </p>
+                    </div>
+                )}
                 <StickyBottomBar lastSaved={lastSaved}>
-                    <OutlineButton onClick={() => router.push('/dealer-portal/leads')}>Back</OutlineButton>
+                    <OutlineButton onClick={() => router.push('/dealer-portal/leads/new')}>Back</OutlineButton>
                     <SecondaryButton onClick={() => handleSaveDraft(false)} loading={savingDraft}>Save Draft</SecondaryButton>
-                    <PrimaryButton onClick={handleSaveAndNext} loading={submitting} disabled={submitting}>
+                    <PrimaryButton onClick={handleSaveAndNext} loading={submitting} disabled={submitting || !canProceed}>
                         Next <ChevronRight className="w-4 h-4" />
                     </PrimaryButton>
                 </StickyBottomBar>

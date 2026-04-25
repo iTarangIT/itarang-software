@@ -8,6 +8,17 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const PINCODE_REGEX = /^\d{6}$/;
 
+const AGE_MIN = 18;
+const AGE_MAX = 90;
+function validateAge(raw: string | undefined | null): string | null {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return "Age is required";
+  if (!/^\d+$/.test(trimmed)) return "Age must be a number";
+  const n = Number(trimmed);
+  if (n < AGE_MIN || n > AGE_MAX) return `Age must be between ${AGE_MIN} and ${AGE_MAX}`;
+  return null;
+}
+
 export function validateStep(
   state: DealerOnboardingState
 ): Record<string, string> {
@@ -89,8 +100,9 @@ export function validateStep(
         errors.ownerEmail = "Enter valid owner email";
       }
 
-      if (!state.ownership.ownerAge?.trim()) {
-        errors.ownerAge = "Owner age is required";
+      {
+        const msg = validateAge(state.ownership.ownerAge);
+        if (msg) errors.ownerAge = msg.replace("Age", "Owner age");
       }
 
       if (!state.ownership.ownerPhoto?.file) {
@@ -127,6 +139,10 @@ export function validateStep(
         errors.partners = "Add at least one partner";
       }
 
+      const seenPartnerNames = new Map<string, number>();
+      const seenPartnerPhones = new Map<string, number>();
+      const seenPartnerEmails = new Map<string, number>();
+
       state.ownership.partners.forEach((partner, index) => {
         if (!partner.name?.trim()) {
           errors[`partner_name_${index}`] = "Partner name required";
@@ -140,8 +156,9 @@ export function validateStep(
           errors[`partner_email_${index}`] = "Valid partner email required";
         }
 
-        if (!partner.age?.trim()) {
-          errors[`partner_age_${index}`] = "Partner age required";
+        {
+          const msg = validateAge(partner.age);
+          if (msg) errors[`partner_age_${index}`] = msg.replace("Age", "Partner age");
         }
 
         if (!partner.photo?.file) {
@@ -168,6 +185,34 @@ export function validateStep(
         if (!PINCODE_REGEX.test(partner.pinCode || "")) {
           errors[`partner_pinCode_${index}`] = "Valid partner pin code required";
         }
+
+        // Uniqueness across partners — no two partners may share name, phone, or email.
+        const nameKey = partner.name?.trim().toLowerCase();
+        if (nameKey && !errors[`partner_name_${index}`]) {
+          if (seenPartnerNames.has(nameKey)) {
+            errors[`partner_name_${index}`] = "Partner name must be unique";
+          } else {
+            seenPartnerNames.set(nameKey, index);
+          }
+        }
+
+        const phoneKey = partner.phone?.trim();
+        if (phoneKey && !errors[`partner_phone_${index}`]) {
+          if (seenPartnerPhones.has(phoneKey)) {
+            errors[`partner_phone_${index}`] = "Partner phone must be unique";
+          } else {
+            seenPartnerPhones.set(phoneKey, index);
+          }
+        }
+
+        const emailKey = partner.email?.trim().toLowerCase();
+        if (emailKey && !errors[`partner_email_${index}`]) {
+          if (seenPartnerEmails.has(emailKey)) {
+            errors[`partner_email_${index}`] = "Partner email must be unique";
+          } else {
+            seenPartnerEmails.set(emailKey, index);
+          }
+        }
       });
     }
 
@@ -184,6 +229,10 @@ export function validateStep(
         errors.directors = "Add at least one director";
       }
 
+      const seenDirectorNames = new Map<string, number>();
+      const seenDirectorPhones = new Map<string, number>();
+      const seenDirectorEmails = new Map<string, number>();
+
       state.ownership.directors.forEach((director, index) => {
         if (!director.name?.trim()) {
           errors[`director_name_${index}`] = "Director name required";
@@ -197,8 +246,9 @@ export function validateStep(
           errors[`director_email_${index}`] = "Valid director email required";
         }
 
-        if (!director.age?.trim()) {
-          errors[`director_age_${index}`] = "Director age required";
+        {
+          const msg = validateAge(director.age);
+          if (msg) errors[`director_age_${index}`] = msg.replace("Age", "Director age");
         }
 
         if (!director.photo?.file) {
@@ -225,6 +275,34 @@ export function validateStep(
         if (!PINCODE_REGEX.test(director.pinCode || "")) {
           errors[`director_pinCode_${index}`] =
             "Valid director pin code required";
+        }
+
+        // Uniqueness across directors — no two directors may share name, phone, or email.
+        const nameKey = director.name?.trim().toLowerCase();
+        if (nameKey && !errors[`director_name_${index}`]) {
+          if (seenDirectorNames.has(nameKey)) {
+            errors[`director_name_${index}`] = "Director name must be unique";
+          } else {
+            seenDirectorNames.set(nameKey, index);
+          }
+        }
+
+        const phoneKey = director.phone?.trim();
+        if (phoneKey && !errors[`director_phone_${index}`]) {
+          if (seenDirectorPhones.has(phoneKey)) {
+            errors[`director_phone_${index}`] = "Director phone must be unique";
+          } else {
+            seenDirectorPhones.set(phoneKey, index);
+          }
+        }
+
+        const emailKey = director.email?.trim().toLowerCase();
+        if (emailKey && !errors[`director_email_${index}`]) {
+          if (seenDirectorEmails.has(emailKey)) {
+            errors[`director_email_${index}`] = "Director email must be unique";
+          } else {
+            seenDirectorEmails.set(emailKey, index);
+          }
         }
       });
     }
@@ -277,6 +355,38 @@ export function validateStep(
       !EMAIL_REGEX.test(state.finance.financeContactEmail.trim())
     ) {
       errors.financeContactEmail = "Valid finance contact email required";
+    }
+
+    // When finance is disabled, step 5 (agreement) is skipped, so the sales
+    // manager block moves into step 4 and must be fully validated here.
+    if (state.finance.enableFinance === "no") {
+      const sm = (state.agreement?.salesManager || {}) as {
+        name?: string;
+        email?: string;
+        mobile?: string;
+        age?: string;
+      };
+
+      if (!sm.name?.trim()) {
+        errors.salesManager_name = "Sales manager name is required";
+      }
+
+      if (!sm.email?.trim()) {
+        errors.salesManager_email = "Sales manager email is required";
+      } else if (!EMAIL_REGEX.test(sm.email.trim())) {
+        errors.salesManager_email = "Enter a valid sales manager email";
+      }
+
+      if (!sm.mobile?.trim()) {
+        errors.salesManager_mobile = "Sales manager mobile is required";
+      } else if (!PHONE_REGEX.test(sm.mobile.trim())) {
+        errors.salesManager_mobile = "Enter a valid sales manager mobile";
+      }
+
+      {
+        const msg = validateAge(sm.age);
+        if (msg) errors.salesManager_age = msg.replace("Age", "Sales manager age");
+      }
     }
   }
 
@@ -344,6 +454,40 @@ export function validateStep(
         "iTarang signatory 1 signing method is required";
     }
 
+    {
+      const msg = validateAge((state.agreement.itarangSignatory1 as any).age);
+      if (msg) errors.itarangSignatory1_age = msg.replace("Age", "iTarang signatory 1 age");
+    }
+
+    // Sales Manager — required when the agreement step is active (finance = yes).
+    {
+      const sm = (state.agreement.salesManager || {}) as {
+        name?: string;
+        email?: string;
+        mobile?: string;
+        age?: string;
+      };
+
+      if (!sm.name?.trim()) {
+        errors.salesManager_name = "Sales manager name is required";
+      }
+
+      if (!sm.email?.trim()) {
+        errors.salesManager_email = "Sales manager email is required";
+      } else if (!EMAIL_REGEX.test(sm.email.trim())) {
+        errors.salesManager_email = "Enter a valid sales manager email";
+      }
+
+      if (!sm.mobile?.trim()) {
+        errors.salesManager_mobile = "Sales manager mobile is required";
+      } else if (!PHONE_REGEX.test(sm.mobile.trim())) {
+        errors.salesManager_mobile = "Enter a valid sales manager mobile";
+      }
+
+      const ageMsg = validateAge(sm.age);
+      if (ageMsg) errors.salesManager_age = ageMsg.replace("Age", "Sales manager age");
+    }
+
     // iTarang Signatory 2 — OPTIONAL
     // Only validate if the user has started filling it in
     const s2 = state.agreement.itarangSignatory2;
@@ -376,6 +520,10 @@ export function validateStep(
       if (!s2.signingMethod) {
         errors.itarangSignatory2_signingMethod =
           "iTarang signatory 2 signing method is required";
+      }
+      {
+        const msg = validateAge((s2 as any).age);
+        if (msg) errors.itarangSignatory2_age = msg.replace("Age", "iTarang signatory 2 age");
       }
     }
 

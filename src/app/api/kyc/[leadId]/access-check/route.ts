@@ -3,7 +3,7 @@ import { db } from '@/lib/db';
 import { leads } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 
-const FINANCE_METHODS = ['other_finance', 'itarang_finance', 'bnpl'];
+const FINANCE_METHODS = ['finance', 'other_finance', 'dealer_finance'];
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -39,6 +39,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             coupon_status: l.coupon_status,
             lead_status: l.lead_status,
             has_co_borrower: l.has_co_borrower,
+            kyc_draft_data: l.kyc_draft_data,
+            draft_updated_at: l.updated_at,
         };
 
         return NextResponse.json({

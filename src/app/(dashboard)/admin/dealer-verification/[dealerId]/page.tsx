@@ -22,7 +22,28 @@ import {
   X,
   Save,
   Languages,
+  AlertTriangle,
+  GitBranch,
 } from "lucide-react";
+
+type DuplicateFlag = "none" | "branch" | "duplicate" | "pan-mismatch";
+
+type DuplicateExistingAccount = {
+  dealerCode: string;
+  companyName: string | null;
+  pan: string | null;
+  addressLine1: string | null;
+  city: string | null;
+  state: string | null;
+  pincode: string | null;
+};
+
+type DuplicateCheckResult = {
+  conflict: DuplicateFlag;
+  existing: DuplicateExistingAccount | null;
+  message: string | null;
+  isBranchDealer?: boolean;
+};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -79,6 +100,20 @@ type AgreementData = {
   statePresence?: string | null;
 };
 
+type OwnershipPerson = {
+  id?: string;
+  name?: string;
+  phone?: string;
+  landline?: string;
+  email?: string;
+  age?: string;
+  addressLine1?: string;
+  city?: string;
+  district?: string;
+  state?: string;
+  pinCode?: string;
+};
+
 type DealerReviewData = {
   id: string;
   dealerId: string;
@@ -95,6 +130,18 @@ type DealerReviewData = {
   accountNumber?: string;
   beneficiaryName?: string;
   ifscCode?: string;
+  bankBranch?: string;
+  accountType?: string;
+  ownerAddressLine1?: string;
+  ownerCity?: string;
+  ownerDistrict?: string;
+  ownerState?: string;
+  ownerPinCode?: string;
+  salesManagerName?: string;
+  salesManagerEmail?: string;
+  salesManagerMobile?: string;
+  partners?: OwnershipPerson[];
+  directors?: OwnershipPerson[];
   agreementLanguage?: string;   // ✅ NEW
   financeEnabled?: boolean;
   onboardingStatus?: string;
@@ -158,6 +205,16 @@ type CompanyEditForm = {
   accountNumber: string;
   beneficiaryName: string;
   ifscCode: string;
+  bankBranch: string;
+  accountType: string;
+  ownerAddressLine1: string;
+  ownerCity: string;
+  ownerDistrict: string;
+  ownerState: string;
+  ownerPinCode: string;
+  salesManagerName: string;
+  salesManagerEmail: string;
+  salesManagerMobile: string;
 };
 
 const AGREEMENT_LANGUAGE_OPTIONS = [
@@ -242,6 +299,56 @@ function EditableField({
   );
 }
 
+function SubsectionHeading({ label }: { label: string }) {
+  return (
+    <div className="mb-3 mt-6 flex items-center gap-3">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+        {label}
+      </p>
+      <div className="h-px flex-1 bg-slate-200" />
+    </div>
+  );
+}
+
+function OwnershipPersonCard({
+  heading,
+  person,
+}: {
+  heading: string;
+  person: {
+    name?: string;
+    phone?: string;
+    landline?: string;
+    email?: string;
+    age?: string;
+    addressLine1?: string;
+    city?: string;
+    district?: string;
+    state?: string;
+    pinCode?: string;
+  };
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+      <h4 className="mb-3 text-sm font-semibold text-slate-700">{heading}</h4>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <InfoField label="Name" value={person?.name} />
+        <InfoField label="Phone" value={person?.phone} />
+        <InfoField label="Email" value={person?.email} />
+        <InfoField label="Landline" value={person?.landline} />
+        <InfoField label="Age" value={person?.age} />
+        <div className="md:col-span-2">
+          <InfoField label="Address Line 1" value={person?.addressLine1} />
+        </div>
+        <InfoField label="City" value={person?.city} />
+        <InfoField label="District" value={person?.district} />
+        <InfoField label="State" value={person?.state} />
+        <InfoField label="Pin Code" value={person?.pinCode} />
+      </div>
+    </div>
+  );
+}
+
 // ─── Badges (unchanged) ───────────────────────────────────────────────────────
 
 function StatusBadge({ value }: { value?: string | null }) {
@@ -310,6 +417,7 @@ function ActionCard({
   remarks, setRemarks, submitting,
   onApprove, onCorrection, onReject, onBack,
   financeEnabled, agreementStatus,
+  duplicate,
 }: {
   remarks: string;
   setRemarks: (value: string) => void;
@@ -320,8 +428,14 @@ function ActionCard({
   onBack: () => void;
   financeEnabled?: boolean;
   agreementStatus?: string | null;
+  duplicate?: DuplicateCheckResult | null;
 }) {
-  const approvalBlocked = !!financeEnabled && (agreementStatus || "").toLowerCase() !== "completed";
+  const financeGateBlock =
+    !!financeEnabled && (agreementStatus || "").toLowerCase() !== "completed";
+  const duplicateBlock =
+    duplicate?.conflict === "duplicate" ||
+    duplicate?.conflict === "pan-mismatch";
+  const approvalBlocked = financeGateBlock || duplicateBlock;
 
   return (
     <motion.aside
@@ -351,13 +465,63 @@ function ActionCard({
         </div>
       </div>
 
-      {approvalBlocked && (
+      {financeGateBlock && (
         <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
           <div className="flex items-start gap-3">
             <Clock3 className="mt-0.5 h-4 w-4 text-amber-600" />
             <p className="text-sm text-amber-800">
               Approval is blocked until the finance agreement reaches completed status.
             </p>
+          </div>
+        </div>
+      )}
+
+      {duplicate?.conflict === "branch" && duplicate.existing && (
+        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <GitBranch className="mt-0.5 h-4 w-4 text-amber-600" />
+            <div className="text-sm text-amber-900">
+              <p className="font-semibold">Branch dealer — will link to existing account</p>
+              <p className="mt-1 text-amber-800">
+                This GSTIN already belongs to{" "}
+                <strong>{duplicate.existing.companyName || duplicate.existing.dealerCode}</strong>{" "}
+                (<code className="text-xs">{duplicate.existing.dealerCode}</code>). Addresses differ —
+                approving will link this dealer as an additional location under the existing legal
+                entity. Shared fields (GSTIN, PAN, bank details) will be read-only for this dealer.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {duplicate?.conflict === "duplicate" && duplicate.existing && (
+        <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 text-rose-600" />
+            <div className="text-sm text-rose-900">
+              <p className="font-semibold">Approval blocked — duplicate dealer</p>
+              <p className="mt-1 text-rose-800">
+                Another dealer with the same GSTIN, PAN, and address already exists (
+                <code className="text-xs">{duplicate.existing.dealerCode}</code>
+                {duplicate.existing.companyName ? ` — ${duplicate.existing.companyName}` : ""}).
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {duplicate?.conflict === "pan-mismatch" && duplicate.existing && (
+        <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 text-rose-600" />
+            <div className="text-sm text-rose-900">
+              <p className="font-semibold">Approval blocked — PAN mismatch</p>
+              <p className="mt-1 text-rose-800">
+                This GSTIN is registered under a different PAN (
+                <code className="text-xs">{duplicate.existing.pan || "unknown"}</code>). The data
+                appears inconsistent — verify the applicant's PAN before approving.
+              </p>
+            </div>
           </div>
         </div>
       )}
@@ -410,6 +574,9 @@ export default function DealerReviewPage() {
     companyName: "", companyAddress: "", gstNumber: "", panNumber: "",
     cinNumber: "", companyType: "", ownerName: "", ownerPhone: "",
     ownerEmail: "", bankName: "", accountNumber: "", beneficiaryName: "", ifscCode: "",
+    bankBranch: "", accountType: "",
+    ownerAddressLine1: "", ownerCity: "", ownerDistrict: "", ownerState: "", ownerPinCode: "",
+    salesManagerName: "", salesManagerEmail: "", salesManagerMobile: "",
   });
 
   // ✅ NEW — agreement language state
@@ -423,6 +590,7 @@ export default function DealerReviewPage() {
   const [tracking, setTracking]             = useState<AgreementTrackingResponse | null>(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
   const [auditTrailLoading, setAuditTrailLoading] = useState(false);
+  const [duplicate, setDuplicate] = useState<DuplicateCheckResult | null>(null);
 
   // ─── loaders ───────────────────────────────────────────────────────────────
 
@@ -465,6 +633,16 @@ export default function DealerReviewPage() {
             accountNumber:  d.accountNumber  || "",
             beneficiaryName: d.beneficiaryName || "",
             ifscCode:       d.ifscCode       || "",
+            bankBranch:     d.bankBranch     || "",
+            accountType:    d.accountType    || "",
+            ownerAddressLine1: d.ownerAddressLine1 || "",
+            ownerCity:      d.ownerCity      || "",
+            ownerDistrict:  d.ownerDistrict  || "",
+            ownerState:     d.ownerState     || "",
+            ownerPinCode:   d.ownerPinCode   || "",
+            salesManagerName:   d.salesManagerName   || "",
+            salesManagerEmail:  d.salesManagerEmail  || "",
+            salesManagerMobile: d.salesManagerMobile || "",
           });
           setAgreementLanguage(d.agreementLanguage || "english");
         } else {
@@ -472,6 +650,25 @@ export default function DealerReviewPage() {
         }
 
         await loadAgreementTracking();
+
+        // Duplicate detection — non-blocking. If this errors we still show
+        // the review page, just without the alert card.
+        try {
+          const dupRes = await fetch(
+            `/api/admin/dealer-verifications/${dealerId}/duplicate-check`
+          );
+          const dupJson = await dupRes.json();
+          if (dupJson?.success) {
+            setDuplicate({
+              conflict: dupJson.conflict,
+              existing: dupJson.existing,
+              message: dupJson.message,
+              isBranchDealer: dupJson.isBranchDealer,
+            });
+          }
+        } catch (dupErr) {
+          console.error("Failed to load duplicate-check", dupErr);
+        }
       } catch (error) {
         console.error("Failed to load dealer review data", error);
         setData(null);
@@ -505,6 +702,16 @@ export default function DealerReviewPage() {
       accountNumber:  data.accountNumber  || "",
       beneficiaryName: data.beneficiaryName || "",
       ifscCode:       data.ifscCode       || "",
+      bankBranch:     data.bankBranch     || "",
+      accountType:    data.accountType    || "",
+      ownerAddressLine1: data.ownerAddressLine1 || "",
+      ownerCity:      data.ownerCity      || "",
+      ownerDistrict:  data.ownerDistrict  || "",
+      ownerState:     data.ownerState     || "",
+      ownerPinCode:   data.ownerPinCode   || "",
+      salesManagerName:   data.salesManagerName   || "",
+      salesManagerEmail:  data.salesManagerEmail  || "",
+      salesManagerMobile: data.salesManagerMobile || "",
     });
     setIsEditing(false);
   };
@@ -901,6 +1108,7 @@ export default function DealerReviewPage() {
               </div>
             )}
 
+            <SubsectionHeading label="Company & Registered Details" />
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               {isEditing ? (
                 <>
@@ -913,10 +1121,6 @@ export default function DealerReviewPage() {
                   <EditableField label="Primary Contact Name"   value={editForm.ownerName}      onChange={handleEditField("ownerName")} />
                   <EditableField label="Primary Contact Phone"  value={editForm.ownerPhone}     onChange={handleEditField("ownerPhone")} />
                   <EditableField label="Primary Contact Email"  value={editForm.ownerEmail}     onChange={handleEditField("ownerEmail")} />
-                  <EditableField label="Bank Name"              value={editForm.bankName}       onChange={handleEditField("bankName")} />
-                  <EditableField label="Account Number"         value={editForm.accountNumber}  onChange={handleEditField("accountNumber")} />
-                  <EditableField label="Beneficiary Name"       value={editForm.beneficiaryName} onChange={handleEditField("beneficiaryName")} />
-                  <EditableField label="IFSC Code"              value={editForm.ifscCode}       onChange={handleEditField("ifscCode")} />
                 </>
               ) : (
                 <>
@@ -929,41 +1133,110 @@ export default function DealerReviewPage() {
                   <InfoField label="Primary Contact Name"  value={data.ownerName} />
                   <InfoField label="Primary Contact Phone" value={data.ownerPhone} />
                   <InfoField label="Primary Contact Email" value={data.ownerEmail} />
-                  <InfoField label="Bank Name"             value={data.bankName} />
-                  <InfoField label="Account Number"        value={data.accountNumber} />
-                  <InfoField label="Beneficiary Name"      value={data.beneficiaryName} />
-                  <InfoField label="IFSC Code"             value={data.ifscCode} />
                 </>
               )}
             </div>
 
-            {/* ✅ NEW — Agreement Language dropdown */}
-            <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="mb-1 flex items-center gap-2">
-                <Languages className="h-4 w-4 text-slate-500" />
-                <p className="text-sm font-semibold text-slate-800">Agreement Language</p>
-                {langSaving && (
-                  <span className="text-xs text-slate-400">Saving…</span>
-                )}
-                {langSaved && !langSaving && (
-                  <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                    ✓ Saved
-                  </span>
-                )}
-              </div>
-              <p className="mb-3 text-xs text-slate-500">
-                Select the language for the dealer agreement document.
-              </p>
-              <select
-                value={agreementLanguage}
-                onChange={(e) => handleLanguageChange(e.target.value)}
-                className="h-11 w-full max-w-xs rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 cursor-pointer"
-              >
-                {AGREEMENT_LANGUAGE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
+            {/* Owner residential address — only applies to sole proprietorship */}
+            {(data.companyType === "sole_proprietorship" ||
+              isEditing ||
+              data.ownerAddressLine1 ||
+              data.ownerCity ||
+              data.ownerPinCode) && (
+              <>
+                <SubsectionHeading label="Owner Residential Address" />
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  {isEditing ? (
+                    <>
+                      <EditableField label="Address Line 1" value={editForm.ownerAddressLine1} onChange={handleEditField("ownerAddressLine1")} />
+                      <EditableField label="City"           value={editForm.ownerCity}         onChange={handleEditField("ownerCity")} />
+                      <EditableField label="District"       value={editForm.ownerDistrict}     onChange={handleEditField("ownerDistrict")} />
+                      <EditableField label="State"          value={editForm.ownerState}        onChange={handleEditField("ownerState")} />
+                      <EditableField label="Pin Code"       value={editForm.ownerPinCode}      onChange={handleEditField("ownerPinCode")} />
+                    </>
+                  ) : (
+                    <>
+                      <InfoField label="Address Line 1" value={data.ownerAddressLine1} />
+                      <InfoField label="City"           value={data.ownerCity} />
+                      <InfoField label="District"       value={data.ownerDistrict} />
+                      <InfoField label="State"          value={data.ownerState} />
+                      <InfoField label="Pin Code"       value={data.ownerPinCode} />
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+
+            <SubsectionHeading label="Bank Details" />
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {isEditing ? (
+                <>
+                  <EditableField label="Bank Name"        value={editForm.bankName}        onChange={handleEditField("bankName")} />
+                  <EditableField label="Account Number"   value={editForm.accountNumber}   onChange={handleEditField("accountNumber")} />
+                  <EditableField label="Beneficiary Name" value={editForm.beneficiaryName} onChange={handleEditField("beneficiaryName")} />
+                  <EditableField label="IFSC Code"        value={editForm.ifscCode}        onChange={handleEditField("ifscCode")} />
+                  <EditableField label="Bank Branch"      value={editForm.bankBranch}      onChange={handleEditField("bankBranch")} />
+                  <EditableField label="Account Type"     value={editForm.accountType}     onChange={handleEditField("accountType")} />
+                </>
+              ) : (
+                <>
+                  <InfoField label="Bank Name"        value={data.bankName} />
+                  <InfoField label="Account Number"   value={data.accountNumber} />
+                  <InfoField label="Beneficiary Name" value={data.beneficiaryName} />
+                  <InfoField label="IFSC Code"        value={data.ifscCode} />
+                  <InfoField label="Bank Branch"      value={data.bankBranch} />
+                  <InfoField
+                    label="Account Type"
+                    value={
+                      data.accountType
+                        ? data.accountType.charAt(0).toUpperCase() + data.accountType.slice(1)
+                        : ""
+                    }
+                  />
+                </>
+              )}
             </div>
+
+            <SubsectionHeading label="Sales Manager" />
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {isEditing ? (
+                <>
+                  <EditableField label="Name"   value={editForm.salesManagerName}   onChange={handleEditField("salesManagerName")} />
+                  <EditableField label="Email"  value={editForm.salesManagerEmail}  onChange={handleEditField("salesManagerEmail")} />
+                  <EditableField label="Mobile" value={editForm.salesManagerMobile} onChange={handleEditField("salesManagerMobile")} />
+                </>
+              ) : (
+                <>
+                  <InfoField label="Name"   value={data.salesManagerName} />
+                  <InfoField label="Email"  value={data.salesManagerEmail} />
+                  <InfoField label="Mobile" value={data.salesManagerMobile} />
+                </>
+              )}
+            </div>
+
+            {/* Read-only partner / director roster — admins can request
+                corrections on these via the existing correction flow. */}
+            {(data.partners?.length || 0) > 0 && (
+              <>
+                <SubsectionHeading label={`Partners (${data.partners?.length})`} />
+                <div className="space-y-3">
+                  {data.partners!.map((p, i) => (
+                    <OwnershipPersonCard key={p.id || `partner-${i}`} heading={`Partner ${i + 1}`} person={p} />
+                  ))}
+                </div>
+              </>
+            )}
+
+            {(data.directors?.length || 0) > 0 && (
+              <>
+                <SubsectionHeading label={`Directors (${data.directors?.length})`} />
+                <div className="space-y-3">
+                  {data.directors!.map((d, i) => (
+                    <OwnershipPersonCard key={d.id || `director-${i}`} heading={`Director ${i + 1}`} person={d} />
+                  ))}
+                </div>
+              </>
+            )}
           </SectionCard>
 
           {/* ── Section 2 — Document Verification (unchanged) ── */}
@@ -1023,6 +1296,33 @@ export default function DealerReviewPage() {
                 </div>
                 <InfoField label="Primary Signer Name"  value={data.agreement?.signerName  || data.agreement?.dealerSignerName  || undefined} />
                 <InfoField label="Primary Signer Email" value={data.agreement?.signerEmail || data.agreement?.dealerSignerEmail || undefined} />
+              </div>
+
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-1 flex items-center gap-2">
+                  <Languages className="h-4 w-4 text-slate-500" />
+                  <p className="text-sm font-semibold text-slate-800">Agreement Language</p>
+                  {langSaving && (
+                    <span className="text-xs text-slate-400">Saving…</span>
+                  )}
+                  {langSaved && !langSaving && (
+                    <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                      ✓ Saved
+                    </span>
+                  )}
+                </div>
+                <p className="mb-3 text-xs text-slate-500">
+                  Select the language for the dealer agreement document.
+                </p>
+                <select
+                  value={agreementLanguage}
+                  onChange={(e) => handleLanguageChange(e.target.value)}
+                  className="h-11 w-full max-w-xs rounded-2xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 cursor-pointer"
+                >
+                  {AGREEMENT_LANGUAGE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
               </div>
 
               <div className="mt-5 flex flex-wrap gap-3">
@@ -1116,21 +1416,28 @@ export default function DealerReviewPage() {
                             </td>
                             <td className="px-6 py-4"><SignerStatusBadge value={signer.signerStatus} /></td>
                             <td className="px-6 py-4">
-                              {tracking?.canReInitiate ? (
-                                <button onClick={() => handleAgreementAction("reinitiate")}
-                                  disabled={agreementActionLoading !== null || isRejected}
-                                  className="inline-flex items-center gap-2 rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50">
-                                  <RefreshCw className="h-4 w-4" />
-                                  {agreementActionLoading === "reinitiate" ? "Re-initiating…" : "Re-initiate Agreement"}
-                                </button>
-                              ) : signer.providerSigningUrl ? (
-                                <a href={signer.providerSigningUrl} target="_blank" rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-2 text-sm font-semibold text-blue-600 hover:text-blue-700">
-                                  <ExternalLink className="h-4 w-4" /> Open Link
-                                </a>
-                              ) : (
-                                <span className="text-slate-400">No action</span>
-                              )}
+                              {(() => {
+                                const hasSigned = (signer.signerStatus || "").toLowerCase() === "signed";
+                                if (tracking?.canReInitiate) {
+                                  return (
+                                    <button onClick={() => handleAgreementAction("reinitiate")}
+                                      disabled={agreementActionLoading !== null || isRejected}
+                                      className="inline-flex items-center gap-2 rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50">
+                                      <RefreshCw className="h-4 w-4" />
+                                      {agreementActionLoading === "reinitiate" ? "Re-initiating…" : "Re-initiate Agreement"}
+                                    </button>
+                                  );
+                                }
+                                if (!hasSigned && signer.providerSigningUrl) {
+                                  return (
+                                    <a href={signer.providerSigningUrl} target="_blank" rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-2 text-sm font-semibold text-blue-600 hover:text-blue-700">
+                                      <ExternalLink className="h-4 w-4" /> Open Link
+                                    </a>
+                                  );
+                                }
+                                return <span className="text-slate-400">No action</span>;
+                              })()}
                             </td>
                           </tr>
                         ))
@@ -1192,6 +1499,7 @@ export default function DealerReviewPage() {
           onBack={() => router.push("/admin/dealer-verification")}
           financeEnabled={data.financeEnabled}
           agreementStatus={agreementStatusForUi}
+          duplicate={duplicate}
         />
       </div>
     </div>
