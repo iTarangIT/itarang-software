@@ -25,6 +25,30 @@ const nextConfig: NextConfig = {
       "./node_modules/.cache/puppeteer/**/*",
     ],
   },
+  // Stop browsers and any reverse proxy from holding onto stale HTML across
+  // deploys. Cached HTML pins references to a previous BUILD_ID's chunks,
+  // which the next deploy wipes — that was the ChunkLoadError loop. Static
+  // assets are content-hashed so they stay long-cacheable.
+  async headers() {
+    return [
+      {
+        source: "/_next/static/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+        ],
+      },
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Cache-Control", value: "no-store, must-revalidate" },
+          { key: "Pragma", value: "no-cache" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
