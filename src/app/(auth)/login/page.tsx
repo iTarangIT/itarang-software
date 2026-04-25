@@ -4,12 +4,18 @@ import { useState } from 'react';
 import { Mail, Lock, Loader2, Eye, EyeOff } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 
+// Hard-navigate (full HTML fetch) instead of router.push so the destination
+// page boots with the current build's manifest. Client-side router.push reuses
+// the manifest the /login page loaded, which 404s on chunk requests if a
+// deploy happened while the user was on the login form.
+function navigateTo(path: string): void {
+    window.location.assign(path);
+}
+
 export default function LoginPage() {
-    const router = useRouter();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
@@ -97,34 +103,34 @@ export default function LoginPage() {
             toast.success(`Welcome back, ${appUser.name || appUser.email}!`);
 
             if (appUser.must_change_password) {
-                router.push('/change-password');
+                navigateTo('/change-password');
                 return;
             }
 
             if (appUser.role === 'dealer') {
-                router.push('/dealer-portal');
+                navigateTo('/dealer-portal');
             } else if (appUser.role === 'admin') {
-                router.push('/admin');
+                navigateTo('/admin');
             } else if (appUser.role === 'ceo') {
-                router.push('/ceo');
+                navigateTo('/ceo');
             } else if (appUser.role === 'sales_head') {
-                router.push('/sales-head');
+                navigateTo('/sales-head');
             } else if (appUser.role === 'business_head') {
-                router.push('/business-head');
+                navigateTo('/business-head');
             } else if (appUser.role === 'finance_controller') {
-                router.push('/finance-controller');
+                navigateTo('/finance-controller');
             } else if (appUser.role === 'sales_order_manager') {
-                router.push('/sales-order-manager');
+                navigateTo('/sales-order-manager');
             } else if (appUser.role === 'inventory_manager') {
-                router.push('/inventory-manager');
+                navigateTo('/inventory-manager');
             } else if (appUser.role === 'service_engineer') {
-                router.push('/service-engineer');
+                navigateTo('/service-engineer');
             } else if (appUser.role === 'sales_manager') {
-                router.push('/sales-manager');
+                navigateTo('/sales-manager');
             } else if (appUser.role === 'sales_executive') {
-                router.push('/sales-executive');
+                navigateTo('/sales-executive');
             } else {
-                router.push('/');
+                navigateTo('/');
             }
         } catch (err) {
             console.error('[LOGIN] Unexpected error:', err);
