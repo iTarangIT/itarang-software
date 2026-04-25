@@ -55,6 +55,14 @@ jobs:
             npm run build
             echo "::endgroup::"
 
+            echo "::group::Assemble standalone bundle"
+            cp .env .next/standalone/.env
+            rm -rf .next/standalone/.next/static
+            cp -r .next/static .next/standalone/.next/static
+            rm -rf .next/standalone/public
+            if [ -d public ]; then cp -r public .next/standalone/public; fi
+            echo "::endgroup::"
+
             echo "::group::Load env and start/reload pm2"
             if pm2 describe sandbox-web > /dev/null 2>&1; then
               pm2 reload ecosystem.sandbox.config.js --update-env
