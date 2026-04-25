@@ -14,7 +14,16 @@
     "type-check": "tsc --noEmit",
     "db:push": "drizzle-kit push",
     "db:update-passwords": "node scripts/update-passwords.js",
-    "db:seed-test": "tsx scripts/seed-test-data.ts"
+    "db:seed-test": "tsx scripts/seed-test-data.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:report": "playwright show-report",
+    "test:e2e:smoke": "playwright test --grep=\\[smoke\\]",
+    "test:e2e:live": "playwright test --project=chromium-live",
+    "test:e2e:manual": "playwright test --project=chromium-manual",
+    "test:e2e:eval": "cross-env EXCEL_REPORT=1 playwright test"
   },
   "dependencies": {
     "@emailjs/browser": "^4.4.1",
@@ -36,7 +45,6 @@
     "bullmq": "^5.71.1",
     "clsx": "^2.1.1",
     "concurrently": "^9.2.1",
-    "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.1",
     "exceljs": "^4.4.0",
     "framer-motion": "^12.37.0",
@@ -67,11 +75,14 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "cross-env": "^10.1.0",
+    "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.9",
     "eslint": "^9",
     "eslint-config-next": "16.1.3",

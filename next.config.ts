@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 // force-rebuild: vercel
 const nextConfig: NextConfig = {
   output: "standalone",
+  generateBuildId: async () => process.env.GITHUB_SHA?.slice(0, 12) || "dev",
   images: {
     unoptimized: true,
   },

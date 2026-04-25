@@ -9,6 +9,7 @@ import {
   personalDetails,
 } from "@/lib/db/schema";
 import { crossMatchAadhaarData } from "@/lib/kyc/cross-match";
+import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
 
 /**
  * DigiLocker Callback — PUBLIC endpoint (no auth).
@@ -59,13 +60,29 @@ export async function GET(
         .where(eq(digilockerTransactions.id, transactionId));
     }
 
-    // Redirect customer to a simple success/thank-you page
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://itarang.com";
-    const redirectUrl = status === "SUCCESS"
-      ? `${appUrl}/kyc/digilocker/success`
-      : `${appUrl}/kyc/digilocker/failed`;
+    // Post-consent redirect back to the app. Route through publicOrigin so
+    // the safe-host allow-list applies here too — otherwise a stale ngrok
+    // value in NEXT_PUBLIC_APP_URL lands the customer on a dead tunnel
+    // (2026-04-23 incident; full writeup in src/lib/public-origin.ts).
+    let redirectBase: string;
+    try {
+      redirectBase = publicOrigin({ req });
+    } catch (err) {
+      console.error(
+        "[DigiLocker Callback GET] No safe public origin available:",
+        err instanceof PublicOriginError ? err.message : err,
+      );
+      return new NextResponse(
+        status === "SUCCESS"
+          ? "Aadhaar verification complete. You can close this window."
+          : "Aadhaar verification did not complete. Please contact support.",
+        { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } },
+      );
+    }
 
-    return NextResponse.redirect(redirectUrl);
+    const redirectPath =
+      status === "SUCCESS" ? "/kyc/digilocker/success" : "/kyc/digilocker/failed";
+    return NextResponse.redirect(new URL(redirectPath, redirectBase));
   } catch (error) {
     console.error("[DigiLocker Callback GET] Error:", error);
     return new NextResponse("Something went wrong. Please close this window.", { status: 200 });
