@@ -132,28 +132,32 @@ export async function fillDealerOnboardingWizard(
   await expect(page.getByRole('heading', { name: /ownership.*banking/i })).toBeVisible({ timeout: 15_000 });
   console.log('[wizard] step 3 heading visible');
 
-  await page.locator('input[placeholder="Owner Name"]').fill(inputs.ownerName);
-  await page.locator('input[placeholder="Owner Phone Number"]').fill(inputs.ownerPhone);
-  await page.locator('input[placeholder="Owner Email ID"]').fill(inputs.ownerEmail);
-  await page.locator('input[placeholder="Owner Age"]').fill('35');
+  // Step 3 placeholders also drift between sandbox/prod. Use current strings
+  // from StepOwnership.tsx and `.first()` for fields whose placeholder appears
+  // multiple times (City/District/State).
+  await page.getByPlaceholder('Full name as on PAN').first().fill(inputs.ownerName);
+  await page.getByPlaceholder('10-digit mobile number').first().fill(inputs.ownerPhone.replace(/[^0-9]/g, '').slice(-10));
+  await page.getByPlaceholder('name@example.com').first().fill(inputs.ownerEmail);
+  await page.getByPlaceholder(/Age \(18.*90\)/).first().fill('35');
 
   // Owner photo upload (1 file input on this step before bank fields)
   await page.locator('input[type="file"]').first().setInputFiles(samples.pngs.ownerPhoto);
   await waitForUploadsToReach(2 + 5 + 1, 'step 3 owner photo');
 
-  await page.locator('input[placeholder="Address Line 1"]').fill('221B Test Street');
-  await page.locator('input[placeholder="City"]').fill('Mumbai');
-  await page.locator('input[placeholder="District"]').fill('Mumbai');
-  await page.locator('input[placeholder="State"]').fill('Maharashtra');
-  await page.locator('input[placeholder="Pin Code"]').fill('400001');
+  await page.getByPlaceholder('House / Street / Area').first().fill('221B Test Street');
+  await page.getByPlaceholder('City').first().fill('Mumbai');
+  await page.getByPlaceholder('District').first().fill('Mumbai');
+  await page.getByPlaceholder('State').first().fill('Maharashtra');
+  await page.getByPlaceholder('6-digit pin code').first().fill('400001');
 
-  await page.locator('input[placeholder="Bank Name"]').fill('State Bank of India');
-  await page.locator('input[placeholder="Account Number"]').fill('12345678901234');
-  await page.locator('input[placeholder="IFSC"]').fill('SBIN0001234');
-  await page.locator('input[placeholder="Beneficiary Name"]').fill(inputs.ownerName);
-  await page.locator('input[placeholder="Branch"]').fill('Mumbai Main');
+  await page.getByPlaceholder('e.g. HDFC Bank').first().fill('State Bank of India');
+  await page.getByPlaceholder('Bank account number').first().fill('12345678901234');
+  await page.getByPlaceholder('11-character IFSC').first().fill('SBIN0001234');
+  await page.getByPlaceholder('As per bank records').first().fill(inputs.ownerName);
+  await page.getByPlaceholder('Branch name').first().fill('Mumbai Main');
   await page.locator('select').last().selectOption('current');
 
+  console.log('[wizard] step 3 fields filled, clicking Next');
   await page.getByRole('button', { name: /next/i }).click();
 
   // STEP 4 — Finance Enablement: branch on inputs.enableFinance
@@ -221,6 +225,17 @@ export async function fillDealerOnboardingWizard(
     await page.getByRole('button', { name: /continue to review/i }).click();
   } else {
     await page.getByRole('button', { name: /no, continue without finance/i }).click();
+    // Selecting "No" reveals a required Sales Manager Information section —
+    // fill it before clicking Next, otherwise validation silently blocks the
+    // navigation and the test stalls on step 6 wait.
+    const smName = page.locator('#smName');
+    if (await smName.isVisible().catch(() => false)) {
+      await smName.fill('E2E Sales Manager');
+      await page.locator('#smEmail').fill('e2e+sm@itarang.com');
+      await page.locator('#smMobile').fill('9000000099');
+      await page.locator('#smAge').fill('35');
+      console.log('[wizard] step 4 sales-manager fields filled');
+    }
     await page.getByRole('button', { name: /next/i }).click();
   }
 

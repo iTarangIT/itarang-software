@@ -1355,8 +1355,13 @@ export const campaigns = pgTable("campaigns", {
 // For "Process Loan" workflow tracking
 export const loanApplications = pgTable("loan_applications", {
   id: varchar("id", { length: 255 }).primaryKey(), // LOAN-APP-XXX
+  // FK references `leads.id` (the borrower), matching both the live DB
+  // constraint loan_applications_lead_id_fkey and how application code uses
+  // it (e.g. dealer/loan-facilitation/queue COALESCEs leads.owner_name into
+  // applicant_name). Earlier this said `dealerLeads.id` — that was a stale
+  // refactor; dealer_leads is the AI-dialer prospecting table, unrelated.
   lead_id: varchar("lead_id", { length: 255 })
-    .references(() => dealerLeads.id)
+    .references(() => leads.id)
     .notNull(),
   applicant_name: text("applicant_name"), // De-normalized for list views
   loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }),
