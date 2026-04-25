@@ -1355,8 +1355,13 @@ export const campaigns = pgTable("campaigns", {
 // For "Process Loan" workflow tracking
 export const loanApplications = pgTable("loan_applications", {
   id: varchar("id", { length: 255 }).primaryKey(), // LOAN-APP-XXX
+  // FK references `leads.id` (the borrower), matching both the live DB
+  // constraint loan_applications_lead_id_fkey and how application code uses
+  // it (e.g. dealer/loan-facilitation/queue COALESCEs leads.owner_name into
+  // applicant_name). Earlier this said `dealerLeads.id` — that was a stale
+  // refactor; dealer_leads is the AI-dialer prospecting table, unrelated.
   lead_id: varchar("lead_id", { length: 255 })
-    .references(() => dealerLeads.id)
+    .references(() => leads.id)
     .notNull(),
   applicant_name: text("applicant_name"), // De-normalized for list views
   loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }),
@@ -3226,3 +3231,123 @@ export const afterSalesRecords = pgTable("after_sales_records", {
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// =============================================================================
+// NBFC RISK DASHBOARD (Phase A — see docs/NBFC_DASHBOARD_PLAN.md)
+// =============================================================================
+// Adds five tables for the multi-tenant NBFC partner dashboard at /nbfc/*.
+// Tenant scoping is enforced in application code (drizzle where-clauses) until
+// Phase C wires NBFC partner auth and we move to Postgres RLS.
+//
+// users.role gets a new value 'nbfc_partner' — no enum to migrate, role is
+// already varchar(50).
+// =============================================================================
+
+// One row per NBFC partner.
+export const nbfcTenants = pgTable("nbfc_tenants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  slug: text("slug").notNull().unique(), // 'demo-nbfc'
+  display_name: text("display_name").notNull(), // 'Demo NBFC Pvt Ltd'
+  contact_email: text("contact_email"),
+  aum_inr: decimal("aum_inr", { precision: 16, scale: 2 }), // displayed in header pill
+  active_loans: integer("active_loans").default(0).notNull(), // denormalized, refreshed nightly
+  is_active: boolean("is_active").default(true).notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Many-to-many between users and tenants. Most NBFC partner users belong to
+// exactly one tenant; some Itarang internal operators may belong to many.
+export const nbfcUsers = pgTable(
+  "nbfc_users",
+  {
+    user_id: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    tenant_id: uuid("tenant_id")
+      .references(() => nbfcTenants.id, { onDelete: "cascade" })
+      .notNull(),
+    role: varchar("role", { length: 32 }).default("viewer").notNull(), // 'admin' | 'viewer'
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    userTenantIdx: index("nbfc_users_user_tenant_idx").on(table.user_id, table.tenant_id),
+    tenantIdx: index("nbfc_users_tenant_idx").on(table.tenant_id),
+  }),
+);
+
+// Bridges existing loan_applications to a tenant + the IoT vehicleno that loan
+// is financing. One loan belongs to one NBFC.
+export const nbfcLoans = pgTable(
+  "nbfc_loans",
+  {
+    loan_application_id: varchar("loan_application_id", { length: 255 })
+      .primaryKey()
+      .references(() => loanApplications.id, { onDelete: "cascade" }),
+    tenant_id: uuid("tenant_id")
+      .references(() => nbfcTenants.id, { onDelete: "restrict" })
+      .notNull(),
+    vehicleno: varchar("vehicleno", { length: 64 }), // joins IoT vehicle_state.vehicleno
+    emi_amount: decimal("emi_amount", { precision: 12, scale: 2 }),
+    emi_due_date_dom: integer("emi_due_date_dom"), // day-of-month
+    current_dpd: integer("current_dpd").default(0).notNull(), // refreshed nightly
+    outstanding_amount: decimal("outstanding_amount", { precision: 14, scale: 2 }),
+    is_active: boolean("is_active").default(true).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_loans_tenant_idx").on(table.tenant_id),
+    vnoIdx: index("nbfc_loans_vno_idx").on(table.vehicleno),
+    dpdIdx: index("nbfc_loans_dpd_idx").on(table.current_dpd),
+  }),
+);
+
+// Hypothesis catalogue. Stable identity so cards can be tracked across runs.
+// Initially seeded with 5 hand-coded entries; LangGraph proposes new ones over
+// time and writes them here with source='llm-v1'.
+export const riskHypotheses = pgTable("risk_hypotheses", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  slug: text("slug").notNull().unique(), // 'usage-drop-7d'
+  title: text("title").notNull(),
+  description: text("description").notNull(), // 1-paragraph statement
+  test_method: varchar("test_method", { length: 16 }).notNull(), // 'sql' | 'js' | 'python'
+  test_definition: jsonb("test_definition").notNull(), // SQL string / JS predicate / Python source
+  source: varchar("source", { length: 16 }).default("human").notNull(), // 'human' | 'llm-v1'
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  retired_at: timestamp("retired_at", { withTimezone: true }), // soft-delete
+});
+
+// One row per (tenant, hypothesis, run). Risk page reads the latest run per
+// (tenant, hypothesis); older runs serve as a time series for the audit page.
+export const riskCardRuns = pgTable(
+  "risk_card_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenant_id: uuid("tenant_id")
+      .references(() => nbfcTenants.id, { onDelete: "cascade" })
+      .notNull(),
+    hypothesis_id: uuid("hypothesis_id")
+      .references(() => riskHypotheses.id, { onDelete: "cascade" })
+      .notNull(),
+    run_at: timestamp("run_at", { withTimezone: true }).defaultNow().notNull(),
+    severity: varchar("severity", { length: 16 }).notNull(), // 'high' | 'warn' | 'ok'
+    finding_summary: text("finding_summary").notNull(), // 1-line headline
+    affected_count: integer("affected_count").default(0).notNull(),
+    total_count: integer("total_count").default(0).notNull(),
+    evidence_json: jsonb("evidence_json"), // sample rows + chart spec for drawer
+    llm_critique: text("llm_critique"),
+    llm_model: varchar("llm_model", { length: 64 }),
+    llm_prompt_tokens: integer("llm_prompt_tokens"),
+    llm_completion_tokens: integer("llm_completion_tokens"),
+  },
+  (table) => ({
+    tenantRunIdx: index("risk_card_runs_tenant_run_idx").on(table.tenant_id, table.run_at),
+    tenantHypIdx: index("risk_card_runs_tenant_hyp_idx").on(table.tenant_id, table.hypothesis_id),
+    severityIdx: index("risk_card_runs_severity_idx").on(table.severity),
+  }),
+);
+
+// =============================================================================
+// END NBFC additions
+// =============================================================================
