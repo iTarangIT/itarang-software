@@ -26,9 +26,32 @@ type Row = {
   steps: string;
   reason: string;
   timestamp: string;
+  runEnv: 'sandbox' | 'prod';
+  consoleErrors: string;
+  networkErrors: string;
 };
 
-const FEATURE_TOKENS = ['onboarding', 'lead-creation', 'kyc-review', 'other'];
+type SweepAttachment = {
+  url: string;
+  tag: string;
+  totalDiscovered: number;
+  clicked: { name: string; postClickUrl: string }[];
+  skipped: { name: string; reason: string }[];
+  failed: { name: string; error: string }[];
+  consoleErrors: string[];
+  pageErrors: string[];
+  networkErrors: { url: string; status: number }[];
+};
+
+const FEATURE_TOKENS = [
+  'onboarding',
+  'lead-creation',
+  'kyc-review',
+  'login',
+  'dealer-verification',
+  'button-sweep',
+  'other',
+];
 const STATUS_COLORS: Record<string, string> = {
   Passed: 'FFC6EFCE',
   Failed: 'FFFFC7CE',
@@ -76,6 +99,8 @@ class ExcelReporter implements Reporter {
   private rows = new Map<string, Row>();
   // retry handling — keep every attempt keyed by test id
   private attempts = new Map<string, TestResult[]>();
+  // sweep attachments collected across the run, keyed by test id
+  private sweepResults = new Map<string, SweepAttachment>();
 
   constructor(options: ReporterOptions = {}) {
     // Default to eval-reports/ so Playwright's test-results cleanup doesn't
@@ -98,6 +123,18 @@ class ExcelReporter implements Reporter {
   onTestEnd(test: TestCase, result: TestResult): void {
     if (!this.attempts.has(test.id)) this.attempts.set(test.id, []);
     this.attempts.get(test.id)!.push(result);
+
+    // Pull sweep attachments off the result. The button-sweep helper attaches
+    // a single JSON blob named 'sweep-result' per test.
+    for (const att of result.attachments) {
+      if (att.name !== 'sweep-result' || !att.body) continue;
+      try {
+        const parsed = JSON.parse(att.body.toString()) as SweepAttachment;
+        this.sweepResults.set(test.id, parsed);
+      } catch {
+        // ignore malformed attachments — the row will still be present.
+      }
+    }
   }
 
   async onEnd(result: FullResult): Promise<void> {
@@ -129,8 +166,30 @@ class ExcelReporter implements Reporter {
     workbook.creator = 'Playwright Excel Reporter';
     workbook.created = this.runStart;
 
+    // Fold sweep attachments into row-level fields BEFORE writing sheets.
+    for (const [testId, sweep] of this.sweepResults) {
+      const row = this.rows.get(testId);
+      if (!row) continue;
+      const consoleLines = [...sweep.consoleErrors, ...sweep.pageErrors].slice(0, 5);
+      if (consoleLines.length) row.consoleErrors = consoleLines.join('\n');
+      const netLines = sweep.networkErrors
+        .slice(0, 10)
+        .map((n) => `${n.status} ${n.url}`);
+      if (netLines.length) row.networkErrors = netLines.join('\n');
+      if (sweep.failed.length) {
+        const failedNames = sweep.failed
+          .map((f) => `${f.name}: ${f.error}`)
+          .slice(0, 5)
+          .join(' | ');
+        row.error = row.error
+          ? `${row.error} | Buttons failed: ${failedNames}`
+          : `Buttons failed: ${failedNames}`;
+      }
+    }
+
     this.writeResultsSheet(workbook, rows);
     this.writeSummarySheet(workbook, rows, result);
+    this.writeButtonSweepSheet(workbook);
     this.writeNotImplementedSheet(workbook, rows);
 
     fs.mkdirSync(this.outputDir, { recursive: true });
@@ -164,7 +223,14 @@ class ExcelReporter implements Reporter {
       steps: '',
       reason: '',
       timestamp: this.runStart.toISOString(),
+      runEnv: this.detectEnv(),
+      consoleErrors: '',
+      networkErrors: '',
     };
+  }
+
+  private detectEnv(): 'sandbox' | 'prod' {
+    return /crm\.itarang\.com/i.test(this.baseURL) ? 'prod' : 'sandbox';
   }
 
   private populateRow(row: Row, result: TestResult): void {
@@ -225,12 +291,15 @@ class ExcelReporter implements Reporter {
     const ws = wb.addWorksheet('Results');
     ws.columns = [
       { header: 'Test ID', key: 'testId', width: 46 },
+      { header: 'Env', key: 'env', width: 10 },
       { header: 'Feature', key: 'feature', width: 16 },
       { header: 'Scenario', key: 'scenario', width: 48 },
       { header: 'Tags', key: 'tags', width: 22 },
       { header: 'Status', key: 'status', width: 26 },
       { header: 'Duration (s)', key: 'duration', width: 12 },
       { header: 'Error', key: 'error', width: 60 },
+      { header: 'Network Errors', key: 'networkErrors', width: 50 },
+      { header: 'Console Errors', key: 'consoleErrors', width: 50 },
       { header: 'Steps', key: 'steps', width: 60 },
       { header: 'Reason / Note', key: 'reason', width: 40 },
       { header: 'Timestamp', key: 'timestamp', width: 22 },
@@ -240,12 +309,15 @@ class ExcelReporter implements Reporter {
     for (const r of rows) {
       ws.addRow({
         testId: `${r.file} > ${r.scenario}`,
+        env: r.runEnv,
         feature: r.feature,
         scenario: r.scenario,
         tags: r.tags,
         status: r.status,
         duration: r.durationSec,
         error: r.error,
+        networkErrors: r.networkErrors,
+        consoleErrors: r.consoleErrors,
         steps: r.steps,
         reason: r.reason,
         timestamp: r.timestamp,
@@ -267,7 +339,10 @@ class ExcelReporter implements Reporter {
       to: { row: 1, column: ws.columnCount },
     };
 
-    const statusColIdx = 5;
+    // Column order is now: Test ID(1) Env(2) Feature(3) Scenario(4) Tags(5)
+    // Status(6) Duration(7) Error(8) NetworkErrors(9) ConsoleErrors(10)
+    // Steps(11) Reason(12) Timestamp(13) Project(14).
+    const statusColIdx = 6;
     for (let i = 2; i <= ws.rowCount; i++) {
       const statusCell = ws.getRow(i).getCell(statusColIdx);
       const color = STATUS_COLORS[String(statusCell.value)];
@@ -278,7 +353,8 @@ class ExcelReporter implements Reporter {
           fgColor: { argb: color },
         };
       }
-      for (const colIdx of [3, 7, 8, 9]) {
+      // Wrap the long-text columns so the report stays readable.
+      for (const colIdx of [4, 8, 9, 10, 11, 12]) {
         ws.getRow(i).getCell(colIdx).alignment = { wrapText: true, vertical: 'top' };
       }
     }
@@ -304,18 +380,40 @@ class ExcelReporter implements Reporter {
     ws.getCell('B3').value = this.runStart.toISOString();
     ws.getCell('A4').value = 'Base URL';
     ws.getCell('B4').value = this.baseURL;
-    ws.getCell('A5').value = 'Total duration (s)';
-    ws.getCell('B5').value = Number((durationMs / 1000).toFixed(1));
-    ws.getCell('A6').value = 'Pass rate';
-    ws.getCell('B6').value = passRate / 100;
-    ws.getCell('B6').numFmt = '0.00%';
-    ws.getCell('A7').value = 'Overall Playwright status';
-    ws.getCell('B7').value = result.status;
-    for (const row of [3, 4, 5, 6, 7]) {
+    ws.getCell('A5').value = 'Run env';
+    ws.getCell('B5').value = this.detectEnv();
+    ws.getCell('A6').value = 'Total duration (s)';
+    ws.getCell('B6').value = Number((durationMs / 1000).toFixed(1));
+    ws.getCell('A7').value = 'Pass rate';
+    ws.getCell('B7').value = passRate / 100;
+    ws.getCell('B7').numFmt = '0.00%';
+    ws.getCell('A8').value = 'Overall Playwright status';
+    ws.getCell('B8').value = result.status;
+
+    // Button-sweep aggregate counters
+    let totalSwept = 0;
+    let totalFailed = 0;
+    const pagesWithConsoleErrors = new Set<string>();
+    for (const sweep of this.sweepResults.values()) {
+      totalSwept += sweep.totalDiscovered;
+      totalFailed += sweep.failed.length;
+      if (sweep.consoleErrors.length || sweep.pageErrors.length) {
+        pagesWithConsoleErrors.add(sweep.tag);
+      }
+    }
+    ws.getCell('A9').value = 'Total buttons swept';
+    ws.getCell('B9').value = totalSwept;
+    ws.getCell('A10').value = 'Buttons failed';
+    ws.getCell('B10').value = totalFailed;
+    ws.getCell('A11').value = 'Pages with console errors';
+    ws.getCell('B11').value = pagesWithConsoleErrors.size;
+
+    for (const row of [3, 4, 5, 6, 7, 8, 9, 10, 11]) {
       ws.getCell(`A${row}`).font = { bold: true };
     }
 
-    ws.getRow(9).values = [
+    const featureHeaderRow = 13;
+    ws.getRow(featureHeaderRow).values = [
       'Feature',
       'Passed',
       'Failed',
@@ -324,16 +422,16 @@ class ExcelReporter implements Reporter {
       'Flaky',
       'Total',
     ];
-    ws.getRow(9).font = { bold: true };
-    ws.getRow(9).fill = {
+    ws.getRow(featureHeaderRow).font = { bold: true };
+    ws.getRow(featureHeaderRow).fill = {
       type: 'pattern',
       pattern: 'solid',
       fgColor: { argb: 'FF1F4E78' },
     };
-    ws.getRow(9).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    ws.getRow(featureHeaderRow).font = { bold: true, color: { argb: 'FFFFFFFF' } };
 
     const features = Array.from(new Set(rows.map((r) => r.feature))).sort();
-    let nextRow = 10;
+    let nextRow = featureHeaderRow + 1;
     const totals = { pass: 0, fail: 0, skipNI: 0, skipOther: 0, flaky: 0 };
     for (const feature of features) {
       const sub = rows.filter((r) => r.feature === feature);
@@ -367,6 +465,86 @@ class ExcelReporter implements Reporter {
 
     ws.getColumn(1).width = 26;
     for (let c = 2; c <= 7; c++) ws.getColumn(c).width = 16;
+  }
+
+  private writeButtonSweepSheet(wb: ExcelJS.Workbook): void {
+    if (this.sweepResults.size === 0) return;
+    const ws = wb.addWorksheet('Button Sweep');
+    ws.columns = [
+      { header: 'Page', key: 'page', width: 32 },
+      { header: 'Button', key: 'button', width: 36 },
+      { header: 'Status', key: 'status', width: 12 },
+      { header: 'Reason / Error', key: 'reason', width: 50 },
+      { header: 'Post-click URL', key: 'postUrl', width: 50 },
+      { header: 'Console Errors', key: 'consoleErrors', width: 50 },
+      { header: 'Network Errors', key: 'networkErrors', width: 50 },
+    ];
+
+    const header = ws.getRow(1);
+    header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+
+    for (const sweep of this.sweepResults.values()) {
+      const consoleAggregate = [...sweep.consoleErrors, ...sweep.pageErrors].slice(0, 5).join('\n');
+      const networkAggregate = sweep.networkErrors
+        .slice(0, 10)
+        .map((n) => `${n.status} ${n.url}`)
+        .join('\n');
+
+      for (const c of sweep.clicked) {
+        ws.addRow({
+          page: sweep.tag,
+          button: c.name,
+          status: 'Clicked',
+          reason: '',
+          postUrl: c.postClickUrl,
+          consoleErrors: consoleAggregate,
+          networkErrors: networkAggregate,
+        });
+      }
+      for (const s of sweep.skipped) {
+        ws.addRow({
+          page: sweep.tag,
+          button: s.name,
+          status: 'Skipped',
+          reason: s.reason,
+          postUrl: '',
+          consoleErrors: '',
+          networkErrors: '',
+        });
+      }
+      for (const f of sweep.failed) {
+        ws.addRow({
+          page: sweep.tag,
+          button: f.name,
+          status: 'Failed',
+          reason: f.error,
+          postUrl: '',
+          consoleErrors: consoleAggregate,
+          networkErrors: networkAggregate,
+        });
+      }
+    }
+
+    const STATUS_FILL: Record<string, string> = {
+      Clicked: 'FFC6EFCE',
+      Skipped: 'FFD9D9D9',
+      Failed: 'FFFFC7CE',
+    };
+    const statusColIdx = 3;
+    for (let i = 2; i <= ws.rowCount; i++) {
+      const statusCell = ws.getRow(i).getCell(statusColIdx);
+      const fill = STATUS_FILL[String(statusCell.value)];
+      if (fill) {
+        statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+      }
+      for (const colIdx of [4, 5, 6, 7]) {
+        ws.getRow(i).getCell(colIdx).alignment = { wrapText: true, vertical: 'top' };
+      }
+    }
+
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: ws.columnCount } };
   }
 
   private writeNotImplementedSheet(wb: ExcelJS.Workbook, rows: Row[]): void {
