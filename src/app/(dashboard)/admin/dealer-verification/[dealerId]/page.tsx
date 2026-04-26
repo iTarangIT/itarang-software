@@ -418,6 +418,7 @@ function ActionCard({
   onApprove, onCorrection, onReject, onBack,
   financeEnabled, agreementStatus,
   duplicate,
+  onboardingStatus,
 }: {
   remarks: string;
   setRemarks: (value: string) => void;
@@ -429,13 +430,19 @@ function ActionCard({
   financeEnabled?: boolean;
   agreementStatus?: string | null;
   duplicate?: DuplicateCheckResult | null;
+  onboardingStatus?: string;
 }) {
   const financeGateBlock =
     !!financeEnabled && (agreementStatus || "").toLowerCase() !== "completed";
   const duplicateBlock =
     duplicate?.conflict === "duplicate" ||
     duplicate?.conflict === "pan-mismatch";
-  const approvalBlocked = financeGateBlock || duplicateBlock;
+  // Mirror the server guard at /api/admin/dealer-verifications/[id]/approve.
+  // Blocking the button locally turns an alert popup into clear inline state.
+  const submissionGateBlock =
+    !!onboardingStatus && onboardingStatus !== "submitted";
+  const approvalBlocked =
+    financeGateBlock || duplicateBlock || submissionGateBlock;
 
   return (
     <motion.aside
@@ -464,6 +471,23 @@ function ActionCard({
           </p>
         </div>
       </div>
+
+      {submissionGateBlock && (
+        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <Clock3 className="mt-0.5 h-4 w-4 text-amber-600" />
+            <p className="text-sm text-amber-800">
+              Approval is blocked — the dealer hasn&apos;t submitted onboarding yet
+              (current status:&nbsp;
+              <span className="font-semibold">
+                {(onboardingStatus || "").replaceAll("_", " ") || "draft"}
+              </span>
+              ). Ask the dealer to complete and submit the onboarding form before
+              approving.
+            </p>
+          </div>
+        </div>
+      )}
 
       {financeGateBlock && (
         <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
@@ -1500,6 +1524,7 @@ export default function DealerReviewPage() {
           financeEnabled={data.financeEnabled}
           agreementStatus={agreementStatusForUi}
           duplicate={duplicate}
+          onboardingStatus={data.onboardingStatus}
         />
       </div>
     </div>
