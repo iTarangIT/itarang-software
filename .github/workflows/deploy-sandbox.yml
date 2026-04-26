@@ -66,9 +66,14 @@ jobs:
 
             echo "::group::Write .env from SANDBOX_ENV_FILE_B64"
             umask 077
-            echo "${{ secrets.SANDBOX_ENV_FILE_B64 }}" | base64 -d > .env
+            # Strip CR — secret was originally created from a CRLF (Windows
+            # line-ending) .env file, which breaks `source .env` with the
+            # cryptic "$'\r': command not found" error.
+            echo "${{ secrets.SANDBOX_ENV_FILE_B64 }}" | base64 -d | tr -d '\r' > .env
             chmod 600 .env
             echo "Wrote .env ($(wc -l < .env) lines, $(wc -c < .env) bytes)"
+            # Quick sanity check — the first non-comment line should look like KEY=value
+            head -5 .env | grep -v '^#' | head -1 | sed 's/=.*/=<redacted>/'
             echo "::endgroup::"
 
             echo "::group::Install/verify Chromium system libs"
@@ -247,6 +252,9 @@ jobs:
             git log -1 --oneline
             echo "::endgroup::"
             echo "::group::Reinstall + rebuild for rollback"
+            # Defensive: prior deploy may have left CRLF in .env. Strip it
+            # before sourcing so we don't silently lose env vars.
+            if [ -f .env ]; then sed -i 's/\r$//' .env; fi
             set -a; source .env 2>/dev/null || true; set +a
             npm ci --no-audit --no-fund --include=dev
             export GITHUB_SHA=$(git rev-parse HEAD)
