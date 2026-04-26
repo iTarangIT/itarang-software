@@ -96,7 +96,11 @@ jobs:
             { set +x; } 2>/dev/null
             set -a; source .env; set +a
             set -x
-            npm run db:push -- --force || {
+            # Drizzle-kit asks interactive create-vs-rename questions when it
+            # finds ambiguous schema diffs. CI has no TTY, so it would hang
+            # forever. Pipe Enter to it — that always selects the highlighted
+            # default option, which for new tables is "create table".
+            yes "" | npm run db:push -- --force || {
               echo "::error::db:push failed — schema mismatch or DB unreachable"
               exit 1
             }
