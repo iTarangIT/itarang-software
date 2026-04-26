@@ -302,7 +302,7 @@ export function StatusBadge({ status }: { status: string }) {
 // ─── Progress Header ────────────────────────────────────────────────────────
 
 export function ProgressHeader({
-    title, subtitle, step, totalSteps = 5,
+    title, subtitle, step, totalSteps = 4, workflowLabel = 'Workflow Progress',
     onBack, onPrev, onNext, onStepClick,
     rightAction,
 }: {
@@ -310,6 +310,7 @@ export function ProgressHeader({
     subtitle?: string;
     step: number;
     totalSteps?: number;
+    workflowLabel?: string;
     onBack: () => void;
     onPrev?: () => void;
     onNext?: () => void;
@@ -336,7 +337,7 @@ export function ProgressHeader({
             <div className="flex flex-col items-end gap-4">
                 <div>
                     <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest text-right mb-1.5">
-                        Workflow Progress
+                        {workflowLabel}
                     </p>
                     <div className="flex items-center gap-4">
                         <span className="text-xs font-bold text-[#1D4ED8] whitespace-nowrap">
