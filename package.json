@@ -23,7 +23,10 @@
     "test:e2e:smoke": "playwright test --grep=\\[smoke\\]",
     "test:e2e:live": "playwright test --project=chromium-live",
     "test:e2e:manual": "playwright test --project=chromium-manual",
-    "test:e2e:eval": "cross-env EXCEL_REPORT=1 playwright test"
+    "test:e2e:eval": "cross-env EXCEL_REPORT=1 playwright test",
+    "test:e2e:prod-eval": "cross-env HEADED=1 E2E_ALLOW_PROD=1 E2E_BASE_URL=https://crm.itarang.com EXCEL_REPORT=1 playwright test --project=chromium-prod --workers=1",
+    "test:e2e:prod-eval:mutations": "cross-env HEADED=1 E2E_ALLOW_PROD=1 E2E_PROD_MUTATIONS=1 E2E_BASE_URL=https://crm.itarang.com EXCEL_REPORT=1 playwright test --project=chromium-prod --workers=1",
+    "test:e2e:prod-eval:headless": "cross-env E2E_ALLOW_PROD=1 E2E_BASE_URL=https://crm.itarang.com EXCEL_REPORT=1 playwright test --project=chromium-prod --workers=1"
   },
   "dependencies": {
     "@emailjs/browser": "^4.4.1",
@@ -75,6 +78,7 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@faker-js/faker": "^10.4.0",
     "@playwright/test": "^1.59.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
