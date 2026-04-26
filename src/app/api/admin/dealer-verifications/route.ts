@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db/index";
 import { dealerOnboardingApplications, dealerOnboardingDocuments } from "@/lib/db/schema";
-import { desc, sql } from "drizzle-orm";
+import { desc, isNotNull, ne, or, sql } from "drizzle-orm";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyApplicationsBatch } from "@/lib/dealer/duplicate-check";
 
@@ -33,6 +33,18 @@ export async function GET() {
         salesManagerMobile: dealerOnboardingApplications.salesManagerMobile,
       })
       .from(dealerOnboardingApplications)
+      // Hide rows the dealer never finished. A pure draft (status = "draft"
+      // AND submitted_at IS NULL) is in-progress dealer work that admins
+      // can't action anyway — including it just produces the misleading
+      // "Dealer onboarding must be submitted before approval." alert when
+      // an admin opens the row and clicks Approve. Submitted, approved,
+      // rejected, and correction_requested rows are still returned.
+      .where(
+        or(
+          ne(dealerOnboardingApplications.onboardingStatus, "draft"),
+          isNotNull(dealerOnboardingApplications.submittedAt),
+        ),
+      )
       .orderBy(
         desc(dealerOnboardingApplications.updatedAt),
         desc(dealerOnboardingApplications.createdAt)

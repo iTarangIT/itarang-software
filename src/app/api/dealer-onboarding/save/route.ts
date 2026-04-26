@@ -109,11 +109,11 @@ export async function POST(req: NextRequest) {
     const registeredAddress = cleanObject(body.registeredAddress);
     const financeEnabled = cleanBoolean(body.financeEnabled);
 
-    const onboardingStatus =
-      body.onboardingStatus === "submitted" ? "submitted" : "draft";
-
-    const reviewStatus =
-      onboardingStatus === "submitted" ? "pending_admin_review" : "draft";
+    // The final onboarding/review status is computed AFTER we look up the
+    // existing row, so a draft autosave cannot regress a row that the dealer
+    // already submitted (or that the admin moved to correction_requested /
+    // rejected). See the computation block after the `existing` query below.
+    const isExplicitSubmission = body.onboardingStatus === "submitted";
 
     const ownerName = cleanString(body.ownerName);
     const ownerPhone = cleanPhone(body.ownerPhone);
@@ -177,7 +177,7 @@ export async function POST(req: NextRequest) {
 
     console.log("SAVE ROUTE AUTH USER ID:", dealerUserId);
     console.log("SAVE ROUTE COMPANY NAME:", companyName);
-    console.log("SAVE ROUTE REVIEW STATUS:", reviewStatus);
+    console.log("SAVE ROUTE EXPLICIT SUBMISSION:", isExplicitSubmission);
 
     if (!companyName) {
       const res = NextResponse.json(
@@ -188,7 +188,7 @@ export async function POST(req: NextRequest) {
       return res;
     }
 
-    if (onboardingStatus === "submitted") {
+    if (isExplicitSubmission) {
       if (!ownerName) {
         const res = NextResponse.json(
           { success: false, message: "Primary contact name is required before submission" },
@@ -242,6 +242,28 @@ export async function POST(req: NextRequest) {
       mergeCookies(cookieCollector, res);
       return res;
     }
+
+    // A draft autosave must NEVER regress a row that the dealer already
+    // submitted, or that the admin moved to correction_requested / rejected —
+    // otherwise the admin queue shows the row as "pending admin review" while
+    // the approve endpoint rejects it for `onboarding_status !== "submitted"`.
+    // Only an explicit submission (body.onboardingStatus === "submitted")
+    // promotes a draft to submitted; anything else preserves the prior state.
+    const previousOnboardingStatus = application?.onboardingStatus ?? null;
+    const previousReviewStatus = application?.reviewStatus ?? null;
+
+    const onboardingStatus = isExplicitSubmission
+      ? "submitted"
+      : previousOnboardingStatus && previousOnboardingStatus !== "draft"
+        ? previousOnboardingStatus
+        : "draft";
+
+    const reviewStatus =
+      onboardingStatus === "submitted"
+        ? "pending_admin_review"
+        : previousReviewStatus && previousReviewStatus !== "draft"
+          ? previousReviewStatus
+          : "draft";
 
     // Transitioning to submitted (or an explicit agreement regen request)
     // should reset the Digio workflow. On a plain draft autosave we must
