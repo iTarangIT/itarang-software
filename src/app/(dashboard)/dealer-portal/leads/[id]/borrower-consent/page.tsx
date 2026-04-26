@@ -2,14 +2,15 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import {
-    AlertCircle, CheckCircle2, ChevronRight, Clock, Download,
-    FileText, Loader2, Phone, RefreshCw, Send, Shield, Upload,
+    AlertCircle, CheckCircle2, ChevronRight, Clock, Download, Eye,
+    FileText, Loader2, Phone, RefreshCw, Scan, Send, Shield, Upload, X,
 } from 'lucide-react';
 import {
-    SectionCard, InputField, DocumentCard, StatusBadge, ProgressHeader,
+    SectionCard, InputField, SelectField, DocumentCard, StatusBadge, ProgressHeader,
     StickyBottomBar, ErrorBanner, PrimaryButton, SecondaryButton,
-    OutlineButton, FullPageLoader,
+    OutlineButton, FullPageLoader, OCRModal,
 } from '@/components/dealer-portal/lead-wizard/shared';
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
 
@@ -27,6 +28,233 @@ type UploadedDoc = {
     rejection_reason?: string | null;
     failed_reason?: string | null;
 };
+
+type RequestedDoc = {
+    id: string;
+    doc_label: string;
+    doc_key: string;
+    doc_for?: string;
+    is_required: boolean;
+    file_url: string | null;
+    upload_status: 'not_uploaded' | 'uploaded' | 'rejected' | 'verified' | string;
+    rejection_reason: string | null;
+    uploaded_at: string | null;
+    created_at: string;
+};
+
+type Step3Context = {
+    lead_kyc_status: string;
+    requires_supporting_docs: boolean;
+    requires_co_borrower: boolean;
+    is_replacement: boolean;
+    latest_co_borrower_request: {
+        id: string;
+        attempt_number: number;
+        reason: string | null;
+        status: string;
+        created_at: string;
+    } | null;
+    supporting_docs_summary: {
+        total: number;
+        required: number;
+        uploaded: number;
+        verified: number;
+        rejected: number;
+    };
+};
+
+const STEP3_ALLOWED_STATUSES = [
+    'awaiting_additional_docs',
+    'awaiting_co_borrower_kyc',
+    'awaiting_both',
+    'awaiting_co_borrower_replacement',
+    'awaiting_doc_reupload',
+    'pending_itarang_reverification',
+];
+
+// ─── Preview Customer Profile (read-only side-by-side modal) ───────────────
+function maskAadhaar(value?: string | null): string {
+    if (!value) return '—';
+    const digits = String(value).replace(/\D/g, '');
+    if (digits.length < 4) return digits;
+    return `XXXX XXXX ${digits.slice(-4)}`;
+}
+
+function fmtDob(value?: string | null): string {
+    if (!value) return '—';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return String(value);
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function PreviewProfileModal({
+    open, onClose, lead, borrowerForm, includeCoBorrower,
+}: {
+    open: boolean;
+    onClose: () => void;
+    lead: any;
+    borrowerForm: any;
+    includeCoBorrower: boolean;
+}) {
+    if (!open) return null;
+    const Field = ({ label, value }: { label: string; value: any }) => (
+        <div className="py-2 border-b border-gray-100 last:border-b-0">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">{label}</p>
+            <p className="text-sm font-medium text-gray-900 mt-0.5 break-words">{value || '—'}</p>
+        </div>
+    );
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+                <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                    <div>
+                        <h3 className="text-lg font-bold text-gray-900">Customer Profile (read-only)</h3>
+                        <p className="text-xs text-gray-500 mt-0.5">Snapshot of primary applicant{includeCoBorrower ? ' and co-borrower' : ''}.</p>
+                    </div>
+                    <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-lg" aria-label="Close">
+                        <X className="w-5 h-5 text-gray-400" />
+                    </button>
+                </div>
+
+                <div className={`grid ${includeCoBorrower ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'} gap-0 overflow-y-auto`}>
+                    {/* Primary applicant */}
+                    <div className="p-6 border-r border-gray-100">
+                        <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-3">Primary Applicant</p>
+                        <Field label="Name" value={lead?.full_name || lead?.owner_name} />
+                        <Field label="Phone" value={lead?.phone || lead?.owner_contact} />
+                        <Field label="Date of Birth" value={fmtDob(lead?.dob)} />
+                        <Field label="Aadhaar" value={maskAadhaar(lead?.aadhaar_no)} />
+                        <Field label="PAN" value={lead?.pan_no} />
+                        <Field label="Permanent Address" value={lead?.permanent_address} />
+                        <Field label="Current Address" value={lead?.current_address || lead?.local_address} />
+                    </div>
+
+                    {/* Co-borrower */}
+                    {includeCoBorrower ? (
+                        <div className="p-6">
+                            <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-3">Co-Borrower</p>
+                            <Field label="Name" value={borrowerForm?.full_name} />
+                            <Field label="Father / Husband" value={borrowerForm?.father_or_husband_name} />
+                            <Field label="Phone" value={borrowerForm?.phone} />
+                            <Field label="Date of Birth" value={fmtDob(borrowerForm?.dob)} />
+                            <Field label="Aadhaar" value={maskAadhaar(borrowerForm?.aadhaar_no)} />
+                            <Field label="PAN" value={borrowerForm?.pan_no} />
+                            <Field label="Relationship" value={borrowerForm?.relationship ? borrowerForm.relationship.charAt(0).toUpperCase() + borrowerForm.relationship.slice(1) : '—'} />
+                            <Field label="Permanent Address" value={borrowerForm?.permanent_address} />
+                            <Field label="Current Address" value={borrowerForm?.current_address} />
+                        </div>
+                    ) : null}
+                </div>
+
+                <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end">
+                    <button
+                        onClick={onClose}
+                        className="px-5 py-2 bg-[#0047AB] text-white rounded-lg text-sm font-bold hover:bg-[#003580]"
+                    >
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ─── Other-Documentation Card (admin-requested supporting docs) ─────────────
+function RequestedDocCard({
+    doc, uploading, onUpload,
+}: {
+    doc: RequestedDoc;
+    uploading: boolean;
+    onUpload: (file: File) => void;
+}) {
+    const status = doc.upload_status;
+    const statusBadge =
+        status === 'verified' ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-[11px] font-bold">
+                <CheckCircle2 className="w-3 h-3" /> Verified
+            </span>
+        ) : status === 'rejected' ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-red-100 text-red-700 rounded-full text-[11px] font-bold">
+                <AlertCircle className="w-3 h-3" /> Rejected
+            </span>
+        ) : status === 'uploaded' ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[11px] font-bold">
+                <Clock className="w-3 h-3" /> Pending Review
+            </span>
+        ) : (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-gray-100 text-gray-600 rounded-full text-[11px] font-bold">
+                Not Uploaded
+            </span>
+        );
+
+    const borderClass =
+        status === 'verified' ? 'border-emerald-200 bg-emerald-50/40'
+        : status === 'rejected' ? 'border-red-200 bg-red-50/40'
+        : status === 'uploaded' ? 'border-amber-200 bg-amber-50/40'
+        : 'border-gray-200 bg-white';
+
+    const canUpload = !uploading && status !== 'verified';
+    const buttonLabel =
+        status === 'rejected' ? 'Re-upload'
+        : status === 'uploaded' ? 'Replace'
+        : 'Upload';
+
+    return (
+        <div className={`rounded-2xl border-2 ${borderClass} p-4 transition-all`}>
+            <div className="flex items-start justify-between gap-2 mb-2">
+                <div className="min-w-0">
+                    <h4 className="text-sm font-bold text-gray-900 truncate">
+                        {doc.doc_label}
+                        {doc.is_required && <span className="text-red-500 ml-1">*</span>}
+                    </h4>
+                    {!doc.is_required && (
+                        <span className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Optional</span>
+                    )}
+                </div>
+                {statusBadge}
+            </div>
+
+            {doc.rejection_reason && (
+                <div className={`mb-2 text-xs ${status === 'rejected' ? 'text-red-700 bg-red-50 border border-red-200' : 'text-gray-600 bg-gray-50 border border-gray-100'} rounded-lg px-3 py-2`}>
+                    <span className="font-bold">{status === 'rejected' ? 'Rejection reason: ' : 'Admin reason: '}</span>
+                    <span className="italic">{doc.rejection_reason}</span>
+                </div>
+            )}
+
+            {doc.uploaded_at && (
+                <p className="text-[11px] text-gray-500 mb-2">
+                    Uploaded: {new Date(doc.uploaded_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                </p>
+            )}
+
+            <div className="flex items-center gap-2 mt-3">
+                {doc.file_url && (
+                    <a
+                        href={doc.file_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-[11px] font-bold text-gray-700 hover:bg-gray-50"
+                    >
+                        <Eye className="w-3 h-3" /> View
+                    </a>
+                )}
+                {canUpload && (
+                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0047AB] text-white rounded-lg text-[11px] font-bold hover:bg-[#003580] cursor-pointer">
+                        {uploading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
+                        {uploading ? 'Uploading...' : buttonLabel}
+                        <input
+                            type="file"
+                            className="hidden"
+                            accept="image/png,image/jpeg,image/jpg,application/pdf"
+                            onChange={e => e.target.files?.[0] && onUpload(e.target.files[0])}
+                        />
+                    </label>
+                )}
+            </div>
+        </div>
+    );
+}
 
 // ─── Consent Helpers ───────────────────────────────────────────────────────
 
@@ -49,7 +277,7 @@ function ConsentStatusBadge({ status }: { status: string }) {
     if (s === 'expired')
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold"><Clock className="w-3 h-3" />Expired</span>;
     if (s === 'esign_completed')
-        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Borrower Signed</span>;
+        return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Co-borrower Signed</span>;
     if (s === 'esign_in_progress')
         return <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Loader2 className="w-3 h-3 animate-spin" />Signing in Progress</span>;
     if (s === 'link_sent' || s === 'link_opened')
@@ -79,8 +307,9 @@ export default function BorrowerConsentPage() {
         full_name: '', father_or_husband_name: '', dob: '', phone: '',
         email: '', pan_no: '', aadhaar_no: '',
         current_address: '', permanent_address: '', is_current_same: false,
-        marital_status: '', income: '',
+        marital_status: '', income: '', relationship: '',
     });
+    const [borrowerErrors, setBorrowerErrors] = useState<Record<string, string>>({});
 
     // Documents & Verifications
     const [uploadedDocs, setUploadedDocs] = useState<Record<string, UploadedDoc>>({});
@@ -104,6 +333,25 @@ export default function BorrowerConsentPage() {
     const [savingDraft, setSavingDraft] = useState(false);
     const [lastSaved, setLastSaved] = useState<string | null>(null);
     const [submitting, setSubmitting] = useState(false);
+
+    // Aadhaar OCR autofill
+    const [showOCR, setShowOCR] = useState(false);
+
+    // Admin-requested supporting documents
+    const [requestedDocs, setRequestedDocs] = useState<RequestedDoc[]>([]);
+    const [requestedUploading, setRequestedUploading] = useState<Record<string, boolean>>({});
+
+    // Step 3 context (gating, banner data) — fetched from /step3-context endpoint
+    const [step3Ctx, setStep3Ctx] = useState<Step3Context | null>(null);
+
+    // Preview Customer Profile modal
+    const [showPreview, setShowPreview] = useState(false);
+
+    // Co-borrower coupon state (separate from any primary-applicant coupon)
+    const [cbCouponCode, setCbCouponCode] = useState('');
+    const [cbCouponValidating, setCbCouponValidating] = useState(false);
+    const [cbCouponResult, setCbCouponResult] = useState<{ success?: boolean; valid?: boolean; coupon_code?: string; status?: string; message?: string; already_used?: boolean } | null>(null);
+    const [cbReleasingCoupon, setCbReleasingCoupon] = useState(false);
 
     // ─── Data Loading ──────────────────────────────────────────────────────
 
@@ -132,16 +380,24 @@ export default function BorrowerConsentPage() {
             setLead(fetchedLead);
             if (fetchedLead?.borrower_consent_status) setConsentStatus(fetchedLead.borrower_consent_status);
 
+            // Restore co-borrower coupon state if a coupon is already attached to the lead
+            if (fetchedLead?.coupon_code && (fetchedLead.coupon_status === 'reserved' || fetchedLead.coupon_status === 'used')) {
+                setCbCouponCode(fetchedLead.coupon_code);
+                setCbCouponResult({ valid: true, success: true, coupon_code: fetchedLead.coupon_code, status: fetchedLead.coupon_status, message: `Coupon ${fetchedLead.coupon_status}` });
+            }
+
             // Borrower is treated as independent from the customer. We do NOT
             // prefill the borrower form from lead (customer) fields — only
             // borrower-specific details persisted under this lead should
             // populate the form.
 
-            const [personalRes, docsRes, verificationsRes, consentRes] = await Promise.allSettled([
+            const [personalRes, docsRes, verificationsRes, consentRes, requestedRes, ctxRes] = await Promise.allSettled([
                 fetch(`/api/kyc/${leadId}/borrower-details`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/documents?doc_for=borrower`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/verifications?verification_for=borrower`, { cache: 'no-store' }),
                 fetch(`/api/kyc/${leadId}/consent/status?consent_for=borrower`, { cache: 'no-store' }),
+                fetch(`/api/kyc/${leadId}/requested-docs?doc_for=primary`, { cache: 'no-store' }),
+                fetch(`/api/kyc/${leadId}/step3-context`, { cache: 'no-store' }),
             ]);
 
             // Populate borrower form only from saved borrower-specific details.
@@ -162,6 +418,7 @@ export default function BorrowerConsentPage() {
                         father_or_husband_name: pd.father_husband_name || '',
                         current_address: pd.local_address || '',
                         dob: pd.dob ? new Date(pd.dob).toISOString().split('T')[0] : '',
+                        relationship: pd.relationship || '',
                     }));
                 }
             }
@@ -187,6 +444,24 @@ export default function BorrowerConsentPage() {
                 const verJson = await verificationsRes.value.json();
                 if (verJson?.success && Array.isArray(verJson.data) && verJson.data.length > 0) {
                     setVerifications(verJson.data);
+                }
+            }
+
+            if (requestedRes.status === 'fulfilled') {
+                const reqJson = await requestedRes.value.json();
+                if (reqJson?.success && Array.isArray(reqJson.data)) {
+                    const sorted = [...reqJson.data].sort((a: RequestedDoc, b: RequestedDoc) => {
+                        if (a.is_required !== b.is_required) return a.is_required ? -1 : 1;
+                        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+                    });
+                    setRequestedDocs(sorted);
+                }
+            }
+
+            if (ctxRes.status === 'fulfilled') {
+                const ctxJson = await ctxRes.value.json();
+                if (ctxJson?.success && ctxJson.data) {
+                    setStep3Ctx(ctxJson.data);
                 }
             }
         } catch {
@@ -226,12 +501,101 @@ export default function BorrowerConsentPage() {
     // ─── Borrower Form Helpers ─────────────────────────────────────────────
 
     const updateField = (field: string, value: any) => {
+        let fin = value;
+        if (['full_name', 'father_or_husband_name'].includes(field)) {
+            // Strip digits and other non-name characters; allow letters, spaces, dots, apostrophes, hyphens
+            const lettersOnly = String(value ?? '').replace(/[^A-Za-z\s.'-]/g, '');
+            fin = lettersOnly.split(' ').map((s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '')).join(' ');
+        }
+        if (field === 'phone') {
+            fin = String(value ?? '').replace(/\D/g, '').slice(0, 10);
+        }
+        if (field === 'aadhaar_no') {
+            fin = String(value ?? '').replace(/\D/g, '').slice(0, 12);
+        }
+        if (field === 'pan_no') {
+            fin = String(value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
+        }
         setBorrowerForm(prev => {
-            const next = { ...prev, [field]: value };
-            if (field === 'is_current_same' && value) next.current_address = next.permanent_address;
-            if (field === 'permanent_address' && next.is_current_same) next.current_address = value;
+            const next = { ...prev, [field]: fin };
+            if (field === 'is_current_same' && fin) next.current_address = next.permanent_address;
+            if (field === 'permanent_address' && next.is_current_same) next.current_address = fin;
             return next;
         });
+        // Clear inline error for this field as soon as user starts editing
+        setBorrowerErrors(prev => {
+            if (!prev[field]) return prev;
+            const { [field]: _, ...rest } = prev;
+            return rest;
+        });
+        // Live check: co-borrower phone must differ from primary applicant phone
+        if (field === 'phone' && /^\d{10}$/.test(fin)) {
+            const primaryPhone = String(lead?.phone || lead?.owner_contact || '').replace(/\D/g, '').slice(-10);
+            if (primaryPhone && primaryPhone === fin) {
+                setBorrowerErrors(prev => ({
+                    ...prev,
+                    phone: "Co-borrower phone must differ from customer's mobile number",
+                }));
+            }
+        }
+    };
+
+    // ─── Co-borrower Form Validation ───────────────────────────────────────
+
+    const validateBorrowerForm = (): { ok: boolean; errors: Record<string, string> } => {
+        const errs: Record<string, string> = {};
+        const f = borrowerForm;
+
+        // Full Name — required, min 2 chars (after trim)
+        if (!f.full_name.trim()) errs.full_name = 'Full name is required';
+        else if (f.full_name.trim().length < 2) errs.full_name = 'Full name must be at least 2 characters';
+
+        // Father / Husband — required
+        if (!f.father_or_husband_name.trim()) errs.father_or_husband_name = "Father / Husband name is required";
+
+        // DOB — valid date, age >= 18
+        if (!f.dob) errs.dob = 'Date of birth is required';
+        else {
+            const d = new Date(f.dob);
+            if (Number.isNaN(d.getTime())) errs.dob = 'Invalid date';
+            else {
+                const today = new Date();
+                let age = today.getFullYear() - d.getFullYear();
+                const m = today.getMonth() - d.getMonth();
+                if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age--;
+                if (age < 18) errs.dob = 'Co-borrower must be at least 18 years old';
+            }
+        }
+
+        // Phone — exactly 10 digits, must NOT match primary applicant phone
+        if (!f.phone) errs.phone = 'Phone is required';
+        else if (!/^\d{10}$/.test(f.phone)) errs.phone = 'Phone must be exactly 10 digits';
+        else {
+            const primaryPhone = String(lead?.phone || lead?.owner_contact || '').replace(/\D/g, '').slice(-10);
+            if (primaryPhone && primaryPhone === f.phone) {
+                errs.phone = "Co-borrower phone must differ from customer's mobile number";
+            }
+        }
+
+        // Permanent Address — required
+        if (!f.permanent_address.trim()) errs.permanent_address = 'Permanent address is required';
+
+        // Current Address — required
+        if (!f.current_address.trim()) errs.current_address = 'Current address is required';
+
+        // PAN — required, format AAAAA9999A
+        if (!f.pan_no.trim()) errs.pan_no = 'PAN is required';
+        else if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(f.pan_no.trim())) errs.pan_no = 'PAN format must be AAAAA9999A';
+
+        // Aadhaar — required, 12 digits
+        if (!f.aadhaar_no) errs.aadhaar_no = 'Aadhaar is required';
+        else if (!/^\d{12}$/.test(f.aadhaar_no)) errs.aadhaar_no = 'Aadhaar must be exactly 12 digits';
+
+        // Relationship — required, one of allowed enums
+        if (!f.relationship) errs.relationship = 'Relationship is required';
+        else if (!['spouse', 'parent', 'sibling', 'other'].includes(f.relationship)) errs.relationship = 'Invalid relationship';
+
+        return { ok: Object.keys(errs).length === 0, errors: errs };
     };
 
     // ─── Document Stats ────────────────────────────────────────────────────
@@ -298,6 +662,91 @@ export default function BorrowerConsentPage() {
             await loadPageData(true);
         } catch (err: any) {
             setApiError(err?.message || 'Document upload failed');
+        }
+    };
+
+    // ─── Aadhaar OCR Auto-fill ─────────────────────────────────────────────
+
+    const handleOCRResult = (data: any) => {
+        if (!data) return;
+        if (data.full_name) updateField('full_name', data.full_name);
+        if (data.father_or_husband_name) updateField('father_or_husband_name', data.father_or_husband_name);
+        if (data.phone) updateField('phone', data.phone);
+        if (data.dob) updateField('dob', data.dob);
+        if (data.current_address) updateField('current_address', data.current_address);
+        if (data.permanent_address) updateField('permanent_address', data.permanent_address);
+        const aadhaar = data.aadhaar_number ?? data.aadhaar_no ?? data.aadhaar;
+        if (aadhaar) updateField('aadhaar_no', String(aadhaar));
+    };
+
+    // ─── Co-Borrower Coupon (BRD §2.9.3.6) ─────────────────────────────────
+    // We reuse the existing /api/kyc/[leadId]/validate-coupon endpoint.
+    // The "co-borrower coupon" concept in BRD is satisfied here because coupon
+    // and lead are 1:1 in the current schema — the dealer applies a coupon on
+    // the lead specifically to authorise re-verification with co-borrower.
+
+    const handleValidateCbCoupon = async () => {
+        if (!cbCouponCode.trim()) { setApiError('Please enter coupon code'); return; }
+        setCbCouponValidating(true);
+        setCbCouponResult(null);
+        try {
+            const res = await fetch(`/api/kyc/${leadId}/validate-coupon`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ couponCode: cbCouponCode.trim() }),
+            });
+            const data = await res.json();
+            setCbCouponResult(data);
+            if (!(data.success || data.valid)) {
+                setApiError(data.message || data.error || 'Invalid coupon');
+            }
+        } catch {
+            setApiError('Coupon validation failed');
+        } finally {
+            setCbCouponValidating(false);
+        }
+    };
+
+    const handleReleaseCbCoupon = async () => {
+        setCbReleasingCoupon(true);
+        setApiError(null);
+        try {
+            const res = await fetch(`/api/kyc/${leadId}/release-coupon`, { method: 'POST' });
+            const data = await res.json();
+            if (data.success) { setCbCouponCode(''); setCbCouponResult(null); }
+            else setApiError(data.error?.message || 'Failed to release coupon');
+        } catch {
+            setApiError('Failed to release coupon');
+        } finally {
+            setCbReleasingCoupon(false);
+        }
+    };
+
+    // ─── Admin-Requested Document Upload ───────────────────────────────────
+
+    const handleRequestedDocUpload = async (requestId: string, file: File) => {
+        if (!['image/png', 'image/jpeg', 'image/jpg', 'application/pdf'].includes(file.type)) {
+            setApiError('Only PNG, JPEG, JPG, and PDF files are allowed');
+            return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+            setApiError('File size must be 5MB or smaller');
+            return;
+        }
+        setRequestedUploading(prev => ({ ...prev, [requestId]: true }));
+        try {
+            setApiError(null);
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('requestId', requestId);
+            const res = await fetch(`/api/kyc/${leadId}/requested-docs`, { method: 'POST', body: formData });
+            const json = await res.json();
+            if (!res.ok || !json?.success) throw new Error(json?.error?.message || 'Upload failed');
+            await loadPageData(true);
+        } catch (err: any) {
+            setApiError(err?.message || 'Upload failed');
+        } finally {
+            setRequestedUploading(prev => ({ ...prev, [requestId]: false }));
         }
     };
 
@@ -404,31 +853,49 @@ export default function BorrowerConsentPage() {
 
     // ─── Save & Next ───────────────────────────────────────────────────────
 
-    const handleSaveAndNext = async () => {
+    // ─── Submit for Verification (BRD §2.9.3.7) ────────────────────────────
+    // Replaces the old "Save & Next" pattern. Sends Step 3 back to admin and
+    // sets lead.kyc_status = 'pending_itarang_reverification'. Step 4 stays
+    // locked until admin approves.
+
+    const handleSubmitForVerification = async () => {
         try {
             setSubmitting(true);
             setApiError(null);
 
-            // Save draft first
+            // Validate co-borrower form when co-borrower is required
+            if (step3Ctx?.requires_co_borrower) {
+                const { ok, errors } = validateBorrowerForm();
+                if (!ok) {
+                    setBorrowerErrors(errors);
+                    setApiError('Please fix the highlighted fields in Co-borrower Details before submitting.');
+                    return;
+                }
+                setBorrowerErrors({});
+            }
+
+            // Save draft first so the dealer doesn't lose work if submit fails
             await fetch(`/api/kyc/${leadId}/save-draft`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ step: 3, data: { borrowerForm, documents: uploadedDocs, consentStatus } }),
             });
 
-            // Complete Step 3 → advance workflow_step to 4
-            const res = await fetch(`/api/kyc/${leadId}/complete-step3`, { method: 'POST' });
+            // Submit. The submit-verification endpoint now also flips
+            // lead.kyc_status to 'pending_itarang_reverification' and inserts
+            // a high-priority adminVerificationQueue row.
+            const res = await fetch(`/api/coborrower/${leadId}/submit-verification`, { method: 'POST' });
             const data = await res.json();
 
             if (!res.ok || !data.success) {
-                setApiError(data?.error?.message || 'Cannot proceed — ensure borrower consent is admin-verified.');
+                setApiError(data?.error?.message || data?.message || 'Submission failed.');
                 return;
             }
 
-            // Always go to Step 4 Interim
-            router.push(`/dealer-portal/leads/${leadId}/kyc/interim`);
+            toast.success('Submitted for verification. Admin will review and you will be notified.');
+            await loadPageData(true);
         } catch (err: any) {
-            setApiError(err?.message || 'Failed to proceed');
+            setApiError(err?.message || 'Failed to submit for verification');
         } finally {
             setSubmitting(false);
         }
@@ -453,13 +920,72 @@ export default function BorrowerConsentPage() {
         );
     }
 
+    // BRD §2.9.3 — Step 3 is conditional. If admin hasn't requested anything,
+    // skip the page entirely and route the dealer to Step 4.
+    if (step3Ctx && !STEP3_ALLOWED_STATUSES.includes(step3Ctx.lead_kyc_status)) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-[#F8F9FB]">
+                <div className="text-center max-w-md">
+                    <CheckCircle2 className="w-14 h-14 text-emerald-500 mx-auto mb-4" />
+                    <h2 className="text-2xl font-bold text-gray-900">Step 3 Not Required</h2>
+                    <p className="mt-2 text-sm text-gray-500">
+                        Admin has not requested additional documents or co-borrower KYC for this lead. Please proceed to product selection.
+                    </p>
+                    <button
+                        onClick={() => router.push(`/dealer-portal/leads/${leadId}/kyc/interim`)}
+                        className="mt-6 px-6 py-3 bg-[#0047AB] text-white rounded-xl font-bold inline-flex items-center gap-2"
+                    >
+                        Proceed to Step 4 <ChevronRight className="w-4 h-4" />
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
     // ─── Gating & Stepper ───────────────────────────────────────────────────
     const isConsentVerified = ['verified', 'admin_verified', 'manual_verified'].includes((consentStatus || '').toLowerCase());
     const allDocsUploaded = requiredDocs.filter(d => d.required).every(d => !!uploadedDocs[d.key]?.file_url);
+
+    // Admin-requested documents (Other Documentation section)
+    const showOtherDocs =
+        ['awaiting_additional_docs', 'awaiting_both', 'pending_itarang_reverification'].includes(lead?.kyc_status || '')
+        || requestedDocs.length > 0;
+    const requiredRequestedDocs = requestedDocs.filter(d => d.is_required);
+    const requestedDocsAllCount = requestedDocs.length;
+    const requestedDocsUploadedCount = requestedDocs.filter(d => !!d.file_url && d.upload_status !== 'rejected').length;
+    const requestedDocsVerifiedCount = requestedDocs.filter(d => d.upload_status === 'verified').length;
+    const requestedDocsRejectedCount = requestedDocs.filter(d => d.upload_status === 'rejected').length;
+    const allRequiredRequestedUploaded = requiredRequestedDocs.every(d => !!d.file_url && d.upload_status !== 'rejected');
+    const pendingRequiredRequestedCount = requiredRequestedDocs.filter(d => !d.file_url || d.upload_status === 'rejected').length;
+
+    // BRD §2.9.3.7 — Submit gating matrix:
+    //   Supporting docs only      → all required supporting docs uploaded
+    //   Co-borrower KYC only      → form valid + 11 docs + consent + coupon
+    //   Both                      → both of the above
     const pendingRequirements: string[] = [];
-    if (!isConsentVerified) pendingRequirements.push('borrower consent verification');
-    if (!allDocsUploaded) pendingRequirements.push(`${docStats.pending.length} pending document${docStats.pending.length === 1 ? '' : 's'}`);
-    const canProceed = isConsentVerified && allDocsUploaded;
+    const cbCouponReserved = !!(cbCouponResult?.success || cbCouponResult?.valid || cbCouponResult?.status === 'reserved' || cbCouponResult?.status === 'used');
+    const alreadySubmitted = step3Ctx?.lead_kyc_status === 'pending_itarang_reverification';
+
+    if (step3Ctx?.requires_co_borrower) {
+        if (!isConsentVerified) pendingRequirements.push('co-borrower consent verification');
+        if (!allDocsUploaded) pendingRequirements.push(`${docStats.pending.length} pending co-borrower document${docStats.pending.length === 1 ? '' : 's'}`);
+        if (!cbCouponReserved) pendingRequirements.push('coupon validation');
+    }
+    if (step3Ctx?.requires_supporting_docs && requestedDocs.length > 0 && !allRequiredRequestedUploaded) {
+        pendingRequirements.push(`${pendingRequiredRequestedCount} admin-requested document${pendingRequiredRequestedCount === 1 ? '' : 's'}`);
+    }
+
+    const canSubmit = (() => {
+        if (alreadySubmitted) return false;
+        if (!step3Ctx) return false;
+        const supportingOk = !step3Ctx.requires_supporting_docs || requestedDocs.length === 0 || allRequiredRequestedUploaded;
+        const coBorrowerOk = !step3Ctx.requires_co_borrower || (
+            isConsentVerified && allDocsUploaded && cbCouponReserved
+        );
+        return supportingOk && coBorrowerOk;
+    })();
+    // Legacy compat — keep canProceed name in case any earlier code reads it
+    const canProceed = canSubmit;
 
     const stepRoutes: Record<number, string> = {
         1: '/dealer-portal/leads/new',
@@ -480,44 +1006,148 @@ export default function BorrowerConsentPage() {
 
     return (
         <div className="min-h-screen bg-[#F8F9FB]">
+            {/* OCR Modal — same Aadhaar autofill used on Step 1 */}
+            <OCRModal open={showOCR} onClose={() => setShowOCR(false)} onResult={handleOCRResult} />
+
+            {/* Preview Customer Profile (BRD §2.9.3 bottom-bar action) */}
+            <PreviewProfileModal
+                open={showPreview}
+                onClose={() => setShowPreview(false)}
+                lead={lead}
+                borrowerForm={borrowerForm}
+                includeCoBorrower={!!step3Ctx?.requires_co_borrower}
+            />
+
             <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
                 {/* Header */}
                 <ProgressHeader
-                    title="Borrower & Consent"
-                    subtitle={`Reference ID: ${lead?.reference_id || leadId}${lead?.full_name ? ` — ${lead.full_name}` : ''}`}
+                    title="Other Documents & Co-Borrower KYC"
+                    subtitle={`Lead ID: ${leadId}${lead?.full_name ? ` — ${lead.full_name}` : ''}`}
                     step={3}
+                    workflowLabel="Interim Step"
                     onBack={() => router.push('/dealer-portal/leads/new')}
                     onPrev={() => jumpToStep(2)}
                     onNext={() => jumpToStep(4)}
                     onStepClick={jumpToStep}
                     rightAction={
-                        <button onClick={() => loadPageData(true)} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold">
-                            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
-                        </button>
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={() => setShowOCR(true)}
+                                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-200 hover:border-[#1D4ED8] hover:text-[#1D4ED8] text-sm font-bold text-gray-800 shadow-sm transition-all"
+                            >
+                                <Scan className="w-4 h-4" /> Auto-fill from ID
+                            </button>
+                            <button onClick={() => loadPageData(true)} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold">
+                                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
+                            </button>
+                        </div>
                     }
                 />
 
                 <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
 
+                {/* ─── Admin Request Banner (BRD §2.9.3) ────────────────── */}
+                {step3Ctx && (
+                    <>
+                        {step3Ctx.is_replacement ? (
+                            <div className="mb-6 flex items-start gap-3 px-4 py-4 rounded-xl bg-red-50 border-2 border-red-200">
+                                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                                <div className="flex-1 text-sm">
+                                    <p className="font-bold text-red-800">
+                                        Previous co-borrower rejected (attempt #{step3Ctx.latest_co_borrower_request?.attempt_number ?? 2})
+                                    </p>
+                                    {step3Ctx.latest_co_borrower_request?.reason && (
+                                        <p className="text-red-700 mt-0.5">
+                                            <span className="font-semibold">Reason: </span>
+                                            <span className="italic">{step3Ctx.latest_co_borrower_request.reason}</span>
+                                        </p>
+                                    )}
+                                    <p className="text-red-600 mt-1 text-xs">Please submit a new co-borrower below.</p>
+                                </div>
+                            </div>
+                        ) : (step3Ctx.requires_supporting_docs || step3Ctx.requires_co_borrower) ? (
+                            <div className="mb-6 flex items-start gap-3 px-4 py-4 rounded-xl bg-blue-50 border border-blue-200">
+                                <FileText className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                                <div className="flex-1 text-sm">
+                                    <p className="font-bold text-blue-900">Admin has requested:</p>
+                                    <ul className="mt-1.5 space-y-1 text-blue-800">
+                                        {step3Ctx.requires_supporting_docs && (
+                                            <li className="flex items-center gap-2">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-blue-600 flex-shrink-0" />
+                                                Supporting Documents ({step3Ctx.supporting_docs_summary.total} item{step3Ctx.supporting_docs_summary.total === 1 ? '' : 's'})
+                                            </li>
+                                        )}
+                                        {step3Ctx.requires_co_borrower && (
+                                            <li className="flex items-center gap-2">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-blue-600 flex-shrink-0" />
+                                                Co-Borrower KYC
+                                                {step3Ctx.latest_co_borrower_request?.reason && (
+                                                    <span className="italic text-blue-700"> — {step3Ctx.latest_co_borrower_request.reason}</span>
+                                                )}
+                                            </li>
+                                        )}
+                                    </ul>
+                                    {step3Ctx.latest_co_borrower_request?.created_at && (
+                                        <p className="text-xs text-blue-600 mt-2">
+                                            Requested on {new Date(step3Ctx.latest_co_borrower_request.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+                        ) : null}
+
+                        {step3Ctx.lead_kyc_status === 'pending_itarang_reverification' && (
+                            <div className="mb-6 flex items-start gap-3 px-4 py-4 rounded-xl bg-emerald-50 border border-emerald-200">
+                                <Clock className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+                                <div className="flex-1 text-sm">
+                                    <p className="font-bold text-emerald-800">Submitted — awaiting admin review</p>
+                                    <p className="text-emerald-700 mt-0.5 text-xs">
+                                        Step 3 has been submitted to iTarang admin. You'll be notified once admin completes the review.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+                    </>
+                )}
+
                 <main className="grid grid-cols-1 gap-6">
-                    {/* ─── Borrower Details (Editable) ───────────────── */}
-                    <SectionCard title="Borrower Details">
+                    {/* ─── Section B — Co-Borrower KYC (BRD §2.9.3.5) ──────
+                        Visible only when admin requested co-borrower KYC. */}
+                    {step3Ctx?.requires_co_borrower && (<>
+                    {/* ─── Co-borrower Details (Editable) ───────────────── */}
+                    <SectionCard title="Co-borrower Details">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6">
-                            <InputField label="Full Name" value={borrowerForm.full_name} onChange={v => updateField('full_name', v)} placeholder="John Doe" required />
-                            <InputField label="Father / Husband Name" value={borrowerForm.father_or_husband_name} onChange={v => updateField('father_or_husband_name', v)} placeholder="Richard Doe" required />
-                            <InputField label="Date of Birth" type="date" value={borrowerForm.dob} onChange={v => updateField('dob', v)} required />
-                            <InputField label="Phone" value={borrowerForm.phone} onChange={v => updateField('phone', v)} placeholder="+91 9876543210" required />
+                            <InputField label="Full Name" value={borrowerForm.full_name} onChange={v => updateField('full_name', v)} placeholder="John Doe" required error={borrowerErrors.full_name} />
+                            <InputField label="Father / Husband Name" value={borrowerForm.father_or_husband_name} onChange={v => updateField('father_or_husband_name', v)} placeholder="Richard Doe" required error={borrowerErrors.father_or_husband_name} />
+                            <InputField label="Date of Birth" type="date" value={borrowerForm.dob} onChange={v => updateField('dob', v)} required error={borrowerErrors.dob} />
+                            <InputField label="Phone" value={borrowerForm.phone} onChange={v => updateField('phone', v)} placeholder="9876543210" required inputMode="numeric" maxLength={10} error={borrowerErrors.phone} />
                             <InputField label="Email" value={borrowerForm.email} onChange={v => updateField('email', v)} placeholder="john@email.com" />
-                            <InputField label="PAN Number" value={borrowerForm.pan_no} onChange={v => updateField('pan_no', v.toUpperCase())} placeholder="ABCDE1234F" />
-                            <InputField label="Aadhaar Number" value={borrowerForm.aadhaar_no} onChange={v => updateField('aadhaar_no', v)} placeholder="1234 5678 9012" />
+                            <InputField label="PAN Number" value={borrowerForm.pan_no} onChange={v => updateField('pan_no', v)} placeholder="ABCDE1234F" required maxLength={10} error={borrowerErrors.pan_no} />
+                            <InputField label="Aadhaar Number" value={borrowerForm.aadhaar_no} onChange={v => updateField('aadhaar_no', v)} placeholder="123456789012" required inputMode="numeric" maxLength={12} error={borrowerErrors.aadhaar_no} />
+                            <SelectField
+                                label="Relationship to Applicant"
+                                value={borrowerForm.relationship}
+                                onChange={v => updateField('relationship', v)}
+                                options={[
+                                    { value: 'spouse', label: 'Spouse' },
+                                    { value: 'parent', label: 'Parent' },
+                                    { value: 'sibling', label: 'Sibling' },
+                                    { value: 'other', label: 'Other' },
+                                ]}
+                                placeholder="Select relationship"
+                                required
+                                error={borrowerErrors.relationship}
+                            />
                             <InputField label="Marital Status" value={borrowerForm.marital_status} onChange={v => updateField('marital_status', v)} placeholder="Single / Married" />
                             <InputField label="Monthly Income (₹)" value={borrowerForm.income} onChange={v => updateField('income', v)} placeholder="50000" />
                             <div className="md:col-span-2">
-                                <InputField label="Permanent Address" value={borrowerForm.permanent_address} onChange={v => updateField('permanent_address', v)} placeholder="Full permanent address" />
+                                <InputField label="Permanent Address" value={borrowerForm.permanent_address} onChange={v => updateField('permanent_address', v)} placeholder="Full permanent address" required error={borrowerErrors.permanent_address} />
                             </div>
                             <div className="md:col-span-2 space-y-2">
                                 <div className="flex items-center justify-between">
-                                    <label className="text-sm font-bold text-gray-900 px-1">Current Address</label>
+                                    <label className="text-sm font-bold text-gray-900 px-1">
+                                        Current Address <span className="text-red-500">*</span>
+                                    </label>
                                     <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-gray-600">
                                         <input type="checkbox" checked={borrowerForm.is_current_same} onChange={e => updateField('is_current_same', e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-[#0047AB]" />
                                         Same as permanent
@@ -528,16 +1158,21 @@ export default function BorrowerConsentPage() {
                                     disabled={borrowerForm.is_current_same}
                                     onChange={e => updateField('current_address', e.target.value)}
                                     className={`w-full h-11 px-4 bg-white border-2 rounded-xl outline-none text-sm transition-all ${
-                                        borrowerForm.is_current_same ? 'bg-gray-50 border-gray-100 text-gray-400' : 'border-[#EBEBEB] focus:border-[#1D4ED8]'
+                                        borrowerForm.is_current_same ? 'bg-gray-50 border-gray-100 text-gray-400' :
+                                        borrowerErrors.current_address ? 'border-red-400' :
+                                        'border-[#EBEBEB] focus:border-[#1D4ED8]'
                                     }`}
                                     placeholder="Current address"
                                 />
+                                {borrowerErrors.current_address && (
+                                    <p className="text-xs text-red-500 px-1">{borrowerErrors.current_address}</p>
+                                )}
                             </div>
                         </div>
                     </SectionCard>
 
-                    {/* ─── Borrower Consent ────────────────────────────── */}
-                    <SectionCard title="Borrower Consent" action={
+                    {/* ─── Co-borrower Consent ────────────────────────────── */}
+                    <SectionCard title="Co-borrower Consent" action={
                         <ConsentStatusBadge status={consentStatus} />
                     }>
                         <div className="mb-4 flex items-center gap-2 text-sm">
@@ -550,7 +1185,7 @@ export default function BorrowerConsentPage() {
                                 <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
                                 <div>
                                     <p className="text-sm font-bold text-emerald-800">Consent Verified</p>
-                                    <p className="text-xs text-emerald-600 mt-0.5">Admin has verified the borrower consent. You can proceed to the next step.</p>
+                                    <p className="text-xs text-emerald-600 mt-0.5">Admin has verified the co-borrower consent. You can proceed to the next step.</p>
                                 </div>
                             </div>
                         ) : consentStatus === 'admin_review_pending' ? (
@@ -567,7 +1202,7 @@ export default function BorrowerConsentPage() {
                                     <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
                                     <div>
                                         <p className="text-sm font-bold text-red-800">Aadhaar eSign Failed</p>
-                                        <p className="text-xs text-red-600 mt-0.5">Borrower eSign was unsuccessful. You can resend the consent link or switch to manual consent.</p>
+                                        <p className="text-xs text-red-600 mt-0.5">Co-borrower eSign was unsuccessful. You can resend the consent link or switch to manual consent.</p>
                                     </div>
                                 </div>
                                 <div className="flex gap-3 items-start">
@@ -634,8 +1269,8 @@ export default function BorrowerConsentPage() {
                                         <CheckCircle2 className="w-6 h-6 text-emerald-600" />
                                     </div>
                                     <div className="flex-1">
-                                        <p className="text-sm font-bold text-emerald-800">Borrower Signed Successfully</p>
-                                        <p className="text-xs text-emerald-600 mt-0.5">The borrower has completed Aadhaar eSign. Consent is now pending admin verification.</p>
+                                        <p className="text-sm font-bold text-emerald-800">Co-borrower Signed Successfully</p>
+                                        <p className="text-xs text-emerald-600 mt-0.5">The co-borrower has completed Aadhaar eSign. Consent is now pending admin verification.</p>
                                         {consentRecord?.signed_at && (
                                             <p className="text-xs text-emerald-500 mt-1">
                                                 Signed at: {new Date(consentRecord.signed_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
@@ -662,8 +1297,8 @@ export default function BorrowerConsentPage() {
                                     <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
                                 </div>
                                 <div className="flex-1">
-                                    <p className="text-sm font-bold text-blue-800">Borrower is Signing...</p>
-                                    <p className="text-xs text-blue-600 mt-0.5">Borrower has opened the consent link and is completing the Aadhaar eSign process. This page will update automatically.</p>
+                                    <p className="text-sm font-bold text-blue-800">Co-borrower is Signing...</p>
+                                    <p className="text-xs text-blue-600 mt-0.5">Co-borrower has opened the consent link and is completing the Aadhaar eSign process. This page will update automatically.</p>
                                 </div>
                             </div>
                         ) : consentStatus === 'admin_rejected' ? (
@@ -699,7 +1334,7 @@ export default function BorrowerConsentPage() {
                         ) : (
                             /* ── Choose Consent Path ──────────────────────── */
                             <div className="space-y-4">
-                                <p className="text-sm text-gray-500">Choose one method to obtain borrower consent. Both options are mutually exclusive.</p>
+                                <p className="text-sm text-gray-500">Choose one method to obtain co-borrower consent. Both options are mutually exclusive.</p>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {/* Digital Consent Card */}
@@ -716,7 +1351,7 @@ export default function BorrowerConsentPage() {
                                             </div>
                                             <div>
                                                 <h4 className="text-sm font-bold text-gray-900">Digital Consent (Aadhaar eSign)</h4>
-                                                <p className="text-xs text-gray-500 mt-0.5">Send consent link via SMS/WhatsApp. Borrower signs digitally with Aadhaar OTP.</p>
+                                                <p className="text-xs text-gray-500 mt-0.5">Send consent link via SMS/WhatsApp. Co-borrower signs digitally with Aadhaar OTP.</p>
                                             </div>
                                         </div>
                                         {consentPath !== 'manual' && (
@@ -746,7 +1381,7 @@ export default function BorrowerConsentPage() {
                                                     <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
                                                 </span>
                                                 <p className="text-xs font-medium text-amber-700">
-                                                    {consentStatus === 'link_opened' ? 'Borrower opened the link. Waiting for signature...' : 'Consent link sent. Waiting for borrower to sign...'}
+                                                    {consentStatus === 'link_opened' ? 'Co-borrower opened the link. Waiting for signature...' : 'Consent link sent. Waiting for co-borrower to sign...'}
                                                     <span className="text-amber-500 ml-1">(auto-updating)</span>
                                                 </p>
                                             </div>
@@ -767,7 +1402,7 @@ export default function BorrowerConsentPage() {
                                             </div>
                                             <div>
                                                 <h4 className="text-sm font-bold text-gray-900">Manual Consent (Signed PDF)</h4>
-                                                <p className="text-xs text-gray-500 mt-0.5">Generate PDF, print, get borrower signature, scan and upload.</p>
+                                                <p className="text-xs text-gray-500 mt-0.5">Generate PDF, print, get co-borrower signature, scan and upload.</p>
                                             </div>
                                         </div>
                                         {consentPath !== 'digital' && (
@@ -801,8 +1436,8 @@ export default function BorrowerConsentPage() {
                         )}
                     </SectionCard>
 
-                    {/* ─── Borrower Documents ─────────────────────────── */}
-                    <SectionCard title="Borrower Documents" action={
+                    {/* ─── Co-borrower Documents ─────────────────────────── */}
+                    <SectionCard title="Co-borrower Documents" action={
                         <div className="flex items-center gap-2">
                             <span className="text-xs font-bold text-gray-500">Uploaded:</span>
                             <span className={`text-sm font-black ${docStats.uploadedCount === docStats.total ? 'text-emerald-600' : 'text-[#0047AB]'}`}>
@@ -846,7 +1481,7 @@ export default function BorrowerConsentPage() {
                     </SectionCard>
 
                     {/* ─── Verification Status ────────────────────────── */}
-                    <SectionCard title="Verification Status (Borrower)">
+                    <SectionCard title="Verification Status (Co-borrower)">
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead>
@@ -883,6 +1518,38 @@ export default function BorrowerConsentPage() {
                                                 <td className="py-3 px-3 text-xs text-red-600">{v.failed_reason || '-'}</td>
                                             </tr>
                                         ))}
+                                        {showOtherDocs && requestedDocs.length > 0 && (
+                                            <tr className="border-b border-gray-50 bg-blue-50/40">
+                                                <td className="py-3 px-3 font-bold text-gray-900">Additional Documents</td>
+                                                <td className="py-3 px-3">
+                                                    <div className="flex items-center gap-2">
+                                                        <StatusBadge status={
+                                                            requestedDocsRejectedCount > 0 ? 'failed'
+                                                            : requestedDocsVerifiedCount === requestedDocsAllCount ? 'success'
+                                                            : allRequiredRequestedUploaded ? 'awaiting_action'
+                                                            : 'pending'
+                                                        } />
+                                                        <span className="text-xs font-medium text-gray-600">
+                                                            {requestedDocsVerifiedCount}/{requestedDocsAllCount} verified
+                                                        </span>
+                                                    </div>
+                                                </td>
+                                                <td className="py-3 px-3 text-gray-500 text-xs">—</td>
+                                                <td className="py-3 px-3">
+                                                    <a
+                                                        href="#other-documentation"
+                                                        className="text-xs font-bold text-[#0047AB] hover:underline inline-flex items-center gap-1"
+                                                    >
+                                                        <Eye className="w-3 h-3" /> View
+                                                    </a>
+                                                </td>
+                                                <td className="py-3 px-3 text-xs text-red-600">
+                                                    {requestedDocsRejectedCount > 0
+                                                        ? `${requestedDocsRejectedCount} doc${requestedDocsRejectedCount === 1 ? '' : 's'} rejected — see below`
+                                                        : '-'}
+                                                </td>
+                                            </tr>
+                                        )}
                                     </tbody>
                                 </table>
                             </div>
@@ -892,21 +1559,134 @@ export default function BorrowerConsentPage() {
                                 <ConsentStatusBadge status={consentStatus} />
                             </div>
                     </SectionCard>
+                    </>)}
+
+                    {/* ─── Section A — Other Documentation (Admin-Requested) ──
+                        Visible only when admin requested supporting documents. */}
+                    {step3Ctx?.requires_supporting_docs && requestedDocs.length > 0 && (
+                        <div id="other-documentation" className="scroll-mt-24">
+                            <SectionCard
+                                title="Other Documentation"
+                                action={
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-xs font-bold text-gray-500">Uploaded:</span>
+                                        <span className={`text-sm font-black ${requestedDocsUploadedCount === requestedDocsAllCount ? 'text-emerald-600' : 'text-[#0047AB]'}`}>
+                                            {requestedDocsUploadedCount}/{requestedDocsAllCount}
+                                        </span>
+                                        {requestedDocsRejectedCount > 0 && (
+                                            <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-[11px] font-bold">
+                                                <AlertCircle className="w-3 h-3" /> {requestedDocsRejectedCount} rejected
+                                            </span>
+                                        )}
+                                    </div>
+                                }
+                            >
+                                <p className="text-xs text-gray-500 mb-4">
+                                    Admin has requested these additional documents. Upload each — they will be sent back to admin for review.
+                                </p>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {requestedDocs.map(doc => (
+                                        <RequestedDocCard
+                                            key={doc.id}
+                                            doc={doc}
+                                            uploading={!!requestedUploading[doc.id]}
+                                            onUpload={(file) => handleRequestedDocUpload(doc.id, file)}
+                                        />
+                                    ))}
+                                </div>
+                                {pendingRequiredRequestedCount > 0 && (
+                                    <p className="mt-4 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                                        Pending: {requiredRequestedDocs.filter(d => !d.file_url || d.upload_status === 'rejected').map(d => d.doc_label).join(', ')}
+                                    </p>
+                                )}
+                            </SectionCard>
+                        </div>
+                    )}
+
+                    {/* ─── Verification Action — Coupon (BRD §2.9.3.6) ────
+                        Visible only when co-borrower KYC is requested. Supporting-
+                        docs-only re-verification reuses the original lead coupon. */}
+                    {step3Ctx?.requires_co_borrower && step3Ctx?.lead_kyc_status !== 'pending_itarang_reverification' && (
+                        <SectionCard title="Verification Action" action={
+                            cbCouponResult?.status === 'used'
+                                ? <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Submitted</span>
+                                : cbCouponResult?.status === 'reserved' || (cbCouponResult?.success || cbCouponResult?.valid)
+                                    ? <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Shield className="w-3 h-3" />Reserved</span>
+                                    : <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-bold">Awaiting Coupon</span>
+                        }>
+                            {(cbCouponResult?.success || cbCouponResult?.valid) ? (
+                                <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                                    <Shield className="w-5 h-5 text-blue-600 flex-shrink-0" />
+                                    <div className="flex-1">
+                                        <p className="text-sm font-bold text-blue-800">
+                                            Coupon Reserved: <span className="font-mono">{cbCouponResult.coupon_code || cbCouponCode}</span>
+                                        </p>
+                                        <p className="text-xs text-blue-500 mt-0.5">
+                                            This coupon is locked to this lead. Click "Submit for Verification" below to start re-verification.
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={handleReleaseCbCoupon}
+                                        disabled={cbReleasingCoupon}
+                                        className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-50 transition-all disabled:opacity-50 flex items-center gap-1.5"
+                                    >
+                                        {cbReleasingCoupon ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                                        Change Coupon
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    <p className="text-xs text-gray-500">
+                                        Enter your verification coupon code to authorise re-verification with the co-borrower.
+                                    </p>
+                                    <div className="flex items-center gap-3">
+                                        <input
+                                            type="text"
+                                            value={cbCouponCode}
+                                            onChange={e => setCbCouponCode(e.target.value.toUpperCase())}
+                                            placeholder="Enter coupon code (e.g., ITARANG-FREE)"
+                                            maxLength={20}
+                                            className="flex-1 h-11 px-4 bg-white border-2 border-[#EBEBEB] rounded-xl outline-none text-sm font-mono focus:border-[#1D4ED8] transition-all"
+                                        />
+                                        <button
+                                            onClick={handleValidateCbCoupon}
+                                            disabled={cbCouponValidating || !cbCouponCode.trim()}
+                                            className="px-6 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2"
+                                        >
+                                            {cbCouponValidating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+                                            Validate
+                                        </button>
+                                    </div>
+                                    {cbCouponResult && !cbCouponResult.valid && !cbCouponResult.success && (
+                                        <div className="px-4 py-2 bg-red-50 border border-red-200 rounded-xl">
+                                            <p className="text-sm font-medium text-red-700">
+                                                <AlertCircle className="w-4 h-4 inline mr-1" />
+                                                {cbCouponResult.message || 'Invalid coupon code'}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </SectionCard>
+                    )}
                 </main>
 
                 {/* ─── Bottom Bar ────────────────────────────────────── */}
-                {!canProceed && pendingRequirements.length > 0 && (
+                {!canSubmit && pendingRequirements.length > 0 && !alreadySubmitted && (
                     <div className="mt-6 flex items-center justify-end">
                         <p className="text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                            Complete to proceed: {pendingRequirements.join(', ')}
+                            Complete to submit: {pendingRequirements.join(', ')}
                         </p>
                     </div>
                 )}
                 <StickyBottomBar lastSaved={lastSaved}>
-                    <OutlineButton onClick={() => router.push('/dealer-portal/leads/new')}>Back</OutlineButton>
+                    <OutlineButton onClick={() => router.push(`/dealer-portal/leads/${leadId}/kyc`)}>Back</OutlineButton>
                     <SecondaryButton onClick={() => handleSaveDraft(false)} loading={savingDraft}>Save Draft</SecondaryButton>
-                    <PrimaryButton onClick={handleSaveAndNext} loading={submitting} disabled={submitting || !canProceed}>
-                        Next <ChevronRight className="w-4 h-4" />
+                    <SecondaryButton onClick={() => setShowPreview(true)}>
+                        <Eye className="w-4 h-4" /> Preview Customer Profile
+                    </SecondaryButton>
+                    <PrimaryButton onClick={handleSubmitForVerification} loading={submitting} disabled={submitting || !canSubmit}>
+                        {alreadySubmitted ? 'Submitted' : 'Submit for Verification'}
                     </PrimaryButton>
                 </StickyBottomBar>
             </div>
