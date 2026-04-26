@@ -85,7 +85,9 @@ jobs:
 
             echo "::group::Writing .env.production from secret"
             umask 077
-            echo "${{ secrets.PROD_ENV_FILE_B64 }}" | base64 -d > .env.production
+            # Strip CR — the secret may have been generated from a CRLF
+            # (Windows) .env file, which breaks `source` and dotenv parsers.
+            echo "${{ secrets.PROD_ENV_FILE_B64 }}" | base64 -d | tr -d '\r' > .env.production
             chmod 600 .env.production
             echo "::endgroup::"
 
