@@ -91,7 +91,11 @@ jobs:
             # ──────────────────────────────────────────────────────────────
             echo "::group::Drizzle db:push (sandbox migration)"
             # Load DATABASE_URL etc. from the .env we just wrote.
+            # SECURITY: disable command-tracing while sourcing .env so secret
+            # values don't get printed to the Actions log.
+            { set +x; } 2>/dev/null
             set -a; source .env; set +a
+            set -x
             npm run db:push -- --force || {
               echo "::error::db:push failed — schema mismatch or DB unreachable"
               exit 1
@@ -255,6 +259,9 @@ jobs:
             # Defensive: prior deploy may have left CRLF in .env. Strip it
             # before sourcing so we don't silently lose env vars.
             if [ -f .env ]; then sed -i 's/\r$//' .env; fi
+            # SECURITY: rollback step doesn't have set -x today, but disable
+            # tracing defensively in case it's added later.
+            { set +x; } 2>/dev/null
             set -a; source .env 2>/dev/null || true; set +a
             npm ci --no-audit --no-fund --include=dev
             export GITHUB_SHA=$(git rev-parse HEAD)
