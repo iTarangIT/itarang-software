@@ -120,6 +120,10 @@ export const oemContacts = pgTable("oem_contacts", {
   phone: varchar({ length: 20 }),
   isPrimary: boolean("is_primary").default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  contactRole: varchar("contact_role", { length: 50 }),
+  contactName: text("contact_name"),
+  contactPhone: varchar("contact_phone", { length: 20 }),
+  contactEmail: text("contact_email"),
 });
 
 export const inventory = pgTable("inventory", {
@@ -494,6 +498,8 @@ export const documents = pgTable("documents", {
   type: varchar({ length: 50 }).notNull(),
   url: text().notNull(),
   uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+  documentType: varchar("document_type", { length: 50 }),
+  fileUrl: text("file_url"),
 });
 
 export const leadDocuments = pgTable("lead_documents", {
@@ -505,6 +511,8 @@ export const leadDocuments = pgTable("lead_documents", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   dealerId: varchar("dealer_id", { length: 255 }),
   userId: uuid("user_id"),
+  docType: varchar("doc_type", { length: 100 }),
+  storagePath: text("storage_path"),
 });
 
 export const leadAssignments = pgTable("lead_assignments", {
@@ -593,6 +601,8 @@ export const orderDisputes = pgTable("order_disputes", {
   resolutionDetails: text("resolution_details"),
   actionTaken: text("action_taken"),
   resolvedAt: timestamp("resolved_at"),
+  assignedTo: uuid("assigned_to"),
+  createdBy: uuid("created_by"),
 });
 
 export const slas = pgTable("slas", {
@@ -607,6 +617,8 @@ export const slas = pgTable("slas", {
   completedAt: timestamp("completed_at"),
   escalatedTo: uuid("escalated_to"),
   escalatedAt: timestamp("escalated_at"),
+  workflowStep: varchar("workflow_step", { length: 100 }),
+  slaDeadline: timestamp("sla_deadline"),
 });
 
 // --- PDI ---
@@ -620,6 +632,7 @@ export const oemInventoryForPDI = pgTable("oem_inventory_for_pdi", {
   serialNumber: varchar("serial_number", { length: 255 }),
   pdiStatus: varchar("pdi_status", { length: 20 }).default('pending').notNull(),
   pdiRecordId: varchar("pdi_record_id", { length: 255 }),
+  provisionId: varchar("provision_id", { length: 255 }),
 });
 
 export const pdiRecords = pgTable("pdi_records", {
@@ -643,6 +656,16 @@ export const pdiRecords = pgTable("pdi_records", {
   pdiPhotos: jsonb("pdi_photos"),
   failureReason: text("failure_reason"),
   inspectedAt: timestamp("inspected_at", { withTimezone: true }).defaultNow().notNull(),
+  oemInventoryId: varchar("oem_inventory_id", { length: 255 }),
+  provisionId: varchar("provision_id", { length: 255 }),
+  serviceEngineerId: uuid("service_engineer_id"),
+  physicalCondition: text("physical_condition"),
+  dischargingConnector: varchar("discharging_connector", { length: 20 }),
+  chargingConnector: varchar("charging_connector", { length: 20 }),
+  productorSticker: varchar("productor_sticker", { length: 50 }),
+  latitude: numeric({ precision: 10, scale: 8 }),
+  longitude: numeric({ precision: 11, scale: 8 }),
+  pdiStatus: varchar("pdi_status", { length: 20 }),
 });
 
 export const auditLogs = pgTable("audit_logs", {
@@ -698,6 +721,9 @@ export const provisions = pgTable("provisions", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   remarks: text(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  oemName: text("oem_name"),
+  products: jsonb(),
+  expectedDeliveryDate: timestamp("expected_delivery_date", { withTimezone: true }),
 });
 
 export const orders = pgTable(
@@ -1855,6 +1881,7 @@ export const campaignSegments = pgTable("campaign_segments", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   isPrebuilt: boolean("is_prebuilt").default(false),
   estimatedAudience: integer("estimated_audience"),
+  filterCriteria: jsonb("filter_criteria"),
 });
 
 // --- RELATIONS FOR NEW TABLES ---
@@ -2735,33 +2762,3 @@ export const riskCardRuns = pgTable(
 // =============================================================================
 // END NBFC additions
 // =============================================================================
-
-// ============================================================
-// AUTO-MERGED FROM LIVE DB (drizzle-kit pull)
-// These tables exist in the live database but were absent from
-// the hand-maintained schema. They are appended verbatim from the
-// pulled schema. Move them into a more appropriate section if you
-// like, but do not change their column definitions without also
-// updating the database.
-// ============================================================
-
-// AUTO-MERGED: this table existed in live DB but was missing from src/lib/db/schema.ts
-export const scrapeBatches = pgTable("scrape_batches", {
-	id: varchar({ length: 255 }).primaryKey().notNull(),
-	query: text().notNull(),
-	city: varchar({ length: 100 }),
-	state: varchar({ length: 100 }),
-	radiusMeters: integer("radius_meters"),
-	latitude: numeric({ precision: 10, scale:  8 }),
-	longitude: numeric({ precision: 11, scale:  8 }),
-	totalResults: integer("total_results").default(0),
-	newLeadsCreated: integer("new_leads_created").default(0),
-	duplicatesFound: integer("duplicates_found").default(0),
-	enrichedExisting: integer("enriched_existing").default(0),
-	noPhoneCount: integer("no_phone_count").default(0),
-	status: varchar({ length: 20 }).default('pending').notNull(),
-	errorMessage: text("error_message"),
-	initiatedBy: uuid("initiated_by").notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-	completedAt: timestamp("completed_at", { withTimezone: true }),
-});
