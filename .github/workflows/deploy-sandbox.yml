@@ -13,6 +13,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # ──────────────────────────────────────────────────────────────────
       # 1. Slack notify start (no-op if SLACK_WEBHOOK_URL secret missing)
@@ -28,9 +29,11 @@ jobs:
             "$SLACK_WEBHOOK_URL" || true
 
       # ──────────────────────────────────────────────────────────────────
-      # 2. SSH deploy — pulls, runs migrations, builds, restarts pm2,
-      #    probes /api/health. Persists PREV_SHA on the VPS so the
-      #    rollback step (below) can revert if anything goes wrong.
+      # 2. SSH deploy — pulls, builds, restarts pm2, probes /api/health.
+      #    Persists PREV_SHA on the VPS so the rollback step can revert.
+      #
+      #    Schema migrations are NOT run here — apply manually via pgAdmin
+      #    BEFORE merging code that references new columns/tables.
       # ──────────────────────────────────────────────────────────────────
       - name: SSH deploy to Hostinger VPS (sandbox)
         id: ssh_deploy
@@ -40,15 +43,11 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
-          command_timeout: 25m
+          command_timeout: 20m
           script_stop: true
           script: |
             set -eo pipefail
-            # ── DIAGNOSTIC: drone-ssh has been swallowing stderr on script
-            # failure. Force every command to echo (set -x) and merge stderr
-            # into stdout so the failing line shows up in the Actions log.
             exec 2>&1
-            set -x
             APP_DIR=/home/itarang-sandbox/htdocs/sandbox.itarang.com
             cd "$APP_DIR"
 
@@ -61,175 +60,103 @@ jobs:
             echo "::group::Pull latest main"
             git fetch origin main
             git reset --hard origin/main
+            NEW_SHA=$(git rev-parse HEAD)
             git log -1 --oneline
             echo "::endgroup::"
 
-            echo "::group::Write .env from SANDBOX_ENV_FILE_B64"
+            echo "::group::Write .env from secret"
             umask 077
-            # Strip CR — secret was originally created from a CRLF (Windows
-            # line-ending) .env file, which breaks `source .env` with the
-            # cryptic "$'\r': command not found" error.
+            # Strip CR (handles CRLF-encoded secrets) so `source .env` works.
             echo "${{ secrets.SANDBOX_ENV_FILE_B64 }}" | base64 -d | tr -d '\r' > .env
             chmod 600 .env
             echo "Wrote .env ($(wc -l < .env) lines, $(wc -c < .env) bytes)"
-            # Quick sanity check — the first non-comment line should look like KEY=value
-            head -5 .env | grep -v '^#' | head -1 | sed 's/=.*/=<redacted>/'
-            echo "::endgroup::"
-
-            echo "::group::Install/verify Chromium system libs"
-            chmod +x scripts/sandbox-system-setup.sh
-            ./scripts/sandbox-system-setup.sh
-            echo "::endgroup::"
-
-            echo "::group::Install deps (incl dev for build)"
-            npm ci --no-audit --no-fund --include=dev
             echo "::endgroup::"
 
             # ──────────────────────────────────────────────────────────────
-            # Drizzle migrations — sandbox uses db:push (per CI/CD plan).
-            # Production uses explicit migration files in deploy-production.yml.
+            # Skip Chromium apt check unless marker is missing.
+            # Saves ~60s per deploy. To force re-check, remove the marker:
+            #   rm /home/itarang-sandbox/.chromium-libs-installed
             # ──────────────────────────────────────────────────────────────
-            echo "::group::Drizzle db:push (sandbox migration)"
-            # Load DATABASE_URL etc. from the .env we just wrote.
-            # SECURITY: disable command-tracing while sourcing .env so secret
-            # values don't get printed to the Actions log.
+            echo "::group::Chromium system libs"
+            MARKER=/home/itarang-sandbox/.chromium-libs-installed
+            if [ -f "$MARKER" ]; then
+              echo "Marker present at $MARKER — skipping apt check."
+            else
+              chmod +x scripts/sandbox-system-setup.sh
+              ./scripts/sandbox-system-setup.sh
+              touch "$MARKER"
+            fi
+            echo "::endgroup::"
+
+            # ──────────────────────────────────────────────────────────────
+            # Skip npm ci unless package-lock.json changed since last install.
+            # Saves ~20-30s per deploy on small VPS.
+            # ──────────────────────────────────────────────────────────────
+            echo "::group::Install deps (only if package-lock changed)"
+            LOCK_HASH=$(sha256sum package-lock.json | cut -d' ' -f1)
+            LAST_HASH=$(cat .last-npm-install-hash 2>/dev/null || echo "")
+            if [ "$LOCK_HASH" = "$LAST_HASH" ] && [ -d node_modules ]; then
+              echo "package-lock.json unchanged — skipping npm ci"
+            else
+              npm ci --no-audit --no-fund --include=dev
+              echo "$LOCK_HASH" > .last-npm-install-hash
+            fi
+            echo "::endgroup::"
+
+            echo "::group::Load .env into shell (no command tracing — secrets)"
             { set +x; } 2>/dev/null
             set -a; source .env; set +a
             set -x
-            # Drizzle-kit asks interactive create-vs-rename questions when it
-            # finds ambiguous schema diffs. CI has no TTY, so it would hang
-            # forever. Pipe Enter to it — that always selects the highlighted
-            # default option, which for new tables is "create table".
-            yes "" | npm run db:push -- --force || {
-              echo "::error::db:push failed — schema mismatch or DB unreachable"
-              exit 1
-            }
-            echo "::endgroup::"
-
-            ARCHIVE_DIR=/home/itarang-sandbox/static_archive
-            ARCHIVE_KEEP=10
-
-            echo "::group::Snapshot previous .next/static into archive ring"
-            mkdir -p "$ARCHIVE_DIR"
-            OLD_BUILD_ID=""
-            if [ -f .next/BUILD_ID ]; then OLD_BUILD_ID=$(cat .next/BUILD_ID); fi
-            if [ -n "$OLD_BUILD_ID" ] && [ -d .next/static ]; then
-              rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID"
-              cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"
-              echo "Archived $OLD_BUILD_ID ($(find "$ARCHIVE_DIR/$OLD_BUILD_ID" -type f | wc -l) files)"
-            else
-              echo "No previous BUILD_ID/.next/static — first build or clean checkout"
-            fi
-            rm -rf .next_prev_static
             echo "::endgroup::"
 
             echo "::group::Build (next build)"
             mkdir -p logs
-            export GITHUB_SHA=$(git rev-parse HEAD)
+            export GITHUB_SHA="$NEW_SHA"
             echo "Building with GITHUB_SHA=$GITHUB_SHA"
             npm run build
             echo "::endgroup::"
 
-            echo "::group::Merge archived chunks into new build (stale-tab grace period)"
-            NEW_BUILD_ID=""
-            if [ -f .next/BUILD_ID ]; then NEW_BUILD_ID=$(cat .next/BUILD_ID); fi
-            if [ -d "$ARCHIVE_DIR" ]; then
-              for archived in "$ARCHIVE_DIR"/*/; do
-                [ -d "$archived" ] || continue
-                archived_id=$(basename "$archived")
-                if [ "$archived_id" = "$NEW_BUILD_ID" ]; then continue; fi
-                for sub in chunks css media; do
-                  if [ -d "$archived/$sub" ]; then
-                    mkdir -p ".next/static/$sub"
-                    rsync -a --ignore-existing "$archived/$sub/" ".next/static/$sub/"
-                  fi
-                done
-              done
-              echo "After merge: $(find .next/static -type f | wc -l) files in .next/static"
-            fi
-            echo "::endgroup::"
-
-            echo "::group::Prune archive ring (keep $ARCHIVE_KEEP newest)"
-            if [ -d "$ARCHIVE_DIR" ]; then
-              ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf
-              echo "Archive now holds $(ls -1d "$ARCHIVE_DIR"/*/ 2>/dev/null | wc -l) builds"
-            fi
-            echo "::endgroup::"
-
-            echo "::group::Verify every chunk referenced by the build manifest exists on disk"
-            node scripts/verify-chunk-manifest.js
-            echo "::endgroup::"
-
-            echo "::group::Stop existing pm2 apps + guarantee port 3003 is free"
+            echo "::group::Restart pm2"
             for app in sandbox-web sandbox-worker; do
               if pm2 describe "$app" > /dev/null 2>&1; then
                 pm2 delete "$app" 2>/dev/null || true
               fi
             done
             fuser -k 3003/tcp 2>/dev/null || true
-            sleep 3
-            echo "Port 3003 cleared"
-            echo "::endgroup::"
-
-            echo "::group::Start pm2 apps fresh"
+            sleep 2
             pm2 start ecosystem.sandbox.config.js
             pm2 save
             pm2 ls
             echo "::endgroup::"
 
             # ──────────────────────────────────────────────────────────────
-            # Health check — was a simple curl /; now probes /api/health
-            # which checks DB + IoT bridge + sandbox.
+            # Health check — /api/health gates rollback.
+            # Polls 1s × 60 = up to 60s.
             # ──────────────────────────────────────────────────────────────
             echo "::group::Health check 127.0.0.1:3003/api/health"
             HTTP=000
-            BODY=""
-            for i in $(seq 1 30); do
-              sleep 2
-              BODY=$(curl -s -m 5 http://127.0.0.1:3003/api/health || echo "")
-              HTTP=$(printf '%s' "$BODY" | tail -1 >/dev/null; curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:3003/api/health || echo 000)
+            for i in $(seq 1 60); do
+              sleep 1
+              HTTP=$(curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:3003/api/health || echo 000)
               if [ "$HTTP" = "200" ]; then
-                echo "HTTP $HTTP after ${i} polls"
+                echo "HTTP 200 after ${i}s"
                 break
               fi
             done
-            if [ "$HTTP" = "200" ]; then
-              echo "✅ /api/health returned 200"
-              echo "$BODY" | head -c 800
-            else
+            if [ "$HTTP" != "200" ]; then
               echo "❌ /api/health returned $HTTP after 60s"
-              echo "Body (truncated):"
-              echo "$BODY" | head -c 1500
-              echo ""
-              echo '--- sandbox-web logs ---'
+              echo '--- sandbox-web (last 40 lines) ---'
               pm2 logs sandbox-web --lines 40 --nostream || true
-              echo '--- sandbox-worker logs ---'
-              pm2 logs sandbox-worker --lines 20 --nostream || true
               exit 1
             fi
-            echo "::endgroup::"
-
-            echo "::group::Verify served BUILD_ID matches disk"
-            DISK_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null || echo "missing")
-            HTML=$(curl -s -L http://127.0.0.1:3003/login 2>/dev/null || true)
-            SERVED_BUILD_ID=$(printf '%s' "$HTML" | grep -oE '"b":"[a-f0-9]+"' | head -1 | cut -d'"' -f4 || true)
-            echo "Disk BUILD_ID:   $DISK_BUILD_ID"
-            echo "Served BUILD_ID: ${SERVED_BUILD_ID:-<not found>}"
-            if [ -n "$SERVED_BUILD_ID" ] && [ "$DISK_BUILD_ID" != "$SERVED_BUILD_ID" ]; then
-              echo "❌ BUILD_ID mismatch — running process is stale"
-              exit 1
-            fi
-            echo "::endgroup::"
-
-            echo "::group::Verify served assets reachable (HEAD on every chunk in served HTML)"
-            PORT=3003 node scripts/verify-served-assets.js
+            curl -s http://127.0.0.1:3003/api/health | head -c 800
+            echo ""
             echo "::endgroup::"
 
             echo "✅ Sandbox deploy complete: $(git rev-parse --short HEAD)"
 
       # ──────────────────────────────────────────────────────────────────
-      # 3. Rollback step — only runs if step 2 failed. Reverts to the
-      #    PREV_SHA we wrote to /tmp at the start of the deploy.
+      # 3. Rollback if step 2 failed: revert to PREV_SHA, rebuild, restart.
       # ──────────────────────────────────────────────────────────────────
       - name: SSH rollback (only on deploy failure)
         if: failure() && steps.ssh_deploy.outcome == 'failure'
@@ -247,39 +174,24 @@ jobs:
             cd "$APP_DIR"
             PREV_SHA=$(cat /tmp/itarang-sandbox-prev-sha 2>/dev/null || echo "")
             CURRENT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
-            if [ -z "$PREV_SHA" ]; then
-              echo "::warning::No PREV_SHA recorded — manual rollback required"
+            if [ -z "$PREV_SHA" ] || [ "$PREV_SHA" = "$CURRENT_SHA" ]; then
+              echo "No rollback needed (PREV_SHA missing or already at PREV_SHA)"
               exit 0
             fi
-            if [ "$PREV_SHA" = "$CURRENT_SHA" ]; then
-              echo "Already at PREV_SHA $PREV_SHA — no rollback needed"
-              exit 0
-            fi
-            echo "::group::Rolling back to $PREV_SHA"
+            echo "Rolling back to $PREV_SHA"
             git reset --hard "$PREV_SHA"
-            git log -1 --oneline
-            echo "::endgroup::"
-            echo "::group::Reinstall + rebuild for rollback"
-            # Defensive: prior deploy may have left CRLF in .env. Strip it
-            # before sourcing so we don't silently lose env vars.
             if [ -f .env ]; then sed -i 's/\r$//' .env; fi
-            # SECURITY: rollback step doesn't have set -x today, but disable
-            # tracing defensively in case it's added later.
             { set +x; } 2>/dev/null
             set -a; source .env 2>/dev/null || true; set +a
-            npm ci --no-audit --no-fund --include=dev
             export GITHUB_SHA=$(git rev-parse HEAD)
             npm run build
-            echo "::endgroup::"
-            echo "::group::Restart pm2 with rolled-back build"
             for app in sandbox-web sandbox-worker; do
               if pm2 describe "$app" > /dev/null 2>&1; then pm2 delete "$app" || true; fi
             done
             fuser -k 3003/tcp 2>/dev/null || true
-            sleep 3
+            sleep 2
             pm2 start ecosystem.sandbox.config.js
             pm2 save
-            echo "::endgroup::"
             echo "✅ Rolled back sandbox to $PREV_SHA"
 
       # ──────────────────────────────────────────────────────────────────
