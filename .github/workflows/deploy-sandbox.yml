@@ -10,12 +10,20 @@ concurrency:
   group: deploy-sandbox
   cancel-in-progress: false
 
+env:
+  APP_DIR: /home/itarang-sandbox/htdocs/sandbox.itarang.com
+  LOG_DIR: /home/itarang-sandbox/deploy-logs
+  CHROMIUM_MARKER: /home/itarang-sandbox/.chromium-libs-installed
+  HEALTH_URL: http://127.0.0.1:3003/api/health
+  PM2_APPS: "sandbox-web sandbox-worker"
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # ──────────────────────────────────────────────────────────────────
-      # 1. Slack notify start (no-op if SLACK_WEBHOOK_URL secret missing)
+      # 1. Slack notify start
       # ──────────────────────────────────────────────────────────────────
       - name: Slack notify start
         if: env.SLACK_WEBHOOK_URL != ''
@@ -28,211 +36,127 @@ jobs:
             "$SLACK_WEBHOOK_URL" || true
 
       # ──────────────────────────────────────────────────────────────────
-      # 2. SSH deploy — pulls, runs migrations, builds, restarts pm2,
-      #    probes /api/health. Persists PREV_SHA on the VPS so the
-      #    rollback step (below) can revert if anything goes wrong.
+      # 2a. Sync code, capture PREV_SHA, write .env
       # ──────────────────────────────────────────────────────────────────
-      - name: SSH deploy to Hostinger VPS (sandbox)
-        id: ssh_deploy
+      - name: Sync code & write .env
+        id: sync
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SANDBOX_VPS_HOST }}
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
-          command_timeout: 25m
-          script_stop: true
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR
           script: |
             set -eo pipefail
-            # ── DIAGNOSTIC: drone-ssh has been swallowing stderr on script
-            # failure. Force every command to echo (set -x) and merge stderr
-            # into stdout so the failing line shows up in the Actions log.
             exec 2>&1
-            set -x
-            APP_DIR=/home/itarang-sandbox/htdocs/sandbox.itarang.com
+            mkdir -p "$LOG_DIR"
+            LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-sync.log"
+            echo "Logging to: $LOG_FILE"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+
+            echo ">>> [$(date -u +%H:%M:%S)] Sync starting"
             cd "$APP_DIR"
 
-            echo "::group::Capture PREV_SHA for rollback"
             PREV_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
             echo "$PREV_SHA" > /tmp/itarang-sandbox-prev-sha
             echo "PREV_SHA=$PREV_SHA"
-            echo "::endgroup::"
 
-            echo "::group::Pull latest main"
+            echo "--- git fetch & reset ---"
             git fetch origin main
             git reset --hard origin/main
+            NEW_SHA=$(git rev-parse HEAD)
+            echo "NEW_SHA=$NEW_SHA"
             git log -1 --oneline
-            echo "::endgroup::"
 
-            echo "::group::Write .env from SANDBOX_ENV_FILE_B64"
+            echo "--- writing .env ---"
             umask 077
-            # Strip CR — secret was originally created from a CRLF (Windows
-            # line-ending) .env file, which breaks `source .env` with the
-            # cryptic "$'\r': command not found" error.
             echo "${{ secrets.SANDBOX_ENV_FILE_B64 }}" | base64 -d | tr -d '\r' > .env
             chmod 600 .env
             echo "Wrote .env ($(wc -l < .env) lines, $(wc -c < .env) bytes)"
-            # Quick sanity check — the first non-comment line should look like KEY=value
-            head -5 .env | grep -v '^#' | head -1 | sed 's/=.*/=<redacted>/'
-            echo "::endgroup::"
 
-            echo "::group::Install/verify Chromium system libs"
+            echo "<<< [$(date -u +%H:%M:%S)] Sync done"
+
+      # ──────────────────────────────────────────────────────────────────
+      # 2b. Install system deps (Chromium libs) only if marker is missing
+      # ──────────────────────────────────────────────────────────────────
+      - name: Install system deps (Chromium libs)
+        id: sysdeps
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          command_timeout: 10m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR,CHROMIUM_MARKER
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-sysdeps.log"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+
+            echo ">>> [$(date -u +%H:%M:%S)] Sysdeps check"
+            cd "$APP_DIR"
+
+            if [ -f "$CHROMIUM_MARKER" ]; then
+              echo "Marker present at $CHROMIUM_MARKER — skipping apt check."
+              echo "<<< [$(date -u +%H:%M:%S)] Sysdeps skipped"
+              exit 0
+            fi
+
+            echo "Marker missing — running sandbox-system-setup.sh"
             chmod +x scripts/sandbox-system-setup.sh
-            ./scripts/sandbox-system-setup.sh
-            echo "::endgroup::"
-
-            echo "::group::Install deps (incl dev for build)"
-            npm ci --no-audit --no-fund --include=dev
-            echo "::endgroup::"
-
-            # ──────────────────────────────────────────────────────────────
-            # Drizzle migrations — sandbox uses db:push (per CI/CD plan).
-            # Production uses explicit migration files in deploy-production.yml.
-            # ──────────────────────────────────────────────────────────────
-            echo "::group::Drizzle db:push (sandbox migration)"
-            # Load DATABASE_URL etc. from the .env we just wrote.
-            # SECURITY: disable command-tracing while sourcing .env so secret
-            # values don't get printed to the Actions log.
-            { set +x; } 2>/dev/null
-            set -a; source .env; set +a
-            set -x
-            # Drizzle-kit asks interactive create-vs-rename questions when it
-            # finds ambiguous schema diffs. CI has no TTY, so it would hang
-            # forever. Pipe Enter to it — that always selects the highlighted
-            # default option, which for new tables is "create table".
-            yes "" | npm run db:push -- --force || {
-              echo "::error::db:push failed — schema mismatch or DB unreachable"
-              exit 1
-            }
-            echo "::endgroup::"
-
-            ARCHIVE_DIR=/home/itarang-sandbox/static_archive
-            ARCHIVE_KEEP=10
-
-            echo "::group::Snapshot previous .next/static into archive ring"
-            mkdir -p "$ARCHIVE_DIR"
-            OLD_BUILD_ID=""
-            if [ -f .next/BUILD_ID ]; then OLD_BUILD_ID=$(cat .next/BUILD_ID); fi
-            if [ -n "$OLD_BUILD_ID" ] && [ -d .next/static ]; then
-              rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID"
-              cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"
-              echo "Archived $OLD_BUILD_ID ($(find "$ARCHIVE_DIR/$OLD_BUILD_ID" -type f | wc -l) files)"
-            else
-              echo "No previous BUILD_ID/.next/static — first build or clean checkout"
-            fi
-            rm -rf .next_prev_static
-            echo "::endgroup::"
-
-            echo "::group::Build (next build)"
-            mkdir -p logs
-            export GITHUB_SHA=$(git rev-parse HEAD)
-            echo "Building with GITHUB_SHA=$GITHUB_SHA"
-            npm run build
-            echo "::endgroup::"
-
-            echo "::group::Merge archived chunks into new build (stale-tab grace period)"
-            NEW_BUILD_ID=""
-            if [ -f .next/BUILD_ID ]; then NEW_BUILD_ID=$(cat .next/BUILD_ID); fi
-            if [ -d "$ARCHIVE_DIR" ]; then
-              for archived in "$ARCHIVE_DIR"/*/; do
-                [ -d "$archived" ] || continue
-                archived_id=$(basename "$archived")
-                if [ "$archived_id" = "$NEW_BUILD_ID" ]; then continue; fi
-                for sub in chunks css media; do
-                  if [ -d "$archived/$sub" ]; then
-                    mkdir -p ".next/static/$sub"
-                    rsync -a --ignore-existing "$archived/$sub/" ".next/static/$sub/"
-                  fi
-                done
-              done
-              echo "After merge: $(find .next/static -type f | wc -l) files in .next/static"
-            fi
-            echo "::endgroup::"
-
-            echo "::group::Prune archive ring (keep $ARCHIVE_KEEP newest)"
-            if [ -d "$ARCHIVE_DIR" ]; then
-              ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf
-              echo "Archive now holds $(ls -1d "$ARCHIVE_DIR"/*/ 2>/dev/null | wc -l) builds"
-            fi
-            echo "::endgroup::"
-
-            echo "::group::Verify every chunk referenced by the build manifest exists on disk"
-            node scripts/verify-chunk-manifest.js
-            echo "::endgroup::"
-
-            echo "::group::Stop existing pm2 apps + guarantee port 3003 is free"
-            for app in sandbox-web sandbox-worker; do
-              if pm2 describe "$app" > /dev/null 2>&1; then
-                pm2 delete "$app" 2>/dev/null || true
-              fi
-            done
-            fuser -k 3003/tcp 2>/dev/null || true
-            sleep 3
-            echo "Port 3003 cleared"
-            echo "::endgroup::"
-
-            echo "::group::Start pm2 apps fresh"
-            pm2 start ecosystem.sandbox.config.js
-            pm2 save
-            pm2 ls
-            echo "::endgroup::"
-
-            # ──────────────────────────────────────────────────────────────
-            # Health check — was a simple curl /; now probes /api/health
-            # which checks DB + IoT bridge + sandbox.
-            # ──────────────────────────────────────────────────────────────
-            echo "::group::Health check 127.0.0.1:3003/api/health"
-            HTTP=000
-            BODY=""
-            for i in $(seq 1 30); do
-              sleep 2
-              BODY=$(curl -s -m 5 http://127.0.0.1:3003/api/health || echo "")
-              HTTP=$(printf '%s' "$BODY" | tail -1 >/dev/null; curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:3003/api/health || echo 000)
-              if [ "$HTTP" = "200" ]; then
-                echo "HTTP $HTTP after ${i} polls"
-                break
-              fi
-            done
-            if [ "$HTTP" = "200" ]; then
-              echo "✅ /api/health returned 200"
-              echo "$BODY" | head -c 800
-            else
-              echo "❌ /api/health returned $HTTP after 60s"
-              echo "Body (truncated):"
-              echo "$BODY" | head -c 1500
-              echo ""
-              echo '--- sandbox-web logs ---'
-              pm2 logs sandbox-web --lines 40 --nostream || true
-              echo '--- sandbox-worker logs ---'
-              pm2 logs sandbox-worker --lines 20 --nostream || true
-              exit 1
-            fi
-            echo "::endgroup::"
-
-            echo "::group::Verify served BUILD_ID matches disk"
-            DISK_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null || echo "missing")
-            HTML=$(curl -s -L http://127.0.0.1:3003/login 2>/dev/null || true)
-            SERVED_BUILD_ID=$(printf '%s' "$HTML" | grep -oE '"b":"[a-f0-9]+"' | head -1 | cut -d'"' -f4 || true)
-            echo "Disk BUILD_ID:   $DISK_BUILD_ID"
-            echo "Served BUILD_ID: ${SERVED_BUILD_ID:-<not found>}"
-            if [ -n "$SERVED_BUILD_ID" ] && [ "$DISK_BUILD_ID" != "$SERVED_BUILD_ID" ]; then
-              echo "❌ BUILD_ID mismatch — running process is stale"
-              exit 1
-            fi
-            echo "::endgroup::"
-
-            echo "::group::Verify served assets reachable (HEAD on every chunk in served HTML)"
-            PORT=3003 node scripts/verify-served-assets.js
-            echo "::endgroup::"
-
-            echo "✅ Sandbox deploy complete: $(git rev-parse --short HEAD)"
+            time ./scripts/sandbox-system-setup.sh
+            touch "$CHROMIUM_MARKER"
+            echo "<<< [$(date -u +%H:%M:%S)] Sysdeps installed"
 
       # ──────────────────────────────────────────────────────────────────
-      # 3. Rollback step — only runs if step 2 failed. Reverts to the
-      #    PREV_SHA we wrote to /tmp at the start of the deploy.
+      # 2c. npm ci (skip if package-lock unchanged)
       # ──────────────────────────────────────────────────────────────────
-      - name: SSH rollback (only on deploy failure)
-        if: failure() && steps.ssh_deploy.outcome == 'failure'
+      - name: Install npm deps
+        id: npm
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          command_timeout: 10m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-npm.log"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+
+            echo ">>> [$(date -u +%H:%M:%S)] npm phase"
+            cd "$APP_DIR"
+
+            LOCK_HASH=$(sha256sum package-lock.json | cut -d' ' -f1)
+            LAST_HASH=$(cat .last-npm-install-hash 2>/dev/null || echo "")
+            echo "lock-hash=$LOCK_HASH last-hash=$LAST_HASH"
+
+            if [ "$LOCK_HASH" = "$LAST_HASH" ] && [ -d node_modules ]; then
+              echo "package-lock.json unchanged — skipping npm ci"
+              echo "<<< [$(date -u +%H:%M:%S)] npm skipped"
+              exit 0
+            fi
+
+            echo "--- running npm ci ---"
+            time npm ci --no-audit --no-fund --include=dev
+            echo "$LOCK_HASH" > .last-npm-install-hash
+            echo "<<< [$(date -u +%H:%M:%S)] npm done"
+
+      # ──────────────────────────────────────────────────────────────────
+      # 2d. Build (next build)
+      # ──────────────────────────────────────────────────────────────────
+      - name: Build (next build)
+        id: build
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SANDBOX_VPS_HOST }}
@@ -241,61 +165,230 @@ jobs:
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
           command_timeout: 15m
           script_stop: false
+          envs: APP_DIR,LOG_DIR
           script: |
             set -eo pipefail
-            APP_DIR=/home/itarang-sandbox/htdocs/sandbox.itarang.com
+            exec 2>&1
+            LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-build.log"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+
+            echo ">>> [$(date -u +%H:%M:%S)] Build starting"
+            cd "$APP_DIR"
+            mkdir -p logs
+
+            # Load .env without leaking values to the trace
+            set -a; source .env; set +a
+
+            export GITHUB_SHA=$(git rev-parse HEAD)
+            echo "Building with GITHUB_SHA=$GITHUB_SHA"
+            echo "Node: $(node -v)  npm: $(npm -v)"
+            echo "Free mem before build:"; free -m || true
+
+            # Force non-interactive output and disable Next.js telemetry banner
+            export CI=1
+            export NEXT_TELEMETRY_DISABLED=1
+
+            time npm run build
+            echo "Free mem after build:"; free -m || true
+            echo "<<< [$(date -u +%H:%M:%S)] Build done"
+
+      # ──────────────────────────────────────────────────────────────────
+      # 2e. Restart pm2
+      # ──────────────────────────────────────────────────────────────────
+      - name: Restart pm2
+        id: pm2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR,PM2_APPS
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-pm2.log"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+
+            echo ">>> [$(date -u +%H:%M:%S)] pm2 restart"
+            cd "$APP_DIR"
+
+            for app in $PM2_APPS; do
+              if pm2 describe "$app" > /dev/null 2>&1; then
+                echo "Deleting existing pm2 app: $app"
+                pm2 delete "$app" 2>/dev/null || true
+              else
+                echo "No existing pm2 app: $app"
+              fi
+            done
+
+            fuser -k 3003/tcp 2>/dev/null || true
+            sleep 2
+
+            pm2 start ecosystem.sandbox.config.js
+            pm2 save
+            pm2 ls
+            echo "<<< [$(date -u +%H:%M:%S)] pm2 restarted"
+
+      # ──────────────────────────────────────────────────────────────────
+      # 2f. Health check (gates rollback)
+      # ──────────────────────────────────────────────────────────────────
+      - name: Health check
+        id: health
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR,HEALTH_URL
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-health.log"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+
+            echo ">>> [$(date -u +%H:%M:%S)] Health check"
+            HTTP=000
+            for i in $(seq 1 60); do
+              sleep 1
+              HTTP=$(curl -s -o /dev/null -m 5 -w "%{http_code}" "$HEALTH_URL" || echo 000)
+              # Print a heartbeat every 5s so the log shows progress
+              if [ $((i % 5)) -eq 0 ] || [ "$HTTP" = "200" ]; then
+                echo "  t=${i}s http=$HTTP"
+              fi
+              if [ "$HTTP" = "200" ]; then
+                echo "HTTP 200 after ${i}s"
+                break
+              fi
+            done
+
+            if [ "$HTTP" != "200" ]; then
+              echo "❌ $HEALTH_URL returned $HTTP after 60s"
+              echo "--- pm2 ls ---"
+              pm2 ls || true
+              echo "--- sandbox-web (last 80 lines) ---"
+              pm2 logs sandbox-web --lines 80 --nostream || true
+              echo "--- sandbox-worker (last 40 lines) ---"
+              pm2 logs sandbox-worker --lines 40 --nostream || true
+              exit 1
+            fi
+
+            echo "--- /api/health body ---"
+            curl -s "$HEALTH_URL" | head -c 800
+            echo ""
+            echo "<<< [$(date -u +%H:%M:%S)] Healthy"
+
+      # ──────────────────────────────────────────────────────────────────
+      # 3. On failure: dump everything useful to the GitHub Actions log
+      #    (recent deploy logs, pm2 status, pm2 logs, disk, memory)
+      # ──────────────────────────────────────────────────────────────────
+      - name: Collect failure logs from VPS
+        if: failure()
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR
+          script: |
+            exec 2>&1
+            echo ">>> Last 10 deploy log files:"
+            ls -lt "$LOG_DIR" 2>/dev/null | head -11 || echo "(no logs)"
+            echo ""
+            echo ">>> Most recent deploy log (last 200 lines):"
+            LATEST=$(ls -t "$LOG_DIR"/*.log 2>/dev/null | head -1 || echo "")
+            if [ -n "$LATEST" ]; then
+              echo "FILE: $LATEST"
+              tail -200 "$LATEST"
+            fi
+            echo ""
+            echo ">>> pm2 status:"
+            pm2 ls || true
+            echo ""
+            echo ">>> sandbox-web logs (last 100 lines):"
+            pm2 logs sandbox-web --lines 100 --nostream || true
+            echo ""
+            echo ">>> sandbox-worker logs (last 50 lines):"
+            pm2 logs sandbox-worker --lines 50 --nostream || true
+            echo ""
+            echo ">>> Disk free:"
+            df -h "$APP_DIR" || true
+            echo ""
+            echo ">>> Memory:"
+            free -m || true
+
+      # ──────────────────────────────────────────────────────────────────
+      # 4. Rollback (only on failure)
+      # ──────────────────────────────────────────────────────────────────
+      - name: SSH rollback (only on deploy failure)
+        if: failure()
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          command_timeout: 15m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            mkdir -p "$LOG_DIR"
+            LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-rollback.log"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+
+            echo ">>> [$(date -u +%H:%M:%S)] Rollback starting"
             cd "$APP_DIR"
             PREV_SHA=$(cat /tmp/itarang-sandbox-prev-sha 2>/dev/null || echo "")
             CURRENT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
-            if [ -z "$PREV_SHA" ]; then
-              echo "::warning::No PREV_SHA recorded — manual rollback required"
+            echo "PREV_SHA=$PREV_SHA  CURRENT_SHA=$CURRENT_SHA"
+
+            if [ -z "$PREV_SHA" ] || [ "$PREV_SHA" = "$CURRENT_SHA" ]; then
+              echo "No rollback needed (PREV_SHA missing or already at PREV_SHA)"
               exit 0
             fi
-            if [ "$PREV_SHA" = "$CURRENT_SHA" ]; then
-              echo "Already at PREV_SHA $PREV_SHA — no rollback needed"
-              exit 0
-            fi
-            echo "::group::Rolling back to $PREV_SHA"
+
+            echo "Rolling back to $PREV_SHA"
             git reset --hard "$PREV_SHA"
-            git log -1 --oneline
-            echo "::endgroup::"
-            echo "::group::Reinstall + rebuild for rollback"
-            # Defensive: prior deploy may have left CRLF in .env. Strip it
-            # before sourcing so we don't silently lose env vars.
             if [ -f .env ]; then sed -i 's/\r$//' .env; fi
-            # SECURITY: rollback step doesn't have set -x today, but disable
-            # tracing defensively in case it's added later.
-            { set +x; } 2>/dev/null
             set -a; source .env 2>/dev/null || true; set +a
-            npm ci --no-audit --no-fund --include=dev
             export GITHUB_SHA=$(git rev-parse HEAD)
-            npm run build
-            echo "::endgroup::"
-            echo "::group::Restart pm2 with rolled-back build"
+            export CI=1
+            export NEXT_TELEMETRY_DISABLED=1
+            time npm run build
+
             for app in sandbox-web sandbox-worker; do
               if pm2 describe "$app" > /dev/null 2>&1; then pm2 delete "$app" || true; fi
             done
             fuser -k 3003/tcp 2>/dev/null || true
-            sleep 3
+            sleep 2
             pm2 start ecosystem.sandbox.config.js
             pm2 save
-            echo "::endgroup::"
-            echo "✅ Rolled back sandbox to $PREV_SHA"
+            echo "<<< [$(date -u +%H:%M:%S)] Rolled back to $PREV_SHA"
 
       # ──────────────────────────────────────────────────────────────────
-      # 4. Slack notify result — runs in all cases (success/fail/rollback)
+      # 5. Slack notify result
       # ──────────────────────────────────────────────────────────────────
       - name: Slack notify result
         if: always() && env.SLACK_WEBHOOK_URL != ''
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          if [ "${{ steps.ssh_deploy.outcome }}" = "success" ]; then
+          if [ "${{ job.status }}" = "success" ]; then
             ICON=":white_check_mark:"
             STATUS="*succeeded*"
           else
             ICON=":x:"
-            STATUS="*FAILED* — rollback ${{ job.status }}"
+            STATUS="*FAILED*"
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           curl -sS -X POST -H 'Content-Type: application/json' \
