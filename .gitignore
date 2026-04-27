@@ -50,8 +50,19 @@ next-env.d.ts
 sandbox.env
 node_modules
 
-# claude code — local, per-developer settings (must not be committed)
-.claude/
+# claude code — local per-developer settings stay out of git, but
+# project-level skills under .claude/skills/ are shared with the team.
+.claude/*
+!.claude/skills/
+
+# db-drift script staging dir (temporary file used to import main:src/lib/db/schema.ts)
+.db-drift-tmp/
+
+# local tooling artifacts
+.playwright-mcp/
+/tsc-errors.log
+/dealer-portal-after-login.png
+*.bak
 
 prod.txt
 env.txt

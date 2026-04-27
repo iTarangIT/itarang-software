@@ -30,13 +30,26 @@ const globalForIotDb = globalThis as unknown as {
   iotPgClient: ReturnType<typeof postgres> | undefined;
 };
 
+// SSL mode is driven by the URL's sslmode parameter (sslmode=require /
+// =disable / =prefer). Hardcoding ssl: "require" here used to override the
+// URL and broke connections to a non-SSL VPS Postgres in sandbox.
+const sslmode = (() => {
+  try {
+    return new URL(connectionString).searchParams.get("sslmode") ?? "prefer";
+  } catch {
+    return "prefer";
+  }
+})();
+const sslOption: "require" | "prefer" | false =
+  sslmode === "disable" ? false : sslmode === "require" ? "require" : "prefer";
+
 // Smaller pool than the CRM client — risk-engine reads are bursty.
 // `prepare: false` aligns with the CRM client (Supabase pooler compatibility),
 // but our IoT PG isn't behind a pooler — kept for code-style parity.
 const queryClient =
   globalForIotDb.iotPgClient ??
   postgres(connectionString, {
-    ssl: "require",
+    ssl: sslOption,
     prepare: false,
     max: 5,
     idle_timeout: 30,
