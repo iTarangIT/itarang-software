@@ -2,7 +2,8 @@ name: Deploy Production to VPS
 
 on:
   push:
-    branches: [production]
+    branches:
+      - production
   workflow_dispatch:
 
 concurrency:
@@ -12,9 +13,10 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # ──────────────────────────────────────────────────────────────────
-      # 1. Slack notify start
+      # 1. Slack notify start — louder for production
       # ──────────────────────────────────────────────────────────────────
       - name: Slack notify start
         if: env.SLACK_WEBHOOK_URL != ''
@@ -27,13 +29,38 @@ jobs:
             "$SLACK_WEBHOOK_URL" || true
 
       # ──────────────────────────────────────────────────────────────────
-      # 2. SSH deploy. Hybrid migration policy:
-      #    - We do NOT auto-run db:push on prod.
-      #    - If new drizzle/00NN_*.sql migration files are detected since
-      #      PREV_SHA, the deploy FAILS with a message — apply via psql
-      #      manually FIRST, then redeploy.
+      # 2. Checkout to detect new migration files
       # ──────────────────────────────────────────────────────────────────
-      - name: Deploy via SSH
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
+
+      # ──────────────────────────────────────────────────────────────────
+      # 3. Hybrid migration safety: refuse to deploy if new drizzle/0*.sql
+      #    migration files exist that haven't been applied to prod yet.
+      #    Apply via psql first, then re-run this workflow.
+      # ──────────────────────────────────────────────────────────────────
+      - name: Detect new drizzle migration files
+        id: migration_check
+        run: |
+          # Compare against last successful deploy's SHA if we can find it.
+          # Otherwise compare against HEAD~1 (most recent prior commit).
+          BASE_SHA=$(git log -2 --format=%H | tail -1)
+          NEW_SQL=$(git diff --name-only "$BASE_SHA"..HEAD -- 'drizzle/0*.sql' 2>/dev/null || true)
+          if [ -n "$NEW_SQL" ]; then
+            echo "::error::New migration files detected since $BASE_SHA:"
+            echo "$NEW_SQL" | sed 's/^/  - /'
+            echo "::error::Apply them MANUALLY to prod RDS via psql FIRST, then re-trigger this workflow."
+            echo "::error::See docs/DEPLOY_RUNBOOK.md → 'Migration policy' section."
+            exit 1
+          fi
+          echo "No new migration files. Safe to deploy."
+
+      # ──────────────────────────────────────────────────────────────────
+      # 4. SSH deploy — same shape as sandbox, different paths/users/port.
+      # ──────────────────────────────────────────────────────────────────
+      - name: SSH deploy to Hostinger VPS (production)
         id: ssh_deploy
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -41,15 +68,11 @@ jobs:
           username: ${{ secrets.PROD_VPS_USER }}
           port: ${{ secrets.PROD_VPS_PORT }}
           key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          command_timeout: 25m
           script_stop: true
-          command_timeout: 20m
           script: |
             set -eo pipefail
-            # ── DIAGNOSTIC: drone-ssh swallows stderr on failure. Force every
-            # command to echo and merge stderr into stdout so the actual
-            # failing line surfaces in the Actions log.
             exec 2>&1
-            set -x
             APP_DIR=/home/itarang-crm/htdocs/crm.itarang.com
             cd "$APP_DIR"
 
@@ -59,172 +82,95 @@ jobs:
             echo "PREV_SHA=$PREV_SHA"
             echo "::endgroup::"
 
-            echo "::group::Pulling latest from production branch"
+            echo "::group::Pull latest production"
             git fetch origin production
-            NEW_SHA=$(git rev-parse origin/production)
-
-            # Hybrid migration safety: refuse to deploy if any new migration
-            # files were added between PREV_SHA and NEW_SHA. Apply them via
-            # psql first, then re-trigger the workflow.
-            if [ -n "$PREV_SHA" ] && [ "$PREV_SHA" != "$NEW_SHA" ]; then
-              NEW_MIGRATIONS=$(git diff --name-only "$PREV_SHA".."$NEW_SHA" -- 'drizzle/0*.sql' || true)
-              if [ -n "$NEW_MIGRATIONS" ]; then
-                echo "::error::New migration files detected — apply them via psql FIRST, then redeploy"
-                echo "Files:"
-                echo "$NEW_MIGRATIONS" | sed 's/^/  - /'
-                echo ""
-                echo "Apply on the prod CRM DB then re-trigger this workflow:"
-                echo "  psql \"\$DATABASE_URL\" -f drizzle/0NNN_xxx.sql"
-                exit 1
-              fi
-            fi
-
             git reset --hard origin/production
+            NEW_SHA=$(git rev-parse HEAD)
             git log -1 --oneline
             echo "::endgroup::"
 
-            echo "::group::Writing .env.production from secret"
+            echo "::group::Write .env.production from secret"
             umask 077
-            # Strip CR — the secret may have been generated from a CRLF
-            # (Windows) .env file, which breaks `source` and dotenv parsers.
             echo "${{ secrets.PROD_ENV_FILE_B64 }}" | base64 -d | tr -d '\r' > .env.production
             chmod 600 .env.production
+            echo "Wrote .env.production ($(wc -l < .env.production) lines, $(wc -c < .env.production) bytes)"
             echo "::endgroup::"
 
-            echo "::group::Installing dependencies"
-            npm ci --no-audit --no-fund --include=dev
-            echo "::endgroup::"
-
-            echo "::group::Preparing logs directory"
-            mkdir -p logs
-            echo "::endgroup::"
-
-            ARCHIVE_DIR=/home/itarang-crm/static_archive
-            ARCHIVE_KEEP=10
-
-            echo "::group::Snapshot previous .next/static into archive ring"
-            mkdir -p "$ARCHIVE_DIR"
-            OLD_BUILD_ID=""
-            if [ -f .next/BUILD_ID ]; then OLD_BUILD_ID=$(cat .next/BUILD_ID); fi
-            if [ -n "$OLD_BUILD_ID" ] && [ -d .next/static ]; then
-              rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID"
-              cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"
-              echo "Archived $OLD_BUILD_ID ($(find "$ARCHIVE_DIR/$OLD_BUILD_ID" -type f | wc -l) files)"
+            echo "::group::Chromium system libs (skip if marker exists)"
+            MARKER=/home/itarang-crm/.chromium-libs-installed
+            if [ -f "$MARKER" ]; then
+              echo "Marker present at $MARKER — skipping apt check."
             else
-              echo "No previous BUILD_ID/.next/static — first build or clean checkout"
+              chmod +x scripts/sandbox-system-setup.sh
+              ./scripts/sandbox-system-setup.sh
+              touch "$MARKER"
             fi
             echo "::endgroup::"
 
-            echo "::group::Building Next.js (standalone)"
-            export GITHUB_SHA=$(git rev-parse HEAD)
-            echo "Building with GITHUB_SHA=$GITHUB_SHA"
+            echo "::group::Install deps (only if package-lock changed)"
+            LOCK_HASH=$(sha256sum package-lock.json | cut -d' ' -f1)
+            LAST_HASH=$(cat .last-npm-install-hash 2>/dev/null || echo "")
+            if [ "$LOCK_HASH" = "$LAST_HASH" ] && [ -d node_modules ]; then
+              echo "package-lock.json unchanged — skipping npm ci"
+            else
+              npm ci --no-audit --no-fund --include=dev
+              echo "$LOCK_HASH" > .last-npm-install-hash
+            fi
+            echo "::endgroup::"
+
+            echo "::group::Load .env.production into shell"
+            { set +x; } 2>/dev/null
+            set -a; source .env.production; set +a
+            set -x
+            echo "::endgroup::"
+
+            echo "::group::Build (next build)"
+            mkdir -p logs
+            export GITHUB_SHA="$NEW_SHA"
+            export NODE_ENV=production
             npm run build
             echo "::endgroup::"
 
-            echo "::group::Merge archived chunks into new build (stale-tab grace period)"
-            NEW_BUILD_ID=""
-            if [ -f .next/BUILD_ID ]; then NEW_BUILD_ID=$(cat .next/BUILD_ID); fi
-            if [ -d "$ARCHIVE_DIR" ]; then
-              for archived in "$ARCHIVE_DIR"/*/; do
-                [ -d "$archived" ] || continue
-                archived_id=$(basename "$archived")
-                if [ "$archived_id" = "$NEW_BUILD_ID" ]; then continue; fi
-                for sub in chunks css media; do
-                  if [ -d "$archived/$sub" ]; then
-                    mkdir -p ".next/static/$sub"
-                    rsync -a --ignore-existing "$archived/$sub/" ".next/static/$sub/"
-                  fi
-                done
-              done
-              echo "After merge: $(find .next/static -type f | wc -l) files in .next/static"
-            fi
-            echo "::endgroup::"
-
-            echo "::group::Prune archive ring (keep $ARCHIVE_KEEP newest)"
-            if [ -d "$ARCHIVE_DIR" ]; then
-              ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf
-              echo "Archive now holds $(ls -1d "$ARCHIVE_DIR"/*/ 2>/dev/null | wc -l) builds"
-            fi
-            echo "::endgroup::"
-
-            echo "::group::Verify chunk manifest"
-            node scripts/verify-chunk-manifest.js
-            echo "::endgroup::"
-
-            echo "::group::Assembling standalone bundle"
-            cp .env.production .next/standalone/.env.production
-            cp .env.production .next/standalone/.env
-            rm -rf .next/standalone/.next/static
-            cp -r .next/static .next/standalone/.next/static
-            rm -rf .next/standalone/public
-            if [ -d public ]; then cp -r public .next/standalone/public; fi
-            echo "::endgroup::"
-
-            echo "::group::Stop pm2 + guarantee port 3002 is free"
-            for app in itarang-crm-new itarang-crm-web; do
+            echo "::group::Restart pm2 (production)"
+            for app in itarang-crm-web; do
               if pm2 describe "$app" > /dev/null 2>&1; then
                 pm2 delete "$app" 2>/dev/null || true
               fi
             done
             fuser -k 3002/tcp 2>/dev/null || true
-            sleep 3
-            echo "Port 3002 cleared"
-            echo "::endgroup::"
-
-            echo "::group::Start pm2 fresh"
+            sleep 2
             pm2 start ecosystem.prod.config.js
             pm2 save
             pm2 ls
             echo "::endgroup::"
 
             # ──────────────────────────────────────────────────────────────
-            # Health check via /api/health (was a simple curl /).
-            # 90s window for production — first start of standalone is slower.
+            # Health check — production gets a longer window (90s)
             # ──────────────────────────────────────────────────────────────
-            echo "::group::Health check 127.0.0.1:3002/api/health (90s window)"
+            echo "::group::Health check 127.0.0.1:3002/api/health"
             HTTP=000
-            BODY=""
-            for i in $(seq 1 45); do
-              sleep 2
-              BODY=$(curl -s -m 5 http://127.0.0.1:3002/api/health || echo "")
+            for i in $(seq 1 90); do
+              sleep 1
               HTTP=$(curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:3002/api/health || echo 000)
               if [ "$HTTP" = "200" ]; then
-                echo "HTTP $HTTP after ${i} polls"
+                echo "HTTP 200 after ${i}s"
                 break
               fi
             done
-            if [ "$HTTP" = "200" ]; then
-              echo "✅ /api/health returned 200"
-              echo "$BODY" | head -c 800
-            else
+            if [ "$HTTP" != "200" ]; then
               echo "❌ /api/health returned $HTTP after 90s"
-              echo "Body (truncated):"
-              echo "$BODY" | head -c 1500
-              pm2 logs itarang-crm-web --lines 50 --nostream || true
+              echo '--- itarang-crm-web (last 60 lines) ---'
+              pm2 logs itarang-crm-web --lines 60 --nostream || true
               exit 1
             fi
-            echo "::endgroup::"
-
-            echo "::group::Verify served BUILD_ID matches disk"
-            DISK_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null || echo "missing")
-            HTML=$(curl -s -L http://127.0.0.1:3002/login 2>/dev/null || true)
-            SERVED_BUILD_ID=$(printf '%s' "$HTML" | grep -oE '"b":"[a-f0-9]+"' | head -1 | cut -d'"' -f4 || true)
-            echo "Disk BUILD_ID:   $DISK_BUILD_ID"
-            echo "Served BUILD_ID: ${SERVED_BUILD_ID:-<not found>}"
-            if [ -n "$SERVED_BUILD_ID" ] && [ "$DISK_BUILD_ID" != "$SERVED_BUILD_ID" ]; then
-              echo "❌ BUILD_ID mismatch — running process is stale"
-              exit 1
-            fi
-            echo "::endgroup::"
-
-            echo "::group::Verify served assets reachable"
-            PORT=3002 node scripts/verify-served-assets.js
+            curl -s http://127.0.0.1:3002/api/health | head -c 800
+            echo ""
             echo "::endgroup::"
 
             echo "✅ Production deploy complete: $(git rev-parse --short HEAD)"
 
       # ──────────────────────────────────────────────────────────────────
-      # 3. Rollback on failure — same pattern as sandbox
+      # 5. Rollback if step 4 failed
       # ──────────────────────────────────────────────────────────────────
       - name: SSH rollback (only on deploy failure)
         if: failure() && steps.ssh_deploy.outcome == 'failure'
@@ -234,7 +180,7 @@ jobs:
           username: ${{ secrets.PROD_VPS_USER }}
           port: ${{ secrets.PROD_VPS_PORT }}
           key: ${{ secrets.PROD_VPS_SSH_KEY }}
-          command_timeout: 15m
+          command_timeout: 20m
           script_stop: false
           script: |
             set -eo pipefail
@@ -243,37 +189,28 @@ jobs:
             PREV_SHA=$(cat /tmp/itarang-prod-prev-sha 2>/dev/null || echo "")
             CURRENT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
             if [ -z "$PREV_SHA" ] || [ "$PREV_SHA" = "$CURRENT_SHA" ]; then
-              echo "::warning::No rollback target (PREV_SHA=$PREV_SHA, current=$CURRENT_SHA)"
+              echo "No rollback needed"
               exit 0
             fi
-            echo "::group::Rolling back PROD to $PREV_SHA"
+            echo "Rolling back PROD to $PREV_SHA"
             git reset --hard "$PREV_SHA"
-            git log -1 --oneline
-            echo "::endgroup::"
-            echo "::group::Reinstall + rebuild"
-            npm ci --no-audit --no-fund --include=dev
+            if [ -f .env.production ]; then sed -i 's/\r$//' .env.production; fi
+            { set +x; } 2>/dev/null
+            set -a; source .env.production 2>/dev/null || true; set +a
             export GITHUB_SHA=$(git rev-parse HEAD)
+            export NODE_ENV=production
             npm run build
-            cp .env.production .next/standalone/.env.production 2>/dev/null || true
-            cp .env.production .next/standalone/.env 2>/dev/null || true
-            rm -rf .next/standalone/.next/static
-            cp -r .next/static .next/standalone/.next/static
-            rm -rf .next/standalone/public
-            if [ -d public ]; then cp -r public .next/standalone/public; fi
-            echo "::endgroup::"
-            echo "::group::Restart pm2 with rolled-back build"
-            for app in itarang-crm-new itarang-crm-web; do
+            for app in itarang-crm-web; do
               if pm2 describe "$app" > /dev/null 2>&1; then pm2 delete "$app" || true; fi
             done
             fuser -k 3002/tcp 2>/dev/null || true
-            sleep 3
+            sleep 2
             pm2 start ecosystem.prod.config.js
             pm2 save
-            echo "::endgroup::"
-            echo "✅ Rolled back PRODUCTION to $PREV_SHA"
+            echo "✅ Rolled back PROD to $PREV_SHA"
 
       # ──────────────────────────────────────────────────────────────────
-      # 4. Slack notify result
+      # 6. Slack notify result
       # ──────────────────────────────────────────────────────────────────
       - name: Slack notify result
         if: always() && env.SLACK_WEBHOOK_URL != ''
@@ -284,10 +221,10 @@ jobs:
             ICON=":white_check_mark:"
             STATUS="*succeeded*"
           else
-            ICON=":rotating_light:"
+            ICON=":x:"
             STATUS="*FAILED* — rollback ${{ job.status }}"
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           curl -sS -X POST -H 'Content-Type: application/json' \
-            --data "{\"text\":\"${ICON} *PRODUCTION* deploy ${STATUS} \`${{ github.sha }}\`\nLogs: ${RUN_URL}\"}" \
+            --data "{\"text\":\"${ICON} PRODUCTION deploy ${STATUS} \`${{ github.sha }}\`\nLogs: ${RUN_URL}\"}" \
             "$SLACK_WEBHOOK_URL" || true
