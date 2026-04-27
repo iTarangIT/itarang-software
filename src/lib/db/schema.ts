@@ -6,15 +6,20 @@ import {
   boolean,
   varchar,
   decimal,
+  numeric,
   jsonb,
+  json,
   uuid,
   index,
   bigint,
-  json,
+  date,
+  serial,
+  primaryKey,
+  unique,
   customType,
 } from "drizzle-orm/pg-core";
 
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 
 // Postgres bytea column backed by Node Buffer. Used for binary blobs like
 // the DigiLocker eAadhaar PDF.
@@ -27,307 +32,273 @@ const bytea = customType<{ data: Buffer; default: false }>({
 // --- FOUNDATION ---
 
 export const users = pgTable("users", {
-  id: uuid("id").primaryKey(),
-  email: text("email").notNull().unique(),
-  name: text("name").notNull(),
-  role: varchar("role", { length: 50 }).notNull(),
-  dealer_id: varchar("dealer_id", { length: 255 }),
-  phone: text("phone"),
-  avatar_url: text("avatar_url"),
-
-  // ADD THESE 2 FIELDS
-  password_hash: text("password_hash"),
-  must_change_password: boolean("must_change_password")
-    .notNull()
-    .default(false),
-
-  is_active: boolean("is_active").notNull().default(true),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: uuid().primaryKey().notNull(),
+  email: text().notNull(),
+  name: text().notNull(),
+  role: varchar({ length: 50 }).notNull(),
+  dealerId: varchar("dealer_id", { length: 255 }),
+  phone: text(),
+  avatarUrl: text("avatar_url"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  passwordHash: text("password_hash"),
+  mustChangePassword: boolean("must_change_password").default(false).notNull(),
 });
 
 // --- PHASE 0: MVP ---
 
 export const productCategories = pgTable("product_categories", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: text("name").notNull().unique(),
-  slug: text("slug").notNull().unique(),
-  is_active: boolean("is_active").notNull().default(true),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  name: text().notNull(),
+  slug: text().notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const products = pgTable(
   "products",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    category_id: uuid("category_id")
-      .references(() => productCategories.id, { onDelete: "restrict" })
-      .notNull(),
-    name: text("name").notNull(), // e.g. "51V 105AH"
-    slug: text("slug").notNull(), // e.g. "51v-105ah"
-    voltage_v: integer("voltage_v"), // 51 / 61 / 64 / 72 (null for non-battery)
-    capacity_ah: integer("capacity_ah"), // 105 / 132 / 153 / 232 (null for non-battery)
-    sku: text("sku").notNull().unique(), // e.g. "3W-51V-105AH"
-    hsn_code: varchar("hsn_code", { length: 8 }),
-    price: integer("price"),
-    asset_type: varchar("asset_type", { length: 50 }), // Battery, Charger, SOC, Harness, Inverter
-    is_serialized: boolean("is_serialized").notNull().default(true),
-    warranty_months: integer("warranty_months").notNull().default(0),
-    status: varchar("status", { length: 20 }).notNull().default("active"),
-    sort_order: integer("sort_order").notNull().default(0),
-    is_active: boolean("is_active").notNull().default(true),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    categoryId: uuid("category_id").notNull(),
+    name: text().notNull(),
+    slug: text().notNull(),
+    voltageV: integer("voltage_v").notNull(),
+    capacityAh: integer("capacity_ah").notNull(),
+    sku: text().notNull(),
+    sortOrder: integer("sort_order").default(0).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    hsnCode: varchar("hsn_code", { length: 8 }),
+    assetType: varchar("asset_type", { length: 50 }),
+    isSerialized: boolean("is_serialized").default(true).notNull(),
+    warrantyMonths: integer("warranty_months").default(0).notNull(),
+    status: varchar({ length: 20 }).default('active').notNull(),
+    price: integer(),
   },
   (table) => ({
     catSortIdx: index("idx_products_category_sort").on(
-      table.category_id,
-      table.sort_order,
+      table.categoryId,
+      table.sortOrder,
     ),
     voltCapIdx: index("idx_products_voltage_capacity").on(
-      table.voltage_v,
-      table.capacity_ah,
+      table.voltageV,
+      table.capacityAh,
     ),
   }),
 );
 
 export const oems = pgTable("oems", {
-  id: varchar("id", { length: 255 }).primaryKey(), // OEM-YYYYMMDD-SEQ
-  business_entity_name: text("business_entity_name").notNull(),
-  gstin: varchar("gstin", { length: 15 }).notNull().unique(),
-  pan: varchar("pan", { length: 10 }),
-  address_line1: text("address_line1"),
-  address_line2: text("address_line2"),
-  city: text("city"),
-  state: text("state"),
-  pincode: varchar("pincode", { length: 6 }),
-  bank_name: text("bank_name"),
-  bank_account_number: text("bank_account_number").notNull(),
-  ifsc_code: varchar("ifsc_code", { length: 11 }).notNull(),
-  bank_proof_url: text("bank_proof_url"),
-  status: varchar("status", { length: 20 }).default("active").notNull(),
-  created_by: uuid("created_by").references(() => users.id),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  businessEntityName: text("business_entity_name").notNull(),
+  gstin: varchar({ length: 15 }).notNull(),
+  pan: varchar({ length: 10 }),
+  addressLine1: text("address_line1"),
+  addressLine2: text("address_line2"),
+  city: text(),
+  state: text(),
+  pincode: varchar({ length: 6 }),
+  bankName: text("bank_name"),
+  bankAccountNumber: text("bank_account_number").notNull(),
+  ifscCode: varchar("ifsc_code", { length: 11 }).notNull(),
+  bankProofUrl: text("bank_proof_url"),
+  status: varchar({ length: 20 }).default('active').notNull(),
+  onboardingStatus: varchar("onboarding_status", { length: 30 }).default('pending').notNull(),
+  createdBy: uuid("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const oemContacts = pgTable("oem_contacts", {
-  id: varchar("id", { length: 255 }).primaryKey(), // OEM_ID-ROLE_SEQ
-  oem_id: varchar("oem_id", { length: 255 })
-    .references(() => oems.id, { onDelete: "cascade" })
-    .notNull(),
-  contact_role: varchar("contact_role", { length: 50 }).notNull(), // sales_head, sales_manager, finance_manager
-  contact_name: text("contact_name").notNull(),
-  contact_phone: varchar("contact_phone", { length: 20 }).notNull(),
-  contact_email: text("contact_email").notNull(),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  oemId: varchar("oem_id", { length: 255 }).notNull(),
+  name: text().notNull(),
+  designation: text(),
+  email: text(),
+  phone: varchar({ length: 20 }),
+  isPrimary: boolean("is_primary").default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  contactRole: varchar("contact_role", { length: 50 }),
+  contactName: text("contact_name"),
+  contactPhone: varchar("contact_phone", { length: 20 }),
+  contactEmail: text("contact_email"),
 });
 
 export const inventory = pgTable("inventory", {
-  id: varchar("id", { length: 255 }).primaryKey(), // INV-YYYYMMDD-XXX
-  product_id: uuid("product_id").references(() => products.id),
-  oem_id: varchar("oem_id", { length: 255 })
-    .references(() => oems.id)
-    .notNull(),
-
-  // Denormalized Product Details (SOP 7.4)
-  oem_name: text("oem_name").notNull(),
-  asset_category: text("asset_category").notNull(),
-  asset_type: text("asset_type").notNull(),
-  model_type: text("model_type").notNull(),
-
-  // Serialization
-  is_serialized: boolean("is_serialized").default(true).notNull(),
-  serial_number: varchar("serial_number", { length: 255 }).unique(),
-  batch_number: varchar("batch_number", { length: 255 }),
-  iot_imei_no: varchar("iot_imei_no", { length: 255 }),
-  quantity: integer("quantity"),
-
-  // Dates
-  manufacturing_date: timestamp("manufacturing_date", {
-    withTimezone: true,
-  }).notNull(),
-  expiry_date: timestamp("expiry_date", { withTimezone: true }).notNull(),
-
-  // Financials
-  inventory_amount: decimal("inventory_amount", {
-    precision: 12,
-    scale: 2,
-  }).notNull(),
-  gst_percent: decimal("gst_percent", { precision: 5, scale: 2 }).notNull(),
-  gst_amount: decimal("gst_amount", { precision: 12, scale: 2 }).notNull(),
-  final_amount: decimal("final_amount", { precision: 12, scale: 2 }).notNull(),
-
-  // Invoicing
-  oem_invoice_number: text("oem_invoice_number").notNull(),
-  oem_invoice_date: timestamp("oem_invoice_date", {
-    withTimezone: true,
-  }).notNull(),
-  oem_invoice_url: text("oem_invoice_url"),
-
-  // Documents
-  product_manual_url: text("product_manual_url"),
-  warranty_document_url: text("warranty_document_url"),
-
-  // Status
-  status: varchar("status", { length: 20 }).default("in_transit").notNull(), // in_transit, pdi_pending, pdi_failed, available, reserved, sold, damaged, returned
-  warehouse_location: text("warehouse_location"),
-
-  // Step 4/5 integration: reservation/dispatch tracking (BRD V2)
-  dealer_id: varchar("dealer_id", { length: 255 }),
-  linked_lead_id: varchar("linked_lead_id", { length: 255 }),
-  dispatch_date: timestamp("dispatch_date", { withTimezone: true }),
-  soc_percent: decimal("soc_percent", { precision: 5, scale: 2 }),
-  soc_last_sync_at: timestamp("soc_last_sync_at", { withTimezone: true }),
-
-  // Metadata
-  created_by: uuid("created_by")
-    .references(() => users.id)
-    .notNull(),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  oemId: varchar("oem_id", { length: 255 }),
+  oemName: text("oem_name"),
+  productCatalogId: varchar("product_catalog_id", { length: 255 }),
+  hsnCode: varchar("hsn_code", { length: 8 }),
+  assetCategory: varchar("asset_category", { length: 20 }).notNull(),
+  assetType: varchar("asset_type", { length: 50 }).notNull(),
+  modelType: text("model_type").notNull(),
+  serialNumber: varchar("serial_number", { length: 255 }),
+  isSerialized: boolean("is_serialized").default(true).notNull(),
+  warrantyMonths: integer("warranty_months").default(0).notNull(),
+  status: varchar({ length: 30 }).default('in_stock').notNull(),
+  batchNumber: varchar("batch_number", { length: 100 }),
+  receivedDate: timestamp("received_date", { withTimezone: true }),
+  pdiStatus: varchar("pdi_status", { length: 20 }).default('pending'),
+  pdiCompletedAt: timestamp("pdi_completed_at", { withTimezone: true }),
+  pdiBy: uuid("pdi_by"),
+  dealerId: varchar("dealer_id", { length: 255 }),
+  allocatedToDealerAt: timestamp("allocated_to_dealer_at", { withTimezone: true }),
+  soldAt: timestamp("sold_at", { withTimezone: true }),
+  dealId: varchar("deal_id", { length: 255 }),
+  createdBy: uuid("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  productId: uuid("product_id"),
+  inventoryAmount: numeric("inventory_amount", { precision: 12, scale:  2 }),
+  gstPercent: numeric("gst_percent", { precision: 5, scale:  2 }),
+  gstAmount: numeric("gst_amount", { precision: 12, scale:  2 }),
+  finalAmount: numeric("final_amount", { precision: 12, scale:  2 }),
+  oemInvoiceNumber: text("oem_invoice_number"),
+  oemInvoiceDate: timestamp("oem_invoice_date", { withTimezone: true }),
+  oemInvoiceUrl: text("oem_invoice_url"),
+  productManualUrl: text("product_manual_url"),
+  warrantyDocumentUrl: text("warranty_document_url"),
+  warehouseLocation: text("warehouse_location"),
+  manufacturingDate: timestamp("manufacturing_date", { withTimezone: true }),
+  expiryDate: timestamp("expiry_date", { withTimezone: true }),
+  quantity: integer(),
+  iotImeiNo: varchar("iot_imei_no", { length: 255 }),
+  linkedLeadId: varchar("linked_lead_id", { length: 255 }),
+  dispatchDate: timestamp("dispatch_date", { withTimezone: true }),
+  socPercent: numeric("soc_percent", { precision: 5, scale:  2 }),
+  socLastSyncAt: timestamp("soc_last_sync_at", { withTimezone: true }),
 });
 
 // --- DEALER SALES ---
 export const leads = pgTable("leads", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  owner_name: text("owner_name"),
-  owner_contact: varchar("owner_contact", { length: 20 }),
-  full_name: text("full_name"),
-  phone: varchar("phone", { length: 20 }),
-  mobile: varchar("mobile", { length: 20 }),
-  business_name: text("business_name"),
-  owner_email: text("owner_email"),
-  state: varchar("state", { length: 100 }),
-  city: varchar("city", { length: 100 }),
-  shop_address: text("shop_address"),
-  local_address: text("local_address"),
-  permanent_address: text("permanent_address"),
-  current_address: text("current_address"),
-  vehicle_rc: varchar("vehicle_rc", { length: 50 }),
-  dob: timestamp("dob", { withTimezone: true }),
-  father_or_husband_name: text("father_or_husband_name"),
-  status: varchar("status", { length: 50 }),
-  kyc_status: varchar("kyc_status", { length: 30 }),
-  payment_method: varchar("payment_method", { length: 20 }),
-  consent_status: varchar("consent_status", { length: 30 }),
-  dealer_id: varchar("dealer_id", { length: 255 }),
-
-  // Lead source / classification
-  lead_source: varchar("lead_source", { length: 50 }),
-  lead_type: varchar("lead_type", { length: 20 }),
-  lead_status: varchar("lead_status", { length: 50 }),
-  lead_score: integer("lead_score"),
-  interest_level: varchar("interest_level", { length: 20 }),
-  reference_id: varchar("reference_id", { length: 255 }),
-  uploader_id: uuid("uploader_id"),
-
-  // Product / vehicle / asset
-  vehicle_ownership: varchar("vehicle_ownership", { length: 50 }),
-  vehicle_owner_name: text("vehicle_owner_name"),
-  vehicle_owner_phone: varchar("vehicle_owner_phone", { length: 20 }),
-  battery_type: varchar("battery_type", { length: 50 }),
-  asset_model: text("asset_model"),
-  asset_price: decimal("asset_price", { precision: 12, scale: 2 }),
-  family_members: integer("family_members"),
-  driving_experience: integer("driving_experience"),
-  is_current_same: boolean("is_current_same").default(false),
-  product_category_id: varchar("product_category_id", { length: 255 }),
-  product_type_id: varchar("product_type_id", { length: 255 }),
-  primary_product_id: uuid("primary_product_id"),
-
-  // Business
-  interested_in: jsonb("interested_in"),
-  battery_order_expected: integer("battery_order_expected"),
-  investment_capacity: decimal("investment_capacity", { precision: 12, scale: 2 }),
-  business_type: varchar("business_type", { length: 50 }),
-
-  // Qualification
-  qualified_by: uuid("qualified_by"),
-  qualified_at: timestamp("qualified_at", { withTimezone: true }),
-  qualification_notes: text("qualification_notes"),
-
-  // Conversion
-  converted_deal_id: varchar("converted_deal_id", { length: 255 }),
-  converted_at: timestamp("converted_at", { withTimezone: true }),
-
-  // AI call tracking
-  total_ai_calls: integer("total_ai_calls").default(0),
-  last_ai_call_at: timestamp("last_ai_call_at", { withTimezone: true }),
-  last_call_outcome: text("last_call_outcome"),
-  last_call_status: text("last_call_status"),
-  conversation_summary: text("conversation_summary"),
-  ai_priority_score: decimal("ai_priority_score", { precision: 5, scale: 2 }),
-  next_call_after: timestamp("next_call_after", { withTimezone: true }),
-  next_call_at: timestamp("next_call_at", { withTimezone: true }),
-  do_not_call: boolean("do_not_call").default(false),
-
-  // AI dialer (Bolna)
-  ai_managed: boolean("ai_managed").default(false),
-  ai_owner: text("ai_owner"),
-  manual_takeover: boolean("manual_takeover").default(false),
-  last_ai_action_at: timestamp("last_ai_action_at", { withTimezone: true }),
-  intent_score: integer("intent_score"),
-  intent_reason: text("intent_reason"),
-  call_priority: integer("call_priority").default(0),
-
-  // V2 workflow
-  workflow_step: integer("workflow_step").default(1),
-  auto_filled: boolean("auto_filled").default(false),
-  ocr_status: varchar("ocr_status", { length: 20 }),
-  ocr_error: text("ocr_error"),
-
-  // Coupon
-  coupon_code: varchar("coupon_code", { length: 20 }),
-  coupon_status: varchar("coupon_status", { length: 20 }),
-
-  // KYC
-  kyc_score: integer("kyc_score"),
-  kyc_completed_at: timestamp("kyc_completed_at", { withTimezone: true }),
-  has_co_borrower: boolean("has_co_borrower").default(false),
-  has_additional_docs_required: boolean("has_additional_docs_required").default(false),
-  interim_step_status: varchar("interim_step_status", { length: 20 }),
-  kyc_draft_data: jsonb("kyc_draft_data"),
-
-  // SM workflow
-  sm_review_status: varchar("sm_review_status", { length: 30 }),
-  submitted_to_sm_at: timestamp("submitted_to_sm_at", { withTimezone: true }),
-  sm_assigned_to: uuid("sm_assigned_to"),
-
-  // Step 4/5 lifecycle (BRD V2 Parts E & F)
-  // kyc_status extended values: pending_itarang_reverification, pending_final_approval,
-  // loan_sanctioned, loan_rejected, sold, closed_loan_rejected
-  sold_at: timestamp("sold_at", { withTimezone: true }),
-
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  dealerId: varchar("dealer_id", { length: 255 }),
+  assignedTo: uuid("assigned_to"),
+  ownerName: text("owner_name"),
+  ownerContact: varchar("owner_contact", { length: 20 }),
+  phone: varchar({ length: 20 }),
+  mobile: varchar({ length: 20 }),
+  permanentAddress: text("permanent_address"),
+  localAddress: text("local_address"),
+  vehicleOwnership: varchar("vehicle_ownership", { length: 50 }),
+  batteryType: varchar("battery_type", { length: 50 }),
+  assetModel: text("asset_model"),
+  assetPrice: numeric("asset_price", { precision: 12, scale:  2 }),
+  familyMembers: integer("family_members"),
+  drivingExperience: integer("driving_experience"),
+  loanRequired: boolean("loan_required").default(false),
+  interestLevel: varchar("interest_level", { length: 20 }).default('cold'),
+  leadScore: integer("lead_score").default(0),
+  status: varchar({ length: 30 }).default('new'),
+  kycStatus: varchar("kyc_status", { length: 30 }).default('pending'),
+  kycScore: integer("kyc_score").default(0),
+  kycCompletedAt: timestamp("kyc_completed_at", { withTimezone: true }),
+  paymentMethod: varchar("payment_method", { length: 20 }),
+  consentStatus: varchar("consent_status", { length: 20 }).default('pending'),
+  hasCoBorrower: boolean("has_co_borrower").default(false),
+  hasAdditionalDocsRequired: boolean("has_additional_docs_required").default(false),
+  interimStepStatus: varchar("interim_step_status", { length: 20 }).default('pending'),
+  kycDraftData: jsonb("kyc_draft_data"),
+  stepStatus: jsonb("step_status"),
+  source: varchar({ length: 50 }),
+  remarks: text(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  leadSource: varchar("lead_source", { length: 50 }).notNull(),
+  leadStatus: varchar("lead_status", { length: 50 }).default('new').notNull(),
+  businessName: text("business_name"),
+  ownerEmail: text("owner_email"),
+  state: varchar({ length: 100 }),
+  city: varchar({ length: 100 }),
+  shopAddress: text("shop_address"),
+  leadType: varchar("lead_type", { length: 20 }),
+  vehicleRc: varchar("vehicle_rc", { length: 50 }),
+  fullName: text("full_name"),
+  fatherOrHusbandName: text("father_or_husband_name"),
+  dob: timestamp({ withTimezone: true }),
+  currentAddress: text("current_address"),
+  isCurrentSame: boolean("is_current_same").default(false).notNull(),
+  productCategoryId: varchar("product_category_id", { length: 255 }),
+  productTypeId: varchar("product_type_id", { length: 255 }),
+  vehicleOwnerName: text("vehicle_owner_name"),
+  vehicleOwnerPhone: varchar("vehicle_owner_phone", { length: 20 }),
+  autoFilled: boolean("auto_filled").default(false).notNull(),
+  ocrStatus: varchar("ocr_status", { length: 20 }),
+  ocrError: text("ocr_error"),
+  referenceId: varchar("reference_id", { length: 255 }),
+  interestedIn: jsonb("interested_in"),
+  batteryOrderExpected: integer("battery_order_expected"),
+  investmentCapacity: numeric("investment_capacity", { precision: 12, scale:  2 }),
+  businessType: varchar("business_type", { length: 50 }),
+  qualifiedBy: uuid("qualified_by"),
+  qualifiedAt: timestamp("qualified_at", { withTimezone: true }),
+  qualificationNotes: text("qualification_notes"),
+  convertedDealId: varchar("converted_deal_id", { length: 255 }),
+  convertedAt: timestamp("converted_at", { withTimezone: true }),
+  totalAiCalls: integer("total_ai_calls").default(0),
+  lastAiCallAt: timestamp("last_ai_call_at", { withTimezone: true }),
+  lastCallOutcome: text("last_call_outcome"),
+  aiPriorityScore: numeric("ai_priority_score", { precision: 5, scale:  2 }),
+  nextCallAfter: timestamp("next_call_after", { withTimezone: true }),
+  doNotCall: boolean("do_not_call").default(false),
+  workflowStep: integer("workflow_step").default(1).notNull(),
+  primaryProductId: uuid("primary_product_id"),
+  uploaderId: uuid("uploader_id").notNull(),
+  aiManaged: boolean("ai_managed").default(false),
+  aiOwner: text("ai_owner"),
+  manualTakeover: boolean("manual_takeover").default(false),
+  lastAiActionAt: timestamp("last_ai_action_at", { withTimezone: true }),
+  intentScore: integer("intent_score"),
+  intentReason: text("intent_reason"),
+  nextCallAt: timestamp("next_call_at", { withTimezone: true }),
+  callPriority: integer("call_priority").default(0),
+  conversationSummary: text("conversation_summary"),
+  lastCallStatus: text("last_call_status"),
+  smReviewStatus: varchar("sm_review_status", { length: 30 }).default('not_submitted'),
+  submittedToSmAt: timestamp("submitted_to_sm_at", { withTimezone: true }),
+  smAssignedTo: uuid("sm_assigned_to"),
+  consentLinkUrl: text("consent_link_url"),
+  consentLinkSentAt: timestamp("consent_link_sent_at", { withTimezone: true }),
+  consentLinkExpiresAt: timestamp("consent_link_expires_at", { withTimezone: true }),
+  consentDeliveryChannel: varchar("consent_delivery_channel", { length: 50 }),
+  esignTransactionId: varchar("esign_transaction_id", { length: 255 }),
+  esignCertificateId: varchar("esign_certificate_id", { length: 255 }),
+  esignCompletedAt: timestamp("esign_completed_at", { withTimezone: true }),
+  esignFailedAt: timestamp("esign_failed_at", { withTimezone: true }),
+  esignErrorCode: varchar("esign_error_code", { length: 100 }),
+  esignErrorMessage: text("esign_error_message"),
+  consentVerifiedBy: uuid("consent_verified_by"),
+  consentVerifiedAt: timestamp("consent_verified_at", { withTimezone: true }),
+  consentVerificationNotes: text("consent_verification_notes"),
+  consentFinal: boolean("consent_final").default(false),
+  consentRejectionReason: varchar("consent_rejection_reason", { length: 255 }),
+  consentRejectionNotes: text("consent_rejection_notes"),
+  consentRejectedBy: uuid("consent_rejected_by"),
+  consentRejectedAt: timestamp("consent_rejected_at", { withTimezone: true }),
+  consentAttemptCount: integer("consent_attempt_count").default(0),
+  googlePlaceId: varchar("google_place_id", { length: 255 }),
+  website: text(),
+  googleMapsUri: text("google_maps_uri"),
+  googleRating: numeric("google_rating", { precision: 3, scale:  1 }),
+  googleRatingsCount: integer("google_ratings_count"),
+  googleBusinessStatus: varchar("google_business_status", { length: 50 }),
+  googleBusinessTypes: jsonb("google_business_types"),
+  rawSourcePayload: jsonb("raw_source_payload"),
+  scrapeQuery: text("scrape_query"),
+  scrapeBatchId: varchar("scrape_batch_id", { length: 255 }),
+  scrapedAt: timestamp("scraped_at", { withTimezone: true }),
+  phoneQuality: varchar("phone_quality", { length: 20 }).default('valid'),
+  normalizedPhone: varchar("normalized_phone", { length: 20 }),
+  intentBand: varchar("intent_band", { length: 20 }),
+  intentScoredAt: timestamp("intent_scored_at", { withTimezone: true }),
+  intentDetails: jsonb("intent_details"),
+  couponCode: varchar("coupon_code", { length: 20 }),
+  couponStatus: varchar("coupon_status", { length: 20 }),
+  borrowerConsentStatus: varchar("borrower_consent_status", { length: 30 }).default('awaiting_signature'),
+  soldAt: timestamp("sold_at", { withTimezone: true }),
 });
 
 // export const leads_commented = pgTable(
@@ -465,480 +436,331 @@ export const leads = pgTable("leads", {
 //   },
 //   (table) => {
 //     return {
-//       leadsSourceIdx: index("leads_source_idx").on(table.lead_source),
-//       leadsInterestIdx: index("leads_interest_idx").on(table.interest_level),
-//       leadsStatusIdx: index("leads_status_idx").on(table.lead_status),
+//       leadsSourceIdx: index("leads_source_idx").on(table.leadSource),
+//       leadsInterestIdx: index("leads_interest_idx").on(table.interestLevel),
+//       leadsStatusIdx: index("leads_status_idx").on(table.leadStatus),
 //     };
 //   },
 // );
 
 export const loanDetails = pgTable("loan_details", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  lead_id: varchar("lead_id", { length: 255 }).references(
-    () => dealerLeads.id,
-    {
-      onDelete: "cascade",
-    },
-  ),
-  loan_required: boolean("loan_required").default(false),
-  loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }),
-  interest_rate: decimal("interest_rate", { precision: 5, scale: 2 }),
-  tenure_months: integer("tenure_months"),
-  processing_fee: decimal("processing_fee", { precision: 10, scale: 2 }),
-  emi: decimal("emi", { precision: 10, scale: 2 }),
-  down_payment: decimal("down_payment", { precision: 12, scale: 2 }),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  loanRequired: boolean("loan_required").default(false),
+  loanAmount: numeric("loan_amount", { precision: 12, scale:  2 }),
+  interestRate: numeric("interest_rate", { precision: 5, scale:  2 }),
+  tenureMonths: integer("tenure_months"),
+  processingFee: numeric("processing_fee", { precision: 10, scale:  2 }),
+  emi: numeric({ precision: 10, scale:  2 }),
+  downPayment: numeric("down_payment", { precision: 12, scale:  2 }),
+  financeType: varchar("finance_type", { length: 50 }),
+  financier: varchar({ length: 100 }),
+  assetType: varchar("asset_type", { length: 50 }),
+  loanType: varchar("loan_type", { length: 50 }),
+  vehicleRc: text("vehicle_rc"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const personalDetails = pgTable("personal_details", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  lead_id: varchar("lead_id", { length: 255 }).references(
-    () => dealerLeads.id,
-    {
-      onDelete: "cascade",
-    },
-  ),
-  aadhaar_no: varchar("aadhaar_no", { length: 20 }),
-  pan_no: varchar("pan_no", { length: 20 }),
-  dob: timestamp("dob", { withTimezone: true }), // Using timestamp for date
-  email: text("email"),
-  income: decimal("income", { precision: 12, scale: 2 }),
-  finance_type: varchar("finance_type", { length: 50 }),
-  financier: varchar("financier", { length: 100 }),
-  asset_type: varchar("asset_type", { length: 50 }), // 2W, 3W
-  vehicle_rc: varchar("vehicle_rc", { length: 50 }),
-  loan_type: varchar("loan_type", { length: 100 }),
-  father_husband_name: text("father_husband_name"),
-  marital_status: varchar("marital_status", { length: 20 }),
-  spouse_name: text("spouse_name"),
-  local_address: text("local_address"),
-
-  // Bank Details (from OCR / manual entry)
-  bank_account_number: text("bank_account_number"),
-  bank_ifsc: varchar("bank_ifsc", { length: 11 }),
-  bank_name: text("bank_name"),
-  bank_branch: text("bank_branch"),
-
-  // OCR Confidence
-  dob_confidence: decimal("dob_confidence", { precision: 5, scale: 2 }),
-  name_confidence: decimal("name_confidence", { precision: 5, scale: 2 }),
-  address_confidence: decimal("address_confidence", { precision: 5, scale: 2 }),
-  ocr_processed_at: timestamp("ocr_processed_at", { withTimezone: true }),
-
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  aadhaarNo: varchar("aadhaar_no", { length: 12 }),
+  panNo: varchar("pan_no", { length: 10 }),
+  dob: timestamp({ withTimezone: true }),
+  email: text(),
+  income: numeric({ precision: 12, scale:  2 }),
+  fatherHusbandName: text("father_husband_name"),
+  maritalStatus: varchar("marital_status", { length: 20 }),
+  spouseName: text("spouse_name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  financeType: varchar("finance_type", { length: 50 }),
+  financier: varchar({ length: 100 }),
+  assetType: varchar("asset_type", { length: 50 }),
+  vehicleRc: varchar("vehicle_rc", { length: 50 }),
+  loanType: varchar("loan_type", { length: 100 }),
+  localAddress: text("local_address"),
+  dobConfidence: numeric("dob_confidence", { precision: 5, scale:  2 }),
+  nameConfidence: numeric("name_confidence", { precision: 5, scale:  2 }),
+  addressConfidence: numeric("address_confidence", { precision: 5, scale:  2 }),
+  ocrProcessedAt: timestamp("ocr_processed_at", { withTimezone: true }),
+  permanentAddress: text("permanent_address"),
+  bankAccountNumber: varchar("bank_account_number", { length: 50 }),
+  bankIfsc: varchar("bank_ifsc", { length: 20 }),
+  bankName: varchar("bank_name", { length: 100 }),
+  bankBranch: varchar("bank_branch", { length: 100 }),
 });
 
 export const documents = pgTable("documents", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  lead_id: varchar("lead_id", { length: 255 }).references(
-    () => dealerLeads.id,
-    {
-      onDelete: "cascade",
-    },
-  ),
-  document_type: varchar("document_type", { length: 50 }).notNull(),
-  file_url: text("file_url").notNull(),
-  uploaded_at: timestamp("uploaded_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  type: varchar({ length: 50 }).notNull(),
+  url: text().notNull(),
+  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+  documentType: varchar("document_type", { length: 50 }),
+  fileUrl: text("file_url"),
 });
 
 export const leadDocuments = pgTable("lead_documents", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  lead_id: varchar("lead_id", { length: 255 }).references(
-    () => dealerLeads.id,
-    {
-      onDelete: "cascade",
-    },
-  ),
-  dealer_id: varchar("dealer_id", { length: 255 }).references(
-    () => accounts.id,
-  ),
-  user_id: uuid("user_id").references(() => users.id),
-  doc_type: varchar("doc_type", { length: 100 }).notNull(),
-  storage_path: text("storage_path").notNull(), // private/dealer_id/lead_id/filename
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  documentType: varchar("document_type", { length: 50 }).notNull(),
+  documentUrl: text("document_url").notNull(),
+  status: varchar({ length: 20 }).default('uploaded'),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  dealerId: varchar("dealer_id", { length: 255 }),
+  userId: uuid("user_id"),
+  docType: varchar("doc_type", { length: 100 }),
+  storagePath: text("storage_path"),
 });
 
 export const leadAssignments = pgTable("lead_assignments", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  lead_id: varchar("lead_id", { length: 255 })
-    .references(() => dealerLeads.id)
-    .notNull(),
-  lead_owner: uuid("lead_owner")
-    .references(() => users.id)
-    .notNull(), // Sales Head MUST assign
-  assigned_by: uuid("assigned_by")
-    .references(() => users.id)
-    .notNull(),
-  assigned_at: timestamp("assigned_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-
-  // Lead Actor (Owner or Sales Head can assign)
-  lead_actor: uuid("lead_actor").references(() => users.id),
-  actor_assigned_by: uuid("actor_assigned_by").references(() => users.id),
-  actor_assigned_at: timestamp("actor_assigned_at", { withTimezone: true }),
-
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  leadOwner: uuid("lead_owner").notNull(),
+  assignedBy: uuid("assigned_by").notNull(),
+  assignedAt: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
+  leadActor: uuid("lead_actor"),
+  actorAssignedBy: uuid("actor_assigned_by"),
+  actorAssignedAt: timestamp("actor_assigned_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const assignmentChangeLogs = pgTable("assignment_change_logs", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  lead_id: varchar("lead_id", { length: 255 })
-    .references(() => dealerLeads.id)
-    .notNull(),
-  change_type: varchar("change_type", { length: 50 }).notNull(), // owner_assigned, owner_changed, actor_assigned, actor_changed, actor_removed
-  old_user_id: uuid("old_user_id").references(() => users.id),
-  new_user_id: uuid("new_user_id").references(() => users.id),
-  changed_by: uuid("changed_by")
-    .references(() => users.id)
-    .notNull(),
-  change_reason: text("change_reason"),
-  changed_at: timestamp("changed_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  oldUserId: uuid("old_user_id"),
+  newUserId: uuid("new_user_id"),
+  changedBy: uuid("changed_by"),
+  changeType: varchar("change_type", { length: 50 }).notNull(),
+  reason: text(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  changeReason: text("change_reason"),
+  changedAt: timestamp("changed_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const deals = pgTable("deals", {
-  id: varchar("id", { length: 255 }).primaryKey(), // DEAL-YYYYMMDD-XXX
-  lead_id: varchar("lead_id", { length: 255 })
-    .references(() => dealerLeads.id)
-    .notNull(),
-
-  // Products & Pricing
-  products: jsonb("products").notNull(), // Array of { product_id, quantity, unit_price, gst_percent }
-  line_total: decimal("line_total", { precision: 12, scale: 2 }).notNull(),
-  gst_amount: decimal("gst_amount", { precision: 12, scale: 2 }).notNull(),
-  transportation_cost: decimal("transportation_cost", {
-    precision: 10,
-    scale: 2,
-  })
-    .default("0")
-    .notNull(),
-  transportation_gst_percent: integer("transportation_gst_percent")
-    .default(18)
-    .notNull(),
-  total_payable: decimal("total_payable", {
-    precision: 12,
-    scale: 2,
-  }).notNull(),
-
-  // Payment Terms
-  payment_term: varchar("payment_term", { length: 20 }).notNull(), // cash, credit
-  credit_period_months: integer("credit_period_months"),
-
-  // Status
-  deal_status: varchar("deal_status", { length: 50 })
-    .default("pending_approval_l1")
-    .notNull(), // pending_approval_l1, pending_approval_l2, pending_approval_l3, approved, rejected, payment_awaited, converted, expired
-
-  // Immutability (after invoice)
-  is_immutable: boolean("is_immutable").default(false).notNull(),
-  invoice_number: text("invoice_number"),
-  invoice_url: text("invoice_url"),
-  invoice_issued_at: timestamp("invoice_issued_at", { withTimezone: true }),
-
-  // Expiry
-  expires_at: timestamp("expires_at", { withTimezone: true }),
-  expired_by: uuid("expired_by").references(() => users.id),
-  expired_at: timestamp("expired_at", { withTimezone: true }),
-  expiry_reason: text("expiry_reason"),
-
-  // Rejection
-  rejected_by: uuid("rejected_by").references(() => users.id),
-  rejected_at: timestamp("rejected_at", { withTimezone: true }),
-  rejection_reason: text("rejection_reason"),
-
-  created_by: uuid("created_by")
-    .references(() => users.id)
-    .notNull(),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  products: jsonb().notNull(),
+  lineTotal: numeric("line_total", { precision: 12, scale:  2 }).notNull(),
+  gstAmount: numeric("gst_amount", { precision: 12, scale:  2 }).notNull(),
+  transportationCost: numeric("transportation_cost", { precision: 10, scale:  2 }).default('0').notNull(),
+  transportationGstPercent: integer("transportation_gst_percent").default(18).notNull(),
+  totalPayable: numeric("total_payable", { precision: 12, scale:  2 }).notNull(),
+  paymentTerm: varchar("payment_term", { length: 20 }).notNull(),
+  creditPeriodMonths: integer("credit_period_months"),
+  dealStatus: varchar("deal_status", { length: 50 }).default('pending_approval_l1').notNull(),
+  isImmutable: boolean("is_immutable").default(false).notNull(),
+  invoiceNumber: text("invoice_number"),
+  invoiceUrl: text("invoice_url"),
+  invoiceIssuedAt: timestamp("invoice_issued_at", { withTimezone: true }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  expiredBy: uuid("expired_by"),
+  expiredAt: timestamp("expired_at", { withTimezone: true }),
+  expiryReason: text("expiry_reason"),
+  rejectedBy: uuid("rejected_by"),
+  rejectedAt: timestamp("rejected_at", { withTimezone: true }),
+  rejectionReason: text("rejection_reason"),
+  createdBy: uuid("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const approvals = pgTable("approvals", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  entity_type: varchar("entity_type", { length: 50 }).notNull(), // deal, order, provision
-  entity_id: varchar("entity_id", { length: 255 }).notNull(),
-
-  level: integer("level").notNull(), // 1, 2, 3
-  approver_role: varchar("approver_role", { length: 50 }).notNull(), // sales_head, business_head, finance_controller
-
-  status: varchar("status", { length: 20 }).default("pending").notNull(), // pending, approved, rejected
-
-  approver_id: uuid("approver_id").references(() => users.id),
-  decision_at: timestamp("decision_at", { withTimezone: true }),
-  rejection_reason: text("rejection_reason"),
-  comments: text("comments"),
-
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  entityType: varchar("entity_type", { length: 50 }).notNull(),
+  entityId: varchar("entity_id", { length: 255 }).notNull(),
+  level: integer().notNull(),
+  approverRole: varchar("approver_role", { length: 50 }).notNull(),
+  status: varchar({ length: 20 }).default('pending').notNull(),
+  approverId: uuid("approver_id"),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  notes: text(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  decisionAt: timestamp("decision_at", { withTimezone: true }),
+  rejectionReason: text("rejection_reason"),
+  comments: text(),
 });
 
 export const orderDisputes = pgTable("order_disputes", {
-  id: varchar("id", { length: 255 }).primaryKey(), // DISP-YYYYMMDD-SEQ
-  order_id: varchar("order_id", { length: 255 })
-    .references(() => orders.id)
-    .notNull(),
-  dispute_type: varchar("dispute_type", { length: 50 }).notNull(), // damage, shortage, delivery_failure
-  description: text("description").notNull(),
-  photos_urls: jsonb("photos_urls"), // Array of photo URLs
-  assigned_to: uuid("assigned_to")
-    .references(() => users.id)
-    .notNull(),
-  resolution_status: varchar("resolution_status", { length: 50 })
-    .default("open")
-    .notNull(), // open, investigating, resolved, closed
-  resolution_details: text("resolution_details"), // Added from SOP 9.6
-  action_taken: text("action_taken"), // Added from SOP 9.6
-  resolved_by: uuid("resolved_by").references(() => users.id),
-  resolved_at: timestamp("resolved_at"),
-  created_by: uuid("created_by")
-    .references(() => users.id)
-    .notNull(),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  orderId: varchar("order_id", { length: 255 }).notNull(),
+  disputeType: varchar("dispute_type", { length: 50 }).notNull(),
+  description: text().notNull(),
+  status: varchar({ length: 20 }).default('open').notNull(),
+  resolution: text(),
+  raisedBy: uuid("raised_by").notNull(),
+  resolvedBy: uuid("resolved_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  photosUrls: jsonb("photos_urls"),
+  resolutionStatus: varchar("resolution_status", { length: 50 }).default('open').notNull(),
+  resolutionDetails: text("resolution_details"),
+  actionTaken: text("action_taken"),
+  resolvedAt: timestamp("resolved_at"),
+  assignedTo: uuid("assigned_to"),
+  createdBy: uuid("created_by"),
 });
 
 export const slas = pgTable("slas", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  workflow_step: varchar("workflow_step", { length: 100 }).notNull(),
-  entity_type: varchar("entity_type", { length: 50 }).notNull(),
-  entity_id: varchar("entity_id", { length: 255 }).notNull(),
-  assigned_to: uuid("assigned_to").references(() => users.id),
-  sla_deadline: timestamp("sla_deadline").notNull(),
-  status: varchar("status", { length: 20 }).default("active").notNull(), // active, completed, breached
-  completed_at: timestamp("completed_at"),
-  escalated_to: uuid("escalated_to").references(() => users.id),
-  escalated_at: timestamp("escalated_at"),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  entityType: varchar("entity_type", { length: 50 }).notNull(),
+  entityId: varchar("entity_id", { length: 255 }).notNull(),
+  deadline: timestamp({ withTimezone: true }),
+  breached: boolean().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  assignedTo: uuid("assigned_to"),
+  status: varchar({ length: 20 }).default('active').notNull(),
+  completedAt: timestamp("completed_at"),
+  escalatedTo: uuid("escalated_to"),
+  escalatedAt: timestamp("escalated_at"),
+  workflowStep: varchar("workflow_step", { length: 100 }),
+  slaDeadline: timestamp("sla_deadline"),
 });
 
 // --- PDI ---
 
 export const oemInventoryForPDI = pgTable("oem_inventory_for_pdi", {
-  id: varchar("id", { length: 255 }).primaryKey(), // PDIREQ-YYYYMMDD-XXX
-  provision_id: varchar("provision_id", { length: 255 }).notNull(),
-  inventory_id: varchar("inventory_id", { length: 255 })
-    .references(() => inventory.id)
-    .notNull(),
-  serial_number: varchar("serial_number", { length: 255 }),
-  oem_id: varchar("oem_id", { length: 255 })
-    .references(() => oems.id)
-    .notNull(),
-  pdi_status: varchar("pdi_status", { length: 20 })
-    .default("pending")
-    .notNull(), // pending, in_progress, completed
-  pdi_record_id: varchar("pdi_record_id", { length: 255 }),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  inventoryId: varchar("inventory_id", { length: 255 }),
+  oemId: varchar("oem_id", { length: 255 }),
+  status: varchar({ length: 20 }).default('pending'),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  serialNumber: varchar("serial_number", { length: 255 }),
+  pdiStatus: varchar("pdi_status", { length: 20 }).default('pending').notNull(),
+  pdiRecordId: varchar("pdi_record_id", { length: 255 }),
+  provisionId: varchar("provision_id", { length: 255 }),
 });
 
 export const pdiRecords = pgTable("pdi_records", {
-  id: varchar("id", { length: 255 }).primaryKey(), // PDI-YYYYMMDD-XXX
-  oem_inventory_id: varchar("oem_inventory_id", { length: 255 })
-    .references(() => oemInventoryForPDI.id)
-    .notNull(),
-  provision_id: varchar("provision_id", { length: 255 }).notNull(),
-  service_engineer_id: uuid("service_engineer_id")
-    .references(() => users.id)
-    .notNull(),
-
-  // Physical Inspection
-  iot_imei_no: varchar("iot_imei_no", { length: 255 }),
-  physical_condition: text("physical_condition").notNull(), // OK - No issues, Minor scratches, Damaged exterior, Severely damaged
-  discharging_connector: varchar("discharging_connector", {
-    length: 20,
-  }).notNull(), // SB75, SB50
-  charging_connector: varchar("charging_connector", { length: 20 }).notNull(), // SB75, SB50
-  productor_sticker: varchar("productor_sticker", { length: 50 }).notNull(), // Available - damage, Available - OK, Unavailable
-
-  // Technical Fields
-  voltage: decimal("voltage", { precision: 5, scale: 2 }),
-  soc: integer("soc"),
-  capacity_ah: decimal("capacity_ah", { precision: 6, scale: 2 }),
-  resistance_mohm: decimal("resistance_mohm", { precision: 6, scale: 2 }),
-  temperature_celsius: decimal("temperature_celsius", {
-    precision: 5,
-    scale: 2,
-  }),
-
-  // GPS
-  latitude: decimal("latitude", { precision: 10, scale: 8 }).notNull(),
-  longitude: decimal("longitude", { precision: 11, scale: 8 }).notNull(),
-  location_address: text("location_address"),
-
-  // Documents
-  product_manual_url: text("product_manual_url"),
-  warranty_document_url: text("warranty_document_url"),
-  pdi_photos: jsonb("pdi_photos"),
-
-  // Result
-  pdi_status: varchar("pdi_status", { length: 20 }).notNull(), // pass, fail
-  failure_reason: text("failure_reason"),
-
-  inspected_at: timestamp("inspected_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  inventoryId: varchar("inventory_id", { length: 255 }),
+  performedBy: uuid("performed_by"),
+  status: varchar({ length: 20 }).default('pending').notNull(),
+  checklist: jsonb(),
+  notes: text(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  iotImeiNo: varchar("iot_imei_no", { length: 255 }),
+  voltage: numeric({ precision: 5, scale:  2 }),
+  soc: integer(),
+  capacityAh: numeric("capacity_ah", { precision: 6, scale:  2 }),
+  resistanceMohm: numeric("resistance_mohm", { precision: 6, scale:  2 }),
+  temperatureCelsius: numeric("temperature_celsius", { precision: 5, scale:  2 }),
+  locationAddress: text("location_address"),
+  productManualUrl: text("product_manual_url"),
+  warrantyDocumentUrl: text("warranty_document_url"),
+  pdiPhotos: jsonb("pdi_photos"),
+  failureReason: text("failure_reason"),
+  inspectedAt: timestamp("inspected_at", { withTimezone: true }).defaultNow().notNull(),
+  oemInventoryId: varchar("oem_inventory_id", { length: 255 }),
+  provisionId: varchar("provision_id", { length: 255 }),
+  serviceEngineerId: uuid("service_engineer_id"),
+  physicalCondition: text("physical_condition"),
+  dischargingConnector: varchar("discharging_connector", { length: 20 }),
+  chargingConnector: varchar("charging_connector", { length: 20 }),
+  productorSticker: varchar("productor_sticker", { length: 50 }),
+  latitude: numeric({ precision: 10, scale: 8 }),
+  longitude: numeric({ precision: 11, scale: 8 }),
+  pdiStatus: varchar("pdi_status", { length: 20 }),
 });
 
 export const auditLogs = pgTable("audit_logs", {
-  id: varchar("id", { length: 255 }).primaryKey(), // AUDIT-YYYYMMDD-SEQ
-  entity_type: varchar("entity_type", { length: 50 }).notNull(),
-  entity_id: varchar("entity_id", { length: 255 }).notNull(),
-  action: varchar("action", { length: 50 }).notNull(), // create, update, delete, approve, reject, assign, complete
-  changes: jsonb("changes"),
-  performed_by: uuid("performed_by")
-    .references(() => users.id)
-    .notNull(),
-  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  entityType: varchar("entity_type", { length: 50 }),
+  entityId: varchar("entity_id", { length: 255 }),
+  action: varchar({ length: 50 }),
+  performedBy: uuid("performed_by"),
+  oldData: jsonb("old_data"),
+  newData: jsonb("new_data"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  changes: jsonb(),
+  timestamp: timestamp({ withTimezone: true }).defaultNow().notNull(),
 });
 
 // --- ACCOUNTS ---
 
 export const accounts = pgTable("accounts", {
-  id: varchar("id", { length: 255 }).primaryKey(), // ACC-YYYYMMDD-XXX
-  business_entity_name: text("business_entity_name"),
-  gstin: varchar("gstin", { length: 15 }),
-  pan: varchar("pan", { length: 20 }),
-  address_line1: text("address_line1"),
-  address_line2: text("address_line2"),
-  city: varchar("city", { length: 100 }),
-  state: varchar("state", { length: 100 }),
-  pincode: varchar("pincode", { length: 10 }),
-  bank_name: text("bank_name"),
-  bank_account_number: text("bank_account_number"),
-  ifsc_code: varchar("ifsc_code", { length: 11 }),
-  bank_proof_url: text("bank_proof_url"),
-  dealer_code: text("dealer_code"),
-  contact_name: text("contact_name"),
-  contact_email: text("contact_email"),
-  contact_phone: varchar("contact_phone", { length: 20 }),
-  status: varchar("status", { length: 20 }).default("active"),
-  onboarding_status: varchar("onboarding_status", { length: 30 }),
-  created_by: uuid("created_by"),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  businessEntityName: text("business_entity_name").notNull(),
+  gstin: varchar({ length: 15 }).notNull(),
+  pan: varchar({ length: 10 }),
+  addressLine1: text("address_line1"),
+  addressLine2: text("address_line2"),
+  city: text(),
+  state: text(),
+  pincode: varchar({ length: 6 }),
+  bankName: text("bank_name"),
+  bankAccountNumber: text("bank_account_number"),
+  ifscCode: varchar("ifsc_code", { length: 11 }),
+  bankProofUrl: text("bank_proof_url"),
+  dealerCode: varchar("dealer_code", { length: 50 }),
+  contactName: text("contact_name"),
+  contactEmail: text("contact_email"),
+  contactPhone: varchar("contact_phone", { length: 20 }),
+  status: varchar({ length: 20 }).default('active').notNull(),
+  onboardingStatus: varchar("onboarding_status", { length: 30 }).default('pending').notNull(),
+  createdBy: uuid("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // --- PROCUREMENT ---
 
 export const provisions = pgTable("provisions", {
-  id: varchar("id", { length: 255 }).primaryKey(), // PROV-YYYYMMDD-XXX
-  oem_id: varchar("oem_id", { length: 255 })
-    .references(() => oems.id)
-    .notNull(),
-  oem_name: text("oem_name").notNull(),
-  products: jsonb("products").notNull(), // Array of { product_id, quantity }
-  expected_delivery_date: timestamp("expected_delivery_date", {
-    withTimezone: true,
-  }).notNull(),
-  status: varchar("status", { length: 20 }).default("pending").notNull(), // pending, acknowledged, in_production, ready_for_pdi, completed, cancelled
-  remarks: text("remarks"),
-  created_by: uuid("created_by")
-    .references(() => users.id)
-    .notNull(),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  orderId: varchar("order_id", { length: 255 }),
+  oemId: varchar("oem_id", { length: 255 }),
+  amount: numeric({ precision: 12, scale:  2 }),
+  status: varchar({ length: 20 }).default('pending'),
+  notes: text(),
+  createdBy: uuid("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  remarks: text(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  oemName: text("oem_name"),
+  products: jsonb(),
+  expectedDeliveryDate: timestamp("expected_delivery_date", { withTimezone: true }),
 });
 
 export const orders = pgTable(
   "orders",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // ORD-YYYYMMDD-XXX
-    provision_id: varchar("provision_id", { length: 255 })
-      .references(() => provisions.id)
-      .notNull(),
-    oem_id: varchar("oem_id", { length: 255 })
-      .references(() => oems.id)
-      .notNull(),
-    account_id: varchar("account_id", { length: 255 }).references(
-      () => accounts.id,
-    ),
-
-    // Order items
-    order_items: jsonb("order_items").notNull(), // Array of { inventory_id, serial_number, amount }
-    total_amount: decimal("total_amount", {
-      precision: 12,
-      scale: 2,
-    }).notNull(),
-
-    payment_term: varchar("payment_term", { length: 20 }).notNull(), // advance, credit
-    credit_period_days: integer("credit_period_days"),
-
-    // Documents
-    pi_url: text("pi_url"),
-    pi_amount: decimal("pi_amount", { precision: 12, scale: 2 }),
-    invoice_url: text("invoice_url"),
-    grn_id: text("grn_id"),
-    grn_date: timestamp("grn_date", { withTimezone: true }),
-
-    // Payment Tracking
-    payment_status: varchar("payment_status", { length: 20 })
-      .default("unpaid")
-      .notNull(), // unpaid, partial, paid
-    payment_amount: decimal("payment_amount", { precision: 12, scale: 2 })
-      .default("0")
-      .notNull(),
-    payment_mode: varchar("payment_mode", { length: 50 }),
-    transaction_id: text("transaction_id"),
-    payment_date: timestamp("payment_date", { withTimezone: true }),
-
-    // Status
-    order_status: varchar("order_status", { length: 50 })
-      .default("pi_awaited")
-      .notNull(), // pi_awaited, pi_approval_pending, pi_approved, pi_rejected, payment_made, in_transit, delivered, cancelled
-    delivery_status: varchar("delivery_status", { length: 20 })
-      .default("pending")
-      .notNull(), // pending, in_transit, delivered, failed
-
-    // Dates
-    expected_delivery_date: timestamp("expected_delivery_date", {
-      withTimezone: true,
-    }),
-    actual_delivery_date: timestamp("actual_delivery_date", {
-      withTimezone: true,
-    }),
-
-    reorder_tat_days: integer("reorder_tat_days"),
-
-    created_by: uuid("created_by")
-      .references(() => users.id)
-      .notNull(),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    provisionId: varchar("provision_id", { length: 255 }).notNull(),
+    oemId: varchar("oem_id", { length: 255 }).notNull(),
+    accountId: varchar("account_id", { length: 255 }),
+    orderItems: jsonb("order_items").notNull(),
+    totalAmount: numeric("total_amount", { precision: 12, scale:  2 }).notNull(),
+    paymentTerm: varchar("payment_term", { length: 20 }).notNull(),
+    creditPeriodDays: integer("credit_period_days"),
+    piUrl: text("pi_url"),
+    piAmount: numeric("pi_amount", { precision: 12, scale:  2 }),
+    invoiceUrl: text("invoice_url"),
+    grnId: text("grn_id"),
+    grnDate: timestamp("grn_date", { withTimezone: true }),
+    paymentStatus: varchar("payment_status", { length: 20 }).default('unpaid').notNull(),
+    paymentAmount: numeric("payment_amount", { precision: 12, scale:  2 }).default('0').notNull(),
+    paymentMode: varchar("payment_mode", { length: 50 }),
+    transactionId: text("transaction_id"),
+    paymentDate: timestamp("payment_date", { withTimezone: true }),
+    orderStatus: varchar("order_status", { length: 50 }).default('pi_awaited').notNull(),
+    deliveryStatus: varchar("delivery_status", { length: 20 }).default('pending').notNull(),
+    expectedDeliveryDate: timestamp("expected_delivery_date", { withTimezone: true }),
+    actualDeliveryDate: timestamp("actual_delivery_date", { withTimezone: true }),
+    createdBy: uuid("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    reorderTatDays: integer("reorder_tat_days"),
   },
   (table) => {
     return {
-      ordersCreatedAtIdx: index("orders_created_at_idx").on(table.created_at),
+      ordersCreatedAtIdx: index("orders_created_at_idx").on(table.createdAt),
       ordersPaymentStatusIdx: index("orders_payment_status_idx").on(
-        table.payment_status,
+        table.paymentStatus,
       ),
     };
   },
@@ -947,36 +769,32 @@ export const orders = pgTable(
 export const bolnaCalls = pgTable(
   "bolna_calls",
   {
-    id: varchar("id", { length: 255 }).primaryKey(),
-    bolna_call_id: varchar("bolna_call_id", { length: 255 }).notNull().unique(),
-    lead_id: varchar("lead_id", { length: 255 }).references(
-      () => dealerLeads.id,
-    ),
-    status: varchar("status", { length: 20 }).default("initiated").notNull(),
-    current_phase: varchar("current_phase", { length: 100 }),
-    started_at: timestamp("started_at", { withTimezone: true }),
-    ended_at: timestamp("ended_at", { withTimezone: true }),
-    transcript_chunk: text("transcript_chunk"),
-    chunk_received_at: timestamp("chunk_received_at", { withTimezone: true }),
-    full_transcript: text("full_transcript"),
-    transcript_fetched_at: timestamp("transcript_fetched_at", {
-      withTimezone: true,
-    }),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    leadId: varchar("lead_id", { length: 255 }),
+    bolnaCallId: text("bolna_call_id"),
+    agentId: text("agent_id"),
+    status: varchar({ length: 20 }),
+    recordingUrl: text("recording_url"),
+    transcript: text(),
+    durationSeconds: integer("duration_seconds"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    currentPhase: varchar("current_phase", { length: 100 }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    transcriptChunk: text("transcript_chunk"),
+    chunkReceivedAt: timestamp("chunk_received_at", { withTimezone: true }),
+    fullTranscript: text("full_transcript"),
+    transcriptFetchedAt: timestamp("transcript_fetched_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => {
     return {
       bolnaCallIdIdx: index("bolna_calls_bolna_call_id_idx").on(
-        table.bolna_call_id,
+        table.bolnaCallId,
       ),
-      leadIdIdx: index("bolna_calls_lead_id_idx").on(table.lead_id),
+      leadIdIdx: index("bolna_calls_lead_id_idx").on(table.leadId),
       statusIdx: index("bolna_calls_status_idx").on(table.status),
-      startedAtIdx: index("bolna_calls_started_at_idx").on(table.started_at),
+      startedAtIdx: index("bolna_calls_started_at_idx").on(table.startedAt),
     };
   },
 );
@@ -984,36 +802,30 @@ export const bolnaCalls = pgTable(
 export const aiCallLogs = pgTable(
   "ai_call_logs",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    lead_id: varchar("lead_id", { length: 255 })
-      .references(() => dealerLeads.id)
-      .notNull(),
-    call_id: varchar("call_id", { length: 255 }).notNull().unique(),
-    agent_id: varchar("agent_id", { length: 255 }),
-    phone_number: varchar("phone_number", { length: 20 }),
-    transcript: text("transcript"),
-    summary: text("summary"),
-    recording_url: text("recording_url"),
-    call_duration: integer("call_duration"), // in seconds
-    status: varchar("status", { length: 50 }),
-    provider: varchar("provider", { length: 50 }),
-    started_at: timestamp("started_at", { withTimezone: true }),
-    ended_at: timestamp("ended_at", { withTimezone: true }),
-    model_used: varchar("model_used", { length: 100 }),
-    intent_score: integer("intent_score"),
-    intent_reason: text("intent_reason"),
-    next_action: text("next_action"),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    leadId: varchar("lead_id", { length: 255 }),
+    provider: varchar({ length: 50 }),
+    status: varchar({ length: 20 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    modelUsed: varchar("model_used", { length: 50 }),
+    intentScore: integer("intent_score"),
+    intentReason: text("intent_reason"),
+    nextAction: varchar("next_action", { length: 50 }),
+    agentId: varchar("agent_id", { length: 255 }),
+    phoneNumber: varchar("phone_number", { length: 20 }),
+    transcript: text(),
+    summary: text(),
+    recordingUrl: text("recording_url"),
+    callDuration: integer("call_duration"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    callId: varchar("call_id", { length: 255 }).notNull(),
   },
   (table) => {
     return {
-      aiCallLogsLeadIdIdx: index("ai_call_logs_lead_id_idx").on(table.lead_id),
-      aiCallLogsCallIdIdx: index("ai_call_logs_call_id_idx").on(table.call_id),
+      aiCallLogsLeadIdIdx: index("ai_call_logs_lead_id_idx").on(table.leadId),
+      aiCallLogsCallIdIdx: index("ai_call_logs_call_id_idx").on(table.callId),
     };
   },
 );
@@ -1021,35 +833,40 @@ export const aiCallLogs = pgTable(
 // --- AI CALLS ---
 
 export const callSessions = pgTable("call_sessions", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  session_id: text("session_id").unique(), // External ID
-  status: text("status").default("active"), // active, completed
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
-  ended_at: timestamp("ended_at", { withTimezone: true }),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }),
+  initiatedBy: uuid("initiated_by"),
+  status: varchar({ length: 20 }).default('initiated'),
+  provider: varchar({ length: 50 }),
+  providerSessionId: text("provider_session_id"),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+  durationSeconds: integer("duration_seconds"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  sessionId: text("session_id"),
 });
 
 export const callRecords = pgTable("call_records", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  session_id: text("session_id").references(() => callSessions.session_id),
-  lead_id: varchar("lead_id", { length: 255 }).references(() => dealerLeads.id),
-  bolna_call_id: varchar("bolna_call_id", { length: 255 }).unique(),
-  status: text("status").default("queued"), // queued, ringing, completed, failed
-  duration_seconds: integer("duration_seconds"),
-  recording_url: text("recording_url"),
-  summary: text("summary"),
-  transcript: text("transcript"),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
-  ended_at: timestamp("ended_at", { withTimezone: true }),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }),
+  sessionId: varchar("session_id", { length: 255 }),
+  recordingUrl: text("recording_url"),
+  transcript: text(),
+  summary: text(),
+  sentiment: varchar({ length: 20 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  bolnaCallId: varchar("bolna_call_id", { length: 255 }),
+  status: text().default('queued'),
+  durationSeconds: integer("duration_seconds"),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
 });
 
 export const conversationMessages = pgTable("conversation_messages", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  call_record_id: varchar("call_record_id", { length: 255 }).references(
-    () => callRecords.id,
-  ), // Link to record
-  role: text("role"), // 'user', 'assistant'
-  message: text("message"),
-  timestamp: timestamp("timestamp", { withTimezone: true }).defaultNow(),
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  callRecordId: varchar("call_record_id", { length: 255 }).notNull(),
+  role: text().notNull(),
+  message: text().notNull(),
+  timestamp: timestamp({ withTimezone: true }).defaultNow().notNull(),
 });
 
 // --- RELATIONS ---
@@ -1063,7 +880,7 @@ export const productCategoriesRelations = relations(
 
 export const productsRelations = relations(products, ({ one, many }) => ({
   category: one(productCategories, {
-    fields: [products.category_id],
+    fields: [products.categoryId],
     references: [productCategories.id],
   }),
   inventories: many(inventory),
@@ -1089,7 +906,7 @@ export const usersRelations = relations(users, ({ many }) => ({
 
 export const oemsRelations = relations(oems, ({ one, many }) => ({
   creator: one(users, {
-    fields: [oems.created_by],
+    fields: [oems.createdBy],
     references: [users.id],
     relationName: "oem_creator",
   }),
@@ -1097,16 +914,16 @@ export const oemsRelations = relations(oems, ({ one, many }) => ({
 }));
 
 export const oemContactsRelations = relations(oemContacts, ({ one }) => ({
-  oem: one(oems, { fields: [oemContacts.oem_id], references: [oems.id] }),
+  oem: one(oems, { fields: [oemContacts.oemId], references: [oems.id] }),
 }));
 
 export const inventoryRelations = relations(inventory, ({ one }) => ({
   product: one(products, {
-    fields: [inventory.product_id],
+    fields: [inventory.productId],
     references: [products.id],
   }),
   creator: one(users, {
-    fields: [inventory.created_by],
+    fields: [inventory.createdBy],
     references: [users.id],
     relationName: "inventory_creator",
   }),
@@ -1114,12 +931,12 @@ export const inventoryRelations = relations(inventory, ({ one }) => ({
 
 // export const leadsRelations = relations(leads, ({ one, many }) => ({
 //   uploader: one(users, {
-//     fields: [leads.uploader_id],
+//     fields: [leads.uploaderId],
 //     references: [users.id],
 //     relationName: "lead_uploader",
 //   }),
 //   qualifiedBy: one(users, {
-//     fields: [leads.qualified_by],
+//     fields: [leads.qualifiedBy],
 //     references: [users.id],
 //     relationName: "qualified_by_user",
 //   }),
@@ -1140,26 +957,26 @@ export const leadAssignmentsRelations = relations(
   leadAssignments,
   ({ one }) => ({
     lead: one(dealerLeads, {
-      fields: [leadAssignments.lead_id],
+      fields: [leadAssignments.leadId],
       references: [dealerLeads.id],
     }),
     owner: one(users, {
-      fields: [leadAssignments.lead_owner],
+      fields: [leadAssignments.leadOwner],
       references: [users.id],
       relationName: "assigned_to_user",
     }),
     assigner: one(users, {
-      fields: [leadAssignments.assigned_by],
+      fields: [leadAssignments.assignedBy],
       references: [users.id],
       relationName: "assigned_by_user",
     }),
     actor: one(users, {
-      fields: [leadAssignments.lead_actor],
+      fields: [leadAssignments.leadActor],
       references: [users.id],
       relationName: "lead_actor_user",
     }),
     actorAssigner: one(users, {
-      fields: [leadAssignments.actor_assigned_by],
+      fields: [leadAssignments.actorAssignedBy],
       references: [users.id],
       relationName: "actor_assigned_by_user",
     }),
@@ -1168,11 +985,11 @@ export const leadAssignmentsRelations = relations(
 
 export const dealsRelations = relations(deals, ({ one, many }) => ({
   lead: one(dealerLeads, {
-    fields: [deals.lead_id],
+    fields: [deals.leadId],
     references: [dealerLeads.id],
   }),
   creator: one(users, {
-    fields: [deals.created_by],
+    fields: [deals.createdBy],
     references: [users.id],
     relationName: "deal_creator",
   }),
@@ -1181,7 +998,7 @@ export const dealsRelations = relations(deals, ({ one, many }) => ({
 
 export const approvalsRelations = relations(approvals, ({ one }) => ({
   approver: one(users, {
-    fields: [approvals.approver_id],
+    fields: [approvals.approverId],
     references: [users.id],
     relationName: "approver_user",
   }),
@@ -1189,21 +1006,21 @@ export const approvalsRelations = relations(approvals, ({ one }) => ({
 
 export const slasRelations = relations(slas, ({ one }) => ({
   assignedUser: one(users, {
-    fields: [slas.assigned_to],
+    fields: [slas.assignedTo],
     references: [users.id],
     relationName: "sla_assigned",
   }),
   escalatedUser: one(users, {
-    fields: [slas.escalated_to],
+    fields: [slas.escalatedTo],
     references: [users.id],
     relationName: "sla_escalated",
   }),
 }));
 
 export const provisionsRelations = relations(provisions, ({ one, many }) => ({
-  oem: one(oems, { fields: [provisions.oem_id], references: [oems.id] }),
+  oem: one(oems, { fields: [provisions.oemId], references: [oems.id] }),
   creator: one(users, {
-    fields: [provisions.created_by],
+    fields: [provisions.createdBy],
     references: [users.id],
   }),
   orders: many(orders),
@@ -1211,13 +1028,13 @@ export const provisionsRelations = relations(provisions, ({ one, many }) => ({
 
 export const ordersRelations = relations(orders, ({ one }) => ({
   provision: one(provisions, {
-    fields: [orders.provision_id],
+    fields: [orders.provisionId],
     references: [provisions.id],
   }),
-  oem: one(oems, { fields: [orders.oem_id], references: [oems.id] }),
-  creator: one(users, { fields: [orders.created_by], references: [users.id] }),
+  oem: one(oems, { fields: [orders.oemId], references: [oems.id] }),
+  creator: one(users, { fields: [orders.createdBy], references: [users.id] }),
   account: one(accounts, {
-    fields: [orders.account_id],
+    fields: [orders.accountId],
     references: [accounts.id],
   }),
 }));
@@ -1226,49 +1043,41 @@ export const oemInventoryForPDIRelations = relations(
   oemInventoryForPDI,
   ({ one }) => ({
     inventory: one(inventory, {
-      fields: [oemInventoryForPDI.inventory_id],
+      fields: [oemInventoryForPDI.inventoryId],
       references: [inventory.id],
     }),
     oem: one(oems, {
-      fields: [oemInventoryForPDI.oem_id],
+      fields: [oemInventoryForPDI.oemId],
       references: [oems.id],
     }),
     pdiRecord: one(pdiRecords, {
-      fields: [oemInventoryForPDI.pdi_record_id],
+      fields: [oemInventoryForPDI.pdiRecordId],
       references: [pdiRecords.id],
     }),
   }),
 );
 
-export const pdiRecordsRelations = relations(pdiRecords, ({ one }) => ({
-  oemInventory: one(oemInventoryForPDI, {
-    fields: [pdiRecords.oem_inventory_id],
-    references: [oemInventoryForPDI.id],
-  }),
-  serviceEngineer: one(users, {
-    fields: [pdiRecords.service_engineer_id],
-    references: [users.id],
-    relationName: "pdi_service_engineer",
-  }),
-}));
+// NOTE: pdiRecords.oemInventoryId / serviceEngineerId columns don't exist in the
+// live DB. Relation commented out until those columns are added.
+export const pdiRecordsRelations = relations(pdiRecords, ({ one }) => ({}));
 
 export const assignmentChangeLogsRelations = relations(
   assignmentChangeLogs,
   ({ one }) => ({
     lead: one(dealerLeads, {
-      fields: [assignmentChangeLogs.lead_id],
+      fields: [assignmentChangeLogs.leadId],
       references: [dealerLeads.id],
     }),
     oldUser: one(users, {
-      fields: [assignmentChangeLogs.old_user_id],
+      fields: [assignmentChangeLogs.oldUserId],
       references: [users.id],
     }),
     newUser: one(users, {
-      fields: [assignmentChangeLogs.new_user_id],
+      fields: [assignmentChangeLogs.newUserId],
       references: [users.id],
     }),
     changedBy: one(users, {
-      fields: [assignmentChangeLogs.changed_by],
+      fields: [assignmentChangeLogs.changedBy],
       references: [users.id],
     }),
   }),
@@ -1276,17 +1085,14 @@ export const assignmentChangeLogsRelations = relations(
 
 export const orderDisputesRelations = relations(orderDisputes, ({ one }) => ({
   order: one(orders, {
-    fields: [orderDisputes.order_id],
+    fields: [orderDisputes.orderId],
     references: [orders.id],
   }),
   resolvedBy: one(users, {
-    fields: [orderDisputes.resolved_by],
+    fields: [orderDisputes.resolvedBy],
     references: [users.id],
   }),
-  creator: one(users, {
-    fields: [orderDisputes.created_by],
-    references: [users.id],
-  }),
+  // NOTE: orderDisputes.createdBy column doesn't exist in live DB; relation omitted.
 }));
 
 export const accountsRelations = relations(accounts, ({ many }) => ({
@@ -1295,14 +1101,14 @@ export const accountsRelations = relations(accounts, ({ many }) => ({
 
 export const bolnaCallsRelations = relations(bolnaCalls, ({ one }) => ({
   lead: one(dealerLeads, {
-    fields: [bolnaCalls.lead_id],
+    fields: [bolnaCalls.leadId],
     references: [dealerLeads.id],
   }),
 }));
 
 export const aiCallLogsRelations = relations(aiCallLogs, ({ one }) => ({
   lead: one(dealerLeads, {
-    fields: [aiCallLogs.lead_id],
+    fields: [aiCallLogs.leadId],
     references: [dealerLeads.id],
   }),
 }));
@@ -1312,11 +1118,11 @@ export const callSessionsRelations = relations(callSessions, ({ many }) => ({
 
 export const callRecordsRelations = relations(callRecords, ({ one, many }) => ({
   session: one(callSessions, {
-    fields: [callRecords.session_id],
-    references: [callSessions.session_id],
+    fields: [callRecords.sessionId],
+    references: [callSessions.sessionId],
   }),
   lead: one(dealerLeads, {
-    fields: [callRecords.lead_id],
+    fields: [callRecords.leadId],
     references: [dealerLeads.id],
   }),
   messages: many(conversationMessages),
@@ -1326,7 +1132,7 @@ export const conversationMessagesRelations = relations(
   conversationMessages,
   ({ one }) => ({
     record: one(callRecords, {
-      fields: [conversationMessages.call_record_id],
+      fields: [conversationMessages.callRecordId],
       references: [callRecords.id],
     }),
   }),
@@ -1335,63 +1141,52 @@ export const conversationMessagesRelations = relations(
 // --- DEALER ADDITIONS (SOP Refinements) ---
 
 export const campaigns = pgTable("campaigns", {
-  id: varchar("id", { length: 255 }).primaryKey(), // CAMP-YYYYMMDD-XXX
-  name: text("name").notNull(),
-  type: varchar("type", { length: 50 }).notNull(), // sms, whatsapp, email
-  status: varchar("status", { length: 20 }).default("draft").notNull(), // draft, scheduled, running, completed
-  audience_filter: jsonb("audience_filter"), // Logic for segments
-  message_content: text("message_content"),
-  total_audience: integer("total_audience"),
-  cost: decimal("cost", { precision: 10, scale: 2 }),
-  created_by: uuid("created_by")
-    .references(() => users.id)
-    .notNull(),
-  started_at: timestamp("started_at", { withTimezone: true }),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  name: text().notNull(),
+  type: varchar({ length: 20 }).notNull(),
+  messageContent: text("message_content"),
+  audienceFilter: jsonb("audience_filter"),
+  totalAudience: integer("total_audience"),
+  status: varchar({ length: 20 }).default('draft').notNull(),
+  sentCount: integer("sent_count").default(0),
+  deliveredCount: integer("delivered_count").default(0),
+  failedCount: integer("failed_count").default(0),
+  scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  createdBy: uuid("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  cost: numeric({ precision: 10, scale:  2 }),
+  startedAt: timestamp("started_at", { withTimezone: true }),
 });
 
 // For "Process Loan" workflow tracking
 export const loanApplications = pgTable("loan_applications", {
-  id: varchar("id", { length: 255 }).primaryKey(), // LOAN-APP-XXX
-  // FK references `leads.id` (the borrower), matching both the live DB
-  // constraint loan_applications_lead_id_fkey and how application code uses
-  // it (e.g. dealer/loan-facilitation/queue COALESCEs leads.owner_name into
-  // applicant_name). Earlier this said `dealerLeads.id` — that was a stale
-  // refactor; dealer_leads is the AI-dialer prospecting table, unrelated.
-  lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id)
-    .notNull(),
-  applicant_name: text("applicant_name"), // De-normalized for list views
-  loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }),
-
-  // Status Flow
-  documents_uploaded: boolean("documents_uploaded").default(false),
-  company_validation_status: varchar("company_validation_status", {
-    length: 20,
-  })
-    .default("pending")
-    .notNull(), // pending, passed, failed
-  facilitation_fee_status: varchar("facilitation_fee_status", { length: 20 })
-    .default("pending")
-    .notNull(), // pending, paid
-  application_status: varchar("application_status", { length: 20 })
-    .default("new")
-    .notNull(), // new, processing, approved, disbursed, rejected
-
-  facilitation_fee_amount: decimal("facilitation_fee_amount", {
-    precision: 10,
-    scale: 2,
-  }),
-
-  created_by: uuid("created_by").references(() => users.id),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  dealerId: varchar("dealer_id", { length: 255 }),
+  applicantName: text("applicant_name"),
+  loanAmount: numeric("loan_amount", { precision: 12, scale:  2 }),
+  interestRate: numeric("interest_rate", { precision: 5, scale:  2 }),
+  tenureMonths: integer("tenure_months"),
+  emiAmount: numeric("emi_amount", { precision: 10, scale:  2 }),
+  downPayment: numeric("down_payment", { precision: 12, scale:  2 }),
+  facilitationFee: numeric("facilitation_fee", { precision: 10, scale:  2 }),
+  facilitationFeeStatus: varchar("facilitation_fee_status", { length: 20 }).default('pending'),
+  documentsUploaded: boolean("documents_uploaded").default(false),
+  status: varchar({ length: 30 }).default('draft'),
+  nbfcName: text("nbfc_name"),
+  nbfcRefId: text("nbfc_ref_id"),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  disbursedAt: timestamp("disbursed_at", { withTimezone: true }),
+  rejectionReason: text("rejection_reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  companyValidationStatus: varchar("company_validation_status", { length: 20 }).default('pending').notNull(),
+  applicationStatus: varchar("application_status", { length: 20 }).default('new').notNull(),
+  facilitationFeeAmount: numeric("facilitation_fee_amount", { precision: 10, scale:  2 }),
+  createdBy: uuid("created_by"),
 });
 
 // --- KYC MODULE ---
@@ -1399,33 +1194,31 @@ export const loanApplications = pgTable("loan_applications", {
 export const kycDocuments = pgTable(
   "kyc_documents",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // KYCDOC-YYYYMMDD-SEQ
-    lead_id: varchar("lead_id", { length: 255 })
-      .references(() => dealerLeads.id, { onDelete: "cascade" })
-      .notNull(),
-    doc_for: varchar("doc_for", { length: 20 }).default("customer").notNull(), // customer, borrower
-    doc_type: varchar("doc_type", { length: 50 }).notNull(), // aadhaar_front, aadhaar_back, pan_card, passport_photo, address_proof, rc_copy, bank_statement, cheque_1, cheque_2, cheque_3, cheque_4
-    file_url: text("file_url").notNull(),
-    file_name: text("file_name"),
-    file_size: integer("file_size"), // bytes
-    verification_status: varchar("verification_status", { length: 30 })
-      .default("pending")
-      .notNull(), // pending, in_progress, success, failed, awaiting_action
-    failed_reason: text("failed_reason"),
-    ocr_data: jsonb("ocr_data"), // Extracted data from OCR
-    api_response: jsonb("api_response"), // Third-party verification API response
-    verified_at: timestamp("verified_at", { withTimezone: true }),
-    uploaded_at: timestamp("uploaded_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    leadId: varchar("lead_id", { length: 255 }).notNull(),
+    docType: varchar("doc_type", { length: 50 }).notNull(),
+    fileUrl: text("file_url"),
+    verificationStatus: varchar("verification_status", { length: 30 }).default('pending'),
+    ocrData: jsonb("ocr_data"),
+    apiResponse: jsonb("api_response"),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow(),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    fileName: text("file_name"),
+    fileSize: integer("file_size"),
+    failedReason: text("failed_reason"),
+    fileType: varchar("file_type", { length: 50 }),
+    docStatus: varchar("doc_status", { length: 30 }).default('not_uploaded'),
+    rejectionReason: text("rejection_reason"),
+    uploadedBy: uuid("uploaded_by"),
+    verifiedBy: uuid("verified_by"),
+    docFor: varchar("doc_for", { length: 20 }).default('customer').notNull(),
   },
   (table) => {
     return {
-      kycDocsLeadIdx: index("kyc_documents_lead_id_idx").on(table.lead_id),
-      kycDocsTypeIdx: index("kyc_documents_doc_type_idx").on(table.doc_type),
+      kycDocsLeadIdx: index("kyc_documents_lead_id_idx").on(table.leadId),
+      kycDocsTypeIdx: index("kyc_documents_doc_type_idx").on(table.docType),
     };
   },
 );
@@ -1433,37 +1226,32 @@ export const kycDocuments = pgTable(
 export const kycVerifications = pgTable(
   "kyc_verifications",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // KYCVER-YYYYMMDD-SEQ
-    lead_id: varchar("lead_id", { length: 255 })
-      .references(() => dealerLeads.id, { onDelete: "cascade" })
-      .notNull(),
-    verification_type: varchar("verification_type", { length: 50 }).notNull(), // aadhaar, pan, bank, address, rc, mobile, cibil, photo
-    applicant: varchar("applicant", { length: 20 }).default("primary").notNull(), // primary, co_borrower
-    status: varchar("status", { length: 30 }).default("pending").notNull(), // pending, initiating, awaiting_action, in_progress, success, failed
-    api_provider: varchar("api_provider", { length: 50 }), // decentro, surepass, vahan
-    api_request: jsonb("api_request"),
-    api_response: jsonb("api_response"),
-    failed_reason: text("failed_reason"),
-    match_score: decimal("match_score", { precision: 5, scale: 2 }), // Fuzzy match percentage
-    retry_count: integer("retry_count").default(0),
-    submitted_at: timestamp("submitted_at", { withTimezone: true }),
-    completed_at: timestamp("completed_at", { withTimezone: true }),
-    admin_action: varchar("admin_action", { length: 30 }), // accepted, rejected, request_more_docs
-    admin_action_by: uuid("admin_action_by").references(() => users.id),
-    admin_action_at: timestamp("admin_action_at", { withTimezone: true }),
-    admin_action_notes: text("admin_action_notes"),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    leadId: varchar("lead_id", { length: 255 }).notNull(),
+    verificationType: varchar("verification_type", { length: 50 }).notNull(),
+    status: varchar({ length: 30 }).default('pending'),
+    apiProvider: varchar("api_provider", { length: 50 }),
+    apiRequest: jsonb("api_request"),
+    apiResponse: jsonb("api_response"),
+    failedReason: text("failed_reason"),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    matchScore: numeric("match_score", { precision: 5, scale:  2 }),
+    retryCount: integer("retry_count").default(0),
+    adminAction: varchar("admin_action", { length: 30 }),
+    adminActionBy: uuid("admin_action_by"),
+    adminActionAt: timestamp("admin_action_at", { withTimezone: true }),
+    adminActionNotes: text("admin_action_notes"),
+    verificationFor: varchar("verification_for", { length: 20 }).default('customer').notNull(),
+    applicant: varchar({ length: 20 }).default('primary').notNull(),
   },
   (table) => {
     return {
-      kycVerLeadIdx: index("kyc_verifications_lead_id_idx").on(table.lead_id),
+      kycVerLeadIdx: index("kyc_verifications_lead_id_idx").on(table.leadId),
       kycVerTypeIdx: index("kyc_verifications_type_idx").on(
-        table.verification_type,
+        table.verificationType,
       ),
     };
   },
@@ -1474,55 +1262,39 @@ export const kycVerifications = pgTable(
 export const digilockerTransactions = pgTable(
   "digilocker_transactions",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // DIGI-YYYYMMDD-SEQ
-    lead_id: varchar("lead_id", { length: 255 })
-      .references(() => dealerLeads.id, { onDelete: "cascade" })
-      .notNull(),
-    verification_id: varchar("verification_id", { length: 255 }).references(
-      () => kycVerifications.id,
-    ),
-    reference_id: varchar("reference_id", { length: 255 }).notNull(),
-    decentro_txn_id: varchar("decentro_txn_id", { length: 255 }),
-    session_id: varchar("session_id", { length: 255 }),
-    status: varchar("status", { length: 30 }).default("initiated").notNull(), // initiated, link_sent, link_opened, consent_given, document_fetched, failed, expired
-    customer_phone: varchar("customer_phone", { length: 20 }).notNull(),
-    customer_email: varchar("customer_email", { length: 255 }),
-    digilocker_url: text("digilocker_url"),
-    short_url: text("short_url"),
-    notification_channel: varchar("notification_channel", { length: 10 })
-      .default("sms")
-      .notNull(), // sms, email, both
-    link_sent_at: timestamp("link_sent_at", { withTimezone: true }),
-    link_opened_at: timestamp("link_opened_at", { withTimezone: true }),
-    customer_authorized_at: timestamp("customer_authorized_at", {
-      withTimezone: true,
-    }),
-    digilocker_raw_response: jsonb("digilocker_raw_response"),
-    aadhaar_extracted_data: jsonb("aadhaar_extracted_data"),
-    cross_match_result: jsonb("cross_match_result"),
-    // Binary PDF of the eAadhaar returned by Decentro when we call the
-    // eAadhaar endpoint with generate_pdf=true. Stored alongside the
-    // structured data so admin review has everything in one row.
-    aadhaar_pdf: bytea("aadhaar_pdf"),
-    // Decentro SMS delivery tracking (migration 0030)
-    sms_message_id: varchar("sms_message_id", { length: 255 }),
-    sms_delivered_at: timestamp("sms_delivered_at", { withTimezone: true }),
-    sms_failed_reason: text("sms_failed_reason"),
-    sms_attempts: integer("sms_attempts").default(0).notNull(),
-    expires_at: timestamp("expires_at", { withTimezone: true }),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    leadId: varchar("lead_id", { length: 255 }).notNull(),
+    verificationId: varchar("verification_id", { length: 255 }),
+    referenceId: varchar("reference_id", { length: 255 }),
+    decentroTxnId: varchar("decentro_txn_id", { length: 255 }),
+    sessionId: varchar("session_id", { length: 255 }),
+    status: varchar({ length: 50 }).default('initiated').notNull(),
+    customerPhone: varchar("customer_phone", { length: 20 }),
+    customerEmail: varchar("customer_email", { length: 255 }),
+    digilockerUrl: text("digilocker_url"),
+    shortUrl: text("short_url"),
+    notificationChannel: varchar("notification_channel", { length: 20 }).default('sms'),
+    linkSentAt: timestamp("link_sent_at", { withTimezone: true }),
+    linkOpenedAt: timestamp("link_opened_at", { withTimezone: true }),
+    customerAuthorizedAt: timestamp("customer_authorized_at", { withTimezone: true }),
+    digilockerRawResponse: jsonb("digilocker_raw_response"),
+    aadhaarExtractedData: jsonb("aadhaar_extracted_data"),
+    crossMatchResult: jsonb("cross_match_result"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    smsMessageId: varchar("sms_message_id", { length: 255 }),
+    smsDeliveredAt: timestamp("sms_delivered_at", { withTimezone: true }),
+    smsFailedReason: text("sms_failed_reason"),
+    smsAttempts: integer("sms_attempts").default(0).notNull(),
+    aadhaarPdf: bytea("aadhaar_pdf"),
   },
   (table) => ({
     digilockerLeadIdx: index("digilocker_transactions_lead_idx").on(
-      table.lead_id,
+      table.leadId,
     ),
     digilockerTxnIdx: index("digilocker_transactions_txn_idx").on(
-      table.decentro_txn_id,
+      table.decentroTxnId,
     ),
     digilockerStatusIdx: index("digilocker_transactions_status_idx").on(
       table.status,
@@ -1535,91 +1307,78 @@ export const digilockerTransactions = pgTable(
 export const kycDataAudit = pgTable(
   "kyc_data_audit",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // KYCAUD-YYYYMMDD-SEQ
-    lead_id: varchar("lead_id", { length: 255 })
-      .references(() => dealerLeads.id, { onDelete: "cascade" })
-      .notNull(),
-    field_name: varchar("field_name", { length: 50 }).notNull(),
-    field_value: varchar("field_value", { length: 200 }),
-    data_source: varchar("data_source", { length: 20 }).notNull(), // ocr, api, manual
-    entered_by: uuid("entered_by")
-      .references(() => users.id)
-      .notNull(),
-    entered_at: timestamp("entered_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    reason: text("reason"),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: serial().primaryKey().notNull(),
+    leadId: varchar("lead_id", { length: 255 }),
+    fieldName: varchar("field_name", { length: 50 }),
+    fieldValue: varchar("field_value", { length: 500 }),
+    dataSource: varchar("data_source", { length: 20 }),
+    enteredBy: uuid("entered_by"),
+    enteredAt: timestamp("entered_at", { withTimezone: true }).defaultNow(),
+    reason: text(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    kycDataAuditLeadIdx: index("kyc_data_audit_lead_idx").on(table.lead_id),
+    kycDataAuditLeadIdx: index("kyc_data_audit_lead_idx").on(table.leadId),
   }),
 );
 
 export const consentRecords = pgTable("consent_records", {
-  id: varchar("id", { length: 255 }).primaryKey(), // CONSENT-YYYYMMDD-SEQ
-  lead_id: varchar("lead_id", { length: 255 })
-    .references(() => dealerLeads.id, { onDelete: "cascade" })
-    .notNull(),
-  consent_for: varchar("consent_for", { length: 20 })
-    .default("primary")
-    .notNull(), // primary, co_borrower
-  consent_type: varchar("consent_type", { length: 30 }), // digital, manual, sms, whatsapp
-  consent_status: varchar("consent_status", { length: 30 })
-    .default("awaiting_signature")
-    .notNull(), // awaiting_signature, link_sent, digitally_signed, manual_uploaded, verified
-  consent_token: varchar("consent_token", { length: 255 }),
-  consent_link_url: text("consent_link_url"),
-  consent_link_sent_at: timestamp("consent_link_sent_at", {
-    withTimezone: true,
-  }),
-  consent_delivery_channel: varchar("consent_delivery_channel", { length: 20 }),
-  esign_transaction_id: varchar("esign_transaction_id", { length: 255 }),
-  signed_consent_url: text("signed_consent_url"),
-  generated_pdf_url: text("generated_pdf_url"),
-  signed_at: timestamp("signed_at", { withTimezone: true }),
-  signer_aadhaar_masked: varchar("signer_aadhaar_masked", { length: 20 }),
-  esign_retry_count: integer("esign_retry_count").default(0),
-  esign_error_message: text("esign_error_message"),
-  verified_by: uuid("verified_by").references(() => users.id),
-  verified_at: timestamp("verified_at", { withTimezone: true }),
-  admin_viewed_by: uuid("admin_viewed_by").references(() => users.id),
-  admin_viewed_at: timestamp("admin_viewed_at", { withTimezone: true }),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  consentType: varchar("consent_type", { length: 30 }).notNull(),
+  channel: varchar({ length: 20 }),
+  consentToken: text("consent_token"),
+  consentLinkUrl: text("consent_link_url"),
+  consentStatus: varchar("consent_status", { length: 20 }).default('awaiting_signature'),
+  signedAt: timestamp("signed_at", { withTimezone: true }),
+  generatedPdfUrl: text("generated_pdf_url"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  consentFor: varchar("consent_for", { length: 20 }).default('primary').notNull(),
+  consentLinkSentAt: timestamp("consent_link_sent_at", { withTimezone: true }),
+  signedConsentUrl: text("signed_consent_url"),
+  verifiedBy: uuid("verified_by"),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  consentLinkExpiresAt: timestamp("consent_link_expires_at", { withTimezone: true }),
+  consentDeliveryChannel: varchar("consent_delivery_channel", { length: 20 }),
+  signMethod: varchar("sign_method", { length: 30 }),
+  esignTransactionId: varchar("esign_transaction_id", { length: 255 }),
+  esignCertificateId: varchar("esign_certificate_id", { length: 255 }),
+  esignProvider: varchar("esign_provider", { length: 50 }),
+  esignErrorCode: varchar("esign_error_code", { length: 50 }),
+  esignErrorMessage: text("esign_error_message"),
+  signerAadhaarMasked: varchar("signer_aadhaar_masked", { length: 20 }),
+  rejectedBy: uuid("rejected_by"),
+  rejectedAt: timestamp("rejected_at", { withTimezone: true }),
+  rejectionReason: varchar("rejection_reason", { length: 255 }),
+  reviewerNotes: text("reviewer_notes"),
+  consentAttemptCount: integer("consent_attempt_count").default(0),
+  esignRetryCount: integer("esign_retry_count").default(0),
+  adminViewedBy: uuid("admin_viewed_by"),
+  adminViewedAt: timestamp("admin_viewed_at", { withTimezone: true }),
 });
 
 export const couponCodes = pgTable("coupon_codes", {
-  id: varchar("id", { length: 255 }).primaryKey(), // COUPON-SEQ
-  code: varchar("code", { length: 20 }).notNull().unique(),
-  dealer_id: varchar("dealer_id", { length: 255 })
-    .references(() => accounts.id)
-    .notNull(),
-  status: varchar("status", { length: 20 }).default("available").notNull(), // available, validated, used, expired
-  credits_available: integer("credits_available").default(1),
-  discount_type: varchar("discount_type", { length: 20 }).default("flat"), // flat, percentage
-  discount_value: decimal("discount_value", {
-    precision: 10,
-    scale: 2,
-  }).default("0"),
-  max_discount_cap: decimal("max_discount_cap", { precision: 10, scale: 2 }),
-  min_amount: decimal("min_amount", { precision: 10, scale: 2 }),
-  used_by_lead_id: varchar("used_by_lead_id", { length: 255 }).references(
-    () => dealerLeads.id,
-  ),
-  used_by: uuid("used_by").references(() => users.id),
-  validated_at: timestamp("validated_at", { withTimezone: true }),
-  used_at: timestamp("used_at", { withTimezone: true }),
-  expires_at: timestamp("expires_at", { withTimezone: true }),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  code: varchar({ length: 50 }).notNull(),
+  dealerId: varchar("dealer_id", { length: 255 }),
+  isUsed: boolean("is_used").default(false),
+  usedByLeadId: varchar("used_by_lead_id", { length: 255 }),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  status: varchar({ length: 20 }).default('available').notNull(),
+  creditsAvailable: integer("credits_available").default(1),
+  usedBy: uuid("used_by"),
+  validatedAt: timestamp("validated_at", { withTimezone: true }),
+  discountType: varchar("discount_type", { length: 20 }).default('flat'),
+  discountValue: numeric("discount_value", { precision: 10, scale:  2 }).default('0'),
+  maxDiscountCap: numeric("max_discount_cap", { precision: 10, scale:  2 }),
+  minAmount: numeric("min_amount", { precision: 10, scale:  2 }),
+  batchId: varchar("batch_id", { length: 255 }),
+  reservedAt: timestamp("reserved_at", { withTimezone: true }),
+  reservedBy: uuid("reserved_by"),
+  reservedForLeadId: varchar("reserved_for_lead_id", { length: 255 }),
 });
 
 // --- COUPON BATCHES ---
@@ -1627,28 +1386,20 @@ export const couponCodes = pgTable("coupon_codes", {
 export const couponBatches = pgTable(
   "coupon_batches",
   {
-    id: varchar("id", { length: 255 }).primaryKey(),
-    name: varchar("name", { length: 200 }).notNull(),
-    dealer_id: varchar("dealer_id", { length: 255 })
-      .references(() => accounts.id)
-      .notNull(),
-    prefix: varchar("prefix", { length: 20 }).notNull(),
-    coupon_value: decimal("coupon_value", { precision: 10, scale: 2 })
-      .default("0")
-      .notNull(),
-    total_quantity: integer("total_quantity").notNull(),
-    expiry_date: timestamp("expiry_date", { withTimezone: true }),
-    status: varchar("status", { length: 20 }).default("active").notNull(),
-    created_by: uuid("created_by").references(() => users.id),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    name: varchar({ length: 200 }).notNull(),
+    dealerId: varchar("dealer_id", { length: 255 }).notNull(),
+    prefix: varchar({ length: 20 }).notNull(),
+    couponValue: numeric("coupon_value", { precision: 10, scale:  2 }).default('0').notNull(),
+    totalQuantity: integer("total_quantity").notNull(),
+    expiryDate: timestamp("expiry_date", { withTimezone: true }),
+    status: varchar({ length: 20 }).default('active').notNull(),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    batchDealerIdx: index("coupon_batches_dealer_idx").on(table.dealer_id),
+    batchDealerIdx: index("coupon_batches_dealer_idx").on(table.dealerId),
     batchStatusIdx: index("coupon_batches_status_idx").on(table.status),
   }),
 );
@@ -1658,25 +1409,21 @@ export const couponBatches = pgTable(
 export const couponAuditLog = pgTable(
   "coupon_audit_log",
   {
-    id: varchar("id", { length: 255 }).primaryKey(),
-    coupon_id: varchar("coupon_id", { length: 255 })
-      .references(() => couponCodes.id)
-      .notNull(),
-    action: varchar("action", { length: 20 }).notNull(),
-    old_status: varchar("old_status", { length: 20 }),
-    new_status: varchar("new_status", { length: 20 }),
-    lead_id: varchar("lead_id", { length: 255 }).references(() => leads.id),
-    performed_by: uuid("performed_by"),
-    ip_address: varchar("ip_address", { length: 45 }),
-    notes: text("notes"),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    couponId: varchar("coupon_id", { length: 255 }).notNull(),
+    action: varchar({ length: 20 }).notNull(),
+    oldStatus: varchar("old_status", { length: 20 }),
+    newStatus: varchar("new_status", { length: 20 }),
+    leadId: varchar("lead_id", { length: 255 }),
+    performedBy: uuid("performed_by"),
+    ipAddress: varchar("ip_address", { length: 45 }),
+    notes: text(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     auditCouponIdx: index("coupon_audit_log_coupon_idx").on(
-      table.coupon_id,
-      table.created_at,
+      table.couponId,
+      table.createdAt,
     ),
     auditActionIdx: index("coupon_audit_log_action_idx").on(table.action),
   }),
@@ -1687,75 +1434,40 @@ export const couponAuditLog = pgTable(
 export const facilitationPayments = pgTable(
   "facilitation_payments",
   {
-    id: varchar("id", { length: 255 }).primaryKey(),
-    lead_id: varchar("lead_id", { length: 255 })
-      .references(() => dealerLeads.id, { onDelete: "cascade" })
-      .notNull(),
-    payment_method: varchar("payment_method", { length: 30 }),
-
-    facilitation_fee_base_amount: decimal("facilitation_fee_base_amount", {
-      precision: 10,
-      scale: 2,
-    })
-      .notNull()
-      .default("1500.00"),
-    coupon_code: varchar("coupon_code", { length: 50 }),
-    coupon_id: varchar("coupon_id", { length: 255 }),
-    coupon_discount_type: varchar("coupon_discount_type", { length: 20 }),
-    coupon_discount_value: decimal("coupon_discount_value", {
-      precision: 10,
-      scale: 2,
-    }),
-    coupon_discount_amount: decimal("coupon_discount_amount", {
-      precision: 10,
-      scale: 2,
-    }).default("0"),
-    facilitation_fee_final_amount: decimal("facilitation_fee_final_amount", {
-      precision: 10,
-      scale: 2,
-    }).notNull(),
-
-    razorpay_qr_id: varchar("razorpay_qr_id", { length: 255 }),
-    razorpay_qr_status: varchar("razorpay_qr_status", { length: 30 }),
-    razorpay_qr_image_url: text("razorpay_qr_image_url"),
-    razorpay_qr_short_url: text("razorpay_qr_short_url"),
-    razorpay_qr_expires_at: timestamp("razorpay_qr_expires_at", {
-      withTimezone: true,
-    }),
-
-    razorpay_payment_id: varchar("razorpay_payment_id", { length: 255 }),
-    razorpay_order_id: varchar("razorpay_order_id", { length: 255 }),
-    razorpay_payment_status: varchar("razorpay_payment_status", { length: 30 }),
-    utr_number_manual: varchar("utr_number_manual", { length: 100 }),
-    payment_screenshot_url: text("payment_screenshot_url"),
-
-    facilitation_fee_status: varchar("facilitation_fee_status", { length: 30 })
-      .notNull()
-      .default("UNPAID"),
-    // UNPAID, QR_GENERATED, PAYMENT_PENDING_CONFIRMATION, PAID, FAILED, EXPIRED
-
-    payment_paid_at: timestamp("payment_paid_at", { withTimezone: true }),
-    payment_verified_at: timestamp("payment_verified_at", {
-      withTimezone: true,
-    }),
-    payment_verification_source: varchar("payment_verification_source", {
-      length: 30,
-    }),
-
-    created_by: uuid("created_by").references(() => users.id),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    leadId: varchar("lead_id", { length: 255 }).notNull(),
+    paymentMethod: varchar("payment_method", { length: 30 }),
+    facilitationFeeBaseAmount: numeric("facilitation_fee_base_amount", { precision: 10, scale:  2 }).default('1500.00').notNull(),
+    couponCode: varchar("coupon_code", { length: 50 }),
+    couponId: varchar("coupon_id", { length: 255 }),
+    couponDiscountType: varchar("coupon_discount_type", { length: 20 }),
+    couponDiscountValue: numeric("coupon_discount_value", { precision: 10, scale:  2 }),
+    couponDiscountAmount: numeric("coupon_discount_amount", { precision: 10, scale:  2 }).default('0'),
+    facilitationFeeFinalAmount: numeric("facilitation_fee_final_amount", { precision: 10, scale:  2 }).notNull(),
+    razorpayQrId: varchar("razorpay_qr_id", { length: 255 }),
+    razorpayQrStatus: varchar("razorpay_qr_status", { length: 30 }),
+    razorpayQrImageUrl: text("razorpay_qr_image_url"),
+    razorpayQrShortUrl: text("razorpay_qr_short_url"),
+    razorpayQrExpiresAt: timestamp("razorpay_qr_expires_at", { withTimezone: true }),
+    razorpayPaymentId: varchar("razorpay_payment_id", { length: 255 }),
+    razorpayOrderId: varchar("razorpay_order_id", { length: 255 }),
+    razorpayPaymentStatus: varchar("razorpay_payment_status", { length: 30 }),
+    utrNumberManual: varchar("utr_number_manual", { length: 100 }),
+    paymentScreenshotUrl: text("payment_screenshot_url"),
+    facilitationFeeStatus: varchar("facilitation_fee_status", { length: 30 }).default('UNPAID').notNull(),
+    paymentPaidAt: timestamp("payment_paid_at", { withTimezone: true }),
+    paymentVerifiedAt: timestamp("payment_verified_at", { withTimezone: true }),
+    paymentVerificationSource: varchar("payment_verification_source", { length: 30 }),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    fpLeadIdx: index("facilitation_payments_lead_id_idx").on(table.lead_id),
+    fpLeadIdx: index("facilitation_payments_lead_id_idx").on(table.leadId),
     fpStatusIdx: index("facilitation_payments_status_idx").on(
-      table.facilitation_fee_status,
+      table.facilitationFeeStatus,
     ),
-    fpQrIdx: index("facilitation_payments_rzp_qr_idx").on(table.razorpay_qr_id),
+    fpQrIdx: index("facilitation_payments_rzp_qr_idx").on(table.razorpayQrId),
   }),
 );
 
@@ -1763,11 +1475,11 @@ export const facilitationPaymentsRelations = relations(
   facilitationPayments,
   ({ one }) => ({
     lead: one(dealerLeads, {
-      fields: [facilitationPayments.lead_id],
+      fields: [facilitationPayments.leadId],
       references: [dealerLeads.id],
     }),
     creator: one(users, {
-      fields: [facilitationPayments.created_by],
+      fields: [facilitationPayments.createdBy],
       references: [users.id],
     }),
   }),
@@ -1778,115 +1490,89 @@ export const facilitationPaymentsRelations = relations(
 export const coBorrowers = pgTable(
   "co_borrowers",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // COBOR-YYYYMMDD-SEQ
-    lead_id: varchar("lead_id", { length: 255 })
-      .references(() => dealerLeads.id, { onDelete: "cascade" })
-      .notNull(),
-    full_name: text("full_name").notNull(),
-    father_or_husband_name: text("father_or_husband_name"),
-    dob: timestamp("dob", { withTimezone: true }),
-    phone: varchar("phone", { length: 20 }).notNull(),
-    permanent_address: text("permanent_address"),
-    current_address: text("current_address"),
-    is_current_same: boolean("is_current_same").default(false),
-    pan_no: varchar("pan_no", { length: 20 }),
-    aadhaar_no: varchar("aadhaar_no", { length: 20 }),
-    auto_filled: boolean("auto_filled").default(false),
-    kyc_status: varchar("kyc_status", { length: 30 }).default("not_started"), // not_started, draft, in_progress, completed, failed
-    consent_status: varchar("consent_status", { length: 30 }).default(
-      "awaiting_signature",
-    ),
-    verification_submitted_at: timestamp("verification_submitted_at", {
-      withTimezone: true,
-    }),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    leadId: varchar("lead_id", { length: 255 }).notNull(),
+    fullName: text("full_name"),
+    phone: varchar({ length: 20 }),
+    aadhaarNo: varchar("aadhaar_no", { length: 12 }),
+    panNo: varchar("pan_no", { length: 10 }),
+    dob: date(),
+    relationship: varchar({ length: 50 }),
+    income: numeric({ precision: 12, scale:  2 }),
+    address: text(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    fatherOrHusbandName: text("father_or_husband_name"),
+    permanentAddress: text("permanent_address"),
+    currentAddress: text("current_address"),
+    isCurrentSame: boolean("is_current_same").default(false),
+    autoFilled: boolean("auto_filled").default(false),
+    kycStatus: varchar("kyc_status", { length: 30 }).default('not_started'),
+    consentStatus: varchar("consent_status", { length: 30 }).default('awaiting_signature'),
+    verificationSubmittedAt: timestamp("verification_submitted_at", { withTimezone: true }),
   },
   (table) => {
     return {
-      coBorrowerLeadIdx: index("co_borrowers_lead_id_idx").on(table.lead_id),
+      coBorrowerLeadIdx: index("co_borrowers_lead_id_idx").on(table.leadId),
     };
   },
 );
 
 export const coBorrowerDocuments = pgTable("co_borrower_documents", {
-  id: varchar("id", { length: 255 }).primaryKey(), // COBDOC-YYYYMMDD-SEQ
-  co_borrower_id: varchar("co_borrower_id", { length: 255 })
-    .references(() => coBorrowers.id, { onDelete: "cascade" })
-    .notNull(),
-  lead_id: varchar("lead_id", { length: 255 })
-    .references(() => dealerLeads.id, { onDelete: "cascade" })
-    .notNull(),
-  doc_type: varchar("document_type", { length: 50 }).notNull(), // aadhaar_front, aadhaar_back, pan_card, passport_photo, address_proof, rc_copy, bank_statement, cheque_1-4
-  file_url: text("document_url").notNull(),
-  file_name: text("file_name"),
-  file_size: integer("file_size"),
-  verification_status: varchar("verification_status", { length: 30 }).default("pending"),
-  status: varchar("status", { length: 30 }).default("pending").notNull(),
-  ocr_data: jsonb("ocr_data"),
-  uploaded_at: timestamp("uploaded_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  coBorrowerId: varchar("co_borrower_id", { length: 255 }),
+  documentType: varchar("document_type", { length: 50 }).notNull(),
+  documentUrl: text("document_url"),
+  status: varchar({ length: 30 }).default('pending'),
+  ocrData: jsonb("ocr_data"),
+  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  fileName: text("file_name"),
+  fileSize: integer("file_size"),
+  verificationStatus: varchar("verification_status", { length: 30 }).default('pending'),
 });
 
 export const otherDocumentRequests = pgTable("other_document_requests", {
-  id: varchar("id", { length: 255 }).primaryKey(), // OTHERDOC-SEQ
-  lead_id: varchar("lead_id", { length: 255 })
-    .references(() => dealerLeads.id, { onDelete: "cascade" })
-    .notNull(),
-  doc_for: varchar("doc_for", { length: 20 }).default("primary").notNull(), // primary, co_borrower
-  doc_label: text("doc_label").notNull(), // e.g., "Rent Agreement", "Owner Verification"
-  doc_key: varchar("doc_key", { length: 100 }).notNull(), // machine-friendly key
-  is_required: boolean("is_required").default(true),
-  file_url: text("file_url"),
-  upload_status: varchar("upload_status", { length: 20 })
-    .default("not_uploaded")
-    .notNull(), // not_uploaded, uploaded, rejected, verified
-  rejection_reason: text("rejection_reason"),
-  reviewed_by: uuid("reviewed_by").references(() => users.id),
-  reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
-  requested_by: uuid("requested_by")
-    .references(() => users.id)
-    .notNull(),
-  uploaded_at: timestamp("uploaded_at", { withTimezone: true }),
-  upload_token: varchar("upload_token", { length: 255 }),
-  token_expires_at: timestamp("token_expires_at", { withTimezone: true }),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  requestedBy: uuid("requested_by"),
+  docLabel: text("doc_label").notNull(),
+  description: text(),
+  fileUrl: text("file_url"),
+  uploadStatus: varchar("upload_status", { length: 20 }).default('pending'),
+  uploadedAt: timestamp("uploaded_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  uploadToken: varchar("upload_token", { length: 255 }),
+  tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
+  docFor: varchar("doc_for", { length: 20 }).default('primary').notNull(),
+  docKey: varchar("doc_key", { length: 100 }).default('other').notNull(),
+  isRequired: boolean("is_required").default(true),
+  rejectionReason: text("rejection_reason"),
+  reviewedBy: uuid("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  documentName: text("document_name"),
+  documentUrl: text("document_url"),
+  status: varchar({ length: 20 }).default('pending'),
 });
 
 export const coBorrowerRequests = pgTable(
   "co_borrower_requests",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // COBREQ-YYYYMMDD-SEQ
-    lead_id: varchar("lead_id", { length: 255 })
-      .references(() => dealerLeads.id, { onDelete: "cascade" })
-      .notNull(),
-    attempt_number: integer("attempt_number").default(1).notNull(),
-    reason: text("reason"),
-    status: varchar("status", { length: 30 }).default("open").notNull(), // open, replaced, completed
-    created_by: uuid("created_by").references(() => users.id),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    leadId: varchar("lead_id", { length: 255 }).notNull(),
+    attemptNumber: integer("attempt_number").default(1).notNull(),
+    reason: text(),
+    status: varchar({ length: 30 }).default('open').notNull(),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     coBorrowerRequestsLeadIdx: index("co_borrower_requests_lead_id_idx").on(
-      table.lead_id,
+      table.leadId,
     ),
   }),
 );
@@ -1896,43 +1582,32 @@ export const coBorrowerRequests = pgTable(
 export const loanOffers = pgTable(
   "loan_offers",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // OFFER-YYYYMMDD-SEQ
-    lead_id: varchar("lead_id", { length: 255 })
-      .references(() => dealerLeads.id, { onDelete: "cascade" })
-      .notNull(),
-    financier_name: text("financier_name").notNull(),
-    loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }).notNull(),
-    interest_rate: decimal("interest_rate", {
-      precision: 5,
-      scale: 2,
-    }).notNull(), // % per annum
-    tenure_months: integer("tenure_months").notNull(),
-    emi: decimal("emi", { precision: 10, scale: 2 }).notNull(),
-    processing_fee: decimal("processing_fee", { precision: 10, scale: 2 }),
-    notes: text("notes"),
-    status: varchar("status", { length: 20 }).default("pending").notNull(), // pending, offered, selected, booked
-    created_by: uuid("created_by")
-      .references(() => users.id)
-      .notNull(),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    leadId: varchar("lead_id", { length: 255 }).notNull(),
+    financierName: text("financier_name").notNull(),
+    loanAmount: numeric("loan_amount", { precision: 12, scale:  2 }).notNull(),
+    interestRate: numeric("interest_rate", { precision: 5, scale:  2 }).notNull(),
+    tenureMonths: integer("tenure_months").notNull(),
+    emi: numeric({ precision: 10, scale:  2 }).notNull(),
+    processingFee: numeric("processing_fee", { precision: 10, scale:  2 }),
+    notes: text(),
+    status: varchar({ length: 20 }).default('pending').notNull(),
+    createdBy: uuid("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    loanOffersLeadIdx: index("loan_offers_lead_id_idx").on(table.lead_id),
+    loanOffersLeadIdx: index("loan_offers_lead_id_idx").on(table.leadId),
   }),
 );
 
 export const loanOffersRelations = relations(loanOffers, ({ one }) => ({
   lead: one(dealerLeads, {
-    fields: [loanOffers.lead_id],
+    fields: [loanOffers.leadId],
     references: [dealerLeads.id],
   }),
   creator: one(users, {
-    fields: [loanOffers.created_by],
+    fields: [loanOffers.createdBy],
     references: [users.id],
   }),
 }));
@@ -1940,115 +1615,79 @@ export const loanOffersRelations = relations(loanOffers, ({ one }) => ({
 // --- ADMIN KYC REVIEW ---
 
 export const adminKycReviews = pgTable("admin_kyc_reviews", {
-  id: varchar("id", { length: 255 }).primaryKey(), // REVIEW-YYYYMMDD-SEQ
-  lead_id: varchar("lead_id", { length: 255 })
-    .references(() => dealerLeads.id, { onDelete: "cascade" })
-    .notNull(),
-  review_for: varchar("review_for", { length: 20 })
-    .default("primary")
-    .notNull(), // primary, co_borrower
-  document_id: varchar("document_id", { length: 255 }), // Reference to kyc_documents or co_borrower_documents
-  document_type: varchar("document_type", { length: 50 }),
-  outcome: varchar("outcome", { length: 20 }).notNull(), // verified, rejected, request_additional
-  rejection_reason: text("rejection_reason"),
-  additional_doc_requested: text("additional_doc_requested"), // If outcome is request_additional
-  reviewer_id: uuid("reviewer_id")
-    .references(() => users.id)
-    .notNull(),
-  reviewer_notes: text("reviewer_notes"),
-  reviewed_at: timestamp("reviewed_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  reviewFor: varchar("review_for", { length: 20 }).default('primary').notNull(),
+  documentId: varchar("document_id", { length: 255 }),
+  documentType: varchar("document_type", { length: 50 }),
+  outcome: varchar({ length: 20 }).notNull(),
+  rejectionReason: text("rejection_reason"),
+  additionalDocRequested: text("additional_doc_requested"),
+  reviewerId: uuid("reviewer_id").notNull(),
+  reviewerNotes: text("reviewer_notes"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const adminVerificationQueue = pgTable(
   "admin_verification_queue",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // ADMQ-YYYYMMDD-SEQ
-    queue_type: varchar("queue_type", { length: 50 })
-      .default("kyc_verification")
-      .notNull(),
-    lead_id: text("lead_id")
-      .references(() => dealerLeads.id, { onDelete: "cascade" })
-      .notNull(),
-    priority: varchar("priority", { length: 20 }).default("normal").notNull(),
-    assigned_to: uuid("assigned_to").references(() => users.id),
-    submitted_by: uuid("submitted_by").references(() => users.id),
-    status: varchar("status", { length: 50 })
-      .default("pending_itarang_verification")
-      .notNull(),
-    submitted_at: timestamp("submitted_at", { withTimezone: true }),
-    reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    queueType: varchar("queue_type", { length: 50 }).default('kyc_verification').notNull(),
+    leadId: text("lead_id").notNull(),
+    priority: varchar({ length: 20 }).default('normal').notNull(),
+    assignedTo: uuid("assigned_to"),
+    submittedBy: uuid("submitted_by"),
+    status: varchar({ length: 50 }).default('pending_itarang_verification').notNull(),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     adminVerificationQueueLeadIdx: index(
       "admin_verification_queue_lead_idx",
-    ).on(table.lead_id),
+    ).on(table.leadId),
     adminVerificationQueueStatusIdx: index(
       "admin_verification_queue_status_idx",
     ).on(table.status),
     adminVerificationQueueAssignedIdx: index(
       "admin_verification_queue_assigned_idx",
-    ).on(table.assigned_to),
+    ).on(table.assignedTo),
     adminVerificationQueueCreatedIdx: index(
       "admin_verification_queue_created_idx",
-    ).on(table.created_at),
+    ).on(table.createdAt),
   }),
 );
 
 export const kycVerificationMetadata = pgTable(
   "kyc_verification_metadata",
   {
-    lead_id: text("lead_id")
-      .primaryKey()
-      .references(() => dealerLeads.id, { onDelete: "cascade" }),
-    submission_timestamp: timestamp("submission_timestamp", {
-      withTimezone: true,
-    }).notNull(),
-    case_type: varchar("case_type", { length: 20 }),
-    coupon_code: varchar("coupon_code", { length: 50 }),
-    coupon_status: varchar("coupon_status", { length: 20 })
-      .default("reserved")
-      .notNull(),
-    documents_count: integer("documents_count").default(0).notNull(),
-    consent_verified: boolean("consent_verified").default(false).notNull(),
-    dealer_edits_locked: boolean("dealer_edits_locked")
-      .default(false)
-      .notNull(),
-    verification_started_at: timestamp("verification_started_at", {
-      withTimezone: true,
-    }),
-    first_api_execution_at: timestamp("first_api_execution_at", {
-      withTimezone: true,
-    }),
-    first_api_type: varchar("first_api_type", { length: 50 }),
-    final_decision: varchar("final_decision", { length: 30 }),
-    final_decision_at: timestamp("final_decision_at", { withTimezone: true }),
-    final_decision_by: uuid("final_decision_by").references(() => users.id),
-    final_decision_notes: text("final_decision_notes"),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    leadId: varchar("lead_id", { length: 255 }).primaryKey().notNull(),
+    submissionTimestamp: timestamp("submission_timestamp", { withTimezone: true }),
+    caseType: varchar("case_type", { length: 20 }),
+    couponCode: varchar("coupon_code", { length: 100 }),
+    couponStatus: varchar("coupon_status", { length: 30 }).default('reserved'),
+    documentsCount: integer("documents_count"),
+    consentVerified: boolean("consent_verified").default(false),
+    dealerEditsLocked: boolean("dealer_edits_locked").default(false),
+    verificationStartedAt: timestamp("verification_started_at", { withTimezone: true }),
+    firstApiExecutionAt: timestamp("first_api_execution_at", { withTimezone: true }),
+    firstApiType: varchar("first_api_type", { length: 50 }),
+    finalDecision: varchar("final_decision", { length: 20 }),
+    finalDecisionAt: timestamp("final_decision_at", { withTimezone: true }),
+    finalDecisionBy: uuid("final_decision_by"),
+    finalDecisionNotes: text("final_decision_notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     kycVerificationMetadataCouponIdx: index(
       "kyc_verification_metadata_coupon_idx",
-    ).on(table.coupon_code),
+    ).on(table.couponCode),
     kycVerificationMetadataStatusIdx: index(
       "kyc_verification_metadata_coupon_status_idx",
-    ).on(table.coupon_status),
+    ).on(table.couponStatus),
   }),
 );
 
@@ -2057,87 +1696,45 @@ export const kycVerificationMetadata = pgTable(
 export const deployedAssets = pgTable(
   "deployed_assets",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // ASSET-YYYYMMDD-SEQ
-    inventory_id: varchar("inventory_id", { length: 255 })
-      .references(() => inventory.id)
-      .notNull(),
-    lead_id: varchar("lead_id", { length: 255 }).references(
-      () => dealerLeads.id,
-    ),
-    deal_id: varchar("deal_id", { length: 255 }).references(() => deals.id),
-    dealer_id: varchar("dealer_id", { length: 255 }).references(
-      () => accounts.id,
-    ),
-    customer_name: text("customer_name"),
-    customer_phone: varchar("customer_phone", { length: 20 }),
-
-    // Asset Info (denormalized)
-    serial_number: varchar("serial_number", { length: 255 }),
-    asset_category: varchar("asset_category", { length: 20 }),
-    asset_type: varchar("asset_type", { length: 50 }),
-    model_type: text("model_type"),
-
-    // Deployment
-    deployment_date: timestamp("deployment_date", {
-      withTimezone: true,
-    }).notNull(),
-    deployment_location: text("deployment_location"),
-    latitude: decimal("latitude", { precision: 10, scale: 8 }),
-    longitude: decimal("longitude", { precision: 11, scale: 8 }),
-
-    // QR Code
-    qr_code_url: text("qr_code_url"),
-    qr_code_data: text("qr_code_data"),
-
-    // Payment
-    payment_type: varchar("payment_type", { length: 20 }), // upfront, finance, lease
-    payment_status: varchar("payment_status", { length: 20 }).default(
-      "pending",
-    ), // pending, partial, paid
-
-    // Battery Health & Telemetry
-    battery_health_percent: decimal("battery_health_percent", {
-      precision: 5,
-      scale: 2,
-    }),
-    last_voltage: decimal("last_voltage", { precision: 5, scale: 2 }),
-    last_soc: integer("last_soc"),
-    last_telemetry_at: timestamp("last_telemetry_at", { withTimezone: true }),
-    telemetry_data: jsonb("telemetry_data"), // Historical telemetry snapshots
-    total_cycles: integer("total_cycles"),
-
-    // Warranty
-    warranty_start_date: timestamp("warranty_start_date", {
-      withTimezone: true,
-    }),
-    warranty_end_date: timestamp("warranty_end_date", { withTimezone: true }),
-    warranty_status: varchar("warranty_status", { length: 20 }).default(
-      "active",
-    ), // active, expired, claimed
-
-    // Status
-    status: varchar("status", { length: 20 }).default("active").notNull(), // active, maintenance, inactive, returned, replaced
-    last_maintenance_at: timestamp("last_maintenance_at", {
-      withTimezone: true,
-    }),
-    next_maintenance_due: timestamp("next_maintenance_due", {
-      withTimezone: true,
-    }),
-
-    created_by: uuid("created_by")
-      .references(() => users.id)
-      .notNull(),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    inventoryId: varchar("inventory_id", { length: 255 }).notNull(),
+    leadId: varchar("lead_id", { length: 255 }),
+    dealId: varchar("deal_id", { length: 255 }),
+    dealerId: varchar("dealer_id", { length: 255 }),
+    customerName: text("customer_name"),
+    customerPhone: varchar("customer_phone", { length: 20 }),
+    serialNumber: varchar("serial_number", { length: 255 }),
+    assetCategory: varchar("asset_category", { length: 20 }),
+    assetType: varchar("asset_type", { length: 50 }),
+    modelType: text("model_type"),
+    deploymentDate: timestamp("deployment_date", { withTimezone: true }).notNull(),
+    deploymentLocation: text("deployment_location"),
+    latitude: numeric({ precision: 10, scale:  8 }),
+    longitude: numeric({ precision: 11, scale:  8 }),
+    qrCodeUrl: text("qr_code_url"),
+    qrCodeData: text("qr_code_data"),
+    paymentType: varchar("payment_type", { length: 20 }),
+    paymentStatus: varchar("payment_status", { length: 20 }).default('pending'),
+    batteryHealthPercent: numeric("battery_health_percent", { precision: 5, scale:  2 }),
+    lastVoltage: numeric("last_voltage", { precision: 5, scale:  2 }),
+    lastSoc: integer("last_soc"),
+    lastTelemetryAt: timestamp("last_telemetry_at", { withTimezone: true }),
+    telemetryData: jsonb("telemetry_data"),
+    totalCycles: integer("total_cycles"),
+    warrantyStartDate: timestamp("warranty_start_date", { withTimezone: true }),
+    warrantyEndDate: timestamp("warranty_end_date", { withTimezone: true }),
+    warrantyStatus: varchar("warranty_status", { length: 20 }).default('active'),
+    status: varchar({ length: 20 }).default('active').notNull(),
+    lastMaintenanceAt: timestamp("last_maintenance_at", { withTimezone: true }),
+    nextMaintenanceDue: timestamp("next_maintenance_due", { withTimezone: true }),
+    createdBy: uuid("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => {
     return {
       deployedAssetsDealerIdx: index("deployed_assets_dealer_id_idx").on(
-        table.dealer_id,
+        table.dealerId,
       ),
       deployedAssetsStatusIdx: index("deployed_assets_status_idx").on(
         table.status,
@@ -2147,19 +1744,13 @@ export const deployedAssets = pgTable(
 );
 
 export const deploymentHistory = pgTable("deployment_history", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  deployed_asset_id: varchar("deployed_asset_id", { length: 255 })
-    .references(() => deployedAssets.id, { onDelete: "cascade" })
-    .notNull(),
-  action: varchar("action", { length: 50 }).notNull(), // deployed, maintenance, replaced, returned, status_change
-  description: text("description"),
-  performed_by: uuid("performed_by")
-    .references(() => users.id)
-    .notNull(),
-  metadata: jsonb("metadata"), // Action-specific data
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  deployedAssetId: varchar("deployed_asset_id", { length: 255 }).notNull(),
+  action: varchar({ length: 50 }).notNull(),
+  description: text(),
+  performedBy: uuid("performed_by").notNull(),
+  metadata: jsonb(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // --- SERVICE MANAGEMENT MODULE ---
@@ -2167,57 +1758,38 @@ export const deploymentHistory = pgTable("deployment_history", {
 export const serviceTickets = pgTable(
   "service_tickets",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // SVC-YYYYMMDD-SEQ
-    deployed_asset_id: varchar("deployed_asset_id", { length: 255 }).references(
-      () => deployedAssets.id,
-    ),
-    dealer_id: varchar("dealer_id", { length: 255 })
-      .references(() => accounts.id)
-      .notNull(),
-    customer_name: text("customer_name"),
-    customer_phone: varchar("customer_phone", { length: 20 }),
-
-    // Issue Details
-    issue_type: varchar("issue_type", { length: 50 }).notNull(), // battery_failure, charger_issue, physical_damage, performance_degradation, connectivity, other
-    issue_description: text("issue_description").notNull(),
-    priority: varchar("priority", { length: 20 }).default("medium").notNull(), // low, medium, high, critical
-    photos_urls: jsonb("photos_urls"),
-
-    // Assignment
-    assigned_to: uuid("assigned_to").references(() => users.id),
-    assigned_at: timestamp("assigned_at", { withTimezone: true }),
-
-    // Resolution
-    status: varchar("status", { length: 30 }).default("open").notNull(), // open, assigned, in_progress, on_hold, resolved, closed, escalated
-    resolution_type: varchar("resolution_type", { length: 50 }), // repair, replace, refund, warranty_claim, no_action
-    resolution_notes: text("resolution_notes"),
-    resolved_by: uuid("resolved_by").references(() => users.id),
-    resolved_at: timestamp("resolved_at", { withTimezone: true }),
-
-    // SLA
-    sla_deadline: timestamp("sla_deadline", { withTimezone: true }),
-    sla_breached: boolean("sla_breached").default(false),
-
-    created_by: uuid("created_by")
-      .references(() => users.id)
-      .notNull(),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    deployedAssetId: varchar("deployed_asset_id", { length: 255 }),
+    dealerId: varchar("dealer_id", { length: 255 }).notNull(),
+    customerName: text("customer_name"),
+    customerPhone: varchar("customer_phone", { length: 20 }),
+    issueType: varchar("issue_type", { length: 50 }).notNull(),
+    issueDescription: text("issue_description").notNull(),
+    priority: varchar({ length: 20 }).default('medium').notNull(),
+    photosUrls: jsonb("photos_urls"),
+    assignedTo: uuid("assigned_to"),
+    assignedAt: timestamp("assigned_at", { withTimezone: true }),
+    status: varchar({ length: 30 }).default('open').notNull(),
+    resolutionType: varchar("resolution_type", { length: 50 }),
+    resolutionNotes: text("resolution_notes"),
+    resolvedBy: uuid("resolved_by"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    slaDeadline: timestamp("sla_deadline", { withTimezone: true }),
+    slaBreached: boolean("sla_breached").default(false),
+    createdBy: uuid("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => {
     return {
       serviceTicketsDealerIdx: index("service_tickets_dealer_id_idx").on(
-        table.dealer_id,
+        table.dealerId,
       ),
       serviceTicketsStatusIdx: index("service_tickets_status_idx").on(
         table.status,
       ),
       serviceTicketsAssetIdx: index("service_tickets_asset_id_idx").on(
-        table.deployed_asset_id,
+        table.deployedAssetId,
       ),
     };
   },
@@ -2228,134 +1800,95 @@ export const serviceTickets = pgTable(
 export const loanFiles = pgTable(
   "loan_files",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // LOANF-YYYYMMDD-SEQ
-    lead_id: varchar("lead_id", { length: 255 })
-      .references(() => dealerLeads.id)
-      .notNull(),
-    loan_application_id: varchar("loan_application_id", {
-      length: 255,
-    }).references(() => loanApplications.id),
-    dealer_id: varchar("dealer_id", { length: 255 }).references(
-      () => accounts.id,
-    ),
-
-    // Loan Details
-    borrower_name: text("borrower_name").notNull(),
-    co_borrower_name: text("co_borrower_name"),
-    loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }).notNull(),
-    interest_rate: decimal("interest_rate", { precision: 5, scale: 2 }),
-    tenure_months: integer("tenure_months"),
-    emi_amount: decimal("emi_amount", { precision: 10, scale: 2 }),
-    down_payment: decimal("down_payment", { precision: 12, scale: 2 }),
-    processing_fee: decimal("processing_fee", { precision: 10, scale: 2 }),
-
-    // Disbursal
-    disbursal_status: varchar("disbursal_status", { length: 30 })
-      .default("pending")
-      .notNull(), // pending, approved, disbursed, rejected
-    disbursed_amount: decimal("disbursed_amount", { precision: 12, scale: 2 }),
-    disbursed_at: timestamp("disbursed_at", { withTimezone: true }),
-    disbursal_reference: text("disbursal_reference"),
-
-    // Payments
-    total_paid: decimal("total_paid", { precision: 12, scale: 2 }).default("0"),
-    total_outstanding: decimal("total_outstanding", {
-      precision: 12,
-      scale: 2,
-    }),
-    next_emi_date: timestamp("next_emi_date", { withTimezone: true }),
-    emi_schedule: jsonb("emi_schedule"), // Array of { due_date, amount, status, paid_date }
-    overdue_amount: decimal("overdue_amount", {
-      precision: 12,
-      scale: 2,
-    }).default("0"),
-    overdue_days: integer("overdue_days").default(0),
-
-    // Status
-    loan_status: varchar("loan_status", { length: 30 })
-      .default("active")
-      .notNull(), // active, closed, defaulted, restructured, written_off
-    closure_date: timestamp("closure_date", { withTimezone: true }),
-    closure_type: varchar("closure_type", { length: 20 }), // normal, prepayment, foreclosure
-
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    leadId: varchar("lead_id", { length: 255 }).notNull(),
+    loanApplicationId: varchar("loan_application_id", { length: 255 }),
+    dealerId: varchar("dealer_id", { length: 255 }),
+    borrowerName: text("borrower_name").notNull(),
+    coBorrowerName: text("co_borrower_name"),
+    loanAmount: numeric("loan_amount", { precision: 12, scale:  2 }).notNull(),
+    interestRate: numeric("interest_rate", { precision: 5, scale:  2 }),
+    tenureMonths: integer("tenure_months"),
+    emiAmount: numeric("emi_amount", { precision: 10, scale:  2 }),
+    downPayment: numeric("down_payment", { precision: 12, scale:  2 }),
+    processingFee: numeric("processing_fee", { precision: 10, scale:  2 }),
+    disbursalStatus: varchar("disbursal_status", { length: 30 }).default('pending').notNull(),
+    disbursedAmount: numeric("disbursed_amount", { precision: 12, scale:  2 }),
+    disbursedAt: timestamp("disbursed_at", { withTimezone: true }),
+    disbursalReference: text("disbursal_reference"),
+    totalPaid: numeric("total_paid", { precision: 12, scale:  2 }).default('0'),
+    totalOutstanding: numeric("total_outstanding", { precision: 12, scale:  2 }),
+    nextEmiDate: timestamp("next_emi_date", { withTimezone: true }),
+    emiSchedule: jsonb("emi_schedule"),
+    overdueAmount: numeric("overdue_amount", { precision: 12, scale:  2 }).default('0'),
+    overdueDays: integer("overdue_days").default(0),
+    loanStatus: varchar("loan_status", { length: 30 }).default('active').notNull(),
+    closureDate: timestamp("closure_date", { withTimezone: true }),
+    closureType: varchar("closure_type", { length: 20 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => {
     return {
-      loanFilesDealerIdx: index("loan_files_dealer_id_idx").on(table.dealer_id),
+      loanFilesDealerIdx: index("loan_files_dealer_id_idx").on(table.dealerId),
       loanFilesStatusIdx: index("loan_files_loan_status_idx").on(
-        table.loan_status,
+        table.loanStatus,
       ),
     };
   },
 );
 
 export const loanPayments = pgTable("loan_payments", {
-  id: varchar("id", { length: 255 }).primaryKey(), // LPAY-YYYYMMDD-SEQ
-  loan_file_id: varchar("loan_file_id", { length: 255 })
-    .references(() => loanFiles.id, { onDelete: "cascade" })
-    .notNull(),
-  payment_type: varchar("payment_type", { length: 20 }).notNull(), // emi, prepayment, penalty, down_payment
-  amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
-  payment_mode: varchar("payment_mode", { length: 30 }), // upi, neft, cash, cheque, auto_debit
-  transaction_id: text("transaction_id"),
-  payment_date: timestamp("payment_date", { withTimezone: true }).notNull(),
-  emi_month: integer("emi_month"), // Which EMI number this payment is for
-  status: varchar("status", { length: 20 }).default("completed").notNull(), // completed, pending, failed, reversed
-  receipt_url: text("receipt_url"),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  loanFileId: varchar("loan_file_id", { length: 255 }).notNull(),
+  paymentType: varchar("payment_type", { length: 20 }).notNull(),
+  amount: numeric({ precision: 12, scale:  2 }).notNull(),
+  paymentMode: varchar("payment_mode", { length: 30 }),
+  transactionId: text("transaction_id"),
+  paymentDate: timestamp("payment_date", { withTimezone: true }).notNull(),
+  emiMonth: integer("emi_month"),
+  status: varchar({ length: 20 }).default('completed').notNull(),
+  receiptUrl: text("receipt_url"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // --- DEALER PROFILE ---
 
 export const dealerSubscriptions = pgTable("dealer_subscriptions", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  dealer_id: varchar("dealer_id", { length: 255 })
-    .references(() => accounts.id)
-    .notNull(),
-  plan_name: varchar("plan_name", { length: 50 }).notNull(), // basic, standard, premium
-  status: varchar("status", { length: 20 }).default("active").notNull(), // active, expired, cancelled
-  started_at: timestamp("started_at", { withTimezone: true }).notNull(),
-  expires_at: timestamp("expires_at", { withTimezone: true }),
-  features: jsonb("features"), // Allowed features based on plan
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  dealerId: varchar("dealer_id", { length: 255 }).notNull(),
+  planName: varchar("plan_name", { length: 50 }).notNull(),
+  status: varchar({ length: 20 }).default('active').notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  features: jsonb(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // --- CAMPAIGN SEGMENTS ---
 
 export const campaignSegments = pgTable("campaign_segments", {
-  id: varchar("id", { length: 255 }).primaryKey(), // SEG-SEQ
-  name: text("name").notNull(),
-  description: text("description"),
-  dealer_id: varchar("dealer_id", { length: 255 }).references(
-    () => accounts.id,
-  ),
-  is_prebuilt: boolean("is_prebuilt").default(false), // true for system segments like "All Customers", "Hot Leads"
-  filter_criteria: jsonb("filter_criteria").notNull(), // { conditions: [{ field, operator, value }], logic: 'AND' | 'OR' }
-  estimated_audience: integer("estimated_audience"),
-  created_by: uuid("created_by").references(() => users.id),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  dealerId: varchar("dealer_id", { length: 255 }),
+  name: text().notNull(),
+  description: text(),
+  segmentType: varchar("segment_type", { length: 20 }).default('custom').notNull(),
+  rules: jsonb(),
+  logic: varchar({ length: 10 }).default('and'),
+  estimatedCount: integer("estimated_count"),
+  createdBy: uuid("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  isPrebuilt: boolean("is_prebuilt").default(false),
+  estimatedAudience: integer("estimated_audience"),
+  filterCriteria: jsonb("filter_criteria"),
 });
 
 // --- RELATIONS FOR NEW TABLES ---
 
 export const campaignsRelations = relations(campaigns, ({ one }) => ({
   creator: one(users, {
-    fields: [campaigns.created_by],
+    fields: [campaigns.createdBy],
     references: [users.id],
   }),
 }));
@@ -2364,11 +1897,11 @@ export const loanApplicationsRelations = relations(
   loanApplications,
   ({ one }) => ({
     lead: one(dealerLeads, {
-      fields: [loanApplications.lead_id],
+      fields: [loanApplications.leadId],
       references: [dealerLeads.id],
     }),
     creator: one(users, {
-      fields: [loanApplications.created_by],
+      fields: [loanApplications.createdBy],
       references: [users.id],
     }),
   }),
@@ -2376,7 +1909,7 @@ export const loanApplicationsRelations = relations(
 
 export const kycDocumentsRelations = relations(kycDocuments, ({ one }) => ({
   lead: one(dealerLeads, {
-    fields: [kycDocuments.lead_id],
+    fields: [kycDocuments.leadId],
     references: [dealerLeads.id],
   }),
 }));
@@ -2385,7 +1918,7 @@ export const kycVerificationsRelations = relations(
   kycVerifications,
   ({ one }) => ({
     lead: one(dealerLeads, {
-      fields: [kycVerifications.lead_id],
+      fields: [kycVerifications.leadId],
       references: [dealerLeads.id],
     }),
   }),
@@ -2393,18 +1926,18 @@ export const kycVerificationsRelations = relations(
 
 export const consentRecordsRelations = relations(consentRecords, ({ one }) => ({
   lead: one(dealerLeads, {
-    fields: [consentRecords.lead_id],
+    fields: [consentRecords.leadId],
     references: [dealerLeads.id],
   }),
   verifier: one(users, {
-    fields: [consentRecords.verified_by],
+    fields: [consentRecords.verifiedBy],
     references: [users.id],
   }),
 }));
 
 export const coBorrowersRelations = relations(coBorrowers, ({ one, many }) => ({
   lead: one(dealerLeads, {
-    fields: [coBorrowers.lead_id],
+    fields: [coBorrowers.leadId],
     references: [dealerLeads.id],
   }),
   documents: many(coBorrowerDocuments),
@@ -2414,11 +1947,11 @@ export const coBorrowerDocumentsRelations = relations(
   coBorrowerDocuments,
   ({ one }) => ({
     coBorrower: one(coBorrowers, {
-      fields: [coBorrowerDocuments.co_borrower_id],
+      fields: [coBorrowerDocuments.coBorrowerId],
       references: [coBorrowers.id],
     }),
     lead: one(dealerLeads, {
-      fields: [coBorrowerDocuments.lead_id],
+      fields: [coBorrowerDocuments.leadId],
       references: [dealerLeads.id],
     }),
   }),
@@ -2428,23 +1961,23 @@ export const deployedAssetsRelations = relations(
   deployedAssets,
   ({ one, many }) => ({
     inventory: one(inventory, {
-      fields: [deployedAssets.inventory_id],
+      fields: [deployedAssets.inventoryId],
       references: [inventory.id],
     }),
     lead: one(dealerLeads, {
-      fields: [deployedAssets.lead_id],
+      fields: [deployedAssets.leadId],
       references: [dealerLeads.id],
     }),
     deal: one(deals, {
-      fields: [deployedAssets.deal_id],
+      fields: [deployedAssets.dealId],
       references: [deals.id],
     }),
     dealer: one(accounts, {
-      fields: [deployedAssets.dealer_id],
+      fields: [deployedAssets.dealerId],
       references: [accounts.id],
     }),
     creator: one(users, {
-      fields: [deployedAssets.created_by],
+      fields: [deployedAssets.createdBy],
       references: [users.id],
     }),
     history: many(deploymentHistory),
@@ -2456,11 +1989,11 @@ export const deploymentHistoryRelations = relations(
   deploymentHistory,
   ({ one }) => ({
     asset: one(deployedAssets, {
-      fields: [deploymentHistory.deployed_asset_id],
+      fields: [deploymentHistory.deployedAssetId],
       references: [deployedAssets.id],
     }),
     performer: one(users, {
-      fields: [deploymentHistory.performed_by],
+      fields: [deploymentHistory.performedBy],
       references: [users.id],
     }),
   }),
@@ -2468,38 +2001,38 @@ export const deploymentHistoryRelations = relations(
 
 export const serviceTicketsRelations = relations(serviceTickets, ({ one }) => ({
   asset: one(deployedAssets, {
-    fields: [serviceTickets.deployed_asset_id],
+    fields: [serviceTickets.deployedAssetId],
     references: [deployedAssets.id],
   }),
   dealer: one(accounts, {
-    fields: [serviceTickets.dealer_id],
+    fields: [serviceTickets.dealerId],
     references: [accounts.id],
   }),
   assignee: one(users, {
-    fields: [serviceTickets.assigned_to],
+    fields: [serviceTickets.assignedTo],
     references: [users.id],
   }),
   resolver: one(users, {
-    fields: [serviceTickets.resolved_by],
+    fields: [serviceTickets.resolvedBy],
     references: [users.id],
   }),
   creator: one(users, {
-    fields: [serviceTickets.created_by],
+    fields: [serviceTickets.createdBy],
     references: [users.id],
   }),
 }));
 
 export const loanFilesRelations = relations(loanFiles, ({ one, many }) => ({
   lead: one(dealerLeads, {
-    fields: [loanFiles.lead_id],
+    fields: [loanFiles.leadId],
     references: [dealerLeads.id],
   }),
   loanApplication: one(loanApplications, {
-    fields: [loanFiles.loan_application_id],
+    fields: [loanFiles.loanApplicationId],
     references: [loanApplications.id],
   }),
   dealer: one(accounts, {
-    fields: [loanFiles.dealer_id],
+    fields: [loanFiles.dealerId],
     references: [accounts.id],
   }),
   payments: many(loanPayments),
@@ -2507,7 +2040,7 @@ export const loanFilesRelations = relations(loanFiles, ({ one, many }) => ({
 
 export const loanPaymentsRelations = relations(loanPayments, ({ one }) => ({
   loanFile: one(loanFiles, {
-    fields: [loanPayments.loan_file_id],
+    fields: [loanPayments.loanFileId],
     references: [loanFiles.id],
   }),
 }));
@@ -2516,11 +2049,11 @@ export const campaignSegmentsRelations = relations(
   campaignSegments,
   ({ one }) => ({
     dealer: one(accounts, {
-      fields: [campaignSegments.dealer_id],
+      fields: [campaignSegments.dealerId],
       references: [accounts.id],
     }),
     creator: one(users, {
-      fields: [campaignSegments.created_by],
+      fields: [campaignSegments.createdBy],
       references: [users.id],
     }),
   }),
@@ -2529,40 +2062,40 @@ export const campaignSegmentsRelations = relations(
 // --- INTELLICAR TELEMETRY (ORM definitions for existing tables) ---
 
 export const deviceBatteryMap = pgTable("device_battery_map", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  device_id: varchar("device_id", { length: 100 }).notNull(),
-  battery_serial: varchar("battery_serial", { length: 100 }),
-  vehicle_number: varchar("vehicle_number", { length: 50 }),
-  vehicle_type: varchar("vehicle_type", { length: 50 }),
-  customer_name: text("customer_name"),
-  customer_phone: varchar("customer_phone", { length: 20 }),
-  dealer_id: varchar("dealer_id", { length: 255 }),
-  status: varchar("status", { length: 20 }).default("active"),
-  installed_at: timestamp("installed_at", { withTimezone: true }),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  deviceId: varchar("device_id", { length: 100 }).notNull(),
+  batterySerial: varchar("battery_serial", { length: 100 }),
+  vehicleNumber: varchar("vehicle_number", { length: 50 }),
+  vehicleType: varchar("vehicle_type", { length: 50 }),
+  customerName: text("customer_name"),
+  customerPhone: varchar("customer_phone", { length: 20 }),
+  dealerId: varchar("dealer_id", { length: 255 }),
+  status: varchar({ length: 20 }).default('active'),
+  installedAt: timestamp("installed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
 export const batteryAlerts = pgTable("battery_alerts", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  device_id: varchar("device_id", { length: 100 }).notNull(),
-  alert_type: varchar("alert_type", { length: 50 }).notNull(),
-  severity: varchar("severity", { length: 20 }).notNull(),
-  message: text("message"),
-  value: decimal("value", { precision: 10, scale: 2 }),
-  threshold: decimal("threshold", { precision: 10, scale: 2 }),
-  acknowledged: boolean("acknowledged").default(false),
-  acknowledged_at: timestamp("acknowledged_at", { withTimezone: true }),
-  acknowledged_by: text("acknowledged_by"),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  deviceId: varchar("device_id", { length: 100 }).notNull(),
+  alertType: varchar("alert_type", { length: 50 }).notNull(),
+  severity: varchar({ length: 20 }).notNull(),
+  message: text(),
+  value: numeric({ precision: 10, scale:  2 }),
+  threshold: numeric({ precision: 10, scale:  2 }),
+  acknowledged: boolean().default(false),
+  acknowledgedAt: timestamp("acknowledged_at", { withTimezone: true }),
+  acknowledgedBy: text("acknowledged_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
 // --- APP SETTINGS ---
 
 export const appSettings = pgTable("app_settings", {
-  key: text("key").primaryKey(),
-  value: jsonb("value").notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  key: text().primaryKey().notNull(),
+  value: jsonb().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
 // --- DEALER LEAD SCRAPER MODULE ---
@@ -2570,28 +2103,26 @@ export const appSettings = pgTable("app_settings", {
 export const scraperRuns = pgTable(
   "scraper_runs",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // SCRAPE-YYYYMMDD-SEQ
-    triggered_by: uuid("triggered_by")
-      .references(() => users.id)
-      .notNull(),
-    status: varchar("status", { length: 20 }).default("running").notNull(), // running, completed, failed, cancelled
-    started_at: timestamp("started_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    completed_at: timestamp("completed_at", { withTimezone: true }),
-    search_queries: jsonb("search_queries"), // string[] of queries used
-    total_found: integer("total_found").default(0),
-    new_leads_saved: integer("new_leads_saved").default(0),
-    duplicates_skipped: integer("duplicates_skipped").default(0),
-    error_message: text("error_message"),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    triggeredBy: uuid("triggered_by").notNull(),
+    status: varchar({ length: 20 }).default('running').notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    searchQueries: jsonb("search_queries"),
+    totalFound: integer("total_found").default(0),
+    newLeadsSaved: integer("new_leads_saved").default(0),
+    duplicatesSkipped: integer("duplicates_skipped").default(0),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    cleanedLeads: integer("cleaned_leads"),
+    durationMs: integer("duration_ms"),
+    totalChunks: integer("total_chunks").default(0),
+    completedChunks: integer("completed_chunks").default(0),
   },
   (table) => ({
     scraperRunsStatusIdx: index("scraper_runs_status_idx").on(table.status),
     scraperRunsTriggeredByIdx: index("scraper_runs_triggered_by_idx").on(
-      table.triggered_by,
+      table.triggeredBy,
     ),
   }),
 );
@@ -2599,98 +2130,74 @@ export const scraperRuns = pgTable(
 export const scrapedDealerLeads = pgTable(
   "scraped_dealer_leads",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // SDL-YYYYMMDD-SEQ
-    scraper_run_id: varchar("scraper_run_id", { length: 255 })
-      .references(() => scraperRuns.id)
-      .notNull(),
-    dealer_name: text("dealer_name").notNull(),
-    phone: varchar("phone", { length: 20 }),
-    location_city: varchar("location_city", { length: 100 }),
-    location_state: varchar("location_state", { length: 100 }),
-    source_url: text("source_url"),
-    raw_data: jsonb("raw_data"), // full scraped payload for reference
-    email: varchar("email", { length: 255 }),
-    gst_number: varchar("gst_number", { length: 20 }),
-    business_type: varchar("business_type", { length: 50 }),
-    products_sold: text("products_sold"),
-    website: text("website"),
-    quality_score: integer("quality_score"),
-    phone_valid: boolean("phone_valid"),
-    // Assignment (Sales Head assigns to Sales Manager)
-    assigned_to: uuid("assigned_to").references(() => users.id), // null = unassigned
-    assigned_by: uuid("assigned_by").references(() => users.id),
-    assigned_at: timestamp("assigned_at", { withTimezone: true }),
-    // Exploration workflow (Sales Manager drives this)
-    exploration_status: varchar("exploration_status", { length: 30 })
-      .default("unassigned")
-      .notNull(),
-    // Values: unassigned, assigned, exploring, explored, not_interested
-    exploration_notes: text("exploration_notes"),
-    explored_at: timestamp("explored_at", { withTimezone: true }),
-    // Promotion to full CRM lead (optional)
-    converted_lead_id: varchar("converted_lead_id", { length: 255 }).references(
-      () => dealerLeads.id,
-    ),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    scraperRunId: varchar("scraper_run_id", { length: 255 }).notNull(),
+    dealerName: text("dealer_name").notNull(),
+    phone: varchar({ length: 20 }),
+    locationCity: varchar("location_city", { length: 100 }),
+    locationState: varchar("location_state", { length: 100 }),
+    sourceUrl: text("source_url"),
+    rawData: jsonb("raw_data"),
+    assignedTo: uuid("assigned_to"),
+    assignedBy: uuid("assigned_by"),
+    assignedAt: timestamp("assigned_at", { withTimezone: true }),
+    explorationStatus: varchar("exploration_status", { length: 30 }).default('unassigned').notNull(),
+    explorationNotes: text("exploration_notes"),
+    exploredAt: timestamp("explored_at", { withTimezone: true }),
+    convertedLeadId: varchar("converted_lead_id", { length: 255 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    email: text(),
+    gstNumber: text("gst_number"),
+    businessType: text("business_type"),
+    productsSold: text("products_sold"),
+    website: text(),
+    qualityScore: integer("quality_score").default(1),
+    phoneValid: boolean("phone_valid").default(false),
   },
   (table) => ({
     sdlPhoneIdx: index("sdl_phone_idx").on(table.phone),
     sdlNameCityIdx: index("sdl_name_city_idx").on(
-      table.dealer_name,
-      table.location_city,
+      table.dealerName,
+      table.locationCity,
     ),
-    sdlSourceUrlIdx: index("sdl_source_url_idx").on(table.source_url),
-    sdlRunIdx: index("sdl_run_idx").on(table.scraper_run_id),
-    sdlAssignedToIdx: index("sdl_assigned_to_idx").on(table.assigned_to),
-    sdlStatusIdx: index("sdl_status_idx").on(table.exploration_status),
+    sdlSourceUrlIdx: index("sdl_source_url_idx").on(table.sourceUrl),
+    sdlRunIdx: index("sdl_run_idx").on(table.scraperRunId),
+    sdlAssignedToIdx: index("sdl_assigned_to_idx").on(table.assignedTo),
+    sdlStatusIdx: index("sdl_status_idx").on(table.explorationStatus),
   }),
 );
 
 export const scraperDedupLogs = pgTable(
   "scraper_dedup_logs",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // DDUP-YYYYMMDD-SEQ
-    scraper_run_id: varchar("scraper_run_id", { length: 255 })
-      .references(() => scraperRuns.id)
-      .notNull(),
-    raw_dealer_name: text("raw_dealer_name"),
-    raw_phone: varchar("raw_phone", { length: 20 }),
-    raw_location: text("raw_location"),
-    raw_source_url: text("raw_source_url"),
-    skip_reason: varchar("skip_reason", { length: 50 }).notNull(), // duplicate_phone, duplicate_name_location, duplicate_url
-    matched_lead_id: varchar("matched_lead_id", { length: 255 }), // existing SDL id that matched
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    scraperRunId: varchar("scraper_run_id", { length: 255 }).notNull(),
+    rawDealerName: text("raw_dealer_name"),
+    rawPhone: varchar("raw_phone", { length: 20 }),
+    rawLocation: text("raw_location"),
+    rawSourceUrl: text("raw_source_url"),
+    skipReason: varchar("skip_reason", { length: 50 }).notNull(),
+    matchedLeadId: varchar("matched_lead_id", { length: 255 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    ddupRunIdx: index("ddup_run_idx").on(table.scraper_run_id),
+    ddupRunIdx: index("ddup_run_idx").on(table.scraperRunId),
   }),
 );
 
 export const scraperSearchQueries = pgTable(
   "scraper_search_queries",
   {
-    id: varchar("id", { length: 255 }).primaryKey(), // SQ-YYYYMMDD-SEQ
-    query_text: text("query_text").notNull(),
-    is_active: boolean("is_active").notNull().default(true),
-    created_by: uuid("created_by")
-      .references(() => users.id)
-      .notNull(),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
+    id: text().primaryKey().notNull(),
+    queryText: text("query_text").notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    sqActiveIdx: index("sq_active_idx").on(table.is_active),
+    sqActiveIdx: index("sq_active_idx").on(table.isActive),
   }),
 );
 
@@ -2698,35 +2205,29 @@ export const scraperSearchQueriesRelations = relations(
   scraperSearchQueries,
   ({ one }) => ({
     createdBy: one(users, {
-      fields: [scraperSearchQueries.created_by],
+      fields: [scraperSearchQueries.createdBy],
       references: [users.id],
     }),
   }),
 );
 
 export const scraperSchedules = pgTable("scraper_schedules", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  frequency: varchar("frequency", { length: 20 }).notNull(),
-  day_of_week: integer("day_of_week"),
-  time_of_day: varchar("time_of_day", { length: 5 }).notNull().default("03:00"),
-  is_active: boolean("is_active").notNull().default(true),
-  last_run_at: timestamp("last_run_at", { withTimezone: true }),
-  created_by: uuid("created_by")
-    .references(() => users.id)
-    .notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  created_at: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
+  id: text().primaryKey().notNull(),
+  frequency: text().default('weekly').notNull(),
+  dayOfWeek: integer("day_of_week").default(1),
+  timeOfDay: text("time_of_day").default('04:00'),
+  isActive: boolean("is_active").default(true).notNull(),
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const scraperSchedulesRelations = relations(
   scraperSchedules,
   ({ one }) => ({
     createdBy: one(users, {
-      fields: [scraperSchedules.created_by],
+      fields: [scraperSchedules.createdBy],
       references: [users.id],
     }),
   }),
@@ -2735,7 +2236,7 @@ export const scraperSchedulesRelations = relations(
 // Relations for scraper tables
 export const scraperRunsRelations = relations(scraperRuns, ({ one, many }) => ({
   triggeredBy: one(users, {
-    fields: [scraperRuns.triggered_by],
+    fields: [scraperRuns.triggeredBy],
     references: [users.id],
   }),
   leads: many(scrapedDealerLeads),
@@ -2746,19 +2247,19 @@ export const scrapedDealerLeadsRelations = relations(
   scrapedDealerLeads,
   ({ one }) => ({
     scraperRun: one(scraperRuns, {
-      fields: [scrapedDealerLeads.scraper_run_id],
+      fields: [scrapedDealerLeads.scraperRunId],
       references: [scraperRuns.id],
     }),
     assignedTo: one(users, {
-      fields: [scrapedDealerLeads.assigned_to],
+      fields: [scrapedDealerLeads.assignedTo],
       references: [users.id],
     }),
     assignedBy: one(users, {
-      fields: [scrapedDealerLeads.assigned_by],
+      fields: [scrapedDealerLeads.assignedBy],
       references: [users.id],
     }),
     convertedLead: one(dealerLeads, {
-      fields: [scrapedDealerLeads.converted_lead_id],
+      fields: [scrapedDealerLeads.convertedLeadId],
       references: [dealerLeads.id],
     }),
   }),
@@ -2768,7 +2269,7 @@ export const scraperDedupLogsRelations = relations(
   scraperDedupLogs,
   ({ one }) => ({
     scraperRun: one(scraperRuns, {
-      fields: [scraperDedupLogs.scraper_run_id],
+      fields: [scraperDedupLogs.scraperRunId],
       references: [scraperRuns.id],
     }),
   }),
@@ -2777,92 +2278,92 @@ export const scraperDedupLogsRelations = relations(
 export const dealerOnboardingApplications = pgTable(
   "dealer_onboarding_applications",
   {
-    id: uuid("id").defaultRandom().primaryKey(),
+    id: uuid().defaultRandom().primaryKey().notNull(),
     dealerUserId: uuid("dealer_user_id"),
     companyName: text("company_name").notNull(),
     companyType: text("company_type"),
     gstNumber: text("gst_number"),
     panNumber: text("pan_number"),
     cinNumber: text("cin_number"),
-    businessAddress: jsonb("business_address").default({}),
-    registeredAddress: jsonb("registered_address").default({}),
     financeEnabled: boolean("finance_enabled").default(false),
-    onboardingStatus: varchar("onboarding_status", { length: 30 })
-      .default("draft")
-      .notNull(),
-    reviewStatus: varchar("review_status", { length: 30 }).default("pending"),
+    onboardingStatus: varchar("onboarding_status", { length: 30 }).default('draft').notNull(),
+    reviewStatus: varchar("review_status", { length: 30 }).default('pending'),
     submittedAt: timestamp("submitted_at"),
     approvedAt: timestamp("approved_at"),
     rejectedAt: timestamp("rejected_at"),
     rejectionReason: text("rejection_reason"),
     adminNotes: text("admin_notes"),
-
-    // Set when this dealer was approved as a branch of an existing accounts row
-    // (same GSTIN+PAN, different address). Branch dealers share the parent
-    // account's legal-entity fields (company, GSTIN, PAN, bank) and are
-    // blocked from editing those via the admin correction endpoint.
-    isBranchDealer: boolean("is_branch_dealer").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
     ownerName: text("owner_name"),
     ownerPhone: text("owner_phone"),
-    ownerLandline: varchar("owner_landline", { length: 20 }),
     ownerEmail: text("owner_email"),
-
-    salesManagerName: text("sales_manager_name"),
-    salesManagerEmail: text("sales_manager_email"),
-    salesManagerMobile: varchar("sales_manager_mobile", { length: 20 }),
-
-    itarangSignatory1Name: text("itarang_signatory_1_name"),
-    itarangSignatory1Email: text("itarang_signatory_1_email"),
-    itarangSignatory1Mobile: varchar("itarang_signatory_1_mobile", { length: 20 }),
-
-    itarangSignatory2Name: text("itarang_signatory_2_name"),
-    itarangSignatory2Email: text("itarang_signatory_2_email"),
-    itarangSignatory2Mobile: varchar("itarang_signatory_2_mobile", { length: 20 }),
-
     bankName: text("bank_name"),
     accountNumber: text("account_number"),
     beneficiaryName: text("beneficiary_name"),
     ifscCode: text("ifsc_code"),
-
     correctionRemarks: text("correction_remarks"),
     rejectionRemarks: text("rejection_remarks"),
-
-    dealerAccountStatus: varchar("dealer_account_status", {
-      length: 30,
-    }).default("inactive"),
+    dealerAccountStatus: varchar("dealer_account_status", { length: 30 }).default('inactive'),
     dealerCode: text("dealer_code"),
-
-    agreementStatus: varchar("agreement_status", { length: 50 }),
-    agreementLanguage: varchar("agreement_language", { length: 30 })
-      .default("english")
-      .notNull(),
-    completionStatus: varchar("completion_status", { length: 30 }),
-    providerDocumentId: text("provider_document_id"),
+    correctionRequestedAt: timestamp("correction_requested_at"),
+    revalidatedAt: timestamp("revalidated_at"),
+    lastActionBy: uuid("last_action_by"),
+    lastActionAt: timestamp("last_action_at"),
+    approvedBy: uuid("approved_by"),
+    rejectedBy: uuid("rejected_by"),
+    correctionCount: integer("correction_count").default(0).notNull(),
+    isLocked: boolean("is_locked").default(false).notNull(),
+    businessAddressNew: jsonb("business_address_new").default({}),
+    city: varchar({ length: 100 }),
+    state: varchar({ length: 100 }),
+    pincode: varchar({ length: 20 }),
+    contactName: text("contact_name"),
+    contactPhone: varchar("contact_phone", { length: 20 }),
+    contactEmail: varchar("contact_email", { length: 150 }),
+    agreementId: uuid("agreement_id"),
+    registeredAddress: jsonb("registered_address").default({}),
+    businessAddress: text("business_address"),
     requestId: text("request_id"),
+    providerDocumentId: text("provider_document_id"),
     providerSigningUrl: text("provider_signing_url"),
-    providerRawResponse: jsonb("provider_raw_response"),
-    stampStatus: varchar("stamp_status", { length: 30 }),
-    stampCertificateIds: jsonb("stamp_certificate_ids")
-      .$type<string[]>()
-      .default([]),
-    lastActionTimestamp: timestamp("last_action_timestamp"),
     signedAt: timestamp("signed_at"),
-    signedAgreementUrl: text("signed_agreement_url"),
+    lastActionTimestamp: timestamp("last_action_timestamp"),
+    stampStatus: varchar("stamp_status", { length: 50 }),
+    completionStatus: varchar("completion_status", { length: 50 }),
+    agreementAuditTrailUrl: text("agreement_audit_trail_url"),
+    salesManagerName: text("sales_manager_name"),
+    salesManagerEmail: text("sales_manager_email"),
+    salesManagerMobile: text("sales_manager_mobile"),
+    itarangSignatory1Name: text("itarang_signatory_1_name"),
+    itarangSignatory1Email: text("itarang_signatory_1_email"),
+    itarangSignatory1Mobile: text("itarang_signatory_1_mobile"),
+    itarangSignatory2Name: text("itarang_signatory_2_name"),
+    itarangSignatory2Email: text("itarang_signatory_2_email"),
+    itarangSignatory2Mobile: text("itarang_signatory_2_mobile"),
+    agreementLastInitiatedAt: timestamp("agreement_last_initiated_at"),
+    agreementExpiredAt: timestamp("agreement_expired_at"),
+    agreementFailedAt: timestamp("agreement_failed_at"),
+    agreementFailureReason: text("agreement_failure_reason"),
+    agreementCompletedAt: timestamp("agreement_completed_at"),
     signedAgreementStoragePath: text("signed_agreement_storage_path"),
-    auditTrailUrl: text("audit_trail_url"),
     auditTrailStoragePath: text("audit_trail_storage_path"),
+    agreementStatus: varchar("agreement_status", { length: 50 }).default('not_generated'),
+    providerRawResponse: jsonb("provider_raw_response"),
+    signedAgreementUrl: text("signed_agreement_url"),
+    auditTrailUrl: text("audit_trail_url"),
+    ownerLandline: varchar("owner_landline", { length: 20 }),
+    agreementLanguage: varchar("agreement_language", { length: 30 }).default('english').notNull(),
+    isBranchDealer: boolean("is_branch_dealer").default(false).notNull(),
+    stampCertificateIds: jsonb("stamp_certificate_ids").default([]),
   },
 );
 
 export const dealerAgreementSigners = pgTable(
   "dealer_agreement_signers",
   {
-    id: uuid("id").defaultRandom().primaryKey(),
-    applicationId: uuid("application_id")
-      .notNull()
-      .references(() => dealerOnboardingApplications.id, { onDelete: "cascade" }),
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    applicationId: uuid("application_id").notNull(),
     providerDocumentId: text("provider_document_id"),
     requestId: text("request_id"),
     signerRole: varchar("signer_role", { length: 50 }).notNull(),
@@ -2872,9 +2373,7 @@ export const dealerAgreementSigners = pgTable(
     signingMethod: varchar("signing_method", { length: 50 }),
     providerSignerIdentifier: text("provider_signer_identifier"),
     providerSigningUrl: text("provider_signing_url"),
-    signerStatus: varchar("signer_status", { length: 50 })
-      .default("pending")
-      .notNull(),
+    signerStatus: varchar("signer_status", { length: 50 }).default('pending').notNull(),
     signedAt: timestamp("signed_at"),
     lastEventAt: timestamp("last_event_at"),
     providerRawResponse: jsonb("provider_raw_response").default({}),
@@ -2897,10 +2396,8 @@ export const dealerAgreementSigners = pgTable(
 export const dealerAgreementEvents = pgTable(
   "dealer_agreement_events",
   {
-    id: uuid("id").defaultRandom().primaryKey(),
-    applicationId: uuid("application_id")
-      .notNull()
-      .references(() => dealerOnboardingApplications.id, { onDelete: "cascade" }),
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    applicationId: uuid("application_id").notNull(),
     providerDocumentId: text("provider_document_id"),
     requestId: text("request_id"),
     eventType: varchar("event_type", { length: 100 }).notNull(),
@@ -2925,46 +2422,29 @@ export const dealerAgreementEvents = pgTable(
 export const dealerOnboardingDocuments = pgTable(
   "dealer_onboarding_documents",
   {
-    id: uuid("id").defaultRandom().primaryKey(),
-
-    applicationId: uuid("application_id")
-      .notNull()
-      .references(() => dealerOnboardingApplications.id, {
-        onDelete: "cascade",
-      }),
-
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    applicationId: uuid("application_id").notNull(),
     documentType: varchar("document_type", { length: 100 }).notNull(),
-
     bucketName: text("bucket_name").notNull(),
     storagePath: text("storage_path").notNull(),
-
     fileName: text("file_name").notNull(),
     fileUrl: text("file_url"),
-
     mimeType: varchar("mime_type", { length: 100 }),
+    // You can use { mode: "bigint" } if numbers are exceeding js number limitations
     fileSize: bigint("file_size", { mode: "number" }),
-
     uploadedBy: uuid("uploaded_by"),
     uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
-
-    docStatus: varchar("doc_status", { length: 30 })
-      .default("uploaded")
-      .notNull(),
-    verificationStatus: varchar("verification_status", { length: 30 }).default(
-      "pending",
-    ),
-
+    docStatus: varchar("doc_status", { length: 30 }).default('uploaded').notNull(),
+    verificationStatus: varchar("verification_status", { length: 30 }).default('pending'),
     verifiedAt: timestamp("verified_at"),
     verifiedBy: uuid("verified_by"),
-
     rejectionReason: text("rejection_reason"),
-
     extractedData: jsonb("extracted_data").default({}),
     apiVerificationResults: jsonb("api_verification_results").default({}),
-    metadata: jsonb("metadata").default({}),
-
+    metadata: jsonb().default({}),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    adminComment: text("admin_comment"),
   },
   (table) => ({
     applicationIdIdx: index("dealer_onboarding_documents_application_id_idx").on(
@@ -2974,37 +2454,28 @@ export const dealerOnboardingDocuments = pgTable(
 );
 
 export const scrapeRuns = pgTable("scraper_runs", {
-  id: text("id").primaryKey(),
-
-  status: text("status"),
-
-  triggeredBy: text("triggered_by"),
-
-  startedAt: timestamp("started_at").defaultNow(),
-  completedAt: timestamp("completed_at"),
-
-  totalFound: integer("total_found"),
-  newLeadsSaved: integer("new_leads_saved"),
-  duplicatesSkipped: integer("duplicates_skipped"),
-
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  triggeredBy: uuid("triggered_by").notNull(),
+  status: varchar({ length: 20 }).default('running').notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  searchQueries: jsonb("search_queries"),
+  totalFound: integer("total_found").default(0),
+  newLeadsSaved: integer("new_leads_saved").default(0),
+  duplicatesSkipped: integer("duplicates_skipped").default(0),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   cleanedLeads: integer("cleaned_leads"),
   durationMs: integer("duration_ms"),
-
-  errorMessage: text("error_message"),
-
-  searchQueries: json("search_queries"),
-
   totalChunks: integer("total_chunks").default(0),
   completedChunks: integer("completed_chunks").default(0),
-
-  createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const scraperRunChunks = pgTable("scraper_run_chunks", {
-  id: text("id").primaryKey(),
+  id: text().primaryKey().notNull(),
   runId: text("run_id").notNull(),
   combinationQuery: text("combination_query").notNull(),
-  status: text("status").default("pending").notNull(),
+  status: text().default('pending').notNull(),
   leadsCount: integer("leads_count").default(0),
   errorMessage: text("error_message"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -3012,224 +2483,176 @@ export const scraperRunChunks = pgTable("scraper_run_chunks", {
 });
 
 export const scraperLeads = pgTable("scraper_leads", {
-  id: text("id").primaryKey(),
-
-  name: text("name"),
-  phone: text("phone"),
-  email: text("email"),
-  website: text("website"),
-
-  city: text("city"),
-  address: text("address"),
-
-  source: text("source"),
-  status: text("status"),
-
+  id: text().primaryKey().notNull(),
+  name: text(),
+  phone: text(),
+  email: text(),
+  website: text(),
+  city: text(),
+  address: text(),
+  source: text(),
+  status: text(),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const scraperRaw = pgTable("scraper_raw", {
-  id: text("id").primaryKey(),
-
+  id: text().primaryKey().notNull(),
   runId: text("run_id"),
-
   rawData: text("raw_data"),
-
   createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const dealerLeads = pgTable("dealer_leads", {
-  id: text("id").primaryKey(),
-
-  dealer_id: text("dealer_id"),
-  dealer_name: text("dealer_name"),
-  phone: text("phone").unique(),
-  language: text("language"),
-  shop_name: text("shop_name"),
-  location: text("location"),
-
-  follow_up_history: jsonb("follow_up_history"),
-  current_status: text("current_status"),
-  total_attempts: integer("total_attempts"),
-  final_intent_score: integer("final_intent_score"),
-
-  memory: jsonb("memory"),
-  overall_summary: text("overall_summary"),
-
-  created_at: timestamp("created_at").defaultNow(),
-  next_call_at: timestamp("next_call_at", { withTimezone: true }),
-
-  assigned_to: text("assigned_to"), // sales manager name
-  approved_by: text("approved_by"), // admin who approved
-  rejected_by: text("rejected_by"), // admin who rejected
+  id: text().primaryKey().notNull(),
+  dealerName: text("dealer_name"),
+  phone: text(),
+  language: text(),
+  followUpHistory: jsonb("follow_up_history").default([]),
+  currentStatus: text("current_status"),
+  totalAttempts: integer("total_attempts").default(0),
+  finalIntentScore: integer("final_intent_score").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  location: text(),
+  memory: jsonb(),
+  nextCallAt: timestamp("next_call_at"),
+  shopName: text("shop_name"),
+  overallSummary: text("overall_summary"),
+  assignedTo: text("assigned_to"),
+  approvedBy: text("approved_by"),
+  rejectedBy: text("rejected_by"),
+  dealerId: text("dealer_id"),
 });
 
 export const scraperLeadsDuplicates = pgTable("scraper_leads_duplicates", {
-  id: text("id").primaryKey(),
-
+  id: text().primaryKey().notNull(),
   originalLeadId: text("original_lead_id"),
-
-  name: text("name"),
-  phone: text("phone"),
-  email: text("email"),
-  website: text("website"),
-
-  city: text("city"),
-  address: text("address"),
-
-  source: text("source"),
-  status: text("status"),
-
-  createdAt: timestamp("created_at").defaultNow(),
+  name: text(),
+  phone: text(),
+  email: text(),
+  website: text(),
+  city: text(),
+  address: text(),
+  source: text(),
+  status: text(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
 });
 
 // --- NOTIFICATIONS ---
 
 export const notifications = pgTable("notifications", {
-  id: text("id").primaryKey(),
-  user_id: uuid("user_id"), // target user (dealer user id)
-  dealer_id: varchar("dealer_id", { length: 255 }), // target dealer account
-  lead_id: varchar("lead_id", { length: 100 }),
-  type: varchar("type", { length: 50 }).notNull(), // kyc_accepted, kyc_rejected, kyc_docs_requested, kyc_approved, kyc_rejected_final
-  title: text("title").notNull(),
-  message: text("message").notNull(),
-  data: jsonb("data"), // extra context (verification_type, notes, etc.)
-  read: boolean("read").default(false),
-  read_at: timestamp("read_at", { withTimezone: true }),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  id: text().primaryKey().notNull(),
+  userId: uuid("user_id"),
+  dealerId: varchar("dealer_id", { length: 255 }),
+  leadId: varchar("lead_id", { length: 100 }),
+  type: varchar({ length: 50 }).notNull(),
+  title: text().notNull(),
+  message: text().notNull(),
+  data: jsonb(),
+  read: boolean().default(false),
+  readAt: timestamp("read_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
 export const scraperCityQueue = pgTable("scraper_city_queue", {
-  id: text("id").primaryKey(),
-  base_query: text("base_query").notNull(),
-  state: text("state").notNull(),
-  city: text("city").notNull(),
-  full_query: text("full_query").notNull(),
-  status: text("status").default("pending"),
-  leads_found: integer("leads_found").default(0),
-  new_leads: integer("new_leads").default(0),
-  duplicates: integer("duplicates").default(0),
-  scraped_at: timestamp("scraped_at"),
-  created_at: timestamp("created_at").defaultNow(),
+  id: text().primaryKey().notNull(),
+  baseQuery: text("base_query").notNull(),
+  state: text().notNull(),
+  city: text().notNull(),
+  fullQuery: text("full_query").notNull(),
+  status: text().default('pending'),
+  leadsFound: integer("leads_found").default(0),
+  newLeads: integer("new_leads").default(0),
+  duplicates: integer().default(0),
+  scrapedAt: timestamp("scraped_at"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // --- STEP 4: PRODUCT SELECTION (BRD V2 Part E) ---
 
 export const productSelections = pgTable("product_selections", {
-  id: varchar("id", { length: 255 }).primaryKey(), // PS-YYYYMMDD-NNN
-  lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id, { onDelete: "cascade" })
-    .notNull(),
-
-  // Selected inventory
-  battery_serial: varchar("battery_serial", { length: 255 }),
-  charger_serial: varchar("charger_serial", { length: 255 }),
-  paraphernalia: jsonb("paraphernalia"), // { digital_soc: 2, volt_soc: 0, harness: "type_b", accessories: [...] }
-
-  // Classification (may differ from Step 1 if dealer changed category)
-  category: varchar("category", { length: 100 }),
-  sub_category: varchar("sub_category", { length: 100 }),
-
-  // Pricing (snapshot at submission time)
-  battery_price: decimal("battery_price", { precision: 12, scale: 2 }),
-  charger_price: decimal("charger_price", { precision: 12, scale: 2 }),
-  paraphernalia_cost: decimal("paraphernalia_cost", { precision: 12, scale: 2 }),
-  dealer_margin: decimal("dealer_margin", { precision: 12, scale: 2 }),
-  final_price: decimal("final_price", { precision: 12, scale: 2 }),
-
-  // Lifecycle
-  payment_mode: varchar("payment_mode", { length: 20 }), // cash, finance
-  admin_decision: varchar("admin_decision", { length: 30 }).default("pending"), // pending, dealer_confirmed, sanctioned, rejected
-  submitted_by: uuid("submitted_by"),
-  submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow(),
-
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  batterySerial: varchar("battery_serial", { length: 255 }),
+  chargerSerial: varchar("charger_serial", { length: 255 }),
+  paraphernalia: jsonb(),
+  category: varchar({ length: 100 }),
+  subCategory: varchar("sub_category", { length: 100 }),
+  batteryPrice: numeric("battery_price", { precision: 12, scale:  2 }),
+  chargerPrice: numeric("charger_price", { precision: 12, scale:  2 }),
+  paraphernaliaCost: numeric("paraphernalia_cost", { precision: 12, scale:  2 }),
+  dealerMargin: numeric("dealer_margin", { precision: 12, scale:  2 }),
+  finalPrice: numeric("final_price", { precision: 12, scale:  2 }),
+  paymentMode: varchar("payment_mode", { length: 20 }),
+  adminDecision: varchar("admin_decision", { length: 30 }).default('pending'),
+  submittedBy: uuid("submitted_by"),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }).defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // --- STEP 4: LOAN SANCTION (Admin-created, distinct from loanOffers) ---
 
 export const loanSanctions = pgTable("loan_sanctions", {
-  id: varchar("id", { length: 255 }).primaryKey(), // LS-YYYYMMDD-NNN
-  lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id, { onDelete: "cascade" })
-    .notNull(),
-  product_selection_id: varchar("product_selection_id", { length: 255 }),
-
-  // 10 BRD fields for sanction
-  loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }),
-  down_payment: decimal("down_payment", { precision: 12, scale: 2 }),
-  file_charge: decimal("file_charge", { precision: 12, scale: 2 }),
-  subvention: decimal("subvention", { precision: 12, scale: 2 }),
-  disbursement_amount: decimal("disbursement_amount", { precision: 12, scale: 2 }),
-  emi: decimal("emi", { precision: 12, scale: 2 }),
-  tenure_months: integer("tenure_months"),
-  roi: decimal("roi", { precision: 5, scale: 2 }),
-  loan_approved_by: text("loan_approved_by"), // lender/NBFC name
-  loan_file_number: varchar("loan_file_number", { length: 100 }),
-
-  // Status
-  status: varchar("status", { length: 30 }).default("sanctioned").notNull(), // sanctioned, rejected, dealer_approved
-  rejection_reason: text("rejection_reason"),
-
-  // Admin audit
-  sanctioned_by: uuid("sanctioned_by"),
-  sanctioned_at: timestamp("sanctioned_at", { withTimezone: true }).defaultNow(),
-
-  // Dealer/customer approval (Step 5 OTP)
-  dealer_approved: boolean("dealer_approved").default(false),
-  dealer_approved_at: timestamp("dealer_approved_at", { withTimezone: true }),
-  dealer_approved_by: uuid("dealer_approved_by"),
-
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  productSelectionId: varchar("product_selection_id", { length: 255 }),
+  loanAmount: numeric("loan_amount", { precision: 12, scale:  2 }),
+  downPayment: numeric("down_payment", { precision: 12, scale:  2 }),
+  fileCharge: numeric("file_charge", { precision: 12, scale:  2 }),
+  subvention: numeric({ precision: 12, scale:  2 }),
+  disbursementAmount: numeric("disbursement_amount", { precision: 12, scale:  2 }),
+  emi: numeric({ precision: 12, scale:  2 }),
+  tenureMonths: integer("tenure_months"),
+  roi: numeric({ precision: 5, scale:  2 }),
+  loanApprovedBy: text("loan_approved_by"),
+  loanFileNumber: varchar("loan_file_number", { length: 100 }),
+  status: varchar({ length: 30 }).default('sanctioned').notNull(),
+  rejectionReason: text("rejection_reason"),
+  sanctionedBy: uuid("sanctioned_by"),
+  sanctionedAt: timestamp("sanctioned_at", { withTimezone: true }).defaultNow(),
+  dealerApproved: boolean("dealer_approved").default(false),
+  dealerApprovedAt: timestamp("dealer_approved_at", { withTimezone: true }),
+  dealerApprovedBy: uuid("dealer_approved_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // --- STEP 5: OTP CONFIRMATION (dispatch authorisation) ---
 
 export const otpConfirmations = pgTable("otp_confirmations", {
-  id: varchar("id", { length: 255 }).primaryKey(), // OTP-YYYYMMDD-NNN
-  lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id, { onDelete: "cascade" })
-    .notNull(),
-  otp_type: varchar("otp_type", { length: 50 }).default("dispatch_confirmation").notNull(),
-  otp_hash: varchar("otp_hash", { length: 255 }).notNull(),
-  phone_sent_to: varchar("phone_sent_to", { length: 20 }),
-
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
-
-  send_count: integer("send_count").default(1).notNull(),
-  attempt_count: integer("attempt_count").default(0).notNull(),
-  locked_until: timestamp("locked_until", { withTimezone: true }),
-
-  is_used: boolean("is_used").default(false).notNull(),
-  used_at: timestamp("used_at", { withTimezone: true }),
-  used_by: uuid("used_by"),
-
-  // Admin override path (BRD §4220) — stubbed for now
-  override_by_admin: boolean("override_by_admin").default(false),
-  override_reason: text("override_reason"),
-  override_by: uuid("override_by"),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }).notNull(),
+  otpType: varchar("otp_type", { length: 50 }).default('dispatch_confirmation').notNull(),
+  otpHash: varchar("otp_hash", { length: 255 }).notNull(),
+  phoneSentTo: varchar("phone_sent_to", { length: 20 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  sendCount: integer("send_count").default(1).notNull(),
+  attemptCount: integer("attempt_count").default(0).notNull(),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  isUsed: boolean("is_used").default(false).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  usedBy: uuid("used_by"),
+  overrideByAdmin: boolean("override_by_admin").default(false),
+  overrideReason: text("override_reason"),
+  overrideBy: uuid("override_by"),
 });
 
 // --- STEP 5: AFTER-SALES RECORDS (post-dispatch service handle) ---
 
 export const afterSalesRecords = pgTable("after_sales_records", {
-  id: varchar("id", { length: 255 }).primaryKey(), // AS-YYYY-NNN
-  lead_id: varchar("lead_id", { length: 255 })
-    .references(() => leads.id, { onDelete: "set null" }),
-  warranty_id: varchar("warranty_id", { length: 255 }),
-  battery_serial: varchar("battery_serial", { length: 255 }),
-  customer_id: varchar("customer_id", { length: 255 }),
-  dealer_id: varchar("dealer_id", { length: 255 }),
-  payment_mode: varchar("payment_mode", { length: 20 }), // cash, finance
-  opened_at: timestamp("opened_at", { withTimezone: true }).defaultNow().notNull(),
-  status: varchar("status", { length: 20 }).default("active").notNull(), // active, closed
-  closed_at: timestamp("closed_at", { withTimezone: true }),
-
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  id: varchar({ length: 255 }).primaryKey().notNull(),
+  leadId: varchar("lead_id", { length: 255 }),
+  warrantyId: varchar("warranty_id", { length: 255 }),
+  batterySerial: varchar("battery_serial", { length: 255 }),
+  customerId: varchar("customer_id", { length: 255 }),
+  dealerId: varchar("dealer_id", { length: 255 }),
+  paymentMode: varchar("payment_mode", { length: 20 }),
+  openedAt: timestamp("opened_at", { withTimezone: true }).defaultNow().notNull(),
+  status: varchar({ length: 20 }).default('active').notNull(),
+  closedAt: timestamp("closed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // =============================================================================
@@ -3245,15 +2668,15 @@ export const afterSalesRecords = pgTable("after_sales_records", {
 
 // One row per NBFC partner.
 export const nbfcTenants = pgTable("nbfc_tenants", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  slug: text("slug").notNull().unique(), // 'demo-nbfc'
-  display_name: text("display_name").notNull(), // 'Demo NBFC Pvt Ltd'
-  contact_email: text("contact_email"),
-  aum_inr: decimal("aum_inr", { precision: 16, scale: 2 }), // displayed in header pill
-  active_loans: integer("active_loans").default(0).notNull(), // denormalized, refreshed nightly
-  is_active: boolean("is_active").default(true).notNull(),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  slug: text().notNull(),
+  displayName: text("display_name").notNull(),
+  contactEmail: text("contact_email"),
+  aumInr: numeric("aum_inr", { precision: 16, scale:  2 }),
+  activeLoans: integer("active_loans").default(0).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Many-to-many between users and tenants. Most NBFC partner users belong to
@@ -3261,18 +2684,14 @@ export const nbfcTenants = pgTable("nbfc_tenants", {
 export const nbfcUsers = pgTable(
   "nbfc_users",
   {
-    user_id: uuid("user_id")
-      .references(() => users.id, { onDelete: "cascade" })
-      .notNull(),
-    tenant_id: uuid("tenant_id")
-      .references(() => nbfcTenants.id, { onDelete: "cascade" })
-      .notNull(),
-    role: varchar("role", { length: 32 }).default("viewer").notNull(), // 'admin' | 'viewer'
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    userId: uuid("user_id").notNull(),
+    tenantId: uuid("tenant_id").notNull(),
+    role: varchar({ length: 32 }).default('viewer').notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    userTenantIdx: index("nbfc_users_user_tenant_idx").on(table.user_id, table.tenant_id),
-    tenantIdx: index("nbfc_users_tenant_idx").on(table.tenant_id),
+    userTenantIdx: index("nbfc_users_user_tenant_idx").on(table.userId, table.tenantId),
+    tenantIdx: index("nbfc_users_tenant_idx").on(table.tenantId),
   }),
 );
 
@@ -3281,25 +2700,21 @@ export const nbfcUsers = pgTable(
 export const nbfcLoans = pgTable(
   "nbfc_loans",
   {
-    loan_application_id: varchar("loan_application_id", { length: 255 })
-      .primaryKey()
-      .references(() => loanApplications.id, { onDelete: "cascade" }),
-    tenant_id: uuid("tenant_id")
-      .references(() => nbfcTenants.id, { onDelete: "restrict" })
-      .notNull(),
-    vehicleno: varchar("vehicleno", { length: 64 }), // joins IoT vehicle_state.vehicleno
-    emi_amount: decimal("emi_amount", { precision: 12, scale: 2 }),
-    emi_due_date_dom: integer("emi_due_date_dom"), // day-of-month
-    current_dpd: integer("current_dpd").default(0).notNull(), // refreshed nightly
-    outstanding_amount: decimal("outstanding_amount", { precision: 14, scale: 2 }),
-    is_active: boolean("is_active").default(true).notNull(),
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    loanApplicationId: varchar("loan_application_id", { length: 255 }).primaryKey().notNull(),
+    tenantId: uuid("tenant_id").notNull(),
+    vehicleno: varchar({ length: 64 }),
+    emiAmount: numeric("emi_amount", { precision: 12, scale:  2 }),
+    emiDueDateDom: integer("emi_due_date_dom"),
+    currentDpd: integer("current_dpd").default(0).notNull(),
+    outstandingAmount: numeric("outstanding_amount", { precision: 14, scale:  2 }),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    tenantIdx: index("nbfc_loans_tenant_idx").on(table.tenant_id),
+    tenantIdx: index("nbfc_loans_tenant_idx").on(table.tenantId),
     vnoIdx: index("nbfc_loans_vno_idx").on(table.vehicleno),
-    dpdIdx: index("nbfc_loans_dpd_idx").on(table.current_dpd),
+    dpdIdx: index("nbfc_loans_dpd_idx").on(table.currentDpd),
   }),
 );
 
@@ -3307,15 +2722,15 @@ export const nbfcLoans = pgTable(
 // Initially seeded with 5 hand-coded entries; LangGraph proposes new ones over
 // time and writes them here with source='llm-v1'.
 export const riskHypotheses = pgTable("risk_hypotheses", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  slug: text("slug").notNull().unique(), // 'usage-drop-7d'
-  title: text("title").notNull(),
-  description: text("description").notNull(), // 1-paragraph statement
-  test_method: varchar("test_method", { length: 16 }).notNull(), // 'sql' | 'js' | 'python'
-  test_definition: jsonb("test_definition").notNull(), // SQL string / JS predicate / Python source
-  source: varchar("source", { length: 16 }).default("human").notNull(), // 'human' | 'llm-v1'
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  retired_at: timestamp("retired_at", { withTimezone: true }), // soft-delete
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  slug: text().notNull(),
+  title: text().notNull(),
+  description: text().notNull(),
+  testMethod: varchar("test_method", { length: 16 }).notNull(),
+  testDefinition: jsonb("test_definition").notNull(),
+  source: varchar({ length: 16 }).default('human').notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  retiredAt: timestamp("retired_at", { withTimezone: true }),
 });
 
 // One row per (tenant, hypothesis, run). Risk page reads the latest run per
@@ -3323,27 +2738,23 @@ export const riskHypotheses = pgTable("risk_hypotheses", {
 export const riskCardRuns = pgTable(
   "risk_card_runs",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
-    tenant_id: uuid("tenant_id")
-      .references(() => nbfcTenants.id, { onDelete: "cascade" })
-      .notNull(),
-    hypothesis_id: uuid("hypothesis_id")
-      .references(() => riskHypotheses.id, { onDelete: "cascade" })
-      .notNull(),
-    run_at: timestamp("run_at", { withTimezone: true }).defaultNow().notNull(),
-    severity: varchar("severity", { length: 16 }).notNull(), // 'high' | 'warn' | 'ok'
-    finding_summary: text("finding_summary").notNull(), // 1-line headline
-    affected_count: integer("affected_count").default(0).notNull(),
-    total_count: integer("total_count").default(0).notNull(),
-    evidence_json: jsonb("evidence_json"), // sample rows + chart spec for drawer
-    llm_critique: text("llm_critique"),
-    llm_model: varchar("llm_model", { length: 64 }),
-    llm_prompt_tokens: integer("llm_prompt_tokens"),
-    llm_completion_tokens: integer("llm_completion_tokens"),
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenantId: uuid("tenant_id").notNull(),
+    hypothesisId: uuid("hypothesis_id").notNull(),
+    runAt: timestamp("run_at", { withTimezone: true }).defaultNow().notNull(),
+    severity: varchar({ length: 16 }).notNull(),
+    findingSummary: text("finding_summary").notNull(),
+    affectedCount: integer("affected_count").default(0).notNull(),
+    totalCount: integer("total_count").default(0).notNull(),
+    evidenceJson: jsonb("evidence_json"),
+    llmCritique: text("llm_critique"),
+    llmModel: varchar("llm_model", { length: 64 }),
+    llmPromptTokens: integer("llm_prompt_tokens"),
+    llmCompletionTokens: integer("llm_completion_tokens"),
   },
   (table) => ({
-    tenantRunIdx: index("risk_card_runs_tenant_run_idx").on(table.tenant_id, table.run_at),
-    tenantHypIdx: index("risk_card_runs_tenant_hyp_idx").on(table.tenant_id, table.hypothesis_id),
+    tenantRunIdx: index("risk_card_runs_tenant_run_idx").on(table.tenantId, table.runAt),
+    tenantHypIdx: index("risk_card_runs_tenant_hyp_idx").on(table.tenantId, table.hypothesisId),
     severityIdx: index("risk_card_runs_severity_idx").on(table.severity),
   }),
 );
