@@ -29,6 +29,41 @@ else
   exit 0
 fi
 
+PKGS_BASE="
+  libatk1.0-0 libatk-bridge2.0-0 libcups2 libnss3 libnspr4
+  libxcomposite1 libxdamage1 libxrandr2 libgbm1 libxkbcommon0
+  libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libasound2
+  libx11-xcb1 libxss1 libgtk-3-0 libxshmfence1
+"
+PKGS_EXTRA="fonts-liberation ca-certificates"
+
+# Fast path: if every required package is already installed (either the base
+# name or the t64 variant), skip apt-get update entirely. This avoids the
+# 20+ minute hang when the Ubuntu archive mirror is slow, since these libs
+# don't change between deploys.
+pkg_installed() {
+  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q '^install ok installed$'
+}
+all_present=1
+missing=""
+for p in $PKGS_BASE; do
+  if ! pkg_installed "${p}t64" && ! pkg_installed "$p"; then
+    all_present=0
+    missing="$missing $p"
+  fi
+done
+for p in $PKGS_EXTRA; do
+  if ! pkg_installed "$p"; then
+    all_present=0
+    missing="$missing $p"
+  fi
+done
+if [ "$all_present" = "1" ]; then
+  echo "Chromium system deps already installed — skipping apt"
+  exit 0
+fi
+echo "Missing packages, running apt:$missing"
+
 $SUDO apt-get update -y
 
 # Package names shifted to the t64 suffix in Ubuntu 24.04 (libc6-time64
@@ -41,14 +76,10 @@ install_pkg() {
   fi
 }
 
-for p in \
-  libatk1.0-0 libatk-bridge2.0-0 libcups2 libnss3 libnspr4 \
-  libxcomposite1 libxdamage1 libxrandr2 libgbm1 libxkbcommon0 \
-  libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libasound2 \
-  libx11-xcb1 libxss1 libgtk-3-0 libxshmfence1 ; do
+for p in $PKGS_BASE; do
   install_pkg "$p"
 done
 
-$SUDO apt-get install -y fonts-liberation ca-certificates
+$SUDO apt-get install -y $PKGS_EXTRA
 
 echo "Chromium system deps installed"
