@@ -1,0 +1,38 @@
+{
+  "generatedAt": "2026-04-26-1614",
+  "diff1": {
+    "summary": "10 only in branch schema.ts, 7 table(s) with shape diffs",
+    "tablesAdded": [
+      "after_sales_records",
+      "loan_sanctions",
+      "nbfc_loans",
+      "nbfc_tenants",
+      "nbfc_users",
+      "otp_confirmations",
+      "product_selections",
+      "risk_card_runs",
+      "risk_hypotheses",
+      "scraper_run_chunks"
+    ],
+    "tablesRemoved": [],
+    "tablesChanged": [
+      "dealer_onboarding_applications",
+      "dealer_onboarding_documents",
+      "digilocker_transactions",
+      "inventory",
+      "kyc_documents",
+      "leads",
+      "loan_applications"
+    ]
+  },
+  "diff2_4_codeBaseline": "main",
+  "diff2": {
+    "summary": "3 only in code, 10 only in sandbox, 66 table(s) with shape diffs"
+  },
+  "diff3": {
+    "summary": "6 only in sandbox, 20 table(s) with shape diffs"
+  },
+  "diff4": {
+    "summary": "3 only in code, 4 only in production, 66 table(s) with shape diffs"
+  }
+}
