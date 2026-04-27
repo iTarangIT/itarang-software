@@ -69,11 +69,14 @@ jobs:
           port: ${{ secrets.PROD_VPS_PORT }}
           key: ${{ secrets.PROD_VPS_SSH_KEY }}
           command_timeout: 25m
-          script_stop: true
+          # script_stop:false because drone-ssh's true mode kills on ANY command
+          # exit-1, including `[ -f X ]` tests inside if statements. Bash's
+          # `set -eo pipefail` below handles real errors correctly.
+          script_stop: false
           script: |
             set -eo pipefail
-            # drone-ssh swallows stderr on failure. Force every command to echo
-            # (set -x) and merge stderr into stdout so failures are debuggable.
+            # drone-ssh swallows stderr on failure. Merge stderr into stdout so
+            # failures are debuggable.
             exec 2>&1
             set -x
             APP_DIR=/home/itarang-crm/htdocs/crm.itarang.com
