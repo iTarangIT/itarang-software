@@ -1,5 +1,6 @@
 import { getCurrentTenant, getTenantLoanSlice } from "@/lib/nbfc/tenant";
 import { getFleetSummary } from "@/lib/db/iot-queries";
+import RiskDistributionDonut from "../_components/RiskDistributionDonut";
 
 export const dynamic = "force-dynamic"; // always pull fresh
 
@@ -46,6 +47,22 @@ export default async function NbfcOverview() {
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <RiskDistributionDonut tenantId={tenant.id} />
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-4">
+            How to read these tiles
+          </h4>
+          <ul className="text-sm text-slate-600 dark:text-slate-400 space-y-2 list-disc pl-5">
+            <li><b>Online (1h)</b>: vehicles whose IoT device reported within the last hour.</li>
+            <li><b>Reporting (5m)</b>: actively communicating right now &mdash; trips in progress.</li>
+            <li><b>With GPS Fix</b>: vehicles with stored coordinates (excludes never-fixed cold starts).</li>
+            <li><b>Avg SOC</b>: fleet-wide average state-of-charge.</li>
+            <li><b>Open Alerts</b>: from the Intellicar telemetry layer (offline + battery thresholds).</li>
+          </ul>
+        </div>
       </div>
 
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-6">
