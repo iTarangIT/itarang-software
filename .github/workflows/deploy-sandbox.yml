@@ -47,7 +47,10 @@ jobs:
           script_stop: true
           script: |
             set -eo pipefail
+            # drone-ssh swallows stderr on failure. Force every command to echo
+            # (set -x) and merge stderr into stdout so failures are debuggable.
             exec 2>&1
+            set -x
             APP_DIR=/home/itarang-sandbox/htdocs/sandbox.itarang.com
             cd "$APP_DIR"
 
