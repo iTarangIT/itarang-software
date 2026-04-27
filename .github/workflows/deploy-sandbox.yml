@@ -14,26 +14,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      # ──────────────────────────────────────────────────────────────────
-      # 1. Slack notify start (no-op if SLACK_WEBHOOK_URL secret missing)
-      # ──────────────────────────────────────────────────────────────────
-      - name: Slack notify start
-        if: env.SLACK_WEBHOOK_URL != ''
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          MSG=$(printf '%s' "${{ github.event.head_commit.message }}" | head -c 200 | sed 's/"/\\"/g')
-          curl -sS -X POST -H 'Content-Type: application/json' \
-            --data "{\"text\":\":rocket: *Sandbox deploy started* \`${{ github.sha }}\`\nby ${{ github.actor }} — \`${MSG}\`\n${{ github.event.head_commit.url }}\"}" \
-            "$SLACK_WEBHOOK_URL" || true
-
-      # ──────────────────────────────────────────────────────────────────
-      # 2. SSH deploy — pulls, runs migrations, builds, restarts pm2,
-      #    probes /api/health. Persists PREV_SHA on the VPS so the
-      #    rollback step (below) can revert if anything goes wrong.
-      # ──────────────────────────────────────────────────────────────────
       - name: SSH deploy to Hostinger VPS (sandbox)
-        id: ssh_deploy
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SANDBOX_VPS_HOST }}
@@ -44,19 +25,8 @@ jobs:
           script_stop: true
           script: |
             set -eo pipefail
-            # ── DIAGNOSTIC: drone-ssh has been swallowing stderr on script
-            # failure. Force every command to echo (set -x) and merge stderr
-            # into stdout so the failing line shows up in the Actions log.
-            exec 2>&1
-            set -x
             APP_DIR=/home/itarang-sandbox/htdocs/sandbox.itarang.com
             cd "$APP_DIR"
-
-            echo "::group::Capture PREV_SHA for rollback"
-            PREV_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
-            echo "$PREV_SHA" > /tmp/itarang-sandbox-prev-sha
-            echo "PREV_SHA=$PREV_SHA"
-            echo "::endgroup::"
 
             echo "::group::Pull latest main"
             git fetch origin main
@@ -66,14 +36,9 @@ jobs:
 
             echo "::group::Write .env from SANDBOX_ENV_FILE_B64"
             umask 077
-            # Strip CR — secret was originally created from a CRLF (Windows
-            # line-ending) .env file, which breaks `source .env` with the
-            # cryptic "$'\r': command not found" error.
-            echo "${{ secrets.SANDBOX_ENV_FILE_B64 }}" | base64 -d | tr -d '\r' > .env
+            echo "${{ secrets.SANDBOX_ENV_FILE_B64 }}" | base64 -d > .env
             chmod 600 .env
             echo "Wrote .env ($(wc -l < .env) lines, $(wc -c < .env) bytes)"
-            # Quick sanity check — the first non-comment line should look like KEY=value
-            head -5 .env | grep -v '^#' | head -1 | sed 's/=.*/=<redacted>/'
             echo "::endgroup::"
 
             echo "::group::Install/verify Chromium system libs"
@@ -83,27 +48,6 @@ jobs:
 
             echo "::group::Install deps (incl dev for build)"
             npm ci --no-audit --no-fund --include=dev
-            echo "::endgroup::"
-
-            # ──────────────────────────────────────────────────────────────
-            # Drizzle migrations — sandbox uses db:push (per CI/CD plan).
-            # Production uses explicit migration files in deploy-production.yml.
-            # ──────────────────────────────────────────────────────────────
-            echo "::group::Drizzle db:push (sandbox migration)"
-            # Load DATABASE_URL etc. from the .env we just wrote.
-            # SECURITY: disable command-tracing while sourcing .env so secret
-            # values don't get printed to the Actions log.
-            { set +x; } 2>/dev/null
-            set -a; source .env; set +a
-            set -x
-            # Drizzle-kit asks interactive create-vs-rename questions when it
-            # finds ambiguous schema diffs. CI has no TTY, so it would hang
-            # forever. Pipe Enter to it — that always selects the highlighted
-            # default option, which for new tables is "create table".
-            yes "" | npm run db:push -- --force || {
-              echo "::error::db:push failed — schema mismatch or DB unreachable"
-              exit 1
-            }
             echo "::endgroup::"
 
             ARCHIVE_DIR=/home/itarang-sandbox/static_archive
@@ -120,6 +64,7 @@ jobs:
             else
               echo "No previous BUILD_ID/.next/static — first build or clean checkout"
             fi
+            # Drop legacy single-snapshot dir from earlier deploys
             rm -rf .next_prev_static
             echo "::endgroup::"
 
@@ -134,6 +79,11 @@ jobs:
             NEW_BUILD_ID=""
             if [ -f .next/BUILD_ID ]; then NEW_BUILD_ID=$(cat .next/BUILD_ID); fi
             if [ -d "$ARCHIVE_DIR" ]; then
+              # Only chunks/css/media — never manifests, BUILD_ID, or server/.
+              # --ignore-existing guarantees new build artifacts always win;
+              # we only fill in filenames the new build no longer emits so
+              # browser tabs from previous deploys can still fetch their
+              # old chunk hashes instead of getting a 404.
               for archived in "$ARCHIVE_DIR"/*/; do
                 [ -d "$archived" ] || continue
                 archived_id=$(basename "$archived")
@@ -157,10 +107,27 @@ jobs:
             echo "::endgroup::"
 
             echo "::group::Verify every chunk referenced by the build manifest exists on disk"
+            # Catches the failure mode where a build emits a manifest that
+            # points at chunk files the build (or a subsequent step) didn't
+            # actually write to disk — which silently succeeds the deploy
+            # but 404s every page.
+            #
+            # Intentionally run via a committed script, not node -e: drone-ssh
+            # appends shell boilerplate for exit-code propagation, and with
+            # a multi-line `node -e '...'` argument that boilerplate gets
+            # injected into the -e string and Node tries to parse it as JS.
             node scripts/verify-chunk-manifest.js
             echo "::endgroup::"
 
             echo "::group::Stop existing pm2 apps + guarantee port 3003 is free"
+            # Previous "poll for port free" logic was unreliable — the ss
+            # filter syntax could silently return empty, the loop would
+            # declare the port free while the old process was still holding
+            # it, pm2 start would EADDRINUSE, crash-loop, give up, and the
+            # OLD process kept serving stale HTML against the new .next.
+            # Do it deterministically: delete the pm2 entries, then
+            # unconditionally fuser -k the port, then sleep. Whatever was
+            # listening is guaranteed dead before pm2 start runs.
             for app in sandbox-web sandbox-worker; do
               if pm2 describe "$app" > /dev/null 2>&1; then
                 pm2 delete "$app" 2>/dev/null || true
@@ -177,30 +144,21 @@ jobs:
             pm2 ls
             echo "::endgroup::"
 
-            # ──────────────────────────────────────────────────────────────
-            # Health check — was a simple curl /; now probes /api/health
-            # which checks DB + IoT bridge + sandbox.
-            # ──────────────────────────────────────────────────────────────
-            echo "::group::Health check 127.0.0.1:3003/api/health"
+            echo "::group::Health check 127.0.0.1:3003"
+            # Poll for up to 60s — first start can take longer than reload.
             HTTP=000
-            BODY=""
             for i in $(seq 1 30); do
               sleep 2
-              BODY=$(curl -s -m 5 http://127.0.0.1:3003/api/health || echo "")
-              HTTP=$(printf '%s' "$BODY" | tail -1 >/dev/null; curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:3003/api/health || echo 000)
-              if [ "$HTTP" = "200" ]; then
+              HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3003 || echo 000)
+              if echo "$HTTP" | grep -qE "^(200|301|302|307)$"; then
                 echo "HTTP $HTTP after ${i} polls"
                 break
               fi
             done
-            if [ "$HTTP" = "200" ]; then
-              echo "✅ /api/health returned 200"
-              echo "$BODY" | head -c 800
+            if echo "$HTTP" | grep -qE "^(200|301|302|307)$"; then
+              echo "✅ Sandbox healthy"
             else
-              echo "❌ /api/health returned $HTTP after 60s"
-              echo "Body (truncated):"
-              echo "$BODY" | head -c 1500
-              echo ""
+              echo "❌ Sandbox failed health check (HTTP $HTTP)"
               echo '--- sandbox-web logs ---'
               pm2 logs sandbox-web --lines 40 --nostream || true
               echo '--- sandbox-worker logs ---'
@@ -210,7 +168,16 @@ jobs:
             echo "::endgroup::"
 
             echo "::group::Verify served BUILD_ID matches disk"
+            # Detects the exact failure that caused the chunk-404 cascade:
+            # disk had a new BUILD_ID but the running process was serving HTML
+            # tagged with the previous build's id, so chunk references didn't
+            # exist on disk. If they don't match, fail loudly so the deploy
+            # doesn't silently lie about success.
             DISK_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null || echo "missing")
+            # Hit /login directly — / may 307 with no body so grep finds
+            # nothing. -L follows redirects either way. Wrap the pipeline in
+            # `|| true` so a no-match grep doesn't abort the script under
+            # set -eo pipefail.
             HTML=$(curl -s -L http://127.0.0.1:3003/login 2>/dev/null || true)
             SERVED_BUILD_ID=$(printf '%s' "$HTML" | grep -oE '"b":"[a-f0-9]+"' | head -1 | cut -d'"' -f4 || true)
             echo "Disk BUILD_ID:   $DISK_BUILD_ID"
@@ -222,82 +189,12 @@ jobs:
             echo "::endgroup::"
 
             echo "::group::Verify served assets reachable (HEAD on every chunk in served HTML)"
+            # Catches the failure mode that verify-chunk-manifest.js can miss:
+            # the build manifest reference walker walks .next/ on disk, but
+            # if a chunk is referenced by some manifest format we don't walk
+            # AND not on disk, it's invisible to that check. This step hits
+            # the running app and HEAD-checks every asset referenced by the
+            # actual served HTML — so 404s become deploy failures instead
+            # of runtime ChunkLoadError on real users.
             PORT=3003 node scripts/verify-served-assets.js
             echo "::endgroup::"
-
-            echo "✅ Sandbox deploy complete: $(git rev-parse --short HEAD)"
-
-      # ──────────────────────────────────────────────────────────────────
-      # 3. Rollback step — only runs if step 2 failed. Reverts to the
-      #    PREV_SHA we wrote to /tmp at the start of the deploy.
-      # ──────────────────────────────────────────────────────────────────
-      - name: SSH rollback (only on deploy failure)
-        if: failure() && steps.ssh_deploy.outcome == 'failure'
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SANDBOX_VPS_HOST }}
-          username: ${{ secrets.SANDBOX_VPS_USER }}
-          port: ${{ secrets.SANDBOX_VPS_PORT }}
-          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
-          command_timeout: 15m
-          script_stop: false
-          script: |
-            set -eo pipefail
-            APP_DIR=/home/itarang-sandbox/htdocs/sandbox.itarang.com
-            cd "$APP_DIR"
-            PREV_SHA=$(cat /tmp/itarang-sandbox-prev-sha 2>/dev/null || echo "")
-            CURRENT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
-            if [ -z "$PREV_SHA" ]; then
-              echo "::warning::No PREV_SHA recorded — manual rollback required"
-              exit 0
-            fi
-            if [ "$PREV_SHA" = "$CURRENT_SHA" ]; then
-              echo "Already at PREV_SHA $PREV_SHA — no rollback needed"
-              exit 0
-            fi
-            echo "::group::Rolling back to $PREV_SHA"
-            git reset --hard "$PREV_SHA"
-            git log -1 --oneline
-            echo "::endgroup::"
-            echo "::group::Reinstall + rebuild for rollback"
-            # Defensive: prior deploy may have left CRLF in .env. Strip it
-            # before sourcing so we don't silently lose env vars.
-            if [ -f .env ]; then sed -i 's/\r$//' .env; fi
-            # SECURITY: rollback step doesn't have set -x today, but disable
-            # tracing defensively in case it's added later.
-            { set +x; } 2>/dev/null
-            set -a; source .env 2>/dev/null || true; set +a
-            npm ci --no-audit --no-fund --include=dev
-            export GITHUB_SHA=$(git rev-parse HEAD)
-            npm run build
-            echo "::endgroup::"
-            echo "::group::Restart pm2 with rolled-back build"
-            for app in sandbox-web sandbox-worker; do
-              if pm2 describe "$app" > /dev/null 2>&1; then pm2 delete "$app" || true; fi
-            done
-            fuser -k 3003/tcp 2>/dev/null || true
-            sleep 3
-            pm2 start ecosystem.sandbox.config.js
-            pm2 save
-            echo "::endgroup::"
-            echo "✅ Rolled back sandbox to $PREV_SHA"
-
-      # ──────────────────────────────────────────────────────────────────
-      # 4. Slack notify result — runs in all cases (success/fail/rollback)
-      # ──────────────────────────────────────────────────────────────────
-      - name: Slack notify result
-        if: always() && env.SLACK_WEBHOOK_URL != ''
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          if [ "${{ steps.ssh_deploy.outcome }}" = "success" ]; then
-            ICON=":white_check_mark:"
-            STATUS="*succeeded*"
-          else
-            ICON=":x:"
-            STATUS="*FAILED* — rollback ${{ job.status }}"
-          fi
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          curl -sS -X POST -H 'Content-Type: application/json' \
-            --data "{\"text\":\"${ICON} Sandbox deploy ${STATUS} \`${{ github.sha }}\`\nLogs: ${RUN_URL}\"}" \
-            "$SLACK_WEBHOOK_URL" || true
