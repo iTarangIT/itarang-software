@@ -2,8 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, asc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { inventory, products } from "@/lib/db/schema";
+import { inventory, products, productCategories } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
+
+// inventory.asset_category stores the productCategories.name (set at
+// bulk-upload time). Callers may pass either the category id or the
+// name — resolve to the name so both work.
+async function resolveCategoryName(input: string): Promise<string> {
+  const [cat] = await db
+    .select({ name: productCategories.name })
+    .from(productCategories)
+    .where(eq(productCategories.id, input))
+    .limit(1);
+  return cat?.name ?? input;
+}
 
 // BRD V2 §2.3 — dealer battery inventory list for Step 4.
 // Filters: dealer_id + asset_type=Battery + status=available.
@@ -29,13 +41,21 @@ export async function GET(
     const { searchParams } = new URL(req.url);
     const category = searchParams.get("category");
     const subCategory = searchParams.get("subCategory");
+    const productId = searchParams.get("productId");
 
     const filters = [
       eq(inventory.dealer_id, dealerId),
       eq(inventory.asset_type, "Battery"),
       eq(inventory.status, "available"),
     ];
-    if (category) filters.push(eq(inventory.asset_category, category));
+    if (category) {
+      const categoryName = await resolveCategoryName(category);
+      filters.push(eq(inventory.asset_category, categoryName));
+    }
+    // When the lead has a primary_product_id (Step 1 "Product Type"),
+    // restrict inventory to that exact product. Falls back to free
+    // listing when no productId is supplied.
+    if (productId) filters.push(eq(inventory.product_id, productId));
     if (subCategory) filters.push(eq(inventory.model_type, subCategory));
 
     const rows = await db
@@ -52,6 +72,12 @@ export async function GET(
         price: products.price,
         voltage_v: products.voltage_v,
         capacity_ah: products.capacity_ah,
+        warranty_months: products.warranty_months,
+        // GST snapshot — already captured per inventory row at OEM upload.
+        gross_amount: inventory.inventory_amount,
+        gst_percent: inventory.gst_percent,
+        gst_amount: inventory.gst_amount,
+        net_amount: inventory.final_amount,
       })
       .from(inventory)
       .leftJoin(products, eq(inventory.product_id, products.id))
