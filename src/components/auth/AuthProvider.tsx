@@ -36,18 +36,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Don't call supabase.auth.getUser() / getSession() here. The GoTrue v2
+  // auth lock can deadlock across hard navigations on the same tab,
+  // freezing every subsequent auth call (verified via fiber-tree probe on
+  // sandbox: getUser/getSession both timed out at 5s). Authentication is
+  // already validated server-side in /api/user/profile via requireAuth(),
+  // which reads Supabase SSR cookies and looks up the RDS user, so we just
+  // hit that endpoint and trust its answer.
   const fetchUser = async ({ silent = false }: { silent?: boolean } = {}) => {
     try {
       if (!silent) setLoading(true);
-
-      const {
-        data: { user: authUser },
-      } = await supabase.auth.getUser();
-
-      if (!authUser) {
-        setUser(null);
-        return;
-      }
 
       const response = await fetch("/api/user/profile", {
         method: "GET",
@@ -61,11 +59,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      setUser({
-        id: authUser.id,
-        email: authUser.email || "",
-        role: "user",
-      });
+      setUser(null);
     } catch (error) {
       console.error("[AuthProvider] Failed to fetch user profile:", error);
       setUser(null);
@@ -84,12 +78,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(null);
         return;
       }
-      // INITIAL_SESSION fires immediately on subscribe and races the
-      // initial fetchUser() above — both call supabase.auth.getUser(),
-      // which serializes through the GoTrue auth lock and can deadlock,
-      // leaving the dashboard stuck on its loading state. TOKEN_REFRESHED
-      // doesn't change identity, so re-fetching the profile on it is
-      // wasted work. Only refetch on real identity changes.
+      // Only refetch the profile on real identity changes. INITIAL_SESSION
+      // is already covered by the initial fetchUser above; TOKEN_REFRESHED
+      // doesn't change identity, so refetching wastes a round-trip.
       if (event === "SIGNED_IN" || event === "USER_UPDATED") {
         await fetchUser({ silent: true });
       }

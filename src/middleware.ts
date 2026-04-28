@@ -72,6 +72,7 @@ export async function middleware(request: NextRequest) {
     sales_order_manager: "/sales-order-manager",
     dealer: "/dealer-portal",
     admin: "/admin",
+    nbfc_partner: "/nbfc",
   };
 
   const isPublicRoute =
@@ -173,7 +174,10 @@ export async function middleware(request: NextRequest) {
     path.startsWith(dashboardPath),
   )?.[0];
 
-  if (matchedRole && matchedRole !== role && role !== "ceo") {
+  // CEO can see all dashboards (existing behavior).
+  // Admin can also see /nbfc/* for support/troubleshooting (Phase C addition).
+  const isAdminViewingNbfc = role === "admin" && path.startsWith("/nbfc");
+  if (matchedRole && matchedRole !== role && role !== "ceo" && !isAdminViewingNbfc) {
     return addNoStoreHeaders(
       NextResponse.redirect(new URL(myDashboard, request.url)),
     );

@@ -1,0 +1,417 @@
+diff --git a/src/lib/db/schema.ts b/src/lib/db/schema.ts
+index 32d4a1c..5927bc1 100644
+--- a/src/lib/db/schema.ts
++++ b/src/lib/db/schema.ts
+@@ -11,10 +11,19 @@ import {
+   index,
+   bigint,
+   json,
++  customType,
+ } from "drizzle-orm/pg-core";
+ 
+ import { relations } from "drizzle-orm";
+ 
++// Postgres bytea column backed by Node Buffer. Used for binary blobs like
++// the DigiLocker eAadhaar PDF.
++const bytea = customType<{ data: Buffer; default: false }>({
++  dataType() {
++    return "bytea";
++  },
++});
++
+ // --- FOUNDATION ---
+ 
+ export const users = pgTable("users", {
+@@ -183,6 +192,13 @@ export const inventory = pgTable("inventory", {
+   status: varchar("status", { length: 20 }).default("in_transit").notNull(), // in_transit, pdi_pending, pdi_failed, available, reserved, sold, damaged, returned
+   warehouse_location: text("warehouse_location"),
+ 
++  // Step 4/5 integration: reservation/dispatch tracking (BRD V2)
++  dealer_id: varchar("dealer_id", { length: 255 }),
++  linked_lead_id: varchar("linked_lead_id", { length: 255 }),
++  dispatch_date: timestamp("dispatch_date", { withTimezone: true }),
++  soc_percent: decimal("soc_percent", { precision: 5, scale: 2 }),
++  soc_last_sync_at: timestamp("soc_last_sync_at", { withTimezone: true }),
++
+   // Metadata
+   created_by: uuid("created_by")
+     .references(() => users.id)
+@@ -301,6 +317,11 @@ export const leads = pgTable("leads", {
+   submitted_to_sm_at: timestamp("submitted_to_sm_at", { withTimezone: true }),
+   sm_assigned_to: uuid("sm_assigned_to"),
+ 
++  // Step 4/5 lifecycle (BRD V2 Parts E & F)
++  // kyc_status extended values: pending_itarang_reverification, pending_final_approval,
++  // loan_sanctioned, loan_rejected, sold, closed_loan_rejected
++  sold_at: timestamp("sold_at", { withTimezone: true }),
++
+   created_at: timestamp("created_at", { withTimezone: true })
+     .defaultNow()
+     .notNull(),
+@@ -1334,8 +1355,13 @@ export const campaigns = pgTable("campaigns", {
+ // For "Process Loan" workflow tracking
+ export const loanApplications = pgTable("loan_applications", {
+   id: varchar("id", { length: 255 }).primaryKey(), // LOAN-APP-XXX
++  // FK references `leads.id` (the borrower), matching both the live DB
++  // constraint loan_applications_lead_id_fkey and how application code uses
++  // it (e.g. dealer/loan-facilitation/queue COALESCEs leads.owner_name into
++  // applicant_name). Earlier this said `dealerLeads.id` — that was a stale
++  // refactor; dealer_leads is the AI-dialer prospecting table, unrelated.
+   lead_id: varchar("lead_id", { length: 255 })
+-    .references(() => dealerLeads.id)
++    .references(() => leads.id)
+     .notNull(),
+   applicant_name: text("applicant_name"), // De-normalized for list views
+   loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }),
+@@ -1377,6 +1403,7 @@ export const kycDocuments = pgTable(
+     lead_id: varchar("lead_id", { length: 255 })
+       .references(() => dealerLeads.id, { onDelete: "cascade" })
+       .notNull(),
++    doc_for: varchar("doc_for", { length: 20 }).default("customer").notNull(), // customer, borrower
+     doc_type: varchar("doc_type", { length: 50 }).notNull(), // aadhaar_front, aadhaar_back, pan_card, passport_photo, address_proof, rc_copy, bank_statement, cheque_1, cheque_2, cheque_3, cheque_4
+     file_url: text("file_url").notNull(),
+     file_name: text("file_name"),
+@@ -1473,6 +1500,15 @@ export const digilockerTransactions = pgTable(
+     digilocker_raw_response: jsonb("digilocker_raw_response"),
+     aadhaar_extracted_data: jsonb("aadhaar_extracted_data"),
+     cross_match_result: jsonb("cross_match_result"),
++    // Binary PDF of the eAadhaar returned by Decentro when we call the
++    // eAadhaar endpoint with generate_pdf=true. Stored alongside the
++    // structured data so admin review has everything in one row.
++    aadhaar_pdf: bytea("aadhaar_pdf"),
++    // Decentro SMS delivery tracking (migration 0030)
++    sms_message_id: varchar("sms_message_id", { length: 255 }),
++    sms_delivered_at: timestamp("sms_delivered_at", { withTimezone: true }),
++    sms_failed_reason: text("sms_failed_reason"),
++    sms_attempts: integer("sms_attempts").default(0).notNull(),
+     expires_at: timestamp("expires_at", { withTimezone: true }),
+     created_at: timestamp("created_at", { withTimezone: true })
+       .defaultNow()
+@@ -2760,12 +2796,31 @@ export const dealerOnboardingApplications = pgTable(
+     rejectedAt: timestamp("rejected_at"),
+     rejectionReason: text("rejection_reason"),
+     adminNotes: text("admin_notes"),
++
++    // Set when this dealer was approved as a branch of an existing accounts row
++    // (same GSTIN+PAN, different address). Branch dealers share the parent
++    // account's legal-entity fields (company, GSTIN, PAN, bank) and are
++    // blocked from editing those via the admin correction endpoint.
++    isBranchDealer: boolean("is_branch_dealer").default(false).notNull(),
+     createdAt: timestamp("created_at").defaultNow().notNull(),
+     updatedAt: timestamp("updated_at").defaultNow().notNull(),
+     ownerName: text("owner_name"),
+     ownerPhone: text("owner_phone"),
++    ownerLandline: varchar("owner_landline", { length: 20 }),
+     ownerEmail: text("owner_email"),
+ 
++    salesManagerName: text("sales_manager_name"),
++    salesManagerEmail: text("sales_manager_email"),
++    salesManagerMobile: varchar("sales_manager_mobile", { length: 20 }),
++
++    itarangSignatory1Name: text("itarang_signatory_1_name"),
++    itarangSignatory1Email: text("itarang_signatory_1_email"),
++    itarangSignatory1Mobile: varchar("itarang_signatory_1_mobile", { length: 20 }),
++
++    itarangSignatory2Name: text("itarang_signatory_2_name"),
++    itarangSignatory2Email: text("itarang_signatory_2_email"),
++    itarangSignatory2Mobile: varchar("itarang_signatory_2_mobile", { length: 20 }),
++
+     bankName: text("bank_name"),
+     accountNumber: text("account_number"),
+     beneficiaryName: text("beneficiary_name"),
+@@ -2780,12 +2835,18 @@ export const dealerOnboardingApplications = pgTable(
+     dealerCode: text("dealer_code"),
+ 
+     agreementStatus: varchar("agreement_status", { length: 50 }),
++    agreementLanguage: varchar("agreement_language", { length: 30 })
++      .default("english")
++      .notNull(),
+     completionStatus: varchar("completion_status", { length: 30 }),
+     providerDocumentId: text("provider_document_id"),
+     requestId: text("request_id"),
+     providerSigningUrl: text("provider_signing_url"),
+     providerRawResponse: jsonb("provider_raw_response"),
+     stampStatus: varchar("stamp_status", { length: 30 }),
++    stampCertificateIds: jsonb("stamp_certificate_ids")
++      .$type<string[]>()
++      .default([]),
+     lastActionTimestamp: timestamp("last_action_timestamp"),
+     signedAt: timestamp("signed_at"),
+     signedAgreementUrl: text("signed_agreement_url"),
+@@ -2905,6 +2966,11 @@ export const dealerOnboardingDocuments = pgTable(
+     createdAt: timestamp("created_at").defaultNow().notNull(),
+     updatedAt: timestamp("updated_at").defaultNow().notNull(),
+   },
++  (table) => ({
++    applicationIdIdx: index("dealer_onboarding_documents_application_id_idx").on(
++      table.applicationId,
++    ),
++  }),
+ );
+ 
+ export const scrapeRuns = pgTable("scraper_runs", {
+@@ -2928,7 +2994,21 @@ export const scrapeRuns = pgTable("scraper_runs", {
+ 
+   searchQueries: json("search_queries"),
+ 
++  totalChunks: integer("total_chunks").default(0),
++  completedChunks: integer("completed_chunks").default(0),
++
++  createdAt: timestamp("created_at").defaultNow(),
++});
++
++export const scraperRunChunks = pgTable("scraper_run_chunks", {
++  id: text("id").primaryKey(),
++  runId: text("run_id").notNull(),
++  combinationQuery: text("combination_query").notNull(),
++  status: text("status").default("pending").notNull(),
++  leadsCount: integer("leads_count").default(0),
++  errorMessage: text("error_message"),
+   createdAt: timestamp("created_at").defaultNow(),
++  completedAt: timestamp("completed_at"),
+ });
+ 
+ export const scraperLeads = pgTable("scraper_leads", {
+@@ -3032,3 +3112,242 @@ export const scraperCityQueue = pgTable("scraper_city_queue", {
+   scraped_at: timestamp("scraped_at"),
+   created_at: timestamp("created_at").defaultNow(),
+ });
++
++// --- STEP 4: PRODUCT SELECTION (BRD V2 Part E) ---
++
++export const productSelections = pgTable("product_selections", {
++  id: varchar("id", { length: 255 }).primaryKey(), // PS-YYYYMMDD-NNN
++  lead_id: varchar("lead_id", { length: 255 })
++    .references(() => leads.id, { onDelete: "cascade" })
++    .notNull(),
++
++  // Selected inventory
++  battery_serial: varchar("battery_serial", { length: 255 }),
++  charger_serial: varchar("charger_serial", { length: 255 }),
++  paraphernalia: jsonb("paraphernalia"), // { digital_soc: 2, volt_soc: 0, harness: "type_b", accessories: [...] }
++
++  // Classification (may differ from Step 1 if dealer changed category)
++  category: varchar("category", { length: 100 }),
++  sub_category: varchar("sub_category", { length: 100 }),
++
++  // Pricing (snapshot at submission time)
++  battery_price: decimal("battery_price", { precision: 12, scale: 2 }),
++  charger_price: decimal("charger_price", { precision: 12, scale: 2 }),
++  paraphernalia_cost: decimal("paraphernalia_cost", { precision: 12, scale: 2 }),
++  dealer_margin: decimal("dealer_margin", { precision: 12, scale: 2 }),
++  final_price: decimal("final_price", { precision: 12, scale: 2 }),
++
++  // Lifecycle
++  payment_mode: varchar("payment_mode", { length: 20 }), // cash, finance
++  admin_decision: varchar("admin_decision", { length: 30 }).default("pending"), // pending, dealer_confirmed, sanctioned, rejected
++  submitted_by: uuid("submitted_by"),
++  submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow(),
++
++  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
++  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
++});
++
++// --- STEP 4: LOAN SANCTION (Admin-created, distinct from loanOffers) ---
++
++export const loanSanctions = pgTable("loan_sanctions", {
++  id: varchar("id", { length: 255 }).primaryKey(), // LS-YYYYMMDD-NNN
++  lead_id: varchar("lead_id", { length: 255 })
++    .references(() => leads.id, { onDelete: "cascade" })
++    .notNull(),
++  product_selection_id: varchar("product_selection_id", { length: 255 }),
++
++  // 10 BRD fields for sanction
++  loan_amount: decimal("loan_amount", { precision: 12, scale: 2 }),
++  down_payment: decimal("down_payment", { precision: 12, scale: 2 }),
++  file_charge: decimal("file_charge", { precision: 12, scale: 2 }),
++  subvention: decimal("subvention", { precision: 12, scale: 2 }),
++  disbursement_amount: decimal("disbursement_amount", { precision: 12, scale: 2 }),
++  emi: decimal("emi", { precision: 12, scale: 2 }),
++  tenure_months: integer("tenure_months"),
++  roi: decimal("roi", { precision: 5, scale: 2 }),
++  loan_approved_by: text("loan_approved_by"), // lender/NBFC name
++  loan_file_number: varchar("loan_file_number", { length: 100 }),
++
++  // Status
++  status: varchar("status", { length: 30 }).default("sanctioned").notNull(), // sanctioned, rejected, dealer_approved
++  rejection_reason: text("rejection_reason"),
++
++  // Admin audit
++  sanctioned_by: uuid("sanctioned_by"),
++  sanctioned_at: timestamp("sanctioned_at", { withTimezone: true }).defaultNow(),
++
++  // Dealer/customer approval (Step 5 OTP)
++  dealer_approved: boolean("dealer_approved").default(false),
++  dealer_approved_at: timestamp("dealer_approved_at", { withTimezone: true }),
++  dealer_approved_by: uuid("dealer_approved_by"),
++
++  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
++  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
++});
++
++// --- STEP 5: OTP CONFIRMATION (dispatch authorisation) ---
++
++export const otpConfirmations = pgTable("otp_confirmations", {
++  id: varchar("id", { length: 255 }).primaryKey(), // OTP-YYYYMMDD-NNN
++  lead_id: varchar("lead_id", { length: 255 })
++    .references(() => leads.id, { onDelete: "cascade" })
++    .notNull(),
++  otp_type: varchar("otp_type", { length: 50 }).default("dispatch_confirmation").notNull(),
++  otp_hash: varchar("otp_hash", { length: 255 }).notNull(),
++  phone_sent_to: varchar("phone_sent_to", { length: 20 }),
++
++  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
++  expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
++
++  send_count: integer("send_count").default(1).notNull(),
++  attempt_count: integer("attempt_count").default(0).notNull(),
++  locked_until: timestamp("locked_until", { withTimezone: true }),
++
++  is_used: boolean("is_used").default(false).notNull(),
++  used_at: timestamp("used_at", { withTimezone: true }),
++  used_by: uuid("used_by"),
++
++  // Admin override path (BRD §4220) — stubbed for now
++  override_by_admin: boolean("override_by_admin").default(false),
++  override_reason: text("override_reason"),
++  override_by: uuid("override_by"),
++});
++
++// --- STEP 5: AFTER-SALES RECORDS (post-dispatch service handle) ---
++
++export const afterSalesRecords = pgTable("after_sales_records", {
++  id: varchar("id", { length: 255 }).primaryKey(), // AS-YYYY-NNN
++  lead_id: varchar("lead_id", { length: 255 })
++    .references(() => leads.id, { onDelete: "set null" }),
++  warranty_id: varchar("warranty_id", { length: 255 }),
++  battery_serial: varchar("battery_serial", { length: 255 }),
++  customer_id: varchar("customer_id", { length: 255 }),
++  dealer_id: varchar("dealer_id", { length: 255 }),
++  payment_mode: varchar("payment_mode", { length: 20 }), // cash, finance
++  opened_at: timestamp("opened_at", { withTimezone: true }).defaultNow().notNull(),
++  status: varchar("status", { length: 20 }).default("active").notNull(), // active, closed
++  closed_at: timestamp("closed_at", { withTimezone: true }),
++
++  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
++  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
++});
++
++// =============================================================================
++// NBFC RISK DASHBOARD (Phase A — see docs/NBFC_DASHBOARD_PLAN.md)
++// =============================================================================
++// Adds five tables for the multi-tenant NBFC partner dashboard at /nbfc/*.
++// Tenant scoping is enforced in application code (drizzle where-clauses) until
++// Phase C wires NBFC partner auth and we move to Postgres RLS.
++//
++// users.role gets a new value 'nbfc_partner' — no enum to migrate, role is
++// already varchar(50).
++// =============================================================================
++
++// One row per NBFC partner.
++export const nbfcTenants = pgTable("nbfc_tenants", {
++  id: uuid("id").primaryKey().defaultRandom(),
++  slug: text("slug").notNull().unique(), // 'demo-nbfc'
++  display_name: text("display_name").notNull(), // 'Demo NBFC Pvt Ltd'
++  contact_email: text("contact_email"),
++  aum_inr: decimal("aum_inr", { precision: 16, scale: 2 }), // displayed in header pill
++  active_loans: integer("active_loans").default(0).notNull(), // denormalized, refreshed nightly
++  is_active: boolean("is_active").default(true).notNull(),
++  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
++  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
++});
++
++// Many-to-many between users and tenants. Most NBFC partner users belong to
++// exactly one tenant; some Itarang internal operators may belong to many.
++export const nbfcUsers = pgTable(
++  "nbfc_users",
++  {
++    user_id: uuid("user_id")
++      .references(() => users.id, { onDelete: "cascade" })
++      .notNull(),
++    tenant_id: uuid("tenant_id")
++      .references(() => nbfcTenants.id, { onDelete: "cascade" })
++      .notNull(),
++    role: varchar("role", { length: 32 }).default("viewer").notNull(), // 'admin' | 'viewer'
++    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
++  },
++  (table) => ({
++    userTenantIdx: index("nbfc_users_user_tenant_idx").on(table.user_id, table.tenant_id),
++    tenantIdx: index("nbfc_users_tenant_idx").on(table.tenant_id),
++  }),
++);
++
++// Bridges existing loan_applications to a tenant + the IoT vehicleno that loan
++// is financing. One loan belongs to one NBFC.
++export const nbfcLoans = pgTable(
++  "nbfc_loans",
++  {
++    loan_application_id: varchar("loan_application_id", { length: 255 })
++      .primaryKey()
++      .references(() => loanApplications.id, { onDelete: "cascade" }),
++    tenant_id: uuid("tenant_id")
++      .references(() => nbfcTenants.id, { onDelete: "restrict" })
++      .notNull(),
++    vehicleno: varchar("vehicleno", { length: 64 }), // joins IoT vehicle_state.vehicleno
++    emi_amount: decimal("emi_amount", { precision: 12, scale: 2 }),
++    emi_due_date_dom: integer("emi_due_date_dom"), // day-of-month
++    current_dpd: integer("current_dpd").default(0).notNull(), // refreshed nightly
++    outstanding_amount: decimal("outstanding_amount", { precision: 14, scale: 2 }),
++    is_active: boolean("is_active").default(true).notNull(),
++    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
++    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
++  },
++  (table) => ({
++    tenantIdx: index("nbfc_loans_tenant_idx").on(table.tenant_id),
++    vnoIdx: index("nbfc_loans_vno_idx").on(table.vehicleno),
++    dpdIdx: index("nbfc_loans_dpd_idx").on(table.current_dpd),
++  }),
++);
++
++// Hypothesis catalogue. Stable identity so cards can be tracked across runs.
++// Initially seeded with 5 hand-coded entries; LangGraph proposes new ones over
++// time and writes them here with source='llm-v1'.
++export const riskHypotheses = pgTable("risk_hypotheses", {
++  id: uuid("id").primaryKey().defaultRandom(),
++  slug: text("slug").notNull().unique(), // 'usage-drop-7d'
++  title: text("title").notNull(),
++  description: text("description").notNull(), // 1-paragraph statement
++  test_method: varchar("test_method", { length: 16 }).notNull(), // 'sql' | 'js' | 'python'
++  test_definition: jsonb("test_definition").notNull(), // SQL string / JS predicate / Python source
++  source: varchar("source", { length: 16 }).default("human").notNull(), // 'human' | 'llm-v1'
++  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
++  retired_at: timestamp("retired_at", { withTimezone: true }), // soft-delete
++});
++
++// One row per (tenant, hypothesis, run). Risk page reads the latest run per
++// (tenant, hypothesis); older runs serve as a time series for the audit page.
++export const riskCardRuns = pgTable(
++  "risk_card_runs",
++  {
++    id: uuid("id").primaryKey().defaultRandom(),
++    tenant_id: uuid("tenant_id")
++      .references(() => nbfcTenants.id, { onDelete: "cascade" })
++      .notNull(),
++    hypothesis_id: uuid("hypothesis_id")
++      .references(() => riskHypotheses.id, { onDelete: "cascade" })
++      .notNull(),
++    run_at: timestamp("run_at", { withTimezone: true }).defaultNow().notNull(),
++    severity: varchar("severity", { length: 16 }).notNull(), // 'high' | 'warn' | 'ok'
++    finding_summary: text("finding_summary").notNull(), // 1-line headline
++    affected_count: integer("affected_count").default(0).notNull(),
++    total_count: integer("total_count").default(0).notNull(),
++    evidence_json: jsonb("evidence_json"), // sample rows + chart spec for drawer
++    llm_critique: text("llm_critique"),
++    llm_model: varchar("llm_model", { length: 64 }),
++    llm_prompt_tokens: integer("llm_prompt_tokens"),
++    llm_completion_tokens: integer("llm_completion_tokens"),
++  },
++  (table) => ({
++    tenantRunIdx: index("risk_card_runs_tenant_run_idx").on(table.tenant_id, table.run_at),
++    tenantHypIdx: index("risk_card_runs_tenant_hyp_idx").on(table.tenant_id, table.hypothesis_id),
++    severityIdx: index("risk_card_runs_severity_idx").on(table.severity),
++  }),
++);
++
++// =============================================================================
++// END NBFC additions
++// =============================================================================

@@ -2,9 +2,13 @@ import { defineConfig, devices, type ReporterDescription } from '@playwright/tes
 import dotenv from 'dotenv';
 import path from 'node:path';
 
-dotenv.config({ path: path.resolve(__dirname, '.env.test.local'), override: true });
+// `override: false` — env vars set on the command line (e.g. by an npm script
+// that exports E2E_BASE_URL=https://crm.itarang.com) win over the dotfile.
+// Without this, .env.test.local silently overwrites the prod target.
+dotenv.config({ path: path.resolve(__dirname, '.env.test.local'), override: false });
 
 const baseURL = process.env.E2E_BASE_URL ?? 'https://sandbox.itarang.com';
+const isProd = process.env.E2E_ALLOW_PROD === '1';
 
 const reporters: ReporterDescription[] = process.env.CI
   ? [['github']]
@@ -26,6 +30,7 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   reporter: reporters,
+  globalTeardown: isProd ? './tests/e2e/global.teardown.ts' : undefined,
   use: {
     baseURL,
     trace: 'on-first-retry',
@@ -45,7 +50,7 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
       dependencies: ['setup'],
       // Default run: exclude opt-in [live] and [manual] tagged tests.
-      grepInvert: /\[(live|manual)\]/,
+      grepInvert: /\[(live|manual|prod)\]/,
     },
     {
       name: 'chromium-live',
@@ -59,5 +64,23 @@ export default defineConfig({
       dependencies: ['setup'],
       grep: /\[manual\]/,
     },
+    // Production project — only registered when E2E_ALLOW_PROD=1 so a casual
+    // `playwright test --project=chromium-prod` errors out with "unknown
+    // project" instead of silently running against prod with stale env.
+    ...(isProd
+      ? [
+          {
+            name: 'chromium-prod',
+            use: {
+              ...devices['Desktop Chrome'],
+              baseURL: process.env.E2E_BASE_URL ?? 'https://crm.itarang.com',
+            },
+            dependencies: ['setup'],
+            grep: /\[prod\]/,
+            retries: 0,
+            fullyParallel: false,
+          },
+        ]
+      : []),
   ],
 });
