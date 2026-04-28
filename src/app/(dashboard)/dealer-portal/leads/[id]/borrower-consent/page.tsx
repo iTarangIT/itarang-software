@@ -63,15 +63,6 @@ type Step3Context = {
     };
 };
 
-const STEP3_ALLOWED_STATUSES = [
-    'awaiting_additional_docs',
-    'awaiting_co_borrower_kyc',
-    'awaiting_both',
-    'awaiting_co_borrower_replacement',
-    'awaiting_doc_reupload',
-    'pending_itarang_reverification',
-];
-
 // ─── Preview Customer Profile (read-only side-by-side modal) ───────────────
 function maskAadhaar(value?: string | null): string {
     if (!value) return '—';
@@ -920,27 +911,9 @@ export default function BorrowerConsentPage() {
         );
     }
 
-    // BRD §2.9.3 — Step 3 is conditional. If admin hasn't requested anything,
-    // skip the page entirely and route the dealer to Step 4.
-    if (step3Ctx && !STEP3_ALLOWED_STATUSES.includes(step3Ctx.lead_kyc_status)) {
-        return (
-            <div className="min-h-screen flex items-center justify-center bg-[#F8F9FB]">
-                <div className="text-center max-w-md">
-                    <CheckCircle2 className="w-14 h-14 text-emerald-500 mx-auto mb-4" />
-                    <h2 className="text-2xl font-bold text-gray-900">Step 3 Not Required</h2>
-                    <p className="mt-2 text-sm text-gray-500">
-                        Admin has not requested additional documents or co-borrower KYC for this lead. Please proceed to product selection.
-                    </p>
-                    <button
-                        onClick={() => router.push(`/dealer-portal/leads/${leadId}/kyc/interim`)}
-                        className="mt-6 px-6 py-3 bg-[#0047AB] text-white rounded-xl font-bold inline-flex items-center gap-2"
-                    >
-                        Proceed to Step 4 <ChevronRight className="w-4 h-4" />
-                    </button>
-                </div>
-            </div>
-        );
-    }
+    // BRD §2.9.3 — Step 3 was previously conditional on admin requesting co-borrower
+    // KYC or additional docs. Team lead requirement: render Step 3 unconditionally so
+    // it's reachable from the Step 2 progress arrow regardless of admin request state.
 
     // ─── Gating & Stepper ───────────────────────────────────────────────────
     const isConsentVerified = ['verified', 'admin_verified', 'manual_verified'].includes((consentStatus || '').toLowerCase());

@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db/index";
 import {
+  dealerCorrectionItems,
+  dealerCorrectionRounds,
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import {
+  documentLabel,
+  fieldLabel,
+} from "@/lib/onboarding/correction-catalog";
 
 const PatchBodySchema = z.object({
   companyName: z.string().optional(),
@@ -107,6 +113,81 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       rejectionReason: doc.rejectionReason,
     }));
 
+    // Latest correction round (any status). The review page renders the
+    // "Correction Response" panel only when status === "submitted"; other
+    // states are surfaced as small status pills so the admin can tell whether
+    // a round is awaiting the dealer.
+    //
+    // Wrapped in try/catch so the review page still loads if the correction
+    // tables haven't been migrated yet (e.g. local DB without db:push) —
+    // correction data is enrichment, not core review data.
+    let correctionRound: unknown = null;
+    try {
+      const [latestRound] = await db
+        .select()
+        .from(dealerCorrectionRounds)
+        .where(eq(dealerCorrectionRounds.applicationId, row.id))
+        .orderBy(desc(dealerCorrectionRounds.roundNumber))
+        .limit(1);
+
+      if (latestRound) {
+        const items = await db
+          .select()
+          .from(dealerCorrectionItems)
+          .where(eq(dealerCorrectionItems.roundId, latestRound.id));
+
+        const linkedDocIds = items
+          .flatMap((it) => [it.previousDocumentId, it.newDocumentId])
+          .filter((v): v is string => !!v);
+
+        const linkedDocs =
+          linkedDocIds.length > 0
+            ? await db
+                .select({
+                  id: dealerOnboardingDocuments.id,
+                  fileName: dealerOnboardingDocuments.fileName,
+                  fileUrl: dealerOnboardingDocuments.fileUrl,
+                  uploadedAt: dealerOnboardingDocuments.uploadedAt,
+                })
+                .from(dealerOnboardingDocuments)
+                .where(inArray(dealerOnboardingDocuments.id, linkedDocIds))
+            : [];
+        const docsById = new Map(linkedDocs.map((d) => [d.id, d]));
+
+        correctionRound = {
+          id: latestRound.id,
+          roundNumber: latestRound.roundNumber,
+          status: latestRound.status,
+          remarks: latestRound.remarks,
+          dealerNote: latestRound.dealerNote,
+          createdAt: latestRound.createdAt,
+          dealerSubmittedAt: latestRound.dealerSubmittedAt,
+          appliedAt: latestRound.appliedAt,
+          tokenExpiresAt: latestRound.tokenExpiresAt,
+          items: items.map((it) => ({
+            id: it.id,
+            kind: it.kind,
+            key: it.key,
+            label: it.kind === "field" ? fieldLabel(it.key) : documentLabel(it.key),
+            previousValue: it.previousValue,
+            newValue: it.newValue,
+            previousDocument: it.previousDocumentId
+              ? docsById.get(it.previousDocumentId) ?? null
+              : null,
+            newDocument: it.newDocumentId
+              ? docsById.get(it.newDocumentId) ?? null
+              : null,
+          })),
+        };
+      }
+    } catch (correctionError: any) {
+      console.warn(
+        "Could not load correction round (tables may not be migrated yet):",
+        correctionError?.message,
+      );
+      correctionRound = null;
+    }
+
     const providerData = parseProviderRawResponse(row.providerRawResponse);
     const agreementData = providerData?.agreement || {};
     const ownershipSnapshot =
@@ -171,6 +252,8 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
         correctionRemarks: row.correctionRemarks || null,
         rejectionRemarks: row.rejectionRemarks || (row as any).rejectionReason || null,
+
+        correctionRound,
 
         documents,
 

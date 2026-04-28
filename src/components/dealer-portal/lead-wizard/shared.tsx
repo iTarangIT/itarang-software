@@ -398,7 +398,7 @@ export function StickyBottomBar({ children, lastSaved }: {
     lastSaved?: string | null;
 }) {
     return (
-        <div className="sticky bottom-0 left-0 right-0 bg-[#F8F9FB] pt-4 pb-8 z-50">
+        <div className="sticky bottom-0 left-0 right-0 bg-[#F8F9FB] pt-4 pb-8 z-30">
             <div className="max-w-[1200px] mx-auto px-6">
                 <div className="flex justify-between items-center bg-white border border-gray-100 rounded-[20px] px-8 py-5 shadow-[0_-8px_30px_rgb(0,0,0,0.04)]">
                     <div className="bg-gray-100 px-4 py-1.5 rounded-full">
