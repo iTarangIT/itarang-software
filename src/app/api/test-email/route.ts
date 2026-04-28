@@ -3,8 +3,17 @@ import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
 
 export async function GET() {
   try {
-    const testEmail =
-      process.env.TEST_EMAIL_TO || "rushikeshkasav306@gmail.com";
+    const testEmail = process.env.TEST_EMAIL_TO;
+    if (!testEmail) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "TEST_EMAIL_TO env var is not set. Set it in .env.local to a recipient address you control before hitting this endpoint.",
+        },
+        { status: 400 }
+      );
+    }
 
     const result = await sendDealerWelcomeEmail({
       toEmail: testEmail,

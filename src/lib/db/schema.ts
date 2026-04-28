@@ -3351,3 +3351,71 @@ export const riskCardRuns = pgTable(
 // =============================================================================
 // END NBFC additions
 // =============================================================================
+
+// Dealer correction rounds — one row per round of "Request Correction" against
+// a dealer onboarding application. Supports multiple rounds: when a new round
+// is opened, any existing pending/submitted round for the same application is
+// flipped to "superseded".
+//
+// status flow:
+//   pending      — round opened, dealer has not submitted yet
+//   submitted    — dealer submitted via the magic-link form
+//   applied      — admin clicked Update Application; values merged into app
+//   superseded   — a newer round was opened before this one was applied
+export const dealerCorrectionRounds = pgTable(
+  "dealer_correction_rounds",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    applicationId: uuid("application_id")
+      .notNull()
+      .references(() => dealerOnboardingApplications.id, { onDelete: "cascade" }),
+    roundNumber: integer("round_number").notNull(),
+    status: varchar("status", { length: 30 }).default("pending").notNull(),
+    requestedBy: uuid("requested_by"),
+    remarks: text("remarks").notNull(),
+    requestedFields: jsonb("requested_fields").$type<string[]>().default([]).notNull(),
+    requestedDocuments: jsonb("requested_documents").$type<string[]>().default([]).notNull(),
+    dealerSubmittedAt: timestamp("dealer_submitted_at"),
+    dealerNote: text("dealer_note"),
+    appliedBy: uuid("applied_by"),
+    appliedAt: timestamp("applied_at"),
+    // sha256 hex of the raw token sent in the dealer email — never store the
+    // raw token. Lookup is by hash.
+    tokenHash: text("token_hash").notNull().unique(),
+    tokenExpiresAt: timestamp("token_expires_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    applicationIdx: index("dealer_correction_rounds_application_id_idx").on(
+      table.applicationId,
+    ),
+    statusIdx: index("dealer_correction_rounds_status_idx").on(table.status),
+    tokenHashIdx: index("dealer_correction_rounds_token_hash_idx").on(
+      table.tokenHash,
+    ),
+  }),
+);
+
+// One row per (round × document or field) — captures both the originally
+// requested item AND the dealer's submitted response so the admin panel can
+// render a clean before/after diff without recomputing from history.
+export const dealerCorrectionItems = pgTable(
+  "dealer_correction_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    roundId: uuid("round_id")
+      .notNull()
+      .references(() => dealerCorrectionRounds.id, { onDelete: "cascade" }),
+    kind: varchar("kind", { length: 20 }).notNull(), // "field" | "document"
+    key: varchar("key", { length: 100 }).notNull(),
+    previousValue: text("previous_value"),
+    newValue: text("new_value"),
+    previousDocumentId: uuid("previous_document_id"),
+    newDocumentId: uuid("new_document_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    roundIdx: index("dealer_correction_items_round_id_idx").on(table.roundId),
+  }),
+);

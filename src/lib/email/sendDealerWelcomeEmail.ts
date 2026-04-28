@@ -14,22 +14,35 @@ export type DealerWelcomeEmailPayload = {
   auditTrailPdf?: Buffer | null;
 };
 
-function getMailer() {
+let transporterVerified = false;
+
+async function getMailer() {
   const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 587);
+  const portRaw = process.env.SMTP_PORT;
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
 
-  if (!host || !user || !pass) {
-    throw new Error("Missing SMTP configuration in environment variables");
+  if (!host || !portRaw || !user || !pass) {
+    throw new Error(
+      `Missing SMTP configuration in environment variables (host=${Boolean(host)}, port=${Boolean(portRaw)}, user=${Boolean(user)}, pass=${Boolean(pass)})`
+    );
   }
 
-  return nodemailer.createTransport({
+  const port = Number(portRaw);
+  const transporter = nodemailer.createTransport({
     host,
     port,
     secure: port === 465,
     auth: { user, pass },
   });
+
+  if (!transporterVerified) {
+    await transporter.verify();
+    transporterVerified = true;
+    console.log("[WELCOME-MAIL] SMTP connection verified", { host, port, user });
+  }
+
+  return transporter;
 }
 
 function escapeHtml(value: unknown): string {
@@ -52,7 +65,7 @@ function escapeUrl(value: string): string {
 export async function sendDealerWelcomeEmail(
   payload: DealerWelcomeEmailPayload
 ) {
-  const transporter = getMailer();
+  const transporter = await getMailer();
 
   const hasSignedAgreement = Boolean(
     payload.signedAgreementPdf && payload.signedAgreementPdf.length > 0
@@ -172,9 +185,19 @@ export async function sendDealerWelcomeEmail(
     attachments: attachments.length ? attachments : undefined,
   });
 
+  if (info.rejected && info.rejected.length > 0) {
+    throw new Error(
+      `SMTP server rejected recipients: ${info.rejected.join(", ")} (response: ${info.response})`
+    );
+  }
+
   console.log("DEALER WELCOME EMAIL SENT:", {
     messageId: info.messageId,
     to: payload.toEmail,
+    accepted: info.accepted,
+    rejected: info.rejected,
+    response: info.response,
+    envelope: info.envelope,
     dealerId: payload.dealerId,
     attached: {
       signedAgreement: hasSignedAgreement,

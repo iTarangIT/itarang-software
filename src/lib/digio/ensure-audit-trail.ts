@@ -34,6 +34,12 @@ export async function ensureDealerAuditTrailUrl(
   const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
 
   if (!clientId || !clientSecret || !supabaseUrl || !serviceRoleKey) {
+    console.warn("[ensureDealerAuditTrailUrl] missing env vars", {
+      hasClientId: Boolean(clientId),
+      hasClientSecret: Boolean(clientSecret),
+      hasSupabaseUrl: Boolean(supabaseUrl),
+      hasServiceRoleKey: Boolean(serviceRoleKey),
+    });
     return null;
   }
 
@@ -89,13 +95,34 @@ export async function ensureDealerAuditTrailUrl(
     cache: "no-store",
   });
 
-  if (!response.ok) return null;
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    console.warn("[ensureDealerAuditTrailUrl] download non-ok", {
+      documentId: application.providerDocumentId,
+      url: digioUrl,
+      status: response.status,
+      body: body.slice(0, 500),
+    });
+    return null;
+  }
 
   const contentType = response.headers.get("content-type") || "";
-  if (contentType.includes("json")) return null;
+  if (contentType.includes("json")) {
+    const body = await response.text().catch(() => "");
+    console.warn("[ensureDealerAuditTrailUrl] download returned JSON", {
+      contentType,
+      body: body.slice(0, 500),
+    });
+    return null;
+  }
 
   const pdfBuffer = await response.arrayBuffer();
-  if (pdfBuffer.byteLength < 100) return null;
+  if (pdfBuffer.byteLength < 100) {
+    console.warn("[ensureDealerAuditTrailUrl] pdf buffer too small / empty", {
+      byteLength: pdfBuffer.byteLength,
+    });
+    return null;
+  }
 
   const supabase = createClient(supabaseUrl, serviceRoleKey);
   const bucketName = "dealer-documents";
