@@ -15,6 +15,7 @@
     "db:push": "drizzle-kit push",
     "db:update-passwords": "node scripts/update-passwords.js",
     "db:seed-test": "tsx scripts/seed-test-data.ts",
+    "db:seed-step4": "node --env-file=.env.local --import tsx scripts/seed-step4-inventory.ts --",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",

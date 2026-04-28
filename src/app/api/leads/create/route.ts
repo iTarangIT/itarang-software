@@ -248,6 +248,9 @@ export const POST = withErrorHandler(async (req: Request) => {
         const normOwnerPhone = normalizePhone(data.vehicle_owner_phone);
         const score = data.interest_level === 'hot' ? 90 : data.interest_level === 'warm' ? 60 : 30;
         const isUpfront = data.payment_method === 'upfront';
+        // BRD §2.1 — both `cash` (form value) and legacy `upfront` skip KYC.
+        const isCashLike = isUpfront || data.payment_method === 'cash';
+        const isHot = data.interest_level === 'hot';
 
         try {
             await db.transaction(async (tx) => {
@@ -273,8 +276,12 @@ export const POST = withErrorHandler(async (req: Request) => {
                     vehicle_owner_phone: normOwnerPhone,
                     interested_in: data.interested_in || [],
                     payment_method: data.payment_method || 'finance',
-                    kyc_status: isUpfront ? 'not_required' : 'not_started',
-                    workflow_step: isUpfront ? 3 : 1,
+                    kyc_status: isCashLike ? 'not_required' : 'not_started',
+                    // Post-Step-1 routing matrix (BRD §2.1):
+                    //   Hot + Cash         → workflow_step 4 (auto-nav to Product Selection)
+                    //   Hot + Non-Cash     → 1 (KYC opens; Step 2 will advance it)
+                    //   Warm/Cold + any    → 1 (parked; cash flag stored, no Step 4 yet)
+                    workflow_step: isCashLike && isHot ? 4 : 1,
                     status: 'ACTIVE',
                     lead_status: 'new',
                     updated_at: new Date()

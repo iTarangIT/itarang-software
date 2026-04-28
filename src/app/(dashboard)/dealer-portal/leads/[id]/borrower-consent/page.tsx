@@ -957,22 +957,18 @@ export default function BorrowerConsentPage() {
         );
         return supportingOk && coBorrowerOk;
     })();
-    // Legacy compat — keep canProceed name in case any earlier code reads it
-    const canProceed = canSubmit;
-
     const stepRoutes: Record<number, string> = {
         1: '/dealer-portal/leads/new',
         2: `/dealer-portal/leads/${leadId}/kyc`,
         3: `/dealer-portal/leads/${leadId}/borrower-consent`,
-        4: `/dealer-portal/leads/${leadId}/kyc/interim`,
-        5: `/dealer-portal/leads/${leadId}/options`,
+        4: `/dealer-portal/leads/${leadId}/product-selection`,
+        5: `/dealer-portal/leads/${leadId}/step-5`,
     };
     const jumpToStep = (target: number) => {
         if (target === 3) return;
-        if (target > 3 && !canProceed) {
-            setApiError('Complete this step before jumping ahead.');
-            return;
-        }
+        // Each step has its own access gate (e.g. /api/lead/:id/step-4-access)
+        // that redirects back when the dealer isn't eligible. Don't block
+        // navigation here — let the destination step decide.
         const route = stepRoutes[target];
         if (route) router.push(route);
     };
@@ -997,6 +993,7 @@ export default function BorrowerConsentPage() {
                     title="Other Documents & Co-Borrower KYC"
                     subtitle={`Lead ID: ${leadId}${lead?.full_name ? ` — ${lead.full_name}` : ''}`}
                     step={3}
+                    totalSteps={5}
                     workflowLabel="Interim Step"
                     onBack={() => router.push('/dealer-portal/leads/new')}
                     onPrev={() => jumpToStep(2)}
