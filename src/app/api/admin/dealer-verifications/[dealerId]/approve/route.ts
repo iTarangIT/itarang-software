@@ -509,7 +509,14 @@ export async function POST(req: NextRequest, context: RouteContext) {
       emailSent = true;
     } catch (mailError: any) {
       emailError = mailError?.message || "Unknown email error";
-      console.error("DEALER WELCOME EMAIL ERROR:", mailError);
+      console.error("[WELCOME-MAIL][FAILED]", {
+        dealerId,
+        toEmail: dealerLoginEmail,
+        error: mailError?.message || mailError,
+        code: mailError?.code,
+        command: mailError?.command,
+        stack: mailError?.stack,
+      });
     }
 
     console.log("DEALER APPROVED:", {

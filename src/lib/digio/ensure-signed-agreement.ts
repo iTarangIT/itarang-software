@@ -36,6 +36,12 @@ export async function ensureDealerSignedAgreementUrl(
   const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
 
   if (!clientId || !clientSecret || !supabaseUrl || !serviceRoleKey) {
+    console.warn("[ensureDealerSignedAgreementUrl] missing env vars", {
+      hasClientId: Boolean(clientId),
+      hasClientSecret: Boolean(clientSecret),
+      hasSupabaseUrl: Boolean(supabaseUrl),
+      hasServiceRoleKey: Boolean(serviceRoleKey),
+    });
     return null;
   }
 
@@ -60,9 +66,22 @@ export async function ensureDealerSignedAgreementUrl(
       cache: "no-store",
     });
 
-    if (statusRes.ok) {
+    if (!statusRes.ok) {
+      const body = await statusRes.text().catch(() => "");
+      console.warn("[ensureDealerSignedAgreementUrl] status endpoint non-ok", {
+        documentId: application.providerDocumentId,
+        url: statusUrl,
+        status: statusRes.status,
+        body: body.slice(0, 500),
+      });
+    } else {
       const parsed = await statusRes.json().catch(() => null);
       const signedUrl = extractSignedAgreementUrl(parsed);
+      console.log("[ensureDealerSignedAgreementUrl] status response", {
+        documentId: application.providerDocumentId,
+        agreementStatus: parsed?.agreement_status ?? parsed?.status ?? null,
+        signedUrlFound: Boolean(signedUrl),
+      });
 
       if (signedUrl) {
         const signedRes = await fetch(signedUrl, {
@@ -74,9 +93,20 @@ export async function ensureDealerSignedAgreementUrl(
           cache: "no-store",
         });
 
-        if (signedRes.ok) {
+        if (!signedRes.ok) {
+          console.warn(
+            "[ensureDealerSignedAgreementUrl] signedUrl fetch non-ok",
+            { signedUrl, status: signedRes.status }
+          );
+        } else {
           const contentType = signedRes.headers.get("content-type") || "";
-          if (!contentType.includes("json")) {
+          if (contentType.includes("json")) {
+            const body = await signedRes.text().catch(() => "");
+            console.warn(
+              "[ensureDealerSignedAgreementUrl] signedUrl returned JSON",
+              { contentType, body: body.slice(0, 500) }
+            );
+          } else {
             pdfBuffer = await signedRes.arrayBuffer();
           }
         }
@@ -101,10 +131,29 @@ export async function ensureDealerSignedAgreementUrl(
         cache: "no-store",
       });
 
-      if (!directRes.ok) return null;
+      if (!directRes.ok) {
+        const body = await directRes.text().catch(() => "");
+        console.warn(
+          "[ensureDealerSignedAgreementUrl] direct download non-ok",
+          {
+            documentId: application.providerDocumentId,
+            url: directUrl,
+            status: directRes.status,
+            body: body.slice(0, 500),
+          }
+        );
+        return null;
+      }
 
       const contentType = directRes.headers.get("content-type") || "";
-      if (contentType.includes("json")) return null;
+      if (contentType.includes("json")) {
+        const body = await directRes.text().catch(() => "");
+        console.warn(
+          "[ensureDealerSignedAgreementUrl] direct download returned JSON",
+          { contentType, body: body.slice(0, 500) }
+        );
+        return null;
+      }
 
       pdfBuffer = await directRes.arrayBuffer();
     } catch (err) {
@@ -113,7 +162,13 @@ export async function ensureDealerSignedAgreementUrl(
     }
   }
 
-  if (!pdfBuffer || pdfBuffer.byteLength < 100) return null;
+  if (!pdfBuffer || pdfBuffer.byteLength < 100) {
+    console.warn(
+      "[ensureDealerSignedAgreementUrl] pdf buffer too small / empty",
+      { byteLength: pdfBuffer?.byteLength ?? 0 }
+    );
+    return null;
+  }
 
   const supabase = createClient(supabaseUrl, serviceRoleKey);
   const bucketName = "dealer-documents";
