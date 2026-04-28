@@ -4,6 +4,7 @@ import { and, eq, desc } from "drizzle-orm";
 import { getCurrentTenant, getTenantLoanSlice } from "@/lib/nbfc/tenant";
 import { HAND_CODED_CARDS, type CardEvaluation } from "@/lib/risk/hand-coded-cards";
 import SeverityTabs from "./_components/SeverityTabs";
+import RerunButton from "./_components/RerunButton";
 
 export const dynamic = "force-dynamic";
 
@@ -21,12 +22,12 @@ interface CardForUi extends CardEvaluation {
  * tenant with no cron history still sees data on first load).
  */
 async function loadCards(tenantId: string): Promise<CardForUi[]> {
-  // 1. Catalogue
+  // 1. Catalogue — show both hand-coded (always) and LLM-generated (after first
+  // "Re-run analysis" populates them).
   const hyps = await db
     .select()
     .from(riskHypotheses)
-    .where(eq(riskHypotheses.source, "human")) // Phase A: only show hand-coded for now
-    .orderBy(riskHypotheses.slug);
+    .orderBy(riskHypotheses.source, riskHypotheses.slug);
 
   // 2. Latest run per hypothesis (group-by-max-run via per-hyp queries — fine for ~5 cards)
   const latestByHyp = new Map<string, typeof riskCardRuns.$inferSelect>();
@@ -90,14 +91,7 @@ export default async function RiskPage() {
             Hypothesis-driven cards. {cards.length} active hypotheses for {tenant.display_name}.
           </p>
         </div>
-        <form action="/api/nbfc/risk/run" method="post">
-          <button
-            type="submit"
-            className="px-4 py-2 text-sm font-medium rounded-md bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
-          >
-            Re-run analysis
-          </button>
-        </form>
+        <RerunButton />
       </div>
       <SeverityTabs cards={cards} />
     </div>

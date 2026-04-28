@@ -19,8 +19,13 @@ import { riskHypotheses, riskCardRuns } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import type { TenantContext } from "@/lib/nbfc/tenant";
 import { buildRiskTools } from "./risk-tools";
+import { executeInSandbox, sandboxHealthy } from "./risk-sandbox-client";
 import { HAND_CODED_CARDS } from "@/lib/risk/hand-coded-cards";
 import { getTenantLoanSlice } from "@/lib/nbfc/tenant";
+import { db as crmDb } from "@/lib/db";
+import { nbfcLoans } from "@/lib/db/schema";
+import { and } from "drizzle-orm";
+import { getDailyKm, getVehicleStates } from "@/lib/db/iot-queries";
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -42,6 +47,10 @@ interface HypothesisDraft {
   description: string;
   // What the agent decided to test, expressed as a tool-call plan.
   test_plan: string;
+  // Phase D: optional Python source defining `def evaluate(**dataframes) -> dict`.
+  // When the sandbox is healthy, runTest executes this against tenant data
+  // instead of asking the LLM to verdict from tool-call output.
+  python_code?: string;
 }
 
 interface HypothesisResult extends HypothesisDraft {
@@ -108,15 +117,45 @@ hypotheses. Each must be a single statement of the form
 "borrowers/vehicles WHERE <condition> have <expected risk signal>".
 
 Return ONLY a JSON array of objects with shape:
-  { "slug": "kebab-case-id", "title": "short title", "description": "one paragraph",
-    "test_plan": "short description of which tools to call and what threshold to apply" }
+  {
+    "slug": "kebab-case-id",
+    "title": "short title (≤8 words)",
+    "description": "one paragraph (≤2 sentences)",
+    "test_plan": "1-2 sentences describing what to test",
+    "python_code": "def evaluate(loans, vehicle_states, daily_km):\\n    ..."
+  }
+
+The python_code field MUST define a function with this exact signature:
+
+    def evaluate(loans, vehicle_states, daily_km):
+        # loans:          DataFrame with columns
+        #   loan_application_id, vehicleno, current_dpd, emi_amount, outstanding_amount
+        # vehicle_states: DataFrame with columns
+        #   vehicleno, online, last_gps_at, sec_since_gps, lat, lon, speed_kph,
+        #   ignition, soc_pct, soh_pct, pack_voltage, pack_temp_c
+        # daily_km:       DataFrame with columns day, vehicleno, km (last 14 days)
+        #
+        # MUST return a dict with keys:
+        #   severity:        "high" | "warn" | "ok"
+        #   affected_count:  int
+        #   total_count:     int
+        #   finding_summary: str (1 line)
+        #   evidence:        { "sample_rows": [...up to 10 rows], "notes": [...] }
+        ...
+
+Use only pandas (as pd) and numpy (as np) — no other imports allowed.
+No file I/O, no network, no exec/eval.
+
+Severity rule of thumb:
+  high: ≥5% of loans affected
+  warn: 1-5% of loans affected
+  ok:   <1% of loans affected
 
 Constraints:
 - Slugs must not collide with: usage-drop-7d, dpd-7-no-telemetry, geo-shift,
   battery-soh-decay, low-utilization-active-loan (these already exist).
-- Hypotheses must be testable using these tools only:
-  getCrmLoanSlice(min_dpd?, only_active_emi?), getIotFleetSummary(),
-  getCohortBaseline(metric: km_7d | soh_delta_30d | soc_now).
+- Don't reference data sources beyond loans / vehicle_states / daily_km.
+- Keep code under 60 lines.
 `;
 
 async function proposeHypotheses(state: State): Promise<Partial<State>> {
@@ -153,12 +192,10 @@ async function proposeHypotheses(state: State): Promise<Partial<State>> {
 }
 
 /**
- * Phase B run_test: bind tools to a tool-calling model and let the agent
- * exercise them. The agent returns a structured verdict object we can map
- * straight to severity + summary.
- *
- * Phase D will replace this with a Python sandbox that executes the test_plan
- * and returns sample rows.
+ * Phase D run_test: prefer the Python sandbox when it's available — the agent
+ * proposed `python_code`, we hand it real DataFrames, and we trust the
+ * deterministic verdict. Falls back to the Phase B LLM-tool-call path if the
+ * sandbox is unhealthy or the agent didn't produce code.
  */
 async function runTest(state: State): Promise<Partial<State>> {
   const baseModel = makeModel();
@@ -168,7 +205,54 @@ async function runTest(state: State): Promise<Partial<State>> {
   let promptTok = 0;
   let completionTok = 0;
 
+  // Probe the sandbox once per run rather than per-hypothesis.
+  const sandboxOk = await sandboxHealthy();
+  // Fetch the tenant data slice once — the same DataFrames are reused for
+  // every sandbox call.
+  const sandboxData = sandboxOk ? await fetchSandboxData(state.tenant) : null;
+  if (sandboxOk) console.log("[risk-graph] sandbox OK — using Python execution path");
+  else console.log("[risk-graph] sandbox unavailable — falling back to LLM-tool-call verdict");
+
   for (const h of state.hypotheses) {
+    // ── Phase D: Python sandbox path ────────────────────────────────────
+    if (sandboxOk && sandboxData && h.python_code) {
+      try {
+        const sb = await executeInSandbox({
+          hypothesis_slug: h.slug,
+          code: h.python_code,
+          data: sandboxData,
+        });
+        if (sb.ok && sb.result) {
+          results.push({
+            ...h,
+            severity: (sb.result.severity as HypothesisResult["severity"]) ?? "ok",
+            finding_summary: sb.result.finding_summary ?? "—",
+            affected_count: Number(sb.result.affected_count ?? 0),
+            total_count: Number(sb.result.total_count ?? 0),
+            evidence: (sb.result.evidence as Record<string, unknown>) ?? {},
+            critique: `python sandbox · ${sb.elapsed_ms}ms`,
+          });
+          continue;
+        }
+        // Sandbox returned an error — log it on the card so operators can see
+        // what went wrong, but don't crash the whole run.
+        results.push({
+          ...h,
+          severity: "ok",
+          finding_summary: `Sandbox error: ${sb.error ?? "unknown"}`,
+          affected_count: 0,
+          total_count: 0,
+          evidence: { sandbox_error: sb.error, elapsed_ms: sb.elapsed_ms },
+          critique: "Phase D sandbox could not evaluate this hypothesis",
+        });
+        continue;
+      } catch (e) {
+        // Network/transport failure — fall through to LLM path.
+        console.warn(`[risk-graph] sandbox transport error for ${h.slug}; falling back to LLM`, e);
+      }
+    }
+
+    // ── Phase B fallback: LLM-tool-call verdict ─────────────────────────
     try {
       const sys = `You are testing a single risk hypothesis. Use the available
 tools to gather evidence, then respond with ONLY a JSON object of shape:
@@ -181,8 +265,6 @@ Description: ${h.description}
 Plan: ${h.test_plan}
 
 Investigate and reply with the JSON verdict only.`;
-      // Single call — model decides tool calls inline; we don't run a full
-      // ReAct loop here for cost reasons. Phase D upgrades this.
       const resp = await model.invoke([
         { role: "system", content: sys },
         { role: "user", content: userPrompt },
@@ -223,6 +305,55 @@ Investigate and reply with the JSON verdict only.`;
     results,
     totalPromptTokens: promptTok,
     totalCompletionTokens: completionTok,
+  };
+}
+
+/**
+ * Phase D helper: snapshot of the tenant's data shaped as JSON arrays the
+ * sandbox can wrap into pandas DataFrames. Single fetch reused across all
+ * hypotheses in a run.
+ */
+async function fetchSandboxData(
+  tenant: TenantContext,
+): Promise<Record<string, unknown[]>> {
+  // 1. Loans for this tenant
+  const loanRows = await crmDb
+    .select({
+      loan_application_id: nbfcLoans.loan_application_id,
+      vehicleno: nbfcLoans.vehicleno,
+      current_dpd: nbfcLoans.current_dpd,
+      emi_amount: nbfcLoans.emi_amount,
+      outstanding_amount: nbfcLoans.outstanding_amount,
+    })
+    .from(nbfcLoans)
+    .where(and(eq(nbfcLoans.tenant_id, tenant.id), eq(nbfcLoans.is_active, true)));
+  const loans = loanRows.map((l) => ({
+    loan_application_id: l.loan_application_id,
+    vehicleno: l.vehicleno,
+    current_dpd: l.current_dpd,
+    emi_amount: l.emi_amount != null ? Number(l.emi_amount) : null,
+    outstanding_amount: l.outstanding_amount != null ? Number(l.outstanding_amount) : null,
+  }));
+  const vnos = loans.map((l) => l.vehicleno).filter((v): v is string => !!v);
+
+  // 2. Per-vehicle current state from IoT
+  const states = await getVehicleStates(vnos);
+
+  // 3. Last 14 days of km per vehicle
+  const daily = await getDailyKm(vnos, 14);
+  const dailyKm = daily.map((r) => ({
+    day: r.day.toISOString().slice(0, 10),
+    vehicleno: r.vehicleno,
+    km: r.km,
+  }));
+
+  return {
+    loans,
+    vehicle_states: states.map((s) => ({
+      ...s,
+      last_gps_at: s.last_gps_at?.toISOString() ?? null,
+    })),
+    daily_km: dailyKm,
   };
 }
 
