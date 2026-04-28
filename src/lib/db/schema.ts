@@ -3137,6 +3137,24 @@ export const productSelections = pgTable("product_selections", {
   dealer_margin: decimal("dealer_margin", { precision: 12, scale: 2 }),
   final_price: decimal("final_price", { precision: 12, scale: 2 }),
 
+  // GST snapshot — per-line gross / GST / net captured at submission so the
+  // admin product panel renders exactly what the dealer saw, even if pricing
+  // changes later in inventory/products.
+  battery_gross: decimal("battery_gross", { precision: 12, scale: 2 }),
+  battery_gst_percent: decimal("battery_gst_percent", { precision: 5, scale: 2 }),
+  battery_gst_amount: decimal("battery_gst_amount", { precision: 12, scale: 2 }),
+  battery_net: decimal("battery_net", { precision: 12, scale: 2 }),
+  charger_gross: decimal("charger_gross", { precision: 12, scale: 2 }),
+  charger_gst_percent: decimal("charger_gst_percent", { precision: 5, scale: 2 }),
+  charger_gst_amount: decimal("charger_gst_amount", { precision: 12, scale: 2 }),
+  charger_net: decimal("charger_net", { precision: 12, scale: 2 }),
+  // Per-line paraphernalia: [{ asset_type, model_type, product_name, qty,
+  //   unit_gross, gst_percent, gst_amount, line_gross, line_net }]
+  paraphernalia_lines: jsonb("paraphernalia_lines"),
+  gross_subtotal: decimal("gross_subtotal", { precision: 12, scale: 2 }),
+  gst_subtotal: decimal("gst_subtotal", { precision: 12, scale: 2 }),
+  net_subtotal: decimal("net_subtotal", { precision: 12, scale: 2 }),
+
   // Lifecycle
   payment_mode: varchar("payment_mode", { length: 20 }), // cash, finance
   admin_decision: varchar("admin_decision", { length: 30 }).default("pending"), // pending, dealer_confirmed, sanctioned, rejected

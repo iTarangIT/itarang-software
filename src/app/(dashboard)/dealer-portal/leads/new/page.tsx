@@ -13,7 +13,7 @@ import {
 } from '@/components/dealer-portal/lead-wizard/shared';
 import {
     INTEREST_LEVELS, PAYMENT_METHODS, VEHICLE_OWNERSHIP_OPTIONS,
-    VEHICLE_CATEGORIES, isFinanceMethod,
+    VEHICLE_CATEGORIES, isFinanceMethod, isCashMethod,
 } from '@/components/dealer-portal/lead-wizard/constants';
 
 const emptyFormData = {
@@ -289,9 +289,17 @@ function NewLeadWizardContent() {
                     }).catch(console.error);
                 }
 
-                if (formData.payment_method === 'cash' || formData.payment_method === 'upfront') {
-                    router.push('/dealer-portal/leads');
-                } else if (formData.interest_level === 'hot' && isFinanceMethod(formData.payment_method)) {
+                // Post-Step-1 routing matrix (BRD §2.1):
+                //                        Non-Cash (finance)        Cash
+                //   Hot                  → Step 2 (KYC)            → Step 4 (Product Selection)
+                //   Warm / Cold          → exit to Lead List       → exit to Lead List (cash flag stored, no Step 4 yet)
+                const isHot = formData.interest_level === 'hot';
+                const cash = isCashMethod(formData.payment_method);
+                const finance = isFinanceMethod(formData.payment_method);
+
+                if (isHot && cash && updatedLeadId) {
+                    router.push(`/dealer-portal/leads/${updatedLeadId}/product-selection`);
+                } else if (isHot && finance && updatedLeadId) {
                     router.push(`/dealer-portal/leads/${updatedLeadId}/kyc`);
                 } else {
                     router.push('/dealer-portal/leads');
