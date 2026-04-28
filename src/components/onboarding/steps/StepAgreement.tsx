@@ -20,7 +20,16 @@ function FieldError({ message }: { message?: string }) {
   return <p className="mt-1.5 text-xs text-red-500">{message}</p>;
 }
 
+function FieldLabel({ children }: { children: ReactNode }) {
+  return (
+    <label className="mb-1.5 block text-sm font-medium text-[#173F63]">
+      {children}
+    </label>
+  );
+}
+
 function InputField({
+  label,
   value,
   onChange,
   placeholder,
@@ -28,6 +37,7 @@ function InputField({
   readOnly = false,
   error,
 }: {
+  label?: string;
   value: string | number | undefined | null;
   onChange: (value: string) => void;
   placeholder: string;
@@ -37,6 +47,7 @@ function InputField({
 }) {
   return (
     <div>
+      {label ? <FieldLabel>{label}</FieldLabel> : null}
       <input
         type={type}
         value={value ?? ""}
@@ -57,16 +68,19 @@ function InputField({
 }
 
 function SelectField({
+  label,
   value,
   onChange,
   error,
 }: {
+  label?: string;
   value: SigningMethod;
   onChange: (value: SigningMethod) => void;
   error?: string;
 }) {
   return (
     <div>
+      {label ? <FieldLabel>{label}</FieldLabel> : null}
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as SigningMethod)}
@@ -254,6 +268,7 @@ export default function StepAgreement() {
       >
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <InputField
+            label="Date of Signing"
             type="date"
             value={agreement.dateOfSigning}
             onChange={(value) => setField("agreement", "dateOfSigning", value)}
@@ -261,6 +276,7 @@ export default function StepAgreement() {
             error={errors.dateOfSigning}
           />
           <InputField
+            label="MoU Date"
             type="date"
             value={agreement.mouDate}
             onChange={(value) => setField("agreement", "mouDate", value)}
@@ -276,6 +292,7 @@ export default function StepAgreement() {
       >
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div>
+            <FieldLabel>Dealer Signatory</FieldLabel>
             <select
               value={agreement.dealerSignerName || ""}
               onChange={(e) => onDealerSignatoryChange(e.target.value)}
@@ -296,6 +313,7 @@ export default function StepAgreement() {
           </div>
 
           <SelectField
+            label="Dealer Signing Method"
             value={(agreement.dealerSigningMethod || "") as SigningMethod}
             onChange={(value) =>
               setField("agreement", "dealerSigningMethod", value)
@@ -304,6 +322,7 @@ export default function StepAgreement() {
           />
 
           <InputField
+            label="Dealer Signatory Designation"
             value={agreement.dealerSignerDesignation}
             onChange={() => undefined}
             placeholder="Dealer Signatory Designation"
@@ -311,6 +330,7 @@ export default function StepAgreement() {
             error={errors.dealerSignerDesignation}
           />
           <InputField
+            label="Dealer Signatory Email"
             value={agreement.dealerSignerEmail}
             onChange={() => undefined}
             placeholder="Dealer Signatory Email"
@@ -318,6 +338,7 @@ export default function StepAgreement() {
             error={errors.dealerSignerEmail}
           />
           <InputField
+            label="Dealer Signatory Mobile"
             value={agreement.dealerSignerPhone}
             onChange={() => undefined}
             placeholder="Dealer Signatory Mobile"
@@ -333,6 +354,7 @@ export default function StepAgreement() {
       >
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <InputField
+            label="Sales Manager Name"
             value={agreement.salesManager?.name || ""}
             onChange={(value) =>
               setField("agreement", "salesManager", {
@@ -344,6 +366,7 @@ export default function StepAgreement() {
             error={errors.salesManager_name}
           />
           <InputField
+            label="Sales Manager Email"
             value={agreement.salesManager?.email || ""}
             onChange={(value) =>
               setField("agreement", "salesManager", {
@@ -356,6 +379,7 @@ export default function StepAgreement() {
             error={errors.salesManager_email}
           />
           <InputField
+            label="Sales Manager Contact Number"
             value={agreement.salesManager?.mobile || ""}
             onChange={(value) =>
               setField("agreement", "salesManager", {
@@ -367,6 +391,7 @@ export default function StepAgreement() {
             error={errors.salesManager_mobile}
           />
           <InputField
+            label="Sales Manager Age"
             value={(agreement.salesManager as any)?.age || ""}
             onChange={(value) =>
               setField("agreement", "salesManager", {
@@ -392,6 +417,7 @@ export default function StepAgreement() {
             subtitle="Primary internal signer"
           >
             <InputField
+              label="Signatory Name"
               value={agreement.itarangSignatory1?.name || ""}
               onChange={(value) =>
                 setField("agreement", "itarangSignatory1", {
@@ -403,6 +429,7 @@ export default function StepAgreement() {
               error={errors.itarangSignatory1_name}
             />
             <InputField
+              label="Designation"
               value={agreement.itarangSignatory1?.designation || ""}
               onChange={(value) =>
                 setField("agreement", "itarangSignatory1", {
@@ -414,6 +441,7 @@ export default function StepAgreement() {
               error={errors.itarangSignatory1_designation}
             />
             <InputField
+              label="Signatory Email"
               value={agreement.itarangSignatory1?.email || ""}
               onChange={(value) =>
                 setField("agreement", "itarangSignatory1", {
@@ -425,6 +453,7 @@ export default function StepAgreement() {
               error={errors.itarangSignatory1_email}
             />
             <InputField
+              label="Signatory Mobile"
               value={agreement.itarangSignatory1?.mobile || ""}
               onChange={(value) =>
                 setField("agreement", "itarangSignatory1", {
@@ -436,6 +465,7 @@ export default function StepAgreement() {
               error={errors.itarangSignatory1_mobile}
             />
             <InputField
+              label="Signatory Age"
               value={(agreement.itarangSignatory1 as any)?.age || ""}
               onChange={(value) =>
                 setField("agreement", "itarangSignatory1", {
@@ -447,6 +477,7 @@ export default function StepAgreement() {
               error={errors.itarangSignatory1_age}
             />
             <InputField
+              label="Signatory Address"
               value={agreement.itarangSignatory1?.address || ""}
               onChange={(value) =>
                 setField("agreement", "itarangSignatory1", {
@@ -457,6 +488,7 @@ export default function StepAgreement() {
               placeholder="Signatory Address"
             />
             <SelectField
+              label="Signing Method"
               value={
                 (agreement.itarangSignatory1?.signingMethod || "") as SigningMethod
               }
@@ -488,6 +520,7 @@ export default function StepAgreement() {
                 subtitle="Secondary internal signer (optional)"
               >
                 <InputField
+                  label="Signatory Name"
                   value={agreement.itarangSignatory2?.name || ""}
                   onChange={(value) =>
                     setField("agreement", "itarangSignatory2", {
@@ -499,6 +532,7 @@ export default function StepAgreement() {
                   error={errors.itarangSignatory2_name}
                 />
                 <InputField
+                  label="Designation"
                   value={agreement.itarangSignatory2?.designation || ""}
                   onChange={(value) =>
                     setField("agreement", "itarangSignatory2", {
@@ -510,6 +544,7 @@ export default function StepAgreement() {
                   error={errors.itarangSignatory2_designation}
                 />
                 <InputField
+                  label="Signatory Email"
                   value={agreement.itarangSignatory2?.email || ""}
                   onChange={(value) =>
                     setField("agreement", "itarangSignatory2", {
@@ -521,6 +556,7 @@ export default function StepAgreement() {
                   error={errors.itarangSignatory2_email}
                 />
                 <InputField
+                  label="Signatory Mobile"
                   value={agreement.itarangSignatory2?.mobile || ""}
                   onChange={(value) =>
                     setField("agreement", "itarangSignatory2", {
@@ -532,6 +568,7 @@ export default function StepAgreement() {
                   error={errors.itarangSignatory2_mobile}
                 />
                 <InputField
+                  label="Signatory Age"
                   value={(agreement.itarangSignatory2 as any)?.age || ""}
                   onChange={(value) =>
                     setField("agreement", "itarangSignatory2", {
@@ -543,6 +580,7 @@ export default function StepAgreement() {
                   error={errors.itarangSignatory2_age}
                 />
                 <InputField
+                  label="Signatory Address"
                   value={agreement.itarangSignatory2?.address || ""}
                   onChange={(value) =>
                     setField("agreement", "itarangSignatory2", {
@@ -553,6 +591,7 @@ export default function StepAgreement() {
                   placeholder="Signatory Address"
                 />
                 <SelectField
+                  label="Signing Method"
                   value={
                     (agreement.itarangSignatory2?.signingMethod || "") as SigningMethod
                   }
