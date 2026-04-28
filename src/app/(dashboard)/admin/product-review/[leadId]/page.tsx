@@ -8,11 +8,26 @@ import Link from "next/link";
 // Shows the submitted product selection (read-only) and exposes the four
 // admin actions: Loan Sanctioned, Loan Rejected, Download Profile, Back.
 
+interface ParaLine {
+  asset_type: string;
+  model_type?: string | null;
+  product_name?: string | null;
+  qty: number;
+  unit_gross: number;
+  gst_percent: number;
+  gst_amount: number;
+  unit_net: number;
+  line_gross: number;
+  line_gst: number;
+  line_net: number;
+}
+
 interface ProductSelection {
   id: string;
   battery_serial: string | null;
   charger_serial: string | null;
   paraphernalia: Record<string, unknown> | null;
+  paraphernalia_lines: ParaLine[] | null;
   category: string | null;
   sub_category: string | null;
   battery_price: string | null;
@@ -20,6 +35,17 @@ interface ProductSelection {
   paraphernalia_cost: string | null;
   dealer_margin: string | null;
   final_price: string | null;
+  battery_gross: string | null;
+  battery_gst_percent: string | null;
+  battery_gst_amount: string | null;
+  battery_net: string | null;
+  charger_gross: string | null;
+  charger_gst_percent: string | null;
+  charger_gst_amount: string | null;
+  charger_net: string | null;
+  gross_subtotal: string | null;
+  gst_subtotal: string | null;
+  net_subtotal: string | null;
   payment_mode: string | null;
   admin_decision: string | null;
   submitted_at: string | null;
@@ -198,23 +224,75 @@ export default function AdminProductReviewPage() {
             <Field label="Battery Model" value={battery?.model_type as string} />
             <Field label="Charger Serial" value={selection.charger_serial} />
             <Field label="Charger Model" value={charger?.model_type as string} />
-            <Field
-              label="Paraphernalia"
-              value={
-                selection.paraphernalia
-                  ? JSON.stringify(selection.paraphernalia)
-                  : "—"
-              }
-            />
             <Field label="Submitted" value={selection.submitted_at} />
           </div>
+
+          <div className="pt-4 border-t">
+            <h3 className="font-bold text-sm mb-3">Bill Breakdown</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border border-gray-200 rounded">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Item</th>
+                    <th className="px-3 py-2 text-right">Gross</th>
+                    <th className="px-3 py-2 text-right">GST %</th>
+                    <th className="px-3 py-2 text-right">GST ₹</th>
+                    <th className="px-3 py-2 text-right">Qty</th>
+                    <th className="px-3 py-2 text-right">Net</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <BillRow
+                    label="Battery"
+                    gross={selection.battery_gross}
+                    gstPct={selection.battery_gst_percent}
+                    gstAmt={selection.battery_gst_amount}
+                    net={selection.battery_net ?? selection.battery_price}
+                    qty={1}
+                  />
+                  <BillRow
+                    label="Charger"
+                    gross={selection.charger_gross}
+                    gstPct={selection.charger_gst_percent}
+                    gstAmt={selection.charger_gst_amount}
+                    net={selection.charger_net ?? selection.charger_price}
+                    qty={1}
+                  />
+                  {(selection.paraphernalia_lines || []).map((line, idx) => (
+                    <BillRow
+                      key={`${line.asset_type}-${idx}`}
+                      label={
+                        line.product_name ||
+                        `${line.asset_type}${line.model_type ? ` ${line.model_type}` : ""}`
+                      }
+                      gross={String(line.unit_gross)}
+                      gstPct={String(line.gst_percent)}
+                      gstAmt={String(line.gst_amount)}
+                      net={String(line.unit_net)}
+                      qty={line.qty}
+                    />
+                  ))}
+                </tbody>
+                <tfoot className="bg-gray-50 font-bold">
+                  <tr>
+                    <td className="px-3 py-2">Subtotal</td>
+                    <td className="px-3 py-2 text-right">
+                      ₹{Number(selection.gross_subtotal ?? 0).toLocaleString("en-IN")}
+                    </td>
+                    <td colSpan={2} className="px-3 py-2 text-right">
+                      GST ₹{Number(selection.gst_subtotal ?? 0).toLocaleString("en-IN")}
+                    </td>
+                    <td className="px-3 py-2 text-right">—</td>
+                    <td className="px-3 py-2 text-right">
+                      ₹{Number(selection.net_subtotal ?? 0).toLocaleString("en-IN")}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-4 text-sm pt-4 border-t">
-            <Field label="Battery Price" value={`₹${selection.battery_price ?? 0}`} />
-            <Field label="Charger Price" value={`₹${selection.charger_price ?? 0}`} />
-            <Field
-              label="Paraphernalia Cost"
-              value={`₹${selection.paraphernalia_cost ?? 0}`}
-            />
             <Field label="Dealer Margin" value={`₹${selection.dealer_margin ?? 0}`} />
             <Field
               label="Final Price"
@@ -345,6 +423,43 @@ function Field({ label, value }: { label: string; value: React.ReactNode | strin
       <div className="text-xs text-gray-500 uppercase tracking-wider">{label}</div>
       <div className="font-medium text-gray-900">{value ?? "—"}</div>
     </div>
+  );
+}
+
+function BillRow({
+  label,
+  gross,
+  gstPct,
+  gstAmt,
+  net,
+  qty,
+}: {
+  label: string;
+  gross?: string | null;
+  gstPct?: string | null;
+  gstAmt?: string | null;
+  net?: string | null;
+  qty: number;
+}) {
+  const fmt = (v: string | null | undefined) =>
+    `₹${Number(v ?? 0).toLocaleString("en-IN")}`;
+  const pct = (v: string | null | undefined) => {
+    const n = Number(v ?? 0);
+    if (!Number.isFinite(n) || n === 0) return "0%";
+    return `${Number.isInteger(n) ? n : n.toFixed(2)}%`;
+  };
+  const lineNet = Number(net ?? 0) * qty;
+  return (
+    <tr className="border-t border-gray-100">
+      <td className="px-3 py-2">{label}</td>
+      <td className="px-3 py-2 text-right tabular-nums">{fmt(gross)}</td>
+      <td className="px-3 py-2 text-right tabular-nums">{pct(gstPct)}</td>
+      <td className="px-3 py-2 text-right tabular-nums">{fmt(gstAmt)}</td>
+      <td className="px-3 py-2 text-right tabular-nums">{qty}</td>
+      <td className="px-3 py-2 text-right tabular-nums font-bold">
+        ₹{lineNet.toLocaleString("en-IN")}
+      </td>
+    </tr>
   );
 }
 

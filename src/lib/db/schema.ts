@@ -2570,24 +2570,53 @@ export const scraperCityQueue = pgTable("scraper_city_queue", {
 // --- STEP 4: PRODUCT SELECTION (BRD V2 Part E) ---
 
 export const productSelections = pgTable("product_selections", {
-  id: varchar({ length: 255 }).primaryKey().notNull(),
-  leadId: varchar("lead_id", { length: 255 }).notNull(),
-  batterySerial: varchar("battery_serial", { length: 255 }),
-  chargerSerial: varchar("charger_serial", { length: 255 }),
-  paraphernalia: jsonb(),
-  category: varchar({ length: 100 }),
-  subCategory: varchar("sub_category", { length: 100 }),
-  batteryPrice: numeric("battery_price", { precision: 12, scale:  2 }),
-  chargerPrice: numeric("charger_price", { precision: 12, scale:  2 }),
-  paraphernaliaCost: numeric("paraphernalia_cost", { precision: 12, scale:  2 }),
-  dealerMargin: numeric("dealer_margin", { precision: 12, scale:  2 }),
-  finalPrice: numeric("final_price", { precision: 12, scale:  2 }),
-  paymentMode: varchar("payment_mode", { length: 20 }),
-  adminDecision: varchar("admin_decision", { length: 30 }).default('pending'),
-  submittedBy: uuid("submitted_by"),
-  submittedAt: timestamp("submitted_at", { withTimezone: true }).defaultNow(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  id: varchar("id", { length: 255 }).primaryKey(), // PS-YYYYMMDD-NNN
+  lead_id: varchar("lead_id", { length: 255 })
+    .references(() => leads.id, { onDelete: "cascade" })
+    .notNull(),
+
+  // Selected inventory
+  battery_serial: varchar("battery_serial", { length: 255 }),
+  charger_serial: varchar("charger_serial", { length: 255 }),
+  paraphernalia: jsonb("paraphernalia"), // { digital_soc: 2, volt_soc: 0, harness: "type_b", accessories: [...] }
+
+  // Classification (may differ from Step 1 if dealer changed category)
+  category: varchar("category", { length: 100 }),
+  sub_category: varchar("sub_category", { length: 100 }),
+
+  // Pricing (snapshot at submission time)
+  battery_price: decimal("battery_price", { precision: 12, scale: 2 }),
+  charger_price: decimal("charger_price", { precision: 12, scale: 2 }),
+  paraphernalia_cost: decimal("paraphernalia_cost", { precision: 12, scale: 2 }),
+  dealer_margin: decimal("dealer_margin", { precision: 12, scale: 2 }),
+  final_price: decimal("final_price", { precision: 12, scale: 2 }),
+
+  // GST snapshot — per-line gross / GST / net captured at submission so the
+  // admin product panel renders exactly what the dealer saw, even if pricing
+  // changes later in inventory/products.
+  battery_gross: decimal("battery_gross", { precision: 12, scale: 2 }),
+  battery_gst_percent: decimal("battery_gst_percent", { precision: 5, scale: 2 }),
+  battery_gst_amount: decimal("battery_gst_amount", { precision: 12, scale: 2 }),
+  battery_net: decimal("battery_net", { precision: 12, scale: 2 }),
+  charger_gross: decimal("charger_gross", { precision: 12, scale: 2 }),
+  charger_gst_percent: decimal("charger_gst_percent", { precision: 5, scale: 2 }),
+  charger_gst_amount: decimal("charger_gst_amount", { precision: 12, scale: 2 }),
+  charger_net: decimal("charger_net", { precision: 12, scale: 2 }),
+  // Per-line paraphernalia: [{ asset_type, model_type, product_name, qty,
+  //   unit_gross, gst_percent, gst_amount, line_gross, line_net }]
+  paraphernalia_lines: jsonb("paraphernalia_lines"),
+  gross_subtotal: decimal("gross_subtotal", { precision: 12, scale: 2 }),
+  gst_subtotal: decimal("gst_subtotal", { precision: 12, scale: 2 }),
+  net_subtotal: decimal("net_subtotal", { precision: 12, scale: 2 }),
+
+  // Lifecycle
+  payment_mode: varchar("payment_mode", { length: 20 }), // cash, finance
+  admin_decision: varchar("admin_decision", { length: 30 }).default("pending"), // pending, dealer_confirmed, sanctioned, rejected
+  submitted_by: uuid("submitted_by"),
+  submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow(),
+
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // --- STEP 4: LOAN SANCTION (Admin-created, distinct from loanOffers) ---
