@@ -15,6 +15,7 @@
     "db:push": "infisical run -- drizzle-kit push",
     "db:update-passwords": "infisical run -- node scripts/update-passwords.js",
     "db:seed-test": "infisical run -- tsx scripts/seed-test-data.ts",
+    "db:seed-step4": "infisical run -- tsx scripts/seed-step4-inventory.ts",
     "db:catalog": "infisical run -- tsx scripts/db-catalog.ts",
     "db:drift": "infisical run -- tsx scripts/db-drift.ts",
     "test:e2e": "infisical run -- playwright test",

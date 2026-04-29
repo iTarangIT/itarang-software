@@ -109,11 +109,11 @@ export async function POST(req: NextRequest) {
     const registeredAddress = cleanObject(body.registeredAddress);
     const financeEnabled = cleanBoolean(body.financeEnabled);
 
-    const onboardingStatus =
-      body.onboardingStatus === "submitted" ? "submitted" : "draft";
-
-    const reviewStatus =
-      onboardingStatus === "submitted" ? "pending_admin_review" : "draft";
+    // The final onboarding/review status is computed AFTER we look up the
+    // existing row, so a draft autosave cannot regress a row that the dealer
+    // already submitted (or that the admin moved to correction_requested /
+    // rejected). See the computation block after the `existing` query below.
+    const isExplicitSubmission = body.onboardingStatus === "submitted";
 
     const ownerName = cleanString(body.ownerName);
     const ownerPhone = cleanPhone(body.ownerPhone);
@@ -177,7 +177,7 @@ export async function POST(req: NextRequest) {
 
     console.log("SAVE ROUTE AUTH USER ID:", dealerUserId);
     console.log("SAVE ROUTE COMPANY NAME:", companyName);
-    console.log("SAVE ROUTE REVIEW STATUS:", reviewStatus);
+    console.log("SAVE ROUTE EXPLICIT SUBMISSION:", isExplicitSubmission);
 
     if (!companyName) {
       const res = NextResponse.json(
@@ -188,7 +188,7 @@ export async function POST(req: NextRequest) {
       return res;
     }
 
-    if (onboardingStatus === "submitted") {
+    if (isExplicitSubmission) {
       if (!ownerName) {
         const res = NextResponse.json(
           { success: false, message: "Primary contact name is required before submission" },
@@ -226,12 +226,12 @@ export async function POST(req: NextRequest) {
     const existing = await db
       .select()
       .from(dealerOnboardingApplications)
-      .where(eq(dealerOnboardingApplications.dealerUserId, dealerUserId))
+      .where(eq(dealerOnboardingApplications.dealer_user_id, dealerUserId))
       .limit(1);
 
     if (existing.length > 0) application = existing[0];
 
-    if (application && application.onboardingStatus === "approved") {
+    if (application && application.onboarding_status === "approved") {
       // Don't modify approved applications via auto-save.
       // Return success silently so the frontend doesn't show an error.
       const res = NextResponse.json({
@@ -242,6 +242,28 @@ export async function POST(req: NextRequest) {
       mergeCookies(cookieCollector, res);
       return res;
     }
+
+    // A draft autosave must NEVER regress a row that the dealer already
+    // submitted, or that the admin moved to correction_requested / rejected —
+    // otherwise the admin queue shows the row as "pending admin review" while
+    // the approve endpoint rejects it for `onboarding_status !== "submitted"`.
+    // Only an explicit submission (body.onboardingStatus === "submitted")
+    // promotes a draft to submitted; anything else preserves the prior state.
+    const previousOnboardingStatus = application?.onboarding_status ?? null;
+    const previousReviewStatus = application?.review_status ?? null;
+
+    const onboardingStatus = isExplicitSubmission
+      ? "submitted"
+      : previousOnboardingStatus && previousOnboardingStatus !== "draft"
+        ? previousOnboardingStatus
+        : "draft";
+
+    const reviewStatus =
+      onboardingStatus === "submitted"
+        ? "pending_admin_review"
+        : previousReviewStatus && previousReviewStatus !== "draft"
+          ? previousReviewStatus
+          : "draft";
 
     // Transitioning to submitted (or an explicit agreement regen request)
     // should reset the Digio workflow. On a plain draft autosave we must
@@ -255,43 +277,43 @@ export async function POST(req: NextRequest) {
 
     // Shared fields including ownerLandline
     const sharedFields = {
-      dealerCode,
-      companyName,
-      companyType,
-      gstNumber,
-      panNumber,
-      businessAddress,
-      registeredAddress,
-      financeEnabled,
-      onboardingStatus,
-      reviewStatus,
-      ownerName,
-      ownerPhone,
-      ownerEmail,
-      ownerLandline,   // ← new field
-      bankName,
-      accountNumber,
-      beneficiaryName,
-      ifscCode,
-      salesManagerName,
-      salesManagerEmail,
-      salesManagerMobile,
-      itarangSignatory1Name,
-      itarangSignatory1Email,
-      itarangSignatory1Mobile,
-      itarangSignatory2Name,
-      itarangSignatory2Email,
-      itarangSignatory2Mobile,
-      providerRawResponse: { agreement: agreementConfig },
-      lastActionTimestamp: new Date(),
+      dealer_code: dealerCode,
+      company_name: companyName,
+      company_type: companyType,
+      gst_number: gstNumber,
+      pan_number: panNumber,
+      business_address: businessAddress ? JSON.stringify(businessAddress) : null,
+      registered_address: registeredAddress ? JSON.stringify(registeredAddress) : null,
+      finance_enabled: financeEnabled,
+      onboarding_status: onboardingStatus,
+      review_status: reviewStatus,
+      owner_name: ownerName,
+      owner_phone: ownerPhone,
+      owner_email: ownerEmail,
+      owner_landline: ownerLandline,   // ← new field
+      bank_name: bankName,
+      account_number: accountNumber,
+      beneficiary_name: beneficiaryName,
+      ifsc_code: ifscCode,
+      sales_manager_name: salesManagerName,
+      sales_manager_email: salesManagerEmail,
+      sales_manager_mobile: salesManagerMobile,
+      itarang_signatory_1_name: itarangSignatory1Name,
+      itarang_signatory_1_email: itarangSignatory1Email,
+      itarang_signatory_1_mobile: itarangSignatory1Mobile,
+      itarang_signatory_2_name: itarangSignatory2Name,
+      itarang_signatory_2_email: itarangSignatory2Email,
+      itarang_signatory_2_mobile: itarangSignatory2Mobile,
+      provider_raw_response: { agreement: agreementConfig },
+      last_action_timestamp: new Date(),
     };
 
     if (application) {
       const updatePayload: Record<string, unknown> = {
         ...sharedFields,
-        dealerUserId: dealerUserId || application.dealerUserId,
-        submittedAt: isSubmissionTransition ? new Date() : application.submittedAt,
-        updatedAt: new Date(),
+        dealer_user_id: dealerUserId || application.dealer_user_id,
+        submitted_at: isSubmissionTransition ? new Date() : application.submitted_at,
+        updated_at: new Date(),
       };
 
       if (shouldResetProviderWorkflow) {
@@ -306,7 +328,7 @@ export async function POST(req: NextRequest) {
         updatePayload.agreementStatus =
           (typeof agreementConfig["agreementStatus"] === "string" &&
             agreementConfig["agreementStatus"]) ||
-          application.agreementStatus ||
+          application.agreement_status ||
           "not_generated";
       }
 
@@ -322,14 +344,14 @@ export async function POST(req: NextRequest) {
         .insert(dealerOnboardingApplications)
         .values({
           ...sharedFields,
-          dealerUserId,
-          submittedAt: onboardingStatus === "submitted" ? new Date() : null,
-          agreementStatus: "not_generated",
+          dealer_user_id: dealerUserId,
+          submitted_at: onboardingStatus === "submitted" ? new Date() : null,
+          agreement_status: "not_generated",
           // New rows start in the "pending" workflow states — these were
           // previously in sharedFields but were moved out so autosave on
           // existing rows doesn't overwrite live Digio state.
-          stampStatus: "pending",
-          completionStatus: "pending",
+          stamp_status: "pending",
+          completion_status: "pending",
         })
         .returning();
 
@@ -352,7 +374,7 @@ export async function POST(req: NextRequest) {
     if (documentsProvided) {
       await db
         .delete(dealerOnboardingDocuments)
-        .where(eq(dealerOnboardingDocuments.applicationId, application.id));
+        .where(eq(dealerOnboardingDocuments.application_id, application.id));
     }
 
     if (documentsProvided && documents.length > 0) {
@@ -366,17 +388,17 @@ export async function POST(req: NextRequest) {
           );
         })
         .map((doc) => ({
-          applicationId: application!.id,
-          documentType: String(doc["documentType"]),
-          bucketName: String(doc["bucketName"]),
-          storagePath: String(doc["storagePath"]),
-          fileName: String(doc["fileName"]),
-          fileUrl: typeof doc["fileUrl"] === "string" ? doc["fileUrl"] : null,
-          mimeType: typeof doc["mimeType"] === "string" ? doc["mimeType"] : null,
-          fileSize: typeof doc["fileSize"] === "number" ? doc["fileSize"] : null,
-          uploadedBy: dealerUserId,
-          docStatus: typeof doc["docStatus"] === "string" ? doc["docStatus"] : "uploaded",
-          verificationStatus:
+          application_id: application!.id,
+          document_type: String(doc["documentType"]),
+          bucket_name: String(doc["bucketName"]),
+          storage_path: String(doc["storagePath"]),
+          file_name: String(doc["fileName"]),
+          file_url: typeof doc["fileUrl"] === "string" ? doc["fileUrl"] : null,
+          mime_type: typeof doc["mimeType"] === "string" ? doc["mimeType"] : null,
+          file_size: typeof doc["fileSize"] === "number" ? doc["fileSize"] : null,
+          uploaded_by: dealerUserId,
+          doc_status: typeof doc["docStatus"] === "string" ? doc["docStatus"] : "uploaded",
+          verification_status:
             typeof doc["verificationStatus"] === "string"
               ? doc["verificationStatus"]
               : "pending",

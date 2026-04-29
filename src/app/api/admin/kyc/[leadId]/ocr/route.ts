@@ -179,6 +179,7 @@ async function saveToPersonalDetails(leadId: string, fields: Record<string, unkn
             .where(eq(personalDetails.lead_id, leadId));
     } else {
         await db.insert(personalDetails).values({
+            id: crypto.randomUUID(),
             lead_id: leadId,
             ...cleanFields,
             ocr_processed_at: new Date(),

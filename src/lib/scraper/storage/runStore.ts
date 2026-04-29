@@ -11,10 +11,10 @@ export async function markRunStarted(
 ) {
   await db.insert(scrapeRuns).values({
     id: runId,
-    searchQueries: query,
+    search_queries: query,
     status: "running",
-    triggeredBy: userId,
-    startedAt: new Date(),
+    triggered_by: userId,
+    started_at: new Date(),
   });
 }
 
@@ -32,13 +32,13 @@ export async function markRunCompleted(
     .update(scrapeRuns)
     .set({
       status: "completed",
-      completedAt: new Date(),
+      completed_at: new Date(),
 
-      totalFound: stats.total,
-      newLeadsSaved: stats.saved,
-      duplicatesSkipped: stats.duplicates,
-      cleanedLeads: stats.cleaned,
-      durationMs: stats.duration_ms,
+      total_found: stats.total,
+      new_leads_saved: stats.saved,
+      duplicates_skipped: stats.duplicates,
+      cleaned_leads: stats.cleaned,
+      duration_ms: stats.duration_ms,
     })
     .where(eq(scrapeRuns.id, runId));
 }
@@ -48,8 +48,8 @@ export async function markRunFailed(runId: string, error: string) {
     .update(scrapeRuns)
     .set({
       status: "failed",
-      errorMessage: error,
-      completedAt: new Date(),
+      error_message: error,
+      completed_at: new Date(),
     })
     .where(eq(scrapeRuns.id, runId));
 }
@@ -68,12 +68,12 @@ export async function markRunCancelled(
     .update(scrapeRuns)
     .set({
       status: "cancelled",
-      completedAt: new Date(),
-      totalFound: stats.total,
-      newLeadsSaved: stats.saved,
-      duplicatesSkipped: stats.duplicates,
-      cleanedLeads: stats.cleaned,
-      durationMs: stats.duration_ms,
+      completed_at: new Date(),
+      total_found: stats.total,
+      new_leads_saved: stats.saved,
+      duplicates_skipped: stats.duplicates,
+      cleaned_leads: stats.cleaned,
+      duration_ms: stats.duration_ms,
     })
     .where(eq(scrapeRuns.id, runId));
 }
@@ -87,10 +87,10 @@ export async function reapStuckRuns() {
     .update(scrapeRuns)
     .set({
       status: "failed",
-      errorMessage: "Run timed out (serverless function terminated)",
-      completedAt: new Date(),
+      error_message: "Run timed out (serverless function terminated)",
+      completed_at: new Date(),
     })
     .where(
-      and(eq(scrapeRuns.status, "running"), lt(scrapeRuns.startedAt, cutoff)),
+      and(eq(scrapeRuns.status, "running"), lt(scrapeRuns.started_at, cutoff)),
     );
 }

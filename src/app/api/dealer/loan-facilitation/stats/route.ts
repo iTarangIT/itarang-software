@@ -16,7 +16,7 @@ const EMPTY_STATS = {
 export const GET = withErrorHandler(async () => {
     const user = await requireRole(['dealer']);
 
-    let rows: { facilitation_fee_status: string; company_validation_status: string }[];
+    let rows: { facilitation_fee_status: string | null; company_validation_status: string }[];
     try {
         rows = await db
             .select({

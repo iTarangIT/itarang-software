@@ -472,6 +472,7 @@ export async function executePanVerification(
       .where(eq(personalDetails.lead_id, leadId));
   } else {
     await db.insert(personalDetails).values({
+      id: crypto.randomUUID(),
       lead_id: leadId,
       pan_no: panUpper,
     });

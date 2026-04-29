@@ -146,6 +146,9 @@ export const POST = withErrorHandler(async (req: Request) => {
     ) {
       return errorResponse("Not authorized for these documents", 403);
     }
+    if (!frontDoc.storage_path || !backDoc.storage_path) {
+      return errorResponse("Documents have no storage_path", 400);
+    }
 
     const [front, back] = await Promise.all([
       fetchDocumentBuffer(frontDoc.storage_path),

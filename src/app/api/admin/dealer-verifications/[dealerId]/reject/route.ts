@@ -49,15 +49,15 @@ export async function POST(req: NextRequest, context: RouteContext) {
     await db
       .update(dealerOnboardingApplications)
       .set({
-        onboardingStatus: "rejected",
-        reviewStatus: "rejected",
-        dealerAccountStatus: "inactive",
-        completionStatus: "pending",
-        rejectedAt: new Date(),
-        rejectionReason: remarks,
-        rejectionRemarks: remarks,
-        correctionRemarks: null,
-        updatedAt: new Date(),
+        onboarding_status: "rejected",
+        review_status: "rejected",
+        dealer_account_status: "inactive",
+        completion_status: "pending",
+        rejected_at: new Date(),
+        rejection_reason: remarks,
+        rejection_remarks: remarks,
+        correction_remarks: null,
+        updated_at: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
 
@@ -73,9 +73,9 @@ export async function POST(req: NextRequest, context: RouteContext) {
     console.log("REJECT recipients:", {
       dealerId,
       applicationId: application.id,
-      salesManagerEmail: maskEmail(application.salesManagerEmail),
-      itarangSignatory1Email: maskEmail(application.itarangSignatory1Email),
-      itarangSignatory2Email: maskEmail(application.itarangSignatory2Email),
+      salesManagerEmail: maskEmail(application.sales_manager_email),
+      itarangSignatory1Email: maskEmail(application.itarang_signatory_1_email),
+      itarangSignatory2Email: maskEmail(application.itarang_signatory_2_email),
       notificationRecipientsCount: notificationRecipients.length,
     });
 
@@ -90,7 +90,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       try {
         emailResult = await sendDealerRejectionNotificationEmail({
           toEmails: notificationRecipients,
-          companyName: application.companyName || "Unknown Company",
+          companyName: application.company_name || "Unknown Company",
           applicationId: String(application.id),
           rejectionRemarks: remarks,
         });

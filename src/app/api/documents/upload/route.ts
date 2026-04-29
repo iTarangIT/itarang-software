@@ -48,13 +48,17 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     const docId = `DOC-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
+    if (!leadId) return errorResponse("leadId is required", 400);
+
     await db.insert(leadDocuments).values({
         id: docId,
-        lead_id: leadId || null,
+        lead_id: leadId,
         dealer_id: user.dealer_id,
         user_id: user.id,
+        document_type: docType,
+        document_url: storagePath,
         doc_type: docType,
-        storage_path: storagePath
+        storage_path: storagePath,
     });
 
     return successResponse({

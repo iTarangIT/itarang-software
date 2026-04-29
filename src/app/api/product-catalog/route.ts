@@ -27,6 +27,8 @@ export const POST = withErrorHandler(async (req: Request) => {
 
     const [product] = await db.insert(products).values({
         ...validated,
+        voltage_v: validated.voltage_v ?? 0,
+        capacity_ah: validated.capacity_ah ?? 0,
         status: 'active',
         is_active: true,
     }).returning();

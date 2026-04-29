@@ -35,7 +35,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     }
 
     // 2. Calculate Total Amount
-    const totalAmount = items.reduce((sum, item) => sum + parseFloat(item.final_amount), 0);
+    const totalAmount = items.reduce((sum, item) => sum + parseFloat(item.final_amount ?? '0'), 0);
 
     const orderId = await generateId('ORD', orders);
 

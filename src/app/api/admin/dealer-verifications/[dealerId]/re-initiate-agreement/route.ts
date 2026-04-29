@@ -31,7 +31,7 @@ export async function POST(req: NextRequest, context: Context) {
       );
     }
 
-    if (!canReInitiateAgreement(application.agreementStatus)) {
+    if (!canReInitiateAgreement(application.agreement_status)) {
       return NextResponse.json(
         {
           success: false,

@@ -41,7 +41,7 @@ export default async function PDIInspectionPage({ params }: PageProps) {
 
     const formData = {
         oem_inventory_id: item.id,
-        provision_id: item.provision_id,
+        provision_id: item.provision_id ?? '',
         serial_number: item.serial_number,
         product_model: item.product?.model_type || 'Unknown',
         asset_type: item.product?.asset_type || 'Unknown',

@@ -24,7 +24,7 @@ export default async function AICallsPage() {
         .limit(100);
 
     const completedCount = allCalls.filter(c => c.status === 'completed').length;
-    const activeCount = allCalls.filter(c => ['initiated', 'in_progress'].includes(c.status)).length;
+    const activeCount = allCalls.filter(c => ['initiated', 'in_progress'].includes(c.status ?? '')).length;
 
     return (
         <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
@@ -67,7 +67,7 @@ export default async function AICallsPage() {
                                 : null;
                             return (
                                 <tr key={call.id} className="hover:bg-gray-50 transition-colors">
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900">{call.bolna_call_id.slice(0, 12)}...</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900">{(call.bolna_call_id ?? '').slice(0, 12)}...</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-blue-600 font-medium">{call.lead_id || '—'}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{call.current_phase || '—'}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
@@ -78,7 +78,7 @@ export default async function AICallsPage() {
                                     </td>
                                     <td className="px-6 py-4 whitespace-nowrap">
                                         <span className={`px-3 py-1 rounded-full text-xs font-bold ${call.status === 'completed' ? 'bg-green-100 text-green-700' : call.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
-                                            {call.status.toUpperCase()}
+                                            {(call.status ?? '').toUpperCase()}
                                         </span>
                                     </td>
                                 </tr>

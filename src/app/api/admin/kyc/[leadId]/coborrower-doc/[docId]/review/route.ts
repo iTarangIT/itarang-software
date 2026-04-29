@@ -97,7 +97,7 @@ export async function POST(
       action,
       changes: {
         lead_id: leadId,
-        doc_type: row.doc_type,
+        doc_type: row.document_type,
         previous_status: row.status,
         new_status: newStatus,
         note: note ?? null,

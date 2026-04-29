@@ -145,21 +145,21 @@ async function fetchCoBorrowerDocuments(
   const query = db
     .select({
       id: coBorrowerDocuments.id,
-      lead_id: coBorrowerDocuments.leadId,
-      document_type: coBorrowerDocuments.documentType,
-      document_url: coBorrowerDocuments.documentUrl,
+      lead_id: coBorrowerDocuments.lead_id,
+      document_type: coBorrowerDocuments.document_type,
+      document_url: coBorrowerDocuments.document_url,
       verification_status: coBorrowerDocuments.status,
-      uploaded_at: coBorrowerDocuments.uploadedAt,
-      ocr_data: coBorrowerDocuments.ocrData,
+      uploaded_at: coBorrowerDocuments.uploaded_at,
+      ocr_data: coBorrowerDocuments.ocr_data,
     })
     .from(coBorrowerDocuments);
 
   return statuses
     ? query
         .where(inArray(coBorrowerDocuments.status, statuses))
-        .orderBy(desc(coBorrowerDocuments.uploadedAt))
+        .orderBy(desc(coBorrowerDocuments.uploaded_at))
         .limit(200)
-    : query.orderBy(desc(coBorrowerDocuments.uploadedAt)).limit(200);
+    : query.orderBy(desc(coBorrowerDocuments.uploaded_at)).limit(200);
 }
 
 function toReviewDocument(doc: DocumentRow, reviewFor: ReviewFor) {
@@ -442,13 +442,13 @@ export async function POST(req: NextRequest) {
       db
         .select({
           id: coBorrowerDocuments.id,
-          document_type: coBorrowerDocuments.documentType,
+          document_type: coBorrowerDocuments.document_type,
         })
         .from(coBorrowerDocuments)
         .where(
           and(
             eq(coBorrowerDocuments.id, documentId),
-            eq(coBorrowerDocuments.leadId, leadId),
+            eq(coBorrowerDocuments.lead_id, leadId),
           ),
         )
         .limit(1),
