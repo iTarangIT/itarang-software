@@ -83,14 +83,14 @@ export async function POST(req: NextRequest, context: RouteContext) {
       );
     }
 
-    if (application.onboardingStatus === "approved") {
+    if (application.onboarding_status === "approved") {
       return NextResponse.json(
         { success: false, message: "Dealer already approved" },
         { status: 400 }
       );
     }
 
-    if (application.onboardingStatus !== "submitted") {
+    if (application.onboarding_status !== "submitted") {
       return NextResponse.json(
         {
           success: false,
@@ -112,11 +112,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
       );
     }
 
-    if (application.financeEnabled) {
+    if (application.finance_enabled) {
       if (
-        application.agreementStatus !== "completed" ||
-        application.reviewStatus !== "agreement_completed" ||
-        !application.providerDocumentId
+        application.agreement_status !== "completed" ||
+        application.review_status !== "agreement_completed" ||
+        !application.provider_document_id
       ) {
         return NextResponse.json(
           {
@@ -163,7 +163,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // code so all downstream FK-style linkage (users.dealer_id, leads, etc.)
     // points at the shared legal entity.
     const dealerCode =
-      sharedAccountId || application.dealerCode || generateDealerCode();
+      sharedAccountId || application.dealer_code || generateDealerCode();
 
     // Pre-flight: for finance-enabled dealers, guarantee BOTH the signed
     // agreement PDF and the audit trail PDF are available before we create
@@ -173,7 +173,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
     let signedAgreementPdf: Buffer | null = null;
     let auditTrailPdf: Buffer | null = null;
 
-    if (application.financeEnabled) {
+    if (application.finance_enabled) {
       const [signedUrl, auditUrl] = await Promise.all([
         ensureDealerSignedAgreementUrl(application).catch((err) => {
           console.error("ENSURE SIGNED AGREEMENT ERROR:", err);
@@ -249,7 +249,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       const metaRole = typeof meta.role === "string" ? meta.role : null;
       const metaDealerCode =
         typeof meta.dealer_code === "string" ? meta.dealer_code : null;
-      const existingAppDealerUserId = application.dealerUserId || null;
+      const existingAppDealerUserId = application.dealer_user_id || null;
 
       const isThisDealer =
         metaRole === "dealer" &&
@@ -324,23 +324,23 @@ export async function POST(req: NextRequest, context: RouteContext) {
       await tx
         .update(dealerOnboardingApplications)
         .set({
-          dealerUserId: authUserId,
-          onboardingStatus: "approved",
-          reviewStatus: "approved",
-          dealerAccountStatus: "active",
-          completionStatus: "completed",
-          approvedAt: new Date(),
-          signedAt:
-            application.agreementStatus === "completed"
-              ? application.signedAt || new Date()
-              : application.signedAt || null,
-          rejectedAt: null,
-          rejectionReason: null,
-          correctionRemarks: null,
-          rejectionRemarks: null,
-          dealerCode,
-          isBranchDealer,
-          updatedAt: new Date(),
+          dealer_user_id: authUserId,
+          onboarding_status: "approved",
+          review_status: "approved",
+          dealer_account_status: "active",
+          completion_status: "completed",
+          approved_at: new Date(),
+          signed_at:
+            application.agreement_status === "completed"
+              ? application.signed_at || new Date()
+              : application.signed_at || null,
+          rejected_at: null,
+          rejection_reason: null,
+          correction_remarks: null,
+          rejection_remarks: null,
+          dealer_code: dealerCode,
+          is_branch_dealer: isBranchDealer,
+          updated_at: new Date(),
         })
         .where(eq(dealerOnboardingApplications.id, dealerId));
 
@@ -357,26 +357,26 @@ export async function POST(req: NextRequest, context: RouteContext) {
         .limit(1);
 
       if (existingAccount.length === 0) {
-        const addressObj = typeof application.businessAddress === "object" && application.businessAddress
-          ? application.businessAddress as Record<string, any>
+        const addressObj = typeof application.business_address === "object" && application.business_address
+          ? application.business_address as Record<string, any>
           : null;
 
         await tx.insert(accounts).values({
           id: dealerCode,
-          business_entity_name: application.companyName || "Dealer Business",
-          gstin: application.gstNumber || "PENDING",
-          pan: application.panNumber || null,
+          business_entity_name: application.company_name || "Dealer Business",
+          gstin: application.gst_number || "PENDING",
+          pan: application.pan_number || null,
           dealer_code: dealerCode,
-          contact_name: application.ownerName || application.companyName || "Dealer",
+          contact_name: application.owner_name || application.company_name || "Dealer",
           contact_email: dealerLoginEmail,
-          contact_phone: application.ownerPhone || null,
+          contact_phone: application.owner_phone || null,
           address_line1: addressObj?.address || addressObj?.line1 || null,
           city: addressObj?.city || null,
           state: addressObj?.state || null,
           pincode: addressObj?.pincode || null,
-          bank_name: application.bankName || null,
-          bank_account_number: application.accountNumber || null,
-          ifsc_code: application.ifscCode || null,
+          bank_name: application.bank_name || null,
+          bank_account_number: application.account_number || null,
+          ifsc_code: application.ifsc_code || null,
           status: "active",
           onboarding_status: "approved",
           created_by: authUserId,
@@ -396,10 +396,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
           .update(users)
           .set({
             id: authUserId,
-            name: application.ownerName || application.companyName || "Dealer",
+            name: application.owner_name || application.company_name || "Dealer",
             role: "dealer",
             dealer_id: dealerCode,
-            phone: application.ownerPhone || null,
+            phone: application.owner_phone || null,
             is_active: true,
             password_hash: passwordHash,
             must_change_password: true,
@@ -410,10 +410,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
         await tx.insert(users).values({
           id: authUserId,
           email: dealerLoginEmail,
-          name: application.ownerName || application.companyName || "Dealer",
+          name: application.owner_name || application.company_name || "Dealer",
           role: "dealer",
           dealer_id: dealerCode,
-          phone: application.ownerPhone || null,
+          phone: application.owner_phone || null,
           avatar_url: null,
           password_hash: passwordHash,
           must_change_password: true,
@@ -434,10 +434,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
 
     console.log("APPROVE MAIL DEBUG:", {
       applicationId: application.id,
-      companyName: application.companyName,
-      salesManagerEmail: application.salesManagerEmail,
-      itarangSignatory1Email: application.itarangSignatory1Email,
-      itarangSignatory2Email: application.itarangSignatory2Email,
+      companyName: application.company_name,
+      salesManagerEmail: application.sales_manager_email,
+      itarangSignatory1Email: application.itarang_signatory_1_email,
+      itarangSignatory2Email: application.itarang_signatory_2_email,
       notificationRecipients,
     });
 
@@ -461,10 +461,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
       try {
         const notifyResult = await sendDealerApprovalNotificationEmail({
           toEmails: notificationRecipients,
-          companyName: application.companyName || "Unknown Company",
+          companyName: application.company_name || "Unknown Company",
           dealerCode,
           dealerName:
-            application.ownerName || application.companyName || "Dealer",
+            application.owner_name || application.company_name || "Dealer",
           approvedAt: new Date().toISOString(),
         });
         internalNotificationResult = {
@@ -491,8 +491,8 @@ export async function POST(req: NextRequest, context: RouteContext) {
     try {
       mailResult = await sendDealerWelcomeEmail({
         toEmail: dealerLoginEmail,
-        dealerName: application.ownerName || application.companyName || "Dealer",
-        companyName: application.companyName || "iTarang Dealer",
+        dealerName: application.owner_name || application.company_name || "Dealer",
+        companyName: application.company_name || "iTarang Dealer",
         dealerId: dealerCode,
         userId: dealerLoginEmail,
         password: temporaryPassword,
@@ -509,7 +509,14 @@ export async function POST(req: NextRequest, context: RouteContext) {
       emailSent = true;
     } catch (mailError: any) {
       emailError = mailError?.message || "Unknown email error";
-      console.error("DEALER WELCOME EMAIL ERROR:", mailError);
+      console.error("[WELCOME-MAIL][FAILED]", {
+        dealerId,
+        toEmail: dealerLoginEmail,
+        error: mailError?.message || mailError,
+        code: mailError?.code,
+        command: mailError?.command,
+        stack: mailError?.stack,
+      });
     }
 
     console.log("DEALER APPROVED:", {

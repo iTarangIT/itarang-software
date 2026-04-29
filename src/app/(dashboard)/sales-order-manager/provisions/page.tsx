@@ -54,11 +54,11 @@ export default async function SOMProvisionsPage() {
                                 <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">{prov.id}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{prov.oem_name}</td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                                    {new Date(prov.expected_delivery_date).toLocaleDateString()}
+                                    {prov.expected_delivery_date ? new Date(prov.expected_delivery_date).toLocaleDateString() : '—'}
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
-                                    <span className={`px-3 py-1 rounded-full text-xs font-bold ${STATUS_COLORS[prov.status] || 'bg-gray-100 text-gray-600'}`}>
-                                        {prov.status.replace(/_/g, ' ').toUpperCase()}
+                                    <span className={`px-3 py-1 rounded-full text-xs font-bold ${STATUS_COLORS[prov.status ?? ''] || 'bg-gray-100 text-gray-600'}`}>
+                                        {(prov.status ?? '').replace(/_/g, ' ').toUpperCase()}
                                     </span>
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-right">

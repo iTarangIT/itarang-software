@@ -1,6 +1,7 @@
 /**
  * Typed query helpers over the IoT VPS Postgres.
  *
+ * 
  * All queries take an explicit `vehiclenos: string[]` filter so a tenant only
  * ever sees telemetry for vehicles tied to its loans. The caller is
  * responsible for resolving the tenant → vehicleno set via `nbfc_loans`.

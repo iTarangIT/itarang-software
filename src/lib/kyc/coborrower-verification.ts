@@ -250,7 +250,7 @@ export async function executeCoBorrowerBankVerification(
   const decentroRes = await verifyBankAccount({
     account_number: input.account_number,
     ifsc: input.ifsc,
-    name: input.name || cb.full_name,
+    name: input.name || cb.full_name || undefined,
     validation_type: "pennydrop",
   });
 

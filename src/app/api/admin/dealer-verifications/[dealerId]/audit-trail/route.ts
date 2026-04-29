@@ -88,11 +88,11 @@ function mergeSigner(
   partyMap: DigioSigningPartyMap,
   invitationAt: Date | null,
 ): AuditSignerDetail {
-  const email = normalizeEmail(localSigner.signerEmail);
+  const email = normalizeEmail(localSigner.signer_email);
   // Map local signer roles to the `reason` strings Digio parties carry
   // (see initiate-agreement/route.ts). Previously this only built a key for
   // `dealer`, so iTarang / financier audit data never matched.
-  const role = (localSigner.signerRole || "").toLowerCase().trim();
+  const role = (localSigner.signer_role || "").toLowerCase().trim();
   const REASON_BY_ROLE: Record<string, string> = {
     dealer: "dealer signer",
     itarang_signatory_1: "itarang signer 1",
@@ -104,26 +104,26 @@ function mergeSigner(
   const party =
     (email ? partyMap.get(email) : null) ||
     (reasonKey ? partyMap.get(reasonKey) : null) ||
-    (localSigner.providerRawResponse as any) ||
+    (localSigner.provider_raw_response as any) ||
     null;
 
   const browser = extractBrowserParts(party);
-  const status = pickString(party?.status, localSigner.signerStatus) || undefined;
-  const signingMethod = pickString(party?.sign_type, localSigner.signingMethod) || undefined;
+  const status = pickString(party?.status, localSigner.signer_status) || undefined;
+  const signingMethod = pickString(party?.sign_type, localSigner.signing_method) || undefined;
 
   return {
     sequence: seq,
-    displayName: pickString(party?.name, localSigner.signerName) || "Signer",
-    email: pickString(party?.email, localSigner.signerEmail) || undefined,
-    mobile: pickString(party?.mobile, localSigner.signerMobile) || undefined,
+    displayName: pickString(party?.name, localSigner.signer_name) || "Signer",
+    email: pickString(party?.email, localSigner.signer_email) || undefined,
+    mobile: pickString(party?.mobile, localSigner.signer_mobile) || undefined,
     requestedAt:
       pickString(party?.requested_on, party?.requested_at, party?.invited_on) ||
       (invitationAt ? invitationAt.toISOString() : null) ||
-      localSigner.createdAt?.toISOString() ||
+      localSigner.created_at?.toISOString() ||
       null,
     signedAt:
       pickString(party?.signed_on, party?.signed_at) ||
-      (localSigner.signedAt ? localSigner.signedAt.toISOString() : null),
+      (localSigner.signed_at ? localSigner.signed_at.toISOString() : null),
     ip: pickString(party?.ip_address, party?.ip) || undefined,
     esp: pickString(party?.esp, party?.esp_name) || undefined,
     aspId: pickString(party?.asp_id, party?.aspId) || undefined,
@@ -146,23 +146,23 @@ async function renderAuditTrailPdf(
     db
       .select()
       .from(dealerAgreementSigners)
-      .where(eq(dealerAgreementSigners.applicationId, application.id))
-      .orderBy(asc(dealerAgreementSigners.createdAt)),
+      .where(eq(dealerAgreementSigners.application_id, application.id))
+      .orderBy(asc(dealerAgreementSigners.created_at)),
     db
       .select()
       .from(dealerAgreementEvents)
-      .where(eq(dealerAgreementEvents.applicationId, application.id))
-      .orderBy(desc(dealerAgreementEvents.createdAt)),
+      .where(eq(dealerAgreementEvents.application_id, application.id))
+      .orderBy(desc(dealerAgreementEvents.created_at)),
   ]);
 
   // Try to fetch Digio document status + audit_log JSON to enrich per-signer details
   // (IP, browser, ESP, ASP ID, document hash, photo hash, certified name, etc.)
   let digioStatus: Record<string, unknown> | null = null;
   let digioAuditLog: Record<string, unknown> | null = null;
-  if (application.providerDocumentId) {
+  if (application.provider_document_id) {
     const [statusResult, auditResult] = await Promise.allSettled([
-      fetchDigioDocumentStatus(application.providerDocumentId),
-      fetchDigioAuditLogJson(application.providerDocumentId),
+      fetchDigioDocumentStatus(application.provider_document_id),
+      fetchDigioAuditLogJson(application.provider_document_id),
     ]);
     digioStatus = statusResult.status === "fulfilled" ? statusResult.value : null;
     digioAuditLog = auditResult.status === "fulfilled" ? auditResult.value : null;
@@ -192,13 +192,13 @@ async function renderAuditTrailPdf(
   }
 
   const invitationEvent = events.find((e) =>
-    ["initiated", "created", "sent"].includes(String(e.eventType || "").toLowerCase()),
+    ["initiated", "created", "sent"].includes(String(e.event_type || "").toLowerCase()),
   );
-  const invitationAt = invitationEvent?.createdAt || application.createdAt || null;
+  const invitationAt = invitationEvent?.created_at || application.created_at || null;
 
   const completedEvent = events.find((e) =>
     ["completed", "signing_complete", "signed"].includes(
-      String(e.eventType || "").toLowerCase(),
+      String(e.event_type || "").toLowerCase(),
     ),
   );
   const digioCompletedAt = pickString(
@@ -225,7 +225,7 @@ async function renderAuditTrailPdf(
         signedAt: null,
         createdAt: null,
         providerRawResponse: party,
-        providerDocumentId: application.providerDocumentId,
+        providerDocumentId: application.provider_document_id,
       } as unknown as typeof dealerAgreementSigners.$inferSelect;
       return mergeSigner(i + 1, synthetic, partyMap, invitationAt);
     });
@@ -238,12 +238,12 @@ async function renderAuditTrailPdf(
     (digioStatus as any)?.created_ip,
     (digioStatus as any)?.request_ip,
     (digioStatus as any)?.ip,
-    (invitationEvent?.eventPayload as any)?.ip,
+    (invitationEvent?.event_payload as any)?.ip,
   );
 
   const documentName = pickString(
     (digioStatus as any)?.file_name,
-    application.companyName ? `${application.companyName}-agreement.pdf` : null,
+    application.company_name ? `${application.company_name}-agreement.pdf` : null,
   ) || "agreement.pdf";
 
   const ownerName = pickString(
@@ -260,12 +260,12 @@ async function renderAuditTrailPdf(
   const status = pickString(
     (digioStatus as any)?.agreement_status,
     (digioStatus as any)?.status,
-    application.agreementStatus,
+    application.agreement_status,
   ) || "completed";
 
   const html = buildAuditTrailHtml({
     documentName,
-    documentId: application.providerDocumentId || application.id,
+    documentId: application.provider_document_id || application.id,
     status,
     ownerName,
     ownerEmail,
@@ -273,8 +273,8 @@ async function renderAuditTrailPdf(
     signers,
     completedAt:
       digioCompletedAt ||
-      completedEvent?.createdAt?.toISOString() ||
-      application.signedAt?.toISOString() ||
+      completedEvent?.created_at?.toISOString() ||
+      application.signed_at?.toISOString() ||
       null,
     completionEmails: signers
       .map((s) => s.email)
@@ -307,7 +307,7 @@ function cleanEnv(value?: string) {
   return value?.trim().replace(/^[\"']|[\"']$/g, "");
 }
 
-function isValidPdfBuffer(buffer: ArrayBuffer | null | undefined): buffer is ArrayBuffer {
+function isValidPdfBuffer(buffer: ArrayBuffer | null | undefined): boolean {
   if (!buffer || buffer.byteLength < 500) return false;
   const head = new Uint8Array(buffer, 0, 5);
   return head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46 && head[4] === 0x2d;
@@ -334,7 +334,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    const documentId = application.providerDocumentId || null;
+    const documentId = application.provider_document_id || null;
 
     if (!documentId) {
       return NextResponse.json(
@@ -360,16 +360,16 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     const supabase = createClient(supabaseUrl, serviceRoleKey);
     const bucketName = "dealer-documents";
     const filePath =
-      application.auditTrailStoragePath ||
+      application.audit_trail_storage_path ||
       `agreements/${dealerId}/audit-trail.pdf`;
 
     let fileBuffer: ArrayBuffer | null = null;
 
     // 1. Try existing Supabase stored file first
-    if (application.auditTrailStoragePath) {
+    if (application.audit_trail_storage_path) {
       const { data, error } = await supabase.storage
         .from(bucketName)
-        .download(application.auditTrailStoragePath);
+        .download(application.audit_trail_storage_path);
 
       if (!error && data) {
         const candidate = await data.arrayBuffer();
@@ -400,7 +400,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       // Primary: fetch Digio audit_log JSON + document status, render PDF via Puppeteer.
       try {
         const generatedPdf = await renderAuditTrailPdf(application);
-        const candidate = await new Response(generatedPdf).arrayBuffer();
+        const candidate = await new Response(generatedPdf as unknown as BodyInit).arrayBuffer();
 
         if (isValidPdfBuffer(candidate)) {
           fileBuffer = candidate;
@@ -422,7 +422,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       if (!fileBuffer) {
         try {
           const { buffer, contentType } = await downloadDigioAuditTrail(documentId, {
-            alternateIds: [application.requestId],
+            alternateIds: [application.request_id],
           });
 
           const candidate =
@@ -478,9 +478,9 @@ export async function GET(_req: NextRequest, context: RouteContext) {
             await db
               .update(dealerOnboardingApplications)
               .set({
-                auditTrailUrl,
-                auditTrailStoragePath: filePath,
-                updatedAt: new Date(),
+                audit_trail_url: auditTrailUrl,
+                audit_trail_storage_path: filePath,
+                updated_at: new Date(),
               })
               .where(eq(dealerOnboardingApplications.id, dealerId));
           }

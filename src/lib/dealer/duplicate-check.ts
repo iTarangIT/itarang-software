@@ -40,7 +40,7 @@ function normalizeGstin(value: string | null | undefined): string {
 
 function applicationAddress(application: Application): AddressParts {
   const raw =
-    (application.businessAddress as Record<string, any> | null | undefined) ||
+    (application.business_address as Record<string, any> | null | undefined) ||
     null;
   if (!raw) return {};
   return {
@@ -82,7 +82,7 @@ export function classifyConflictAgainstAccount(
   application: Application,
   existing: Account
 ): DuplicateClassification {
-  const appPan = normalizePan(application.panNumber);
+  const appPan = normalizePan(application.pan_number);
   const acctPan = normalizePan(existing.pan);
 
   if (appPan && acctPan && appPan !== acctPan) {
@@ -122,7 +122,7 @@ export function classifyConflictAgainstAccount(
 export async function classifyGstinConflict(
   application: Application
 ): Promise<DuplicateClassification> {
-  const gstin = normalizeGstin(application.gstNumber);
+  const gstin = normalizeGstin(application.gst_number);
   if (!gstin) return CLASSIFIED_CLEAN;
 
   // If the application is itself already approved as a branch (or shares a
@@ -138,7 +138,7 @@ export async function classifyGstinConflict(
 
   // If the matching account IS this application's own dealer row (via
   // dealerCode), skip — it's a re-approval / already-linked case.
-  if (application.dealerCode && existing.id === application.dealerCode) {
+  if (application.dealer_code && existing.id === application.dealer_code) {
     return CLASSIFIED_CLEAN;
   }
 
@@ -153,7 +153,7 @@ export async function classifyGstinConflict(
 export async function classifyApplicationsBatch(
   applications: Pick<
     Application,
-    "id" | "gstNumber" | "panNumber" | "businessAddress" | "dealerCode"
+    "id" | "gst_number" | "pan_number" | "business_address" | "dealer_code"
   >[]
 ): Promise<Map<string, DuplicateClassification>> {
   const result = new Map<string, DuplicateClassification>();
@@ -161,7 +161,7 @@ export async function classifyApplicationsBatch(
   const gstins = Array.from(
     new Set(
       applications
-        .map((a) => normalizeGstin(a.gstNumber))
+        .map((a) => normalizeGstin(a.gst_number))
         .filter((g) => g.length > 0)
     )
   );
@@ -184,7 +184,7 @@ export async function classifyApplicationsBatch(
   }
 
   for (const app of applications) {
-    const gstin = normalizeGstin(app.gstNumber);
+    const gstin = normalizeGstin(app.gst_number);
     if (!gstin) {
       result.set(app.id, CLASSIFIED_CLEAN);
       continue;
@@ -196,7 +196,7 @@ export async function classifyApplicationsBatch(
       continue;
     }
 
-    if (app.dealerCode && existing.id === app.dealerCode) {
+    if (app.dealer_code && existing.id === app.dealer_code) {
       result.set(app.id, CLASSIFIED_CLEAN);
       continue;
     }

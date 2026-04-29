@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
+import RequestCorrectionDialog from "@/components/admin/dealer-verification/RequestCorrectionDialog";
+import CorrectionResponsePanel, {
+  type CorrectionRound,
+} from "@/components/admin/dealer-verification/CorrectionResponsePanel";
 import {
   ArrowLeft,
   Building2,
@@ -149,6 +153,7 @@ type DealerReviewData = {
   submittedAt?: string | null;
   correctionRemarks?: string | null;
   rejectionRemarks?: string | null;
+  correctionRound?: CorrectionRound | null;
   documents?: DocumentItem[];
   agreement?: AgreementData | null;
 };
@@ -418,6 +423,7 @@ function ActionCard({
   onApprove, onCorrection, onReject, onBack,
   financeEnabled, agreementStatus,
   duplicate,
+  onboardingStatus,
 }: {
   remarks: string;
   setRemarks: (value: string) => void;
@@ -429,13 +435,19 @@ function ActionCard({
   financeEnabled?: boolean;
   agreementStatus?: string | null;
   duplicate?: DuplicateCheckResult | null;
+  onboardingStatus?: string;
 }) {
   const financeGateBlock =
     !!financeEnabled && (agreementStatus || "").toLowerCase() !== "completed";
   const duplicateBlock =
     duplicate?.conflict === "duplicate" ||
     duplicate?.conflict === "pan-mismatch";
-  const approvalBlocked = financeGateBlock || duplicateBlock;
+  // Mirror the server guard at /api/admin/dealer-verifications/[id]/approve.
+  // Blocking the button locally turns an alert popup into clear inline state.
+  const submissionGateBlock =
+    !!onboardingStatus && onboardingStatus !== "submitted";
+  const approvalBlocked =
+    financeGateBlock || duplicateBlock || submissionGateBlock;
 
   return (
     <motion.aside
@@ -464,6 +476,23 @@ function ActionCard({
           </p>
         </div>
       </div>
+
+      {submissionGateBlock && (
+        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <Clock3 className="mt-0.5 h-4 w-4 text-amber-600" />
+            <p className="text-sm text-amber-800">
+              Approval is blocked — the dealer hasn&apos;t submitted onboarding yet
+              (current status:&nbsp;
+              <span className="font-semibold">
+                {(onboardingStatus || "").replaceAll("_", " ") || "draft"}
+              </span>
+              ). Ask the dealer to complete and submit the onboarding form before
+              approving.
+            </p>
+          </div>
+        </div>
+      )}
 
       {financeGateBlock && (
         <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
@@ -538,7 +567,7 @@ function ActionCard({
           className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
           <CheckCircle2 className="h-4 w-4" /> Approve & Activate
         </button>
-        <button onClick={onCorrection} disabled={submitting || !remarks.trim()}
+        <button onClick={onCorrection} disabled={submitting}
           className="inline-flex items-center justify-center gap-2 rounded-2xl bg-amber-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50">
           <Clock3 className="h-4 w-4" /> Request Correction
         </button>
@@ -591,6 +620,7 @@ export default function DealerReviewPage() {
   const [trackingLoading, setTrackingLoading] = useState(false);
   const [auditTrailLoading, setAuditTrailLoading] = useState(false);
   const [duplicate, setDuplicate] = useState<DuplicateCheckResult | null>(null);
+  const [correctionDialogOpen, setCorrectionDialogOpen] = useState(false);
 
   // ─── loaders ───────────────────────────────────────────────────────────────
 
@@ -905,24 +935,8 @@ export default function DealerReviewPage() {
     } finally { setSubmitting(false); }
   };
 
-  const handleCorrection = async () => {
-    setSubmitting(true);
-    try {
-      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/request-correction`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ remarks }),
-      });
-      let json: any = null;
-      try { json = await res.json(); } catch { /* non-JSON body */ }
-      if (!res.ok || !json?.success) {
-        alert(json?.message || `Correction request failed (HTTP ${res.status})`);
-        return;
-      }
-      router.push("/admin/dealer-verification");
-    } catch (err: any) {
-      alert(err?.message || "Something went wrong while requesting correction");
-    } finally { setSubmitting(false); }
+  const handleCorrection = () => {
+    setCorrectionDialogOpen(true);
   };
 
   const handleReject = async () => {
@@ -1487,6 +1501,16 @@ export default function DealerReviewPage() {
               </div>
             </SectionCard>
           )}
+
+          {data.correctionRound &&
+          (data.correctionRound.status === "submitted" ||
+            data.correctionRound.status === "pending") ? (
+            <CorrectionResponsePanel
+              dealerId={data.id}
+              round={data.correctionRound}
+              onApplied={reloadDealer}
+            />
+          ) : null}
         </div>
 
         <ActionCard
@@ -1500,8 +1524,17 @@ export default function DealerReviewPage() {
           financeEnabled={data.financeEnabled}
           agreementStatus={agreementStatusForUi}
           duplicate={duplicate}
+          onboardingStatus={data.onboardingStatus}
         />
       </div>
+
+      <RequestCorrectionDialog
+        open={correctionDialogOpen}
+        onClose={() => setCorrectionDialogOpen(false)}
+        dealerId={data.id}
+        companyName={data.companyName}
+        onRequested={reloadDealer}
+      />
     </div>
   );
 }

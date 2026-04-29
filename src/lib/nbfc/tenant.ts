@@ -74,14 +74,14 @@ export async function getCurrentTenant(opts?: { tenantSlugOverride?: string }): 
       .select({
         id: nbfcTenants.id,
         slug: nbfcTenants.slug,
-        display_name: nbfcTenants.displayName,
-        contact_email: nbfcTenants.contactEmail,
-        aum_inr: nbfcTenants.aumInr,
-        active_loans: nbfcTenants.activeLoans,
+        display_name: nbfcTenants.display_name,
+        contact_email: nbfcTenants.contact_email,
+        aum_inr: nbfcTenants.aum_inr,
+        active_loans: nbfcTenants.active_loans,
       })
       .from(nbfcUsers)
-      .innerJoin(nbfcTenants, eq(nbfcUsers.tenantId, nbfcTenants.id))
-      .where(and(eq(nbfcUsers.userId, session.id), eq(nbfcTenants.isActive, true)))
+      .innerJoin(nbfcTenants, eq(nbfcUsers.tenant_id, nbfcTenants.id))
+      .where(and(eq(nbfcUsers.user_id, session.id), eq(nbfcTenants.is_active, true)))
       .limit(1);
 
     if (!rows[0]) {
@@ -113,16 +113,16 @@ export async function getCurrentTenant(opts?: { tenantSlugOverride?: string }): 
   const rows = await db
     .select()
     .from(nbfcTenants)
-    .where(eq(nbfcTenants.isActive, true))
+    .where(eq(nbfcTenants.is_active, true))
     .limit(1);
   if (rows[0]) {
     return {
       id: rows[0].id,
       slug: rows[0].slug,
-      display_name: rows[0].displayName,
-      contact_email: rows[0].contactEmail,
-      aum_inr: rows[0].aumInr,
-      active_loans: rows[0].activeLoans,
+      display_name: rows[0].display_name,
+      contact_email: rows[0].contact_email,
+      aum_inr: rows[0].aum_inr,
+      active_loans: rows[0].active_loans,
       via: "first_active",
     };
   }
@@ -137,13 +137,13 @@ async function tenantBySlug(slug: string) {
     .select({
       id: nbfcTenants.id,
       slug: nbfcTenants.slug,
-      display_name: nbfcTenants.displayName,
-      contact_email: nbfcTenants.contactEmail,
-      aum_inr: nbfcTenants.aumInr,
-      active_loans: nbfcTenants.activeLoans,
+      display_name: nbfcTenants.display_name,
+      contact_email: nbfcTenants.contact_email,
+      aum_inr: nbfcTenants.aum_inr,
+      active_loans: nbfcTenants.active_loans,
     })
     .from(nbfcTenants)
-    .where(and(eq(nbfcTenants.slug, slug), eq(nbfcTenants.isActive, true)))
+    .where(and(eq(nbfcTenants.slug, slug), eq(nbfcTenants.is_active, true)))
     .limit(1);
   return rows[0] ?? null;
 }
@@ -173,9 +173,9 @@ export async function requireNbfcAccess(tenantId: string): Promise<SessionUser |
   }
   // Verify membership
   const rows = await db
-    .select({ id: nbfcUsers.tenantId })
+    .select({ id: nbfcUsers.tenant_id })
     .from(nbfcUsers)
-    .where(and(eq(nbfcUsers.userId, session.id), eq(nbfcUsers.tenantId, tenantId)))
+    .where(and(eq(nbfcUsers.user_id, session.id), eq(nbfcUsers.tenant_id, tenantId)))
     .limit(1);
   if (!rows[0]) throw new Error(`FORBIDDEN: user ${session.email} is not a member of tenant ${tenantId}`);
   return session;
@@ -187,14 +187,14 @@ export async function requireNbfcAccess(tenantId: string): Promise<SessionUser |
 export async function getTenantLoanSlice(tenantId: string) {
   const rows = await db
     .select({
-      loan_application_id: nbfcLoans.loanApplicationId,
+      loan_application_id: nbfcLoans.loan_application_id,
       vehicleno: nbfcLoans.vehicleno,
-      current_dpd: nbfcLoans.currentDpd,
-      emi_amount: nbfcLoans.emiAmount,
-      outstanding_amount: nbfcLoans.outstandingAmount,
+      current_dpd: nbfcLoans.current_dpd,
+      emi_amount: nbfcLoans.emi_amount,
+      outstanding_amount: nbfcLoans.outstanding_amount,
     })
     .from(nbfcLoans)
-    .where(and(eq(nbfcLoans.tenantId, tenantId), eq(nbfcLoans.isActive, true)));
+    .where(and(eq(nbfcLoans.tenant_id, tenantId), eq(nbfcLoans.is_active, true)));
 
   return rows.map((r) => ({
     loan_application_id: r.loan_application_id,

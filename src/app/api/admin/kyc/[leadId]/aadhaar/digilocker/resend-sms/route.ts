@@ -101,7 +101,7 @@ export async function POST(
 
     const attempt = (txn.sms_attempts ?? 0) + 1;
     const smsResult = await sendKycSms({
-      mobile_number: txn.customer_phone,
+      mobile_number: txn.customer_phone ?? '',
       message: buildDigilockerSmsMessage(txn.digilocker_url, remainingHours),
       reference_id: `${txn.reference_id}-RESEND-${attempt}`,
       // Matches the approved Gupshup template body: {{1}} = link, {{2}} = hours.

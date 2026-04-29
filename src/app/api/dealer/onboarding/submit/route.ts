@@ -467,8 +467,8 @@ export async function POST(req: NextRequest) {
           await db
             .select()
             .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.dealerUserId, dealerUserId))
-            .orderBy(desc(dealerOnboardingApplications.updatedAt))
+            .where(eq(dealerOnboardingApplications.dealer_user_id, dealerUserId))
+            .orderBy(desc(dealerOnboardingApplications.updated_at))
             .limit(1)
         )[0] ?? null;
     }
@@ -480,9 +480,9 @@ export async function POST(req: NextRequest) {
             .select()
             .from(dealerOnboardingApplications)
             .where(
-              eq(dealerOnboardingApplications.ownerEmail, primaryOwner.ownerEmail)
+              eq(dealerOnboardingApplications.owner_email, primaryOwner.ownerEmail)
             )
-            .orderBy(desc(dealerOnboardingApplications.updatedAt))
+            .orderBy(desc(dealerOnboardingApplications.updated_at))
             .limit(1)
         )[0] ?? null;
     }
@@ -493,8 +493,8 @@ export async function POST(req: NextRequest) {
           await db
             .select()
             .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.ownerEmail, authEmail))
-            .orderBy(desc(dealerOnboardingApplications.updatedAt))
+            .where(eq(dealerOnboardingApplications.owner_email, authEmail))
+            .orderBy(desc(dealerOnboardingApplications.updated_at))
             .limit(1)
         )[0] ?? null;
     }
@@ -505,20 +505,20 @@ export async function POST(req: NextRequest) {
           await db
             .select()
             .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.dealerCode, dealerCode))
-            .orderBy(desc(dealerOnboardingApplications.updatedAt))
+            .where(eq(dealerOnboardingApplications.dealer_code, dealerCode))
+            .orderBy(desc(dealerOnboardingApplications.updated_at))
             .limit(1)
         )[0] ?? null;
     }
 
-    if (existingApplication?.onboardingStatus === "approved") {
+    if (existingApplication?.onboarding_status === "approved") {
       // Allow creating a brand-new application even if a previous one was approved.
       // Reset so the code path below will INSERT instead of UPDATE.
       existingApplication = null;
     }
 
     const providerRawResponse = {
-      ...parseProviderRawResponse(existingApplication?.providerRawResponse),
+      ...parseProviderRawResponse(existingApplication?.provider_raw_response),
       agreement,
       submissionSnapshot: {
         company,
@@ -531,72 +531,72 @@ export async function POST(req: NextRequest) {
     };
 
     const applicationPayload: typeof dealerOnboardingApplications.$inferInsert = {
-      dealerUserId:
-        dealerUserId || existingApplication?.dealerUserId || null,
-      dealerCode: dealerCode || existingApplication?.dealerCode || null,
-      companyName: cleanString(company.companyName),
-      companyType: cleanString(company.companyType) || null,
-      gstNumber: toNullable(company.gstNumber),
-      panNumber: toNullable(company.companyPanNumber),
-      businessAddress: buildAddress(
+      dealer_user_id:
+        dealerUserId || existingApplication?.dealer_user_id || null,
+      dealer_code: dealerCode || existingApplication?.dealer_code || null,
+      company_name: cleanString(company.companyName),
+      company_type: cleanString(company.companyType) || null,
+      gst_number: toNullable(company.gstNumber),
+      pan_number: toNullable(company.companyPanNumber),
+      business_address: JSON.stringify(buildAddress(
         company.companyAddress || rawBody.businessAddress
-      ),
-      registeredAddress: buildAddress(
+      )),
+      registered_address: JSON.stringify(buildAddress(
         rawBody.registeredAddress || company.companyAddress
-      ),
-      financeEnabled,
-      onboardingStatus: "submitted",
-      reviewStatus: "pending_admin_review",
-      submittedAt: new Date(),
-      updatedAt: new Date(),
+      )),
+      finance_enabled: financeEnabled,
+      onboarding_status: "submitted",
+      review_status: "pending_admin_review",
+      submitted_at: new Date(),
+      updated_at: new Date(),
 
-      ownerName: primaryOwner.ownerName,
-      ownerPhone: primaryOwner.ownerPhone,
-      ownerLandline: resolveOwnerLandline(body),
-      ownerEmail: primaryOwner.ownerEmail,
+      owner_name: primaryOwner.ownerName,
+      owner_phone: primaryOwner.ownerPhone,
+      owner_landline: resolveOwnerLandline(body),
+      owner_email: primaryOwner.ownerEmail,
 
-      salesManagerName: toNullable(agreement?.salesManager?.name),
-      salesManagerEmail: toNullableEmail(agreement?.salesManager?.email),
-      salesManagerMobile: toNullablePhone(agreement?.salesManager?.mobile),
+      sales_manager_name: toNullable(agreement?.salesManager?.name),
+      sales_manager_email: toNullableEmail(agreement?.salesManager?.email),
+      sales_manager_mobile: toNullablePhone(agreement?.salesManager?.mobile),
 
-      itarangSignatory1Name: toNullable(agreement?.itarangSignatory1?.name),
-      itarangSignatory1Email: toNullableEmail(
+      itarang_signatory_1_name: toNullable(agreement?.itarangSignatory1?.name),
+      itarang_signatory_1_email: toNullableEmail(
         agreement?.itarangSignatory1?.email
       ),
-      itarangSignatory1Mobile: toNullablePhone(
+      itarang_signatory_1_mobile: toNullablePhone(
         agreement?.itarangSignatory1?.mobile
       ),
 
-      itarangSignatory2Name: toNullable(agreement?.itarangSignatory2?.name),
-      itarangSignatory2Email: toNullableEmail(
+      itarang_signatory_2_name: toNullable(agreement?.itarangSignatory2?.name),
+      itarang_signatory_2_email: toNullableEmail(
         agreement?.itarangSignatory2?.email
       ),
-      itarangSignatory2Mobile: toNullablePhone(
+      itarang_signatory_2_mobile: toNullablePhone(
         agreement?.itarangSignatory2?.mobile
       ),
 
-      bankName: toNullable(ownership.bankName),
-      accountNumber: toNullable(ownership.accountNumber),
-      beneficiaryName: toNullable(ownership.beneficiaryName),
-      ifscCode: toNullable(ownership.ifsc),
+      bank_name: toNullable(ownership.bankName),
+      account_number: toNullable(ownership.accountNumber),
+      beneficiary_name: toNullable(ownership.beneficiaryName),
+      ifsc_code: toNullable(ownership.ifsc),
 
-      providerSigningUrl: toNullable(agreement.providerSigningUrl),
-      providerDocumentId: toNullable(agreement.providerDocumentId),
-      requestId: toNullable(agreement.requestId),
-      providerRawResponse,
-      agreementStatus: financeEnabled
+      provider_signing_url: toNullable(agreement.providerSigningUrl),
+      provider_document_id: toNullable(agreement.providerDocumentId),
+      request_id: toNullable(agreement.requestId),
+      provider_raw_response: providerRawResponse,
+      agreement_status: financeEnabled
         ? cleanString(agreement.agreementStatus) || "not_generated"
         : "not_generated",
-      stampStatus: cleanString(agreement.stampStatus) || "pending",
-      completionStatus: financeEnabled
+      stamp_status: cleanString(agreement.stampStatus) || "pending",
+      completion_status: financeEnabled
         ? cleanString(agreement.completionStatus) || "pending"
         : "completed",
-      correctionRemarks: null,
-      rejectionRemarks: null,
-      rejectedAt: null,
-      rejectionReason: null,
-      approvedAt: null,
-      lastActionTimestamp: new Date(),
+      correction_remarks: null,
+      rejection_remarks: null,
+      rejected_at: null,
+      rejection_reason: null,
+      approved_at: null,
+      last_action_timestamp: new Date(),
     };
 
     let finalApplicationId = existingApplication?.id || applicationId || null;
@@ -612,7 +612,7 @@ export async function POST(req: NextRequest) {
           .insert(dealerOnboardingApplications)
           .values({
             ...applicationPayload,
-            createdAt: new Date(),
+            created_at: new Date(),
           })
           .returning({ id: dealerOnboardingApplications.id });
 
@@ -625,7 +625,7 @@ export async function POST(req: NextRequest) {
 
       await tx
         .delete(dealerOnboardingDocuments)
-        .where(eq(dealerOnboardingDocuments.applicationId, finalApplicationId));
+        .where(eq(dealerOnboardingDocuments.application_id, finalApplicationId));
 
       const documentRows = collectDocuments(
         finalApplicationId,

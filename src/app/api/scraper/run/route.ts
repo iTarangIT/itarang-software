@@ -53,12 +53,12 @@ export const POST = withErrorHandler(async (req: Request) => {
 
   await db.insert(scrapeRuns).values({
     id: runId,
-    searchQueries: baseQuery,
+    search_queries: baseQuery,
     status: "running",
-    triggeredBy: user.id,
-    startedAt: new Date(),
-    totalChunks: 0,
-    completedChunks: 0,
+    triggered_by: user.id,
+    started_at: new Date(),
+    total_chunks: 0,
+    completed_chunks: 0,
   });
 
   // Fan-out (AI query/city generation + QStash publishes) runs in the
@@ -86,7 +86,7 @@ export const GET = withErrorHandler(async (req: Request) => {
   const runs = await db
     .select()
     .from(scrapeRuns)
-    .orderBy(desc(scrapeRuns.startedAt))
+    .orderBy(desc(scrapeRuns.started_at))
     .limit(limit)
     .offset(offset);
 

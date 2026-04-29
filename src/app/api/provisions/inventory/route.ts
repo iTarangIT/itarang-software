@@ -29,7 +29,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     const inventoryIds = pdiItems.map(i => i.inventory_id);
 
     let items: any[] = [];
-    if (inventoryIds.length > 0) {
+    if (inventoryIds.length > 0 && provision.oem_id) {
         // Since we can't use inArray with empty list and it might be many, we fetch them
         // For simplicity and matching the frontend expectations
         const allInventory = await db.select({

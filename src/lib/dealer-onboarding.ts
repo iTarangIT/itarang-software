@@ -31,8 +31,8 @@ export async function findLatestDealerOnboardingApplication(
         await db
           .select()
           .from(dealerOnboardingApplications)
-          .where(eq(dealerOnboardingApplications.dealerUserId, candidateId))
-          .orderBy(desc(dealerOnboardingApplications.updatedAt))
+          .where(eq(dealerOnboardingApplications.dealer_user_id, candidateId))
+          .orderBy(desc(dealerOnboardingApplications.updated_at))
           .limit(1)
       )[0] ?? null;
 
@@ -51,8 +51,8 @@ export async function findLatestDealerOnboardingApplication(
       await db
         .select()
         .from(dealerOnboardingApplications)
-        .where(eq(dealerOnboardingApplications.ownerEmail, email))
-        .orderBy(desc(dealerOnboardingApplications.updatedAt))
+        .where(eq(dealerOnboardingApplications.owner_email, email))
+        .orderBy(desc(dealerOnboardingApplications.updated_at))
         .limit(1)
     )[0] ?? null
   );

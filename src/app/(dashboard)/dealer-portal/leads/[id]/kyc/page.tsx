@@ -631,7 +631,7 @@ export default function KYCPage() {
                     step={2}
                     onBack={() => router.push('/dealer-portal/leads/new')}
                     onPrev={() => jumpToStep(1)}
-                    onNext={() => jumpToStep(3)}
+                    onNext={() => router.push(`/dealer-portal/leads/${leadId}/borrower-consent`)}
                     onStepClick={jumpToStep}
                     rightAction={
                         <button onClick={async () => {

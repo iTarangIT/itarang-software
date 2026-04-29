@@ -274,7 +274,7 @@ export async function GET(
           if (
             !signedUrl &&
             c.esign_transaction_id &&
-            !SKIP_BACKFILL_STATUSES.has(consentStatus)
+            !SKIP_BACKFILL_STATUSES.has(consentStatus ?? '')
           ) {
             try {
               const stored = await fetchAndStoreSignedConsent(c.esign_transaction_id, leadId);
@@ -383,8 +383,8 @@ export async function GET(
               verificationSubmittedAt: coBorrower.verification_submitted_at,
               documents: coBorrowerDocRows.map((d) => ({
                 id: d.id,
-                docType: d.doc_type,
-                fileUrl: d.file_url,
+                docType: d.document_type,
+                fileUrl: d.document_url,
                 status: d.status,
                 ocrData: d.ocr_data,
                 uploadedAt: d.uploaded_at,

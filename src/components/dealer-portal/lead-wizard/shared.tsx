@@ -302,7 +302,7 @@ export function StatusBadge({ status }: { status: string }) {
 // ─── Progress Header ────────────────────────────────────────────────────────
 
 export function ProgressHeader({
-    title, subtitle, step, totalSteps = 5,
+    title, subtitle, step, totalSteps = 4, workflowLabel = 'Workflow Progress',
     onBack, onPrev, onNext, onStepClick,
     rightAction,
 }: {
@@ -310,6 +310,7 @@ export function ProgressHeader({
     subtitle?: string;
     step: number;
     totalSteps?: number;
+    workflowLabel?: string;
     onBack: () => void;
     onPrev?: () => void;
     onNext?: () => void;
@@ -336,7 +337,7 @@ export function ProgressHeader({
             <div className="flex flex-col items-end gap-4">
                 <div>
                     <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest text-right mb-1.5">
-                        Workflow Progress
+                        {workflowLabel}
                     </p>
                     <div className="flex items-center gap-4">
                         <span className="text-xs font-bold text-[#1D4ED8] whitespace-nowrap">
@@ -397,7 +398,7 @@ export function StickyBottomBar({ children, lastSaved }: {
     lastSaved?: string | null;
 }) {
     return (
-        <div className="sticky bottom-0 left-0 right-0 bg-[#F8F9FB] pt-4 pb-8 z-50">
+        <div className="sticky bottom-0 left-0 right-0 bg-[#F8F9FB] pt-4 pb-8 z-30">
             <div className="max-w-[1200px] mx-auto px-6">
                 <div className="flex justify-between items-center bg-white border border-gray-100 rounded-[20px] px-8 py-5 shadow-[0_-8px_30px_rgb(0,0,0,0.04)]">
                     <div className="bg-gray-100 px-4 py-1.5 rounded-full">

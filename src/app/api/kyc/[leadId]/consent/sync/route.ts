@@ -58,7 +58,7 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
         }
 
         // If already completed but missing signed PDF, try to backfill it
-        if (!WAITING_STATUSES.includes(record.consent_status)) {
+        if (!WAITING_STATUSES.includes(record.consent_status ?? '')) {
             if (record.consent_status === 'esign_completed' && !record.signed_consent_url && record.esign_transaction_id) {
                 const stored = await fetchAndStoreSignedConsent(record.esign_transaction_id, leadId);
                 if (stored?.publicUrl) {
