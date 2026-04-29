@@ -65,7 +65,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       );
     }
 
-    if (round.applicationId !== dealerId) {
+    if (round.application_id !== dealerId) {
       return NextResponse.json(
         { success: false, message: "Round does not belong to this dealer" },
         { status: 400 },
@@ -87,7 +87,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
     const items = await db
       .select()
       .from(dealerCorrectionItems)
-      .where(eq(dealerCorrectionItems.roundId, round.id));
+      .where(eq(dealerCorrectionItems.round_id, round.id));
 
     // ── Merge field updates ─────────────────────────────────────────────────
     const fieldUpdates: Partial<Record<CorrectionFieldKey, string>> = {};
@@ -96,17 +96,17 @@ export async function POST(req: NextRequest, context: RouteContext) {
       if (!ALLOWED_FIELD_KEYS.has(item.key as CorrectionFieldKey)) continue;
       // Skip items the dealer didn't actually fill in (defense — shouldn't
       // happen because the POST submit handler enforces all-or-nothing).
-      if (item.newValue === null || item.newValue === undefined) continue;
-      fieldUpdates[item.key as CorrectionFieldKey] = item.newValue;
+      if (item.new_value === null || item.new_value === undefined) continue;
+      fieldUpdates[item.key as CorrectionFieldKey] = item.new_value;
     }
 
     // ── Promote new docs / supersede old docs ───────────────────────────────
     const newDocIds = items
-      .map((it) => (it.kind === "document" ? it.newDocumentId : null))
+      .map((it) => (it.kind === "document" ? it.new_document_id : null))
       .filter((v): v is string => !!v);
     const oldDocIds = items
       .map((it) =>
-        it.kind === "document" && it.newDocumentId ? it.previousDocumentId : null,
+        it.kind === "document" && it.new_document_id ? it.previous_document_id : null,
       )
       .filter((v): v is string => !!v);
 
@@ -114,9 +114,9 @@ export async function POST(req: NextRequest, context: RouteContext) {
       await db
         .update(dealerOnboardingDocuments)
         .set({
-          docStatus: "uploaded",
-          verificationStatus: "pending",
-          updatedAt: new Date(),
+          doc_status: "uploaded",
+          verification_status: "pending",
+          updated_at: new Date(),
         })
         .where(inArray(dealerOnboardingDocuments.id, newDocIds));
     }
@@ -125,13 +125,13 @@ export async function POST(req: NextRequest, context: RouteContext) {
       await db
         .update(dealerOnboardingDocuments)
         .set({
-          docStatus: "superseded",
-          updatedAt: new Date(),
+          doc_status: "superseded",
+          updated_at: new Date(),
         })
         .where(
           and(
             inArray(dealerOnboardingDocuments.id, oldDocIds),
-            eq(dealerOnboardingDocuments.applicationId, dealerId),
+            eq(dealerOnboardingDocuments.application_id, dealerId),
           ),
         );
     }
@@ -146,8 +146,8 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // fixed a typo on the bank field — would be cruel.
     const [currentRow] = await db
       .select({
-        financeEnabled: dealerOnboardingApplications.financeEnabled,
-        agreementStatus: dealerOnboardingApplications.agreementStatus,
+        financeEnabled: dealerOnboardingApplications.finance_enabled,
+        agreementStatus: dealerOnboardingApplications.agreement_status,
       })
       .from(dealerOnboardingApplications)
       .where(eq(dealerOnboardingApplications.id, dealerId))
@@ -161,14 +161,14 @@ export async function POST(req: NextRequest, context: RouteContext) {
       .update(dealerOnboardingApplications)
       .set({
         ...fieldUpdates,
-        onboardingStatus: "submitted",
-        reviewStatus: agreementAlreadyComplete
+        onboarding_status: "submitted",
+        review_status: agreementAlreadyComplete
           ? "agreement_completed"
           : "under_review",
-        completionStatus: agreementAlreadyComplete ? "completed" : "pending",
-        dealerAccountStatus: "inactive",
-        correctionRemarks: null,
-        updatedAt: new Date(),
+        completion_status: agreementAlreadyComplete ? "completed" : "pending",
+        dealer_account_status: "inactive",
+        correction_remarks: null,
+        updated_at: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
 
@@ -177,9 +177,9 @@ export async function POST(req: NextRequest, context: RouteContext) {
       .update(dealerCorrectionRounds)
       .set({
         status: "applied",
-        appliedAt: new Date(),
-        appliedBy: auth.user.id,
-        updatedAt: new Date(),
+        applied_at: new Date(),
+        applied_by: auth.user.id,
+        updated_at: new Date(),
       })
       .where(eq(dealerCorrectionRounds.id, round.id));
 
