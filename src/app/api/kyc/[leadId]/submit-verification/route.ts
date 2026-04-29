@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { kycVerifications, kycDocuments, leads, couponCodes } from '@/lib/db/schema';
+import { kycVerifications, kycDocuments, leads, couponCodes, adminVerificationQueue } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { validateDocument, verifyBankAccount } from '@/lib/decentro';
+import { createWorkflowId, getOpenQueueEntryForLead } from '@/lib/kyc/admin-workflow';
 
 const VERIFICATION_LABELS: Record<string, string> = {
     aadhaar: 'Aadhaar Verification',
@@ -158,6 +159,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         await db.update(leads)
             .set({ kyc_status: 'in_progress', updated_at: now })
             .where(eq(leads.id, leadId));
+
+        // Add the lead to the admin verification queue so it surfaces on the
+        // admin KYC review page. Idempotent — re-submitting reuses the open
+        // entry instead of inserting duplicates.
+        const existingQueueEntry = await getOpenQueueEntryForLead(leadId);
+        if (!existingQueueEntry) {
+            await db.insert(adminVerificationQueue).values({
+                id: createWorkflowId('ADMQ', now),
+                queue_type: 'kyc_verification',
+                lead_id: leadId,
+                priority: 'normal',
+                assigned_to: null,
+                submitted_by: null,
+                status: 'pending_itarang_verification',
+                submitted_at: now,
+                created_at: now,
+                updated_at: now,
+            });
+        }
 
         // Return current verification state
         const allVers = await db.select().from(kycVerifications).where(eq(kycVerifications.lead_id, leadId));

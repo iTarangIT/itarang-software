@@ -450,6 +450,8 @@ export default function PANCard({
         leadId={leadId}
         sourceVerificationId={verificationId || existingVerification?.id || null}
         sourceCardLabel="PAN Verification"
+        defaultDocFor={applicant === "co_borrower" ? "co_borrower" : "primary"}
+        lockScope
         onSuccess={() => onActionComplete?.()}
       />
     </div>
