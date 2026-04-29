@@ -93,7 +93,7 @@ export default function LoginPage() {
                 return;
             }
 
-            if (!appUser.is_active) {
+            if (!appUser.isActive) {
                 toast.error('Your account is inactive. Contact your administrator.');
                 await supabase.auth.signOut();
                 setLoading(false);
@@ -102,7 +102,7 @@ export default function LoginPage() {
 
             toast.success(`Welcome back, ${appUser.name || appUser.email}!`);
 
-            if (appUser.must_change_password) {
+            if (appUser.mustChangePassword) {
                 navigateTo('/change-password');
                 return;
             }

@@ -10,6 +10,7 @@ import {
 } from "@/lib/db/schema";
 import { fetchCibilReport } from "@/lib/decentro";
 import { interpretCibilScore } from "@/lib/kyc/cibil-interpreter";
+import { humanizeCibilError } from "@/lib/kyc/cibil-friendly-errors";
 import {
   createWorkflowId,
   requireAdminAppUser,
@@ -353,6 +354,16 @@ export async function POST(
         .where(eq(kycVerificationMetadata.lead_id, leadId));
     }
 
+    const friendly =
+      overallSuccess || consumerNotFound
+        ? null
+        : humanizeCibilError({
+            endpoint: "report",
+            responseKey,
+            rawMessage: decentroRes?.message ?? null,
+            bureauErrorDesc: bureauError?.errorDesc ?? null,
+          });
+
     return NextResponse.json({
       success: overallSuccess || consumerNotFound,
       data: {
@@ -367,14 +378,15 @@ export async function POST(
         generatedAt: now.toISOString(),
         rawResponse: decentroRes,
       },
-      ...(overallSuccess || consumerNotFound
-        ? {}
-        : {
+      ...(friendly
+        ? {
             error: {
-              message:
-                decentroRes?.message || "Failed to fetch CIBIL report",
+              message: friendly.message,
+              suggestion: friendly.suggestion,
+              code: friendly.code,
             },
-          }),
+          }
+        : {}),
     });
   } catch (error) {
     console.error("[CIBIL Report] Error:", error);
