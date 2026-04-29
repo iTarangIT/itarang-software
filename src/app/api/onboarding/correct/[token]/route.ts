@@ -266,19 +266,19 @@ export async function POST(req: NextRequest, context: RouteContext) {
         .insert(dealerOnboardingDocuments)
         .values(
           sanitizedDocs.map((d) => ({
-            applicationId: round.application_id,
-            documentType: d.documentType,
-            bucketName: d.bucketName,
-            storagePath: d.storagePath,
-            fileName: d.fileName,
-            fileUrl: d.fileUrl,
-            mimeType: d.mimeType,
-            fileSize: d.fileSize,
-            docStatus: "pending_correction",
-            verificationStatus: "pending",
+            application_id: round.application_id,
+            document_type: d.documentType,
+            bucket_name: d.bucketName,
+            storage_path: d.storagePath,
+            file_name: d.fileName,
+            file_url: d.fileUrl,
+            mime_type: d.mimeType,
+            file_size: d.fileSize,
+            doc_status: "pending_correction",
+            verification_status: "pending",
             metadata: {
               source: "dealer_correction_submission",
-              correctionRoundId: round.id,
+              correction_round_id: round.id,
             },
           })),
         )

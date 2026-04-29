@@ -9,6 +9,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     // 1. Create call_sessions row
     const sessionId = `SESS-${Date.now()}`;
     await db.insert(callSessions).values({
+        id: sessionId,
         session_id: sessionId,
         status: 'active',
         created_at: new Date()

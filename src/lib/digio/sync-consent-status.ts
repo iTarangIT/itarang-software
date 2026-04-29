@@ -42,7 +42,7 @@ async function fetchDigioDocument(
 type SyncInput = {
   id: string;
   lead_id: string;
-  consent_status: string;
+  consent_status: string | null;
   signed_consent_url: string | null;
   esign_transaction_id: string | null;
   signer_aadhaar_masked: string | null;
@@ -71,7 +71,7 @@ export async function syncConsentStatusFromDigio(
   record: SyncInput,
 ): Promise<SyncResult | null> {
   if (!record.esign_transaction_id) return null;
-  if (!CONSENT_WAITING_STATUSES.includes(record.consent_status)) return null;
+  if (!CONSENT_WAITING_STATUSES.includes(record.consent_status ?? '')) return null;
 
   const auth = getDigioBasicAuth();
   if (!auth) return null;

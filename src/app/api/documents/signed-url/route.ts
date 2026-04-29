@@ -21,6 +21,8 @@ export const GET = withErrorHandler(async (req: Request) => {
         return errorResponse('Forbidden', 403);
     }
 
+    if (!doc.storage_path) return errorResponse('Document has no storage_path', 404);
+
     const adminSupabase = supabaseAdmin;
     const { data, error } = await adminSupabase.storage
         .from('private-documents')

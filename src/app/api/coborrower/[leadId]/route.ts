@@ -26,7 +26,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             lead_id: leadId,
             full_name: body.full_name,
             father_or_husband_name: body.father_or_husband_name,
-            dob: body.dob ? new Date(body.dob) : null,
+            dob: body.dob || null,
             phone: body.phone,
             permanent_address: body.permanent_address,
             current_address: body.current_address,

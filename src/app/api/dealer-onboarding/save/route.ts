@@ -277,43 +277,43 @@ export async function POST(req: NextRequest) {
 
     // Shared fields including ownerLandline
     const sharedFields = {
-      dealerCode,
-      companyName,
-      companyType,
-      gstNumber,
-      panNumber,
-      businessAddress,
-      registeredAddress,
-      financeEnabled,
-      onboardingStatus,
-      reviewStatus,
-      ownerName,
-      ownerPhone,
-      ownerEmail,
-      ownerLandline,   // ← new field
-      bankName,
-      accountNumber,
-      beneficiaryName,
-      ifscCode,
-      salesManagerName,
-      salesManagerEmail,
-      salesManagerMobile,
-      itarangSignatory1Name,
-      itarangSignatory1Email,
-      itarangSignatory1Mobile,
-      itarangSignatory2Name,
-      itarangSignatory2Email,
-      itarangSignatory2Mobile,
-      providerRawResponse: { agreement: agreementConfig },
-      lastActionTimestamp: new Date(),
+      dealer_code: dealerCode,
+      company_name: companyName,
+      company_type: companyType,
+      gst_number: gstNumber,
+      pan_number: panNumber,
+      business_address: businessAddress ? JSON.stringify(businessAddress) : null,
+      registered_address: registeredAddress ? JSON.stringify(registeredAddress) : null,
+      finance_enabled: financeEnabled,
+      onboarding_status: onboardingStatus,
+      review_status: reviewStatus,
+      owner_name: ownerName,
+      owner_phone: ownerPhone,
+      owner_email: ownerEmail,
+      owner_landline: ownerLandline,   // ← new field
+      bank_name: bankName,
+      account_number: accountNumber,
+      beneficiary_name: beneficiaryName,
+      ifsc_code: ifscCode,
+      sales_manager_name: salesManagerName,
+      sales_manager_email: salesManagerEmail,
+      sales_manager_mobile: salesManagerMobile,
+      itarang_signatory_1_name: itarangSignatory1Name,
+      itarang_signatory_1_email: itarangSignatory1Email,
+      itarang_signatory_1_mobile: itarangSignatory1Mobile,
+      itarang_signatory_2_name: itarangSignatory2Name,
+      itarang_signatory_2_email: itarangSignatory2Email,
+      itarang_signatory_2_mobile: itarangSignatory2Mobile,
+      provider_raw_response: { agreement: agreementConfig },
+      last_action_timestamp: new Date(),
     };
 
     if (application) {
       const updatePayload: Record<string, unknown> = {
         ...sharedFields,
-        dealerUserId: dealerUserId || application.dealer_user_id,
-        submittedAt: isSubmissionTransition ? new Date() : application.submitted_at,
-        updatedAt: new Date(),
+        dealer_user_id: dealerUserId || application.dealer_user_id,
+        submitted_at: isSubmissionTransition ? new Date() : application.submitted_at,
+        updated_at: new Date(),
       };
 
       if (shouldResetProviderWorkflow) {
@@ -388,17 +388,17 @@ export async function POST(req: NextRequest) {
           );
         })
         .map((doc) => ({
-          applicationId: application!.id,
-          documentType: String(doc["documentType"]),
-          bucketName: String(doc["bucketName"]),
-          storagePath: String(doc["storagePath"]),
-          fileName: String(doc["fileName"]),
-          fileUrl: typeof doc["fileUrl"] === "string" ? doc["fileUrl"] : null,
-          mimeType: typeof doc["mimeType"] === "string" ? doc["mimeType"] : null,
-          fileSize: typeof doc["fileSize"] === "number" ? doc["fileSize"] : null,
-          uploadedBy: dealerUserId,
-          docStatus: typeof doc["docStatus"] === "string" ? doc["docStatus"] : "uploaded",
-          verificationStatus:
+          application_id: application!.id,
+          document_type: String(doc["documentType"]),
+          bucket_name: String(doc["bucketName"]),
+          storage_path: String(doc["storagePath"]),
+          file_name: String(doc["fileName"]),
+          file_url: typeof doc["fileUrl"] === "string" ? doc["fileUrl"] : null,
+          mime_type: typeof doc["mimeType"] === "string" ? doc["mimeType"] : null,
+          file_size: typeof doc["fileSize"] === "number" ? doc["fileSize"] : null,
+          uploaded_by: dealerUserId,
+          doc_status: typeof doc["docStatus"] === "string" ? doc["docStatus"] : "uploaded",
+          verification_status:
             typeof doc["verificationStatus"] === "string"
               ? doc["verificationStatus"]
               : "pending",
