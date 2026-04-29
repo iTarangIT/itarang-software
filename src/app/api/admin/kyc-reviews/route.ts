@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
 import {
   adminKycReviews,
+  adminVerificationQueue,
   coBorrowerDocuments,
   coBorrowers,
   consentRecords,
@@ -285,7 +286,24 @@ export async function GET(req: NextRequest) {
         new Date(left.uploaded_at ?? 0).getTime(),
     );
 
-    const leadIds = [...new Set(allDocuments.map((doc) => doc.lead_id))];
+    const candidateLeadIds = [...new Set(allDocuments.map((doc) => doc.lead_id))];
+
+    if (candidateLeadIds.length === 0) {
+      return NextResponse.json({ success: true, data: [] });
+    }
+
+    // Gate the admin KYC list on the dealer having explicitly clicked
+    // "Submit for Verification" — that's what creates an admin_verification_queue
+    // row. Without this filter, drafts (uploaded docs / pending consents that
+    // have not been submitted) leak onto the admin queue and reviewers waste
+    // time triaging cases the dealer hasn't finalised yet.
+    const submittedRows = await db
+      .select({ lead_id: adminVerificationQueue.lead_id })
+      .from(adminVerificationQueue)
+      .where(inArray(adminVerificationQueue.lead_id, candidateLeadIds));
+
+    const submittedLeadIds = new Set(submittedRows.map((row) => row.lead_id));
+    const leadIds = candidateLeadIds.filter((id) => submittedLeadIds.has(id));
 
     if (leadIds.length === 0) {
       return NextResponse.json({ success: true, data: [] });
