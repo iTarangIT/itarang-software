@@ -411,24 +411,26 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       }
     }
 
-    // Only include fields that were actually sent
+    // Only include fields that were actually sent. Keys must match the
+    // snake_case Drizzle field names from the 10af73a schema rename, otherwise
+    // .set() throws and the PATCH returns "Failed to update dealer details".
     const updatePayload: Record<string, any> = {};
 
-    if (companyName     !== undefined) updatePayload.companyName     = companyName;
-    if (gstNumber       !== undefined) updatePayload.gstNumber       = gstNumber;
-    if (panNumber       !== undefined) updatePayload.panNumber       = panNumber;
-    if (cinNumber       !== undefined) updatePayload.cinNumber       = cinNumber;
-    if (companyType     !== undefined) updatePayload.companyType     = companyType;
-    if (ownerName       !== undefined) updatePayload.ownerName       = ownerName;
-    if (ownerPhone      !== undefined) updatePayload.ownerPhone      = ownerPhone;
-    if (ownerEmail      !== undefined) updatePayload.ownerEmail      = ownerEmail;
-    if (bankName        !== undefined) updatePayload.bankName        = bankName;
-    if (accountNumber   !== undefined) updatePayload.accountNumber   = accountNumber;
-    if (beneficiaryName !== undefined) updatePayload.beneficiaryName = beneficiaryName;
-    if (ifscCode        !== undefined) updatePayload.ifscCode        = ifscCode;
-    if (salesManagerName   !== undefined) updatePayload.salesManagerName   = salesManagerName;
-    if (salesManagerEmail  !== undefined) updatePayload.salesManagerEmail  = salesManagerEmail;
-    if (salesManagerMobile !== undefined) updatePayload.salesManagerMobile = salesManagerMobile;
+    if (companyName     !== undefined) updatePayload.company_name      = companyName;
+    if (gstNumber       !== undefined) updatePayload.gst_number        = gstNumber;
+    if (panNumber       !== undefined) updatePayload.pan_number        = panNumber;
+    if (cinNumber       !== undefined) updatePayload.cin_number        = cinNumber;
+    if (companyType     !== undefined) updatePayload.company_type      = companyType;
+    if (ownerName       !== undefined) updatePayload.owner_name        = ownerName;
+    if (ownerPhone      !== undefined) updatePayload.owner_phone       = ownerPhone;
+    if (ownerEmail      !== undefined) updatePayload.owner_email       = ownerEmail;
+    if (bankName        !== undefined) updatePayload.bank_name         = bankName;
+    if (accountNumber   !== undefined) updatePayload.account_number    = accountNumber;
+    if (beneficiaryName !== undefined) updatePayload.beneficiary_name  = beneficiaryName;
+    if (ifscCode        !== undefined) updatePayload.ifsc_code         = ifscCode;
+    if (salesManagerName   !== undefined) updatePayload.sales_manager_name   = salesManagerName;
+    if (salesManagerEmail  !== undefined) updatePayload.sales_manager_email  = salesManagerEmail;
+    if (salesManagerMobile !== undefined) updatePayload.sales_manager_mobile = salesManagerMobile;
 
     // Fields that live inside providerRawResponse.submissionSnapshot.ownership
     // (bank branch, account type, owner residential address) or inside
@@ -491,7 +493,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       existingSnapshot.ownership = existingOwnership;
       existingAgreement.salesManager = existingSalesManager;
 
-      updatePayload.providerRawResponse = {
+      updatePayload.provider_raw_response = {
         ...(existingProvider as Record<string, any>),
         submissionSnapshot: existingSnapshot,
         agreement: existingAgreement,
@@ -508,17 +510,36 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
         .from(dealerOnboardingApplications)
         .where(eq(dealerOnboardingApplications.id, dealerId))
         .limit(1);
-      const existingAddr =
-        existing?.businessAddress &&
-        typeof existing.businessAddress === "object" &&
-        !Array.isArray(existing.businessAddress)
-          ? (existing.businessAddress as Record<string, unknown>)
-          : {};
-      updatePayload.businessAddress = { ...existingAddr, address: companyAddress };
+      // business_address is TEXT — values are JSON-encoded strings (or plain
+      // strings). Parse so we preserve sibling keys (city/state/pincode) when
+      // an admin edits only the address line.
+      let existingAddr: Record<string, unknown> = {};
+      const raw = existing?.businessAddress;
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        existingAddr = raw as Record<string, unknown>;
+      } else if (typeof raw === "string") {
+        const trimmed = raw.trim();
+        if (trimmed.startsWith("{")) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              existingAddr = parsed as Record<string, unknown>;
+            }
+          } catch {
+            existingAddr = { address: trimmed };
+          }
+        } else if (trimmed.length > 0) {
+          existingAddr = { address: trimmed };
+        }
+      }
+      // business_address is a TEXT column holding a JSON-encoded object —
+      // stringify so Drizzle writes a valid string and the read path
+      // (extractAddress) can JSON.parse it back into the structured shape.
+      updatePayload.business_address = JSON.stringify({ ...existingAddr, address: companyAddress });
     }
 
     // agreementLanguage stored in its own column (add to schema — see README below)
-    if (agreementLanguage !== undefined) updatePayload.agreementLanguage = agreementLanguage;
+    if (agreementLanguage !== undefined) updatePayload.agreement_language = agreementLanguage;
 
     if (Object.keys(updatePayload).length === 0) {
       return NextResponse.json(
