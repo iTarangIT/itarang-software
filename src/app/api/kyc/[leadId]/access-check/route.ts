@@ -16,10 +16,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
 
         const l = lead[0];
 
-        // Access condition: lead must not be abandoned, and must have a finance payment method
+        // Access condition: lead must not be abandoned, must be Hot, and must have a finance payment method.
+        // Warm/Cold leads are parked at Step 1 until promoted to Hot — they cannot enter KYC.
         const isFinance = FINANCE_METHODS.includes(l.payment_method || '');
+        const isHot = l.interest_level === 'hot';
         const isNotAbandoned = l.status !== 'ABANDONED';
-        const allowed = isNotAbandoned && isFinance;
+        const allowed = isNotAbandoned && isFinance && isHot;
 
         const leadData = {
             id: l.id,
@@ -48,9 +50,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             allowed,
             lead: leadData,
             message: !allowed
-                ? !isFinance
-                    ? 'KYC is only available for leads with a finance payment method.'
-                    : 'This lead has been abandoned.'
+                ? !isNotAbandoned
+                    ? 'This lead has been abandoned.'
+                    : !isHot
+                        ? 'Step 2 (KYC) is only available for Hot leads. Promote this lead to Hot to proceed.'
+                        : 'KYC is only available for leads with a finance payment method.'
                 : undefined,
         });
     } catch (error) {
