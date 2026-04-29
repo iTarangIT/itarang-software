@@ -230,6 +230,7 @@ export async function GET(
         documents: documents.map((d) => ({
           id: d.id,
           docType: d.doc_type,
+          docFor: d.doc_for,
           fileUrl: d.file_url,
           fileName: d.file_name,
           verificationStatus: d.verification_status,

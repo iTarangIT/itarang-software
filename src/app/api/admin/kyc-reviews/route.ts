@@ -121,21 +121,21 @@ async function fetchPrimaryDocuments(
   const query = db
     .select({
       id: kycDocuments.id,
-      lead_id: kycDocuments.lead_id,
-      document_type: kycDocuments.doc_type,
-      document_url: kycDocuments.file_url,
-      verification_status: kycDocuments.verification_status,
-      uploaded_at: kycDocuments.uploaded_at,
-      ocr_data: kycDocuments.ocr_data,
+      lead_id: kycDocuments.leadId,
+      document_type: kycDocuments.docType,
+      document_url: kycDocuments.fileUrl,
+      verification_status: kycDocuments.verificationStatus,
+      uploaded_at: kycDocuments.uploadedAt,
+      ocr_data: kycDocuments.ocrData,
     })
     .from(kycDocuments);
 
   return statuses
     ? query
-        .where(inArray(kycDocuments.verification_status, statuses))
-        .orderBy(desc(kycDocuments.uploaded_at))
+        .where(inArray(kycDocuments.verificationStatus, statuses))
+        .orderBy(desc(kycDocuments.uploadedAt))
         .limit(200)
-    : query.orderBy(desc(kycDocuments.uploaded_at)).limit(200);
+    : query.orderBy(desc(kycDocuments.uploadedAt)).limit(200);
 }
 
 async function fetchCoBorrowerDocuments(
@@ -185,13 +185,13 @@ async function fetchPendingConsentsForFilter(filter: ReviewFilter) {
   const baseQuery = db
     .select({
       id: consentRecords.id,
-      lead_id: consentRecords.lead_id,
-      consent_for: consentRecords.consent_for,
-      consent_status: consentRecords.consent_status,
-      signed_consent_url: consentRecords.signed_consent_url,
-      generated_pdf_url: consentRecords.generated_pdf_url,
-      signed_at: consentRecords.signed_at,
-      verified_at: consentRecords.verified_at,
+      lead_id: consentRecords.leadId,
+      consent_for: consentRecords.consentFor,
+      consent_status: consentRecords.consentStatus,
+      signed_consent_url: consentRecords.signedConsentUrl,
+      generated_pdf_url: consentRecords.generatedPdfUrl,
+      signed_at: consentRecords.signedAt,
+      verified_at: consentRecords.verifiedAt,
     })
     .from(consentRecords);
 
@@ -199,33 +199,33 @@ async function fetchPendingConsentsForFilter(filter: ReviewFilter) {
     return baseQuery
       .where(
         and(
-          inArray(consentRecords.consent_status, [
+          inArray(consentRecords.consentStatus, [
             "esign_completed",
             "admin_review_pending",
           ]),
-          isNull(consentRecords.verified_at),
+          isNull(consentRecords.verifiedAt),
         ),
       )
-      .orderBy(desc(consentRecords.signed_at))
+      .orderBy(desc(consentRecords.signedAt))
       .limit(200);
   }
 
   if (filter === "verified") {
     return baseQuery
-      .where(isNotNull(consentRecords.verified_at))
-      .orderBy(desc(consentRecords.verified_at))
+      .where(isNotNull(consentRecords.verifiedAt))
+      .orderBy(desc(consentRecords.verifiedAt))
       .limit(200);
   }
 
   if (filter === "rejected") {
     return baseQuery
-      .where(eq(consentRecords.consent_status, "admin_rejected"))
-      .orderBy(desc(consentRecords.updated_at))
+      .where(eq(consentRecords.consentStatus, "admin_rejected"))
+      .orderBy(desc(consentRecords.updatedAt))
       .limit(200);
   }
 
   // "all"
-  return baseQuery.orderBy(desc(consentRecords.updated_at)).limit(200);
+  return baseQuery.orderBy(desc(consentRecords.updatedAt)).limit(200);
 }
 
 type ConsentRow = Awaited<ReturnType<typeof fetchPendingConsentsForFilter>>[number];
@@ -295,16 +295,16 @@ export async function GET(req: NextRequest) {
       db
         .select({
           id: leads.id,
-          owner_name: leads.owner_name,
-          dealer_name: leads.business_name,
-          kyc_status: leads.kyc_status,
+          owner_name: leads.ownerName,
+          dealer_name: leads.businessName,
+          kyc_status: leads.kycStatus,
         })
         .from(leads)
         .where(inArray(leads.id, leadIds)),
       db
-        .select({ lead_id: coBorrowers.lead_id })
+        .select({ lead_id: coBorrowers.leadId })
         .from(coBorrowers)
-        .where(inArray(coBorrowers.lead_id, leadIds)),
+        .where(inArray(coBorrowers.leadId, leadIds)),
     ]);
 
     const documentsByLead = new Map<
@@ -429,13 +429,13 @@ export async function POST(req: NextRequest) {
       db
         .select({
           id: kycDocuments.id,
-          document_type: kycDocuments.doc_type,
+          document_type: kycDocuments.docType,
         })
         .from(kycDocuments)
         .where(
           and(
             eq(kycDocuments.id, documentId),
-            eq(kycDocuments.lead_id, leadId),
+            eq(kycDocuments.leadId, leadId),
           ),
         )
         .limit(1),
@@ -476,33 +476,33 @@ export async function POST(req: NextRequest) {
 
     await db.insert(adminKycReviews).values({
       id: reviewId,
-      lead_id: leadId,
-      review_for: reviewFor,
-      document_id: documentId,
-      document_type: matchedDocument.document_type,
+      leadId: leadId,
+      reviewFor: reviewFor,
+      documentId: documentId,
+      documentType: matchedDocument.document_type,
       outcome: typedOutcome,
-      rejection_reason: typedOutcome === "rejected" ? rejectionReason : null,
-      additional_doc_requested:
+      rejectionReason: typedOutcome === "rejected" ? rejectionReason : null,
+      additionalDocRequested:
         typedOutcome === "request_additional" ? additionalDocRequested : null,
-      reviewer_id: admin.id,
-      reviewer_notes: reviewerNotes || null,
-      reviewed_at: now,
-      created_at: now,
+      reviewerId: admin.id,
+      reviewerNotes: reviewerNotes || null,
+      reviewedAt: now,
+      createdAt: now,
     });
 
     if (reviewFor === "primary") {
       await db
         .update(kycDocuments)
         .set({
-          verification_status:
+          verificationStatus:
             typedOutcome === "verified"
               ? "success"
               : typedOutcome === "rejected"
                 ? "failed"
                 : "awaiting_action",
-          failed_reason: typedOutcome === "rejected" ? rejectionReason : null,
-          verified_at: typedOutcome === "verified" ? now : null,
-          updated_at: now,
+          failedReason: typedOutcome === "rejected" ? rejectionReason : null,
+          verifiedAt: typedOutcome === "verified" ? now : null,
+          updatedAt: now,
         })
         .where(eq(kycDocuments.id, documentId));
     } else {
@@ -515,7 +515,7 @@ export async function POST(req: NextRequest) {
               : typedOutcome === "rejected"
                 ? "failed"
                 : "awaiting_action",
-          updated_at: now,
+          updatedAt: now,
         })
         .where(eq(coBorrowerDocuments.id, documentId));
     }

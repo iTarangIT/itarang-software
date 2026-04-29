@@ -59,6 +59,7 @@ interface PersonalDetails {
 interface Document {
   id: string;
   docType: string;
+  docFor: string;
   fileUrl: string;
   fileName: string;
   verificationStatus: string;
@@ -211,6 +212,20 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const [autoFetchAttempted, setAutoFetchAttempted] = useState<Set<string>>(new Set());
   const [consentExpanded, setConsentExpanded] = useState(false);
   const [showCoBorrowerModal, setShowCoBorrowerModal] = useState(false);
+  // Transient toast for admin actions that succeed but have no obvious UI
+  // change (e.g., a request was sent to the dealer who is on a different
+  // device). Auto-clears after 6s.
+  const [requestToast, setRequestToast] = useState<{
+    kind: "success" | "error";
+    title: string;
+    detail?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!requestToast) return;
+    const t = setTimeout(() => setRequestToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [requestToast]);
 
   const handleConsentVerify = useCallback(
     async (c: Consent, action: "approve" | "reject") => {
@@ -462,7 +477,13 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
         });
         fetchData();
       } else {
-        setDecisionResult({ success: false, message: json.error?.message || "Failed" });
+        // Backend (final-decision route) now returns a per-blocker list as
+        // `error.blockers: string[]` plus a multi-line `error.message` with
+        // bullet markers. Render the message verbatim — whitespace-pre-line
+        // on the toast container preserves the bullets.
+        const message =
+          json.error?.message || "Failed to submit decision";
+        setDecisionResult({ success: false, message });
       }
     } catch {
       setDecisionResult({ success: false, message: "Network error" });
@@ -498,7 +519,37 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
     );
   }
 
-  const { lead, personalDetails: pd, documents, metadata, queueEntry, consent } = data;
+  const { lead, personalDetails: pd, documents, metadata, queueEntry, consent: rawConsent } = data;
+  // Dedupe consent rows to at most one per applicant. The send-consent route
+  // used to INSERT on every call, leaving duplicate consent_records — admins
+  // were seeing two "Primary Consent" cards. The backend is now idempotent,
+  // but pre-fix data still has duplicates, so we also defend at the render
+  // layer: keep the most recent row per consent_for. Co-borrower row is
+  // hidden entirely if the lead has no co-borrower record.
+  const consent = (() => {
+    const buckets = new Map<string, Consent>();
+    for (const c of rawConsent) {
+      const key = c.consentFor || "primary";
+      const prev = buckets.get(key);
+      if (!prev) {
+        buckets.set(key, c);
+        continue;
+      }
+      // Keep the row that's furthest along — verified > esign_completed >
+      // link_sent > anything else. Falls back to most recently signed/viewed.
+      const rank = (s: string) =>
+        s === "verified" || s === "digitally_signed" ? 4
+        : s === "esign_completed" || s === "admin_review_pending" ? 3
+        : s === "link_sent" || s === "viewed" ? 2 : 1;
+      if (rank(c.consentStatus) >= rank(prev.consentStatus)) {
+        buckets.set(key, c);
+      }
+    }
+    const out: Consent[] = [];
+    if (buckets.has("primary")) out.push(buckets.get("primary")!);
+    if (data.coBorrower && buckets.has("co_borrower")) out.push(buckets.get("co_borrower")!);
+    return out;
+  })();
   const isFinalDecided = metadata?.finalDecision === "approved" || metadata?.finalDecision === "rejected";
   const initials = (lead.name || "?")
     .split(/\s+/)
@@ -515,6 +566,43 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   });
   const verifCompleted = verifStats.filter((v) => v.status === "success" || v.status === "completed").length;
   const verifProgress = Math.round((verifCompleted / verifTypes.length) * 100);
+
+  // Compute optimistic approve/reject readiness from card state, mirroring
+  // the server-side gate at /api/admin/kyc/[leadId]/final-decision. When this
+  // returns a non-empty list we disable the matching button and show the
+  // reasons in a tooltip — admin no longer clicks Submit, gets bounced, and
+  // re-clicks. Server still validates authoritatively.
+  const approveBlockers: string[] = [];
+  const rejectBlockers: string[] = [];
+  for (const t of verifTypes) {
+    const card = data.verificationCards.find(
+      (c) => c.type === t && (!("applicant" in c) || true),
+    );
+    if (!card) {
+      approveBlockers.push(`${t.toUpperCase()} verification not run yet`);
+      rejectBlockers.push(`${t.toUpperCase()} verification not run yet`);
+      continue;
+    }
+    if (card.adminAction !== "accepted") {
+      approveBlockers.push(`Click Accept on the ${t.toUpperCase()} card`);
+    }
+    if (card.adminAction !== "rejected") {
+      rejectBlockers.push(`Click Reject on the ${t.toUpperCase()} card`);
+    }
+  }
+  // Supporting docs gate
+  if (Array.isArray(data.supportingDocs)) {
+    for (const d of data.supportingDocs) {
+      if ((d as { uploadStatus?: string }).uploadStatus !== "verified") {
+        approveBlockers.push(`Supporting doc "${(d as { docLabel?: string }).docLabel ?? "(unnamed)"}" must be verified`);
+      }
+      if ((d as { uploadStatus?: string }).uploadStatus !== "rejected") {
+        rejectBlockers.push(`Supporting doc "${(d as { docLabel?: string }).docLabel ?? "(unnamed)"}" must be rejected`);
+      }
+    }
+  }
+  const canApprove = approveBlockers.length === 0;
+  const canReject = rejectBlockers.length === 0;
 
   return (
     <div className="space-y-6 pb-6">
@@ -1114,55 +1202,99 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
         </div>
       )}
 
-      {/* Documents Tab */}
-      {activeTab === "documents" && (
-        <div>
-          {documents.length === 0 ? (
+      {/* Documents Tab — split into Primary and Co-Borrower sections so admins
+          can review each applicant's docs separately instead of a flat mixed
+          grid. Co-Borrower section is hidden when there are no co-borrower
+          docs and no co-borrower record on the lead. */}
+      {activeTab === "documents" && (() => {
+        const primaryDocs = documents.filter(
+          (d) => !d.docFor || d.docFor === "customer" || d.docFor === "primary",
+        );
+        const coBorrowerDocs = documents.filter((d) => d.docFor === "co_borrower");
+        const renderDocCard = (doc: Document) => (
+          <button key={doc.id} onClick={() => setLightboxUrl(doc.fileUrl)}
+            className="group bg-white border border-gray-100 rounded-2xl p-3 hover:border-teal-300 hover:shadow-lg hover:-translate-y-0.5 transition-all text-left shadow-sm">
+            <div className="aspect-[4/3] bg-gradient-to-br from-gray-100 to-gray-50 rounded-xl mb-3 overflow-hidden flex items-center justify-center relative ring-1 ring-gray-100">
+              {doc.fileUrl ? (
+                <Image src={doc.fileUrl} alt={doc.docType} fill
+                  className="object-cover group-hover:scale-110 transition-transform duration-300" />
+              ) : (
+                <svg className="w-8 h-8 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              )}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
+            <p className="text-[13px] font-semibold text-gray-800 truncate group-hover:text-teal-700 transition-colors">
+              {DOC_TYPE_LABELS[doc.docType] || doc.docType}
+            </p>
+            <span className={`inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold ring-1 ring-inset capitalize ${
+              doc.verificationStatus === "success" ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20" :
+              doc.verificationStatus === "failed" ? "bg-red-50 text-red-700 ring-red-600/20" :
+              doc.verificationStatus === "in_progress" || doc.verificationStatus === "awaiting_action" ? "bg-amber-50 text-amber-700 ring-amber-600/20" :
+              "bg-gray-50 text-gray-600 ring-gray-500/20"
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                doc.verificationStatus === "success" ? "bg-emerald-500" :
+                doc.verificationStatus === "failed" ? "bg-red-500" :
+                doc.verificationStatus === "in_progress" || doc.verificationStatus === "awaiting_action" ? "bg-amber-500" :
+                "bg-gray-400"
+              }`} />
+              {doc.verificationStatus.replace(/_/g, " ")}
+            </span>
+          </button>
+        );
+
+        if (documents.length === 0) {
+          return (
             <div className="bg-gradient-to-br from-gray-50 to-gray-100/50 border-2 border-dashed border-gray-200 rounded-2xl p-12 text-center">
               <div className="w-14 h-14 rounded-2xl bg-white shadow-sm mx-auto mb-3 flex items-center justify-center">
                 <svg className="w-7 h-7 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
               </div>
               <p className="text-gray-500 font-medium">No documents uploaded yet</p>
             </div>
-          ) : (
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              {documents.map((doc) => (
-                <button key={doc.id} onClick={() => setLightboxUrl(doc.fileUrl)}
-                  className="group bg-white border border-gray-100 rounded-2xl p-3 hover:border-teal-300 hover:shadow-lg hover:-translate-y-0.5 transition-all text-left shadow-sm">
-                  <div className="aspect-[4/3] bg-gradient-to-br from-gray-100 to-gray-50 rounded-xl mb-3 overflow-hidden flex items-center justify-center relative ring-1 ring-gray-100">
-                    {doc.fileUrl ? (
-                      <Image src={doc.fileUrl} alt={doc.docType} fill
-                        className="object-cover group-hover:scale-110 transition-transform duration-300" />
-                    ) : (
-                      <svg className="w-8 h-8 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                    )}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+          );
+        }
+
+        return (
+          <div className="space-y-6">
+            {/* Primary Applicant section */}
+            <section>
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-teal-500" />
+                Primary Applicant Documents
+                <span className="text-gray-400 normal-case font-normal">({primaryDocs.length})</span>
+              </h3>
+              {primaryDocs.length > 0 ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                  {primaryDocs.map(renderDocCard)}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 italic">No primary documents uploaded yet.</p>
+              )}
+            </section>
+
+            {/* Co-Borrower section — only render when co-borrower exists or
+                their docs exist. Avoids confusing empty section on solo leads. */}
+            {(coBorrowerDocs.length > 0 || data.coBorrower) && (
+              <section>
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-purple-500" />
+                  Co-Borrower Documents
+                  <span className="text-gray-400 normal-case font-normal">({coBorrowerDocs.length})</span>
+                </h3>
+                {coBorrowerDocs.length > 0 ? (
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                    {coBorrowerDocs.map(renderDocCard)}
                   </div>
-                  <p className="text-[13px] font-semibold text-gray-800 truncate group-hover:text-teal-700 transition-colors">
-                    {DOC_TYPE_LABELS[doc.docType] || doc.docType}
-                  </p>
-                  <span className={`inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold ring-1 ring-inset capitalize ${
-                    doc.verificationStatus === "success" ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20" :
-                    doc.verificationStatus === "failed" ? "bg-red-50 text-red-700 ring-red-600/20" :
-                    doc.verificationStatus === "in_progress" || doc.verificationStatus === "awaiting_action" ? "bg-amber-50 text-amber-700 ring-amber-600/20" :
-                    "bg-gray-50 text-gray-600 ring-gray-500/20"
-                  }`}>
-                    <span className={`w-1.5 h-1.5 rounded-full ${
-                      doc.verificationStatus === "success" ? "bg-emerald-500" :
-                      doc.verificationStatus === "failed" ? "bg-red-500" :
-                      doc.verificationStatus === "in_progress" || doc.verificationStatus === "awaiting_action" ? "bg-amber-500" :
-                      "bg-gray-400"
-                    }`} />
-                    {doc.verificationStatus.replace(/_/g, " ")}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+                ) : (
+                  <p className="text-sm text-gray-400 italic">Co-borrower hasn&apos;t uploaded any documents yet.</p>
+                )}
+              </section>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Document Lightbox */}
       {lightboxUrl && (
@@ -1325,7 +1457,20 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
             </div>
 
             <div className="flex flex-wrap gap-3 items-center">
-              <button onClick={handleFinalDecision} disabled={!decision || decisionLoading}
+              {(() => {
+                const blockers =
+                  decision === "approved"
+                    ? approveBlockers
+                    : decision === "rejected"
+                      ? rejectBlockers
+                      : [];
+                const blocked = blockers.length > 0;
+                const tooltip = blocked
+                  ? `Resolve these first:\n• ${blockers.join("\n• ")}`
+                  : "";
+                return (
+              <button onClick={handleFinalDecision} disabled={!decision || decisionLoading || blocked}
+                title={tooltip}
                 className={`inline-flex items-center gap-2 px-8 py-3 rounded-xl text-sm font-bold text-white shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none ${
                   decision === "approved"
                     ? "bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 shadow-emerald-500/30"
@@ -1345,6 +1490,21 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                   </>
                 )}
               </button>
+                );
+              })()}
+              {/* Inline blocker hint shown right under the button so it's
+                  noticeable without hovering for the tooltip. Mirrors what the
+                  server would return; vanishes once the admin resolves them. */}
+              {decision === "approved" && approveBlockers.length > 0 && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 whitespace-pre-line w-full">
+                  Resolve before approving:{"\n• "}{approveBlockers.join("\n• ")}
+                </p>
+              )}
+              {decision === "rejected" && rejectBlockers.length > 0 && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 whitespace-pre-line w-full">
+                  Resolve before rejecting:{"\n• "}{rejectBlockers.join("\n• ")}
+                </p>
+              )}
               <Link href="/admin/kyc-review"
                 className="inline-flex items-center gap-1.5 px-5 py-3 rounded-xl text-sm font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
@@ -1364,7 +1524,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                     : <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
                   }
                 </svg>
-                <span className="font-medium">{decisionResult.message}</span>
+                <span className="font-medium whitespace-pre-line">{decisionResult.message}</span>
               </div>
             )}
           </div>
@@ -1384,8 +1544,47 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
         open={showCoBorrowerModal}
         onClose={() => setShowCoBorrowerModal(false)}
         leadId={leadId}
-        onSuccess={() => { setShowCoBorrowerModal(false); fetchData(); }}
+        onSuccess={() => {
+          setShowCoBorrowerModal(false);
+          setRequestToast({
+            kind: "success",
+            title: "Co-borrower KYC request sent",
+            detail: "The dealer will see this on their portal.",
+          });
+          fetchData();
+        }}
       />
+
+      {/* Floating toast for admin requests sent to the dealer. */}
+      {requestToast && (
+        <div className="fixed bottom-6 right-6 z-50 max-w-sm">
+          <div className={`rounded-xl shadow-lg ring-1 px-4 py-3 ${
+            requestToast.kind === "success"
+              ? "bg-emerald-50 ring-emerald-200 text-emerald-800"
+              : "bg-red-50 ring-red-200 text-red-800"
+          }`}>
+            <div className="flex items-start gap-2">
+              <svg className="w-5 h-5 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                {requestToast.kind === "success"
+                  ? <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  : <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                }
+              </svg>
+              <div className="flex-1">
+                <p className="font-semibold text-sm">{requestToast.title}</p>
+                {requestToast.detail && (
+                  <p className="text-xs opacity-90 mt-0.5">{requestToast.detail}</p>
+                )}
+              </div>
+              <button onClick={() => setRequestToast(null)} className="text-current opacity-60 hover:opacity-100 ml-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
