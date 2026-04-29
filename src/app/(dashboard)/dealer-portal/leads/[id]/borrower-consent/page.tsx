@@ -1007,7 +1007,10 @@ export default function BorrowerConsentPage() {
                             >
                                 <Scan className="w-4 h-4" /> Auto-fill from ID
                             </button>
-                            <button onClick={() => loadPageData(true)} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold">
+                            <button onClick={async () => {
+                                try { await fetch(`/api/kyc/${leadId}/consent/sync?consent_for=borrower`, { method: 'POST', cache: 'no-store' }); } catch {}
+                                loadPageData(true);
+                            }} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold">
                                 <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
                             </button>
                         </div>

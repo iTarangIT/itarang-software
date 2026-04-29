@@ -1,8 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { consentRecords, leads } from "@/lib/db/schema";
+import { coBorrowers, consentRecords, leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
+
+// Update consent_status on the appropriate applicant-level rows so initial
+// page loads and downstream consumers see the latest state without having to
+// re-derive from consent_records. For the co-borrower path we update both
+// coBorrowers.consent_status (canonical) and leads.borrower_consent_status
+// (denormalised cache the dealer page reads on first render).
+async function syncApplicantConsentStatus(
+  consentFor: string | null | undefined,
+  leadId: string,
+  status: string,
+  now: Date,
+) {
+  if (consentFor === "co_borrower") {
+    await db.update(coBorrowers)
+      .set({ consent_status: status, updated_at: now })
+      .where(eq(coBorrowers.lead_id, leadId));
+    await db.update(leads)
+      .set({ borrower_consent_status: status, updated_at: now })
+      .where(eq(leads.id, leadId));
+  } else {
+    await db.update(leads)
+      .set({ consent_status: status, updated_at: now })
+      .where(eq(leads.id, leadId));
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -69,9 +94,7 @@ export async function POST(req: NextRequest) {
       }
 
       await db.update(consentRecords).set(updates).where(eq(consentRecords.id, record.id));
-      await db.update(leads)
-        .set({ consent_status: "esign_completed", updated_at: now })
-        .where(eq(leads.id, record.lead_id));
+      await syncApplicantConsentStatus(record.consent_for, record.lead_id, "esign_completed", now);
 
     } else if (failedStatuses.includes(rawStatus)) {
       console.log("[DigiO Webhook] Document failed:", documentId, rawStatus);
@@ -86,9 +109,7 @@ export async function POST(req: NextRequest) {
         updated_at: now,
       }).where(eq(consentRecords.id, record.id));
 
-      await db.update(leads)
-        .set({ consent_status: newStatus, updated_at: now })
-        .where(eq(leads.id, record.lead_id));
+      await syncApplicantConsentStatus(record.consent_for, record.lead_id, newStatus, now);
 
     } else if (expiredStatuses.includes(rawStatus)) {
       console.log("[DigiO Webhook] Document expired:", documentId);
@@ -98,9 +119,7 @@ export async function POST(req: NextRequest) {
         updated_at: now,
       }).where(eq(consentRecords.id, record.id));
 
-      await db.update(leads)
-        .set({ consent_status: "expired", updated_at: now })
-        .where(eq(leads.id, record.lead_id));
+      await syncApplicantConsentStatus(record.consent_for, record.lead_id, "expired", now);
 
     } else {
       console.log("[DigiO Webhook] Unhandled status:", rawStatus, "for document:", documentId);
