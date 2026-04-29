@@ -246,7 +246,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                             const ocrRes = await extractDocumentOcr(decentroOcrType, blob, fname, side);
                             // Decentro may use responseStatus or status field
                             const isSuccess = ocrRes.responseStatus === 'SUCCESS' || ocrRes.status === 'SUCCESS' || ocrRes.status === 200;
-                            const ocrPayload = ocrRes.data || ocrRes.result || ocrRes.kycResult;
+                            const ocrPayload = ocrRes.data || ocrRes.result || ocrRes.kycResult || ocrRes.ocrResult;
                             console.log(`[OCR Fallback] Decentro OCR for doc ${candidate.id}: isSuccess=${isSuccess}, hasData=${!!ocrPayload}`);
                             if (isSuccess && ocrPayload) {
                                 await db.update(kycDocuments)
@@ -338,11 +338,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             return NextResponse.json({ success: false, error: `No ${doc_type} document found for this lead` }, { status: 404 });
         }
 
-        // Return cached OCR data if available (already saved to DB on first run)
-        if (doc.ocrData && Object.keys(doc.ocrData as object).length > 0) {
+        // Return cached OCR data if available (already saved to DB on first run).
+        // BUT skip the cache when the cached payload is a Tesseract fallback —
+        // those rows were saved when Decentro was misconfigured (kyc_validate=1
+        // rejected by the prod module) and only contain rawText. Falling through
+        // to a fresh Decentro call gives us real structured fields instead of
+        // perpetually returning the bad cached result.
+        const cached = doc.ocrData as Record<string, unknown> | null;
+        const isFallbackCache =
+            !!cached &&
+            (cached.source === 'tesseract_fallback' ||
+                (Object.keys(cached).every((k) => k === 'rawText' || k === 'source')));
+        if (cached && Object.keys(cached).length > 0 && !isFallbackCache) {
             return NextResponse.json({
                 success: true,
-                ocr_data: doc.ocrData,
+                ocr_data: cached,
                 source: 'db',
                 doc_type,
             });
@@ -384,7 +394,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 : undefined;
             const decentroRes = await extractDocumentOcr(decentroType, blob, fileName, side);
             const success = decentroRes.responseStatus === 'SUCCESS' || decentroRes.status === 'SUCCESS' || decentroRes.status === 200;
-            const decentroPayload = decentroRes.data || decentroRes.result || decentroRes.kycResult;
+            const decentroPayload = decentroRes.data || decentroRes.result || decentroRes.kycResult || decentroRes.ocrResult;
             if (success && decentroPayload) {
                 ocrData = decentroPayload;
                 source = 'decentro';
