@@ -105,24 +105,24 @@ function buildDocumentRow(
   if (!file || !isUploadedFile(file)) return null;
 
   return {
-    applicationId,
-    documentType,
-    bucketName: cleanString(file.bucketName),
-    storagePath: cleanString(file.storagePath),
-    fileName: getFileName(file),
-    fileUrl: cleanString(file.uploadedUrl) || null,
-    mimeType: cleanString(file.mimeType || file.type) || null,
-    fileSize: Number(file.fileSize ?? file.size ?? 0) || null,
-    uploadedBy: uploadedBy || null,
-    docStatus: "uploaded",
-    verificationStatus: cleanString(file.verificationState) || "pending",
+    application_id: applicationId,
+    document_type: documentType,
+    bucket_name: cleanString(file.bucketName),
+    storage_path: cleanString(file.storagePath),
+    file_name: getFileName(file),
+    file_url: cleanString(file.uploadedUrl) || null,
+    mime_type: cleanString(file.mimeType || file.type) || null,
+    file_size: Number(file.fileSize ?? file.size ?? 0) || null,
+    uploaded_by: uploadedBy || null,
+    doc_status: "uploaded",
+    verification_status: cleanString(file.verificationState) || "pending",
     metadata: {
       source: "dealer_onboarding_submit",
       originalLabel: cleanString(file.label),
       fileId: cleanString(file.id),
     },
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    created_at: new Date(),
+    updated_at: new Date(),
   };
 }
 
@@ -141,22 +141,22 @@ function buildLegacyDocumentRow(
   }
 
   return {
-    applicationId,
-    documentType,
-    bucketName,
-    storagePath,
-    fileName,
-    fileUrl: cleanString(document.fileUrl) || null,
-    mimeType: cleanString(document.mimeType) || null,
-    fileSize: Number(document.fileSize ?? 0) || null,
-    uploadedBy: uploadedBy || null,
-    docStatus: cleanString(document.docStatus) || "uploaded",
-    verificationStatus: cleanString(document.verificationStatus) || "pending",
+    application_id: applicationId,
+    document_type: documentType,
+    bucket_name: bucketName,
+    storage_path: storagePath,
+    file_name: fileName,
+    file_url: cleanString(document.fileUrl) || null,
+    mime_type: cleanString(document.mimeType) || null,
+    file_size: Number(document.fileSize ?? 0) || null,
+    uploaded_by: uploadedBy || null,
+    doc_status: cleanString(document.docStatus) || "uploaded",
+    verification_status: cleanString(document.verificationStatus) || "pending",
     metadata: {
       source: "dealer_onboarding_submit_legacy_documents",
     },
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    created_at: new Date(),
+    updated_at: new Date(),
   };
 }
 
@@ -176,7 +176,7 @@ function collectDocuments(
   ) => {
     const row = buildDocumentRow(applicationId, documentType, file, uploadedBy);
     if (row) {
-      deduped.set(`${row.documentType}::${row.storagePath}`, row);
+      deduped.set(`${row.document_type}::${row.storage_path}`, row);
     }
   };
 
@@ -210,7 +210,7 @@ function collectDocuments(
     payload.documents.forEach((document) => {
       const row = buildLegacyDocumentRow(applicationId, document, uploadedBy);
       if (row) {
-        deduped.set(`${row.documentType}::${row.storagePath}`, row);
+        deduped.set(`${row.document_type}::${row.storage_path}`, row);
       }
     });
   }
