@@ -338,11 +338,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             return NextResponse.json({ success: false, error: `No ${doc_type} document found for this lead` }, { status: 404 });
         }
 
-        // Return cached OCR data if available (already saved to DB on first run)
-        if (doc.ocrData && Object.keys(doc.ocrData as object).length > 0) {
+        // Return cached OCR data if available (already saved to DB on first run).
+        // BUT skip the cache when the cached payload is a Tesseract fallback —
+        // those rows were saved when Decentro was misconfigured (kyc_validate=1
+        // rejected by the prod module) and only contain rawText. Falling through
+        // to a fresh Decentro call gives us real structured fields instead of
+        // perpetually returning the bad cached result.
+        const cached = doc.ocrData as Record<string, unknown> | null;
+        const isFallbackCache =
+            !!cached &&
+            (cached.source === 'tesseract_fallback' ||
+                (Object.keys(cached).every((k) => k === 'rawText' || k === 'source')));
+        if (cached && Object.keys(cached).length > 0 && !isFallbackCache) {
             return NextResponse.json({
                 success: true,
-                ocr_data: doc.ocrData,
+                ocr_data: cached,
                 source: 'db',
                 doc_type,
             });
