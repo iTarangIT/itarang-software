@@ -282,7 +282,7 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
 
 const BADGE_CONFIG: Record<string, { bg: string; text: string; label: string }> = {
     pending: { bg: 'bg-yellow-50', text: 'text-yellow-700', label: 'Pending' },
-    initiating: { bg: 'bg-orange-50', text: 'text-orange-700', label: 'Initiating' },
+    initiating: { bg: 'bg-yellow-50', text: 'text-yellow-700', label: 'Pending' },
     awaiting_action: { bg: 'bg-gray-100', text: 'text-gray-600', label: 'Awaiting Action' },
     in_progress: { bg: 'bg-blue-50', text: 'text-blue-700', label: 'In Progress' },
     processing: { bg: 'bg-blue-50', text: 'text-blue-700', label: 'Processing' },
