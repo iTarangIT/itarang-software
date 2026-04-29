@@ -17,7 +17,7 @@ const nextConfig: NextConfig = {
   serverExternalPackages: [
     "puppeteer",
     "puppeteer-core",
-    "@sparticuz/chromium-min",
+    "@sparticuz/chromium",
   ],
   outputFileTracingExcludes: {
     "/api/kyc/*/generate-consent-pdf": [
