@@ -171,7 +171,7 @@ export async function POST(
       for (const d of step3SupportingDocs) {
         if (d.upload_status !== "verified") {
           blockers.push(
-            `Supporting doc "${d.doc_type}" is "${d.upload_status}" — verify or close the request`,
+            `Supporting doc "${d.doc_label}" is "${d.upload_status}" — verify or close the request`,
           );
         }
       }
@@ -231,7 +231,7 @@ export async function POST(
       for (const d of step3SupportingDocs) {
         if (d.upload_status !== "rejected") {
           blockers.push(
-            `Supporting doc "${d.doc_type}" is "${d.upload_status}" — reject it`,
+            `Supporting doc "${d.doc_label}" is "${d.upload_status}" — reject it`,
           );
         }
       }
