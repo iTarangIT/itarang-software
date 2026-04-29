@@ -26,13 +26,15 @@ export async function getDealerNotificationRecipients(
   const emails: string[] = [];
 
   if (includeDealer) {
-    emails.push(cleanEmail(application?.ownerEmail));
+    // Drizzle returns the row with snake_case keys after the schema rename in
+    // 10af73a. Read both shapes so older callers don't silently drop the dealer.
+    emails.push(cleanEmail(application?.owner_email ?? application?.ownerEmail));
   }
 
   // Application-level columns (populated by dealer-portal onboarding submit).
-  emails.push(cleanEmail(application?.salesManagerEmail));
-  emails.push(cleanEmail(application?.itarangSignatory1Email));
-  emails.push(cleanEmail(application?.itarangSignatory2Email));
+  emails.push(cleanEmail(application?.sales_manager_email ?? application?.salesManagerEmail));
+  emails.push(cleanEmail(application?.itarang_signatory_1_email ?? application?.itarangSignatory1Email));
+  emails.push(cleanEmail(application?.itarang_signatory_2_email ?? application?.itarangSignatory2Email));
 
   // Fallback: read itarang signer emails from dealer_agreement_signers.
   // This covers admin-initiated agreements where the app-level columns are NULL
@@ -59,6 +61,6 @@ export async function getDealerNotificationRecipients(
       err,
     );
   }
-// hello
+
   return Array.from(new Set(emails.filter(Boolean)));
 }
