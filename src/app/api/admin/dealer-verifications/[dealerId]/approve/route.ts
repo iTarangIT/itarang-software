@@ -32,7 +32,11 @@ function generateDealerCode() {
 }
 
 function resolveDealerLoginEmail(application: any) {
-  return application?.ownerEmail?.trim?.() || null;
+  // Drizzle returns snake_case keys after the schema rename in 10af73a; keep
+  // the camelCase fallback so older code paths that still build the row by
+  // hand don't break.
+  const email = application?.owner_email ?? application?.ownerEmail;
+  return typeof email === "string" ? email.trim() || null : null;
 }
 
 function resolveDealerLoginUrl(req: NextRequest): string {
