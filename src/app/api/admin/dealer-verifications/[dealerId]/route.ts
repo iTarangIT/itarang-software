@@ -63,9 +63,20 @@ function parseProviderRawResponse(value: unknown) {
 
 function extractAddress(value: unknown) {
   if (!value) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "object" && value !== null) {
-    const obj = value as Record<string, any>;
+  // business_address is a TEXT column that may hold a raw address or a
+  // JSON-encoded object like '{"address":"Pune"}'. Parse first so the UI
+  // never sees the wrapper braces/quotes.
+  let normalized: unknown = value;
+  if (typeof normalized === "string") {
+    const trimmed = normalized.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try { normalized = JSON.parse(trimmed); } catch { return trimmed; }
+    } else {
+      return trimmed;
+    }
+  }
+  if (typeof normalized === "object" && normalized !== null) {
+    const obj = normalized as Record<string, any>;
     return (
       obj.address ||
       obj.fullAddress ||
