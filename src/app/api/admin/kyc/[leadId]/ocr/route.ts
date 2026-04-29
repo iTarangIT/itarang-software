@@ -246,7 +246,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                             const ocrRes = await extractDocumentOcr(decentroOcrType, blob, fname, side);
                             // Decentro may use responseStatus or status field
                             const isSuccess = ocrRes.responseStatus === 'SUCCESS' || ocrRes.status === 'SUCCESS' || ocrRes.status === 200;
-                            const ocrPayload = ocrRes.data || ocrRes.result || ocrRes.kycResult;
+                            const ocrPayload = ocrRes.data || ocrRes.result || ocrRes.kycResult || ocrRes.ocrResult;
                             console.log(`[OCR Fallback] Decentro OCR for doc ${candidate.id}: isSuccess=${isSuccess}, hasData=${!!ocrPayload}`);
                             if (isSuccess && ocrPayload) {
                                 await db.update(kycDocuments)
@@ -394,7 +394,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 : undefined;
             const decentroRes = await extractDocumentOcr(decentroType, blob, fileName, side);
             const success = decentroRes.responseStatus === 'SUCCESS' || decentroRes.status === 'SUCCESS' || decentroRes.status === 200;
-            const decentroPayload = decentroRes.data || decentroRes.result || decentroRes.kycResult;
+            const decentroPayload = decentroRes.data || decentroRes.result || decentroRes.kycResult || decentroRes.ocrResult;
             if (success && decentroPayload) {
                 ocrData = decentroPayload;
                 source = 'decentro';

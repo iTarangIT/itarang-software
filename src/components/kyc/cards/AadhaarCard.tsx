@@ -798,6 +798,8 @@ export default function AadhaarCard({
         leadId={leadId}
         sourceVerificationId={existingVerification?.id || null}
         sourceCardLabel="Aadhaar Verification"
+        defaultDocFor={applicant === "co_borrower" ? "co_borrower" : "primary"}
+        lockScope
         onSuccess={() => onActionComplete?.()}
       />
     </div>
