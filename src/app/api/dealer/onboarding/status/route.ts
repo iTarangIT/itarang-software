@@ -5,15 +5,15 @@ import { findLatestDealerOnboardingApplication } from "@/lib/dealer-onboarding";
 import { findSupabaseUserProfile } from "@/lib/supabase/identity";
 
 function resolveDealerStatus(application: {
-  onboardingStatus?: string | null;
-  reviewStatus?: string | null;
-  agreementStatus?: string | null;
-  dealerAccountStatus?: string | null;
+  onboarding_status?: string | null;
+  review_status?: string | null;
+  agreement_status?: string | null;
+  dealer_account_status?: string | null;
 }) {
-  const onboardingStatus = (application.onboardingStatus || "draft").toLowerCase();
-  const reviewStatus = (application.reviewStatus || "").toLowerCase();
-  const agreementStatus = (application.agreementStatus || "").toLowerCase();
-  const dealerAccountStatus = (application.dealerAccountStatus || "").toLowerCase();
+  const onboardingStatus = (application.onboarding_status || "draft").toLowerCase();
+  const reviewStatus = (application.review_status || "").toLowerCase();
+  const agreementStatus = (application.agreement_status || "").toLowerCase();
+  const dealerAccountStatus = (application.dealer_account_status || "").toLowerCase();
 
   if (
     onboardingStatus === "approved" &&
@@ -119,15 +119,15 @@ export async function GET(_req: NextRequest) {
 
     return NextResponse.json({
       status,
-      onboardingStatus: currentApplication.onboardingStatus || "draft",
-      reviewStatus: currentApplication.reviewStatus || null,
-      agreementStatus: currentApplication.agreementStatus || "not_generated",
-      dealerAccountStatus: currentApplication.dealerAccountStatus || "inactive",
-      submittedAt: currentApplication.submittedAt || null,
-      approvedAt: currentApplication.approvedAt || null,
-      rejectedAt: currentApplication.rejectedAt || null,
-      correctionRemarks: currentApplication.correctionRemarks || null,
-      rejectionRemarks: currentApplication.rejectionRemarks || null,
+      onboardingStatus: currentApplication.onboarding_status || "draft",
+      reviewStatus: currentApplication.review_status || null,
+      agreementStatus: currentApplication.agreement_status || "not_generated",
+      dealerAccountStatus: currentApplication.dealer_account_status || "inactive",
+      submittedAt: currentApplication.submitted_at || null,
+      approvedAt: currentApplication.approved_at || null,
+      rejectedAt: currentApplication.rejected_at || null,
+      correctionRemarks: currentApplication.correction_remarks || null,
+      rejectionRemarks: currentApplication.rejection_remarks || null,
     });
   } catch (error) {
     console.error("Onboarding status fetch error:", error);

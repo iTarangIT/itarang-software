@@ -40,11 +40,11 @@ export async function getDealerNotificationRecipients(
   try {
     const signers = await db
       .select({
-        role: dealerAgreementSigners.signerRole,
-        email: dealerAgreementSigners.signerEmail,
+        role: dealerAgreementSigners.signer_role,
+        email: dealerAgreementSigners.signer_email,
       })
       .from(dealerAgreementSigners)
-      .where(eq(dealerAgreementSigners.applicationId, application.id));
+      .where(eq(dealerAgreementSigners.application_id, application.id));
 
     for (const s of signers) {
       const role = String(s.role || "").toLowerCase();

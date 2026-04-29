@@ -8,7 +8,7 @@ export async function GET() {
     const applications = await db
       .select()
       .from(dealerOnboardingApplications)
-      .orderBy(desc(dealerOnboardingApplications.createdAt));
+      .orderBy(desc(dealerOnboardingApplications.created_at));
 
     return NextResponse.json({
       success: true,

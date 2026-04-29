@@ -100,17 +100,17 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     const uploadedDocuments = await db
       .select()
       .from(dealerOnboardingDocuments)
-      .where(eq(dealerOnboardingDocuments.applicationId, row.id));
+      .where(eq(dealerOnboardingDocuments.application_id, row.id));
 
     const documents = uploadedDocuments.map((doc) => ({
       id: doc.id,
-      name: doc.fileName || doc.documentType,
-      documentType: doc.documentType,
-      url: doc.fileUrl || "",
-      docStatus: doc.docStatus,
-      verificationStatus: doc.verificationStatus,
-      uploadedAt: doc.uploadedAt,
-      rejectionReason: doc.rejectionReason,
+      name: doc.file_name || doc.document_type,
+      documentType: doc.document_type,
+      url: doc.file_url || "",
+      docStatus: doc.doc_status,
+      verificationStatus: doc.verification_status,
+      uploadedAt: doc.uploaded_at,
+      rejectionReason: doc.rejection_reason,
     }));
 
     // Latest correction round (any status). The review page renders the
@@ -126,18 +126,18 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       const [latestRound] = await db
         .select()
         .from(dealerCorrectionRounds)
-        .where(eq(dealerCorrectionRounds.applicationId, row.id))
-        .orderBy(desc(dealerCorrectionRounds.roundNumber))
+        .where(eq(dealerCorrectionRounds.application_id, row.id))
+        .orderBy(desc(dealerCorrectionRounds.round_number))
         .limit(1);
 
       if (latestRound) {
         const items = await db
           .select()
           .from(dealerCorrectionItems)
-          .where(eq(dealerCorrectionItems.roundId, latestRound.id));
+          .where(eq(dealerCorrectionItems.round_id, latestRound.id));
 
         const linkedDocIds = items
-          .flatMap((it) => [it.previousDocumentId, it.newDocumentId])
+          .flatMap((it) => [it.previous_document_id, it.new_document_id])
           .filter((v): v is string => !!v);
 
         const linkedDocs =
@@ -145,9 +145,9 @@ export async function GET(_req: NextRequest, context: RouteContext) {
             ? await db
                 .select({
                   id: dealerOnboardingDocuments.id,
-                  fileName: dealerOnboardingDocuments.fileName,
-                  fileUrl: dealerOnboardingDocuments.fileUrl,
-                  uploadedAt: dealerOnboardingDocuments.uploadedAt,
+                  fileName: dealerOnboardingDocuments.file_name,
+                  fileUrl: dealerOnboardingDocuments.file_url,
+                  uploadedAt: dealerOnboardingDocuments.uploaded_at,
                 })
                 .from(dealerOnboardingDocuments)
                 .where(inArray(dealerOnboardingDocuments.id, linkedDocIds))
@@ -156,26 +156,26 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
         correctionRound = {
           id: latestRound.id,
-          roundNumber: latestRound.roundNumber,
+          roundNumber: latestRound.round_number,
           status: latestRound.status,
           remarks: latestRound.remarks,
-          dealerNote: latestRound.dealerNote,
-          createdAt: latestRound.createdAt,
-          dealerSubmittedAt: latestRound.dealerSubmittedAt,
-          appliedAt: latestRound.appliedAt,
-          tokenExpiresAt: latestRound.tokenExpiresAt,
+          dealerNote: latestRound.dealer_note,
+          createdAt: latestRound.created_at,
+          dealerSubmittedAt: latestRound.dealer_submitted_at,
+          appliedAt: latestRound.applied_at,
+          tokenExpiresAt: latestRound.token_expires_at,
           items: items.map((it) => ({
             id: it.id,
             kind: it.kind,
             key: it.key,
             label: it.kind === "field" ? fieldLabel(it.key) : documentLabel(it.key),
-            previousValue: it.previousValue,
-            newValue: it.newValue,
-            previousDocument: it.previousDocumentId
-              ? docsById.get(it.previousDocumentId) ?? null
+            previousValue: it.previous_value,
+            newValue: it.new_value,
+            previousDocument: it.previous_document_id
+              ? docsById.get(it.previous_document_id) ?? null
               : null,
-            newDocument: it.newDocumentId
-              ? docsById.get(it.newDocumentId) ?? null
+            newDocument: it.new_document_id
+              ? docsById.get(it.new_document_id) ?? null
               : null,
           })),
         };
@@ -188,7 +188,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       correctionRound = null;
     }
 
-    const providerData = parseProviderRawResponse(row.providerRawResponse);
+    const providerData = parseProviderRawResponse(row.provider_raw_response);
     const agreementData = providerData?.agreement || {};
     const ownershipSnapshot =
       (providerData as any)?.submissionSnapshot?.ownership || {};
@@ -206,21 +206,21 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         id: row.id,
         dealerId: row.id,
 
-        companyName: row.companyName,
-        companyAddress: extractAddress(row.businessAddress),
-        gstNumber: row.gstNumber,
-        panNumber: row.panNumber,
+        companyName: row.company_name,
+        companyAddress: extractAddress(row.business_address),
+        gstNumber: row.gst_number,
+        panNumber: row.pan_number,
         // cinNumber: row.cinNumber,
-        companyType: row.companyType,
+        companyType: row.company_type,
 
-        ownerName: row.ownerName,
-        ownerPhone: row.ownerPhone,
-        ownerEmail: row.ownerEmail,
+        ownerName: row.owner_name,
+        ownerPhone: row.owner_phone,
+        ownerEmail: row.owner_email,
 
-        bankName: row.bankName,
-        accountNumber: row.accountNumber,
-        beneficiaryName: row.beneficiaryName,
-        ifscCode: row.ifscCode,
+        bankName: row.bank_name,
+        accountNumber: row.account_number,
+        beneficiaryName: row.beneficiary_name,
+        ifscCode: row.ifsc_code,
 
         // Bank extras captured in onboarding step 3 — live in snapshot JSON
         bankBranch: ownershipSnapshot?.branch || "",
@@ -238,36 +238,36 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         directors: directorsSnapshot,
 
         // Sales manager — prefer structured columns; fall back to snapshot
-        salesManagerName: row.salesManagerName || salesManagerSnapshot?.name || "",
-        salesManagerEmail: row.salesManagerEmail || salesManagerSnapshot?.email || "",
-        salesManagerMobile: row.salesManagerMobile || salesManagerSnapshot?.mobile || "",
+        salesManagerName: row.sales_manager_name || salesManagerSnapshot?.name || "",
+        salesManagerEmail: row.sales_manager_email || salesManagerSnapshot?.email || "",
+        salesManagerMobile: row.sales_manager_mobile || salesManagerSnapshot?.mobile || "",
 
         // ✅ NEW — agreement language preference
-        agreementLanguage: row.agreementLanguage,
+        agreementLanguage: row.agreement_language,
 
-        financeEnabled: row.financeEnabled,
-        onboardingStatus: row.onboardingStatus,
-        reviewStatus: row.reviewStatus,
-        submittedAt: row.submittedAt,
+        financeEnabled: row.finance_enabled,
+        onboardingStatus: row.onboarding_status,
+        reviewStatus: row.review_status,
+        submittedAt: row.submitted_at,
 
-        correctionRemarks: row.correctionRemarks || null,
-        rejectionRemarks: row.rejectionRemarks || (row as any).rejectionReason || null,
+        correctionRemarks: row.correction_remarks || null,
+        rejectionRemarks: row.rejection_remarks || (row as any).rejectionReason || null,
 
         correctionRound,
 
         documents,
 
-        agreement: row.financeEnabled
+        agreement: row.finance_enabled
           ? {
-              agreementId: row.providerDocumentId || null,
-              status: row.agreementStatus || "not_generated",
-              copyUrl: row.providerSigningUrl || null,
-              signedAgreementUrl: row.signedAgreementUrl || null,
-              requestId: row.requestId || null,
-              stampStatus: row.stampStatus || "pending",
-              completionStatus: row.completionStatus || "pending",
-              signedAt: row.signedAt || null,
-              lastActionTimestamp: row.lastActionTimestamp || null,
+              agreementId: row.provider_document_id || null,
+              status: row.agreement_status || "not_generated",
+              copyUrl: row.provider_signing_url || null,
+              signedAgreementUrl: row.signed_agreement_url || null,
+              requestId: row.request_id || null,
+              stampStatus: row.stamp_status || "pending",
+              completionStatus: row.completion_status || "pending",
+              signedAt: row.signed_at || null,
+              lastActionTimestamp: row.last_action_timestamp || null,
 
               agreementName: agreementData.agreementName || "",
               agreementVersion: agreementData.agreementVersion || "",
@@ -365,7 +365,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
     // on the parent account and must not be mutated from here.
     const [branchCheck] = await db
       .select({
-        isBranchDealer: dealerOnboardingApplications.isBranchDealer,
+        isBranchDealer: dealerOnboardingApplications.is_branch_dealer,
       })
       .from(dealerOnboardingApplications)
       .where(eq(dealerOnboardingApplications.id, dealerId))
@@ -447,7 +447,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
 
     if (touchesOwnershipSnapshot || touchesSalesManagerSnapshot) {
       const [existingRow] = await db
-        .select({ providerRawResponse: dealerOnboardingApplications.providerRawResponse })
+        .select({ providerRawResponse: dealerOnboardingApplications.provider_raw_response })
         .from(dealerOnboardingApplications)
         .where(eq(dealerOnboardingApplications.id, dealerId))
         .limit(1);
@@ -493,7 +493,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
     // agreement payload) rely on.
     if (companyAddress !== undefined) {
       const [existing] = await db
-        .select({ businessAddress: dealerOnboardingApplications.businessAddress })
+        .select({ businessAddress: dealerOnboardingApplications.business_address })
         .from(dealerOnboardingApplications)
         .where(eq(dealerOnboardingApplications.id, dealerId))
         .limit(1);

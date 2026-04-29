@@ -35,7 +35,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     return NextResponse.json({
       success: true,
       dealerId: application.id,
-      isBranchDealer: application.isBranchDealer,
+      isBranchDealer: application.is_branch_dealer,
       ...classification,
     });
   } catch (error: any) {

@@ -35,7 +35,7 @@ async function main() {
   const rows = await db
     .select()
     .from(dealerOnboardingApplications)
-    .where(eq(dealerOnboardingApplications.ownerEmail, email));
+    .where(eq(dealerOnboardingApplications.owner_email, email));
 
   const application = rows[0];
   if (!application) {
@@ -45,23 +45,23 @@ async function main() {
 
   console.log("Current state:", {
     id: application.id,
-    companyName: application.companyName,
-    onboardingStatus: application.onboardingStatus,
-    reviewStatus: application.reviewStatus,
-    financeEnabled: application.financeEnabled,
-    agreementStatus: application.agreementStatus,
-    dealerCode: application.dealerCode,
-    dealerUserId: application.dealerUserId,
+    companyName: application.company_name,
+    onboardingStatus: application.onboarding_status,
+    reviewStatus: application.review_status,
+    financeEnabled: application.finance_enabled,
+    agreementStatus: application.agreement_status,
+    dealerCode: application.dealer_code,
+    dealerUserId: application.dealer_user_id,
   });
 
-  if (application.onboardingStatus === "approved") {
+  if (application.onboarding_status === "approved") {
     console.log(
-      `Already approved. dealerCode=${application.dealerCode}. Issuing a fresh temp password so you can log in.`,
+      `Already approved. dealerCode=${application.dealer_code}. Issuing a fresh temp password so you can log in.`,
     );
   }
 
-  const dealerCode = application.dealerCode || generateDealerCode();
-  const dealerLoginEmail = application.ownerEmail?.trim() || email;
+  const dealerCode = application.dealer_code || generateDealerCode();
+  const dealerLoginEmail = application.owner_email?.trim() || email;
 
   const temporaryPassword = generateTemporaryPassword();
   const passwordHash = await hashPassword(temporaryPassword);
@@ -101,22 +101,22 @@ async function main() {
     await tx
       .update(dealerOnboardingApplications)
       .set({
-        dealerUserId: authUserId,
-        onboardingStatus: "approved",
-        reviewStatus: "approved",
-        dealerAccountStatus: "active",
-        completionStatus: "completed",
-        approvedAt: new Date(),
-        signedAt:
-          application.agreementStatus === "completed"
-            ? application.signedAt || new Date()
-            : application.signedAt || null,
-        rejectedAt: null,
-        rejectionReason: null,
-        correctionRemarks: null,
-        rejectionRemarks: null,
-        dealerCode,
-        updatedAt: new Date(),
+        dealer_user_id: authUserId,
+        onboarding_status: "approved",
+        review_status: "approved",
+        dealer_account_status: "active",
+        completion_status: "completed",
+        approved_at: new Date(),
+        signed_at:
+          application.agreement_status === "completed"
+            ? application.signed_at || new Date()
+            : application.signed_at || null,
+        rejected_at: null,
+        rejection_reason: null,
+        correction_remarks: null,
+        rejection_remarks: null,
+        dealer_code: dealerCode,
+        updated_at: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, application.id));
 
@@ -128,28 +128,28 @@ async function main() {
 
     if (existingAccount.length === 0) {
       const addressObj =
-        typeof application.businessAddress === "object" &&
-        application.businessAddress
-          ? (application.businessAddress as Record<string, any>)
+        typeof application.business_address === "object" &&
+        application.business_address
+          ? (application.business_address as Record<string, any>)
           : null;
 
       await tx.insert(accounts).values({
         id: dealerCode,
-        business_entity_name: application.companyName || "Dealer Business",
-        gstin: application.gstNumber || "PENDING",
-        pan: application.panNumber || null,
+        business_entity_name: application.company_name || "Dealer Business",
+        gstin: application.gst_number || "PENDING",
+        pan: application.pan_number || null,
         dealer_code: dealerCode,
         contact_name:
-          application.ownerName || application.companyName || "Dealer",
+          application.owner_name || application.company_name || "Dealer",
         contact_email: dealerLoginEmail,
-        contact_phone: application.ownerPhone || null,
+        contact_phone: application.owner_phone || null,
         address_line1: addressObj?.address || addressObj?.line1 || null,
         city: addressObj?.city || null,
         state: addressObj?.state || null,
         pincode: addressObj?.pincode || null,
-        bank_name: application.bankName || null,
-        bank_account_number: application.accountNumber || null,
-        ifsc_code: application.ifscCode || null,
+        bank_name: application.bank_name || null,
+        bank_account_number: application.account_number || null,
+        ifsc_code: application.ifsc_code || null,
         status: "active",
         onboarding_status: "approved",
         created_by: authUserId,
@@ -167,10 +167,10 @@ async function main() {
         .set({
           id: authUserId,
           name:
-            application.ownerName || application.companyName || "Dealer",
+            application.owner_name || application.company_name || "Dealer",
           role: "dealer",
           dealer_id: dealerCode,
-          phone: application.ownerPhone || null,
+          phone: application.owner_phone || null,
           is_active: true,
           password_hash: passwordHash,
           must_change_password: true,
@@ -181,10 +181,10 @@ async function main() {
       await tx.insert(users).values({
         id: authUserId,
         email: dealerLoginEmail,
-        name: application.ownerName || application.companyName || "Dealer",
+        name: application.owner_name || application.company_name || "Dealer",
         role: "dealer",
         dealer_id: dealerCode,
-        phone: application.ownerPhone || null,
+        phone: application.owner_phone || null,
         avatar_url: null,
         password_hash: passwordHash,
         must_change_password: true,

@@ -62,15 +62,15 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     let pdfBuffer: ArrayBuffer | null = null;
 
     // 1. First try from Supabase storage path
-    if (application.signedAgreementStoragePath) {
+    if (application.signed_agreement_storage_path) {
       console.log(
         "[DOWNLOAD SIGNED AGREEMENT] Trying Supabase path:",
-        application.signedAgreementStoragePath
+        application.signed_agreement_storage_path
       );
 
       const { data, error } = await supabase.storage
         .from(bucketName)
-        .download(application.signedAgreementStoragePath);
+        .download(application.signed_agreement_storage_path);
 
       if (!error && data) {
         const candidate = await data.arrayBuffer();
@@ -92,13 +92,13 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     }
 
     // 2. Fallback to signedAgreementUrl if present
-    if (!pdfBuffer && application.signedAgreementUrl) {
+    if (!pdfBuffer && application.signed_agreement_url) {
       console.log(
         "[DOWNLOAD SIGNED AGREEMENT] Trying signedAgreementUrl:",
-        application.signedAgreementUrl
+        application.signed_agreement_url
       );
 
-      const fileRes = await fetch(application.signedAgreementUrl, {
+      const fileRes = await fetch(application.signed_agreement_url, {
         method: "GET",
         cache: "no-store",
       });
@@ -125,7 +125,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
     // 3. Final fallback to Digio
     if (!pdfBuffer) {
-      if (!application.providerDocumentId) {
+      if (!application.provider_document_id) {
         return NextResponse.json(
           { success: false, message: "Signed agreement not available" },
           { status: 400 }
@@ -146,8 +146,8 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
       // Try multiple Digio download endpoints
       const downloadUrls = [
-        `${baseUrl}/v2/client/document/download?document_id=${application.providerDocumentId}`,
-        `${baseUrl}/v2/client/document/${application.providerDocumentId}/download`,
+        `${baseUrl}/v2/client/document/download?document_id=${application.provider_document_id}`,
+        `${baseUrl}/v2/client/document/${application.provider_document_id}/download`,
       ];
 
       let digioResponse: Response | null = null;
@@ -178,7 +178,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       // If both endpoints failed, check agreement status first
       if (!digioResponse) {
         // Query Digio for the document status to get the signed URL directly
-        const statusUrl = `${baseUrl}/v2/client/document/${application.providerDocumentId}`;
+        const statusUrl = `${baseUrl}/v2/client/document/${application.provider_document_id}`;
         console.log("[DOWNLOAD SIGNED AGREEMENT] Checking Digio document status:", statusUrl);
 
         const statusRes = await fetch(statusUrl, {
@@ -263,7 +263,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
       // Save to Supabase for future downloads
       const filePath =
-        application.signedAgreementStoragePath ||
+        application.signed_agreement_storage_path ||
         `agreements/${dealerId}/signed-agreement.pdf`;
 
       const { error: uploadError } = await supabase.storage
@@ -283,9 +283,9 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         await db
           .update(dealerOnboardingApplications)
           .set({
-            signedAgreementStoragePath: filePath,
-            signedAgreementUrl: signedAgreementUrl || application.signedAgreementUrl,
-            updatedAt: new Date(),
+            signed_agreement_storage_path: filePath,
+            signed_agreement_url: signedAgreementUrl || application.signed_agreement_url,
+            updated_at: new Date(),
           })
           .where(eq(dealerOnboardingApplications.id, dealerId));
       } else {

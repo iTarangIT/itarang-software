@@ -40,7 +40,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    if (!application.providerDocumentId) {
+    if (!application.provider_document_id) {
       return NextResponse.json(
         { success: false, message: "Audit trail not available" },
         { status: 400 }
@@ -48,10 +48,10 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     }
 
     // If already saved, return existing URL
-    if (application.auditTrailUrl) {
+    if (application.audit_trail_url) {
       return NextResponse.json({
         success: true,
-        auditTrailUrl: application.auditTrailUrl,
+        auditTrailUrl: application.audit_trail_url,
       });
     }
 
@@ -76,7 +76,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    const auditUrl = `${baseUrl}/v2/client/document/download_audit_trail?document_id=${application.providerDocumentId}`;
+    const auditUrl = `${baseUrl}/v2/client/document/download_audit_trail?document_id=${application.provider_document_id}`;
 
     const digioResponse = await fetch(auditUrl, {
       method: "GET",
@@ -159,9 +159,9 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     await db
       .update(dealerOnboardingApplications)
       .set({
-        auditTrailUrl,
-        auditTrailStoragePath: filePath,
-        updatedAt: new Date(),
+        audit_trail_url: auditTrailUrl,
+        audit_trail_storage_path: filePath,
+        updated_at: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
 

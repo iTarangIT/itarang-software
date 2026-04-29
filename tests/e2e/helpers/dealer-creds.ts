@@ -88,7 +88,7 @@ export async function findApplicationIdByCompanyName(companyName: string): Promi
   const [row] = await db
     .select({ id: schema.dealerOnboardingApplications.id })
     .from(schema.dealerOnboardingApplications)
-    .where(eq(schema.dealerOnboardingApplications.companyName, companyName))
+    .where(eq(schema.dealerOnboardingApplications.company_name, companyName))
     .limit(1);
   if (!row) throw new Error(`no dealer_onboarding_applications row with company_name="${companyName}"`);
   return row.id;
