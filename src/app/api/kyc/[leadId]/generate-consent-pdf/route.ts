@@ -165,6 +165,10 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
                 .update(coBorrowers)
                 .set({ consent_status: 'consent_generated', updated_at: now })
                 .where(eq(coBorrowers.lead_id, leadId));
+            await db
+                .update(leads)
+                .set({ borrower_consent_status: 'consent_generated', updated_at: now })
+                .where(eq(leads.id, leadId));
         } else {
             await db
                 .update(leads)

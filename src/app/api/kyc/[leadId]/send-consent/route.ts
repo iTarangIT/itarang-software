@@ -381,11 +381,14 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       console.error("[send-consent] kyc_verifications upsert failed:", persistErr);
     }
 
-    // 4. Update consent status on the appropriate record
+    // 4. Update consent status on the appropriate applicant-level rows
     if (consentForRole === "co_borrower") {
       await db.update(coBorrowers)
         .set({ consent_status: "link_sent", updated_at: now })
         .where(eq(coBorrowers.lead_id, leadId));
+      await db.update(leads)
+        .set({ borrower_consent_status: "link_sent", updated_at: now })
+        .where(eq(leads.id, leadId));
     } else {
       await db.update(leads)
         .set({ consent_status: "link_sent", updated_at: now })
