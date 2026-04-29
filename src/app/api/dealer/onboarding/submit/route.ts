@@ -538,65 +538,65 @@ export async function POST(req: NextRequest) {
       company_type: cleanString(company.companyType) || null,
       gst_number: toNullable(company.gstNumber),
       pan_number: toNullable(company.companyPanNumber),
-      business_address: buildAddress(
+      business_address: JSON.stringify(buildAddress(
         company.companyAddress || rawBody.businessAddress
-      ),
-      registeredAddress: buildAddress(
+      )),
+      registered_address: JSON.stringify(buildAddress(
         rawBody.registeredAddress || company.companyAddress
-      ),
-      financeEnabled,
-      onboardingStatus: "submitted",
-      reviewStatus: "pending_admin_review",
-      submittedAt: new Date(),
-      updatedAt: new Date(),
+      )),
+      finance_enabled: financeEnabled,
+      onboarding_status: "submitted",
+      review_status: "pending_admin_review",
+      submitted_at: new Date(),
+      updated_at: new Date(),
 
-      ownerName: primaryOwner.ownerName,
-      ownerPhone: primaryOwner.ownerPhone,
-      ownerLandline: resolveOwnerLandline(body),
-      ownerEmail: primaryOwner.ownerEmail,
+      owner_name: primaryOwner.ownerName,
+      owner_phone: primaryOwner.ownerPhone,
+      owner_landline: resolveOwnerLandline(body),
+      owner_email: primaryOwner.ownerEmail,
 
-      salesManagerName: toNullable(agreement?.salesManager?.name),
-      salesManagerEmail: toNullableEmail(agreement?.salesManager?.email),
-      salesManagerMobile: toNullablePhone(agreement?.salesManager?.mobile),
+      sales_manager_name: toNullable(agreement?.salesManager?.name),
+      sales_manager_email: toNullableEmail(agreement?.salesManager?.email),
+      sales_manager_mobile: toNullablePhone(agreement?.salesManager?.mobile),
 
-      itarangSignatory1Name: toNullable(agreement?.itarangSignatory1?.name),
-      itarangSignatory1Email: toNullableEmail(
+      itarang_signatory_1_name: toNullable(agreement?.itarangSignatory1?.name),
+      itarang_signatory_1_email: toNullableEmail(
         agreement?.itarangSignatory1?.email
       ),
-      itarangSignatory1Mobile: toNullablePhone(
+      itarang_signatory_1_mobile: toNullablePhone(
         agreement?.itarangSignatory1?.mobile
       ),
 
-      itarangSignatory2Name: toNullable(agreement?.itarangSignatory2?.name),
-      itarangSignatory2Email: toNullableEmail(
+      itarang_signatory_2_name: toNullable(agreement?.itarangSignatory2?.name),
+      itarang_signatory_2_email: toNullableEmail(
         agreement?.itarangSignatory2?.email
       ),
-      itarangSignatory2Mobile: toNullablePhone(
+      itarang_signatory_2_mobile: toNullablePhone(
         agreement?.itarangSignatory2?.mobile
       ),
 
-      bankName: toNullable(ownership.bankName),
-      accountNumber: toNullable(ownership.accountNumber),
-      beneficiaryName: toNullable(ownership.beneficiaryName),
-      ifscCode: toNullable(ownership.ifsc),
+      bank_name: toNullable(ownership.bankName),
+      account_number: toNullable(ownership.accountNumber),
+      beneficiary_name: toNullable(ownership.beneficiaryName),
+      ifsc_code: toNullable(ownership.ifsc),
 
-      providerSigningUrl: toNullable(agreement.providerSigningUrl),
-      providerDocumentId: toNullable(agreement.providerDocumentId),
-      requestId: toNullable(agreement.requestId),
-      providerRawResponse,
-      agreementStatus: financeEnabled
+      provider_signing_url: toNullable(agreement.providerSigningUrl),
+      provider_document_id: toNullable(agreement.providerDocumentId),
+      request_id: toNullable(agreement.requestId),
+      provider_raw_response: providerRawResponse,
+      agreement_status: financeEnabled
         ? cleanString(agreement.agreementStatus) || "not_generated"
         : "not_generated",
-      stampStatus: cleanString(agreement.stampStatus) || "pending",
-      completionStatus: financeEnabled
+      stamp_status: cleanString(agreement.stampStatus) || "pending",
+      completion_status: financeEnabled
         ? cleanString(agreement.completionStatus) || "pending"
         : "completed",
-      correctionRemarks: null,
-      rejectionRemarks: null,
-      rejectedAt: null,
-      rejectionReason: null,
-      approvedAt: null,
-      lastActionTimestamp: new Date(),
+      correction_remarks: null,
+      rejection_remarks: null,
+      rejected_at: null,
+      rejection_reason: null,
+      approved_at: null,
+      last_action_timestamp: new Date(),
     };
 
     let finalApplicationId = existingApplication?.id || applicationId || null;

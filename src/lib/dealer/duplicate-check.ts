@@ -161,7 +161,7 @@ export async function classifyApplicationsBatch(
   const gstins = Array.from(
     new Set(
       applications
-        .map((a) => normalizeGstin(a.gstNumber))
+        .map((a) => normalizeGstin(a.gst_number))
         .filter((g) => g.length > 0)
     )
   );

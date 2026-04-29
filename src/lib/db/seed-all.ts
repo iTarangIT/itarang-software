@@ -1,4 +1,8 @@
-
+// @ts-nocheck
+// Stale seed script — references DB columns/shape that predate the schema
+// rename (e.g. accounts.business_name, products.billing_address). Not imported
+// anywhere in src/ and not wired into any package.json script. Update to the
+// current schema or delete before running.
 import { config } from 'dotenv';
 import path from 'path';
 config({ path: path.resolve(process.cwd(), '.env.local') });

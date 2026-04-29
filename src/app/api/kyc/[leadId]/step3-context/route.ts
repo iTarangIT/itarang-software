@@ -95,7 +95,7 @@ export async function GET(
       total: otherDocs.length,
       required: otherDocs.filter((d) => d.is_required === true).length,
       uploaded: otherDocs.filter((d) =>
-        ["uploaded", "verified"].includes(d.upload_status),
+        ["uploaded", "verified"].includes(d.upload_status ?? ''),
       ).length,
       verified: otherDocs.filter((d) => d.upload_status === "verified").length,
       rejected: otherDocs.filter((d) => d.upload_status === "rejected").length,

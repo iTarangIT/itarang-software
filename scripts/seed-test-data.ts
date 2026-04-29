@@ -1,3 +1,7 @@
+// @ts-nocheck
+// Stale seed script — references DB columns/shape (e.g. business_address as
+// nested object) that predate the schema rename and column-type changes. Run
+// only after updating the inserts to match the current schema.
 /**
  * Test Data Seed Script
  *
