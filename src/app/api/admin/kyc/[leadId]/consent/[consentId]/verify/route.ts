@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { consentRecords } from "@/lib/db/schema";
+import { coBorrowers, consentRecords, leads } from "@/lib/db/schema";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
 
 const ALLOWED_ACTIONS = new Set(["approve", "reject"]);
@@ -85,6 +85,25 @@ export async function POST(
         verified_by: consentRecords.verified_by,
         verified_at: consentRecords.verified_at,
       });
+
+    // Propagate the admin decision to the applicant-level row so downstream
+    // consumers (case review, dealer page initial load) reflect it without
+    // having to re-derive from consent_records.
+    if (record.consent_for === "co_borrower") {
+      await db
+        .update(coBorrowers)
+        .set({ consent_status: nextStatus, updated_at: now })
+        .where(eq(coBorrowers.lead_id, leadId));
+      await db
+        .update(leads)
+        .set({ borrower_consent_status: nextStatus, updated_at: now })
+        .where(eq(leads.id, leadId));
+    } else {
+      await db
+        .update(leads)
+        .set({ consent_status: nextStatus, updated_at: now })
+        .where(eq(leads.id, leadId));
+    }
 
     return NextResponse.json({
       success: true,
