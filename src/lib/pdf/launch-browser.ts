@@ -42,6 +42,24 @@ const FAST_FLAGS = [
 type BrowserHandle = Awaited<ReturnType<typeof launchBrowserOnce>>;
 let browserPromise: Promise<BrowserHandle> | null = null;
 
+async function tryLaunchServerless() {
+  const [{ default: puppeteerCore }, { default: chromium }, fs] = await Promise.all([
+    import("puppeteer-core"),
+    import("@sparticuz/chromium-min"),
+    import("node:fs/promises"),
+  ]);
+  const executablePath = await chromium.executablePath(CHROMIUM_REMOTE_PACK);
+  // EACCES on /tmp/chromium means the extracted binary lacks +x. chmod fixes
+  // it directly without waiting for the wipe-and-retry path below to kick in.
+  await fs.chmod(executablePath, 0o755).catch(() => {});
+  return puppeteerCore.launch({
+    args: [...chromium.args, ...FAST_FLAGS],
+    defaultViewport: (chromium as unknown as { defaultViewport?: unknown }).defaultViewport as never,
+    executablePath,
+    headless: true,
+  });
+}
+
 async function launchBrowserOnce() {
   const isServerless =
     !!process.env.VERCEL ||
@@ -49,16 +67,22 @@ async function launchBrowserOnce() {
     process.env.USE_SPARTICUZ_CHROMIUM === "1";
 
   if (isServerless) {
-    const [{ default: puppeteerCore }, { default: chromium }] = await Promise.all([
-      import("puppeteer-core"),
-      import("@sparticuz/chromium-min"),
-    ]);
-    return puppeteerCore.launch({
-      args: [...chromium.args, ...FAST_FLAGS],
-      defaultViewport: (chromium as unknown as { defaultViewport?: unknown }).defaultViewport as never,
-      executablePath: await chromium.executablePath(CHROMIUM_REMOTE_PACK),
-      headless: true,
-    });
+    try {
+      return await tryLaunchServerless();
+    } catch (err) {
+      // A previous invocation that timed out mid-extraction can leave a
+      // partial /tmp/chromium with no execute bit. Sparticuz then skips
+      // re-extraction and every retry on the warm container hits EACCES
+      // on the same broken file. Wipe it once and re-extract.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/EACCES|spawn .*chromium/i.test(msg)) {
+        const fs = await import("node:fs/promises");
+        await fs.rm("/tmp/chromium", { recursive: true, force: true }).catch(() => {});
+        await fs.rm("/tmp/chromium-pack", { recursive: true, force: true }).catch(() => {});
+        return await tryLaunchServerless();
+      }
+      throw err;
+    }
   }
 
   const { default: puppeteer } = await import("puppeteer");
