@@ -91,6 +91,7 @@ export default function CIBILCard({
   });
   const [verificationId, setVerificationId] = useState(existingVerification?.id || "");
   const [error, setError] = useState("");
+  const [errorSuggestion, setErrorSuggestion] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
   const [showCoBorrowerModal, setShowCoBorrowerModal] = useState(false);
@@ -100,6 +101,7 @@ export default function CIBILCard({
   const handleFetch = async (type: "score" | "report") => {
     setStatus(type === "score" ? "loading_score" : "loading_report");
     setError("");
+    setErrorSuggestion("");
 
     const endpoint = type === "score"
       ? `${apiBase}/cibil/score`
@@ -134,18 +136,25 @@ export default function CIBILCard({
         setScore(null);
         setStatus("no_history");
       } else {
-        // Actual API failure
-        const rawKey = data.data?.rawResponse?.responseKey || "";
-        const rawMsg = data.data?.rawResponse?.message || data.error?.message || "";
-        if (rawKey === "error_credits_score_not_found" && type === "score") {
-          setError("Credit score not found via basic lookup. Try 'Get Report' for a full credit bureau search using PAN & DOB.");
+        // Actual API failure — use the friendly error returned by the route
+        // (humanizeCibilError on the server side maps Decentro responseKey /
+        // rawMessage / bureauError into a non-technical message + suggestion).
+        const friendlyMessage = data.error?.message || "";
+        const friendlySuggestion = data.error?.suggestion || "";
+        if (friendlyMessage) {
+          setError(friendlyMessage);
+          setErrorSuggestion(friendlySuggestion);
         } else {
+          // Fallback if an older deploy returns the bare raw message
+          const rawMsg = data.data?.rawResponse?.message || "";
           setError(rawMsg || "Failed to fetch CIBIL data");
+          setErrorSuggestion("");
         }
         setStatus("failed");
       }
     } catch {
-      setError("Network error. Please try again.");
+      setError("Network error reaching the credit bureau.");
+      setErrorSuggestion("Retry in a few seconds.");
       setStatus("failed");
     }
   };
@@ -567,7 +576,14 @@ export default function CIBILCard({
           </div>
         )}
 
-        {error && <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">{error}</div>}
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm">
+            <div className="text-red-700 font-medium">{error}</div>
+            {errorSuggestion && (
+              <div className="text-red-600/80 mt-1">{errorSuggestion}</div>
+            )}
+          </div>
+        )}
       </div>
 
       <RequestCoBorrowerModal

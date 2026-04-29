@@ -1,11 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { supabaseAdmin } from '@/lib/supabase/admin';
 import { db } from '@/lib/db';
 import { kycDocuments, personalDetails } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { extractDocumentOcr, type OcrDocType } from '@/lib/decentro';
 import { extractTextFromImageBuffer } from '@/lib/ocr/tesseractOcr';
 import { parseBankDocument } from '@/lib/ocr/bankDocParser';
+
+// Supabase signed URLs expire (default 1 hour). Old leads have stale URLs in
+// kyc_documents.file_url, so a direct fetch returns 403 → the catch block
+// previously surfaced an opaque "Server error". Detect signed URLs, parse the
+// bucket + object path, and re-sign right before fetching.
+async function resolveFetchableUrl(storedUrl: string): Promise<string> {
+    if (!storedUrl) return storedUrl;
+    try {
+        const u = new URL(storedUrl);
+        // Format: /storage/v1/object/sign/<bucket>/<path...>
+        const signMatch = u.pathname.match(/\/storage\/v1\/object\/sign\/([^/]+)\/(.+)$/);
+        if (signMatch) {
+            const [, bucket, objectPath] = signMatch;
+            const { data, error } = await supabaseAdmin.storage
+                .from(bucket)
+                .createSignedUrl(decodeURIComponent(objectPath), 120);
+            if (!error && data?.signedUrl) {
+                return data.signedUrl;
+            }
+            console.warn(`[OCR] re-sign failed for ${bucket}/${objectPath}: ${error?.message ?? 'no url'}`);
+        }
+    } catch (e) {
+        console.warn('[OCR] resolveFetchableUrl: not a URL, using as-is', e);
+    }
+    return storedUrl;
+}
 
 // Map internal doc types to Decentro OCR doc types
 const DECENTRO_OCR_MAP: Record<string, OcrDocType> = {
@@ -199,7 +226,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             for (const candidate of allDocs) {
                 if (!candidate.fileUrl) continue;
                 try {
-                    const fileRes = await fetch(candidate.fileUrl);
+                    const fetchUrl = await resolveFetchableUrl(candidate.fileUrl);
+                    const fileRes = await fetch(fetchUrl);
                     if (!fileRes.ok) { console.log(`[OCR Fallback] Failed to fetch file for doc ${candidate.id}: ${fileRes.status}`); continue; }
                     const buf = Buffer.from(await fileRes.arrayBuffer());
                     const ct = fileRes.headers.get('content-type') || 'image/jpeg';
@@ -324,9 +352,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             return NextResponse.json({ success: false, error: 'Document has no file URL' }, { status: 400 });
         }
 
-        const fileRes = await fetch(doc.fileUrl);
+        const fetchUrl = await resolveFetchableUrl(doc.fileUrl);
+        const fileRes = await fetch(fetchUrl);
         if (!fileRes.ok) {
-            return NextResponse.json({ success: false, error: 'Failed to fetch document file' }, { status: 500 });
+            const detail = `HTTP ${fileRes.status} ${fileRes.statusText || ''}`.trim();
+            console.error(`[Admin OCR] file fetch failed for doc ${doc.id}: ${detail}. URL host: ${(() => { try { return new URL(fetchUrl).host; } catch { return 'unknown'; } })()}`);
+            return NextResponse.json({
+                success: false,
+                error: fileRes.status === 403 || fileRes.status === 401
+                    ? 'Document file URL has expired or is no longer accessible. Ask the dealer to re-upload.'
+                    : `Failed to fetch document file (${detail}).`,
+            }, { status: 500 });
         }
 
         const fileBuffer = Buffer.from(await fileRes.arrayBuffer());
@@ -468,7 +504,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             doc_type,
         });
     } catch (error) {
-        console.error('Admin OCR error:', error);
-        return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 });
+        // Surface the actual cause to the admin instead of a generic
+        // "Server error" — non-technical users were stuck staring at a red
+        // tag with zero context. Full stack still goes to pm2 logs via
+        // console.error, but the response carries the message itself.
+        console.error('[Admin OCR] error:', error);
+        const message =
+            error instanceof Error
+                ? error.message
+                : typeof error === 'string'
+                    ? error
+                    : 'OCR failed';
+        return NextResponse.json(
+            { success: false, error: `OCR failed: ${message}` },
+            { status: 500 },
+        );
     }
 }

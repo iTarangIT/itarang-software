@@ -89,24 +89,54 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
         const auth = basicAuthHeader(clientId, clientSecret);
         const parsed = await fetchDigioDocument(baseUrl, auth, record.esign_transaction_id);
 
-        // Persist the raw DigiO document-status response for audit. Non-fatal.
+        // Persist the raw DigiO document-status response for audit. Upsert by
+        // (lead_id, verification_type='esign_consent_sync', applicant) so each
+        // poll updates the same row instead of inserting a duplicate. Old code
+        // inserted on every poll → 7 stale rows piled up per lead and silently
+        // blocked the final-decision approval gate. Non-fatal.
         if (parsed) {
             try {
                 const syncNow = new Date();
-                await db.insert(kycVerifications).values({
-                    id: createWorkflowId('KYCVER', syncNow),
-                    lead_id: leadId,
-                    verification_type: 'esign_consent_sync',
-                    applicant: 'primary',
-                    status: 'success',
-                    api_provider: 'digio',
-                    api_request: { document_id: record.esign_transaction_id, consent_id: record.id },
-                    api_response: parsed as Record<string, unknown>,
-                    submitted_at: syncNow,
-                    completed_at: syncNow,
-                });
+                const existingSync = await db
+                    .select({ id: kycVerifications.id })
+                    .from(kycVerifications)
+                    .where(
+                        and(
+                            eq(kycVerifications.lead_id, leadId),
+                            eq(kycVerifications.verification_type, 'esign_consent_sync'),
+                            eq(kycVerifications.applicant, 'primary'),
+                        ),
+                    )
+                    .limit(1);
+
+                if (existingSync[0]) {
+                    await db
+                        .update(kycVerifications)
+                        .set({
+                            status: 'success',
+                            api_provider: 'digio',
+                            api_request: { document_id: record.esign_transaction_id, consent_id: record.id },
+                            api_response: parsed as Record<string, unknown>,
+                            completed_at: syncNow,
+                            updated_at: syncNow,
+                        })
+                        .where(eq(kycVerifications.id, existingSync[0].id));
+                } else {
+                    await db.insert(kycVerifications).values({
+                        id: createWorkflowId('KYCVER', syncNow),
+                        lead_id: leadId,
+                        verification_type: 'esign_consent_sync',
+                        applicant: 'primary',
+                        status: 'success',
+                        api_provider: 'digio',
+                        api_request: { document_id: record.esign_transaction_id, consent_id: record.id },
+                        api_response: parsed as Record<string, unknown>,
+                        submitted_at: syncNow,
+                        completed_at: syncNow,
+                    });
+                }
             } catch (persistErr) {
-                console.error('[consent/sync] kyc_verifications insert failed:', persistErr);
+                console.error('[consent/sync] kyc_verifications upsert failed:', persistErr);
             }
         }
 
