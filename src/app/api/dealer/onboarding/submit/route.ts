@@ -467,8 +467,8 @@ export async function POST(req: NextRequest) {
           await db
             .select()
             .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.dealerUserId, dealerUserId))
-            .orderBy(desc(dealerOnboardingApplications.updatedAt))
+            .where(eq(dealerOnboardingApplications.dealer_user_id, dealerUserId))
+            .orderBy(desc(dealerOnboardingApplications.updated_at))
             .limit(1)
         )[0] ?? null;
     }
@@ -480,9 +480,9 @@ export async function POST(req: NextRequest) {
             .select()
             .from(dealerOnboardingApplications)
             .where(
-              eq(dealerOnboardingApplications.ownerEmail, primaryOwner.ownerEmail)
+              eq(dealerOnboardingApplications.owner_email, primaryOwner.ownerEmail)
             )
-            .orderBy(desc(dealerOnboardingApplications.updatedAt))
+            .orderBy(desc(dealerOnboardingApplications.updated_at))
             .limit(1)
         )[0] ?? null;
     }
@@ -493,8 +493,8 @@ export async function POST(req: NextRequest) {
           await db
             .select()
             .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.ownerEmail, authEmail))
-            .orderBy(desc(dealerOnboardingApplications.updatedAt))
+            .where(eq(dealerOnboardingApplications.owner_email, authEmail))
+            .orderBy(desc(dealerOnboardingApplications.updated_at))
             .limit(1)
         )[0] ?? null;
     }
@@ -505,20 +505,20 @@ export async function POST(req: NextRequest) {
           await db
             .select()
             .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.dealerCode, dealerCode))
-            .orderBy(desc(dealerOnboardingApplications.updatedAt))
+            .where(eq(dealerOnboardingApplications.dealer_code, dealerCode))
+            .orderBy(desc(dealerOnboardingApplications.updated_at))
             .limit(1)
         )[0] ?? null;
     }
 
-    if (existingApplication?.onboardingStatus === "approved") {
+    if (existingApplication?.onboarding_status === "approved") {
       // Allow creating a brand-new application even if a previous one was approved.
       // Reset so the code path below will INSERT instead of UPDATE.
       existingApplication = null;
     }
 
     const providerRawResponse = {
-      ...parseProviderRawResponse(existingApplication?.providerRawResponse),
+      ...parseProviderRawResponse(existingApplication?.provider_raw_response),
       agreement,
       submissionSnapshot: {
         company,
@@ -531,14 +531,14 @@ export async function POST(req: NextRequest) {
     };
 
     const applicationPayload: typeof dealerOnboardingApplications.$inferInsert = {
-      dealerUserId:
-        dealerUserId || existingApplication?.dealerUserId || null,
-      dealerCode: dealerCode || existingApplication?.dealerCode || null,
-      companyName: cleanString(company.companyName),
-      companyType: cleanString(company.companyType) || null,
-      gstNumber: toNullable(company.gstNumber),
-      panNumber: toNullable(company.companyPanNumber),
-      businessAddress: buildAddress(
+      dealer_user_id:
+        dealerUserId || existingApplication?.dealer_user_id || null,
+      dealer_code: dealerCode || existingApplication?.dealer_code || null,
+      company_name: cleanString(company.companyName),
+      company_type: cleanString(company.companyType) || null,
+      gst_number: toNullable(company.gstNumber),
+      pan_number: toNullable(company.companyPanNumber),
+      business_address: buildAddress(
         company.companyAddress || rawBody.businessAddress
       ),
       registeredAddress: buildAddress(
@@ -612,7 +612,7 @@ export async function POST(req: NextRequest) {
           .insert(dealerOnboardingApplications)
           .values({
             ...applicationPayload,
-            createdAt: new Date(),
+            created_at: new Date(),
           })
           .returning({ id: dealerOnboardingApplications.id });
 
@@ -625,7 +625,7 @@ export async function POST(req: NextRequest) {
 
       await tx
         .delete(dealerOnboardingDocuments)
-        .where(eq(dealerOnboardingDocuments.applicationId, finalApplicationId));
+        .where(eq(dealerOnboardingDocuments.application_id, finalApplicationId));
 
       const documentRows = collectDocuments(
         finalApplicationId,

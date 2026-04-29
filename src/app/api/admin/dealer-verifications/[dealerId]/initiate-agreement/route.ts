@@ -258,7 +258,7 @@ export async function POST(
       );
     }
 
-    if (!application.financeEnabled) {
+    if (!application.finance_enabled) {
       return NextResponse.json(
         {
           success: false,
@@ -270,7 +270,7 @@ export async function POST(
     }
 
     const currentAgreementStatus = String(
-      application.agreementStatus || ""
+      application.agreement_status || ""
     ).toLowerCase();
 
     const canInitiateStatuses = ["", "not_generated", "failed", "expired"];
@@ -370,26 +370,26 @@ export async function POST(
     const createAgreementPayload = {
       applicationId: application.id,
       company: {
-        companyName: application.companyName || "",
-        companyType: application.companyType || "",
+        companyName: application.company_name || "",
+        companyType: application.company_type || "",
         companyAddress:
-          typeof application.businessAddress === "object" &&
-          application.businessAddress &&
-          "address" in application.businessAddress
-            ? String((application.businessAddress as any).address || "")
+          typeof application.business_address === "object" &&
+          application.business_address &&
+          "address" in application.business_address
+            ? String((application.business_address as any).address || "")
             : "",
-        gstNumber: application.gstNumber || "",
-        panNumber: application.panNumber || "",
+        gstNumber: application.gst_number || "",
+        panNumber: application.pan_number || "",
       },
       ownership: {
-        ownerName: application.ownerName || "",
-        ownerPhone: application.ownerPhone || "",
-        ownerEmail: application.ownerEmail || "",
-        businessAddress: application.businessAddress || {},
-        bankName: application.bankName || "",
-        accountNumber: application.accountNumber || "",
-        ifscCode: application.ifscCode || "",
-        beneficiaryName: application.beneficiaryName || "",
+        ownerName: application.owner_name || "",
+        ownerPhone: application.owner_phone || "",
+        ownerEmail: application.owner_email || "",
+        businessAddress: application.business_address || {},
+        bankName: application.bank_name || "",
+        accountNumber: application.account_number || "",
+        ifscCode: application.ifsc_code || "",
+        beneficiaryName: application.beneficiary_name || "",
       },
       agreement: {
         agreementName:
@@ -516,29 +516,29 @@ export async function POST(
     await db
       .update(dealerOnboardingApplications)
       .set({
-        agreementStatus:
+        agreement_status:
           agreementStatus === "requested"
             ? "sent_to_external_party"
             : agreementStatus,
-        reviewStatus: "pending_admin_review",
-        completionStatus: "pending",
-        providerDocumentId: providerDocumentId || null,
-        requestId,
-        providerSigningUrl: signingUrl || null,
-        providerRawResponse: mergeProviderRawResponse(
-          application.providerRawResponse,
+        review_status: "pending_admin_review",
+        completion_status: "pending",
+        provider_document_id: providerDocumentId || null,
+        request_id: requestId,
+        provider_signing_url: signingUrl || null,
+        provider_raw_response: mergeProviderRawResponse(
+          application.provider_raw_response,
           responseData,
         ),
-        stampStatus,
-        stampCertificateIds,
-        lastActionTimestamp: new Date(),
-        updatedAt: new Date(),
+        stamp_status: stampStatus,
+        stamp_certificate_ids: stampCertificateIds,
+        last_action_timestamp: new Date(),
+        updated_at: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
 
     await db
       .delete(dealerAgreementSigners)
-      .where(eq(dealerAgreementSigners.applicationId, dealerId));
+      .where(eq(dealerAgreementSigners.application_id, dealerId));
 
     const findSignerByEmail = (email: string | null) => {
       if (!email) return null;

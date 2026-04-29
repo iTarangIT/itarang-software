@@ -108,19 +108,19 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // shows the latest round.
     await db
       .update(dealerCorrectionRounds)
-      .set({ status: "superseded", updatedAt: new Date() })
+      .set({ status: "superseded", updated_at: new Date() })
       .where(
         and(
-          eq(dealerCorrectionRounds.applicationId, dealerId),
+          eq(dealerCorrectionRounds.application_id, dealerId),
           inArray(dealerCorrectionRounds.status, ["pending", "submitted"]),
         ),
       );
 
     const latestRoundRow = await db
-      .select({ roundNumber: dealerCorrectionRounds.roundNumber })
+      .select({ roundNumber: dealerCorrectionRounds.round_number })
       .from(dealerCorrectionRounds)
-      .where(eq(dealerCorrectionRounds.applicationId, dealerId))
-      .orderBy(desc(dealerCorrectionRounds.roundNumber))
+      .where(eq(dealerCorrectionRounds.application_id, dealerId))
+      .orderBy(desc(dealerCorrectionRounds.round_number))
       .limit(1);
     const nextRoundNumber = (latestRoundRow[0]?.roundNumber ?? 0) + 1;
 
@@ -131,15 +131,15 @@ export async function POST(req: NextRequest, context: RouteContext) {
       const docRows = await db
         .select({
           id: dealerOnboardingDocuments.id,
-          documentType: dealerOnboardingDocuments.documentType,
-          uploadedAt: dealerOnboardingDocuments.uploadedAt,
+          documentType: dealerOnboardingDocuments.document_type,
+          uploadedAt: dealerOnboardingDocuments.uploaded_at,
         })
         .from(dealerOnboardingDocuments)
         .where(
           and(
-            eq(dealerOnboardingDocuments.applicationId, dealerId),
+            eq(dealerOnboardingDocuments.application_id, dealerId),
             inArray(
-              dealerOnboardingDocuments.documentType,
+              dealerOnboardingDocuments.document_type,
               requestedDocuments,
             ),
           ),
@@ -170,25 +170,25 @@ export async function POST(req: NextRequest, context: RouteContext) {
     const [round] = await db
       .insert(dealerCorrectionRounds)
       .values({
-        applicationId: dealerId,
-        roundNumber: nextRoundNumber,
+        application_id: dealerId,
+        round_number: nextRoundNumber,
         status: "pending",
-        requestedBy: auth.user.id,
+        requested_by: auth.user.id,
         remarks,
-        requestedFields,
-        requestedDocuments,
-        tokenHash,
-        tokenExpiresAt,
+        requested_fields: requestedFields,
+        requested_documents: requestedDocuments,
+        token_hash: tokenHash,
+        token_expires_at: tokenExpiresAt,
       })
       .returning();
 
     const itemRows: Array<typeof dealerCorrectionItems.$inferInsert> = [];
     for (const fieldKey of requestedFields) {
       itemRows.push({
-        roundId: round.id,
+        round_id: round.id,
         kind: "field",
         key: fieldKey,
-        previousValue: snapshotFieldValue(
+        previous_value: snapshotFieldValue(
           application as Record<string, unknown>,
           fieldKey,
         ),
@@ -196,10 +196,10 @@ export async function POST(req: NextRequest, context: RouteContext) {
     }
     for (const docKey of requestedDocuments) {
       itemRows.push({
-        roundId: round.id,
+        round_id: round.id,
         kind: "document",
         key: docKey,
-        previousDocumentId: previousDocsByType.get(docKey) ?? null,
+        previous_document_id: previousDocsByType.get(docKey) ?? null,
       });
     }
     if (itemRows.length > 0) {
@@ -209,12 +209,12 @@ export async function POST(req: NextRequest, context: RouteContext) {
     await db
       .update(dealerOnboardingApplications)
       .set({
-        onboardingStatus: "correction_requested",
-        reviewStatus: "under_correction",
-        dealerAccountStatus: "inactive",
-        completionStatus: "pending",
-        correctionRemarks: remarks,
-        updatedAt: new Date(),
+        onboarding_status: "correction_requested",
+        review_status: "under_correction",
+        dealer_account_status: "inactive",
+        completion_status: "pending",
+        correction_remarks: remarks,
+        updated_at: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
 
@@ -241,9 +241,9 @@ export async function POST(req: NextRequest, context: RouteContext) {
       applicationId: application.id,
       roundId: round.id,
       roundNumber: nextRoundNumber,
-      salesManagerEmail: maskEmail(application.salesManagerEmail),
-      itarangSignatory1Email: maskEmail(application.itarangSignatory1Email),
-      itarangSignatory2Email: maskEmail(application.itarangSignatory2Email),
+      salesManagerEmail: maskEmail(application.sales_manager_email),
+      itarangSignatory1Email: maskEmail(application.itarang_signatory_1_email),
+      itarangSignatory2Email: maskEmail(application.itarang_signatory_2_email),
       notificationRecipientsCount: notificationRecipients.length,
     });
 
@@ -268,7 +268,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       try {
         emailResult = await sendDealerCorrectionNotificationEmail({
           toEmails: notificationRecipients,
-          companyName: application.companyName || "Unknown Company",
+          companyName: application.company_name || "Unknown Company",
           applicationId: String(application.id),
           correctionRemarks: remarks,
           correctionLink,

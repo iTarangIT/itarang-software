@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
         .where(where)
         .orderBy(
           sql`CASE WHEN ${scraperLeads.phone} IS NOT NULL AND ${scraperLeads.phone} != '' THEN 0 ELSE 1 END`,
-          desc(scraperLeads.createdAt),
+          desc(scraperLeads.created_at),
         )
         .limit(limit)
         .offset(offset),

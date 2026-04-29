@@ -52,13 +52,13 @@ export async function insertAgreementEvent(params: {
   eventPayload?: unknown;
 }) {
   await db.insert(dealerAgreementEvents).values({
-    applicationId: params.applicationId,
-    providerDocumentId: params.providerDocumentId || null,
-    requestId: params.requestId || null,
-    eventType: params.eventType,
-    signerRole: params.signerRole || null,
-    eventStatus: params.eventStatus || null,
-    eventPayload: (params.eventPayload as any) || {},
-    createdAt: new Date(),
+    application_id: params.applicationId,
+    provider_document_id: params.providerDocumentId || null,
+    request_id: params.requestId || null,
+    event_type: params.eventType,
+    signer_role: params.signerRole || null,
+    event_status: params.eventStatus || null,
+    event_payload: (params.eventPayload as any) || {},
+    created_at: new Date(),
   });
 }

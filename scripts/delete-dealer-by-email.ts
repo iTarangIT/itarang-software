@@ -32,7 +32,7 @@ async function main() {
   const apps = await db
     .select()
     .from(dealerOnboardingApplications)
-    .where(eq(dealerOnboardingApplications.ownerEmail, email));
+    .where(eq(dealerOnboardingApplications.owner_email, email));
 
   const { data: list, error: listErr } =
     await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 });

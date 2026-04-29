@@ -68,10 +68,10 @@ export const POST = withErrorHandler(async (req: Request) => {
     // Resolve dealer_id: first from user record, then from onboarding application
     if (!dealer_id) {
         try {
-            const onboardingRows = await db.select({ dealerCode: dealerOnboardingApplications.dealerCode })
+            const onboardingRows = await db.select({ dealerCode: dealerOnboardingApplications.dealer_code })
                 .from(dealerOnboardingApplications)
-                .where(eq(dealerOnboardingApplications.dealerUserId, user.id))
-                .orderBy(desc(dealerOnboardingApplications.updatedAt))
+                .where(eq(dealerOnboardingApplications.dealer_user_id, user.id))
+                .orderBy(desc(dealerOnboardingApplications.updated_at))
                 .limit(1);
 
             if (onboardingRows[0]?.dealerCode) {
@@ -96,15 +96,15 @@ export const POST = withErrorHandler(async (req: Request) => {
             try {
                 const onbRows = await db.select()
                     .from(dealerOnboardingApplications)
-                    .where(eq(dealerOnboardingApplications.dealerUserId, user.id))
-                    .orderBy(desc(dealerOnboardingApplications.updatedAt))
+                    .where(eq(dealerOnboardingApplications.dealer_user_id, user.id))
+                    .orderBy(desc(dealerOnboardingApplications.updated_at))
                     .limit(1);
                 const onb = onbRows[0];
                 if (onb) {
-                    bizName = onb.companyName || bizName;
-                    contactName = onb.ownerName || contactName;
-                    contactEmail = onb.ownerEmail || contactEmail;
-                    gstin = onb.gstNumber || gstin;
+                    bizName = onb.company_name || bizName;
+                    contactName = onb.owner_name || contactName;
+                    contactEmail = onb.owner_email || contactEmail;
+                    gstin = onb.gst_number || gstin;
                 }
             } catch { /* use defaults */ }
 

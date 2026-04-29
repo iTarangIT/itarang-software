@@ -25,8 +25,8 @@ function basicAuthHeader(clientId: string, clientSecret: string) {
 export async function ensureDealerSignedAgreementUrl(
   application: Application
 ): Promise<string | null> {
-  if (application.signedAgreementUrl) return application.signedAgreementUrl;
-  if (!application.providerDocumentId) return null;
+  if (application.signed_agreement_url) return application.signed_agreement_url;
+  if (!application.provider_document_id) return null;
 
   const clientId = cleanEnv(process.env.DIGIO_CLIENT_ID);
   const clientSecret = cleanEnv(process.env.DIGIO_CLIENT_SECRET);
@@ -51,7 +51,7 @@ export async function ensureDealerSignedAgreementUrl(
   // state; try status first so we can extract a signed_agreement_url when
   // present, then fall back to the binary download endpoint.
   const statusUrl = `${baseUrl}/v2/client/document/${encodeURIComponent(
-    application.providerDocumentId
+    application.provider_document_id
   )}`;
 
   let pdfBuffer: ArrayBuffer | null = null;
@@ -69,7 +69,7 @@ export async function ensureDealerSignedAgreementUrl(
     if (!statusRes.ok) {
       const body = await statusRes.text().catch(() => "");
       console.warn("[ensureDealerSignedAgreementUrl] status endpoint non-ok", {
-        documentId: application.providerDocumentId,
+        documentId: application.provider_document_id,
         url: statusUrl,
         status: statusRes.status,
         body: body.slice(0, 500),
@@ -78,7 +78,7 @@ export async function ensureDealerSignedAgreementUrl(
       const parsed = await statusRes.json().catch(() => null);
       const signedUrl = extractSignedAgreementUrl(parsed);
       console.log("[ensureDealerSignedAgreementUrl] status response", {
-        documentId: application.providerDocumentId,
+        documentId: application.provider_document_id,
         agreementStatus: parsed?.agreement_status ?? parsed?.status ?? null,
         signedUrlFound: Boolean(signedUrl),
       });
@@ -118,7 +118,7 @@ export async function ensureDealerSignedAgreementUrl(
 
   if (!pdfBuffer || pdfBuffer.byteLength < 100) {
     const directUrl = `${baseUrl}/v2/client/document/download?document_id=${encodeURIComponent(
-      application.providerDocumentId
+      application.provider_document_id
     )}`;
 
     try {
@@ -136,7 +136,7 @@ export async function ensureDealerSignedAgreementUrl(
         console.warn(
           "[ensureDealerSignedAgreementUrl] direct download non-ok",
           {
-            documentId: application.providerDocumentId,
+            documentId: application.provider_document_id,
             url: directUrl,
             status: directRes.status,
             body: body.slice(0, 500),
@@ -199,9 +199,9 @@ export async function ensureDealerSignedAgreementUrl(
   await db
     .update(dealerOnboardingApplications)
     .set({
-      signedAgreementUrl,
-      signedAgreementStoragePath: filePath,
-      updatedAt: new Date(),
+      signed_agreement_url: signedAgreementUrl,
+      signed_agreement_storage_path: filePath,
+      updated_at: new Date(),
     })
     .where(eq(dealerOnboardingApplications.id, application.id));
 

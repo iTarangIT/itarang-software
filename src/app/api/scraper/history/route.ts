@@ -21,15 +21,15 @@ export const GET = withErrorHandler(async (req: Request) => {
     .select({
       id: scrapeRuns.id,
       status: scrapeRuns.status,
-      startedAt: scrapeRuns.startedAt,
-      completedAt: scrapeRuns.completedAt,
-      totalFound: scrapeRuns.totalFound,
-      newLeadsSaved: scrapeRuns.newLeadsSaved,
-      duplicatesSkipped: scrapeRuns.duplicatesSkipped,
-      errorMessage: scrapeRuns.errorMessage,
+      startedAt: scrapeRuns.started_at,
+      completedAt: scrapeRuns.completed_at,
+      totalFound: scrapeRuns.total_found,
+      newLeadsSaved: scrapeRuns.new_leads_saved,
+      duplicatesSkipped: scrapeRuns.duplicates_skipped,
+      errorMessage: scrapeRuns.error_message,
     })
     .from(scrapeRuns)
-    .orderBy(desc(scrapeRuns.startedAt))
+    .orderBy(desc(scrapeRuns.started_at))
     .limit(limit)
     .offset(offset);
 

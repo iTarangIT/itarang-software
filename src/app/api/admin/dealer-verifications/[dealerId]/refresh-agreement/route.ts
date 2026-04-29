@@ -155,7 +155,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    if (!application.providerDocumentId) {
+    if (!application.provider_document_id) {
       return NextResponse.json(
         { success: false, message: "Agreement not initiated yet." },
         { status: 400 }
@@ -173,7 +173,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    const digioUrl = `${baseUrl}/v2/client/document/${application.providerDocumentId}`;
+    const digioUrl = `${baseUrl}/v2/client/document/${application.provider_document_id}`;
 
     const digioResponse = await fetch(digioUrl, {
       method: "GET",
@@ -217,8 +217,8 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     try {
       await syncSignersFromDigio(
         dealerId,
-        application.providerDocumentId,
-        application.requestId,
+        application.provider_document_id,
+        application.request_id,
         parsed,
       );
     } catch (signerSyncErr) {
@@ -227,13 +227,13 @@ export async function POST(_req: NextRequest, context: RouteContext) {
 
     const signingUrl = extractSigningUrl(parsed);
     let signedAgreementUrl =
-      extractSignedAgreementUrl(parsed) || application.signedAgreementUrl || null;
+      extractSignedAgreementUrl(parsed) || application.signed_agreement_url || null;
 
-    let auditTrailUrl = application.auditTrailUrl || null;
+    let auditTrailUrl = application.audit_trail_url || null;
 
     const refreshedStampCertificateIds = extractStampCertificateIds(parsed);
-    const existingStampCertificateIds = Array.isArray(application.stampCertificateIds)
-      ? application.stampCertificateIds
+    const existingStampCertificateIds = Array.isArray(application.stamp_certificate_ids)
+      ? application.stamp_certificate_ids
       : [];
     const mergedStampCertificateIds =
       refreshedStampCertificateIds.length > 0
@@ -259,7 +259,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
           Accept: "application/pdf",
         };
 
-        if (extractedSignedUrl && !application.signedAgreementStoragePath) {
+        if (extractedSignedUrl && !application.signed_agreement_storage_path) {
           const publicUrl = await downloadAndCacheFile(
             extractedSignedUrl,
             signedStoragePath,
@@ -272,14 +272,14 @@ export async function POST(_req: NextRequest, context: RouteContext) {
             await db
               .update(dealerOnboardingApplications)
               .set({
-                signedAgreementStoragePath: signedStoragePath,
-                signedAgreementUrl: publicUrl,
+                signed_agreement_storage_path: signedStoragePath,
+                signed_agreement_url: publicUrl,
               })
               .where(eq(dealerOnboardingApplications.id, dealerId));
           }
-        } else if (!application.signedAgreementStoragePath) {
+        } else if (!application.signed_agreement_storage_path) {
           // Fallback: try Digio direct download only if no signed URL available
-          const directDownloadUrl = `${baseUrl}/v2/client/document/download?document_id=${application.providerDocumentId}`;
+          const directDownloadUrl = `${baseUrl}/v2/client/document/download?document_id=${application.provider_document_id}`;
 
           console.log("[REFRESH AGREEMENT] trying Digio direct PDF download:", directDownloadUrl);
 
@@ -311,8 +311,8 @@ export async function POST(_req: NextRequest, context: RouteContext) {
               await db
                 .update(dealerOnboardingApplications)
                 .set({
-                  signedAgreementStoragePath: signedStoragePath,
-                  signedAgreementUrl: signedAgreementUrl,
+                  signed_agreement_storage_path: signedStoragePath,
+                  signed_agreement_url: signedAgreementUrl,
                 })
                 .where(eq(dealerOnboardingApplications.id, dealerId));
             } else {
@@ -325,8 +325,8 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         }
 
         // Audit trail
-        if (!application.auditTrailStoragePath) {
-          const auditTrailDigioUrl = `${baseUrl}/v2/client/document/download_audit_trail?document_id=${application.providerDocumentId}`;
+        if (!application.audit_trail_storage_path) {
+          const auditTrailDigioUrl = `${baseUrl}/v2/client/document/download_audit_trail?document_id=${application.provider_document_id}`;
           const auditPath = `agreements/${dealerId}/audit-trail.pdf`;
 
           const publicUrl = await downloadAndCacheFile(auditTrailDigioUrl, auditPath, digioAuthHeaders);
@@ -337,8 +337,8 @@ export async function POST(_req: NextRequest, context: RouteContext) {
             await db
               .update(dealerOnboardingApplications)
               .set({
-                auditTrailStoragePath: auditPath,
-                auditTrailUrl: publicUrl,
+                audit_trail_storage_path: auditPath,
+                audit_trail_url: publicUrl,
               })
               .where(eq(dealerOnboardingApplications.id, dealerId));
           }
@@ -350,30 +350,30 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     await db
       .update(dealerOnboardingApplications)
       .set({
-        agreementStatus: normalizedStatus,
-        providerSigningUrl: signingUrl,
-        signedAgreementUrl,
-        auditTrailUrl,
-        providerRawResponse: mergeProviderRawResponse(
-          application.providerRawResponse,
+        agreement_status: normalizedStatus,
+        provider_signing_url: signingUrl,
+        signed_agreement_url: signedAgreementUrl,
+        audit_trail_url: auditTrailUrl,
+        provider_raw_response: mergeProviderRawResponse(
+          application.provider_raw_response,
           parsed || {},
         ),
-        stampCertificateIds: mergedStampCertificateIds,
-        stampStatus:
+        stamp_certificate_ids: mergedStampCertificateIds,
+        stamp_status:
           mergedStampCertificateIds.length > 0
             ? "attached"
-            : application.stampStatus || null,
-        completionStatus: normalizedStatus === "completed" ? "completed" : "pending",
-        reviewStatus:
+            : application.stamp_status || null,
+        completion_status: normalizedStatus === "completed" ? "completed" : "pending",
+        review_status:
           normalizedStatus === "completed"
             ? "agreement_completed"
             : "agreement_in_progress",
-        signedAt:
+        signed_at:
           normalizedStatus === "completed"
             ? new Date(extractSignedAt(parsed) || new Date())
-            : application.signedAt || null,
-        lastActionTimestamp: new Date(),
-        updatedAt: new Date(),
+            : application.signed_at || null,
+        last_action_timestamp: new Date(),
+        updated_at: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
 
