@@ -4,7 +4,7 @@ export const maxDuration = 60;
 import { NextRequest, NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
-import { leads, consentRecords, users, personalDetails } from '@/lib/db/schema';
+import { leads, consentRecords, users, coBorrowers } from '@/lib/db/schema';
 import { requireRole } from '@/lib/auth-utils';
 import { uploadFileToStorage } from '@/lib/storage';
 import { generateConsentHtml } from '@/lib/consent/consent-pdf-template';
@@ -44,8 +44,15 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         const user = await requireRole(['dealer']);
         const { leadId } = await params;
         const body = await req.json().catch(() => ({}));
-        const consentFor = String(body?.consent_for || 'customer').toLowerCase();
-        const dbConsentFor = consentFor === 'customer' ? 'primary' : consentFor;
+
+        // Normalize the applicant the consent is for. Dealer page sends
+        // 'customer' for Step 2 and 'borrower' for Step 3. Persist as
+        // 'primary' / 'co_borrower' so admin review and status polling match.
+        const rawConsentFor = String(body?.consent_for || 'customer').toLowerCase();
+        const consentForRole: 'primary' | 'co_borrower' =
+            rawConsentFor === 'borrower' || rawConsentFor === 'co_borrower'
+                ? 'co_borrower'
+                : 'primary';
 
         const leadRows = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
         if (!leadRows.length) {
@@ -60,25 +67,52 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             if (userRows.length) dealerName = userRows[0].name || '';
         }
 
-        // Borrower-specific data if generating borrower consent
-        let borrowerData: any = null;
-        if (consentFor === 'borrower') {
-            const personalRows = await db
-                .select()
-                .from(personalDetails)
-                .where(eq(personalDetails.lead_id, leadId))
-                .limit(1);
-            borrowerData = personalRows[0] || null;
-        }
+        // Resolve signer data per role — primary uses lead fields, co-borrower
+        // uses the coBorrowers row so the generated PDF carries the
+        // co-borrower's actual name, phone, DOB and addresses.
+        let signerName: string;
+        let signerFatherName: string;
+        let signerPhone: string;
+        let signerEmail: string;
+        let signerCurrentAddress: string;
+        let signerPermanentAddress: string;
+        let signerDob: unknown;
+        let signerAadhaar: string;
+        let signerPan: string;
 
-        const personName = lead.full_name || lead.owner_name || '';
-        const personFather = borrowerData?.father_husband_name || lead.father_or_husband_name || '';
-        const personPhone = lead.phone || '';
-        const personAddress = borrowerData?.local_address || lead.current_address || '';
-        const personPermanentAddress = lead.permanent_address || personAddress;
-        const personDob = borrowerData?.dob || lead.dob;
-        const personAadhaar = borrowerData?.aadhaar_no || '';
-        const personPan = borrowerData?.pan_no || '';
+        if (consentForRole === 'co_borrower') {
+            const cobRows = await db
+                .select()
+                .from(coBorrowers)
+                .where(eq(coBorrowers.lead_id, leadId))
+                .limit(1);
+            const cob = cobRows[0];
+            if (!cob) {
+                return NextResponse.json(
+                    { success: false, error: { message: 'Co-borrower not found for this lead' } },
+                    { status: 404 },
+                );
+            }
+            signerName = cob.full_name || 'Co-borrower';
+            signerFatherName = cob.father_or_husband_name || '';
+            signerPhone = cob.phone || '';
+            signerEmail = '';
+            signerCurrentAddress = cob.current_address || cob.address || '';
+            signerPermanentAddress = cob.permanent_address || cob.address || '';
+            signerDob = cob.dob;
+            signerAadhaar = cob.aadhaar_no || '';
+            signerPan = cob.pan_no || '';
+        } else {
+            signerName = lead.full_name || lead.owner_name || '';
+            signerFatherName = lead.father_or_husband_name || '';
+            signerPhone = lead.phone || '';
+            signerEmail = lead.owner_email || '';
+            signerCurrentAddress = lead.current_address || '';
+            signerPermanentAddress = lead.permanent_address || lead.current_address || '';
+            signerDob = lead.dob;
+            signerAadhaar = '';
+            signerPan = '';
+        }
 
         const now = new Date();
         const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
@@ -86,15 +120,15 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         const consentId = `CONSENT-${dateStr}-${seq}`;
 
         const html = generateConsentHtml({
-            customerName: personName,
-            fatherOrHusbandName: personFather,
-            dob: formatDob(personDob),
-            phone: personPhone,
-            customerEmail: lead.owner_email || '',
-            currentAddress: personAddress,
-            permanentAddress: personPermanentAddress,
-            aadhaarMasked: personAadhaar,
-            panNumber: personPan,
+            customerName: signerName,
+            fatherOrHusbandName: signerFatherName,
+            dob: formatDob(signerDob),
+            phone: signerPhone,
+            customerEmail: signerEmail,
+            currentAddress: signerCurrentAddress,
+            permanentAddress: signerPermanentAddress,
+            aadhaarMasked: signerAadhaar,
+            panNumber: signerPan,
             productName: lead.asset_model || '',
             productCategory: lead.asset_model || '',
             paymentMethod: lead.payment_method || '',
@@ -118,7 +152,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         await db.insert(consentRecords).values({
             id: consentId,
             lead_id: leadId,
-            consent_for: dbConsentFor,
+            consent_for: consentForRole,
             consent_type: 'manual',
             consent_status: 'consent_generated',
             generated_pdf_url: uploadResult.url,
@@ -126,10 +160,17 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
             updated_at: now,
         });
 
-        await db
-            .update(leads)
-            .set({ consent_status: 'consent_generated' })
-            .where(eq(leads.id, leadId));
+        if (consentForRole === 'co_borrower') {
+            await db
+                .update(coBorrowers)
+                .set({ consent_status: 'consent_generated', updated_at: now })
+                .where(eq(coBorrowers.lead_id, leadId));
+        } else {
+            await db
+                .update(leads)
+                .set({ consent_status: 'consent_generated' })
+                .where(eq(leads.id, leadId));
+        }
 
         return NextResponse.json({
             success: true,
