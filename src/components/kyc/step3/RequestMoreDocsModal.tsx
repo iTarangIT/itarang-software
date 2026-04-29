@@ -40,6 +40,10 @@ interface RequestMoreDocsModalProps {
   sourceVerificationId?: string | null;
   sourceCardLabel?: string; // e.g. "PAN Verification"
   defaultDocFor?: "primary" | "co_borrower";
+  // When true, hide the Primary/Co-Borrower radio toggle and lock the
+  // request scope to defaultDocFor. Use from card-triggered invocations
+  // where the scope is implied by which card was clicked.
+  lockScope?: boolean;
   onSuccess?: () => void;
 }
 
@@ -50,6 +54,7 @@ export default function RequestMoreDocsModal({
   sourceVerificationId,
   sourceCardLabel,
   defaultDocFor = "primary",
+  lockScope = false,
   onSuccess,
 }: RequestMoreDocsModalProps) {
   const [docFor, setDocFor] = useState<"primary" | "co_borrower">(
@@ -233,24 +238,33 @@ export default function RequestMoreDocsModal({
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
               Request For
             </label>
-            <div className="flex gap-4 mt-2">
-              <label className="flex items-center gap-2 text-sm text-gray-700">
-                <input
-                  type="radio"
-                  checked={docFor === "primary"}
-                  onChange={() => setDocFor("primary")}
-                />
-                Primary Applicant
-              </label>
-              <label className="flex items-center gap-2 text-sm text-gray-700">
-                <input
-                  type="radio"
-                  checked={docFor === "co_borrower"}
-                  onChange={() => setDocFor("co_borrower")}
-                />
-                Co-Borrower
-              </label>
-            </div>
+            {lockScope ? (
+              <div className="mt-2 text-sm text-gray-700">
+                Requesting documents from:{" "}
+                <span className="font-semibold">
+                  {docFor === "co_borrower" ? "Co-Borrower" : "Primary Applicant"}
+                </span>
+              </div>
+            ) : (
+              <div className="flex gap-4 mt-2">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    checked={docFor === "primary"}
+                    onChange={() => setDocFor("primary")}
+                  />
+                  Primary Applicant
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    checked={docFor === "co_borrower"}
+                    onChange={() => setDocFor("co_borrower")}
+                  />
+                  Co-Borrower
+                </label>
+              </div>
+            )}
           </div>
 
           <div className="space-y-4">
