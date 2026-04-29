@@ -70,19 +70,19 @@ export async function GET(req: NextRequest) {
 
     const conditions = [];
     if (dateFrom) {
-      conditions.push(gte(dealerOnboardingApplications.submittedAt, dateFrom));
+      conditions.push(gte(dealerOnboardingApplications.submitted_at, dateFrom));
     }
     if (dateTo) {
-      conditions.push(lte(dealerOnboardingApplications.submittedAt, dateTo));
+      conditions.push(lte(dealerOnboardingApplications.submitted_at, dateTo));
     }
     if (q) {
       const like = `%${q}%`;
       const search = or(
-        ilike(dealerOnboardingApplications.ownerName, like),
-        ilike(dealerOnboardingApplications.companyName, like),
-        ilike(dealerOnboardingApplications.gstNumber, like),
-        ilike(dealerOnboardingApplications.onboardingStatus, like),
-        ilike(dealerOnboardingApplications.companyType, like),
+        ilike(dealerOnboardingApplications.owner_name, like),
+        ilike(dealerOnboardingApplications.company_name, like),
+        ilike(dealerOnboardingApplications.gst_number, like),
+        ilike(dealerOnboardingApplications.onboarding_status, like),
+        ilike(dealerOnboardingApplications.company_type, like),
       );
       if (search) conditions.push(search);
     }
@@ -94,8 +94,8 @@ export async function GET(req: NextRequest) {
       .from(dealerOnboardingApplications)
       .where(whereClause)
       .orderBy(
-        desc(dealerOnboardingApplications.updatedAt),
-        desc(dealerOnboardingApplications.createdAt),
+        desc(dealerOnboardingApplications.updated_at),
+        desc(dealerOnboardingApplications.created_at),
       );
 
     const docCountMap = new Map<string, number>();
@@ -103,17 +103,17 @@ export async function GET(req: NextRequest) {
       const applicationIds = applications.map((a) => a.id);
       const docCounts = await db
         .select({
-          applicationId: dealerOnboardingDocuments.applicationId,
+          applicationId: dealerOnboardingDocuments.application_id,
           count: sql<number>`cast(count(*) as integer)`,
         })
         .from(dealerOnboardingDocuments)
         .where(
-          sql`${dealerOnboardingDocuments.applicationId} = ANY(ARRAY[${sql.join(
+          sql`${dealerOnboardingDocuments.application_id} = ANY(ARRAY[${sql.join(
             applicationIds.map((id) => sql`${id}::uuid`),
             sql`, `,
           )}])`,
         )
-        .groupBy(dealerOnboardingDocuments.applicationId);
+        .groupBy(dealerOnboardingDocuments.application_id);
 
       for (const row of docCounts) {
         docCountMap.set(row.applicationId, row.count);
@@ -164,55 +164,55 @@ export async function GET(req: NextRequest) {
     ];
 
     const rows = applications.map((a) => {
-      const agreement = !a.financeEnabled
+      const agreement = !a.finance_enabled
         ? "N/A"
-        : (a.agreementStatus?.trim() || "not_generated");
+        : (a.agreement_status?.trim() || "not_generated");
       const docCount = docCountMap.get(a.id) ?? 0;
-      const companyType = a.companyType
-        ? a.companyType.replaceAll("_", " ")
+      const companyType = a.company_type
+        ? a.company_type.replaceAll("_", " ")
         : "";
 
       return [
         a.id,
-        a.dealerCode,
-        a.companyName,
+        a.dealer_code,
+        a.company_name,
         companyType,
-        a.gstNumber,
-        a.panNumber,
-        a.cinNumber,
-        a.ownerName,
-        a.ownerEmail,
-        a.ownerPhone,
-        a.ownerLandline,
-        a.salesManagerName,
-        a.salesManagerEmail,
-        a.salesManagerMobile,
-        formatAddress(a.businessAddress),
-        formatAddress(a.registeredAddress),
-        a.bankName,
-        a.accountNumber,
-        a.beneficiaryName,
-        a.ifscCode,
-        a.onboardingStatus,
-        a.reviewStatus,
-        a.dealerAccountStatus,
-        a.financeEnabled,
+        a.gst_number,
+        a.pan_number,
+        a.cin_number,
+        a.owner_name,
+        a.owner_email,
+        a.owner_phone,
+        a.owner_landline,
+        a.sales_manager_name,
+        a.sales_manager_email,
+        a.sales_manager_mobile,
+        formatAddress(a.business_address),
+        formatAddress(a.registered_address),
+        a.bank_name,
+        a.account_number,
+        a.beneficiary_name,
+        a.ifsc_code,
+        a.onboarding_status,
+        a.review_status,
+        a.dealer_account_status,
+        a.finance_enabled,
         docCount,
         agreement,
-        a.agreementLanguage,
-        a.stampStatus,
-        a.completionStatus,
-        a.createdAt,
-        a.submittedAt,
-        a.approvedAt,
-        a.rejectedAt,
-        a.signedAt,
-        a.lastActionTimestamp,
-        a.updatedAt,
-        a.adminNotes,
-        a.rejectionReason,
-        a.rejectionRemarks,
-        a.correctionRemarks,
+        a.agreement_language,
+        a.stamp_status,
+        a.completion_status,
+        a.created_at,
+        a.submitted_at,
+        a.approved_at,
+        a.rejected_at,
+        a.signed_at,
+        a.last_action_timestamp,
+        a.updated_at,
+        a.admin_notes,
+        a.rejection_reason,
+        a.rejection_remarks,
+        a.correction_remarks,
       ];
     });
 

@@ -23,8 +23,8 @@ function basicAuthHeader(clientId: string, clientSecret: string) {
 export async function ensureDealerAuditTrailUrl(
   application: Application
 ): Promise<string | null> {
-  if (application.auditTrailUrl) return application.auditTrailUrl;
-  if (!application.providerDocumentId) return null;
+  if (application.audit_trail_url) return application.audit_trail_url;
+  if (!application.provider_document_id) return null;
 
   const clientId = cleanEnv(process.env.DIGIO_CLIENT_ID);
   const clientSecret = cleanEnv(process.env.DIGIO_CLIENT_SECRET);
@@ -52,7 +52,7 @@ export async function ensureDealerAuditTrailUrl(
   try {
     const statusRes = await fetch(
       `${baseUrl}/v2/client/document/${encodeURIComponent(
-        application.providerDocumentId
+        application.provider_document_id
       )}`,
       {
         method: "GET",
@@ -67,12 +67,12 @@ export async function ensureDealerAuditTrailUrl(
     if (statusRes.ok) {
       const parsed = await statusRes.json().catch(() => null);
       const remoteId = extractDigioDocumentId(parsed);
-      if (remoteId && remoteId !== application.providerDocumentId) {
+      if (remoteId && remoteId !== application.provider_document_id) {
         console.warn(
           "[ensureDealerAuditTrailUrl] DigiO document_id mismatch",
           {
             applicationId: application.id,
-            expected: application.providerDocumentId,
+            expected: application.provider_document_id,
             digioReturned: remoteId,
           }
         );
@@ -83,7 +83,7 @@ export async function ensureDealerAuditTrailUrl(
   }
 
   const digioUrl = `${baseUrl}/v2/client/document/download_audit_trail?document_id=${encodeURIComponent(
-    application.providerDocumentId
+    application.provider_document_id
   )}`;
 
   const response = await fetch(digioUrl, {
@@ -98,7 +98,7 @@ export async function ensureDealerAuditTrailUrl(
   if (!response.ok) {
     const body = await response.text().catch(() => "");
     console.warn("[ensureDealerAuditTrailUrl] download non-ok", {
-      documentId: application.providerDocumentId,
+      documentId: application.provider_document_id,
       url: digioUrl,
       status: response.status,
       body: body.slice(0, 500),
@@ -147,9 +147,9 @@ export async function ensureDealerAuditTrailUrl(
   await db
     .update(dealerOnboardingApplications)
     .set({
-      auditTrailUrl,
-      auditTrailStoragePath: filePath,
-      updatedAt: new Date(),
+      audit_trail_url: auditTrailUrl,
+      audit_trail_storage_path: filePath,
+      updated_at: new Date(),
     })
     .where(eq(dealerOnboardingApplications.id, application.id));
 

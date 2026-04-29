@@ -226,12 +226,12 @@ export async function POST(req: NextRequest) {
     const existing = await db
       .select()
       .from(dealerOnboardingApplications)
-      .where(eq(dealerOnboardingApplications.dealerUserId, dealerUserId))
+      .where(eq(dealerOnboardingApplications.dealer_user_id, dealerUserId))
       .limit(1);
 
     if (existing.length > 0) application = existing[0];
 
-    if (application && application.onboardingStatus === "approved") {
+    if (application && application.onboarding_status === "approved") {
       // Don't modify approved applications via auto-save.
       // Return success silently so the frontend doesn't show an error.
       const res = NextResponse.json({
@@ -249,8 +249,8 @@ export async function POST(req: NextRequest) {
     // the approve endpoint rejects it for `onboarding_status !== "submitted"`.
     // Only an explicit submission (body.onboardingStatus === "submitted")
     // promotes a draft to submitted; anything else preserves the prior state.
-    const previousOnboardingStatus = application?.onboardingStatus ?? null;
-    const previousReviewStatus = application?.reviewStatus ?? null;
+    const previousOnboardingStatus = application?.onboarding_status ?? null;
+    const previousReviewStatus = application?.review_status ?? null;
 
     const onboardingStatus = isExplicitSubmission
       ? "submitted"
@@ -311,8 +311,8 @@ export async function POST(req: NextRequest) {
     if (application) {
       const updatePayload: Record<string, unknown> = {
         ...sharedFields,
-        dealerUserId: dealerUserId || application.dealerUserId,
-        submittedAt: isSubmissionTransition ? new Date() : application.submittedAt,
+        dealerUserId: dealerUserId || application.dealer_user_id,
+        submittedAt: isSubmissionTransition ? new Date() : application.submitted_at,
         updatedAt: new Date(),
       };
 
@@ -328,7 +328,7 @@ export async function POST(req: NextRequest) {
         updatePayload.agreementStatus =
           (typeof agreementConfig["agreementStatus"] === "string" &&
             agreementConfig["agreementStatus"]) ||
-          application.agreementStatus ||
+          application.agreement_status ||
           "not_generated";
       }
 
@@ -344,14 +344,14 @@ export async function POST(req: NextRequest) {
         .insert(dealerOnboardingApplications)
         .values({
           ...sharedFields,
-          dealerUserId,
-          submittedAt: onboardingStatus === "submitted" ? new Date() : null,
-          agreementStatus: "not_generated",
+          dealer_user_id: dealerUserId,
+          submitted_at: onboardingStatus === "submitted" ? new Date() : null,
+          agreement_status: "not_generated",
           // New rows start in the "pending" workflow states — these were
           // previously in sharedFields but were moved out so autosave on
           // existing rows doesn't overwrite live Digio state.
-          stampStatus: "pending",
-          completionStatus: "pending",
+          stamp_status: "pending",
+          completion_status: "pending",
         })
         .returning();
 
@@ -374,7 +374,7 @@ export async function POST(req: NextRequest) {
     if (documentsProvided) {
       await db
         .delete(dealerOnboardingDocuments)
-        .where(eq(dealerOnboardingDocuments.applicationId, application.id));
+        .where(eq(dealerOnboardingDocuments.application_id, application.id));
     }
 
     if (documentsProvided && documents.length > 0) {

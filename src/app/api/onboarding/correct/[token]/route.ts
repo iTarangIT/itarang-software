@@ -33,7 +33,7 @@ async function loadRoundByToken(rawToken: string) {
   const rows = await db
     .select()
     .from(dealerCorrectionRounds)
-    .where(eq(dealerCorrectionRounds.tokenHash, tokenHash))
+    .where(eq(dealerCorrectionRounds.token_hash, tokenHash))
     .limit(1);
   return rows[0] ?? null;
 }
@@ -45,7 +45,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
     if (!round) return badRequest("Invalid correction link", 404);
 
-    if (round.tokenExpiresAt && new Date(round.tokenExpiresAt).getTime() < Date.now()) {
+    if (round.token_expires_at && new Date(round.token_expires_at).getTime() < Date.now()) {
       return NextResponse.json({
         success: false,
         state: "expired",
@@ -74,10 +74,10 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     const [application] = await db
       .select({
         id: dealerOnboardingApplications.id,
-        companyName: dealerOnboardingApplications.companyName,
+        companyName: dealerOnboardingApplications.company_name,
       })
       .from(dealerOnboardingApplications)
-      .where(eq(dealerOnboardingApplications.id, round.applicationId))
+      .where(eq(dealerOnboardingApplications.id, round.application_id))
       .limit(1);
 
     if (!application) return badRequest("Application not found", 404);
@@ -85,10 +85,10 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     const items = await db
       .select()
       .from(dealerCorrectionItems)
-      .where(eq(dealerCorrectionItems.roundId, round.id));
+      .where(eq(dealerCorrectionItems.round_id, round.id));
 
     const previousDocIds = items
-      .map((it) => it.previousDocumentId)
+      .map((it) => it.previous_document_id)
       .filter((v): v is string => !!v);
 
     const previousDocs =
@@ -96,10 +96,10 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         ? await db
             .select({
               id: dealerOnboardingDocuments.id,
-              documentType: dealerOnboardingDocuments.documentType,
-              fileName: dealerOnboardingDocuments.fileName,
-              fileUrl: dealerOnboardingDocuments.fileUrl,
-              uploadedAt: dealerOnboardingDocuments.uploadedAt,
+              documentType: dealerOnboardingDocuments.document_type,
+              fileName: dealerOnboardingDocuments.file_name,
+              fileUrl: dealerOnboardingDocuments.file_url,
+              uploadedAt: dealerOnboardingDocuments.uploaded_at,
             })
             .from(dealerOnboardingDocuments)
             .where(inArray(dealerOnboardingDocuments.id, previousDocIds))
@@ -107,15 +107,15 @@ export async function GET(_req: NextRequest, context: RouteContext) {
     const previousDocsById = new Map(previousDocs.map((d) => [d.id, d]));
 
     const responseItems = items.map((it) => {
-      const previousDoc = it.previousDocumentId
-        ? previousDocsById.get(it.previousDocumentId) ?? null
+      const previousDoc = it.previous_document_id
+        ? previousDocsById.get(it.previous_document_id) ?? null
         : null;
       return {
         id: it.id,
         kind: it.kind,
         key: it.key,
         label: it.kind === "field" ? fieldLabel(it.key) : documentLabel(it.key),
-        previousValue: it.previousValue,
+        previousValue: it.previous_value,
         previousDocument: previousDoc
           ? {
               fileName: previousDoc.fileName,
@@ -132,9 +132,9 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       data: {
         applicationId: application.id,
         companyName: application.companyName,
-        roundNumber: round.roundNumber,
+        roundNumber: round.round_number,
         remarks: round.remarks,
-        expiresAt: round.tokenExpiresAt,
+        expiresAt: round.token_expires_at,
         items: responseItems,
       },
     });
@@ -168,7 +168,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
 
     if (!round) return badRequest("Invalid correction link", 404);
 
-    if (round.tokenExpiresAt && new Date(round.tokenExpiresAt).getTime() < Date.now()) {
+    if (round.token_expires_at && new Date(round.token_expires_at).getTime() < Date.now()) {
       return badRequest("This correction link has expired", 410);
     }
     if (round.status !== "pending") {
@@ -185,13 +185,13 @@ export async function POST(req: NextRequest, context: RouteContext) {
       : [];
     const dealerNote = cleanString(body?.dealerNote) || null;
 
-    const requestedFieldSet = new Set(round.requestedFields ?? []);
-    const requestedDocumentSet = new Set(round.requestedDocuments ?? []);
+    const requestedFieldSet = new Set(round.requested_fields ?? []);
+    const requestedDocumentSet = new Set(round.requested_documents ?? []);
 
     const items = await db
       .select()
       .from(dealerCorrectionItems)
-      .where(eq(dealerCorrectionItems.roundId, round.id));
+      .where(eq(dealerCorrectionItems.round_id, round.id));
 
     // ── Validate field updates ──────────────────────────────────────────────
     const fieldUpdates: Record<string, string> = {};
@@ -266,7 +266,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
         .insert(dealerOnboardingDocuments)
         .values(
           sanitizedDocs.map((d) => ({
-            applicationId: round.applicationId,
+            applicationId: round.application_id,
             documentType: d.documentType,
             bucketName: d.bucketName,
             storagePath: d.storagePath,
@@ -284,7 +284,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
         )
         .returning({
           id: dealerOnboardingDocuments.id,
-          documentType: dealerOnboardingDocuments.documentType,
+          documentType: dealerOnboardingDocuments.document_type,
         });
 
       const newDocIdByType = new Map(inserted.map((i) => [i.documentType, i.id]));
@@ -295,7 +295,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
         if (!newId) continue;
         await db
           .update(dealerCorrectionItems)
-          .set({ newDocumentId: newId })
+          .set({ new_document_id: newId })
           .where(eq(dealerCorrectionItems.id, item.id));
       }
     }
@@ -306,7 +306,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       if (value === undefined) continue;
       await db
         .update(dealerCorrectionItems)
-        .set({ newValue: value })
+        .set({ new_value: value })
         .where(eq(dealerCorrectionItems.id, item.id));
     }
 
@@ -314,9 +314,9 @@ export async function POST(req: NextRequest, context: RouteContext) {
       .update(dealerCorrectionRounds)
       .set({
         status: "submitted",
-        dealerSubmittedAt: new Date(),
-        dealerNote,
-        updatedAt: new Date(),
+        dealer_submitted_at: new Date(),
+        dealer_note: dealerNote,
+        updated_at: new Date(),
       })
       .where(eq(dealerCorrectionRounds.id, round.id));
 

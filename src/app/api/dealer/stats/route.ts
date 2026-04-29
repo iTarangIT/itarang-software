@@ -52,7 +52,7 @@ export async function GET() {
       profileUserId: appUser.id,
       email: authUser.email,
     });
-    const dealerId = appUser.dealer_id || dealerApp?.dealerCode || null;
+    const dealerId = appUser.dealer_id || dealerApp?.dealer_code || null;
 
     // Safe defaults so dashboard always loads
     let totalLeads = 0;
@@ -123,18 +123,18 @@ export async function GET() {
         dealer: dealerApp
           ? {
               id: dealerApp.id,
-              companyName: dealerApp.companyName,
-              dealerCode: dealerApp.dealerCode,
-              onboardingStatus: dealerApp.onboardingStatus,
-              reviewStatus: dealerApp.reviewStatus,
-              dealerAccountStatus: dealerApp.dealerAccountStatus,
-              approvedAt: dealerApp.approvedAt,
-              submittedAt: dealerApp.submittedAt,
-              financeEnabled: dealerApp.financeEnabled ?? false,
+              companyName: dealerApp.company_name,
+              dealerCode: dealerApp.dealer_code,
+              onboardingStatus: dealerApp.onboarding_status,
+              reviewStatus: dealerApp.review_status,
+              dealerAccountStatus: dealerApp.dealer_account_status,
+              approvedAt: dealerApp.approved_at,
+              submittedAt: dealerApp.submitted_at,
+              financeEnabled: dealerApp.finance_enabled ?? false,
               isApproved:
-                dealerApp.onboardingStatus === "approved" ||
-                dealerApp.reviewStatus === "approved" ||
-                dealerApp.dealerAccountStatus === "active",
+                dealerApp.onboarding_status === "approved" ||
+                dealerApp.review_status === "approved" ||
+                dealerApp.dealer_account_status === "active",
             }
           : null,
         metrics: {

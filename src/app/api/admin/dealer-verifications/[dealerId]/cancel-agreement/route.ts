@@ -39,14 +39,14 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    if (!application.providerDocumentId) {
+    if (!application.provider_document_id) {
       return NextResponse.json(
         { success: false, message: "No agreement to cancel — agreement not initiated yet." },
         { status: 400 }
       );
     }
 
-    const currentStatus = String(application.agreementStatus || "").toLowerCase();
+    const currentStatus = String(application.agreement_status || "").toLowerCase();
     if (currentStatus === "completed") {
       return NextResponse.json(
         { success: false, message: "Cannot cancel a completed agreement." },
@@ -65,7 +65,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    const cancelUrl = `${baseUrl}/v2/client/document/${encodeURIComponent(application.providerDocumentId)}/cancel`;
+    const cancelUrl = `${baseUrl}/v2/client/document/${encodeURIComponent(application.provider_document_id)}/cancel`;
 
     const digioResponse = await fetch(cancelUrl, {
       method: "GET",
@@ -99,22 +99,22 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     await db
       .update(dealerOnboardingApplications)
       .set({
-        agreementStatus: "failed",
-        completionStatus: "pending",
-        reviewStatus: "pending_admin_review",
-        providerRawResponse: mergeProviderRawResponse(
-          application.providerRawResponse,
+        agreement_status: "failed",
+        completion_status: "pending",
+        review_status: "pending_admin_review",
+        provider_raw_response: mergeProviderRawResponse(
+          application.provider_raw_response,
           parsed || {},
         ),
-        lastActionTimestamp: new Date(),
-        updatedAt: new Date(),
+        last_action_timestamp: new Date(),
+        updated_at: new Date(),
       })
       .where(eq(dealerOnboardingApplications.id, dealerId));
 
     await insertAgreementEvent({
       applicationId: dealerId,
-      providerDocumentId: application.providerDocumentId,
-      requestId: application.requestId || null,
+      providerDocumentId: application.provider_document_id,
+      requestId: application.request_id || null,
       eventType: "cancelled",
       eventStatus: "failed",
       eventPayload: parsed || {},
