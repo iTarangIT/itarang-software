@@ -98,10 +98,9 @@ export async function POST(
     }
 
     const now = new Date();
-    const id = createWorkflowId("KYCAUD", now);
 
     await db.insert(kycDataAudit).values({
-      id,
+      // id is `serial()` — let the DB auto-increment.
       lead_id: leadId,
       field_name: fieldName,
       field_value: fieldValue || null,
@@ -113,7 +112,7 @@ export async function POST(
 
     return NextResponse.json({
       success: true,
-      data: { id, leadId, fieldName, dataSource },
+      data: { leadId, fieldName, dataSource },
     });
   } catch (error) {
     console.error("[KYC Data Audit POST] Error:", error);

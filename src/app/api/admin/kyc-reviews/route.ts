@@ -24,9 +24,9 @@ type DocumentRow = {
   id: string;
   lead_id: string;
   document_type: string;
-  document_url: string;
-  verification_status: string;
-  uploaded_at: Date;
+  document_url: string | null;
+  verification_status: string | null;
+  uploaded_at: Date | null;
   ocr_data: unknown;
 };
 
@@ -146,8 +146,8 @@ async function fetchCoBorrowerDocuments(
     .select({
       id: coBorrowerDocuments.id,
       lead_id: coBorrowerDocuments.lead_id,
-      document_type: coBorrowerDocuments.doc_type,
-      document_url: coBorrowerDocuments.file_url,
+      document_type: coBorrowerDocuments.document_type,
+      document_url: coBorrowerDocuments.document_url,
       verification_status: coBorrowerDocuments.status,
       uploaded_at: coBorrowerDocuments.uploaded_at,
       ocr_data: coBorrowerDocuments.ocr_data,
@@ -281,8 +281,8 @@ export async function GET(req: NextRequest) {
       ...pendingConsentRows.map(consentToReviewDocument),
     ].sort(
       (left, right) =>
-        new Date(right.uploaded_at).getTime() -
-        new Date(left.uploaded_at).getTime(),
+        new Date(right.uploaded_at ?? 0).getTime() -
+        new Date(left.uploaded_at ?? 0).getTime(),
     );
 
     const leadIds = [...new Set(allDocuments.map((doc) => doc.lead_id))];
@@ -350,10 +350,10 @@ export async function GET(req: NextRequest) {
       })
       .sort((left, right) => {
         const leftTime = left.documents[0]
-          ? new Date(left.documents[0].uploaded_at).getTime()
+          ? new Date(left.documents[0].uploaded_at ?? 0).getTime()
           : 0;
         const rightTime = right.documents[0]
-          ? new Date(right.documents[0].uploaded_at).getTime()
+          ? new Date(right.documents[0].uploaded_at ?? 0).getTime()
           : 0;
 
         return rightTime - leftTime;
@@ -442,7 +442,7 @@ export async function POST(req: NextRequest) {
       db
         .select({
           id: coBorrowerDocuments.id,
-          document_type: coBorrowerDocuments.doc_type,
+          document_type: coBorrowerDocuments.document_type,
         })
         .from(coBorrowerDocuments)
         .where(

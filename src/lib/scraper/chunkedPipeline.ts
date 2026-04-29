@@ -66,10 +66,10 @@ export async function startChunkedRun(runId: string, baseQuery: string) {
 
     const chunkRows = combinations.map((combo, idx) => ({
       id: `CHUNK-${runId}-${String(idx).padStart(4, "0")}`,
-      runId,
-      combinationQuery: combo,
+      run_id: runId,
+      combination_query: combo,
       status: "pending",
-      leadsCount: 0,
+      leads_count: 0,
     }));
 
     await db.insert(scraperRunChunks).values(chunkRows);

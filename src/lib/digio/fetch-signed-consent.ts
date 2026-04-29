@@ -5,7 +5,7 @@ import {
     getDigioBasicAuth,
 } from "./client";
 
-function isValidPdfBuffer(buffer: ArrayBuffer | null | undefined): buffer is ArrayBuffer {
+function isValidPdfBuffer(buffer: ArrayBuffer | null | undefined): boolean {
     if (!buffer || buffer.byteLength < 500) return false;
     const head = new Uint8Array(buffer, 0, 5);
     return head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46 && head[4] === 0x2d;

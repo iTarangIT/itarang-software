@@ -172,7 +172,7 @@ export async function fetchDigioAndSyncSigners(params: {
   providerDocumentId: string;
   requestId?: string | null;
 }): Promise<Record<string, unknown> | null> {
-  const { applicationId, providerDocumentId, requestId } = params;
+  const { application_id: applicationId, providerDocumentId, requestId } = params;
 
   const clientId = process.env.DIGIO_CLIENT_ID?.trim();
   const clientSecret = process.env.DIGIO_CLIENT_SECRET?.trim();

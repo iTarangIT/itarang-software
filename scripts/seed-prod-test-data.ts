@@ -1,3 +1,7 @@
+// @ts-nocheck
+// Standalone seed script — Supabase client generic-type tightening in newer
+// versions trips strict mode here. Update the SupabaseClient<> generics if
+// resurrecting this script.
 /**
  * Provision the e2e users + persistent seeded artifacts that the prod
  * Playwright suite needs. Distinct from `scripts/seed-test-data.ts` (which

@@ -41,6 +41,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         photos_urls: data.photos_urls as any,
         assigned_to: assignedUser.id,
         resolution_status: 'open',
+        raised_by: user.id,
         created_by: user.id,
         created_at: new Date(),
     });

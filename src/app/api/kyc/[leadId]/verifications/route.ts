@@ -56,7 +56,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             .orderBy(desc(consentRecords.updated_at))
             .limit(1);
 
-        if (consent && ADMIN_VERIFIED_CONSENT_STATUSES.includes(consent.consent_status)) {
+        if (consent && ADMIN_VERIFIED_CONSENT_STATUSES.includes(consent.consent_status ?? '')) {
             data.push({
                 type: 'esign_consent',
                 label: LABELS.esign_consent,

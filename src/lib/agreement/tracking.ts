@@ -24,20 +24,20 @@ export async function insertAgreementSigners(signers: SignerInput[]) {
 
   await db.insert(dealerAgreementSigners).values(
     signers.map((item) => ({
-      applicationId: item.applicationId,
-      providerDocumentId: item.providerDocumentId || null,
-      requestId: item.requestId || null,
-      signerRole: item.signerRole,
-      signerName: item.signerName,
-      signerEmail: item.signerEmail || null,
-      signerMobile: item.signerMobile || null,
-      signingMethod: item.signingMethod || null,
-      providerSignerIdentifier: item.providerSignerIdentifier || null,
-      providerSigningUrl: item.providerSigningUrl || null,
-      signerStatus: item.signerStatus || "pending",
-      providerRawResponse: (item.providerRawResponse as any) || {},
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      application_id: item.applicationId,
+      provider_document_id: item.providerDocumentId || null,
+      request_id: item.requestId || null,
+      signer_role: item.signerRole,
+      signer_name: item.signerName,
+      signer_email: item.signerEmail || null,
+      signer_mobile: item.signerMobile || null,
+      signing_method: item.signingMethod || null,
+      provider_signer_identifier: item.providerSignerIdentifier || null,
+      provider_signing_url: item.providerSigningUrl || null,
+      signer_status: item.signerStatus || "pending",
+      provider_raw_response: (item.providerRawResponse as any) || {},
+      created_at: new Date(),
+      updated_at: new Date(),
     }))
   );
 }
