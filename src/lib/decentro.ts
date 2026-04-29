@@ -287,7 +287,7 @@ export async function extractDocumentOcr(
     filename: string,
     document_side?: OcrDocSide,
     signal?: AbortSignal,
-    kycValidate: boolean = true,
+    kycValidate?: boolean,
 ) {
     // Decentro rejects filenames with multiple periods — sanitize by keeping only the last one (extension)
     const lastDot = filename.lastIndexOf('.');
@@ -301,10 +301,13 @@ export async function extractDocumentOcr(
     form.append('consent', 'Y');
     form.append('consent_purpose', 'Document OCR extraction for KYC verification');
     // kyc_validate=1 makes Decentro cross-check the doc against UIDAI/NSDL
-    // (requires OTP for Aadhaar → fails for plain extraction flows). Pure OCR
-    // auto-fill must pass kycValidate=false so Decentro returns just the
-    // extracted fields.
-    form.append('kyc_validate', kycValidate ? '1' : '0');
+    // (requires OTP for Aadhaar → fails for plain extraction flows). Default
+    // is now to not send the param at all — that matches the curl shape known
+    // to succeed on our prod module. Callers can still opt in by passing
+    // kycValidate=true when they actually want NSDL/UIDAI validation.
+    if (kycValidate !== undefined) {
+        form.append('kyc_validate', kycValidate ? '1' : '0');
+    }
     form.append('document', documentBlob, sanitizedFilename);
     // Tell Decentro which side of the document this is — needed for Aadhaar to know whether
     // to prioritize name/DOB (front) or address/id-number (back) extraction.
