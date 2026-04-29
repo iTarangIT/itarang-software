@@ -41,7 +41,6 @@ const DEFAULT_CUSTOMER_VERIFICATIONS: VerificationRow[] = [
     { type: 'bank', label: 'Bank Verification', status: 'pending' },
     { type: 'address_proof', label: 'Address Proof', status: 'pending' },
     { type: 'rc', label: 'RC Verification', status: 'pending' },
-    { type: 'mobile', label: 'Mobile Number', status: 'pending' },
 ];
 
 function isFinalConsentStatus(status: string) {
@@ -605,14 +604,25 @@ export default function KYCPage() {
     const allVerificationsApproved =
         verifications.length > 0 &&
         verifications.every(v => ['success', 'verified'].includes((v.status || '').toLowerCase()));
+
+    // Once the admin clicks "Request Co-Borrower KYC" or "Request Additional
+    // Docs" on the case-review screen, has_co_borrower / has_additional_docs_required
+    // is flipped on the lead. That admin action itself is the green light to
+    // advance from Step 2 — the dealer should be able to proceed even if some
+    // verification rows are still in pending/failed state.
+    const adminRequestedStep3 = !!(lead?.has_co_borrower || lead?.has_additional_docs_required);
+
     const pendingRequirements: string[] = [];
     if (!isConsentVerified) pendingRequirements.push('consent verification');
     if (!allDocsUploaded) pendingRequirements.push(`${docStats.pending.length} pending document${docStats.pending.length === 1 ? '' : 's'}`);
     if (!isCouponSubmitted) pendingRequirements.push('coupon submission');
-    if (!allVerificationsApproved) pendingRequirements.push('admin verification of all checks');
-    const canProceed = isConsentVerified && allDocsUploaded && isCouponSubmitted && allVerificationsApproved;
+    if (!adminRequestedStep3 && !allVerificationsApproved) pendingRequirements.push('admin verification of all checks');
+    const canProceed =
+        isConsentVerified &&
+        allDocsUploaded &&
+        isCouponSubmitted &&
+        (adminRequestedStep3 || allVerificationsApproved);
 
-    const adminRequestedStep3 = !!(lead?.has_co_borrower || lead?.has_additional_docs_required);
     const nextStepRoute = adminRequestedStep3
         ? `/dealer-portal/leads/${leadId}/borrower-consent`
         : `/dealer-portal/leads/${leadId}/kyc/interim`;

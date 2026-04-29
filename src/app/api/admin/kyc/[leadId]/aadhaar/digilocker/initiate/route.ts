@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -226,13 +226,24 @@ export async function POST(
         ? "skipped"
         : "failed";
 
-    // Create verification record
-    const verificationId = createWorkflowId("KYCVER", now);
-    await db.insert(kycVerifications).values({
-      id: verificationId,
-      lead_id: leadId,
-      verification_type: "aadhaar",
-      status: "initiating",
+    // Upsert verification record by (lead_id, type='aadhaar', applicant='primary')
+    // so re-initiating DigiLocker for the same lead doesn't pile up duplicate
+    // rows in the dealer-side Verification Status table.
+    const existingAadhaar = await db
+      .select({ id: kycVerifications.id })
+      .from(kycVerifications)
+      .where(
+        and(
+          eq(kycVerifications.lead_id, leadId),
+          eq(kycVerifications.verification_type, "aadhaar"),
+          eq(kycVerifications.applicant, "primary"),
+        ),
+      )
+      .limit(1);
+
+    let verificationId: string;
+    const verificationFields = {
+      status: "initiating" as const,
       api_provider: "decentro_digilocker",
       api_request: {
         reference_id: referenceId,
@@ -241,8 +252,25 @@ export async function POST(
         link_validity_hours: linkValidityHours,
       },
       api_response: decentroRes,
-      submitted_at: now,
-    });
+      updated_at: now,
+    };
+    if (existingAadhaar[0]) {
+      verificationId = existingAadhaar[0].id;
+      await db
+        .update(kycVerifications)
+        .set(verificationFields)
+        .where(eq(kycVerifications.id, verificationId));
+    } else {
+      verificationId = createWorkflowId("KYCVER", now);
+      await db.insert(kycVerifications).values({
+        id: verificationId,
+        lead_id: leadId,
+        verification_type: "aadhaar",
+        applicant: "primary",
+        submitted_at: now,
+        ...verificationFields,
+      });
+    }
 
     // Create DigiLocker transaction
     await db.insert(digilockerTransactions).values({
