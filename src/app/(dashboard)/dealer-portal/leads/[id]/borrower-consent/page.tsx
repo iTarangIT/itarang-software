@@ -310,7 +310,6 @@ export default function BorrowerConsentPage() {
         { type: 'bank', label: 'Bank Verification', status: 'pending' },
         { type: 'address_proof', label: 'Address Proof', status: 'pending' },
         { type: 'rc', label: 'RC Verification', status: 'pending' },
-        { type: 'mobile', label: 'Mobile Number', status: 'pending' },
     ]);
 
     // Consent
