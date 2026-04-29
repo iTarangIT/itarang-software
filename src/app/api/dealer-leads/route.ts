@@ -74,10 +74,10 @@ export async function GET(req: NextRequest) {
       ? and(
           phonePresent,
           or(
-            ilike(dealerLeads.dealerName, `%${search}%`),
+            ilike(dealerLeads.dealer_name, `%${search}%`),
             ilike(dealerLeads.phone, `%${search}%`),
             ilike(dealerLeads.location, `%${search}%`),
-            ilike(dealerLeads.shopName, `%${search}%`),
+            ilike(dealerLeads.shop_name, `%${search}%`),
           ),
         )
       : phonePresent;
@@ -87,7 +87,7 @@ export async function GET(req: NextRequest) {
         .select()
         .from(dealerLeads)
         .where(where)
-        .orderBy(desc(dealerLeads.createdAt))
+        .orderBy(desc(dealerLeads.created_at))
         .limit(limit)
         .offset(offset),
       db

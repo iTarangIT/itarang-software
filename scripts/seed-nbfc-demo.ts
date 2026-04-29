@@ -11,7 +11,7 @@
 import "dotenv/config";
 import { db } from "@/lib/db";
 import { nbfcTenants, nbfcLoans, loanApplications } from "@/lib/db/schema";
-import { iotSql } from "@/lib/db/iot";
+import { getIotSql } from "@/lib/db/iot";
 import { eq } from "drizzle-orm";
 
 async function main() {
@@ -40,6 +40,7 @@ async function main() {
   }
 
   // 2. Pull some vehiclenos from IoT
+  const iotSql = getIotSql();
   const vnoRows = await iotSql<Array<{ vehicleno: string }>>`
     SELECT vehicleno FROM vehicle_state ORDER BY vehicleno LIMIT 50
   `;
