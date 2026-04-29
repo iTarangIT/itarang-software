@@ -4,7 +4,7 @@ export const maxDuration = 30;
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { consentRecords, kycVerifications, leads, users } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
 import { createDigioAgreement } from "@/lib/digio/service";
@@ -70,6 +70,62 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         { status: 400 }
       );
     }
+
+    // Idempotency: if there's already an active consent record for the primary
+    // applicant on this lead, return it instead of generating a new PDF +
+    // Digio agreement (which previously created duplicate consent_records and
+    // produced two "Primary Consent" cards in the admin UI). Statuses that
+    // count as "still active": link_sent, viewed, signed, esign_completed.
+    // Failed / expired rows are allowed to be retried — we'll UPDATE that row
+    // below instead of inserting a new one.
+    const existingConsents = await db
+      .select()
+      .from(consentRecords)
+      .where(
+        and(
+          eq(consentRecords.lead_id, leadId),
+          eq(consentRecords.consent_for, "primary"),
+        ),
+      );
+
+    const ACTIVE_STATUSES = new Set([
+      "link_sent",
+      "viewed",
+      "signed",
+      "esign_completed",
+    ]);
+    const activeConsent = existingConsents.find((r) =>
+      ACTIVE_STATUSES.has(r.consent_status || ""),
+    );
+    if (activeConsent) {
+      return NextResponse.json({
+        success: true,
+        replaced: false,
+        alreadyActive: true,
+        hasDigioIntegration: true,
+        data: {
+          consentId: activeConsent.id,
+          leadId,
+          channel: activeConsent.consent_delivery_channel,
+          phone: customerPhone,
+          customerSigningUrl: activeConsent.consent_link_url,
+          digioDocumentId: activeConsent.esign_transaction_id,
+          sentAt: activeConsent.consent_link_sent_at?.toISOString() ?? null,
+          message:
+            "An active consent already exists for this lead — reusing the existing link instead of creating a duplicate.",
+        },
+      });
+    }
+
+    // Existing failed/expired row to refresh (UPDATE instead of new INSERT).
+    const refreshableConsent = existingConsents
+      .filter((r) =>
+        ["failed", "expired", "rejected"].includes(r.consent_status || ""),
+      )
+      .sort(
+        (a, b) =>
+          (b.updated_at?.getTime?.() ?? 0) - (a.updated_at?.getTime?.() ?? 0),
+      )[0];
 
     // Fetch dealer name
     let dealerName = "";
@@ -185,40 +241,85 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       );
     }
 
-    // 3. Insert consent record
-    await db.insert(consentRecords).values({
-      id: consentId,
-      lead_id: leadId,
-      consent_for: "primary",
-      consent_type: "digital",
-      consent_status: "link_sent",
-      consent_delivery_channel: channel,
-      consent_link_url: customerSigningUrl,
-      consent_link_sent_at: now,
-      esign_transaction_id: digioDocumentId,
-      generated_pdf_url: generatedPdfUrl,
-      created_at: now,
-      updated_at: now,
-    });
-
-    // Persist raw DigiO provider response for audit. consent_records has no
-    // jsonb column, so we fold the raw response into kyc_verifications with a
-    // dedicated verification_type marker. Non-fatal.
-    try {
-      await db.insert(kycVerifications).values({
-        id: createWorkflowId("KYCVER", now),
+    // 3. Upsert consent record. If a previous row was failed/expired, UPDATE
+    // it (resend semantics). Otherwise, INSERT new. Avoids the duplicate-row
+    // problem that produced two "Primary Consent" cards in admin UI.
+    const finalConsentId = refreshableConsent?.id || consentId;
+    if (refreshableConsent) {
+      await db
+        .update(consentRecords)
+        .set({
+          consent_status: "link_sent",
+          consent_delivery_channel: channel,
+          consent_link_url: customerSigningUrl,
+          consent_link_sent_at: now,
+          esign_transaction_id: digioDocumentId,
+          generated_pdf_url: generatedPdfUrl,
+          updated_at: now,
+        })
+        .where(eq(consentRecords.id, refreshableConsent.id));
+    } else {
+      await db.insert(consentRecords).values({
+        id: consentId,
         lead_id: leadId,
-        verification_type: "esign_consent",
-        applicant: "primary",
-        status: "success",
-        api_provider: "digio",
-        api_request: { consent_id: consentId, channel, phone: cleanPhone },
-        api_response: digioResponse as unknown as Record<string, unknown>,
-        submitted_at: now,
-        completed_at: now,
+        consent_for: "primary",
+        consent_type: "digital",
+        consent_status: "link_sent",
+        consent_delivery_channel: channel,
+        consent_link_url: customerSigningUrl,
+        consent_link_sent_at: now,
+        esign_transaction_id: digioDocumentId,
+        generated_pdf_url: generatedPdfUrl,
+        created_at: now,
+        updated_at: now,
       });
+    }
+
+    // Persist raw DigiO provider response for audit. Upsert by
+    // (lead_id, verification_type='esign_consent', applicant) so polling /
+    // resends don't pile up duplicate audit rows that would later block the
+    // final-decision approval gate. Non-fatal.
+    try {
+      const existingAudit = await db
+        .select({ id: kycVerifications.id })
+        .from(kycVerifications)
+        .where(
+          and(
+            eq(kycVerifications.lead_id, leadId),
+            eq(kycVerifications.verification_type, "esign_consent"),
+            eq(kycVerifications.applicant, "primary"),
+          ),
+        )
+        .limit(1);
+
+      if (existingAudit[0]) {
+        await db
+          .update(kycVerifications)
+          .set({
+            status: "success",
+            api_provider: "digio",
+            api_request: { consent_id: finalConsentId, channel, phone: cleanPhone },
+            api_response: digioResponse as unknown as Record<string, unknown>,
+            completed_at: now,
+            updated_at: now,
+          })
+          .where(eq(kycVerifications.id, existingAudit[0].id));
+      } else {
+        await db.insert(kycVerifications).values({
+          id: createWorkflowId("KYCVER", now),
+          lead_id: leadId,
+          verification_type: "esign_consent",
+          applicant: "primary",
+          status: "success",
+          api_provider: "digio",
+          api_request: { consent_id: finalConsentId, channel, phone: cleanPhone },
+          api_response: digioResponse as unknown as Record<string, unknown>,
+          submitted_at: now,
+          completed_at: now,
+        });
+      }
     } catch (persistErr) {
-      console.error("[send-consent] kyc_verifications insert failed:", persistErr);
+      console.error("[send-consent] kyc_verifications upsert failed:", persistErr);
     }
 
     // 4. Update lead consent status
@@ -228,9 +329,10 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
 
     return NextResponse.json({
       success: true,
+      replaced: !!refreshableConsent,
       hasDigioIntegration: true,
       data: {
-        consentId,
+        consentId: finalConsentId,
         leadId,
         channel,
         phone: cleanPhone,
