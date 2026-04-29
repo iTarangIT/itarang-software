@@ -22,7 +22,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const formData = await req.formData();
         const file = formData.get('file') as File;
         const consentForRaw = String(formData.get('consent_for') || 'customer').toLowerCase();
-        const dbConsentFor = consentForRaw === 'customer' ? 'primary' : consentForRaw;
+        const dbConsentFor =
+            consentForRaw === 'customer' ? 'primary'
+            : consentForRaw === 'borrower' ? 'co_borrower'
+            : consentForRaw;
 
         if (!file) {
             return NextResponse.json({ success: false, error: { message: 'File is required' } }, { status: 400 });
