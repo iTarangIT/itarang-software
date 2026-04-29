@@ -46,6 +46,7 @@ export async function GET(
         dealer_id: leads.dealer_id,
         full_name: leads.full_name,
         payment_method: leads.payment_method,
+        interest_level: leads.interest_level,
         kyc_status: leads.kyc_status,
         product_category_id: leads.product_category_id,
         product_type_id: leads.product_type_id,
@@ -65,6 +66,20 @@ export async function GET(
     const paymentMode = String(lead.payment_method || "").toLowerCase();
     const kycStatus = String(lead.kyc_status || "");
     const customerName = lead.full_name || null;
+    const isHot = String(lead.interest_level || "").toLowerCase() === "hot";
+
+    // Warm/Cold leads are parked at Step 1 — Step 4 is only available once
+    // the lead is promoted to Hot. Block entry up front regardless of path.
+    if (!isHot) {
+      return NextResponse.json({
+        success: true,
+        data: {
+          allowed: false,
+          redirectTo: "/dealer-portal/leads",
+          reason: "Step 4 is only available for Hot leads. Promote this lead to Hot to proceed.",
+        },
+      });
+    }
 
     // Resolve category id → human-readable name when possible. The
     // inventory APIs still filter by id (we keep `category` as the id
