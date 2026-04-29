@@ -9,7 +9,7 @@
 // postMessage is unreliable here).
 
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -219,24 +219,52 @@ export async function GET(
 
         // Persist a kyc_verifications row so the later KYC step sees
         // Aadhaar as already government-verified. We flag the api
-        // provider distinctly from the OCR pathway.
+        // provider distinctly from the OCR pathway. Upsert by
+        // (lead_id, type='aadhaar', applicant='primary') so the row created
+        // by digilocker/initiate (or any earlier path) is updated in place
+        // instead of producing a duplicate Aadhaar Verification entry.
         try {
-            const verificationId = createWorkflowId("KYCVER", now);
-            await db.insert(kycVerifications).values({
-                id: verificationId,
-                lead_id: txn.lead_id,
-                verification_type: "aadhaar",
-                applicant: "primary",
-                status: "success",
+            const existingAadhaar = await db
+                .select({ id: kycVerifications.id })
+                .from(kycVerifications)
+                .where(
+                    and(
+                        eq(kycVerifications.lead_id, txn.lead_id),
+                        eq(kycVerifications.verification_type, "aadhaar"),
+                        eq(kycVerifications.applicant, "primary"),
+                    ),
+                )
+                .limit(1);
+
+            let verificationId: string;
+            const verificationFields = {
+                status: "success" as const,
                 api_provider: "decentro_digilocker",
                 api_request: {
                     reference_id: txn.reference_id,
                     transaction_id: transactionId,
                 },
                 api_response: finalData,
-                submitted_at: txn.created_at ?? now,
                 completed_at: now,
-            });
+                updated_at: now,
+            };
+            if (existingAadhaar[0]) {
+                verificationId = existingAadhaar[0].id;
+                await db
+                    .update(kycVerifications)
+                    .set(verificationFields)
+                    .where(eq(kycVerifications.id, verificationId));
+            } else {
+                verificationId = createWorkflowId("KYCVER", now);
+                await db.insert(kycVerifications).values({
+                    id: verificationId,
+                    lead_id: txn.lead_id,
+                    verification_type: "aadhaar",
+                    applicant: "primary",
+                    submitted_at: txn.created_at ?? now,
+                    ...verificationFields,
+                });
+            }
             await db
                 .update(digilockerTransactions)
                 .set({ verification_id: verificationId, updated_at: now })
