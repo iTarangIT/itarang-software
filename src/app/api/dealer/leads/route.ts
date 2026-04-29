@@ -124,6 +124,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             // B. Insert Loan Details
             if (data.loan_required) {
                 await tx.insert(loanDetails).values({
+                    id: crypto.randomUUID(),
                     lead_id: leadId,
                     loan_required: true,
                     loan_amount: data.loan_amount ? String(data.loan_amount) : null,
@@ -137,6 +138,7 @@ export const POST = withErrorHandler(async (req: Request) => {
 
             // C. Insert Personal Details
             await tx.insert(personalDetails).values({
+                id: crypto.randomUUID(),
                 lead_id: leadId,
                 aadhaar_no: data.aadhaar_no,
                 pan_no: data.pan_no,
@@ -158,9 +160,12 @@ export const POST = withErrorHandler(async (req: Request) => {
             if (data.documents && data.documents.length > 0) {
                 await tx.insert(documents).values(
                     data.documents.map(doc => ({
+                        id: crypto.randomUUID(),
                         lead_id: leadId,
+                        type: doc.type,
+                        url: doc.url,
                         document_type: doc.type,
-                        file_url: doc.url
+                        file_url: doc.url,
                     }))
                 );
             }

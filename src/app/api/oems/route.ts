@@ -56,6 +56,7 @@ export const POST = withErrorHandler(async (req: Request) => {
             contactData.map((c, i) => ({
                 id: `${oemId}-${i + 1}`,
                 oem_id: oemId,
+                name: c.contact_name,
                 ...c,
             }))
         ).returning();

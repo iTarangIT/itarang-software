@@ -33,6 +33,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         const docs = await db.select().from(leadDocuments).where(eq(leadDocuments.lead_id, lead.id));
 
         for (const doc of docs) {
+            if (!doc.storage_path) continue;
             await adminSupabase.storage.from('private-documents').remove([doc.storage_path]);
         }
 

@@ -74,6 +74,13 @@ export const GET = async (req: Request) => {
     });
   }
 
+  if (!schedule.created_by) {
+    return successResponse({
+      message: "Schedule has no created_by; skipping run",
+      triggered: false,
+    });
+  }
+
   const runId = await generateId("SCRAPE", scraperRuns);
   await db.insert(scraperRuns).values({
     id: runId,

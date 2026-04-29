@@ -29,7 +29,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             phone: l.phone,
             owner_contact: l.owner_contact,
             asset_model: l.asset_model,
-            asset_category: l.asset_category,
+            asset_category: null, // column not present on current leads schema
             payment_method: l.payment_method,
             interest_level: l.interest_level,
             consent_status: l.consent_status,
