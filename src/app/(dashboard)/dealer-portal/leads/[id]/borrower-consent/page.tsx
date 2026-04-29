@@ -480,10 +480,15 @@ export default function BorrowerConsentPage() {
         else if (manualStatuses.includes(consentStatus)) setConsentPath('manual');
     }, [consentStatus]);
 
-    // Auto-save every 2 minutes
+    // Auto-save every 2 minutes — write both to leads.kyc_draft_data (resume
+    // protection) and to coBorrowers (canonical row read by send-consent /
+    // generate-consent-pdf / admin case-review).
     useEffect(() => {
         const interval = setInterval(() => {
-            if (!loading && !accessDenied) handleSaveDraft(true);
+            if (!loading && !accessDenied) {
+                handleSaveDraft(true);
+                persistBorrowerToCoBorrowers();
+            }
         }, 120000);
         return () => clearInterval(interval);
     }, [loading, accessDenied, borrowerForm, consentStatus]);
@@ -761,11 +766,35 @@ export default function BorrowerConsentPage() {
 
     // ─── Consent Handlers ──────────────────────────────────────────────────
 
+    // Persist the locally-edited borrower form to the canonical `coBorrowers`
+    // row before any downstream consumer reads from it. send-consent /
+    // generate-consent-pdf fill the DigiO PDF and SMS recipient from this row,
+    // and the admin case-review screen reads it after Submit-for-Verification.
+    // Without this call, those endpoints would either 404 or use the stale
+    // empty stub admin created when requesting co-borrower KYC.
+    const persistBorrowerToCoBorrowers = async (): Promise<boolean> => {
+        try {
+            const res = await fetch(`/api/coborrower/${leadId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(borrowerForm),
+            });
+            const data = await res.json().catch(() => ({}));
+            return !!data?.success;
+        } catch {
+            return false;
+        }
+    };
+
     const handleSendConsent = async (channel: 'sms' | 'whatsapp') => {
         try {
             setApiError(null);
             setConsentLoading(true);
             setConsentPath('digital');
+            const persisted = await persistBorrowerToCoBorrowers();
+            if (!persisted) {
+                throw new Error('Could not save co-borrower details. Please try again.');
+            }
             const res = await fetch(`/api/kyc/${leadId}/send-consent`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -787,6 +816,10 @@ export default function BorrowerConsentPage() {
             setApiError(null);
             setConsentLoading(true);
             setConsentPath('manual');
+            const persisted = await persistBorrowerToCoBorrowers();
+            if (!persisted) {
+                throw new Error('Could not save co-borrower details. Please try again.');
+            }
             const res = await fetch(`/api/kyc/${leadId}/generate-consent-pdf`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -870,6 +903,11 @@ export default function BorrowerConsentPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ step: 3, data: { borrowerForm, documents: uploadedDocs, consentStatus } }),
             });
+
+            // Promote the borrower form into the canonical coBorrowers row so
+            // the admin case-review screen sees the dealer's actual data
+            // (name, phone, addresses, etc.) instead of the empty stub.
+            await persistBorrowerToCoBorrowers();
 
             // Submit. The submit-verification endpoint now also flips
             // lead.kyc_status to 'pending_itarang_reverification' and inserts
