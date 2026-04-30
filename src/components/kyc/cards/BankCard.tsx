@@ -224,6 +224,7 @@ export default function BankCard({
               docType={["bank_statement", "cheque_1", "cheque_2", "cheque_3", "cheque_4"]}
               cachedOcrData={ocrData}
               disabled={status === "loading"}
+              applicant={applicant}
               onOcrResult={(data) => {
                 const acct = (data.account_number || data.accountNumber) as string | undefined;
                 const ifc = (data.ifsc || data.ifsc_code || data.ifscCode) as string | undefined;
