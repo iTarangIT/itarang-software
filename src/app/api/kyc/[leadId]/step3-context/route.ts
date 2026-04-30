@@ -4,6 +4,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   coBorrowerRequests,
+  coBorrowers,
   leads,
   otherDocumentRequests,
 } from "@/lib/db/schema";
@@ -77,6 +78,21 @@ export async function GET(
 
     const latestCb = latestCbRequest[0] ?? null;
 
+    // Co-borrower submission timestamp — set once when the dealer hits
+    // Submit for Verification on Step 3. Used by the dealer page as a
+    // monotonic gate so the Submit button stays hidden even after admin
+    // moves the lead forward (lead.kyc_status flips to step_3_cleared,
+    // kyc_approved, etc.).
+    const cbRow = await db
+      .select({
+        verification_submitted_at: coBorrowers.verification_submitted_at,
+      })
+      .from(coBorrowers)
+      .where(eq(coBorrowers.lead_id, leadId))
+      .limit(1);
+    const co_borrower_submitted_at =
+      cbRow[0]?.verification_submitted_at?.toISOString() ?? null;
+
     // Supporting docs summary for the standard request banner
     const otherDocs = await db
       .select({
@@ -118,6 +134,7 @@ export async function GET(
         requires_supporting_docs,
         requires_co_borrower,
         is_replacement,
+        co_borrower_submitted_at,
         latest_co_borrower_request: latestCb
           ? {
               id: latestCb.id,
