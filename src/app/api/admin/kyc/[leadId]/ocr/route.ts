@@ -34,15 +34,26 @@ async function resolveFetchableUrl(storedUrl: string): Promise<string> {
     return storedUrl;
 }
 
-// Map internal doc types to Decentro OCR doc types
+// Map internal doc types to Decentro OCR doc types.
 const DECENTRO_OCR_MAP: Record<string, OcrDocType> = {
     pan_card: 'PAN',
     aadhaar_front: 'AADHAAR',
     aadhaar_back: 'AADHAAR',
 };
 
-// Doc types that use Tesseract fallback
+// Doc types that use Tesseract OCR (regex-extracted from raw text).
 const TESSERACT_TYPES = ['bank_statement', 'cheque_1', 'cheque_2', 'cheque_3', 'cheque_4', 'rc_copy'];
+
+// Per-doc-type Decentro options that mirror the working curl shape exactly.
+// PAN on our prod module rejects requests carrying `module_secret` and uses
+// a different `consent_purpose` than Aadhaar — sending the same shape we
+// verified end-to-end via curl avoids the metadata-only error response.
+const DECENTRO_OCR_OPTIONS: Record<string, { skipModuleSecret?: boolean; consentPurpose?: string }> = {
+    pan_card: {
+        skipModuleSecret: true,
+        consentPurpose: 'for bank account purpose only',
+    },
+};
 
 /** Helper: extract a string field from nested OCR response. Walks common nesting levels
  *  (kycResult, extractedData, result, ocrResult, data) and accepts both strings and numbers.
@@ -243,7 +254,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                                 doc_type === 'aadhaar_front' ? 'FRONT'
                                 : doc_type === 'aadhaar_back' ? 'BACK'
                                 : undefined;
-                            const ocrRes = await extractDocumentOcr(decentroOcrType, blob, fname, side);
+                            const ocrRes = await extractDocumentOcr(
+                                decentroOcrType,
+                                blob,
+                                fname,
+                                side,
+                                undefined,
+                                undefined,
+                                DECENTRO_OCR_OPTIONS[doc_type],
+                            );
                             // Decentro may use responseStatus or status field
                             const isSuccess = ocrRes.responseStatus === 'SUCCESS' || ocrRes.status === 'SUCCESS' || ocrRes.status === 200;
                             const ocrPayload = ocrRes.data || ocrRes.result || ocrRes.kycResult || ocrRes.ocrResult;
@@ -382,6 +401,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         let ocrData: Record<string, unknown> = {};
         let source: 'decentro' | 'tesseract' = 'decentro';
+        // Capture Decentro's own error message when extraction fails so the
+        // front-end can show admins the real cause (plan disabled, invalid
+        // module_secret, expired creds) instead of silently rendering the
+        // Tesseract fallback as if it were the truth.
+        let decentroError: string | null = null;
 
         const decentroType = DECENTRO_OCR_MAP[doc_type];
 
@@ -392,17 +416,76 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 doc_type === 'aadhaar_front' ? 'FRONT'
                 : doc_type === 'aadhaar_back' ? 'BACK'
                 : undefined;
-            const decentroRes = await extractDocumentOcr(decentroType, blob, fileName, side);
+            const decentroRes = await extractDocumentOcr(
+                decentroType,
+                blob,
+                fileName,
+                side,
+                undefined,
+                undefined,
+                DECENTRO_OCR_OPTIONS[doc_type],
+            );
             const success = decentroRes.responseStatus === 'SUCCESS' || decentroRes.status === 'SUCCESS' || decentroRes.status === 200;
-            const decentroPayload = decentroRes.data || decentroRes.result || decentroRes.kycResult || decentroRes.ocrResult;
+            // Decentro varies the wrapping key by document/SKU. Cover the
+            // shapes we've seen across PAN/Aadhaar/forensics endpoints.
+            const decentroPayload =
+                decentroRes.data ||
+                decentroRes.result ||
+                decentroRes.kycResult ||
+                decentroRes.ocrResult ||
+                decentroRes.ocr_result ||
+                decentroRes.kyc_result;
             if (success && decentroPayload) {
                 ocrData = decentroPayload;
                 source = 'decentro';
             } else {
-                // Fallback to Tesseract
+                // Decentro didn't give us usable structured data — capture why
+                // before falling back. The `error` field can be either a plain
+                // string OR a nested { message, code } / { message } / { errorMessage }
+                // object depending on the SKU and failure mode. Try every shape
+                // before falling back to a "couldn't read it" diagnostic.
+                const pickErrorMessage = (val: unknown): string | null => {
+                    if (typeof val === 'string' && val.trim()) return val.trim();
+                    if (val && typeof val === 'object') {
+                        const o = val as Record<string, unknown>;
+                        const candidate =
+                            (typeof o.message === 'string' && o.message) ||
+                            (typeof o.errorMessage === 'string' && o.errorMessage) ||
+                            (typeof o.error === 'string' && o.error) ||
+                            (typeof o.responseMessage === 'string' && o.responseMessage);
+                        const code =
+                            (typeof o.responseCode === 'string' && o.responseCode) ||
+                            (typeof o.code === 'string' && o.code) ||
+                            (typeof o.errorCode === 'string' && o.errorCode);
+                        if (candidate) {
+                            return code ? `${candidate} (${code})` : candidate;
+                        }
+                    }
+                    return null;
+                };
+                decentroError =
+                    pickErrorMessage(decentroRes.message) ||
+                    pickErrorMessage(decentroRes.error) ||
+                    pickErrorMessage(decentroRes.responseMessage) ||
+                    pickErrorMessage((decentroRes.data as Record<string, unknown> | undefined)?.error) ||
+                    `Decentro returned no extractable data (keys: ${Object.keys(decentroRes ?? {}).join(', ')})`;
+                console.error(
+                    `[Admin OCR] Decentro extraction failed for ${doc_type} on lead ${leadId}: success=${success} payload=${!!decentroPayload} message=${decentroError}`,
+                );
+
+                // Fallback to Tesseract — and salvage what we can from the raw
+                // text so the admin still gets autofill in degraded mode.
                 const text = await extractTextFromImageBuffer(fileBuffer);
                 ocrData = { rawText: text, source: 'tesseract_fallback' };
                 source = 'tesseract';
+
+                // PAN: regex out the 5-letter / 4-digit / 1-letter pattern.
+                if (doc_type === 'pan_card') {
+                    const panMatch = text.match(/[A-Z]{5}\d{4}[A-Z]/);
+                    if (panMatch) {
+                        (ocrData as Record<string, unknown>).pan_number = panMatch[0];
+                    }
+                }
             }
         } else if (TESSERACT_TYPES.includes(doc_type)) {
             // Use Tesseract for bank docs and RC
@@ -513,6 +596,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             ocr_data: ocrData,
             source,
             doc_type,
+            ...(decentroError ? { decentro_error: decentroError } : {}),
         });
     } catch (error) {
         // Surface the actual cause to the admin instead of a generic
