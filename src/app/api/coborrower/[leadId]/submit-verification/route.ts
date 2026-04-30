@@ -26,6 +26,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             await db.insert(kycVerifications).values({
                 id: `KYCVER-COB-${dateStr}-${seq}`,
                 lead_id: leadId,
+                applicant: 'co_borrower',
                 verification_type: `coborrower_${type}`,
                 status: 'initiating',
                 api_provider: 'decentro',
