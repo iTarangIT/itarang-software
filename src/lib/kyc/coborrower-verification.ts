@@ -742,6 +742,47 @@ export async function executeCoBorrowerDigilockerStatus(
     };
   }
 
+  // Don't poll Decentro's eAadhaar endpoint before the customer has
+  // consented — primary's status route warns that early calls can
+  // invalidate the session, after which Decentro keeps returning "no
+  // consent" even when the customer signs successfully. The no-segment
+  // callback at src/app/api/kyc/digilocker/callback/route.ts now records
+  // consent_given_at on the verification row when Decentro redirects
+  // post-consent. If we don't see that timestamp yet, return a soft
+  // "awaiting consent" response without ever hitting Decentro.
+  const consentGivenAt =
+    typeof apiData.consent_given_at === "string"
+      ? (apiData.consent_given_at as string)
+      : null;
+  // Already-fetched data short-circuits the gate too — once we have
+  // aadhaarData stored we don't need to keep polling.
+  const alreadyHasData =
+    !!(apiData.aadhaarData && Object.keys(apiData.aadhaarData as Record<string, unknown>).length > 0) ||
+    !!apiData.proofOfIdentity ||
+    !!apiData.aadhaarUid ||
+    !!apiData.name;
+
+  if (!consentGivenAt && !alreadyHasData) {
+    // Primary's status route returns success: true even pre-fetch — the
+    // documentFetched boolean conveys whether eAadhaar is on file. Match
+    // that so AadhaarCard's pollStatus doesn't surface this as an error
+    // banner; the customer just hasn't consented yet.
+    return {
+      success: true,
+      message: "Awaiting co-borrower consent on DigiLocker.",
+      data: {
+        verificationId: transactionId,
+        transactionId,
+        status: "awaiting_consent",
+        documentFetched: false,
+        consentGiven: false,
+        linkOpened: false,
+        aadhaarData: {},
+        crossMatchResult: null,
+      },
+    };
+  }
+
   const reference_id = `CB-STATUS-${cb.id}-${Date.now()}`;
   const decentroRes = await digilockerGetEaadhaar({
     initial_decentro_transaction_id: decentroTxnId,
@@ -909,7 +950,11 @@ export async function executeCoBorrowerDigilockerStatus(
   }
 
   return {
-    success: hasDocument,
+    // Always success: true — primary's status route uses the same
+    // convention. documentFetched conveys whether the eAadhaar is on
+    // file. AadhaarCard.pollStatus's `if (!data.success) setError` path
+    // is reserved for genuine errors (missing decentro_txn_id, network).
+    success: true,
     message: hasDocument
       ? "Co-borrower Aadhaar fetched from DigiLocker."
       : "Awaiting co-borrower consent on DigiLocker.",
