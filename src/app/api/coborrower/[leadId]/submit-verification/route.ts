@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import {
     adminVerificationQueue,
@@ -26,14 +26,46 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const now = new Date();
         const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
 
+        // Idempotent: if the dealer re-submits (or admin re-opened the case
+        // and the dealer hits Submit again), we must NOT clobber an already
+        // verified row with a new 'initiating' placeholder. Insert rows with
+        // canonical type names ('aadhaar', 'pan', 'bank' — no 'coborrower_'
+        // prefix) so admin's upsertCoBorrowerVerification (in
+        // src/lib/kyc/coborrower-verification.ts) updates THIS row instead
+        // of creating a parallel one. Skip the insert entirely if a row of
+        // that canonical type already exists for this co-borrower (covers
+        // re-submission and legacy 'coborrower_*' rows).
+        const existingRows = await db
+            .select({ verification_type: kycVerifications.verification_type })
+            .from(kycVerifications)
+            .where(and(
+                eq(kycVerifications.lead_id, leadId),
+                eq(kycVerifications.applicant, 'co_borrower'),
+                inArray(
+                    kycVerifications.verification_type,
+                    [
+                        'aadhaar', 'pan', 'bank',
+                        'coborrower_aadhaar', 'coborrower_pan', 'coborrower_bank',
+                    ],
+                ),
+            ));
+        const canonicalExisting = new Set(
+            existingRows.map(r =>
+                r.verification_type.startsWith('coborrower_')
+                    ? r.verification_type.slice('coborrower_'.length)
+                    : r.verification_type,
+            ),
+        );
+
         const verifications = [];
         for (const type of verificationTypes) {
+            if (canonicalExisting.has(type)) continue;
             const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
             await db.insert(kycVerifications).values({
                 id: `KYCVER-COB-${dateStr}-${seq}`,
                 lead_id: leadId,
                 applicant: 'co_borrower',
-                verification_type: `coborrower_${type}`,
+                verification_type: type,
                 status: 'initiating',
                 api_provider: 'decentro',
                 submitted_at: now,
@@ -42,7 +74,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             });
 
             verifications.push({
-                type: `coborrower_${type}`,
+                type,
                 label: `Co-Borrower ${type.charAt(0).toUpperCase() + type.slice(1)} Verification`,
                 status: 'initiating',
                 last_update: now.toISOString(),
