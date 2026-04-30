@@ -569,7 +569,7 @@ export default function KYCPage() {
             const adminRequestedStep3 = !!(lead?.has_co_borrower || lead?.has_additional_docs_required);
             const route = adminRequestedStep3
                 ? `/dealer-portal/leads/${leadId}/borrower-consent`
-                : `/dealer-portal/leads/${leadId}/kyc/interim`;
+                : `/dealer-portal/leads/${leadId}/product-selection`;
             router.push(route);
         } catch (err: any) {
             setApiError(err?.message || 'Failed to proceed');
@@ -625,14 +625,14 @@ export default function KYCPage() {
 
     const nextStepRoute = adminRequestedStep3
         ? `/dealer-portal/leads/${leadId}/borrower-consent`
-        : `/dealer-portal/leads/${leadId}/kyc/interim`;
+        : `/dealer-portal/leads/${leadId}/product-selection`;
 
     const stepRoutes: Record<number, string> = {
         1: '/dealer-portal/leads/new',
         2: `/dealer-portal/leads/${leadId}/kyc`,
         3: `/dealer-portal/leads/${leadId}/borrower-consent`,
-        4: `/dealer-portal/leads/${leadId}/kyc/interim`,
-        5: `/dealer-portal/leads/${leadId}/options`,
+        4: `/dealer-portal/leads/${leadId}/product-selection`,
+        5: `/dealer-portal/leads/${leadId}/step-5`,
     };
     const jumpToStep = (target: number) => {
         if (target === 2) return; // already here
