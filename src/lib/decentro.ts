@@ -281,6 +281,25 @@ export async function classifyDocument(documentBlob: Blob, filename: string) {
 export type OcrDocType = 'PAN' | 'AADHAAR' | 'DRIVING_LICENSE' | 'VOTERID' | 'PASSPORT';
 export type OcrDocSide = 'FRONT' | 'BACK' | undefined;
 
+export interface ExtractDocumentOcrOptions {
+    /**
+     * When true, do NOT send the `module_secret` header even if
+     * DECENTRO_MODULE_SECRET_KYC is set in env. Use this when the
+     * SKU you're calling rejects requests carrying module_secret —
+     * e.g. PAN OCR on our prod module returns metadata-only error
+     * responses when module_secret is included, but works when it's
+     * omitted (mirrors the curl shape we've verified end-to-end).
+     */
+    skipModuleSecret?: boolean;
+    /**
+     * Override the `consent_purpose` form field. Defaults to
+     * 'Document OCR extraction for KYC verification'. Set to
+     * 'for bank account purpose only' for PAN to mirror the working
+     * curl exactly.
+     */
+    consentPurpose?: string;
+}
+
 export async function extractDocumentOcr(
     document_type: OcrDocType,
     documentBlob: Blob,
@@ -288,6 +307,7 @@ export async function extractDocumentOcr(
     document_side?: OcrDocSide,
     signal?: AbortSignal,
     kycValidate?: boolean,
+    options?: ExtractDocumentOcrOptions,
 ) {
     // Decentro rejects filenames with multiple periods — sanitize by keeping only the last one (extension)
     const lastDot = filename.lastIndexOf('.');
@@ -299,7 +319,10 @@ export async function extractDocumentOcr(
     form.append('reference_id', genRefId());
     form.append('document_type', document_type);
     form.append('consent', 'Y');
-    form.append('consent_purpose', 'Document OCR extraction for KYC verification');
+    form.append(
+        'consent_purpose',
+        options?.consentPurpose || 'Document OCR extraction for KYC verification',
+    );
     // kyc_validate=1 makes Decentro cross-check the doc against UIDAI/NSDL
     // (requires OTP for Aadhaar → fails for plain extraction flows). Default
     // is now to not send the param at all — that matches the curl shape known
@@ -323,7 +346,9 @@ export async function extractDocumentOcr(
     // Production Decentro tiers scope KYC OCR on a separate pricing SKU gated by
     // `module_secret`. Staging doesn't require it; prod rejects with
     // "API usage disallowed due to missing pricing configuration" when absent.
-    if (isRealSecret(MODULE_SECRET_KYC)) {
+    // Some SKUs (e.g. PAN OCR on our prod module) work the OPPOSITE way and
+    // reject when module_secret is sent — caller can opt out via options.
+    if (!options?.skipModuleSecret && isRealSecret(MODULE_SECRET_KYC)) {
         headers['module_secret'] = MODULE_SECRET_KYC!;
     }
 
