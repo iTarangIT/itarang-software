@@ -337,12 +337,6 @@ export default function BorrowerConsentPage() {
     // Preview Customer Profile modal
     const [showPreview, setShowPreview] = useState(false);
 
-    // Co-borrower coupon state (separate from any primary-applicant coupon)
-    const [cbCouponCode, setCbCouponCode] = useState('');
-    const [cbCouponValidating, setCbCouponValidating] = useState(false);
-    const [cbCouponResult, setCbCouponResult] = useState<{ success?: boolean; valid?: boolean; coupon_code?: string; status?: string; message?: string; already_used?: boolean } | null>(null);
-    const [cbReleasingCoupon, setCbReleasingCoupon] = useState(false);
-
     // ─── Data Loading ──────────────────────────────────────────────────────
 
     const loadPageData = async (soft = false) => {
@@ -369,12 +363,6 @@ export default function BorrowerConsentPage() {
             setAccessDenied(false);
             setLead(fetchedLead);
             if (fetchedLead?.borrower_consent_status) setConsentStatus(fetchedLead.borrower_consent_status);
-
-            // Restore co-borrower coupon state if a coupon is already attached to the lead
-            if (fetchedLead?.coupon_code && (fetchedLead.coupon_status === 'reserved' || fetchedLead.coupon_status === 'used')) {
-                setCbCouponCode(fetchedLead.coupon_code);
-                setCbCouponResult({ valid: true, success: true, coupon_code: fetchedLead.coupon_code, status: fetchedLead.coupon_status, message: `Coupon ${fetchedLead.coupon_status}` });
-            }
 
             // Borrower is treated as independent from the customer. We do NOT
             // prefill the borrower form from lead (customer) fields — only
@@ -674,49 +662,6 @@ export default function BorrowerConsentPage() {
         if (aadhaar) updateField('aadhaar_no', String(aadhaar));
     };
 
-    // ─── Co-Borrower Coupon (BRD §2.9.3.6) ─────────────────────────────────
-    // We reuse the existing /api/kyc/[leadId]/validate-coupon endpoint.
-    // The "co-borrower coupon" concept in BRD is satisfied here because coupon
-    // and lead are 1:1 in the current schema — the dealer applies a coupon on
-    // the lead specifically to authorise re-verification with co-borrower.
-
-    const handleValidateCbCoupon = async () => {
-        if (!cbCouponCode.trim()) { setApiError('Please enter coupon code'); return; }
-        setCbCouponValidating(true);
-        setCbCouponResult(null);
-        try {
-            const res = await fetch(`/api/kyc/${leadId}/validate-coupon`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ couponCode: cbCouponCode.trim() }),
-            });
-            const data = await res.json();
-            setCbCouponResult(data);
-            if (!(data.success || data.valid)) {
-                setApiError(data.message || data.error || 'Invalid coupon');
-            }
-        } catch {
-            setApiError('Coupon validation failed');
-        } finally {
-            setCbCouponValidating(false);
-        }
-    };
-
-    const handleReleaseCbCoupon = async () => {
-        setCbReleasingCoupon(true);
-        setApiError(null);
-        try {
-            const res = await fetch(`/api/kyc/${leadId}/release-coupon`, { method: 'POST' });
-            const data = await res.json();
-            if (data.success) { setCbCouponCode(''); setCbCouponResult(null); }
-            else setApiError(data.error?.message || 'Failed to release coupon');
-        } catch {
-            setApiError('Failed to release coupon');
-        } finally {
-            setCbReleasingCoupon(false);
-        }
-    };
-
     // ─── Admin-Requested Document Upload ───────────────────────────────────
 
     const handleRequestedDocUpload = async (requestId: string, file: File) => {
@@ -968,18 +913,18 @@ export default function BorrowerConsentPage() {
     const allRequiredRequestedUploaded = requiredRequestedDocs.every(d => !!d.file_url && d.upload_status !== 'rejected');
     const pendingRequiredRequestedCount = requiredRequestedDocs.filter(d => !d.file_url || d.upload_status === 'rejected').length;
 
-    // BRD §2.9.3.7 — Submit gating matrix:
+    // Submit gating: coupon was already validated at Step 2 — Step 3 only
+    // checks that the dealer has finished the co-borrower / supporting-doc
+    // work the admin requested.
     //   Supporting docs only      → all required supporting docs uploaded
-    //   Co-borrower KYC only      → form valid + 11 docs + consent + coupon
+    //   Co-borrower KYC only      → form valid + 11 docs + consent
     //   Both                      → both of the above
     const pendingRequirements: string[] = [];
-    const cbCouponReserved = !!(cbCouponResult?.success || cbCouponResult?.valid || cbCouponResult?.status === 'reserved' || cbCouponResult?.status === 'used');
     const alreadySubmitted = step3Ctx?.lead_kyc_status === 'pending_itarang_reverification';
 
     if (step3Ctx?.requires_co_borrower) {
         if (!isConsentVerified) pendingRequirements.push('co-borrower consent verification');
         if (!allDocsUploaded) pendingRequirements.push(`${docStats.pending.length} pending co-borrower document${docStats.pending.length === 1 ? '' : 's'}`);
-        if (!cbCouponReserved) pendingRequirements.push('coupon validation');
     }
     if (step3Ctx?.requires_supporting_docs && requestedDocs.length > 0 && !allRequiredRequestedUploaded) {
         pendingRequirements.push(`${pendingRequiredRequestedCount} admin-requested document${pendingRequiredRequestedCount === 1 ? '' : 's'}`);
@@ -989,9 +934,7 @@ export default function BorrowerConsentPage() {
         if (alreadySubmitted) return false;
         if (!step3Ctx) return false;
         const supportingOk = !step3Ctx.requires_supporting_docs || requestedDocs.length === 0 || allRequiredRequestedUploaded;
-        const coBorrowerOk = !step3Ctx.requires_co_borrower || (
-            isConsentVerified && allDocsUploaded && cbCouponReserved
-        );
+        const coBorrowerOk = !step3Ctx.requires_co_borrower || (isConsentVerified && allDocsUploaded);
         return supportingOk && coBorrowerOk;
     })();
 
@@ -1494,6 +1437,53 @@ export default function BorrowerConsentPage() {
                         </div>
                     </SectionCard>
 
+                    {/* ─── Verification Action ─────────────────────────
+                        Sits between the dealer's co-borrower uploads and the
+                        admin-side verification status table. Coupon was already
+                        validated at Step 2 — Step 3 only needs the dealer to
+                        click Submit once consent + docs are done. */}
+                    {step3Ctx?.lead_kyc_status !== 'pending_itarang_reverification' && (
+                        <SectionCard title="Verification Action" action={
+                            alreadySubmitted ? (
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Submitted</span>
+                            ) : canSubmit ? (
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Shield className="w-3 h-3" />Ready to Submit</span>
+                            ) : (
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-bold">Pending</span>
+                            )
+                        }>
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                                    <div className="flex items-center justify-between px-4 py-3 bg-gray-50 rounded-xl">
+                                        <span className="font-bold text-gray-700">Co-borrower consent</span>
+                                        <ConsentStatusBadge status={consentStatus} />
+                                    </div>
+                                    <div className="flex items-center justify-between px-4 py-3 bg-gray-50 rounded-xl">
+                                        <span className="font-bold text-gray-700">Documents uploaded</span>
+                                        <span className={`font-black ${allDocsUploaded ? 'text-emerald-600' : 'text-[#0047AB]'}`}>
+                                            {requiredDocs.filter(d => d.required && !!uploadedDocs[d.key]?.file_url).length}/{requiredDocs.filter(d => d.required).length}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                    <p className="text-xs text-gray-500 flex-1 min-w-[240px]">
+                                        Submitting sends the co-borrower KYC back to the iTarang admin team. Admin can act on the documents once submitted.
+                                    </p>
+                                    <PrimaryButton onClick={handleSubmitForVerification} loading={submitting} disabled={submitting || !canSubmit}>
+                                        {alreadySubmitted ? 'Submitted' : 'Submit for Verification'}
+                                    </PrimaryButton>
+                                </div>
+
+                                {!canSubmit && pendingRequirements.length > 0 && !alreadySubmitted && (
+                                    <p className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                                        Complete to submit: {pendingRequirements.join(', ')}
+                                    </p>
+                                )}
+                            </div>
+                        </SectionCard>
+                    )}
+
                     {/* ─── Verification Status ────────────────────────── */}
                     <SectionCard title="Verification Status (Co-borrower)">
                             <div className="overflow-x-auto">
@@ -1617,95 +1607,18 @@ export default function BorrowerConsentPage() {
                         </div>
                     )}
 
-                    {/* ─── Verification Action — Coupon (BRD §2.9.3.6) ────
-                        Visible only when co-borrower KYC is requested. Supporting-
-                        docs-only re-verification reuses the original lead coupon. */}
-                    {step3Ctx?.requires_co_borrower && step3Ctx?.lead_kyc_status !== 'pending_itarang_reverification' && (
-                        <SectionCard title="Verification Action" action={
-                            cbCouponResult?.status === 'used'
-                                ? <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Submitted</span>
-                                : cbCouponResult?.status === 'reserved' || (cbCouponResult?.success || cbCouponResult?.valid)
-                                    ? <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold"><Shield className="w-3 h-3" />Reserved</span>
-                                    : <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-bold">Awaiting Coupon</span>
-                        }>
-                            {(cbCouponResult?.success || cbCouponResult?.valid) ? (
-                                <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
-                                    <Shield className="w-5 h-5 text-blue-600 flex-shrink-0" />
-                                    <div className="flex-1">
-                                        <p className="text-sm font-bold text-blue-800">
-                                            Coupon Reserved: <span className="font-mono">{cbCouponResult.coupon_code || cbCouponCode}</span>
-                                        </p>
-                                        <p className="text-xs text-blue-500 mt-0.5">
-                                            This coupon is locked to this lead. Click "Submit for Verification" below to start re-verification.
-                                        </p>
-                                    </div>
-                                    <button
-                                        onClick={handleReleaseCbCoupon}
-                                        disabled={cbReleasingCoupon}
-                                        className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-50 transition-all disabled:opacity-50 flex items-center gap-1.5"
-                                    >
-                                        {cbReleasingCoupon ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
-                                        Change Coupon
-                                    </button>
-                                </div>
-                            ) : (
-                                <div className="space-y-3">
-                                    <p className="text-xs text-gray-500">
-                                        Enter your verification coupon code to authorise re-verification with the co-borrower.
-                                    </p>
-                                    <div className="flex items-center gap-3">
-                                        <input
-                                            type="text"
-                                            value={cbCouponCode}
-                                            onChange={e => setCbCouponCode(e.target.value.toUpperCase())}
-                                            placeholder="Enter coupon code (e.g., ITARANG-FREE)"
-                                            maxLength={20}
-                                            className="flex-1 h-11 px-4 bg-white border-2 border-[#EBEBEB] rounded-xl outline-none text-sm font-mono focus:border-[#1D4ED8] transition-all"
-                                        />
-                                        <button
-                                            onClick={handleValidateCbCoupon}
-                                            disabled={cbCouponValidating || !cbCouponCode.trim()}
-                                            className="px-6 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center gap-2"
-                                        >
-                                            {cbCouponValidating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
-                                            Validate
-                                        </button>
-                                    </div>
-                                    {cbCouponResult && !cbCouponResult.valid && !cbCouponResult.success && (
-                                        <div className="px-4 py-2 bg-red-50 border border-red-200 rounded-xl">
-                                            <p className="text-sm font-medium text-red-700">
-                                                <AlertCircle className="w-4 h-4 inline mr-1" />
-                                                {cbCouponResult.message || 'Invalid coupon code'}
-                                            </p>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </SectionCard>
-                    )}
                 </main>
 
                 {/* ─── Bottom Bar ────────────────────────────────────── */}
-                {!canSubmit && pendingRequirements.length > 0 && !alreadySubmitted && (
-                    <div className="mt-6 flex items-center justify-end">
-                        <p className="text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                            Complete to submit: {pendingRequirements.join(', ')}
-                        </p>
-                    </div>
-                )}
                 <StickyBottomBar lastSaved={lastSaved}>
                     <OutlineButton onClick={() => router.push(`/dealer-portal/leads/${leadId}/kyc`)}>Back</OutlineButton>
                     <SecondaryButton onClick={() => handleSaveDraft(false)} loading={savingDraft}>Save Draft</SecondaryButton>
                     <SecondaryButton onClick={() => setShowPreview(true)}>
                         <Eye className="w-4 h-4" /> Preview Customer Profile
                     </SecondaryButton>
-                    {step3Cleared ? (
+                    {step3Cleared && (
                         <PrimaryButton onClick={() => router.push(`/dealer-portal/leads/${leadId}/product-selection`)}>
                             Next: Product Selection <ChevronRight className="w-4 h-4" />
-                        </PrimaryButton>
-                    ) : (
-                        <PrimaryButton onClick={handleSubmitForVerification} loading={submitting} disabled={submitting || !canSubmit}>
-                            {alreadySubmitted ? 'Submitted' : 'Submit for Verification'}
                         </PrimaryButton>
                     )}
                 </StickyBottomBar>
