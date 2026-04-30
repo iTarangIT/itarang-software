@@ -8,10 +8,10 @@ import { and, desc, eq, notInArray, notLike } from 'drizzle-orm';
 // user-facing verification checks — the Customer Consent card on the KYC page
 // already reflects the live consent state. Hide them from this list and emit
 // a single synthesized row only after admin verification.
-// 'mobile' rows are also hidden — the mobile-number check was removed from
-// the dealer-facing Verification Status table.
+// 'mobile' and 'address' rows are also hidden — admin takes no action on
+// them, so they were removed from the dealer-facing Verification Status table.
 const CONSENT_AUDIT_TYPES = ['esign_consent', 'esign_consent_sync'];
-const HIDDEN_VERIFICATION_TYPES = [...CONSENT_AUDIT_TYPES, 'mobile'];
+const HIDDEN_VERIFICATION_TYPES = [...CONSENT_AUDIT_TYPES, 'mobile', 'address'];
 const ADMIN_VERIFIED_CONSENT_STATUSES = ['admin_verified', 'manual_verified', 'verified'];
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
