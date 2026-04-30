@@ -1209,10 +1209,14 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           grid. Co-Borrower section is hidden when there are no co-borrower
           docs and no co-borrower record on the lead. */}
       {activeTab === "documents" && (() => {
-        const primaryDocs = documents.filter(
-          (d) => !d.docFor || d.docFor === "customer" || d.docFor === "primary",
-        );
-        const coBorrowerDocs = documents.filter((d) => d.docFor === "co_borrower");
+        // Primary = explicitly marked primary OR has no marker (legacy rows).
+        // Anything else (co_borrower, coborrower, co-borrower, borrower, ...)
+        // falls into the co-borrower bucket so DB rows with non-canonical
+        // doc_for values still get surfaced under the right section.
+        const isPrimaryDoc = (d: Document) =>
+          !d.docFor || d.docFor === "customer" || d.docFor === "primary";
+        const primaryDocs = documents.filter(isPrimaryDoc);
+        const coBorrowerDocs = documents.filter((d) => !isPrimaryDoc(d));
         const renderDocCard = (doc: Document) => (
           <button key={doc.id} onClick={() => setLightboxUrl(doc.fileUrl)}
             className="group bg-white border border-gray-100 rounded-2xl p-3 hover:border-teal-300 hover:shadow-lg hover:-translate-y-0.5 transition-all text-left shadow-sm">
