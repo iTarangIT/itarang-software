@@ -390,7 +390,23 @@ export default function AadhaarCard({
     try {
       const res = await fetch(`${apiBase}/aadhaar/digilocker/status/${transactionId}`);
       const data = await res.json();
-      if (!data.success) return;
+      if (!data.success) {
+        // Surface actionable errors instead of silently dropping the response.
+        // Common case for co-borrower: api_response.data.decentro_txn_id is
+        // missing on the row (admin manual-accepted before any DigiLocker
+        // session ran, or the row predates the decentro_txn_id capture fix),
+        // and there's no path to recovery without a fresh init. Stop the
+        // poll loop on that terminal error so we don't hammer the route.
+        const msg =
+          (typeof data?.error?.message === "string" && data.error.message) ||
+          (typeof data?.message === "string" && data.message) ||
+          "Failed to fetch DigiLocker status";
+        setError(msg);
+        if (msg.toLowerCase().includes("decentro transaction id missing")) {
+          if (pollRef.current) clearInterval(pollRef.current);
+        }
+        return;
+      }
       const s = data.data;
 
       if (s.documentFetched) {
