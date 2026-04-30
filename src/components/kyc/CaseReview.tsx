@@ -14,6 +14,7 @@ import SupportingDocsPanel, {
 } from "./step3/SupportingDocsPanel";
 import CoBorrowerPanel, {
   type CoBorrowerData,
+  type CoBorrowerGated,
 } from "./step3/CoBorrowerPanel";
 import RequestCoBorrowerModal from "./step3/RequestCoBorrowerModal";
 
@@ -144,7 +145,7 @@ interface CaseData {
   reviews: unknown[];
   digilocker: DigilockerEntry[];
   supportingDocs: SupportingDoc[];
-  coBorrower: CoBorrowerData | null;
+  coBorrower: CoBorrowerData | CoBorrowerGated | null;
 }
 
 function formatRelativeTime(isoString: string | null): string | null {
@@ -1180,12 +1181,35 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
       )}
 
       {/* Step 3 — Panel 3: Co-Borrower KYC Review (BRD §2.9.3) */}
-      {activeTab === "verifications" && data.coBorrower && (
+      {activeTab === "verifications" && data.coBorrower && !data.coBorrower.gated && (
         <CoBorrowerPanel
           leadId={leadId}
-          coBorrower={data.coBorrower}
+          coBorrower={data.coBorrower as CoBorrowerData}
           onRefresh={fetchData}
         />
+      )}
+
+      {/* Awaiting Dealer Submission Banner — shown when admin requested
+          a co-borrower but the dealer hasn't yet hit Submit for Verification
+          on Step 3. Documents and verification controls are intentionally
+          withheld until the dealer formally submits. */}
+      {activeTab === "verifications" && data.coBorrower?.gated && (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+          <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center">
+            <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-gray-900">Co-borrower KYC requested — awaiting dealer submission</p>
+            <p className="text-xs text-gray-600 mt-0.5">
+              Documents and verification controls will appear here once the dealer submits Step 3.
+              {data.coBorrower.requestedAt && (
+                <> Requested on {new Date(data.coBorrower.requestedAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}.</>
+              )}
+            </p>
+          </div>
+        </div>
       )}
 
       {/* Request Co-Borrower Banner — shown when no co-borrower exists yet */}
@@ -1290,8 +1314,11 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
             </section>
 
             {/* Co-Borrower section — only render when co-borrower exists or
-                their docs exist. Avoids confusing empty section on solo leads. */}
-            {(coBorrowerDocs.length > 0 || data.coBorrower) && (
+                their docs exist. Avoids confusing empty section on solo leads.
+                When the dealer hasn't submitted Step 3 yet, the case-review
+                API marks coBorrower as gated; suppress this section so admin
+                doesn't see (or act on) documents pre-submission. */}
+            {(coBorrowerDocs.length > 0 || data.coBorrower) && !data.coBorrower?.gated && (
               <section>
                 <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-purple-500" />
@@ -1371,19 +1398,31 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           )}
         </div>
 
-        {/* Co-Borrower Status Indicator */}
+        {/* Co-Borrower Status Indicator. When gated (dealer hasn't submitted
+            Step 3 yet), the API only returns the gated stub — render a
+            simpler awaiting-submission line. */}
         {data.coBorrower && (
           <div className="flex items-center gap-2 mb-4 px-3 py-2 rounded-xl bg-blue-50 border border-blue-200 text-sm">
             <svg className="w-4 h-4 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
             </svg>
             <span className="text-blue-800 font-medium">
-              Co-Borrower: {data.coBorrower.fullName || "Pending submission"}
-              {data.coBorrower.kycStatus === "not_started" || data.coBorrower.kycStatus === "draft"
-                ? " — awaiting dealer submission"
-                : data.coBorrower.kycStatus === "completed"
-                  ? " — submitted for review"
-                  : ` — ${(data.coBorrower.kycStatus || "pending").replace(/_/g, " ")}`}
+              {data.coBorrower.gated
+                ? "Co-Borrower: awaiting dealer submission"
+                : (() => {
+                    const cb = data.coBorrower as CoBorrowerData;
+                    const status = cb.kycStatus;
+                    return (
+                      <>
+                        Co-Borrower: {cb.fullName || "Pending submission"}
+                        {status === "not_started" || status === "draft"
+                          ? " — awaiting dealer submission"
+                          : status === "completed"
+                            ? " — submitted for review"
+                            : ` — ${(status || "pending").replace(/_/g, " ")}`}
+                      </>
+                    );
+                  })()}
             </span>
           </div>
         )}

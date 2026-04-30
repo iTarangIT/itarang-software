@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import {
     adminVerificationQueue,
+    coBorrowers,
     kycVerifications,
     leads,
 } from '@/lib/db/schema';
@@ -16,7 +17,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     try {
         const { leadId } = await params;
 
-        const verificationTypes = ['aadhaar', 'pan', 'bank', 'address', 'mobile'];
+        // Admin only acts on aadhaar/pan/bank for the co-borrower. Address
+        // and mobile rows used to be inserted as placeholders but cluttered
+        // the dealer's Verification Status table with rows admin never
+        // touches — see CONSENT_AUDIT_TYPES comment in
+        // src/app/api/kyc/[leadId]/verifications/route.ts.
+        const verificationTypes = ['aadhaar', 'pan', 'bank'];
         const now = new Date();
         const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
 
@@ -52,6 +58,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 updated_at: now,
             })
             .where(eq(leads.id, leadId));
+
+        // Stamp the co-borrower as submitted so the admin case-review API
+        // and the doc-review endpoint know the dealer has formally handed
+        // off Step 3. Until this column is non-null, admin sees a gated
+        // banner and cannot approve/reject documents.
+        await db
+            .update(coBorrowers)
+            .set({
+                verification_submitted_at: now,
+                kyc_status: 'submitted',
+                updated_at: now,
+            })
+            .where(eq(coBorrowers.lead_id, leadId));
 
         // BRD: high-priority entry in admin queue so re-verification is surfaced
         await db.insert(adminVerificationQueue).values({

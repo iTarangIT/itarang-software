@@ -10,8 +10,17 @@ import { and, desc, eq, notInArray, notLike } from 'drizzle-orm';
 // a single synthesized row only after admin verification.
 // 'mobile' and 'address' rows are also hidden — admin takes no action on
 // them, so they were removed from the dealer-facing Verification Status table.
+// The 'coborrower_*' variants cover legacy rows inserted by the older submit
+// flow that stamped a coborrower_ prefix; the current submit-verification
+// endpoint no longer creates these, but we still filter them defensively.
 const CONSENT_AUDIT_TYPES = ['esign_consent', 'esign_consent_sync'];
-const HIDDEN_VERIFICATION_TYPES = [...CONSENT_AUDIT_TYPES, 'mobile', 'address'];
+const HIDDEN_VERIFICATION_TYPES = [
+    ...CONSENT_AUDIT_TYPES,
+    'mobile',
+    'address',
+    'coborrower_mobile',
+    'coborrower_address',
+];
 const ADMIN_VERIFIED_CONSENT_STATUSES = ['admin_verified', 'manual_verified', 'verified'];
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {

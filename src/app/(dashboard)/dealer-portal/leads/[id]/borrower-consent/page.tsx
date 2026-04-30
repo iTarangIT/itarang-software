@@ -512,6 +512,9 @@ export default function BorrowerConsentPage() {
         if (field === 'pan_no') {
             fin = String(value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
         }
+        if (field === 'income') {
+            fin = String(value ?? '').replace(/\D/g, '').slice(0, 9);
+        }
         setBorrowerForm(prev => {
             const next = { ...prev, [field]: fin };
             if (field === 'is_current_same' && fin) next.current_address = next.permanent_address;
@@ -590,6 +593,11 @@ export default function BorrowerConsentPage() {
         // Relationship — required, one of allowed enums
         if (!f.relationship) errs.relationship = 'Relationship is required';
         else if (!['spouse', 'parent', 'sibling', 'other'].includes(f.relationship)) errs.relationship = 'Invalid relationship';
+
+        // Monthly Income — required, positive integer (rupees)
+        const incomeStr = String(f.income ?? '').trim();
+        if (!incomeStr) errs.income = 'Monthly income is required';
+        else if (!/^\d+$/.test(incomeStr) || Number(incomeStr) <= 0) errs.income = 'Enter a valid monthly income';
 
         return { ok: Object.keys(errs).length === 0, errors: errs };
     };
@@ -916,6 +924,11 @@ export default function BorrowerConsentPage() {
                 return;
             }
 
+            // Optimistically flip the status locally so the Verification
+            // Action card unmounts immediately. If loadPageData picks the
+            // server status up first, this is a no-op; if it doesn't, we
+            // never want to re-render the Submit button.
+            setStep3Ctx(prev => prev ? { ...prev, lead_kyc_status: 'pending_itarang_reverification' } : prev);
             toast.success('Submitted for verification. Admin will review and you will be notified.');
             await loadPageData(true);
         } catch (err: any) {
@@ -1145,7 +1158,7 @@ export default function BorrowerConsentPage() {
                                 error={borrowerErrors.relationship}
                             />
                             <InputField label="Marital Status" value={borrowerForm.marital_status} onChange={v => updateField('marital_status', v)} placeholder="Single / Married" />
-                            <InputField label="Monthly Income (₹)" value={borrowerForm.income} onChange={v => updateField('income', v)} placeholder="50000" />
+                            <InputField label="Monthly Income (₹)" value={borrowerForm.income} onChange={v => updateField('income', v)} placeholder="50000" required inputMode="numeric" maxLength={9} error={borrowerErrors.income} />
                             <div className="md:col-span-2">
                                 <InputField label="Permanent Address" value={borrowerForm.permanent_address} onChange={v => updateField('permanent_address', v)} placeholder="Full permanent address" required error={borrowerErrors.permanent_address} />
                             </div>
