@@ -377,6 +377,11 @@ jobs:
             export NEXT_TELEMETRY_DISABLED=1
             time npm run build
 
+            echo "--- staging standalone bundle (rollback) ---"
+            rm -rf .next/standalone/.next/static .next/standalone/public
+            cp -r .next/static .next/standalone/.next/static
+            if [ -d public ]; then cp -r public .next/standalone/public; fi
+
             for app in sandbox-web sandbox-worker; do
               if pm2 describe "$app" > /dev/null 2>&1; then pm2 delete "$app" || true; fi
             done
