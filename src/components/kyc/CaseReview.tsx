@@ -579,10 +579,14 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   // CIBIL instead. Treating co-borrower acceptance as satisfying the same
   // requirement matches the BRD intent — co-borrower exists specifically
   // to backstop primary.
-  const cbCards = (data.coBorrower?.verificationCards ?? []) as Array<{
-    type: string;
-    adminAction: string | null;
-  }>;
+  // data.coBorrower may be CoBorrowerData (full payload, has
+  // verificationCards) OR CoBorrowerGated (a stub used when co-borrower
+  // KYC is gated and the verifications haven't been collected yet).
+  // Only the full shape carries verificationCards — narrow before reading.
+  const cbCards: Array<{ type: string; adminAction: string | null }> =
+    data.coBorrower && "verificationCards" in data.coBorrower
+      ? (data.coBorrower.verificationCards as Array<{ type: string; adminAction: string | null }>)
+      : [];
   for (const t of verifTypes) {
     const primaryCard = data.verificationCards.find((c) => c.type === t);
     const coBorrowerCard = cbCards.find((c) => c.type === t);

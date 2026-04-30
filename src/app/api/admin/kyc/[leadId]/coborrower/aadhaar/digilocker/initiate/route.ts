@@ -30,7 +30,17 @@ export async function POST(
     let callbackUrl: string;
     try {
       const callbackBase = publicOrigin({ req });
-      callbackUrl = body.redirect_url || `${callbackBase}/api/kyc/digilocker/callback`;
+      // Include leadId as a path segment so the callback handler can find
+      // the right co-borrower verification row by an unambiguous key
+      // instead of a fragile JSONB equality match on the Decentro txn id.
+      // Mirrors primary's pattern at
+      // src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/initiate/route.ts:147
+      // (primary uses its digiId; we use leadId — there's at most one
+      // in-progress co-borrower aadhaar verification per lead, so it's a
+      // safe natural key).
+      callbackUrl =
+        body.redirect_url ||
+        `${callbackBase}/api/kyc/digilocker/callback/coborrower/${encodeURIComponent(leadId)}`;
     } catch (err) {
       if (err instanceof PublicOriginError) {
         return NextResponse.json(
