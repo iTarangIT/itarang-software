@@ -566,10 +566,13 @@ export default function KYCPage() {
         try {
             setSubmitting(true);
             setApiError(null);
-            const adminRequestedStep3 = !!(lead?.has_co_borrower || lead?.has_additional_docs_required);
-            const route = adminRequestedStep3
-                ? `/dealer-portal/leads/${leadId}/borrower-consent`
-                : `/dealer-portal/leads/${leadId}/product-selection`;
+            // Match the gate: if admin approved → Step 4, else if admin
+            // requested Step 3 → Step 3. Approval wins over step3 request
+            // so step_3_cleared still goes straight to product selection.
+            const approved = ['kyc_approved', 'step_3_cleared'].includes(lead?.kyc_status || '');
+            const route = approved
+                ? `/dealer-portal/leads/${leadId}/product-selection`
+                : `/dealer-portal/leads/${leadId}/borrower-consent`;
             router.push(route);
         } catch (err: any) {
             setApiError(err?.message || 'Failed to proceed');
@@ -598,34 +601,26 @@ export default function KYCPage() {
     }
 
     // ─── Gating & Stepper ───────────────────────────────────────────────────
-    const isConsentVerified = ['verified', 'admin_verified', 'manual_verified'].includes((consentStatus || '').toLowerCase());
-    const allDocsUploaded = requiredDocs.filter(d => d.required).every(d => !!uploadedDocs[d.key]?.file_url);
-    const isCouponSubmitted = lead?.coupon_status === 'used' || submittedForVerification;
-    const allVerificationsApproved =
-        verifications.length > 0 &&
-        verifications.every(v => ['success', 'verified'].includes((v.status || '').toLowerCase()));
-
-    // Once the admin clicks "Request Co-Borrower KYC" or "Request Additional
-    // Docs" on the case-review screen, has_co_borrower / has_additional_docs_required
-    // is flipped on the lead. That admin action itself is the green light to
-    // advance from Step 2 — the dealer should be able to proceed even if some
-    // verification rows are still in pending/failed state.
+    // Step 2 Next is gated purely on the admin's final decision:
+    //   • Approve Lead              → kyc_status = 'kyc_approved' / 'step_3_cleared' → route to Step 4
+    //   • Request Co-Borrower KYC   → has_co_borrower=true                            → route to Step 3
+    //   • Request Docs              → has_additional_docs_required=true               → route to Step 3
+    // Until the admin clicks one of those, Next stays disabled regardless of
+    // dealer-side state (consent / docs / coupon are tracked elsewhere).
+    const adminApprovedFinal = ['kyc_approved', 'step_3_cleared'].includes(lead?.kyc_status || '');
     const adminRequestedStep3 = !!(lead?.has_co_borrower || lead?.has_additional_docs_required);
 
     const pendingRequirements: string[] = [];
-    if (!isConsentVerified) pendingRequirements.push('consent verification');
-    if (!allDocsUploaded) pendingRequirements.push(`${docStats.pending.length} pending document${docStats.pending.length === 1 ? '' : 's'}`);
-    if (!isCouponSubmitted) pendingRequirements.push('coupon submission');
-    if (!adminRequestedStep3 && !allVerificationsApproved) pendingRequirements.push('admin verification of all checks');
-    const canProceed =
-        isConsentVerified &&
-        allDocsUploaded &&
-        isCouponSubmitted &&
-        (adminRequestedStep3 || allVerificationsApproved);
+    if (!adminApprovedFinal && !adminRequestedStep3) {
+        pendingRequirements.push('admin final decision');
+    }
+    const canProceed = adminApprovedFinal || adminRequestedStep3;
 
-    const nextStepRoute = adminRequestedStep3
-        ? `/dealer-portal/leads/${leadId}/borrower-consent`
-        : `/dealer-portal/leads/${leadId}/product-selection`;
+    // Approval takes precedence: if the admin approved Step 3 (step_3_cleared)
+    // even after a co-borrower flow, route straight to Step 4.
+    const nextStepRoute = adminApprovedFinal
+        ? `/dealer-portal/leads/${leadId}/product-selection`
+        : `/dealer-portal/leads/${leadId}/borrower-consent`;
 
     const stepRoutes: Record<number, string> = {
         1: '/dealer-portal/leads/new',
