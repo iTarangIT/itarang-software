@@ -79,6 +79,115 @@ interface AadhaarTableRow {
   match: { similarity: number; threshold: number; pass: boolean } | null;
 }
 
+/**
+ * Normalise eAadhaar fields out of whatever shape sits in
+ * `kyc_verifications.api_response.data` for a co-borrower verification row.
+ *
+ * Three shapes coexist in the wild:
+ *  1. New (post latest server fix) — `data.aadhaarData = { uid, name, dob, ... }`.
+ *  2. Decentro-raw nested — `data.proofOfIdentity.{name,gender,dob}` /
+ *     `data.proofOfAddress.{careOf,house,street,...}` / `data.aadhaarUid`.
+ *  3. Decentro-raw flat — `data.name`, `data.aadhaar_number` /
+ *     `data.aadhaarNumber`, `data.dob` / `data.date_of_birth`, `data.gender`,
+ *     `data.address` / `data.full_address`, `data.careof` / `data.care_of` /
+ *     `data.fatherName`.
+ *
+ * Returns `null` when no field can be extracted. Field shape matches what
+ * `buildAadhaarTableRows` already consumes.
+ */
+function normalizeAadhaarFromVerData(
+  data: Record<string, unknown> | undefined,
+): Record<string, string | null> | null {
+  if (!data) return null;
+
+  const newShape =
+    (data.aadhaarData ?? null) as Record<string, unknown> | null;
+  const poi = (data.proofOfIdentity ?? {}) as Record<string, unknown>;
+  const poa = (data.proofOfAddress ?? {}) as Record<string, unknown>;
+
+  const pick = (...candidates: unknown[]): string | null => {
+    for (const c of candidates) {
+      if (typeof c === "string" && c.trim()) return c;
+      if (typeof c === "number") return String(c);
+    }
+    return null;
+  };
+
+  const uid = pick(
+    newShape?.uid,
+    data.aadhaarUid,
+    data.aadhaar_number,
+    data.aadhaarNumber,
+    data.uid,
+  );
+  const name = pick(newShape?.name, poi.name, data.name, data.full_name);
+  const dob = pick(
+    newShape?.dob,
+    poi.dob,
+    data.dob,
+    data.date_of_birth,
+  );
+  const gender = pick(newShape?.gender, poi.gender, data.gender);
+  const careof = pick(
+    newShape?.careof,
+    poa.careOf,
+    poa.careof,
+    data.careof,
+    data.care_of,
+    data.fatherName,
+    data.father_name,
+  );
+
+  // Decentro nests address under proofOfAddress as discrete components —
+  // join them when present, fall back to flat `address` / `full_address`.
+  const poaAddressParts = [
+    poa.house, poa.street, poa.landmark, poa.locality,
+    poa.vtc, poa.subDistrict, poa.district, poa.state, poa.pincode,
+  ]
+    .filter((p) => typeof p === "string" && p.trim())
+    .join(", ");
+  const address = pick(
+    newShape?.address,
+    poaAddressParts || null,
+    data.address,
+    data.full_address,
+  );
+
+  const district = pick(newShape?.district, poa.district, data.district, data.dist);
+  const state = pick(newShape?.state, poa.state, data.state);
+  const pincode = pick(newShape?.pincode, poa.pincode, data.pincode, data.zip);
+  const mobile = pick(
+    newShape?.mobile,
+    poi.hashedMobileNumber,
+    data.mobile,
+    data.phone,
+  );
+  const photo = pick(newShape?.photo_base64, data.image, data.photo_base64, data.photo);
+
+  // If literally nothing was extracted, return null so the calling card can
+  // keep aadhaarData state at null (and render the empty-state CTA).
+  if (
+    !uid && !name && !dob && !gender && !careof && !address &&
+    !district && !state && !pincode && !mobile && !photo
+  ) {
+    return null;
+  }
+
+  return {
+    uid,
+    name,
+    dob,
+    gender,
+    careof,
+    address,
+    district,
+    state,
+    pincode,
+    mobile,
+    photo_base64: photo,
+  };
+}
+
 function buildAadhaarTableRows({
   aadhaarData,
   crossMatch,
@@ -214,15 +323,16 @@ export default function AadhaarCard({
     existingTransaction?.id ||
       (applicant === "co_borrower" && existingVerification?.id ? existingVerification.id : "")
   );
-  // For co-borrower, executeCoBorrowerDigilockerStatus now persists the
+  // For co-borrower, executeCoBorrowerDigilockerStatus persists the
   // normalised aadhaarData / crossMatchResult into kyc_verifications.api_response.data
   // (mirroring primary's digilockerTransactions.aadhaar_extracted_data path).
   // Hydrate from there on mount so the data table renders without waiting
-  // for the next poll tick.
+  // for the next poll tick. Use normalizeAadhaarFromVerData so legacy rows
+  // (raw Decentro shape, no nested aadhaarData key) also populate — that
+  // helper tries the new shape first, then proofOfIdentity/proofOfAddress
+  // nesting, then flat fields.
   const cbAadhaarFromVer =
-    applicant === "co_borrower"
-      ? (cbVerData?.aadhaarData as Record<string, string | null> | undefined)
-      : undefined;
+    applicant === "co_borrower" ? normalizeAadhaarFromVerData(cbVerData) : null;
   const cbCrossMatchFromVer =
     applicant === "co_borrower"
       ? (cbVerData?.crossMatchResult as CrossMatchResult | null | undefined)
