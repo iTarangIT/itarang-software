@@ -460,6 +460,19 @@ export default function BorrowerConsentPage() {
         return () => clearInterval(interval);
     }, [consentStatus, leadId]);
 
+    // Auto-poll Step 3 verification status every 5s once the dealer has
+    // submitted for re-verification — the admin's accept/reject and final
+    // approval should appear without a manual refresh, and the
+    // "Next: Product Selection" button should light up as soon as kyc_status
+    // flips to step_3_cleared / kyc_approved.
+    useEffect(() => {
+        const submitted = step3Ctx?.lead_kyc_status === 'pending_itarang_reverification';
+        const cleared = ['step_3_cleared', 'kyc_approved'].includes(lead?.kyc_status || '');
+        if (!submitted || cleared) return;
+        const interval = setInterval(() => loadPageData(true), 5000);
+        return () => clearInterval(interval);
+    }, [step3Ctx?.lead_kyc_status, lead?.kyc_status, leadId]);
+
     // Detect consent path
     useEffect(() => {
         const digitalStatuses = ['link_sent', 'link_opened', 'esign_in_progress', 'esign_completed'];
@@ -650,16 +663,54 @@ export default function BorrowerConsentPage() {
 
     // ─── Aadhaar OCR Auto-fill ─────────────────────────────────────────────
 
-    const handleOCRResult = (data: any) => {
+    const sanitizeName = (v: any) => {
+        const lettersOnly = String(v ?? '').replace(/[^A-Za-z\s.'-]/g, '');
+        return lettersOnly.split(' ').map((s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '')).join(' ');
+    };
+
+    const handleOCRResult = async (data: any) => {
         if (!data) return;
-        if (data.full_name) updateField('full_name', data.full_name);
-        if (data.father_or_husband_name) updateField('father_or_husband_name', data.father_or_husband_name);
-        if (data.phone) updateField('phone', data.phone);
-        if (data.dob) updateField('dob', data.dob);
-        if (data.current_address) updateField('current_address', data.current_address);
-        if (data.permanent_address) updateField('permanent_address', data.permanent_address);
+
+        // Build the merged form locally so we can both setState AND post the
+        // exact same snapshot to the server in one shot. Calling setState then
+        // immediately reading borrowerForm from closure is racy — closure has
+        // the old value. Snapshotting avoids that.
         const aadhaar = data.aadhaar_number ?? data.aadhaar_no ?? data.aadhaar;
-        if (aadhaar) updateField('aadhaar_no', String(aadhaar));
+        const updates: any = {};
+        if (data.full_name) updates.full_name = sanitizeName(data.full_name);
+        if (data.father_or_husband_name) updates.father_or_husband_name = sanitizeName(data.father_or_husband_name);
+        if (data.phone) updates.phone = String(data.phone).replace(/\D/g, '').slice(0, 10);
+        if (data.dob) updates.dob = data.dob;
+        if (data.current_address) updates.current_address = data.current_address;
+        if (data.permanent_address) updates.permanent_address = data.permanent_address;
+        if (aadhaar) updates.aadhaar_no = String(aadhaar).replace(/\D/g, '').slice(0, 12);
+
+        const next = { ...borrowerForm, ...updates };
+        if (next.is_current_same) next.current_address = next.permanent_address;
+        setBorrowerForm(next);
+
+        // Persist the OCR-filled values RIGHT AWAY to both:
+        //   1. leads.kyc_draft_data.borrowerForm (page reload reads from here)
+        //   2. coBorrowers row (consent PDF + send-consent + admin review read here)
+        // This prevents a refresh-within-2-min from reverting the form to the
+        // last saved (likely empty) state.
+        try {
+            await Promise.all([
+                fetch(`/api/coborrower/${leadId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(next),
+                }),
+                fetch(`/api/kyc/${leadId}/save-draft`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ step: 3, data: { borrowerForm: next, documents: uploadedDocs, consentStatus } }),
+                }),
+            ]);
+            setLastSaved(`Auto-saved at ${new Date().toLocaleTimeString()}`);
+        } catch {
+            // Silent — the next manual save / consent action will retry.
+        }
     };
 
     // ─── Admin-Requested Document Upload ───────────────────────────────────
