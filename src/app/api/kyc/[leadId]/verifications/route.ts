@@ -41,7 +41,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             .from(kycVerifications)
             .where(customerWhere);
 
-        const LABELS: Record<string, string> = {
+        const PRIMARY_LABELS: Record<string, string> = {
             aadhaar: 'Aadhaar Verification',
             pan: 'PAN Verification',
             bank: 'Bank Verification',
@@ -53,9 +53,33 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             esign_consent: 'Customer Consent',
         };
 
+        const COBORROWER_LABELS: Record<string, string> = {
+            aadhaar: 'Co-borrower Aadhaar Verification',
+            pan: 'Co-borrower PAN Verification',
+            bank: 'Co-borrower Bank Verification',
+            address: 'Co-borrower Address Proof',
+            rc: 'Co-borrower RC Verification',
+            mobile: 'Co-borrower Mobile Number',
+            cibil: 'Co-borrower CIBIL Score',
+            photo: 'Co-borrower Photo Verification',
+            esign_consent: 'Co-borrower Consent',
+            coborrower_aadhaar: 'Co-borrower Aadhaar Verification',
+            coborrower_pan: 'Co-borrower PAN Verification',
+            coborrower_bank: 'Co-borrower Bank Verification',
+            coborrower_address: 'Co-borrower Address Proof',
+            coborrower_mobile: 'Co-borrower Mobile Number',
+        };
+
+        const labelFor = (type: string): string => {
+            if (applicant === 'co_borrower') {
+                return COBORROWER_LABELS[type] || PRIMARY_LABELS[type] || type;
+            }
+            return PRIMARY_LABELS[type] || type;
+        };
+
         const data = verifications.map(v => ({
             type: v.verification_type,
-            label: LABELS[v.verification_type] || v.verification_type,
+            label: labelFor(v.verification_type),
             status: v.status,
             last_update: v.updated_at?.toISOString() || null,
             failed_reason: v.failed_reason,
@@ -74,7 +98,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
         if (consent && ADMIN_VERIFIED_CONSENT_STATUSES.includes(consent.consent_status ?? '')) {
             data.push({
                 type: 'esign_consent',
-                label: LABELS.esign_consent,
+                label: labelFor('esign_consent'),
                 status: 'success',
                 last_update: (consent.verified_at ?? consent.updated_at)?.toISOString() || null,
                 failed_reason: null,
