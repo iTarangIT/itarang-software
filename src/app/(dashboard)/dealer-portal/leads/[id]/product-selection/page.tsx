@@ -415,7 +415,6 @@ export default function ProductSelectionPage() {
     (async () => {
       try {
         const qs = new URLSearchParams();
-        if (selectedBattery.model_type) qs.set("batteryModel", selectedBattery.model_type);
         if (access?.category) qs.set("category", access.category);
         const res = await fetch(`/api/inventory/dealer/${dealerId}/chargers?${qs.toString()}`);
         const json = await res.json();
@@ -906,30 +905,38 @@ export default function ProductSelectionPage() {
               )}
             </SectionCard>
 
+            {/* Selected Battery summary — drives the downstream cards */}
+            {selectedBattery && (
+              <SelectedBatterySummary
+                battery={selectedBattery}
+                price={batteryPriceTriple.net}
+              />
+            )}
+
             {/* Section C — Charger */}
             <SectionCard title="Charger">
               {!selectedBattery ? (
                 <EmptyState
                   icon={<Plug className="w-10 h-10 text-gray-300" />}
                   title="Select a battery first"
-                  hint="Compatible chargers will appear here once a battery is selected."
+                  hint="Available chargers from your inventory will appear once a battery is selected."
                 />
               ) : chargersLoading ? (
                 <SkeletonCardGrid />
               ) : chargers.length === 0 ? (
                 <EmptyState
                   icon={<Plug className="w-10 h-10 text-gray-300" />}
-                  title="No compatible chargers available"
-                  hint={`Looking for chargers matching ${selectedBattery.model_type || "battery model"}.`}
+                  title="No chargers available in your inventory"
+                  hint="Contact your inventory manager to add chargers for this category."
                 />
               ) : (
                 <>
                   <p className="text-[11px] text-gray-400 mb-3 px-1">
-                    Showing chargers compatible with{" "}
+                    Pair with{" "}
                     <strong className="text-gray-700">
-                      {selectedBattery.model_name || selectedBattery.model_type}
+                      {selectedBattery.model_name || selectedBattery.model_type || "the selected battery"}
                     </strong>
-                    .
+                    . Showing all available chargers in your inventory.
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {chargers.map((c) => (
@@ -1284,6 +1291,55 @@ function SocBar({
         <span className={`text-[9px] ${stale ? "text-amber-600" : "text-gray-400"}`}>
           {syncLabel}
         </span>
+      )}
+    </div>
+  );
+}
+
+function SelectedBatterySummary({
+  battery,
+  price,
+}: {
+  battery: BatteryRow;
+  price: number;
+}) {
+  const specs: { label: string; value: string }[] = [];
+  if (battery.voltage_v) specs.push({ label: "Voltage", value: `${battery.voltage_v}V` });
+  if (battery.capacity_ah) specs.push({ label: "Capacity", value: `${battery.capacity_ah}Ah` });
+  if (battery.warranty_months) specs.push({ label: "Warranty", value: `${battery.warranty_months} mo` });
+  if (battery.soc_percent != null) specs.push({ label: "SoC", value: `${battery.soc_percent}%` });
+  return (
+    <div className="rounded-2xl border-2 border-[#0047AB]/20 bg-gradient-to-r from-blue-50 to-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-[#0047AB] text-white flex items-center justify-center flex-shrink-0">
+            <BatteryIcon className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[10px] font-black text-[#0047AB] uppercase tracking-widest">Selected Battery</p>
+            <p className="text-sm font-black text-gray-900 truncate">
+              {battery.model_name || battery.model_type || "Battery"}
+            </p>
+            <p className="text-[11px] text-gray-500 font-mono truncate">{battery.serial_number}</p>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-lg font-black text-[#0047AB]">{inr(price)}</div>
+          <div className="text-[10px] text-gray-400 font-medium">incl. GST</div>
+        </div>
+      </div>
+      {specs.length > 0 && (
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
+          {specs.map((s) => (
+            <span
+              key={s.label}
+              className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-[#0047AB]/15 rounded-full text-[11px] font-bold text-gray-700"
+            >
+              <span className="text-gray-400">{s.label}:</span> {s.value}
+            </span>
+          ))}
+          <AgeBadge badge={battery.age_badge} days={battery.inventory_age_days} />
+        </div>
       )}
     </div>
   );
