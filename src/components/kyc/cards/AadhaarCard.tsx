@@ -24,6 +24,12 @@ interface AadhaarCardProps {
     status: string;
     adminAction?: string | null;
     adminActionNotes?: string | null;
+    // Co-borrower DigiLocker sessions store the URL / SMS state inside
+    // kyc_verifications.api_response.data instead of digilockerTransactions
+    // (executeCoBorrowerDigilockerInit doesn't write a transaction row), so
+    // we forward the raw response and hydrate from it on mount when applicant
+    // is co_borrower. Primary continues to use the existingTransaction prop.
+    apiResponse?: Record<string, unknown> | null;
   } | null;
   onActionComplete?: () => void;
 }
@@ -172,6 +178,15 @@ export default function AadhaarCard({
     applicant === "co_borrower"
       ? `/api/admin/kyc/${leadId}/coborrower`
       : `/api/admin/kyc/${leadId}`;
+  // Co-borrower DigiLocker session data lives in kyc_verifications.api_response.data
+  // (executeCoBorrowerDigilockerInit doesn't write a digilockerTransactions row).
+  // Pull it once here so cardStatus + URL/SMS state initializers can read from
+  // the same place. Primary keeps using existingTransaction unchanged.
+  const cbVerData =
+    applicant === "co_borrower"
+      ? ((existingVerification?.apiResponse as { data?: Record<string, unknown> } | undefined)?.data ?? undefined)
+      : undefined;
+  const cbHasDigilockerUrl = typeof cbVerData?.digilocker_url === "string" && (cbVerData.digilocker_url as string).length > 0;
   const [cardStatus, setCardStatus] = useState<CardStatus>(() => {
     if (existingVerification?.adminAction === "accepted") return "success";
     if (existingVerification?.adminAction === "rejected") return "failed";
@@ -179,6 +194,13 @@ export default function AadhaarCard({
     if (existingTransaction?.status === "expired") return "expired";
     if (existingTransaction?.status === "failed") return "failed";
     if (existingTransaction?.status && existingTransaction.status !== "idle") return "awaiting_consent";
+    // Co-borrower path: an in-flight DigiLocker session has the URL but no
+    // existingTransaction. Treat it like awaiting_consent so the link panel
+    // (gated on cardStatus === "awaiting_consent" + digilockerUrl truthy)
+    // renders on a hard reload.
+    if (applicant === "co_borrower" && cbHasDigilockerUrl && existingVerification?.status !== "success") {
+      return "awaiting_consent";
+    }
     return "pending";
   });
 
@@ -202,13 +224,30 @@ export default function AadhaarCard({
   // extracted data. Stays false by default so the default view is the
   // extracted-data panel, not a "Re-send DigiLocker link" prompt.
   const [rerunMode, setRerunMode] = useState(false);
-  const [digilockerUrl, setDigilockerUrl] = useState("");
+  // For co-borrower, hydrate digilockerUrl / SMS state from cbVerData (see the
+  // computation above the cardStatus initialiser) so the link panel renders on
+  // hard reload, not just after a fresh handleInitiate() response.
+  const [digilockerUrl, setDigilockerUrl] = useState<string>(
+    typeof cbVerData?.digilocker_url === "string" ? (cbVerData.digilocker_url as string) : "",
+  );
   const [linkCopied, setLinkCopied] = useState(false);
   const [smsStatus, setSmsStatus] = useState<
     "delivered" | "failed" | "skipped" | "retrying" | null
-  >(null);
-  const [smsAttempts, setSmsAttempts] = useState(0);
-  const [smsStatusMessage, setSmsStatusMessage] = useState<string | null>(null);
+  >(
+    cbVerData?.sms_delivered_at
+      ? "delivered"
+      : cbVerData?.sms_failed_reason
+        ? "failed"
+        : null,
+  );
+  const [smsAttempts, setSmsAttempts] = useState<number>(
+    typeof cbVerData?.sms_attempts === "number" ? (cbVerData.sms_attempts as number) : 0,
+  );
+  const [smsStatusMessage, setSmsStatusMessage] = useState<string | null>(
+    typeof cbVerData?.sms_failed_reason === "string"
+      ? (cbVerData.sms_failed_reason as string)
+      : null,
+  );
   const [resendingSms, setResendingSms] = useState(false);
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");

@@ -45,6 +45,39 @@ function nameSimilarity(a: string, b: string): number {
   return Math.round((intersection / union) * 100);
 }
 
+// Mirrors src/lib/kyc/pan-verification.ts:computeMatch so co-borrower PAN
+// cross-match rows ship with the same { score, pass } shape the primary
+// produces and PANCard.tsx already knows how to render.
+function computeMatch(
+  a: string | null | undefined,
+  b: string | null | undefined,
+  type: "similarity" | "exact" | "phone" = "similarity",
+): { score: number | null; pass: boolean } {
+  if (!a || !b) return { score: null, pass: true };
+  if (type === "exact") {
+    const match = a.trim().toLowerCase() === b.trim().toLowerCase();
+    return { score: match ? 100 : 0, pass: match };
+  }
+  if (type === "phone") {
+    const match =
+      a.replace(/\D/g, "").slice(-10) === b.replace(/\D/g, "").slice(-10);
+    return { score: match ? 100 : 0, pass: match };
+  }
+  const sim = nameSimilarity(a, b);
+  return { score: sim, pass: sim >= 80 };
+}
+
+function formatDob(value: unknown): string {
+  if (!value) return "";
+  const d = new Date(value as string);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 async function getCoBorrower(leadId: string) {
   const rows = await db
     .select()
@@ -167,22 +200,92 @@ export async function executeCoBorrowerPanVerification(
   }
   const overallSuccess = isValid && (matchScore === null || matchScore >= 50);
 
+  // Mirror primary's allCrossMatchFields shape (pan-verification.ts:376-432)
+  // so the front-end Verification Match Results table renders the same set of
+  // rows on the co-borrower side. Aadhaar column stays null until we wire in
+  // the co-borrower DigiLocker extracted data.
+  const cbFatherName = (cb.father_or_husband_name as string | null) || null;
+  const cbAddress = (cb.address as string | null) || (cb.current_address as string | null) || null;
+  const cbDob = formatDob(cb.dob);
+  const cbPhone = (cb.phone as string | null) || null;
+
+  const panDob = (kycResult.dateOfBirth || kycResult.dob || "") as string;
+  const panAddressRaw = kycResult.address as unknown;
+  const panAddress =
+    panAddressRaw && typeof panAddressRaw === "object" && (panAddressRaw as { full?: string }).full
+      ? ((panAddressRaw as { full: string }).full)
+      : typeof panAddressRaw === "string"
+        ? panAddressRaw
+        : "";
+  const panMobile = (kycResult.mobile || kycResult.phone || kycResult.mobileNumber || "") as string;
+  const panGender = (kycResult.gender || "") as string;
+  const panFather = (kycResult.fatherName || "") as string;
+
+  const dobMatch = computeMatch(cbDob, panDob, "exact");
+  const addressMatch = computeMatch(cbAddress, panAddress);
+  const mobileMatch = computeMatch(cbPhone, panMobile, "phone");
+  const fatherMatch = computeMatch(cbFatherName, panFather);
+
+  const allCrossMatchFields = [
+    {
+      field: "Name",
+      leadValue: cb.full_name || null,
+      panValue: panName || null,
+      aadhaarValue: null,
+      matchScore,
+      pass: matchScore === null ? true : matchScore >= 80,
+    },
+    {
+      field: "Gender",
+      leadValue: null,
+      panValue: panGender || null,
+      aadhaarValue: null,
+      matchScore: null,
+      pass: true,
+    },
+    {
+      field: "DOB",
+      leadValue: cbDob || null,
+      panValue: panDob || null,
+      aadhaarValue: null,
+      matchScore: dobMatch.score,
+      pass: dobMatch.pass,
+    },
+    {
+      field: "Address",
+      leadValue: cbAddress,
+      panValue: panAddress || null,
+      aadhaarValue: null,
+      matchScore: addressMatch.score,
+      pass: addressMatch.pass,
+    },
+    {
+      field: "Mobile",
+      leadValue: cbPhone,
+      panValue: panMobile || null,
+      aadhaarValue: null,
+      matchScore: mobileMatch.score,
+      pass: mobileMatch.pass,
+    },
+    {
+      field: "Father/Husband Name",
+      leadValue: cbFatherName,
+      panValue: panFather || null,
+      aadhaarValue: null,
+      matchScore: fatherMatch.score,
+      pass: fatherMatch.pass,
+    },
+  ];
+
+  const crossMatchFields = allCrossMatchFields.filter((f) => f.leadValue || f.panValue);
+
   const verificationId = await upsertCoBorrowerVerification(leadId, "pan", {
     status: overallSuccess ? "success" : "failed",
     api_request: { pan_number: input.panNumber },
     api_response: {
       ...decentroRes,
       data: {
-        crossMatchFields: [
-          {
-            field: "Name",
-            leadValue: cb.full_name,
-            panValue: panName,
-            aadhaarValue: null,
-            matchScore,
-            pass: matchScore === null ? true : matchScore >= 80,
-          },
-        ],
+        crossMatchFields,
         pan_name: panName,
         pan_status: panStatus,
         name_match_score: matchScore,
@@ -210,16 +313,7 @@ export async function executeCoBorrowerPanVerification(
       lead_name: cb.full_name,
       pan_status: panStatus,
       name_match_score: matchScore,
-      crossMatchFields: [
-        {
-          field: "Name",
-          leadValue: cb.full_name,
-          panValue: panName,
-          aadhaarValue: null,
-          matchScore,
-          pass: matchScore === null ? true : matchScore >= 80,
-        },
-      ],
+      crossMatchFields,
     },
   };
 }
@@ -232,6 +326,8 @@ export async function executeCoBorrowerBankVerification(
     account_number: string;
     ifsc: string;
     name?: string;
+    perform_name_match?: boolean;
+    validation_type?: "penniless" | "pennydrop" | "hybrid";
   },
 ) {
   if (!input.account_number || !input.ifsc) {
@@ -249,15 +345,48 @@ export async function executeCoBorrowerBankVerification(
 
   const decentroRes = await verifyBankAccount({
     account_number: input.account_number,
-    ifsc: input.ifsc,
+    ifsc: input.ifsc.toUpperCase().trim(),
     name: input.name || cb.full_name || undefined,
-    validation_type: "pennydrop",
+    perform_name_match: input.perform_name_match,
+    validation_type: input.validation_type ?? "pennydrop",
   });
 
-  const data = decentroRes.data || decentroRes.kycResult || {};
-  const accountStatus = (data.accountStatus || data.status || "").toUpperCase();
-  const beneficiaryName = data.beneficiaryName || data.accountHolderName || "";
-  const nameMatch = cb.full_name
+  // Mirror primary handler's misconfig short-circuit (bank-verification.ts:55-68)
+  // so the BankCard front-end's existing config-banner branch (BankCard.tsx:110-114)
+  // lights up cleanly on the co-borrower side too.
+  const isMisconfig =
+    typeof decentroRes.message === "string" &&
+    /must be set in \.env/i.test(decentroRes.message);
+  if (isMisconfig) {
+    return {
+      success: false,
+      status: 503,
+      error: {
+        message:
+          "Bank verification is not available on this server — contact the administrator to configure it.",
+        code: "bank_verify_misconfigured",
+      },
+    };
+  }
+
+  // Decentro v2 /core_banking returns fields at the top level (no `data` envelope),
+  // but the older mocked shape nests them under `data`. Flatten both like primary
+  // does at bank-verification.ts:135-136 so accountStatus / beneficiaryName resolve
+  // regardless of which shape we get.
+  const nested = (decentroRes.data || null) as Record<string, unknown> | null;
+  const flat: Record<string, unknown> = { ...decentroRes, ...(nested || {}) };
+  const accountStatus = String(
+    (flat.accountStatus as string) || (flat.status as string) || "",
+  ).toUpperCase();
+  const beneficiaryName = String(
+    (flat.beneficiaryName as string) || (flat.accountHolderName as string) || "",
+  );
+  const bankReferenceNumber =
+    (flat.bankReferenceNumber as string | undefined) ||
+    (flat.bank_reference_number as string | undefined) ||
+    null;
+
+  const nameMatch = cb.full_name && beneficiaryName
     ? nameSimilarity(beneficiaryName, cb.full_name)
     : null;
   const overallSuccess = accountStatus === "SUCCESS" || accountStatus === "VALID";
@@ -267,12 +396,15 @@ export async function executeCoBorrowerBankVerification(
     api_request: {
       account_number: input.account_number,
       ifsc: input.ifsc,
+      perform_name_match: input.perform_name_match,
+      validation_type: input.validation_type,
     },
     api_response: {
       ...decentroRes,
       data: {
         beneficiaryName,
         accountStatus,
+        bankReferenceNumber,
         nameMatchScore: nameMatch,
       },
     },
@@ -286,11 +418,12 @@ export async function executeCoBorrowerBankVerification(
     success: overallSuccess,
     message: overallSuccess
       ? `Bank verified. Name on account: ${beneficiaryName}`
-      : `Bank verification failed: ${accountStatus}`,
+      : `Bank verification failed${accountStatus ? `: ${accountStatus}` : ""}`,
     data: {
       verificationId,
       beneficiaryName,
       accountStatus,
+      bankReferenceNumber,
       nameMatchScore: nameMatch,
     },
   };
