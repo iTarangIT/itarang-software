@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -246,7 +246,9 @@ export async function POST(
       enquiries: reportData.enquiryDetails || responseData.enquiries || responseData.enquiryDetails || [],
     };
 
-    // Upsert kycVerifications
+    // Filter by applicant so a co-borrower CIBIL row doesn't get hijacked by
+    // the primary report run (would otherwise produce a row with primary's
+    // data tagged co_borrower, breaking the Final Decision validator).
     const existingRows = await db
       .select({ id: kycVerifications.id })
       .from(kycVerifications)
@@ -254,6 +256,10 @@ export async function POST(
         and(
           eq(kycVerifications.lead_id, leadId),
           eq(kycVerifications.verification_type, "cibil"),
+          or(
+            eq(kycVerifications.applicant, "primary"),
+            isNull(kycVerifications.applicant),
+          ),
         ),
       )
       .limit(1);
@@ -322,6 +328,7 @@ export async function POST(
         id: verificationId,
         lead_id: leadId,
         verification_type: "cibil",
+        applicant: "primary",
         status: dbStatus,
         api_provider: "decentro",
         api_request: apiRequest,

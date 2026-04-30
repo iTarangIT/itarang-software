@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { kycVerifications } from "@/lib/db/schema";
@@ -78,6 +78,11 @@ export async function executeBankVerification(
     .toString()
     .padStart(4, "0");
 
+  // Filter by applicant so a co-borrower bank row doesn't get hijacked by
+  // primary's update — see the matching CIBIL fix in
+  // src/app/api/admin/kyc/[leadId]/cibil/score/route.ts. The previous
+  // unfiltered upsert produced rows with primary's data tagged co_borrower,
+  // and the Final Decision validator wouldn't find a primary verification.
   const existing = await db
     .select({ id: kycVerifications.id })
     .from(kycVerifications)
@@ -85,6 +90,10 @@ export async function executeBankVerification(
       and(
         eq(kycVerifications.lead_id, leadId),
         eq(kycVerifications.verification_type, "bank"),
+        or(
+          eq(kycVerifications.applicant, "primary"),
+          isNull(kycVerifications.applicant),
+        ),
       ),
     )
     .limit(1);
@@ -112,17 +121,13 @@ export async function executeBankVerification(
     await db
       .update(kycVerifications)
       .set(verData)
-      .where(
-        and(
-          eq(kycVerifications.lead_id, leadId),
-          eq(kycVerifications.verification_type, "bank"),
-        ),
-      );
+      .where(eq(kycVerifications.id, existing[0].id));
   } else {
     await db.insert(kycVerifications).values({
       id: verificationId,
       lead_id: leadId,
       verification_type: "bank",
+      applicant: "primary",
       submitted_at: now,
       created_at: now,
       ...verData,

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -114,7 +114,13 @@ export async function POST(
 
     const interpretation = score !== null && !isNaN(score) ? interpretCibilScore(score) : null;
 
-    // Upsert kycVerifications
+    // Upsert kycVerifications. Filter by applicant so a previously-created
+    // co-borrower CIBIL row (applicant='co_borrower') doesn't get
+    // hijacked by primary's update — that produced a row with primary's
+    // data tagged co_borrower, which case-review then routed away from
+    // verificationCards (the primary-applicant array) and the Final
+    // Decision validator reported "CIBIL verification not run yet" even
+    // though primary CIBIL had been run and accepted.
     const existingRows = await db
       .select({ id: kycVerifications.id })
       .from(kycVerifications)
@@ -122,6 +128,10 @@ export async function POST(
         and(
           eq(kycVerifications.lead_id, leadId),
           eq(kycVerifications.verification_type, "cibil"),
+          or(
+            eq(kycVerifications.applicant, "primary"),
+            isNull(kycVerifications.applicant),
+          ),
         ),
       )
       .limit(1);
@@ -169,6 +179,7 @@ export async function POST(
         id: verificationId,
         lead_id: leadId,
         verification_type: "cibil",
+        applicant: "primary",
         status: overallSuccess ? "success" : "failed",
         api_provider: "decentro",
         api_request: apiRequest,

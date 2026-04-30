@@ -9,6 +9,10 @@ import {
   digilockerInitiateSession,
   digilockerGetEaadhaar,
 } from "@/lib/decentro";
+import {
+  crossMatchAadhaarData,
+  type CrossMatchResult,
+} from "@/lib/kyc/cross-match";
 
 // BRD §2.9.3 Panel 3 co-borrower API verification cards. These helpers
 // provide a thin Decentro wrapper scoped to a co-borrower row. They do NOT
@@ -76,6 +80,21 @@ function formatDob(value: unknown): string {
     month: "short",
     year: "numeric",
   });
+}
+
+// Decentro's eAadhaar dob comes back as DD-MM-YYYY or DD/MM/YYYY most of the
+// time. PostgreSQL's date column wants YYYY-MM-DD, so normalise before the
+// write. Returns null on anything we don't recognise — caller should skip
+// the column update rather than risk a 500 mid-verification.
+function normalizeDobForDb(s: string | null | undefined): string | null {
+  if (!s) return null;
+  const v = String(s).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  let m = v.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  m = v.match(/^(\d{4})[-/](\d{2})[-/](\d{2})$/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  return null;
 }
 
 async function getCoBorrower(leadId: string) {
@@ -296,10 +315,23 @@ export async function executeCoBorrowerPanVerification(
   });
 
   if (overallSuccess) {
-    await db
-      .update(coBorrowers)
-      .set({ pan_no: input.panNumber.toUpperCase().trim(), updated_at: new Date() })
-      .where(eq(coBorrowers.id, cb.id));
+    // Backfill what PAN reliably gives us. pan_no is the verification's
+    // authoritative output. Other columns only fill when null so dealer
+    // entries aren't overwritten.
+    const panUpdates: Record<string, unknown> = {
+      pan_no: input.panNumber.toUpperCase().trim(),
+      updated_at: new Date(),
+    };
+    if (panName && !cb.full_name) panUpdates.full_name = panName;
+    if (panFather && !cb.father_or_husband_name) {
+      panUpdates.father_or_husband_name = panFather;
+    }
+    if (panDob && !cb.dob) {
+      const normalisedPanDob = normalizeDobForDb(panDob);
+      if (normalisedPanDob) panUpdates.dob = normalisedPanDob;
+    }
+    if (panAddress && !cb.address) panUpdates.address = panAddress;
+    await db.update(coBorrowers).set(panUpdates).where(eq(coBorrowers.id, cb.id));
   }
 
   return {
@@ -637,38 +669,183 @@ export async function executeCoBorrowerDigilockerStatus(
     reference_id,
   });
 
-  const fetched = !!decentroRes.data?.aadhaarXmlUrl || !!decentroRes.data?.name;
-  const aadhaarData = decentroRes.data || {};
+  // Mirror primary's status-route parsing
+  // (src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/status/[transactionId]/route.ts:159-200).
+  // Decentro's eAadhaar response nests fields under proofOfIdentity /
+  // proofOfAddress (not flat data.name). The previous co-borrower code read
+  // data.name / data.aadhaarXmlUrl which only worked for an old/alternate
+  // shape, so AadhaarCard ended up with `null` and the data table never
+  // rendered.
+  const remoteData = (decentroRes?.data ?? {}) as Record<string, unknown>;
+  const poi = (remoteData.proofOfIdentity ?? {}) as Record<string, unknown>;
+  const poa = (remoteData.proofOfAddress ?? {}) as Record<string, unknown>;
+  const raw = (remoteData.aadhaar_data ??
+    decentroRes?.kycResult ??
+    remoteData) as Record<string, unknown>;
 
+  const hasDocument =
+    !!remoteData.document_fetched ||
+    !!remoteData.aadhaar_data ||
+    !!remoteData.kycResult ||
+    !!remoteData.name ||
+    !!remoteData.proofOfIdentity ||
+    !!remoteData.aadhaarUid ||
+    !!decentroRes?.kycResult ||
+    (decentroRes?.status === "SUCCESS" &&
+      typeof decentroRes?.responseKey === "string" &&
+      (decentroRes.responseKey as string).includes("eaadhaar"));
+
+  const addressParts = [
+    poa.house, poa.street, poa.landmark, poa.locality,
+    poa.vtc, poa.subDistrict, poa.district, poa.state, poa.pincode,
+  ].filter(Boolean) as string[];
+  const fullAddress =
+    addressParts.length > 0
+      ? addressParts.join(", ")
+      : (raw.address as string | undefined) ||
+        (raw.full_address as string | undefined) ||
+        null;
+
+  const aadhaarData: Record<string, string | null> = hasDocument
+    ? {
+        uid:
+          (remoteData.aadhaarUid as string | undefined) ||
+          (raw.uid as string | undefined) ||
+          (raw.aadhaar_number as string | undefined) ||
+          null,
+        name: (poi.name as string | undefined) || (raw.name as string | undefined) || null,
+        gender: (poi.gender as string | undefined) || (raw.gender as string | undefined) || null,
+        dob:
+          (poi.dob as string | undefined) ||
+          (raw.dob as string | undefined) ||
+          (raw.date_of_birth as string | undefined) ||
+          null,
+        careof:
+          (poa.careOf as string | undefined) ||
+          (poa.careof as string | undefined) ||
+          (raw.careof as string | undefined) ||
+          (raw.care_of as string | undefined) ||
+          null,
+        address: fullAddress,
+        district:
+          (poa.district as string | undefined) ||
+          (raw.dist as string | undefined) ||
+          (raw.district as string | undefined) ||
+          null,
+        state: (poa.state as string | undefined) || (raw.state as string | undefined) || null,
+        pincode:
+          (poa.pincode as string | undefined) ||
+          (raw.pincode as string | undefined) ||
+          (raw.zip as string | undefined) ||
+          null,
+        photo_base64:
+          (remoteData.image as string | undefined) ||
+          (raw.photo_base64 as string | undefined) ||
+          (raw.photo as string | undefined) ||
+          null,
+        mobile:
+          (poi.hashedMobileNumber as string | undefined) ||
+          (raw.mobile as string | undefined) ||
+          (raw.phone as string | undefined) ||
+          null,
+      }
+    : {};
+
+  // Cross-match against co-borrower fields (mirrors primary's
+  // crossMatchAadhaarData call). Maps to the leadValue/aadhaarValue/pass
+  // shape AadhaarCard.tsx:96-103 reads from.
+  let crossMatchResult: CrossMatchResult | null = null;
+  if (hasDocument) {
+    const rawCrossMatch = crossMatchAadhaarData(
+      {
+        name: aadhaarData.name,
+        dob: aadhaarData.dob,
+        phone: aadhaarData.mobile,
+        address: aadhaarData.address,
+        gender: aadhaarData.gender,
+        fatherOrHusbandName: aadhaarData.careof,
+      },
+      {
+        name: cb.full_name,
+        dob: cb.dob ? new Date(cb.dob).toISOString().slice(0, 10) : null,
+        phone: cb.phone,
+        address: cb.address || cb.current_address || null,
+        gender: null,
+        fatherOrHusbandName: cb.father_or_husband_name,
+      },
+    );
+    crossMatchResult = {
+      ...rawCrossMatch,
+      fields: rawCrossMatch.fields.map((f) => ({
+        field: f.field,
+        leadValue: f.inputValue,
+        aadhaarValue: f.documentValue,
+        similarity: f.similarity,
+        threshold: f.threshold,
+        pass: f.matchResult === "strong" || f.matchResult === "moderate",
+      })),
+    } as unknown as CrossMatchResult;
+  }
+
+  // Persist normalised data into kyc_verifications.api_response.data so
+  // AadhaarCard can hydrate aadhaarData / crossMatchResult on page reload
+  // (we don't write a digilockerTransactions row for co-borrowers, so the
+  // existingTransaction prop primary uses isn't available here).
   const verificationId = await upsertCoBorrowerVerification(leadId, "aadhaar", {
-    status: fetched ? "success" : "in_progress",
+    status: hasDocument ? "success" : "in_progress",
     api_request: { transaction_id: transactionId },
     api_response: {
       ...decentroRes,
-      data: aadhaarData,
+      data: {
+        ...remoteData,
+        aadhaarData,
+        crossMatchResult,
+      },
     },
-    failed_reason: fetched ? null : "Aadhaar document not yet fetched",
+    failed_reason: hasDocument ? null : "Aadhaar document not yet fetched",
   });
 
-  if (fetched && aadhaarData.aadhaarNumber) {
-    await db
-      .update(coBorrowers)
-      .set({
-        aadhaar_no: String(aadhaarData.aadhaarNumber),
-        updated_at: new Date(),
-      })
-      .where(eq(coBorrowers.id, cb.id));
+  if (hasDocument) {
+    // Persist eAadhaar fields onto coBorrowers columns. aadhaar_no is the
+    // authoritative output of the verification and always overwritten.
+    // For full_name / dob / father / address we only backfill when the
+    // existing column is null/empty so dealer-entered values aren't
+    // clobbered by Aadhaar text variations. The full eAadhaar payload
+    // also lives in kyc_verifications.api_response.data for audit.
+    const updates: Record<string, unknown> = { updated_at: new Date() };
+    if (aadhaarData.uid) updates.aadhaar_no = String(aadhaarData.uid);
+    if (aadhaarData.name && !cb.full_name) updates.full_name = aadhaarData.name;
+    if (aadhaarData.dob && !cb.dob) {
+      const normalisedDob = normalizeDobForDb(aadhaarData.dob);
+      if (normalisedDob) updates.dob = normalisedDob;
+    }
+    if (aadhaarData.careof && !cb.father_or_husband_name) {
+      updates.father_or_husband_name = aadhaarData.careof;
+    }
+    if (aadhaarData.address) {
+      if (!cb.address) updates.address = aadhaarData.address;
+      if (!cb.permanent_address) updates.permanent_address = aadhaarData.address;
+    }
+    await db.update(coBorrowers).set(updates).where(eq(coBorrowers.id, cb.id));
   }
 
   return {
-    success: fetched,
-    message: fetched
+    success: hasDocument,
+    message: hasDocument
       ? "Co-borrower Aadhaar fetched from DigiLocker."
       : "Awaiting co-borrower consent on DigiLocker.",
     data: {
       verificationId,
-      status: fetched ? "document_fetched" : "awaiting_consent",
-      aadhaarExtractedData: aadhaarData,
+      transactionId,
+      status: hasDocument ? "document_fetched" : "awaiting_consent",
+      // Match primary status-route response shape (lines 297-318) so
+      // AadhaarCard's pollStatus (which reads s.documentFetched +
+      // s.aadhaarData + s.crossMatchResult) finds the values it expects.
+      documentFetched: hasDocument,
+      consentGiven: hasDocument,
+      linkOpened: hasDocument,
+      aadhaarData,
+      crossMatchResult,
     },
   };
 }
