@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { consentRecords, kycVerifications } from '@/lib/db/schema';
-import { and, desc, eq, notInArray } from 'drizzle-orm';
+import { and, desc, eq, notInArray, notLike } from 'drizzle-orm';
 
 // esign_consent / esign_consent_sync rows in kyc_verifications are raw DigiO
 // audit logs written by send-consent and consent/sync. They are not
@@ -20,14 +20,26 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
         const verificationFor = req.nextUrl.searchParams.get('verification_for') || 'customer';
         const applicant = verificationFor === 'borrower' ? 'co_borrower' : 'primary';
 
-        const verifications = await db
-            .select()
-            .from(kycVerifications)
-            .where(and(
+        const customerWhere = applicant === 'primary'
+            ? and(
                 eq(kycVerifications.lead_id, leadId),
                 eq(kycVerifications.applicant, applicant),
                 notInArray(kycVerifications.verification_type, HIDDEN_VERIFICATION_TYPES),
-            ));
+                // Defensive: legacy rows where co-borrower verifications were
+                // inserted without applicant='co_borrower' would otherwise leak
+                // into the customer table. Exclude any coborrower_* types.
+                notLike(kycVerifications.verification_type, 'coborrower_%'),
+            )
+            : and(
+                eq(kycVerifications.lead_id, leadId),
+                eq(kycVerifications.applicant, applicant),
+                notInArray(kycVerifications.verification_type, HIDDEN_VERIFICATION_TYPES),
+            );
+
+        const verifications = await db
+            .select()
+            .from(kycVerifications)
+            .where(customerWhere);
 
         const LABELS: Record<string, string> = {
             aadhaar: 'Aadhaar Verification',
