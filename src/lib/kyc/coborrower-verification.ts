@@ -607,29 +607,86 @@ export async function executeCoBorrowerDigilockerInit(
     email: input.email,
   });
 
+  // Decentro's /v2/kyc/digilocker/initiate_session returns the auth URL under
+  // `data.authorizationUrl` (camelCase) — see how the primary handler extracts
+  // it at src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/initiate/route.ts:165.
+  // The previous co-borrower extraction read `data.digilockerUrl`, which Decentro
+  // never returns, so digilocker_url was always null and the URL panel never
+  // rendered. Mirror primary's priority chain.
+  const resData = (decentroRes?.data as Record<string, unknown> | undefined) || {};
   const sessionId =
-    decentroRes.data?.sessionId || decentroRes.sessionId || null;
+    (resData.session_id as string | undefined) ||
+    (resData.sessionId as string | undefined) ||
+    (decentroRes?.sessionId as string | undefined) ||
+    null;
   const digilocker_url =
-    decentroRes.data?.digilockerUrl || decentroRes.digilockerUrl || null;
+    (resData.authorizationUrl as string | undefined) ||
+    (resData.authorization_url as string | undefined) ||
+    (resData.digilocker_url as string | undefined) ||
+    (resData.url as string | undefined) ||
+    null;
+
+  // If Decentro didn't actually generate a URL, surface the failure rather than
+  // storing a useless in_progress row that the UI can't act on.
+  const apiSuccess =
+    (decentroRes?.status === "SUCCESS" ||
+      decentroRes?.responseStatus === "SUCCESS" ||
+      decentroRes?.api_status === "Success") &&
+    !!digilocker_url;
+  if (!apiSuccess) {
+    return {
+      success: false,
+      status: 502,
+      error:
+        (decentroRes?.message as string | undefined) ||
+        "Failed to initiate DigiLocker session for co-borrower",
+    };
+  }
+
+  // Decentro sends the DigiLocker SMS itself when notification_channel='sms'.
+  // We don't get back a per-channel ack on co-borrower today, so optimistically
+  // mark sms as delivered (matches what the primary path does when its own SMS
+  // send succeeds). The resend-sms endpoint will overwrite these on retry.
+  const now = new Date();
+  const initData: Record<string, unknown> = {
+    sessionId,
+    digilocker_url,
+    reference_id,
+    sms_attempts: 1,
+    sms_delivered_at: now.toISOString(),
+    sms_failed_reason: null,
+  };
 
   const verificationId = await upsertCoBorrowerVerification(leadId, "aadhaar", {
     status: "in_progress",
     api_request: { reference_id, phone },
     api_response: {
       ...decentroRes,
-      data: { sessionId, digilocker_url, reference_id },
+      data: initData,
     },
     failed_reason: null,
   });
 
+  // Mirror primary's response shape (src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/initiate/route.ts:329-345)
+  // so AadhaarCard.tsx:handleInitiate (which reads camelCase keys) populates
+  // digilockerUrl + smsStatus + smsAttempts after a fresh init on the
+  // co-borrower side too. snake_case keys are kept for any consumer that
+  // already speaks them.
   return {
     success: true,
     message: "DigiLocker session initiated for co-borrower.",
     data: {
       verificationId,
+      transactionId: verificationId,
       sessionId,
+      digilockerUrl: digilocker_url,
       digilocker_url,
       reference_id,
+      linkSent: true,
+      smsStatus: "delivered" as const,
+      smsStatusMessage: null,
+      smsAttempts: 1,
+      sentTo: { mobile: phone },
     },
   };
 }
