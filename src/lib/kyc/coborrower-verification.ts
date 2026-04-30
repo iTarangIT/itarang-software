@@ -515,11 +515,23 @@ export async function executeCoBorrowerDigilockerInit(
   }
 
   const reference_id = `CB-${cb.id}-${Date.now()}`;
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+  // Caller must pass a validated redirect_url. The route handler runs it
+  // through publicOrigin() which rejects unsafe hosts (localhost, ngrok,
+  // .local) in production — this used to fall back to a raw
+  // process.env.NEXT_PUBLIC_APP_URL which on sandbox was set to
+  // http://localhost:3003 and caused Decentro to redirect customers to a
+  // host their browsers couldn't reach.
+  if (!input.redirect_url) {
+    return {
+      success: false,
+      status: 500,
+      error:
+        "redirect_url is required (caller must resolve it via publicOrigin to ensure a safe public host)",
+    };
+  }
   const decentroRes = await digilockerInitiateSession({
     reference_id,
-    redirect_url:
-      input.redirect_url || `${appUrl}/api/kyc/digilocker/callback`,
+    redirect_url: input.redirect_url,
     consent_purpose: "Co-borrower KYC Aadhaar verification",
     notification_channel: "sms",
     mobile_number: phone,
