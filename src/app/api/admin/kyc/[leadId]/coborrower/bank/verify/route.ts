@@ -23,11 +23,18 @@ export async function POST(
       account_number: body.account_number,
       ifsc: body.ifsc,
       name: body.name,
+      perform_name_match: body.perform_name_match,
+      validation_type: body.validation_type,
     });
 
     if ("error" in result) {
+      // result.error may be a plain string OR an object { message, code }
+      // (the misconfig branch returns the latter so the BankCard front-end
+      // can light up the config-banner via error.code === 'bank_verify_misconfigured').
+      const errorPayload =
+        typeof result.error === "string" ? { message: result.error } : result.error;
       return NextResponse.json(
-        { success: false, error: { message: result.error } },
+        { success: false, error: errorPayload },
         { status: result.status },
       );
     }
