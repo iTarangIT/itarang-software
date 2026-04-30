@@ -47,6 +47,11 @@ type Step3Context = {
     requires_supporting_docs: boolean;
     requires_co_borrower: boolean;
     is_replacement: boolean;
+    // Set once when the dealer hits Submit for Verification. Used as a
+    // monotonic gate for the Submit button — survives admin's downstream
+    // status changes (step_3_cleared / kyc_approved / etc.) so the dealer
+    // never sees a "Submit again" affordance once they've already submitted.
+    co_borrower_submitted_at: string | null;
     latest_co_borrower_request: {
         id: string;
         attempt_number: number;
@@ -466,12 +471,12 @@ export default function BorrowerConsentPage() {
     // "Next: Product Selection" button should light up as soon as kyc_status
     // flips to step_3_cleared / kyc_approved.
     useEffect(() => {
-        const submitted = step3Ctx?.lead_kyc_status === 'pending_itarang_reverification';
+        const submitted = !!step3Ctx?.co_borrower_submitted_at;
         const cleared = ['step_3_cleared', 'kyc_approved'].includes(lead?.kyc_status || '');
         if (!submitted || cleared) return;
         const interval = setInterval(() => loadPageData(true), 5000);
         return () => clearInterval(interval);
-    }, [step3Ctx?.lead_kyc_status, lead?.kyc_status, leadId]);
+    }, [step3Ctx?.co_borrower_submitted_at, lead?.kyc_status, leadId]);
 
     // Detect consent path
     useEffect(() => {
@@ -924,11 +929,15 @@ export default function BorrowerConsentPage() {
                 return;
             }
 
-            // Optimistically flip the status locally so the Verification
-            // Action card unmounts immediately. If loadPageData picks the
-            // server status up first, this is a no-op; if it doesn't, we
-            // never want to re-render the Submit button.
-            setStep3Ctx(prev => prev ? { ...prev, lead_kyc_status: 'pending_itarang_reverification' } : prev);
+            // Optimistically stamp the submission timestamp locally so the
+            // Verification Action card unmounts immediately. The server
+            // also writes coBorrowers.verification_submitted_at; the next
+            // loadPageData refresh will replace this with the server value.
+            const nowIso = new Date().toISOString();
+            setStep3Ctx(prev => prev
+                ? { ...prev, co_borrower_submitted_at: prev.co_borrower_submitted_at ?? nowIso, lead_kyc_status: 'pending_itarang_reverification' }
+                : prev,
+            );
             toast.success('Submitted for verification. Admin will review and you will be notified.');
             await loadPageData(true);
         } catch (err: any) {
@@ -984,7 +993,12 @@ export default function BorrowerConsentPage() {
     //   Co-borrower KYC only      → form valid + 11 docs + consent
     //   Both                      → both of the above
     const pendingRequirements: string[] = [];
-    const alreadySubmitted = step3Ctx?.lead_kyc_status === 'pending_itarang_reverification';
+    // alreadySubmitted is keyed off coBorrowers.verification_submitted_at
+    // (a monotonic, set-once timestamp) instead of lead.kyc_status, because
+    // admin's case-review flow advances the lead through step_3_cleared /
+    // kyc_approved / kyc_rejected, which would otherwise let the Submit
+    // button reappear after the dealer has already submitted.
+    const alreadySubmitted = !!step3Ctx?.co_borrower_submitted_at;
 
     if (step3Ctx?.requires_co_borrower) {
         if (!isConsentVerified) pendingRequirements.push('co-borrower consent verification');
@@ -1504,7 +1518,7 @@ export default function BorrowerConsentPage() {
                         admin-side verification status table. Coupon was already
                         validated at Step 2 — Step 3 only needs the dealer to
                         click Submit once consent + docs are done. */}
-                    {step3Ctx?.lead_kyc_status !== 'pending_itarang_reverification' && (
+                    {!alreadySubmitted && (
                         <SectionCard title="Verification Action" action={
                             alreadySubmitted ? (
                                 <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold"><CheckCircle2 className="w-3 h-3" />Submitted</span>
