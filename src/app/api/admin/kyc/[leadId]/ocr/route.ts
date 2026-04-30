@@ -205,25 +205,35 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
         const { leadId } = await params;
-        const { doc_type } = await req.json();
+        const body = await req.json();
+        const doc_type: string | undefined = body.doc_type;
+        // doc_for filters by applicant: 'customer' = primary, 'borrower' = co-borrower.
+        // Default 'customer' keeps existing callers (that don't send doc_for) on the
+        // primary doc — backward compatible with the autofill button before this fix.
+        const doc_for: string = typeof body.doc_for === 'string' ? body.doc_for : 'customer';
 
         if (!doc_type) {
             return NextResponse.json({ success: false, error: 'doc_type is required' }, { status: 400 });
         }
 
-        // Find the document record by exact doc_type
+        // Find the document record by exact doc_type AND doc_for so a co-borrower
+        // OCR call doesn't accidentally pick up the primary's PAN (or vice versa).
         let [doc] = await db.select({
             id: kycDocuments.id,
             fileUrl: kycDocuments.file_url,
             fileName: kycDocuments.file_name,
             ocrData: kycDocuments.ocr_data,
         }).from(kycDocuments)
-            .where(and(eq(kycDocuments.lead_id, leadId), eq(kycDocuments.doc_type, doc_type)))
+            .where(and(
+                eq(kycDocuments.lead_id, leadId),
+                eq(kycDocuments.doc_type, doc_type),
+                eq(kycDocuments.doc_for, doc_for),
+            ))
             .limit(1);
 
-        // Fallback: if no exact match, search all docs for this lead and try to identify the right one
+        // Fallback: if no exact match, search docs for this lead+doc_for and try to identify the right one
         if (!doc) {
-            console.log(`[OCR Fallback] No exact match for doc_type="${doc_type}" on lead=${leadId}. Searching all docs...`);
+            console.log(`[OCR Fallback] No exact match for doc_type="${doc_type}" doc_for="${doc_for}" on lead=${leadId}. Searching all docs...`);
             const allDocs = await db.select({
                 id: kycDocuments.id,
                 fileUrl: kycDocuments.file_url,
@@ -231,7 +241,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 ocrData: kycDocuments.ocr_data,
                 docType: kycDocuments.doc_type,
             }).from(kycDocuments)
-                .where(eq(kycDocuments.lead_id, leadId));
+                .where(and(
+                    eq(kycDocuments.lead_id, leadId),
+                    eq(kycDocuments.doc_for, doc_for),
+                ));
 
             console.log(`[OCR Fallback] Found ${allDocs.length} docs:`, allDocs.map(d => ({ id: d.id, docType: d.docType, fileName: d.fileName })));
 
@@ -518,6 +531,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             .where(eq(kycDocuments.id, doc.id));
 
         // ── 2. Save extracted fields to personalDetails (persistent DB storage) ──
+        // personalDetails holds the PRIMARY applicant's data only — skip the
+        // save for co-borrower OCR runs (doc_for !== 'customer') so we don't
+        // overwrite primary's PAN / Aadhaar / address with co-borrower values.
+        // Co-borrower OCR results still get persisted to kycDocuments.ocr_data
+        // above and surface on the co-borrower card via the case-review fetch.
+        if (doc_for === 'customer') {
         if (doc_type === 'pan_card') {
             const panNo = getField(ocrData, 'pan_number', 'panNumber', 'id_number', 'idNumber', 'pan', 'panNo');
             const fatherName = getField(ocrData, 'fatherName', 'father_name', 'fatherOrHusbandName');
@@ -590,6 +609,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 bank_branch: ocrData.branch,
             });
         }
+        } // end doc_for === 'customer' gate
 
         return NextResponse.json({
             success: true,
