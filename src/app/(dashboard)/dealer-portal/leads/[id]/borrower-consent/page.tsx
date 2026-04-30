@@ -1028,8 +1028,6 @@ export default function BorrowerConsentPage() {
                     title="Other Documents & Co-Borrower KYC"
                     subtitle={`Lead ID: ${leadId}${lead?.full_name ? ` — ${lead.full_name}` : ''}`}
                     step={3}
-                    totalSteps={5}
-                    workflowLabel="Interim Step"
                     onBack={() => router.push('/dealer-portal/leads/new')}
                     onPrev={() => jumpToStep(2)}
                     onNext={() => jumpToStep(4)}

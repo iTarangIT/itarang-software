@@ -230,7 +230,7 @@ export default function DealerOptionsPage() {
         return (
             <div className="min-h-screen bg-[#F8F9FB]">
                 <div className="max-w-[1200px] mx-auto px-6 py-8">
-                    <ProgressHeader title="Loan Options" subtitle={`Lead: ${leadId}`} step={4} onBack={() => router.back()} />
+                    <ProgressHeader title="Loan Options" subtitle={`Lead: ${leadId}`} step={5} onBack={() => router.back()} />
                     <div className="mt-12 max-w-lg mx-auto text-center">
                         <div className="w-24 h-24 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-6">
                             <motion.div
@@ -264,7 +264,7 @@ export default function DealerOptionsPage() {
         return (
             <div className="min-h-screen bg-[#F8F9FB]">
                 <div className="max-w-[1200px] mx-auto px-6 py-8">
-                    <ProgressHeader title="Loan Options" subtitle={`Lead: ${leadId}`} step={4} onBack={() => router.back()} />
+                    <ProgressHeader title="Loan Options" subtitle={`Lead: ${leadId}`} step={5} onBack={() => router.back()} />
                     <motion.div
                         initial={{ opacity: 0, scale: 0.9 }}
                         animate={{ opacity: 1, scale: 1 }}
@@ -308,7 +308,7 @@ export default function DealerOptionsPage() {
     return (
         <div className="min-h-screen bg-[#F8F9FB]">
             <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
-                <ProgressHeader title="Loan Options" subtitle={`Lead: ${leadId}`} step={4} onBack={() => router.back()} />
+                <ProgressHeader title="Loan Options" subtitle={`Lead: ${leadId}`} step={5} onBack={() => router.back()} />
                 <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
 
                 <main className="grid grid-cols-1 gap-6">
