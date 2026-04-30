@@ -330,6 +330,7 @@ export default function CoBorrowerPanel({
                     adminAction: getVerification("aadhaar")!.adminAction,
                     adminActionNotes:
                       getVerification("aadhaar")!.adminActionNotes,
+                    apiResponse: getVerification("aadhaar")!.apiResponse,
                   }
                 : null
             }
