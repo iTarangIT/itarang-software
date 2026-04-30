@@ -112,9 +112,9 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
             data: {
                 leadId,
                 workflow_step: 4,
-                nextStep: `/dealer-portal/leads/${leadId}/kyc/interim`,
+                nextStep: `/dealer-portal/leads/${leadId}/product-selection`,
                 completedAt: now.toISOString(),
-                message: "Step 3 completed. Proceed to co-borrower & additional documents.",
+                message: "Step 3 completed. Proceed to product selection.",
             },
         });
     } catch (error) {

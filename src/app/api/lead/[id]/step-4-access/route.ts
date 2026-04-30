@@ -198,7 +198,7 @@ export async function GET(
     // Redirect routing
     let redirectTo = `/dealer-portal/leads/${leadId}`;
     if (STEP_3_STATES.has(kycStatus)) {
-      redirectTo = `/dealer-portal/leads/${leadId}/kyc/interim`;
+      redirectTo = `/dealer-portal/leads/${leadId}/borrower-consent`;
     } else if (kycStatus === "not_started" || kycStatus === "draft" || kycStatus === "in_progress") {
       redirectTo = `/dealer-portal/leads/${leadId}/kyc`;
     } else if (kycStatus === "kyc_rejected" || kycStatus === "sold") {
