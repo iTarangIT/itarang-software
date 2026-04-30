@@ -3,7 +3,7 @@ export const maxDuration = 30;
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { consentRecords, kycVerifications, leads, users } from "@/lib/db/schema";
+import { coBorrowers, consentRecords, kycVerifications, leads, users } from "@/lib/db/schema";
 import { and, eq } from "drizzle-orm";
 import { requireRole } from "@/lib/auth-utils";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
@@ -49,6 +49,15 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       );
     }
 
+    // Normalize the applicant the consent is for. Dealer page sends 'customer'
+    // for Step 2 and 'borrower' for Step 3. Persist as 'primary' / 'co_borrower'
+    // so the rest of the system (admin review, status polling) can match.
+    const rawConsentFor = String(body?.consent_for || "customer").toLowerCase();
+    const consentForRole: "primary" | "co_borrower" =
+      rawConsentFor === "borrower" || rawConsentFor === "co_borrower"
+        ? "co_borrower"
+        : "primary";
+
     // Fetch lead
     const leadRows = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
     const lead = leadRows[0];
@@ -60,22 +69,67 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       );
     }
 
-    const customerPhone = lead.phone || lead.owner_contact;
-    const customerName = lead.full_name || lead.owner_name || "Customer";
-    const customerEmail = lead.owner_email || "";
+    // Resolve applicant data — primary uses lead fields, co-borrower uses the
+    // coBorrowers row so the e-sign link is delivered to the co-borrower's
+    // phone (not the primary applicant's).
+    let signerPhone: string | null;
+    let signerName: string;
+    let signerEmail: string;
+    let signerFatherName: string;
+    let signerDob: string | null;
+    let signerCurrentAddress: string;
+    let signerPermanentAddress: string;
 
-    if (!customerPhone) {
+    if (consentForRole === "co_borrower") {
+      const cobRows = await db
+        .select()
+        .from(coBorrowers)
+        .where(eq(coBorrowers.lead_id, leadId))
+        .limit(1);
+      const cob = cobRows[0];
+      if (!cob) {
+        return NextResponse.json(
+          { success: false, error: { message: "Co-borrower not found for this lead" } },
+          { status: 404 }
+        );
+      }
+      signerPhone = cob.phone || null;
+      signerName = cob.full_name || "Co-borrower";
+      signerEmail = "";
+      signerFatherName = cob.father_or_husband_name || "";
+      signerDob = (cob.dob as unknown as string) || null;
+      signerCurrentAddress = cob.current_address || cob.address || "";
+      signerPermanentAddress = cob.permanent_address || cob.address || "";
+    } else {
+      signerPhone = lead.phone || lead.owner_contact;
+      signerName = lead.full_name || lead.owner_name || "Customer";
+      signerEmail = lead.owner_email || "";
+      signerFatherName = lead.father_or_husband_name || "";
+      signerDob = (lead.dob as unknown as string) || null;
+      signerCurrentAddress = lead.current_address || "";
+      signerPermanentAddress = lead.permanent_address || lead.current_address || "";
+    }
+
+    if (!signerPhone) {
       return NextResponse.json(
-        { success: false, error: { message: "Customer phone number not available" } },
+        {
+          success: false,
+          error: {
+            message:
+              consentForRole === "co_borrower"
+                ? "Co-borrower phone number not available"
+                : "Customer phone number not available",
+          },
+        },
         { status: 400 }
       );
     }
 
-    // Idempotency: if there's already an active consent record for the primary
+    // Idempotency: if there's already an active consent record for THIS
     // applicant on this lead, return it instead of generating a new PDF +
     // Digio agreement (which previously created duplicate consent_records and
-    // produced two "Primary Consent" cards in the admin UI). Statuses that
-    // count as "still active": link_sent, viewed, signed, esign_completed.
+    // produced two cards in the admin UI). Statuses that count as
+    // "still active": link_sent, viewed, signed, esign_completed.
     // Failed / expired rows are allowed to be retried — we'll UPDATE that row
     // below instead of inserting a new one.
     const existingConsents = await db
@@ -84,7 +138,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       .where(
         and(
           eq(consentRecords.lead_id, leadId),
-          eq(consentRecords.consent_for, "primary"),
+          eq(consentRecords.consent_for, consentForRole),
         ),
       );
 
@@ -107,7 +161,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
           consentId: activeConsent.id,
           leadId,
           channel: activeConsent.consent_delivery_channel,
-          phone: customerPhone,
+          phone: signerPhone,
           customerSigningUrl: activeConsent.consent_link_url,
           digioDocumentId: activeConsent.esign_transaction_id,
           sentAt: activeConsent.consent_link_sent_at?.toISOString() ?? null,
@@ -144,20 +198,22 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
 
     // Format DOB
     let dobFormatted = "";
-    if (lead.dob) {
-      const d = new Date(lead.dob);
-      dobFormatted = `${d.getDate().toString().padStart(2, "0")}/${(d.getMonth() + 1).toString().padStart(2, "0")}/${d.getFullYear()}`;
+    if (signerDob) {
+      const d = new Date(signerDob);
+      if (!Number.isNaN(d.getTime())) {
+        dobFormatted = `${d.getDate().toString().padStart(2, "0")}/${(d.getMonth() + 1).toString().padStart(2, "0")}/${d.getFullYear()}`;
+      }
     }
 
     // 1. Generate consent PDF
     const html = generateConsentHtml({
-      customerName,
-      fatherOrHusbandName: lead.father_or_husband_name || "",
+      customerName: signerName,
+      fatherOrHusbandName: signerFatherName,
       dob: dobFormatted,
-      phone: customerPhone,
-      customerEmail,
-      currentAddress: lead.current_address || "",
-      permanentAddress: lead.permanent_address || lead.current_address || "",
+      phone: signerPhone,
+      customerEmail: signerEmail,
+      currentAddress: signerCurrentAddress,
+      permanentAddress: signerPermanentAddress,
       productName: lead.asset_model || "",
       productCategory: lead.asset_model || "",
       paymentMethod: lead.payment_method || "",
@@ -172,7 +228,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     const pdfBase64 = pdfBuffer.toString("base64");
 
     // Digio needs 10-digit mobile number
-    const cleanPhone = customerPhone.replace(/\D/g, "").slice(-10);
+    const cleanPhone = signerPhone.replace(/\D/g, "").slice(-10);
 
     // Run the unsigned-PDF Supabase upload and the Digio agreement creation in
     // parallel — both are network-bound and independent, so overlapping them
@@ -212,8 +268,11 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       signers: [
         {
           identifier: cleanPhone,
-          name: customerName,
-          reason: "Customer Consent for KYC & Loan Processing",
+          name: signerName,
+          reason:
+            consentForRole === "co_borrower"
+              ? "Co-borrower Consent for KYC & Loan Processing"
+              : "Customer Consent for KYC & Loan Processing",
           sign_type: "aadhaar",
         },
       ],
@@ -262,7 +321,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       await db.insert(consentRecords).values({
         id: consentId,
         lead_id: leadId,
-        consent_for: "primary",
+        consent_for: consentForRole,
         consent_type: "digital",
         consent_status: "link_sent",
         consent_delivery_channel: channel,
@@ -287,7 +346,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
           and(
             eq(kycVerifications.lead_id, leadId),
             eq(kycVerifications.verification_type, "esign_consent"),
-            eq(kycVerifications.applicant, "primary"),
+            eq(kycVerifications.applicant, consentForRole),
           ),
         )
         .limit(1);
@@ -309,7 +368,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
           id: createWorkflowId("KYCVER", now),
           lead_id: leadId,
           verification_type: "esign_consent",
-          applicant: "primary",
+          applicant: consentForRole,
           status: "success",
           api_provider: "digio",
           api_request: { consent_id: finalConsentId, channel, phone: cleanPhone },
@@ -322,10 +381,19 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       console.error("[send-consent] kyc_verifications upsert failed:", persistErr);
     }
 
-    // 4. Update lead consent status
-    await db.update(leads)
-      .set({ consent_status: "link_sent", updated_at: now })
-      .where(eq(leads.id, leadId));
+    // 4. Update consent status on the appropriate applicant-level rows
+    if (consentForRole === "co_borrower") {
+      await db.update(coBorrowers)
+        .set({ consent_status: "link_sent", updated_at: now })
+        .where(eq(coBorrowers.lead_id, leadId));
+      await db.update(leads)
+        .set({ borrower_consent_status: "link_sent", updated_at: now })
+        .where(eq(leads.id, leadId));
+    } else {
+      await db.update(leads)
+        .set({ consent_status: "link_sent", updated_at: now })
+        .where(eq(leads.id, leadId));
+    }
 
     return NextResponse.json({
       success: true,
@@ -339,7 +407,10 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         customerSigningUrl,
         digioDocumentId,
         sentAt: now.toISOString(),
-        message: `Consent form sent to customer via DigiO. Signing link delivered to ${cleanPhone}.`,
+        message:
+          consentForRole === "co_borrower"
+            ? `Consent form sent to co-borrower via DigiO. Signing link delivered to ${cleanPhone}.`
+            : `Consent form sent to customer via DigiO. Signing link delivered to ${cleanPhone}.`,
       },
     });
   } catch (error: any) {

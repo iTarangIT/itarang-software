@@ -41,7 +41,6 @@ const DEFAULT_CUSTOMER_VERIFICATIONS: VerificationRow[] = [
     { type: 'bank', label: 'Bank Verification', status: 'pending' },
     { type: 'address_proof', label: 'Address Proof', status: 'pending' },
     { type: 'rc', label: 'RC Verification', status: 'pending' },
-    { type: 'mobile', label: 'Mobile Number', status: 'pending' },
 ];
 
 function isFinalConsentStatus(status: string) {
@@ -567,7 +566,11 @@ export default function KYCPage() {
         try {
             setSubmitting(true);
             setApiError(null);
-            router.push(`/dealer-portal/leads/${leadId}/borrower-consent`);
+            const adminRequestedStep3 = !!(lead?.has_co_borrower || lead?.has_additional_docs_required);
+            const route = adminRequestedStep3
+                ? `/dealer-portal/leads/${leadId}/borrower-consent`
+                : `/dealer-portal/leads/${leadId}/kyc/interim`;
+            router.push(route);
         } catch (err: any) {
             setApiError(err?.message || 'Failed to proceed');
         } finally {
@@ -598,11 +601,31 @@ export default function KYCPage() {
     const isConsentVerified = ['verified', 'admin_verified', 'manual_verified'].includes((consentStatus || '').toLowerCase());
     const allDocsUploaded = requiredDocs.filter(d => d.required).every(d => !!uploadedDocs[d.key]?.file_url);
     const isCouponSubmitted = lead?.coupon_status === 'used' || submittedForVerification;
+    const allVerificationsApproved =
+        verifications.length > 0 &&
+        verifications.every(v => ['success', 'verified'].includes((v.status || '').toLowerCase()));
+
+    // Once the admin clicks "Request Co-Borrower KYC" or "Request Additional
+    // Docs" on the case-review screen, has_co_borrower / has_additional_docs_required
+    // is flipped on the lead. That admin action itself is the green light to
+    // advance from Step 2 — the dealer should be able to proceed even if some
+    // verification rows are still in pending/failed state.
+    const adminRequestedStep3 = !!(lead?.has_co_borrower || lead?.has_additional_docs_required);
+
     const pendingRequirements: string[] = [];
     if (!isConsentVerified) pendingRequirements.push('consent verification');
     if (!allDocsUploaded) pendingRequirements.push(`${docStats.pending.length} pending document${docStats.pending.length === 1 ? '' : 's'}`);
     if (!isCouponSubmitted) pendingRequirements.push('coupon submission');
-    const canProceed = isConsentVerified && allDocsUploaded && isCouponSubmitted;
+    if (!adminRequestedStep3 && !allVerificationsApproved) pendingRequirements.push('admin verification of all checks');
+    const canProceed =
+        isConsentVerified &&
+        allDocsUploaded &&
+        isCouponSubmitted &&
+        (adminRequestedStep3 || allVerificationsApproved);
+
+    const nextStepRoute = adminRequestedStep3
+        ? `/dealer-portal/leads/${leadId}/borrower-consent`
+        : `/dealer-portal/leads/${leadId}/kyc/interim`;
 
     const stepRoutes: Record<number, string> = {
         1: '/dealer-portal/leads/new',
@@ -615,6 +638,11 @@ export default function KYCPage() {
         if (target === 2) return; // already here
         if (target > 2 && !canProceed) {
             setApiError('Complete this step before jumping ahead.');
+            return;
+        }
+        if (target === 3 && !adminRequestedStep3) {
+            // Step 3 only opens when admin has requested co-borrower or additional documents.
+            router.push(stepRoutes[4]);
             return;
         }
         const route = stepRoutes[target];
@@ -631,7 +659,7 @@ export default function KYCPage() {
                     step={2}
                     onBack={() => router.push('/dealer-portal/leads/new')}
                     onPrev={() => jumpToStep(1)}
-                    onNext={() => router.push(`/dealer-portal/leads/${leadId}/borrower-consent`)}
+                    onNext={() => router.push(nextStepRoute)}
                     onStepClick={jumpToStep}
                     rightAction={
                         <button onClick={async () => {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { consentRecords, kycVerifications, leads } from '@/lib/db/schema';
+import { coBorrowers, consentRecords, kycVerifications, leads } from '@/lib/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 import { fetchAndStoreSignedConsent } from '@/lib/digio/fetch-signed-consent';
@@ -41,15 +41,23 @@ async function fetchDigioDocument(baseUrl: string, auth: string, documentId: str
     return null;
 }
 
-export async function POST(_req: NextRequest, { params }: RouteContext) {
+export async function POST(req: NextRequest, { params }: RouteContext) {
     try {
         await requireRole(['dealer', 'admin', 'ceo', 'business_head', 'sales_head']);
         const { leadId } = await params;
 
+        // Sync the primary applicant by default; Step 3 page passes
+        // ?consent_for=borrower to sync the co-borrower consent instead.
+        const rawConsentFor = (req.nextUrl.searchParams.get('consent_for') || 'customer').toLowerCase();
+        const consentForRole: 'primary' | 'co_borrower' =
+            rawConsentFor === 'borrower' || rawConsentFor === 'co_borrower'
+                ? 'co_borrower'
+                : 'primary';
+
         const [record] = await db
             .select()
             .from(consentRecords)
-            .where(and(eq(consentRecords.lead_id, leadId), eq(consentRecords.consent_for, 'primary')))
+            .where(and(eq(consentRecords.lead_id, leadId), eq(consentRecords.consent_for, consentForRole)))
             .orderBy(desc(consentRecords.updated_at))
             .limit(1);
 
@@ -104,7 +112,7 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
                         and(
                             eq(kycVerifications.lead_id, leadId),
                             eq(kycVerifications.verification_type, 'esign_consent_sync'),
-                            eq(kycVerifications.applicant, 'primary'),
+                            eq(kycVerifications.applicant, consentForRole),
                         ),
                     )
                     .limit(1);
@@ -126,7 +134,7 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
                         id: createWorkflowId('KYCVER', syncNow),
                         lead_id: leadId,
                         verification_type: 'esign_consent_sync',
-                        applicant: 'primary',
+                        applicant: consentForRole,
                         status: 'success',
                         api_provider: 'digio',
                         api_request: { document_id: record.esign_transaction_id, consent_id: record.id },
@@ -191,7 +199,18 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
         if (statusChanged || backfillingPdf) {
             await db.update(consentRecords).set(updates).where(eq(consentRecords.id, record.id));
             if (statusChanged) {
-                await db.update(leads).set({ consent_status: newStatus, updated_at: now }).where(eq(leads.id, leadId));
+                if (consentForRole === 'co_borrower') {
+                    await db.update(coBorrowers)
+                        .set({ consent_status: newStatus, updated_at: now })
+                        .where(eq(coBorrowers.lead_id, leadId));
+                    await db.update(leads)
+                        .set({ borrower_consent_status: newStatus, updated_at: now })
+                        .where(eq(leads.id, leadId));
+                } else {
+                    await db.update(leads)
+                        .set({ consent_status: newStatus, updated_at: now })
+                        .where(eq(leads.id, leadId));
+                }
             }
         }
 

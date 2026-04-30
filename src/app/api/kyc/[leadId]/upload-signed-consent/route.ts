@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { leads, consentRecords } from '@/lib/db/schema';
+import { coBorrowers, leads, consentRecords } from '@/lib/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
 import {
@@ -22,7 +22,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const formData = await req.formData();
         const file = formData.get('file') as File;
         const consentForRaw = String(formData.get('consent_for') || 'customer').toLowerCase();
-        const dbConsentFor = consentForRaw === 'customer' ? 'primary' : consentForRaw;
+        const dbConsentFor =
+            consentForRaw === 'customer' ? 'primary'
+            : consentForRaw === 'borrower' ? 'co_borrower'
+            : consentForRaw;
 
         if (!file) {
             return NextResponse.json({ success: false, error: { message: 'File is required' } }, { status: 400 });
@@ -93,11 +96,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             });
         }
 
-        // Mirror the same status onto the lead so the dealer UI shows
-        // "Pending Review" instead of falling through to "Awaiting Signature".
-        await db.update(leads)
-            .set({ consent_status: 'admin_review_pending', updated_at: now })
-            .where(eq(leads.id, leadId));
+        // Mirror the same status onto the applicant-level rows so the dealer
+        // UI shows "Pending Review" instead of falling through to "Awaiting
+        // Signature". For co-borrower we update both coBorrowers (canonical)
+        // and leads.borrower_consent_status (denormalised cache).
+        if (dbConsentFor === 'co_borrower') {
+            await db.update(coBorrowers)
+                .set({ consent_status: 'admin_review_pending', updated_at: now })
+                .where(eq(coBorrowers.lead_id, leadId));
+            await db.update(leads)
+                .set({ borrower_consent_status: 'admin_review_pending', updated_at: now })
+                .where(eq(leads.id, leadId));
+        } else {
+            await db.update(leads)
+                .set({ consent_status: 'admin_review_pending', updated_at: now })
+                .where(eq(leads.id, leadId));
+        }
 
         return NextResponse.json({ success: true, fileUrl: urlData.publicUrl });
     } catch (error) {
