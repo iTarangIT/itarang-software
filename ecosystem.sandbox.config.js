@@ -1,14 +1,16 @@
 // ecosystem.sandbox.config.js
 // pm2 config for the Hostinger VPS sandbox deployment.
 // Managed by .github/workflows/deploy-sandbox.yml — do not edit on the server.
-
 module.exports = {
   apps: [
     {
       name: "sandbox-web",
       cwd: __dirname,
-      script: "./node_modules/next/dist/bin/next",
-      args: "start -p 3003 -H 127.0.0.1",
+      // Next.js standalone output: run the bundled server.js directly.
+      // `next start` is incompatible with output: "standalone" in next.config.ts
+      // — it can't find the chunks/manifests the standalone build lays out.
+      script: "node",
+      args: ".next/standalone/server.js",
       instances: 1,
       exec_mode: "fork",
       env: {
