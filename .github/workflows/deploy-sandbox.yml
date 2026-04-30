@@ -188,7 +188,7 @@ jobs:
             export CI=1
             export NEXT_TELEMETRY_DISABLED=1
 
-           time npm run build
+            time npm run build
 
             echo "--- staging standalone bundle ---"
             # Next.js standalone output excludes static + public by design.
