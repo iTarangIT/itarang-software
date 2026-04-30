@@ -206,12 +206,32 @@ export default function AadhaarCard({
 
   const digiOrder: DigilockerStep[] = ["link_sent", "link_opened", "consent_given", "document_fetched"];
   const [digiStatus, setDigiStatus] = useState<string>(existingTransaction?.status || "idle");
-  const [transactionId, setTransactionId] = useState(existingTransaction?.id || "");
+  // For co-borrower, the verificationId doubles as the transactionId on the
+  // status route (executeCoBorrowerDigilockerStatus accepts the saved
+  // verificationId via the [transactionId] path segment). Hydrating it lets
+  // pollStatus run on reload without waiting for handleInitiate.
+  const [transactionId, setTransactionId] = useState(
+    existingTransaction?.id ||
+      (applicant === "co_borrower" && existingVerification?.id ? existingVerification.id : "")
+  );
+  // For co-borrower, executeCoBorrowerDigilockerStatus now persists the
+  // normalised aadhaarData / crossMatchResult into kyc_verifications.api_response.data
+  // (mirroring primary's digilockerTransactions.aadhaar_extracted_data path).
+  // Hydrate from there on mount so the data table renders without waiting
+  // for the next poll tick.
+  const cbAadhaarFromVer =
+    applicant === "co_borrower"
+      ? (cbVerData?.aadhaarData as Record<string, string | null> | undefined)
+      : undefined;
+  const cbCrossMatchFromVer =
+    applicant === "co_borrower"
+      ? (cbVerData?.crossMatchResult as CrossMatchResult | null | undefined)
+      : undefined;
   const [aadhaarData, setAadhaarData] = useState<Record<string, string | null> | null>(
-    existingTransaction?.aadhaarExtractedData || null
+    existingTransaction?.aadhaarExtractedData || cbAadhaarFromVer || null
   );
   const [crossMatch, setCrossMatch] = useState<CrossMatchResult | null>(
-    existingTransaction?.crossMatchResult || null
+    existingTransaction?.crossMatchResult || cbCrossMatchFromVer || null
   );
   const [linkExpiry, setLinkExpiry] = useState(existingTransaction?.expiresAt || "");
   const [timeRemaining, setTimeRemaining] = useState("");
