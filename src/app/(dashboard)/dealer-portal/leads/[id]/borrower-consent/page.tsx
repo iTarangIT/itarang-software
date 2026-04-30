@@ -994,6 +994,10 @@ export default function BorrowerConsentPage() {
         );
         return supportingOk && coBorrowerOk;
     })();
+
+    // Admin has finished verifying Step 3. Lead is unlocked for Step 4
+    // (Product Selection). Show the Next button so the dealer can advance.
+    const step3Cleared = ['step_3_cleared', 'kyc_approved'].includes(lead?.kyc_status || '');
     const stepRoutes: Record<number, string> = {
         1: '/dealer-portal/leads/new',
         2: `/dealer-portal/leads/${leadId}/kyc`,
@@ -1695,9 +1699,15 @@ export default function BorrowerConsentPage() {
                     <SecondaryButton onClick={() => setShowPreview(true)}>
                         <Eye className="w-4 h-4" /> Preview Customer Profile
                     </SecondaryButton>
-                    <PrimaryButton onClick={handleSubmitForVerification} loading={submitting} disabled={submitting || !canSubmit}>
-                        {alreadySubmitted ? 'Submitted' : 'Submit for Verification'}
-                    </PrimaryButton>
+                    {step3Cleared ? (
+                        <PrimaryButton onClick={() => router.push(`/dealer-portal/leads/${leadId}/product-selection`)}>
+                            Next: Product Selection <ChevronRight className="w-4 h-4" />
+                        </PrimaryButton>
+                    ) : (
+                        <PrimaryButton onClick={handleSubmitForVerification} loading={submitting} disabled={submitting || !canSubmit}>
+                            {alreadySubmitted ? 'Submitted' : 'Submit for Verification'}
+                        </PrimaryButton>
+                    )}
                 </StickyBottomBar>
             </div>
         </div>
