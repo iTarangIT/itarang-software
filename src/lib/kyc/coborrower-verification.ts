@@ -591,12 +591,35 @@ export async function executeCoBorrowerDigilockerInit(
   // Decentro's transaction id — REQUIRED for the eAadhaar status fetch.
   // /v2/kyc/digilocker/eaadhaar's `initial_decentro_transaction_id` field
   // expects THIS value, not our internal verificationId. Mirrors primary's
-  // extraction at src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/initiate/route.ts:166.
+  // extraction at src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/initiate/route.ts:166,
+  // with extra key candidates so a Decentro tenant returning the id under a
+  // less-common name still gets captured.
   const decentroTxnId =
     (decentroRes?.decentroTxnId as string | undefined) ||
+    (decentroRes?.decentro_transaction_id as string | undefined) ||
+    (decentroRes?.transactionId as string | undefined) ||
+    (decentroRes?.txn_id as string | undefined) ||
     (resData.decentroTxnId as string | undefined) ||
     (resData.decentro_transaction_id as string | undefined) ||
+    (resData.decentro_txn_id as string | undefined) ||
+    (resData.transaction_id as string | undefined) ||
+    (resData.txn_id as string | undefined) ||
     null;
+
+  // Log enough of the Decentro response to debug missing-decentroTxnId
+  // reports without dumping full PII into logs.
+  console.log(
+    "[Co-Borrower DigiLocker Init] Decentro response shape:",
+    JSON.stringify({
+      status: decentroRes?.status,
+      responseStatus: decentroRes?.responseStatus,
+      api_status: decentroRes?.api_status,
+      responseKey: decentroRes?.responseKey,
+      decentroTxnIdCaptured: decentroTxnId,
+      topLevelKeys: decentroRes ? Object.keys(decentroRes) : [],
+      dataKeys: resData ? Object.keys(resData) : [],
+    }),
+  );
 
   // If Decentro didn't actually generate a URL, surface the failure rather than
   // storing a useless in_progress row that the UI can't act on.
@@ -682,6 +705,7 @@ export async function executeCoBorrowerDigilockerStatus(
   const verRows = await db
     .select({
       id: kycVerifications.id,
+      api_request: kycVerifications.api_request,
       api_response: kycVerifications.api_response,
     })
     .from(kycVerifications)
@@ -690,17 +714,31 @@ export async function executeCoBorrowerDigilockerStatus(
   const verRow = verRows[0];
   const apiResp = (verRow?.api_response ?? {}) as Record<string, unknown>;
   const apiData = (apiResp.data ?? {}) as Record<string, unknown>;
+  const apiReq = (verRow?.api_request ?? {}) as Record<string, unknown>;
   const decentroTxnId =
     (apiData.decentro_txn_id as string | undefined) ||
+    (apiData.decentroTxnId as string | undefined) ||
+    (apiData.decentro_transaction_id as string | undefined) ||
+    (apiData.transaction_id as string | undefined) ||
+    (apiData.txn_id as string | undefined) ||
     (apiResp.decentroTxnId as string | undefined) ||
+    (apiResp.decentro_transaction_id as string | undefined) ||
+    (apiReq.decentro_txn_id as string | undefined) ||
+    (apiReq.transaction_id as string | undefined) ||
     null;
 
   if (!decentroTxnId) {
+    console.warn("[Co-Borrower DigiLocker Status] decentro_txn_id missing", {
+      verificationId: transactionId,
+      apiResponseDataKeys: Object.keys(apiData),
+      apiResponseTopLevelKeys: Object.keys(apiResp),
+      apiRequestKeys: Object.keys(apiReq),
+    });
     return {
       success: false,
       status: 400,
       error:
-        "Decentro transaction id missing on this verification. Click \"New Link\" to initiate a fresh DigiLocker session.",
+        "Decentro transaction id missing on this verification. Click \"Re-run Aadhaar Verification\" to start a fresh DigiLocker session.",
     };
   }
 
