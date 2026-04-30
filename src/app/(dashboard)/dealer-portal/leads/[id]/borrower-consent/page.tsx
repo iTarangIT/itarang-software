@@ -1026,11 +1026,20 @@ export default function BorrowerConsentPage() {
         4: `/dealer-portal/leads/${leadId}/product-selection`,
         5: `/dealer-portal/leads/${leadId}/step-5`,
     };
+    // The progress-bar dots for Steps 4 and 5 stay locked until admin
+    // approves Step 3. The right chevron is intentionally exempt — it stays
+    // navigable as the dealer's manual escape hatch — so the lock applies
+    // only to dot clicks via jumpToStep. Each downstream step also has its
+    // own server-side access gate.
+    const lockedSteps = step3Cleared ? [] : [4, 5];
     const jumpToStep = (target: number) => {
         if (target === 3) return;
-        // Each step has its own access gate (e.g. /api/lead/:id/step-4-access)
-        // that redirects back when the dealer isn't eligible. Don't block
-        // navigation here — let the destination step decide.
+        if (lockedSteps.includes(target)) return;
+        const route = stepRoutes[target];
+        if (route) router.push(route);
+    };
+    const navigateToStep = (target: number) => {
+        if (target === 3) return;
         const route = stepRoutes[target];
         if (route) router.push(route);
     };
@@ -1057,8 +1066,9 @@ export default function BorrowerConsentPage() {
                     step={3}
                     onBack={() => router.push('/dealer-portal/leads/new')}
                     onPrev={() => jumpToStep(2)}
-                    onNext={() => jumpToStep(4)}
+                    onNext={() => navigateToStep(4)}
                     onStepClick={jumpToStep}
+                    lockedSteps={lockedSteps}
                     rightAction={
                         <div className="flex items-center gap-3">
                             <button

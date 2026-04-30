@@ -303,7 +303,7 @@ export function StatusBadge({ status }: { status: string }) {
 
 export function ProgressHeader({
     title, subtitle, step, totalSteps = 5, workflowLabel = 'Workflow Progress',
-    onBack, onPrev, onNext, onStepClick,
+    onBack, onPrev, onNext, onStepClick, lockedSteps,
     rightAction,
 }: {
     title: string;
@@ -315,9 +315,16 @@ export function ProgressHeader({
     onPrev?: () => void;
     onNext?: () => void;
     onStepClick?: (targetStep: number) => void;
+    // Step indices that should be visually disabled and unclickable in the
+    // progress bar (e.g. Step 4 while Step 3 is still under admin review).
+    // Locked steps also block the right-chevron's onNext.
+    lockedSteps?: number[];
     rightAction?: ReactNode;
 }) {
     const canGoPrev = step > 1;
+    const isLocked = (idx: number) => !!lockedSteps?.includes(idx);
+    // Note: lockedSteps only affects the progress-bar dots. The right
+    // chevron stays enabled and is the dealer's escape hatch.
     const canGoNext = step < totalSteps;
     return (
         <header className="mb-8 flex justify-between items-start gap-4">
@@ -357,18 +364,20 @@ export function ProgressHeader({
                                 {Array.from({ length: totalSteps }, (_, i) => {
                                     const idx = i + 1;
                                     const reached = idx <= step;
-                                    const clickable = !!onStepClick;
+                                    const locked = isLocked(idx);
+                                    const clickable = !!onStepClick && !locked;
                                     return (
                                         <button
                                             type="button"
                                             key={idx}
                                             onClick={clickable ? () => onStepClick?.(idx) : undefined}
                                             disabled={!clickable}
-                                            aria-label={`Jump to step ${idx}`}
+                                            aria-label={locked ? `Step ${idx} locked` : `Jump to step ${idx}`}
                                             aria-current={idx === step ? 'step' : undefined}
+                                            title={locked ? 'Locked — complete the previous step first' : undefined}
                                             className={`h-[6px] w-[50px] rounded-full transition-all duration-300 ${
                                                 reached ? 'bg-[#0047AB]' : 'bg-gray-200'
-                                            } ${clickable ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
+                                            } ${locked ? 'opacity-40 cursor-not-allowed' : clickable ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
                                         />
                                     );
                                 })}
