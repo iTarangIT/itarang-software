@@ -302,7 +302,7 @@ export function StatusBadge({ status }: { status: string }) {
 // ─── Progress Header ────────────────────────────────────────────────────────
 
 export function ProgressHeader({
-    title, subtitle, step, totalSteps = 4, workflowLabel = 'Workflow Progress',
+    title, subtitle, step, totalSteps = 5, workflowLabel = 'Workflow Progress',
     onBack, onPrev, onNext, onStepClick,
     rightAction,
 }: {
