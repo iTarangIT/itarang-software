@@ -225,6 +225,7 @@ export default function PANCard({
               docType="pan_card"
               cachedOcrData={ocrData}
               disabled={status === "loading"}
+              applicant={applicant}
               onOcrResult={(data) => {
                 const searchTargets = [data];
                 for (const k of ["kycResult", "extractedData", "result", "ocrResult"]) {
