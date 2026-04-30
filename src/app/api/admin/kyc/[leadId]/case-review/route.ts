@@ -367,39 +367,51 @@ export async function GET(
           tokenExpiresAt: r.token_expires_at,
         })),
         coBorrower: coBorrower
-          ? {
-              id: coBorrower.id,
-              fullName: coBorrower.full_name,
-              fatherOrHusbandName: coBorrower.father_or_husband_name,
-              dob: formatDob(coBorrower.dob),
-              phone: coBorrower.phone,
-              permanentAddress: coBorrower.permanent_address,
-              currentAddress: coBorrower.current_address,
-              isCurrentSame: coBorrower.is_current_same,
-              panNo: coBorrower.pan_no,
-              aadhaarNo: coBorrower.aadhaar_no,
-              kycStatus: coBorrower.kyc_status,
-              consentStatus: coBorrower.consent_status,
-              verificationSubmittedAt: coBorrower.verification_submitted_at,
-              documents: coBorrowerDocRows.map((d) => ({
-                id: d.id,
-                docType: d.document_type,
-                fileUrl: d.document_url,
-                status: d.status,
-                ocrData: d.ocr_data,
-                uploadedAt: d.uploaded_at,
-              })),
-              verificationCards: coBorrowerVerificationCards,
-              activeRequest: activeCoBorrowerRequest
-                ? {
-                    id: activeCoBorrowerRequest.id,
-                    attemptNumber: activeCoBorrowerRequest.attempt_number,
-                    reason: activeCoBorrowerRequest.reason,
-                    status: activeCoBorrowerRequest.status,
-                    createdAt: activeCoBorrowerRequest.created_at,
-                  }
-                : null,
-            }
+          ? coBorrower.verification_submitted_at
+            ? {
+                id: coBorrower.id,
+                gated: false,
+                fullName: coBorrower.full_name,
+                fatherOrHusbandName: coBorrower.father_or_husband_name,
+                dob: formatDob(coBorrower.dob),
+                phone: coBorrower.phone,
+                permanentAddress: coBorrower.permanent_address,
+                currentAddress: coBorrower.current_address,
+                isCurrentSame: coBorrower.is_current_same,
+                panNo: coBorrower.pan_no,
+                aadhaarNo: coBorrower.aadhaar_no,
+                kycStatus: coBorrower.kyc_status,
+                consentStatus: coBorrower.consent_status,
+                verificationSubmittedAt: coBorrower.verification_submitted_at,
+                documents: coBorrowerDocRows.map((d) => ({
+                  id: d.id,
+                  docType: d.document_type,
+                  fileUrl: d.document_url,
+                  status: d.status,
+                  ocrData: d.ocr_data,
+                  uploadedAt: d.uploaded_at,
+                })),
+                verificationCards: coBorrowerVerificationCards,
+                activeRequest: activeCoBorrowerRequest
+                  ? {
+                      id: activeCoBorrowerRequest.id,
+                      attemptNumber: activeCoBorrowerRequest.attempt_number,
+                      reason: activeCoBorrowerRequest.reason,
+                      status: activeCoBorrowerRequest.status,
+                      createdAt: activeCoBorrowerRequest.created_at,
+                    }
+                  : null,
+              }
+            : {
+                // Dealer hasn't submitted Step 3 yet. Withhold documents,
+                // profile, and verification cards so the admin UI shows an
+                // "awaiting submission" banner instead of actionable rows.
+                id: coBorrower.id,
+                gated: true,
+                awaitingDealerSubmission: true,
+                requestedAt: activeCoBorrowerRequest?.created_at ?? null,
+                attemptNumber: activeCoBorrowerRequest?.attempt_number ?? null,
+              }
           : null,
       },
     });
