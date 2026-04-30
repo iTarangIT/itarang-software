@@ -8,6 +8,10 @@ interface OcrAutofillButtonProps {
   cachedOcrData?: Record<string, unknown> | null;
   onOcrResult: (data: Record<string, unknown>, source: string) => void;
   disabled?: boolean;
+  // When omitted, defaults to "primary" so the API picks the primary
+  // applicant's document. Pass "co_borrower" from a co-borrower card so the
+  // backend filters kyc_documents by doc_for and returns the right doc.
+  applicant?: "primary" | "co_borrower";
 }
 
 export default function OcrAutofillButton({
@@ -16,6 +20,7 @@ export default function OcrAutofillButton({
   cachedOcrData,
   onOcrResult,
   disabled,
+  applicant = "primary",
 }: OcrAutofillButtonProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -50,7 +55,13 @@ export default function OcrAutofillButton({
         const res = await fetch(`/api/admin/kyc/${leadId}/ocr`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ doc_type: dt }),
+          body: JSON.stringify({
+            doc_type: dt,
+            // 'borrower' / 'customer' match the values stamped at upload time
+            // by /api/kyc/[leadId]/upload-document so the OCR route can filter
+            // kyc_documents to the right applicant's doc.
+            doc_for: applicant === "co_borrower" ? "borrower" : "customer",
+          }),
         });
         const data = await res.json();
 
