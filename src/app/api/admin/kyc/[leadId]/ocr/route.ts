@@ -35,17 +35,25 @@ async function resolveFetchableUrl(storedUrl: string): Promise<string> {
 }
 
 // Map internal doc types to Decentro OCR doc types.
-// pan_card intentionally OMITTED: the prod Decentro module currently doesn't
-// have the PAN OCR plan enabled (response: "no extractable data" — only the
-// metadata keys come back). Until that plan is enabled with Decentro, run
-// PAN OCR through Tesseract so admins still get the PAN number auto-filled.
 const DECENTRO_OCR_MAP: Record<string, OcrDocType> = {
+    pan_card: 'PAN',
     aadhaar_front: 'AADHAAR',
     aadhaar_back: 'AADHAAR',
 };
 
 // Doc types that use Tesseract OCR (regex-extracted from raw text).
-const TESSERACT_TYPES = ['pan_card', 'bank_statement', 'cheque_1', 'cheque_2', 'cheque_3', 'cheque_4', 'rc_copy'];
+const TESSERACT_TYPES = ['bank_statement', 'cheque_1', 'cheque_2', 'cheque_3', 'cheque_4', 'rc_copy'];
+
+// Per-doc-type Decentro options that mirror the working curl shape exactly.
+// PAN on our prod module rejects requests carrying `module_secret` and uses
+// a different `consent_purpose` than Aadhaar — sending the same shape we
+// verified end-to-end via curl avoids the metadata-only error response.
+const DECENTRO_OCR_OPTIONS: Record<string, { skipModuleSecret?: boolean; consentPurpose?: string }> = {
+    pan_card: {
+        skipModuleSecret: true,
+        consentPurpose: 'for bank account purpose only',
+    },
+};
 
 /** Helper: extract a string field from nested OCR response. Walks common nesting levels
  *  (kycResult, extractedData, result, ocrResult, data) and accepts both strings and numbers.
@@ -246,7 +254,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                                 doc_type === 'aadhaar_front' ? 'FRONT'
                                 : doc_type === 'aadhaar_back' ? 'BACK'
                                 : undefined;
-                            const ocrRes = await extractDocumentOcr(decentroOcrType, blob, fname, side);
+                            const ocrRes = await extractDocumentOcr(
+                                decentroOcrType,
+                                blob,
+                                fname,
+                                side,
+                                undefined,
+                                undefined,
+                                DECENTRO_OCR_OPTIONS[doc_type],
+                            );
                             // Decentro may use responseStatus or status field
                             const isSuccess = ocrRes.responseStatus === 'SUCCESS' || ocrRes.status === 'SUCCESS' || ocrRes.status === 200;
                             const ocrPayload = ocrRes.data || ocrRes.result || ocrRes.kycResult || ocrRes.ocrResult;
@@ -400,7 +416,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 doc_type === 'aadhaar_front' ? 'FRONT'
                 : doc_type === 'aadhaar_back' ? 'BACK'
                 : undefined;
-            const decentroRes = await extractDocumentOcr(decentroType, blob, fileName, side);
+            const decentroRes = await extractDocumentOcr(
+                decentroType,
+                blob,
+                fileName,
+                side,
+                undefined,
+                undefined,
+                DECENTRO_OCR_OPTIONS[doc_type],
+            );
             const success = decentroRes.responseStatus === 'SUCCESS' || decentroRes.status === 'SUCCESS' || decentroRes.status === 200;
             // Decentro varies the wrapping key by document/SKU. Cover the
             // shapes we've seen across PAN/Aadhaar/forensics endpoints.
@@ -464,23 +488,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 }
             }
         } else if (TESSERACT_TYPES.includes(doc_type)) {
-            // Use Tesseract for PAN, bank docs and RC
+            // Use Tesseract for bank docs and RC
             const text = await extractTextFromImageBuffer(fileBuffer);
             source = 'tesseract';
 
-            if (doc_type === 'pan_card') {
-                // Strict 10-char PAN format: 5 letters + 4 digits + 1 letter.
-                // Use word boundaries to avoid catching substrings inside
-                // unrelated runs of OCR garbage. The PAN appears once on the
-                // card; if Tesseract reads multiple matches (rare), prefer
-                // the first since cards typically print PAN in a stable spot.
-                const upper = text.toUpperCase();
-                const matches = upper.match(/\b[A-Z]{5}\d{4}[A-Z]\b/g);
-                ocrData = {
-                    pan_number: matches?.[0] || null,
-                    rawText: text,
-                };
-            } else if (doc_type === 'rc_copy') {
+            if (doc_type === 'rc_copy') {
                 const rcMatch = text.match(/[A-Z]{2}[\s\-.]?\d{1,2}[\s\-.]?[A-Z]{1,3}[\s\-.]?\d{1,4}/i);
                 ocrData = {
                     rc_number: rcMatch?.[0]?.replace(/[\s.]/g, '-').toUpperCase() || null,
