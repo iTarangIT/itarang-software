@@ -522,6 +522,8 @@ export default function BankCard({
         leadId={leadId}
         sourceVerificationId={existingVerification?.id || null}
         sourceCardLabel="Bank Verification"
+        defaultDocFor={applicant === "co_borrower" ? "co_borrower" : "primary"}
+        lockScope
         onSuccess={() => onActionComplete?.()}
       />
     </div>
