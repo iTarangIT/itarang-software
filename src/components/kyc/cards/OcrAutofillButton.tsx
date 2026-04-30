@@ -24,8 +24,17 @@ export default function OcrAutofillButton({
   const runOcr = async () => {
     setError("");
 
-    // If cached data exists, use it immediately
-    if (cachedOcrData && Object.keys(cachedOcrData).length > 0) {
+    // Treat tesseract-fallback rows as if there were no cache — those came
+    // from a previous Decentro failure and the admin clicking Autofill is
+    // the explicit signal to retry. Mirrors the backend cache-bypass in
+    // src/app/api/admin/kyc/[leadId]/ocr/route.ts.
+    const isFallbackCache =
+      !!cachedOcrData &&
+      ((cachedOcrData as Record<string, unknown>).source === "tesseract_fallback" ||
+        Object.keys(cachedOcrData).every((k) => k === "rawText" || k === "source"));
+
+    // If cached data exists and isn't a tesseract-fallback stub, use it immediately
+    if (cachedOcrData && Object.keys(cachedOcrData).length > 0 && !isFallbackCache) {
       setLastSource("cached");
       onOcrResult(cachedOcrData, "cached");
       return;
@@ -48,6 +57,12 @@ export default function OcrAutofillButton({
         if (data.success && data.ocr_data) {
           setLastSource(data.source || "ocr");
           onOcrResult(data.ocr_data, data.source || "ocr");
+          // Surface Decentro's own error if extraction had to fall back, so
+          // the admin understands why they got Tesseract instead of structured
+          // fields (plan disabled, invalid module_secret, etc.).
+          if (data.decentro_error) {
+            setError(`Decentro: ${data.decentro_error}`);
+          }
           setLoading(false);
           return;
         }
