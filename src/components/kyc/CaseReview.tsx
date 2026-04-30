@@ -297,8 +297,6 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   }, [leadId]);
 
   const handleConsentClick = useCallback(async (c: Consent) => {
-    if (c.consentFor !== "primary") return;
-
     // Admin must only ever view the signed PDF — never the unsigned draft at
     // generated_pdf_url (that's the pre-sign template, not what the customer
     // actually signed). If a DigiO eSign transaction exists and we don't have
@@ -893,7 +891,11 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                       // customer's actual signed document.
                       const pdfUrl = consentPdfOverrides[c.id] ?? c.signedConsentUrl;
                       const isPrimary = c.consentFor === "primary";
-                      const isViewable = isPrimary && !!pdfUrl;
+                      // View / Approve / Reject available for both primary and
+                      // co-borrower so admin can verify the co-borrower's signed
+                      // consent from this same card. Verify endpoint operates
+                      // by consentId and is already scope-agnostic.
+                      const isViewable = !!pdfUrl;
                       const isVerified = c.consentStatus === "verified" || c.consentStatus === "digitally_signed";
                       const isRejected = c.consentStatus === "rejected";
                       const isViewed = !!c.adminViewedAt && !isVerified && !isRejected;
@@ -901,8 +903,8 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                       // Signed PDF is pullable any time an eSign transaction
                       // exists — covers the case where the webhook didn't fire
                       // but DigiO already has the signed document.
-                      const canFetchSigned = isPrimary && !pdfUrl && !!c.esignTransactionId;
-                      const canDecide = isPrimary && !isVerified && !isRejected && (isViewable || isEsignCompleted);
+                      const canFetchSigned = !pdfUrl && !!c.esignTransactionId;
+                      const canDecide = !isVerified && !isRejected && (isViewable || isEsignCompleted);
                       const isConfirmingReject = pendingRejectId === c.id;
                       const isApprovingThis = consentActionLoading === `${c.id}:approve`;
                       const isRejectingThis = consentActionLoading === `${c.id}:reject`;
@@ -965,7 +967,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                                   {fetchingPdfId === c.id ? "Fetching signed PDF..." : "Pull signed PDF from DigiO"}
                                 </button>
                               )}
-                              {isPrimary && !pdfUrl && !c.esignTransactionId && (
+                              {!pdfUrl && !c.esignTransactionId && (
                                 <p className="text-[10px] text-gray-400 italic">Consent not yet sent for signature</p>
                               )}
                             </div>
