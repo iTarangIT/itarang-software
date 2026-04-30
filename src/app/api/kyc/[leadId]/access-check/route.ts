@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { leads } from '@/lib/db/schema';
+import { leads, personalDetails } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 
 const FINANCE_METHODS = ['finance', 'other_finance', 'dealer_finance'];
@@ -23,13 +23,30 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
         const isNotAbandoned = l.status !== 'ABANDONED';
         const allowed = isNotAbandoned && isFinance && isHot;
 
+        // Pull aadhaar_no / pan_no from personal_details — those don't live
+        // on the leads table. Other primary applicant fields (dob, addresses,
+        // father / husband) live on leads itself.
+        const personal = await db
+            .select()
+            .from(personalDetails)
+            .where(eq(personalDetails.lead_id, l.id))
+            .limit(1);
+        const pd = personal[0];
+
         const leadData = {
             id: l.id,
             reference_id: l.reference_id,
             full_name: l.full_name,
             owner_name: l.owner_name,
+            father_or_husband_name: l.father_or_husband_name ?? pd?.father_husband_name ?? null,
             phone: l.phone,
             owner_contact: l.owner_contact,
+            dob: (l.dob ?? pd?.dob) ?? null,
+            permanent_address: l.permanent_address ?? pd?.permanent_address ?? null,
+            current_address: l.current_address ?? pd?.local_address ?? null,
+            local_address: l.local_address ?? pd?.local_address ?? null,
+            aadhaar_no: pd?.aadhaar_no ?? null,
+            pan_no: pd?.pan_no ?? null,
             asset_model: l.asset_model,
             asset_category: null, // column not present on current leads schema
             payment_method: l.payment_method,
