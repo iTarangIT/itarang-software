@@ -657,20 +657,6 @@ export async function executeCoBorrowerDigilockerInit(
     sms_failed_reason: null,
   };
 
-  // Decentro sends the DigiLocker SMS itself when notification_channel='sms'.
-  // We don't get back a per-channel ack on co-borrower today, so optimistically
-  // mark sms as delivered (matches what the primary path does when its own SMS
-  // send succeeds). The resend-sms endpoint will overwrite these on retry.
-  const now = new Date();
-  const initData: Record<string, unknown> = {
-    sessionId,
-    digilocker_url,
-    reference_id,
-    sms_attempts: 1,
-    sms_delivered_at: now.toISOString(),
-    sms_failed_reason: null,
-  };
-
   const verificationId = await upsertCoBorrowerVerification(leadId, "aadhaar", {
     status: "in_progress",
     api_request: { reference_id, phone },
