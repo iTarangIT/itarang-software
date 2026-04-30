@@ -391,6 +391,7 @@ export async function extractAadhaarOcr(
     backBlob: Blob,
     backFilename: string,
     signal?: AbortSignal,
+    options?: ExtractDocumentOcrOptions,
 ) {
     const sanitize = (n: string): string => {
         const lastDot = n.lastIndexOf('.');
@@ -403,7 +404,10 @@ export async function extractAadhaarOcr(
     form.append('reference_id', genRefId());
     form.append('document_type', 'AADHAAR');
     form.append('consent', 'Y');
-    form.append('consent_purpose', 'Document OCR extraction for KYC verification');
+    form.append(
+        'consent_purpose',
+        options?.consentPurpose || 'Document OCR extraction for KYC verification',
+    );
     // kyc_validate is N/A for Aadhaar per Decentro docs (offline verification).
     // We omit it entirely rather than send 0 or 1 — the docs say default is 1
     // when absent, but since it's ignored for Aadhaar either way, we rely on
@@ -415,7 +419,9 @@ export async function extractAadhaarOcr(
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
     };
-    if (isRealSecret(MODULE_SECRET_KYC)) {
+    // Some SKUs reject the OCR request when module_secret is included even
+    // though it's required by other endpoints. Caller can opt out via options.
+    if (!options?.skipModuleSecret && isRealSecret(MODULE_SECRET_KYC)) {
         headers['module_secret'] = MODULE_SECRET_KYC!;
     }
 

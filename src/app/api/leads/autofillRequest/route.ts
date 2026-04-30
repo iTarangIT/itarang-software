@@ -227,11 +227,23 @@ export const POST = withErrorHandler(async (req: Request) => {
     type: backContentType,
   });
 
+  // Match the curl shape verified end-to-end against Decentro's prod module:
+  //   - no module_secret header
+  //   - consent_purpose = "for bank account purpose only"
+  // Sending module_secret on this SKU caused Decentro to return a metadata-only
+  // error response (no ocrResult), which the dealer page rendered as
+  // "We couldn't read this Aadhaar...". Without module_secret, the same call
+  // returns a fully-populated ocrResult — same fix applied to admin PAN OCR.
   const decentroResponse = await extractAadhaarOcr(
     frontBlob,
     frontName,
     backBlob,
     backName,
+    undefined,
+    {
+      skipModuleSecret: true,
+      consentPurpose: "for bank account purpose only",
+    },
   ).catch((e) => {
     console.error("[AutoFill] Decentro call threw:", e?.message);
     return null;
