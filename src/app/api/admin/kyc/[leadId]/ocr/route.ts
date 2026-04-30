@@ -382,6 +382,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         let ocrData: Record<string, unknown> = {};
         let source: 'decentro' | 'tesseract' = 'decentro';
+        // Capture Decentro's own error message when extraction fails so the
+        // front-end can show admins the real cause (plan disabled, invalid
+        // module_secret, expired creds) instead of silently rendering the
+        // Tesseract fallback as if it were the truth.
+        let decentroError: string | null = null;
 
         const decentroType = DECENTRO_OCR_MAP[doc_type];
 
@@ -394,15 +399,44 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 : undefined;
             const decentroRes = await extractDocumentOcr(decentroType, blob, fileName, side);
             const success = decentroRes.responseStatus === 'SUCCESS' || decentroRes.status === 'SUCCESS' || decentroRes.status === 200;
-            const decentroPayload = decentroRes.data || decentroRes.result || decentroRes.kycResult || decentroRes.ocrResult;
+            // Decentro varies the wrapping key by document/SKU. Cover the
+            // shapes we've seen across PAN/Aadhaar/forensics endpoints.
+            const decentroPayload =
+                decentroRes.data ||
+                decentroRes.result ||
+                decentroRes.kycResult ||
+                decentroRes.ocrResult ||
+                decentroRes.ocr_result ||
+                decentroRes.kyc_result;
             if (success && decentroPayload) {
                 ocrData = decentroPayload;
                 source = 'decentro';
             } else {
-                // Fallback to Tesseract
+                // Decentro didn't give us usable structured data — capture why
+                // before falling back. Log keys so we can spot a new wrapping
+                // shape from prod logs.
+                decentroError =
+                    (typeof decentroRes.message === 'string' && decentroRes.message) ||
+                    (typeof decentroRes.error === 'string' && decentroRes.error) ||
+                    (typeof decentroRes.responseMessage === 'string' && decentroRes.responseMessage) ||
+                    `Decentro returned no extractable data (keys: ${Object.keys(decentroRes ?? {}).join(', ')})`;
+                console.error(
+                    `[Admin OCR] Decentro extraction failed for ${doc_type} on lead ${leadId}: success=${success} payload=${!!decentroPayload} message=${decentroError}`,
+                );
+
+                // Fallback to Tesseract — and salvage what we can from the raw
+                // text so the admin still gets autofill in degraded mode.
                 const text = await extractTextFromImageBuffer(fileBuffer);
                 ocrData = { rawText: text, source: 'tesseract_fallback' };
                 source = 'tesseract';
+
+                // PAN: regex out the 5-letter / 4-digit / 1-letter pattern.
+                if (doc_type === 'pan_card') {
+                    const panMatch = text.match(/[A-Z]{5}\d{4}[A-Z]/);
+                    if (panMatch) {
+                        (ocrData as Record<string, unknown>).pan_number = panMatch[0];
+                    }
+                }
             }
         } else if (TESSERACT_TYPES.includes(doc_type)) {
             // Use Tesseract for bank docs and RC
@@ -513,6 +547,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             ocr_data: ocrData,
             source,
             doc_type,
+            ...(decentroError ? { decentro_error: decentroError } : {}),
         });
     } catch (error) {
         // Surface the actual cause to the admin instead of a generic
