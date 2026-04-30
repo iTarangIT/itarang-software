@@ -7,6 +7,7 @@ import {
   auditLogs,
   coBorrowerRequests,
   coBorrowers,
+  kycVerificationMetadata,
   leads,
 } from "@/lib/db/schema";
 import {
@@ -163,6 +164,27 @@ export async function POST(
       .update(leads)
       .set({ kyc_status: nextStatus, has_co_borrower: true, updated_at: now })
       .where(eq(leads.id, leadId));
+
+    // Releasing the dealer-edits lock from Step 2 — the dealer must be able to
+    // upload co-borrower documents now. Final approve sets it back to true.
+    const metaRows = await db
+      .select({ lead_id: kycVerificationMetadata.lead_id })
+      .from(kycVerificationMetadata)
+      .where(eq(kycVerificationMetadata.lead_id, leadId))
+      .limit(1);
+    if (metaRows.length > 0) {
+      await db
+        .update(kycVerificationMetadata)
+        .set({ dealer_edits_locked: false, updated_at: now })
+        .where(eq(kycVerificationMetadata.lead_id, leadId));
+    } else {
+      await db.insert(kycVerificationMetadata).values({
+        lead_id: leadId,
+        dealer_edits_locked: false,
+        created_at: now,
+        updated_at: now,
+      });
+    }
 
     await db.insert(auditLogs).values({
       id: createWorkflowId("AUDIT", now),
