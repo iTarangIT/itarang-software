@@ -213,7 +213,7 @@ export default function Step5Page() {
         </div>
         <div className="flex flex-col gap-2">
           <button
-            onClick={() => router.push(`/dealer-portal/leads/${leadId}/kyc/interim`)}
+            onClick={() => router.push(`/dealer-portal/leads/${leadId}/borrower-consent`)}
             className="px-5 py-2 bg-[#0047AB] text-white rounded font-bold text-sm"
           >
             Re-apply with Co-Borrower
