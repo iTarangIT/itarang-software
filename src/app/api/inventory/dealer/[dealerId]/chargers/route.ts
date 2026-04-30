@@ -17,9 +17,12 @@ async function resolveCategoryName(input: string): Promise<string> {
 }
 
 // BRD V2 §2.3 — dealer charger inventory list for Step 4.
-// Chargers are filtered by compatibility with the selected battery model.
-// Since the schema does not track explicit compatibility yet, we filter by
-// matching `model_type` on the inventory row when batteryModel is supplied.
+// The schema has no battery↔charger compatibility table yet, and chargers
+// have their own `model_type` (different from the battery's), so a strict
+// equality match on model_type returns zero rows in practice. Until a real
+// compatibility mapping exists, we filter by category and return every
+// available charger in the dealer's inventory. The frontend renders the
+// selected battery's model alongside the list so the dealer can pair them.
 
 export async function GET(
   req: NextRequest,
@@ -37,7 +40,6 @@ export async function GET(
     }
 
     const { searchParams } = new URL(req.url);
-    const batteryModel = searchParams.get("batteryModel");
     const category = searchParams.get("category");
 
     const filters = [
@@ -49,8 +51,6 @@ export async function GET(
       const categoryName = await resolveCategoryName(category);
       filters.push(eq(inventory.asset_category, categoryName));
     }
-    // Best-effort compatibility filter: match on model_type if supplied.
-    if (batteryModel) filters.push(eq(inventory.model_type, batteryModel));
 
     const rows = await db
       .select({
