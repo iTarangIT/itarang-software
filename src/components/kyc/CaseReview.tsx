@@ -573,19 +573,34 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   // re-clicks. Server still validates authoritatively.
   const approveBlockers: string[] = [];
   const rejectBlockers: string[] = [];
+  // Pull co-borrower's verification cards once — they substitute for the
+  // primary's slot when admin accepts on the co-borrower side. Common case:
+  // primary's number isn't linked to CIBIL, admin accepts the co-borrower
+  // CIBIL instead. Treating co-borrower acceptance as satisfying the same
+  // requirement matches the BRD intent — co-borrower exists specifically
+  // to backstop primary.
+  const cbCards = (data.coBorrower?.verificationCards ?? []) as Array<{
+    type: string;
+    adminAction: string | null;
+  }>;
   for (const t of verifTypes) {
-    const card = data.verificationCards.find(
-      (c) => c.type === t && (!("applicant" in c) || true),
-    );
-    if (!card) {
+    const primaryCard = data.verificationCards.find((c) => c.type === t);
+    const coBorrowerCard = cbCards.find((c) => c.type === t);
+
+    const primaryAccepted = primaryCard?.adminAction === "accepted";
+    const primaryRejected = primaryCard?.adminAction === "rejected";
+    const coBorrowerAccepted = coBorrowerCard?.adminAction === "accepted";
+    const coBorrowerRejected = coBorrowerCard?.adminAction === "rejected";
+
+    if (!primaryCard && !coBorrowerCard) {
       approveBlockers.push(`${t.toUpperCase()} verification not run yet`);
       rejectBlockers.push(`${t.toUpperCase()} verification not run yet`);
       continue;
     }
-    if (card.adminAction !== "accepted") {
+    if (!primaryAccepted && !coBorrowerAccepted) {
       approveBlockers.push(`Click Accept on the ${t.toUpperCase()} card`);
     }
-    if (card.adminAction !== "rejected") {
+    if (!primaryRejected && !coBorrowerRejected) {
       rejectBlockers.push(`Click Reject on the ${t.toUpperCase()} card`);
     }
   }

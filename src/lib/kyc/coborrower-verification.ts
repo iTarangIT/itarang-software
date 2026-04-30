@@ -588,6 +588,15 @@ export async function executeCoBorrowerDigilockerInit(
     (resData.digilocker_url as string | undefined) ||
     (resData.url as string | undefined) ||
     null;
+  // Decentro's transaction id — REQUIRED for the eAadhaar status fetch.
+  // /v2/kyc/digilocker/eaadhaar's `initial_decentro_transaction_id` field
+  // expects THIS value, not our internal verificationId. Mirrors primary's
+  // extraction at src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/initiate/route.ts:166.
+  const decentroTxnId =
+    (decentroRes?.decentroTxnId as string | undefined) ||
+    (resData.decentroTxnId as string | undefined) ||
+    (resData.decentro_transaction_id as string | undefined) ||
+    null;
 
   // If Decentro didn't actually generate a URL, surface the failure rather than
   // storing a useless in_progress row that the UI can't act on.
@@ -615,6 +624,7 @@ export async function executeCoBorrowerDigilockerInit(
     sessionId,
     digilocker_url,
     reference_id,
+    decentro_txn_id: decentroTxnId,
     sms_attempts: 1,
     sms_delivered_at: now.toISOString(),
     sms_failed_reason: null,
@@ -663,9 +673,40 @@ export async function executeCoBorrowerDigilockerStatus(
     return { success: false, status: 404, error: "Co-borrower not found" };
   }
 
+  // The route's `transactionId` path segment is our internal verificationId
+  // (KYCVER-...). Decentro's /v2/kyc/digilocker/eaadhaar expects ITS OWN
+  // transaction id (decentroTxnId, captured during initiate). Without this
+  // lookup, the previous code passed our KYCVER id straight to Decentro,
+  // which returned an empty/error response — that's why the data table
+  // showed only "Name" with leadValue and a blank Aadhaar column.
+  const verRows = await db
+    .select({
+      id: kycVerifications.id,
+      api_response: kycVerifications.api_response,
+    })
+    .from(kycVerifications)
+    .where(eq(kycVerifications.id, transactionId))
+    .limit(1);
+  const verRow = verRows[0];
+  const apiResp = (verRow?.api_response ?? {}) as Record<string, unknown>;
+  const apiData = (apiResp.data ?? {}) as Record<string, unknown>;
+  const decentroTxnId =
+    (apiData.decentro_txn_id as string | undefined) ||
+    (apiResp.decentroTxnId as string | undefined) ||
+    null;
+
+  if (!decentroTxnId) {
+    return {
+      success: false,
+      status: 400,
+      error:
+        "Decentro transaction id missing on this verification. Click \"New Link\" to initiate a fresh DigiLocker session.",
+    };
+  }
+
   const reference_id = `CB-STATUS-${cb.id}-${Date.now()}`;
   const decentroRes = await digilockerGetEaadhaar({
-    initial_decentro_transaction_id: transactionId,
+    initial_decentro_transaction_id: decentroTxnId,
     reference_id,
   });
 
