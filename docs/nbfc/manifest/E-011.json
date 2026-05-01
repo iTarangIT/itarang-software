@@ -1,0 +1,33 @@
+{
+  "id": "E-011",
+  "slug": "nbfc-status-lifecycle",
+  "name": "NBFC status lifecycle — 8-state machine with transition guards",
+  "status": "blocked_on_schema_push",
+  "loop_count": 1,
+  "ac_results": {
+    "AC1": "code_complete_pending_test",
+    "AC2": "code_complete_pending_test",
+    "AC3": "code_complete_pending_test",
+    "AC4": "code_complete_pending_test"
+  },
+  "schema_changes": {
+    "tables_added": ["nbfc_status_history"],
+    "tables_referenced": ["nbfc"],
+    "auto_approved": true
+  },
+  "blocker": {
+    "kind": "schema_push_pending",
+    "detail": "drizzle-kit push --force ran for 5+ minutes with no progress output and was not retryable from this agent (sandbox shared DB; second invocation blocked by harness). nbfc_status_history needs to be created in sandbox before Playwright API tests can verify ACs. Code, schema, routes, and tests are committed; once the table exists in sandbox, run `npx playwright test --config=tests/e2e/nbfc-loop.config.ts --project=nbfc-api tests/e2e/nbfc/E-011_nbfc-status-lifecycle.api.spec.ts` to verify."
+  },
+  "files": {
+    "schema": "src/lib/db/schema.ts",
+    "lib": ["src/lib/nbfc/admin/status-transitions.ts"],
+    "api": [
+      "src/app/api/admin/nbfc/[nbfcId]/transition/route.ts",
+      "src/app/api/admin/nbfc/[nbfcId]/status-history/route.ts"
+    ],
+    "components": [],
+    "pages": [],
+    "tests": ["tests/e2e/nbfc/E-011_nbfc-status-lifecycle.api.spec.ts"]
+  }
+}
