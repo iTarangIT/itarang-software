@@ -98,10 +98,18 @@ acceptance_criteria:
     test_layer: api
     test_name: "Compliance metadata endpoint requires NBFC auth"
 
-status: needs_schema_approval
-loop_count: 0
+status: implemented
+loop_count: 1
 last_failure_signature: null
 human_checkpoints: []
+schema_approval_mode: "auto-approved (loop --auto-approve-schema)"
+implementation_artifacts:
+  - drizzle/E-080_compliance_screen.sql
+  - src/lib/db/schema.ts (nbfcTenants additions + nbfcComplianceText)
+  - src/lib/nbfc/compliance/screen-metadata.ts
+  - src/app/api/nbfc/compliance/screen-metadata/route.ts
+  - src/components/nbfc/compliance/ComplianceScreenBlock.tsx
+  - tests/e2e/nbfc/E-080_compliance-screen-elements.api.spec.ts
 audit: |
   {
     "unit_id": "E-080",
