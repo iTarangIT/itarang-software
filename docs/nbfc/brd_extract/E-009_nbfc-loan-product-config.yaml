@@ -1,0 +1,223 @@
+id: E-009
+slug: nbfc-loan-product-config
+name: "NBFC loan product configuration — CRUD for per-NBFC loan products"
+source_section: "6.0.5"
+brd_excerpt: |
+  6.0.5 NBFC Loan Product Configuration
+  Each NBFC may offer multiple loan products. Admin configures each product after NBFC activation.
+  Fields:
+  Product Name (e.g. 'E-Rickshaw Finance Scheme 2026')
+  Eligible Battery Categories — Multi-select: 3W | 2W | 4W | Inverter | Solar
+  Loan Amount Range — Min (₹) — Max (₹). Dealer cannot sanction loans outside this band.
+  Tenure Range — Min months — Max months.
+  Interest Rate Range — Min ROI (%) — Max ROI (%). Informational — actual rate entered per deal.
+  Down Payment Requirement — Minimum down payment as % of loan amount.
+  Subvention Available — Yes / No. If Yes: iTarang admin can enter subvention amount in Loan Sanctioned form.
+  File Charge — Fixed amount (₹) or % of loan amount.
+  Disbursement Method — Direct to Dealer | RTGS to Dealer Account | Escrow.
+  Status — Active | Inactive. Only active products appear in admin loan sanction form.
+
+depends_on: []
+
+non_functional:
+  - "Only loan products with status='active' appear in dealer loan sanction dropdown — server enforces, never client."
+  - "Loan Amount Range max must be > min; Tenure Range max must be > min; Min ROI must be ≤ Max ROI — server-side validation."
+  - "Down payment % must be between 0 and 100 inclusive."
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/nbfc/{nbfcId}/loan-products
+      auth: admin
+      request_zod: |
+        z.object({
+          productName: z.string().min(1).max(120),
+          eligibleBatteryCategories: z.array(z.enum(["3W","2W","4W","INVERTER","SOLAR"])).min(1),
+          loanAmountMin: z.number().int().nonnegative(),
+          loanAmountMax: z.number().int().positive(),
+          tenureMonthsMin: z.number().int().positive(),
+          tenureMonthsMax: z.number().int().positive(),
+          minRoiPct: z.number().nonnegative(),
+          maxRoiPct: z.number().nonnegative(),
+          downPaymentPct: z.number().min(0).max(100),
+          subventionAvailable: z.boolean(),
+          fileChargeFixed: z.number().nonnegative().optional(),
+          fileChargePct: z.number().min(0).max(100).optional(),
+          disbursementMethod: z.enum(["direct_to_dealer","rtgs_to_dealer","escrow"]),
+          status: z.enum(["active","inactive"]).default("active"),
+        }).refine(d => d.loanAmountMax > d.loanAmountMin, { message: "loanAmountMax must be > loanAmountMin" })
+          .refine(d => d.tenureMonthsMax >= d.tenureMonthsMin, { message: "tenureMonthsMax must be >= tenureMonthsMin" })
+          .refine(d => d.maxRoiPct >= d.minRoiPct, { message: "maxRoiPct must be >= minRoiPct" })
+      response_shape:
+        id: "number"
+        productName: "string"
+        status: "string"
+    - method: GET
+      path: /api/admin/nbfc/{nbfcId}/loan-products
+      auth: admin
+      query_zod: |
+        z.object({
+          status: z.enum(["active","inactive"]).optional(),
+        })
+      response_shape:
+        items:
+          - id: "number"
+            productName: "string"
+            loanAmountMin: "number"
+            loanAmountMax: "number"
+            status: "string"
+    - method: PATCH
+      path: /api/admin/nbfc/loan-products/{productId}
+      auth: admin
+      request_zod: |
+        z.object({}).partial()
+      response_shape:
+        id: "number"
+        updatedAt: "iso-datetime"
+  components:
+    - "src/components/admin/nbfc/NbfcLoanProductForm.tsx"
+  jobs: []
+  pages:
+    - "/admin/nbfc/[nbfcId]/loan-products"
+
+logic: |
+  1. Validate body against request_zod.
+  2. Resolve NBFC; require nbfc.status IN ('approved','active').
+  3. Insert nbfc_loan_products row.
+  4. GET filters by status when query param provided; defaults to all.
+  5. PATCH applies partial update; does not allow nbfc_id to change.
+
+tables_columns:
+  reuse:
+    - table: nbfc
+      schema_ts_line: 1
+      columns: [id, status]
+  new:
+    - table: nbfc_loan_products
+      justification: "Per-NBFC loan-product catalogue per BRD 6.0.5; no existing table holds NBFC product config with battery categories and disbursement method."
+      columns:
+        - { name: id, type: "serial().primaryKey()" }
+        - { name: nbfc_id, type: "integer().notNull().references(() => nbfc.id)" }
+        - { name: product_name, type: "varchar({ length: 120 }).notNull()" }
+        - { name: eligible_battery_categories, type: "jsonb().notNull()" }
+        - { name: loan_amount_min, type: "integer().notNull()" }
+        - { name: loan_amount_max, type: "integer().notNull()" }
+        - { name: tenure_months_min, type: "integer().notNull()" }
+        - { name: tenure_months_max, type: "integer().notNull()" }
+        - { name: min_roi_pct, type: "numeric({ precision: 5, scale: 2 }).notNull()" }
+        - { name: max_roi_pct, type: "numeric({ precision: 5, scale: 2 }).notNull()" }
+        - { name: down_payment_pct, type: "numeric({ precision: 5, scale: 2 }).notNull()" }
+        - { name: subvention_available, type: "boolean().notNull().default(false)" }
+        - { name: file_charge_fixed, type: "numeric({ precision: 12, scale: 2 })" }
+        - { name: file_charge_pct, type: "numeric({ precision: 5, scale: 2 })" }
+        - { name: disbursement_method, type: "varchar({ length: 32 }).notNull()" }
+        - { name: status, type: "varchar({ length: 16 }).notNull().default('active')" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: updated_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/admin/nbfc/{nbfcId}/loan-products with valid body returns 200 and persists a row with the given productName."
+    test_layer: api
+    test_name: "create persists loan product row"
+  - id: AC2
+    statement: "POST returns 422 when loanAmountMax <= loanAmountMin."
+    test_layer: api
+    test_name: "create rejects inverted loan amount range"
+  - id: AC3
+    statement: "GET /api/admin/nbfc/{nbfcId}/loan-products?status=active returns only loan products with status='active' for that NBFC."
+    test_layer: api
+    test_name: "list filters by status=active"
+  - id: AC4
+    statement: "POST returns 409 when target NBFC status is not in {'approved','active'}."
+    test_layer: api
+    test_name: "create rejects products on non-approved NBFCs"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-009
+  audited_at: "2026-05-01T06:30:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - status
+      reason: table not present in baseline; introduced by sibling unit E-003
+      sibling_unit: E-003
+  new_findings:
+    - table: nbfc_loan_products
+      justification_present: true
+      justification_chars: 139
+      fuzzy_collisions: []
+      columns_proposed:
+        - name: id
+          type: serial().primaryKey()
+          drizzle_builder: serial
+        - name: nbfc_id
+          type: integer().notNull().references(() => nbfc.id)
+          drizzle_builder: integer
+        - name: product_name
+          type: "varchar({ length: 120 }).notNull()"
+          drizzle_builder: varchar
+        - name: eligible_battery_categories
+          type: jsonb().notNull()
+          drizzle_builder: jsonb
+        - name: loan_amount_min
+          type: integer().notNull()
+          drizzle_builder: integer
+        - name: loan_amount_max
+          type: integer().notNull()
+          drizzle_builder: integer
+        - name: tenure_months_min
+          type: integer().notNull()
+          drizzle_builder: integer
+        - name: tenure_months_max
+          type: integer().notNull()
+          drizzle_builder: integer
+        - name: min_roi_pct
+          type: "numeric({ precision: 5, scale: 2 }).notNull()"
+          drizzle_builder: numeric
+        - name: max_roi_pct
+          type: "numeric({ precision: 5, scale: 2 }).notNull()"
+          drizzle_builder: numeric
+        - name: down_payment_pct
+          type: "numeric({ precision: 5, scale: 2 }).notNull()"
+          drizzle_builder: numeric
+        - name: subvention_available
+          type: boolean().notNull().default(false)
+          drizzle_builder: boolean
+        - name: file_charge_fixed
+          type: "numeric({ precision: 12, scale: 2 })"
+          drizzle_builder: numeric
+        - name: file_charge_pct
+          type: "numeric({ precision: 5, scale: 2 })"
+          drizzle_builder: numeric
+        - name: disbursement_method
+          type: "varchar({ length: 32 }).notNull()"
+          drizzle_builder: varchar
+        - name: status
+          type: "varchar({ length: 16 }).notNull().default('active')"
+          drizzle_builder: varchar
+        - name: created_at
+          type: "timestamp({ withTimezone: true }).defaultNow().notNull()"
+          drizzle_builder: timestamp
+        - name: updated_at
+          type: "timestamp({ withTimezone: true }).defaultNow().notNull()"
+          drizzle_builder: timestamp
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM"
+    - "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs"
+    - "G-04: Sync Audit G-04: dealers table never defined — referenced as FK target by many tables"
+    - "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type"
+    - reuse table 'nbfc' not yet in baseline — introduced by sibling unit E-003 (depends_on must include E-003 before this unit codes)
+  checkpoint_html: docs/nbfc/loop_report/E-009/checkpoint_1.html
