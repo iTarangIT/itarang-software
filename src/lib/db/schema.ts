@@ -4391,3 +4391,60 @@ export const telemetryAlerts = pgTable(
     severityIdx: index("telemetry_alerts_severity_idx").on(table.severity),
   }),
 );
+
+// =============================================================================
+// E-070 — Cancel Lot with MFA, dual approval, battery return-to-inventory
+// (BRD §6.3.4)
+// =============================================================================
+// `nbfc_auction_cancel_requests` is the dual-approval ledger for the
+// "Cancel Lot" admin action in the Auction Control Centre. Cancellation is
+// the ONLY auction action that requires dual approval per BRD §6.3.4 — it
+// removes a lot from the auction and returns the underlying battery to
+// inventory.
+//
+// Lifecycle:
+//   1. First admin POSTs /cancel/request with mfa_token + lot_id + reason.
+//      We validate MFA, insert a row with status='pending_second_approval',
+//      requested_by = first admin's uuid.
+//   2. A *different* admin POSTs /cancel/approve with decision.
+//      - decision='reject' → status='rejected'.
+//      - decision='approve' → atomically:
+//          a. lot.status='cancelled'
+//          b. inventory rows whose serial_number == lot.lot_code (the
+//             convention shared with E-039 recovery_pipeline.battery_serial)
+//             flip to status='in_stock' (the canonical 'returned to
+//             inventory' state in this codebase — `inventory.status` defaults
+//             to 'in_stock', see line ~143).
+//          c. request row → status='executed', approved_by, applied_at.
+//          d. audit_logs row with action='AUCTION_LOT_CANCELLED' carrying
+//             both approver IDs, lot_id, and the mandatory reason.
+//
+// Self-approval is rejected at the service layer (FORBIDDEN) — the second
+// approver's uuid must differ from requested_by.
+// -----------------------------------------------------------------------------
+
+export const nbfcAuctionCancelRequests = pgTable(
+  "nbfc_auction_cancel_requests",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull(),
+    reason: text("reason").notNull(),
+    requested_by: uuid("requested_by").notNull(),
+    approved_by: uuid("approved_by"),
+    status: varchar({ length: 32 }).notNull(),
+    requested_at: timestamp("requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    applied_at: timestamp("applied_at", { withTimezone: true }),
+  },
+  (table) => ({
+    // Approval-queue read pattern — list pending requests, newest first.
+    statusIdx: index("nbfc_auction_cancel_requests_status_idx").on(
+      table.status,
+    ),
+    lotIdx: index("nbfc_auction_cancel_requests_lot_idx").on(table.lot_id),
+    requestedByIdx: index("nbfc_auction_cancel_requests_requested_by_idx").on(
+      table.requested_by,
+    ),
+  }),
+);
