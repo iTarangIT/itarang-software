@@ -4394,3 +4394,39 @@ export const telemetryAlerts = pgTable(
     severityIdx: index("telemetry_alerts_severity_idx").on(table.severity),
   }),
 );
+
+// -----------------------------------------------------------------------------
+// E-030 — PCI nightly computation (Section 6.1.5)
+// -----------------------------------------------------------------------------
+// emi_schedules is already defined above (line ~3071) and reused here. This
+// section adds nbfc_risk_alerts — the alert rows surfaced on the NBFC Risk
+// Alerts UI. The PCI job inserts type='pci_low' rows when a borrower dips
+// below 0.40; other E-units may insert their own types (cds_high, etc.).
+// Tenant scoping enforced in application code (drizzle where-clauses).
+// -----------------------------------------------------------------------------
+
+export const nbfcRiskAlerts = pgTable(
+  "nbfc_risk_alerts",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    tenant_id: uuid("tenant_id").notNull(),
+    borrower_id: uuid("borrower_id").notNull(),
+    loan_sanction_id: uuid("loan_sanction_id").notNull(),
+    type: varchar({ length: 32 }).notNull(), // 'pci_low' | 'cds_high' | ...
+    severity: varchar({ length: 16 }).notNull(), // 'low' | 'medium' | 'high' | 'critical'
+    payload: jsonb("payload"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_risk_alerts_tenant_idx").on(table.tenant_id),
+    borrowerIdx: index("nbfc_risk_alerts_borrower_idx").on(table.borrower_id),
+    loanSanctionIdx: index("nbfc_risk_alerts_loan_sanction_idx").on(
+      table.loan_sanction_id,
+    ),
+    typeIdx: index("nbfc_risk_alerts_type_idx").on(table.type),
+    createdAtIdx: index("nbfc_risk_alerts_created_at_idx").on(table.created_at),
+  }),
+);
