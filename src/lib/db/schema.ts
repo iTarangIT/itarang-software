@@ -2839,6 +2839,33 @@ export const nbfcRecoveryPipeline = pgTable(
   }),
 );
 
+// -----------------------------------------------------------------------------
+// E-027 — Portfolio Data Freshness Badge (Section 6.1.3)
+// -----------------------------------------------------------------------------
+// telemetry_ingestion_log records each per-battery IoT ingestion event so the
+// freshness endpoint can compute the most recent telemetry timestamp for a
+// tenant's portfolio. The freshness badge in the NBFC portal turns amber when
+// the most recent ingestion (or the most recent CDS computed_at) is older than
+// 24 hours — surfacing IoT sync issues to the partner.
+// -----------------------------------------------------------------------------
+
+export const telemetryIngestionLog = pgTable(
+  "telemetry_ingestion_log",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    battery_serial: varchar("battery_serial", { length: 64 }).notNull(),
+    ingested_at: timestamp("ingested_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("telemetry_ingestion_log_tenant_idx").on(table.tenant_id),
+    tenantIngestedIdx: index("telemetry_ingestion_log_tenant_ingested_idx").on(
+      table.tenant_id,
+      table.ingested_at,
+    ),
+  }),
+);
+
 // =============================================================================
 // END NBFC additions
 // =============================================================================
