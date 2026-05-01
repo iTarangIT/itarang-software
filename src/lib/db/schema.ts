@@ -3340,3 +3340,53 @@ export const nbfcStatusHistory = pgTable(
     ),
   }),
 );
+
+// =============================================================================
+// E-093 — NBFC score override (BRD 6.4.5)
+// NBFC Risk Manager may override a borrower's computed credit score with a
+// documented reason. The override is logged to audit_logs but does NOT mutate
+// the computed value in nbfc_score_runs / borrower_risk_scores. Append-only:
+// when a new override is created for the same (loan_application_id, score_type)
+// pair, the prior active row is flipped to is_active=false (superseded) and
+// the new row becomes is_active=true. RBI Digital Lending Directions 2025
+// require that human overrides of credit scores are documented with a reason
+// and visible in the audit log.
+// =============================================================================
+export const nbfcScoreOverrides = pgTable(
+  "nbfc_score_overrides",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    loan_application_id: varchar("loan_application_id", {
+      length: 255,
+    }).notNull(),
+    score_type: varchar("score_type", { length: 8 }).notNull(),
+    computed_score_value: numeric("computed_score_value", {
+      precision: 6,
+      scale: 2,
+    }).notNull(),
+    override_value: numeric("override_value", {
+      precision: 6,
+      scale: 2,
+    }).notNull(),
+    reason: text("reason").notNull(),
+    created_by: uuid("created_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    is_active: boolean("is_active").default(true).notNull(),
+  },
+  (table) => ({
+    loanScoreIdx: index("nbfc_score_overrides_loan_score_idx").on(
+      table.loan_application_id,
+      table.score_type,
+    ),
+    activeIdx: index("nbfc_score_overrides_active_idx").on(
+      table.loan_application_id,
+      table.score_type,
+      table.is_active,
+    ),
+    createdAtIdx: index("nbfc_score_overrides_created_at_idx").on(
+      table.created_at,
+    ),
+  }),
+);
