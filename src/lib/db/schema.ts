@@ -3066,6 +3066,44 @@ export const dualApprovalActionConfig = pgTable(
 );
 
 // =============================================================================
+// E-083 — Battery Immobilisation Action (Section 6.4.3)
+// One row per executed immobilisation outcome. Created ONLY after the upstream
+// dual_approval_requests row (action_type='battery_immobilisation') flips to
+// 'approved' by an nbfc_risk_head user. iot_command_id and executed_at stamp
+// the IoT dispatch; borrower_notified_at is set if a Fair-Practices notice was
+// sent. Separate from the approval row because one approval can spawn multiple
+// side-effects (notice, IoT command, audit log).
+// =============================================================================
+export const nbfcImmobilisationActions = pgTable(
+  "nbfc_immobilisation_actions",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id")
+      .notNull()
+      .references(() => nbfcTenants.id),
+    loan_application_id: varchar("loan_application_id", {
+      length: 255,
+    }).notNull(),
+    imei: varchar("imei", { length: 64 }).notNull(),
+    approval_request_id: uuid("approval_request_id").notNull(),
+    iot_command_id: varchar("iot_command_id", { length: 128 }),
+    executed_at: timestamp("executed_at", { withTimezone: true }),
+    borrower_notified_at: timestamp("borrower_notified_at", {
+      withTimezone: true,
+    }),
+  },
+  (table) => ({
+    approvalRequestIdx: index(
+      "nbfc_immobilisation_actions_approval_request_idx",
+    ).on(table.approval_request_id),
+    tenantLoanIdx: index("nbfc_immobilisation_actions_tenant_loan_idx").on(
+      table.tenant_id,
+      table.loan_application_id,
+    ),
+  }),
+);
+
+// =============================================================================
 // E-003 — NBFC Master Details (Section 6.0.3)
 // Master NBFC partner table per BRD 6.0.7 — captures NBFC partner identities,
 // RBI registration data, statutory IDs (CIN, GST, PAN), grievance officer
