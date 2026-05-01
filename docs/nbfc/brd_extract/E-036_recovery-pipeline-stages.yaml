@@ -87,8 +87,8 @@ acceptance_criteria:
     test_layer: api
     test_name: "Invalid stage transitions are rejected with 400"
 
-status: audited
-loop_count: 0
+status: implemented
+loop_count: 1
 last_failure_signature: null
 human_checkpoints: []
 audit:
