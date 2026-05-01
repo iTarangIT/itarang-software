@@ -2960,6 +2960,51 @@ export const nbfcRiskRules = pgTable(
   },
 );
 
+// -----------------------------------------------------------------------------
+// E-068 — Risk Rule Engine dual-approval commit workflow (BRD §6.3.3)
+// -----------------------------------------------------------------------------
+// One row per pending/executed/rejected threshold-change request.
+//
+// Lifecycle:
+//   pending_second_approval — requester submitted with MFA; awaits Risk Head.
+//   executed                — Risk Head approved; nbfc_risk_rules.current_value
+//                             now equals new_value; applied_at is set.
+//   rejected                — Risk Head rejected; current_value untouched.
+//
+// Distinct from `dual_approval_requests` (E-082): that primitive gates per-NBFC
+// *operational* actions on a per-tenant basis. The eight platform thresholds
+// in `nbfc_risk_rules` have no tenant_id, so their change history lives here
+// in a global table instead.
+// -----------------------------------------------------------------------------
+export const nbfcRiskRuleChangeRequests = pgTable(
+  "nbfc_risk_rule_change_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    rule_key: varchar("rule_key", { length: 64 }).notNull(),
+    previous_value: numeric("previous_value", { precision: 12, scale: 4 })
+      .notNull(),
+    new_value: numeric("new_value", { precision: 12, scale: 4 }).notNull(),
+    requested_by: uuid("requested_by").notNull(),
+    approved_by: uuid("approved_by"),
+    status: varchar("status", { length: 32 }).notNull(),
+    requested_at: timestamp("requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    applied_at: timestamp("applied_at", { withTimezone: true }),
+  },
+  (table) => ({
+    statusIdx: index("nbfc_risk_rule_change_requests_status_idx").on(
+      table.status,
+    ),
+    ruleKeyIdx: index("nbfc_risk_rule_change_requests_rule_key_idx").on(
+      table.rule_key,
+    ),
+    requestedByIdx: index("nbfc_risk_rule_change_requests_requested_by_idx").on(
+      table.requested_by,
+    ),
+  }),
+);
+
 // =============================================================================
 // END NBFC additions
 // =============================================================================
