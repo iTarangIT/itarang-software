@@ -7,6 +7,11 @@ const port = Number(process.env.NBFC_DEV_PORT ?? '3000');
 // Wave 1+2 lessons: explicit testDir + DOTENV_CONFIG_QUIET to avoid noise.
 process.env.DOTENV_CONFIG_QUIET = 'true';
 
+// E-027 lesson: the freshness badge UI test uses a worktree-local fixture
+// page at /nbfc-test/freshness-badge that is middleware-unprotected, so it
+// does NOT need the global setup/storageState. It runs under the dedicated
+// `nbfc-ui-public` project with no dependencies.
+
 export default defineConfig({
   ...base,
   testDir: path.resolve(__dirname),
@@ -15,10 +20,18 @@ export default defineConfig({
     { name: 'setup', testMatch: /global\.setup\.ts/ },
     {
       name: 'nbfc-api',
+      testMatch: /nbfc\/.*\.api\.spec\.ts$/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'nbfc-ui-public',
+      testMatch: /nbfc\/E-027_freshness-badge\.ui\.spec\.ts$/,
       use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'nbfc-ui',
+      testMatch: /nbfc\/.*\.ui\.spec\.ts$/,
+      testIgnore: /nbfc\/E-027_freshness-badge\.ui\.spec\.ts$/,
       use: {
         ...devices['Desktop Chrome'],
         storageState: 'tests/.auth/sales_head.json',
