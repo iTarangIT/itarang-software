@@ -3,6 +3,10 @@
     {
       "path": "/api/bolna/call-scheduler",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/nbfc-cor-expiry",
+      "schedule": "30 0 * * *"
     }
   ],
   "functions": {
