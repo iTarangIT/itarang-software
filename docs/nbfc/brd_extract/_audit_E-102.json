@@ -1,0 +1,168 @@
+{
+  "unit_id": "E-102",
+  "audited_at": "2026-05-01T15:39:58Z",
+  "baseline_sha": "e9eae8c3af97ccb2e211f62bf5c7d91ec4a47f4af5359d033d8a5e9f05350c64",
+  "reuse_findings": [],
+  "new_findings": [
+    {
+      "table": "dealers",
+      "justification_present": true,
+      "fuzzy_collisions": [
+        {
+          "proposed": "company_name",
+          "candidates": [
+            "dealer_onboarding_applications.company_name"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "company_type",
+          "candidates": [
+            "dealer_onboarding_applications.company_type"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "gst_number",
+          "candidates": [
+            "scraped_dealer_leads.gst_number",
+            "dealer_onboarding_applications.gst_number",
+            "nbfc.gst_number"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "pan_number",
+          "candidates": [
+            "dealer_onboarding_applications.pan_number",
+            "nbfc.pan_number"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "registered_address",
+          "candidates": [
+            "dealer_onboarding_applications.registered_address",
+            "nbfc.registered_address"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "bank_name",
+          "candidates": [
+            "oems.bank_name",
+            "personal_details.bank_name",
+            "accounts.bank_name",
+            "dealer_onboarding_applications.bank_name"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "bank_account_number",
+          "candidates": [
+            "oems.bank_account_number",
+            "personal_details.bank_account_number",
+            "accounts.bank_account_number",
+            "dealer_onboarding_applications.account_number"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "bank_ifsc",
+          "candidates": [
+            "personal_details.bank_ifsc"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "bank_branch",
+          "candidates": [
+            "personal_details.bank_branch"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "owner_name",
+          "candidates": [
+            "leads.owner_name",
+            "dealer_onboarding_applications.owner_name",
+            "leads.vehicle_owner_name"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "owner_phone",
+          "candidates": [
+            "dealer_onboarding_applications.owner_phone",
+            "leads.vehicle_owner_phone"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "owner_email",
+          "candidates": [
+            "leads.owner_email",
+            "dealer_onboarding_applications.owner_email"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "finance_enabled",
+          "candidates": [
+            "dealer_onboarding_applications.finance_enabled"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "onboarding_status",
+          "candidates": [
+            "oems.onboarding_status",
+            "accounts.onboarding_status",
+            "dealer_onboarding_applications.onboarding_status"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "application_id",
+          "candidates": [
+            "dealer_agreement_signers.application_id",
+            "dealer_agreement_events.application_id",
+            "dealer_onboarding_documents.application_id",
+            "dealer_correction_rounds.application_id",
+            "loan_files.loan_application_id"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        },
+        {
+          "proposed": "activated_at",
+          "candidates": [
+            "nbfc.activated_at"
+          ],
+          "reason": "jaccard \u2265 0.6 with existing column(s); top score 1.00",
+          "decision": "accepted_intentional"
+        }
+      ],
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "status": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [],
+  "checkpoint_html": "docs/nbfc/loop_report/E-102/checkpoint_1.html"
+}
