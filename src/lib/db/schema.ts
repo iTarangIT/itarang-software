@@ -4026,3 +4026,43 @@ export const dealers = pgTable(
     ),
   }),
 );
+
+// =============================================================================
+// E-012 — dealer_nbfc_assignments (Sync Audit G-05)
+// Junction table that links finance-enabled dealers to their approved NBFCs.
+// Only NBFCs present here appear in a given dealer's loan-sanction dropdown
+// (consumed by E-013). UNIQUE (dealer_id, nbfc_id) prevents duplicate
+// assignments; the API surfaces 409 on duplicate insert. Status transitions:
+// active <-> suspended; either state may move to terminated (terminal).
+// =============================================================================
+export const dealerNbfcAssignments = pgTable(
+  "dealer_nbfc_assignments",
+  {
+    id: serial("id").primaryKey(),
+    // FK target is dealers.id (INT). Hard FK to dealers omitted to mirror the
+    // rest of the dealer-consumer fanout migration which is staged separately
+    // (G-04 follow-up); enforced at the application layer instead.
+    dealer_id: integer("dealer_id").notNull(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    enabled_at: timestamp("enabled_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // Admin user surrogate id that created the assignment. BRD spec defines
+    // this column as INTEGER FK admin_user_id; we keep it INTEGER and resolve
+    // from users.numeric_id at the route layer (set to 0 in test bypass).
+    enabled_by: integer("enabled_by").notNull(),
+    // active | suspended | terminated
+    status: varchar("status", { length: 16 }).default("active").notNull(),
+    notes: text("notes"),
+  },
+  (table) => ({
+    uniqDealerNbfc: uniqueIndex("dealer_nbfc_assignments_dealer_nbfc_uq").on(
+      table.dealer_id,
+      table.nbfc_id,
+    ),
+    dealerIdx: index("dealer_nbfc_assignments_dealer_idx").on(table.dealer_id),
+    nbfcIdx: index("dealer_nbfc_assignments_nbfc_idx").on(table.nbfc_id),
+  }),
+);

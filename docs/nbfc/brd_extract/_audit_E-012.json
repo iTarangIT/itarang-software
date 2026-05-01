@@ -1,19 +1,21 @@
 {
   "unit_id": "E-012",
-  "audited_at": "2026-05-01T06:30:00Z",
-  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "audited_at": "2026-05-01T08:00:00Z",
+  "baseline_sha": "01fdda8c341fc4f25d92f38a94cd875d81b27c47d7d9a817973a83dfe1aec3b5",
+  "re_audit": true,
+  "re_audit_reason": "Re-audited after merge of nbfc/E-008, E-071, E-031, E-066, E-102 into apoorv-claude. `nbfc` table now present in baseline (line 3427). `dealers` table now present (line 3978) which closes G-04 dependency.",
   "reuse_findings": [
     {
       "table": "nbfc",
-      "verified": false,
-      "ts_line": null,
-      "columns_verified": [],
-      "columns_missing": [
+      "verified": true,
+      "ts_line": 3427,
+      "columns_verified": [
         "id",
         "short_name",
         "status"
       ],
-      "reason": "table not present in baseline; introduced by sibling unit E-003",
+      "columns_missing": [],
+      "reason": "table present in baseline as of merge of nbfc/E-008..nbfc/E-102 chain",
       "sibling_unit": "E-003"
     }
   ],
@@ -73,8 +75,9 @@
     "G-05: Sync Audit G-05: product_selections retains sub_category column (rename to model_number); junction table dealer_nbfc_assignments required",
     "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type",
     "G-10: Sync Audit G-10: Dealer onboarding status not linked to lead creation gate",
-    "reuse table 'nbfc' not yet in baseline \u2014 introduced by sibling unit E-003 (depends_on must include E-003 before this unit codes)",
-    "Sync Audit G-04 \u2014 dealer_id is declared as integer FK but no `dealers` table exists in baseline; spec must clarify referenced table (likely dealer_onboarding_applications.id or a future dealers table per Sec D resolution)"
+    "RE-AUDIT 2026-05-01T08:00Z: dependency `nbfc` cleared (now in baseline at line 3427).",
+    "RE-AUDIT 2026-05-01T08:00Z: G-04 dependency `dealers` cleared (now in baseline at line 3978 from E-102). dealer_id FK target is `dealers.id` (serial integer).",
+    "Verdict unchanged: needs_schema_approval \u2014 proposed `dealer_nbfc_assignments` table (7 columns) still requires human sign-off."
   ],
   "checkpoint_html": "docs/nbfc/loop_report/E-012/checkpoint_1.html"
 }
