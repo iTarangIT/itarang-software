@@ -3470,3 +3470,41 @@ export const nbfcBulkImmobilisationBatches = pgTable(
     ),
   }),
 );
+
+// =============================================================================
+// E-088 — Audit log data export gated by dual approval (BRD §6.4.3)
+// Records the lifecycle of bulk audit-log export requests: requestor identity,
+// MFA confirmation timestamp, time range, expected/actual row count, and the
+// signed-URL artefact + checksum produced after the iTarang Compliance Officer
+// approves via the E-082 dual-approval gate. Required for DPDPA accountability
+// when audit data leaves the system; the row is created with status implicit
+// in the FK to dual_approval_requests, and download_url/checksum_sha256 stay
+// NULL until the second approver flips the request to 'approved' and the
+// async export job completes.
+// =============================================================================
+export const nbfcAuditLogExports = pgTable(
+  "nbfc_audit_log_exports",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    requested_by: uuid("requested_by").notNull(),
+    approval_request_id: uuid("approval_request_id").notNull(),
+    mfa_verified_at: timestamp("mfa_verified_at", { withTimezone: true })
+      .notNull(),
+    from_ts: timestamp("from_ts", { withTimezone: true }).notNull(),
+    to_ts: timestamp("to_ts", { withTimezone: true }).notNull(),
+    entity_type: varchar("entity_type", { length: 50 }),
+    row_count: integer("row_count"),
+    download_url: text("download_url"),
+    checksum_sha256: varchar("checksum_sha256", { length: 64 }),
+    expires_at: timestamp("expires_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    approvalIdx: index("nbfc_audit_log_exports_approval_idx").on(
+      table.approval_request_id,
+    ),
+    requestedByIdx: index("nbfc_audit_log_exports_requested_by_idx").on(
+      table.requested_by,
+    ),
+  }),
+);

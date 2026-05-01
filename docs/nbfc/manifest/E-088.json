@@ -1,0 +1,36 @@
+{
+  "id": "E-088",
+  "slug": "audit-log-export-gated",
+  "name": "Audit log data export gated by dual approval (Requestor MFA → Compliance Officer)",
+  "status": "passed",
+  "loop_count": 1,
+  "depends_on": ["E-082"],
+  "ac_results": {
+    "AC1": "passed",
+    "AC2": "passed",
+    "AC3": "passed"
+  },
+  "schema_changes": {
+    "tables_added": ["nbfc_audit_log_exports"],
+    "tables_referenced": ["audit_logs", "dual_approval_requests"],
+    "auto_approved": true,
+    "applied_to_sandbox_at": "2026-05-01"
+  },
+  "files": {
+    "schema": "src/lib/db/schema.ts",
+    "lib": ["src/lib/nbfc/audit-export/service.ts"],
+    "api": [
+      "src/app/api/nbfc/actions/audit-log-export/initiate/route.ts",
+      "src/app/api/nbfc/dual-approval/requests/[id]/approve/route.ts"
+    ],
+    "components": ["src/components/admin/audit/AuditExportInitiateForm.tsx"],
+    "pages": [],
+    "tests": ["tests/e2e/nbfc/E-088_audit-log-export-gated.api.spec.ts"],
+    "scripts": ["scripts/apply-e088-schema.mjs"]
+  },
+  "verification": {
+    "schema_applied_via": "scripts/apply-e088-schema.mjs (CREATE TABLE IF NOT EXISTS nbfc_audit_log_exports + indexes)",
+    "tests_run": "E2E_BASE_URL=http://localhost:3088 NBFC_TEST_BYPASS_SECRET=e082-loop-bypass-secret npx playwright test tests/e2e/nbfc/E-088_audit-log-export-gated.api.spec.ts",
+    "tests_passed": "3/3"
+  }
+}
