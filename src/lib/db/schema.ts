@@ -3139,17 +3139,33 @@ export const nbfcCorExpiryAlerts = pgTable(
 
 // E-007/E-008 — Digio-driven LSP agreement record. agreement_status mirrors the
 // shared dealer agreement_status ENUM domain (DRAFT, INITIATED, IN_PROGRESS,
-// COMPLETED, FAILED, EXPIRED) per Sync Audit G-01. Stored as varchar so the
+// COMPLETED, FAILED, EXPIRED, SENT_TO_EXTERNAL_PARTY, SIGN_PENDING,
+// PARTIALLY_SIGNED, SIGNED) per Sync Audit G-01. Stored as varchar so the
 // final-approval gate can re-validate it via a simple equality check.
+//
+// E-007 augmentation: signatory fields, agreement_id (AGR-NBFC-YYYYMMDD-SEQ
+// pattern), expires_at, audit_trail_url, signing_date, created_by per
+// Section 6.0.4a's Digio multi_templates create_sign_request integration.
 export const nbfcLspAgreements = pgTable(
   "nbfc_lsp_agreements",
   {
     id: serial("id").primaryKey().notNull(),
+    agreement_id: varchar("agreement_id", { length: 50 }).unique(),
     nbfc_id: integer("nbfc_id").notNull().references(() => nbfc.id),
     digio_request_id: varchar("digio_request_id", { length: 128 }),
     digio_document_id: varchar("digio_document_id", { length: 128 }),
     agreement_status: varchar("agreement_status", { length: 32 }).default("DRAFT").notNull(),
+    signing_date: date("signing_date"),
+    nbfc_signatory_name: varchar("nbfc_signatory_name", { length: 200 }),
+    nbfc_signatory_email: varchar("nbfc_signatory_email", { length: 200 }),
+    itarang_signatory_1_name: varchar("itarang_signatory_1_name", { length: 200 }),
+    itarang_signatory_1_email: varchar("itarang_signatory_1_email", { length: 200 }),
+    itarang_signatory_2_name: varchar("itarang_signatory_2_name", { length: 200 }),
+    itarang_signatory_2_email: varchar("itarang_signatory_2_email", { length: 200 }),
     signed_pdf_url: text("signed_pdf_url"),
+    audit_trail_url: text("audit_trail_url"),
+    expires_at: timestamp("expires_at", { withTimezone: true }),
+    created_by: integer("created_by"),
     initiated_by: integer("initiated_by"),
     initiated_at: timestamp("initiated_at", { withTimezone: true }),
     completed_at: timestamp("completed_at", { withTimezone: true }),
@@ -3160,6 +3176,7 @@ export const nbfcLspAgreements = pgTable(
   (table) => ({
     nbfcIdx: index("nbfc_lsp_agreements_nbfc_id_idx").on(table.nbfc_id),
     statusIdx: index("nbfc_lsp_agreements_status_idx").on(table.agreement_status),
+    agreementIdIdx: index("nbfc_lsp_agreements_agreement_id_idx").on(table.agreement_id),
   }),
 );
 
