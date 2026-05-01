@@ -67,3 +67,13 @@ node_modules
 prod.txt
 env.txt
 /eval-reports
+
+# NBFC self-coding loop (per ~/.claude/skills/nbfc/SKILL.md)
+/.nbfc-loop/
+/keys
+docs/nbfc/_preflight.json
+docs/nbfc/manifest.json
+docs/nbfc/manifest/
+docs/nbfc/loop_report/
+tests/e2e/nbfc-loop.config.ts
+tests/e2e/nbfc-setup.ts
