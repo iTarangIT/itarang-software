@@ -2859,3 +2859,61 @@ export const dealerCorrectionItems = pgTable(
     roundIdx: index("dealer_correction_items_round_id_idx").on(table.round_id),
   }),
 );
+
+// =============================================================================
+// E-082 — Dual Approval Gate primitive
+// Two-person rule for high-impact NBFC actions (battery immobilisation, loan
+// restructuring, risk-rule threshold change, bulk immobilisation, auction lot
+// cancellation, audit-log export, PII access). Initiator creates a pending
+// row; an Approver 2 (distinct user, role-matched) approves or rejects within
+// 24h. Status transitions are append-only and mirrored in `audit_logs`.
+// =============================================================================
+
+export const dualApprovalRequests = pgTable(
+  "dual_approval_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    action_type: varchar("action_type", { length: 64 }).notNull(),
+    entity_id: varchar("entity_id", { length: 255 }).notNull(),
+    initiator_user_id: uuid("initiator_user_id").notNull(),
+    approver_user_id: uuid("approver_user_id"),
+    required_approver_role: varchar("required_approver_role", { length: 64 }).notNull(),
+    status: varchar("status", { length: 24 }).default('pending_approval').notNull(),
+    reason_code: varchar("reason_code", { length: 64 }).notNull(),
+    evidence_snapshot: jsonb("evidence_snapshot").notNull(),
+    borrower_notice_id: varchar("borrower_notice_id", { length: 255 }),
+    rejection_reason: text("rejection_reason"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    approved_at: timestamp("approved_at", { withTimezone: true }),
+    rejected_at: timestamp("rejected_at", { withTimezone: true }),
+    expired_at: timestamp("expired_at", { withTimezone: true }),
+  },
+  (table) => ({
+    tenantStatusIdx: index("dual_approval_requests_tenant_status_idx").on(
+      table.tenant_id,
+      table.status,
+    ),
+    initiatorIdx: index("dual_approval_requests_initiator_idx").on(table.initiator_user_id),
+    expiresIdx: index("dual_approval_requests_expires_idx").on(table.expires_at),
+  }),
+);
+
+// Catalogue of which action_type requires which Approver-2 role. Tenant-scoped
+// so each NBFC may map roles differently. Seeded once per tenant at deploy.
+export const dualApprovalActionConfig = pgTable(
+  "dual_approval_action_config",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    action_type: varchar("action_type", { length: 64 }).notNull(),
+    initiator_role: varchar("initiator_role", { length: 64 }).notNull(),
+    approver_role: varchar("approver_role", { length: 64 }).notNull(),
+  },
+  (table) => ({
+    actionTypeIdx: index("dual_approval_action_config_action_type_idx").on(
+      table.action_type,
+    ),
+  }),
+);
+
