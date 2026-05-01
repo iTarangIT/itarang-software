@@ -3068,10 +3068,45 @@ export const nbfc = pgTable("nbfc", {
   // re-approving an already-approved NBFC.
   approved_by: uuid("approved_by"),
   approved_at: timestamp("approved_at", { withTimezone: true }),
+  // E-002 — activation timestamp. Distinct from approved_at: approved_at fires
+  // when the final-approval gate releases (status='approved'); activated_at
+  // fires when portal credentials are dispatched (status='active').
+  activated_at: timestamp("activated_at", { withTimezone: true }),
   created_by: integer("created_by").notNull(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// =============================================================================
+// E-002 — NBFC portal credential issuance audit (Section 6.0.2 Step 6)
+// One row per credential dispatch attempt for an NBFC partner. Records the
+// supabase auth user that backs the portal login, the dispatch lifecycle
+// (pending → dispatched | failed), and the timestamp the credential email was
+// sent. Password itself is never persisted — only Supabase holds the hashed
+// credential. Resend operations append additional rows so every attempt is
+// auditable.
+// =============================================================================
+export const nbfcPortalCredentials = pgTable(
+  "nbfc_portal_credentials",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    supabase_user_id: uuid("supabase_user_id").notNull(),
+    email_dispatched_at: timestamp("email_dispatched_at", {
+      withTimezone: true,
+    }),
+    dispatch_status: varchar("dispatch_status", { length: 32 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_portal_credentials_nbfc_id_idx").on(table.nbfc_id),
+    statusIdx: index("nbfc_portal_credentials_dispatch_status_idx").on(
+      table.dispatch_status,
+    ),
+  }),
+);
 
 // =============================================================================
 // E-005 — NBFC compliance document upload/verify/reject workflow
