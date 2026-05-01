@@ -134,10 +134,12 @@
       "decision": "approved_pending_human"
     }
   ],
-  "verdict": "needs_schema_approval",
-  "migration_required": false,
+  "verdict": "schema_auto_approved",
+  "migration_required": true,
+  "migration_file": "drizzle/E-080_compliance_screen.sql",
   "notes": [
-    "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+    "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit.",
+    "Auto-approved under loop --auto-approve-schema. Human review still recommended before prod migration."
   ],
   "checkpoint_html": "docs/nbfc/loop_report/E-080/checkpoint_1.html"
 }

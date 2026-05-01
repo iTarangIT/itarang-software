@@ -2705,6 +2705,12 @@ export const afterSalesRecords = pgTable("after_sales_records", {
 // =============================================================================
 
 // One row per NBFC partner.
+//
+// E-080 (BRD §6.4.2) — Mandatory compliance metadata renderer for borrower-impacting
+// screens. RBI Digital Lending Directions 2025 require the formal registered NBFC
+// legal name, RBI registration number, and grievance channel (URL + helpline) on
+// every borrower-facing communication. `display_name` is a brand label; the four
+// columns below carry the regulatory-grade identity that compliance screens render.
 export const nbfcTenants = pgTable("nbfc_tenants", {
   id: uuid().defaultRandom().primaryKey().notNull(),
   slug: text().notNull(),
@@ -2713,9 +2719,40 @@ export const nbfcTenants = pgTable("nbfc_tenants", {
   aum_inr: numeric("aum_inr", { precision: 16, scale:  2 }),
   active_loans: integer("active_loans").default(0).notNull(),
   is_active: boolean("is_active").default(true).notNull(),
+  // E-080 — RBI DLD 2025 mandatory compliance identity columns.
+  nbfc_legal_name: varchar("nbfc_legal_name", { length: 255 }),
+  rbi_registration_no: varchar("rbi_registration_no", { length: 64 }),
+  grievance_url: text("grievance_url"),
+  grievance_helpline: varchar("grievance_helpline", { length: 32 }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// E-080 (BRD §6.4.2) — Versioned compliance copy, keyed by screen.
+// One row per (tenant, screen_key, version). The latest active row by
+// effective_from supplies the body_text rendered on every borrower-facing
+// screen so that authoritative wording stays consistent and changes are
+// audit-trailed. `screen_key` matches the API enum:
+//   immobilisation_confirm | collection_sms | telemetry_view |
+//   portal_footer | recovery_call | sms_template
+export const nbfcComplianceText = pgTable(
+  "nbfc_compliance_text",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    screen_key: varchar("screen_key", { length: 64 }).notNull(),
+    body_text: text("body_text").notNull(),
+    version: integer("version").default(1).notNull(),
+    effective_from: timestamp("effective_from", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantScreenIdx: index("nbfc_compliance_text_tenant_screen_idx").on(
+      table.tenant_id,
+      table.screen_key,
+    ),
+    effectiveIdx: index("nbfc_compliance_text_effective_idx").on(table.effective_from),
+  }),
+);
 
 // Many-to-many between users and tenants. Most NBFC partner users belong to
 // exactly one tenant; some Itarang internal operators may belong to many.
