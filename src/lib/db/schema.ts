@@ -3540,3 +3540,54 @@ export const nbfcAuditLogExports = pgTable(
     ),
   }),
 );
+
+// E-090 — DPDPA 2023 consent record persistence + withdrawal.
+// `consent_records` (line 1326) lacks DPDPA scope-level state, so we add:
+//   * nbfc_consent_scopes — toggleable per-purpose scope flags
+//     (loan_processing / risk_assessment / warranty_management) keyed by
+//     consent_id, with a deactivated_at timestamp for partial withdrawal.
+//   * nbfc_consent_withdrawals — append-only record of every withdrawal,
+//     including the channel it came in through (grievance_portal / helpline /
+//     email) and an optional free-text reason. The original consent_records
+//     row is never deleted: DPDPA forbids retroactive erasure of past data
+//     and existing loan obligations remain in force.
+export const nbfcConsentScopes = pgTable(
+  "nbfc_consent_scopes",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    consent_id: varchar("consent_id", { length: 255 }).notNull(),
+    scope_key: varchar("scope_key", { length: 64 }).notNull(),
+    is_active: boolean("is_active").default(true).notNull(),
+    deactivated_at: timestamp("deactivated_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    consentIdx: index("nbfc_consent_scopes_consent_idx").on(table.consent_id),
+    consentScopeUniq: uniqueIndex("nbfc_consent_scopes_consent_scope_uniq").on(
+      table.consent_id,
+      table.scope_key,
+    ),
+  }),
+);
+
+export const nbfcConsentWithdrawals = pgTable(
+  "nbfc_consent_withdrawals",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    consent_id: varchar("consent_id", { length: 255 }).notNull(),
+    withdrawal_channel: varchar("withdrawal_channel", { length: 32 }).notNull(),
+    reason: text("reason"),
+    withdrawn_at: timestamp("withdrawn_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    leadIdx: index("nbfc_consent_withdrawals_lead_idx").on(table.lead_id),
+    consentIdx: index("nbfc_consent_withdrawals_consent_idx").on(
+      table.consent_id,
+    ),
+  }),
+);
