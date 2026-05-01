@@ -1,14 +1,13 @@
 {
   "unit_id": "E-008",
-  "audited_at": "2026-05-01T06:30:00Z",
-  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "audited_at": "2026-05-01T15:39:58Z",
+  "baseline_sha": "e9eae8c3af97ccb2e211f62bf5c7d91ec4a47f4af5359d033d8a5e9f05350c64",
   "reuse_findings": [
     {
       "table": "nbfc_lsp_agreements",
-      "verified": false,
-      "ts_line": null,
-      "columns_verified": [],
-      "columns_missing": [
+      "verified": true,
+      "ts_line": 3535,
+      "columns_verified": [
         "id",
         "agreement_id",
         "nbfc_id",
@@ -18,33 +17,27 @@
         "signing_date",
         "updated_at"
       ],
-      "reason": "table not present in baseline; introduced by sibling unit E-007",
-      "sibling_unit": "E-007"
+      "columns_missing": []
     },
     {
       "table": "nbfc",
-      "verified": false,
-      "ts_line": null,
-      "columns_verified": [],
-      "columns_missing": [
+      "verified": true,
+      "ts_line": 3392,
+      "columns_verified": [
         "id",
         "lsp_agreement_id"
       ],
-      "reason": "table not present in baseline; introduced by sibling unit E-003",
-      "sibling_unit": "E-003"
+      "columns_missing": []
     }
   ],
   "new_findings": [],
-  "verdict": "needs_clarification",
-  "status": "needs_clarification",
+  "verdict": "audited",
+  "status": "audited",
   "migration_required": false,
   "notes": [
     "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM",
     "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs",
-    "G-04: Sync Audit G-04: dealers table never defined \u2014 referenced as FK target by many tables",
-    "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type",
-    "reuse table 'nbfc_lsp_agreements' not yet in baseline \u2014 introduced by sibling unit E-007 (depends_on must include E-007 before this unit codes)",
-    "reuse table 'nbfc' not yet in baseline \u2014 introduced by sibling unit E-003 (depends_on must include E-003 before this unit codes)"
+    "G-04: Sync Audit G-04: dealers table never defined \u2014 referenced as FK target by many tables"
   ],
-  "checkpoint_html": "docs/nbfc/loop_report/E-008/checkpoint_1.html"
+  "checkpoint_html": null
 }
