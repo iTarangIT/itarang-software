@@ -3819,3 +3819,72 @@ export const nbfcScoreOverrides = pgTable(
     ),
   }),
 );
+
+// -----------------------------------------------------------------------------
+// E-030 — PCI nightly computation (Section 6.1.5)
+// -----------------------------------------------------------------------------
+// Two new tables to support the nightly PCI cron:
+//   • emi_schedules     — per-loan EMI schedule rows; the PCI/CDS jobs read
+//                          recent rows to compute weighted on-time/late/missed
+//                          scores. (Forward-referenced by E-029 too — kept
+//                          minimal so both jobs can read it without a migration
+//                          churn.)
+//   • nbfc_risk_alerts  — alert rows surfaced on the NBFC Risk Alerts UI. The
+//                          PCI job inserts type='pci_low' rows when a borrower
+//                          dips below 0.40; other E-units may insert their
+//                          own types (cds_high, etc.).
+// Tenant scoping enforced in application code (drizzle where-clauses).
+// -----------------------------------------------------------------------------
+
+export const emiSchedules = pgTable(
+  "emi_schedules",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    // loan_sanctions.id is varchar(255), so this column is varchar too — that
+    // matches the production-DB shape established by an earlier migration. The
+    // PCI/CDS jobs persist loan_sanction_id as a string for read joins against
+    // borrower_risk_scores.loan_sanction_id (which is uuid in this schema; the
+    // application is responsible for the cast where they meet).
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
+    due_date: date("due_date").notNull(),
+    paid_at: timestamp("paid_at", { withTimezone: true }),
+    status: varchar({ length: 16 }).notNull(), // 'paid' | 'paid_late' | 'missed' | 'pending'
+    days_overdue: integer("days_overdue"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    loanIdx: index("emi_schedules_loan_idx").on(table.loan_sanction_id),
+    loanDueIdx: index("emi_schedules_loan_due_idx").on(
+      table.loan_sanction_id,
+      table.due_date,
+    ),
+  }),
+);
+
+export const nbfcRiskAlerts = pgTable(
+  "nbfc_risk_alerts",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    tenant_id: uuid("tenant_id").notNull(),
+    borrower_id: uuid("borrower_id").notNull(),
+    loan_sanction_id: uuid("loan_sanction_id").notNull(),
+    type: varchar({ length: 32 }).notNull(), // 'pci_low' | 'cds_high' | ...
+    severity: varchar({ length: 16 }).notNull(), // 'low' | 'medium' | 'high' | 'critical'
+    payload: jsonb("payload"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_risk_alerts_tenant_idx").on(table.tenant_id),
+    borrowerIdx: index("nbfc_risk_alerts_borrower_idx").on(table.borrower_id),
+    loanSanctionIdx: index("nbfc_risk_alerts_loan_sanction_idx").on(
+      table.loan_sanction_id,
+    ),
+    typeIdx: index("nbfc_risk_alerts_type_idx").on(table.type),
+    createdAtIdx: index("nbfc_risk_alerts_created_at_idx").on(table.created_at),
+  }),
+);
