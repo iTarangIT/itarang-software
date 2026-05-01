@@ -93,8 +93,8 @@ acceptance_criteria:
     test_layer: api
     test_name: "Delivered settlement marks recovery pipeline as resold"
 
-status: needs_clarification
-loop_count: 0
+status: pass
+loop_count: 1
 last_failure_signature: null
 human_checkpoints: []
 audit:
