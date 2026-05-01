@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>E-093 — Score Override — loop 01 — pass</title>
+<style>
+  body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { margin-bottom: .25rem; }
+  .ok { color: #137333; font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; vertical-align: top; }
+  code { background: #f6f8fa; padding: 1px 4px; border-radius: 3px; }
+  .small { color: #555; font-size: .9rem; }
+</style>
+</head>
+<body>
+  <h1>E-093 — Score Override</h1>
+  <p class="small">Loop 01 — <span class="ok">pass (5/5 ACs)</span> — branch <code>nbfc/E-093</code></p>
+
+  <h2>Summary</h2>
+  <p>
+    NBFC Risk Manager can override a borrower's computed credit score with a
+    documented reason. The override is logged to <code>audit_logs</code> with
+    action <code>score.override.created</code> but does NOT mutate the computed
+    score. New table <code>nbfc_score_overrides</code> holds the append-only
+    history; a new override flips any prior <code>is_active</code> row to
+    <code>false</code> for the same <code>(loan_application_id, score_type)</code>.
+  </p>
+
+  <h2>Acceptance Criteria</h2>
+  <table>
+    <thead><tr><th>AC</th><th>Statement</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>AC1</td><td>Risk Manager + reason ≥ 20 chars → 200, is_active=true; computed score untouched.</td><td class="ok">pass</td></tr>
+      <tr><td>AC2</td><td>Non-Risk-Manager role → 403.</td><td class="ok">pass</td></tr>
+      <tr><td>AC3</td><td>Reason &lt; 20 chars → 400.</td><td class="ok">pass</td></tr>
+      <tr><td>AC4</td><td>Second override supersedes prior; both audit-logged with action=<code>score.override.created</code>.</td><td class="ok">pass</td></tr>
+      <tr><td>AC5</td><td>GET returns active_override + history newest-first.</td><td class="ok">pass</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Schema</h2>
+  <p>
+    Added table <code>nbfc_score_overrides</code> (auto-approved per
+    <code>--auto-approve-schema</code>) with indexes on
+    <code>(loan_application_id, score_type)</code>,
+    <code>(loan_application_id, score_type, is_active)</code>, and
+    <code>(created_at)</code>. Applied to sandbox RDS via
+    <code>CREATE TABLE IF NOT EXISTS</code> + index DDL because
+    <code>drizzle-kit push</code> stalled on the introspection phase.
+  </p>
+
+  <h2>Files</h2>
+  <ul>
+    <li><code>src/lib/db/schema.ts</code> — added <code>nbfcScoreOverrides</code></li>
+    <li><code>src/lib/nbfc/scores/override-service.ts</code> — service (create + list)</li>
+    <li><code>src/app/api/nbfc/scores/override/route.ts</code> — POST + GET</li>
+    <li><code>src/components/nbfc/scores/ScoreOverrideForm.tsx</code> — Risk Manager form</li>
+    <li><code>tests/e2e/nbfc/E-093_score-override.api.spec.ts</code> — 5 ACs</li>
+  </ul>
+
+  <h2>Test command</h2>
+  <pre><code>NBFC_DEV_PORT=3010 NBFC_TEST_BYPASS_SECRET=e093-loop-bypass-secret \
+  npx playwright test --config=tests/e2e/nbfc-loop.config.ts \
+  --project=nbfc-api tests/e2e/nbfc/E-093_score-override.api.spec.ts
+# 5 passed (5.0s)</code></pre>
+</body>
+</html>

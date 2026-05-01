@@ -1,0 +1,33 @@
+{
+  "id": "E-093",
+  "slug": "score-override",
+  "name": "Score override with documented reason (logged, does not change computed score)",
+  "status": "passed",
+  "loop_count": 1,
+  "ac_results": {
+    "AC1": "passed",
+    "AC2": "passed",
+    "AC3": "passed",
+    "AC4": "passed",
+    "AC5": "passed"
+  },
+  "schema_changes": {
+    "tables_added": ["nbfc_score_overrides"],
+    "tables_referenced": ["audit_logs"],
+    "auto_approved": true,
+    "applied_to_sandbox_at": "2026-05-01"
+  },
+  "files": {
+    "schema": "src/lib/db/schema.ts",
+    "lib": ["src/lib/nbfc/scores/override-service.ts"],
+    "api": ["src/app/api/nbfc/scores/override/route.ts"],
+    "components": ["src/components/nbfc/scores/ScoreOverrideForm.tsx"],
+    "pages": [],
+    "tests": ["tests/e2e/nbfc/E-093_score-override.api.spec.ts"]
+  },
+  "verification": {
+    "schema_applied_via": "direct CREATE TABLE IF NOT EXISTS + indexes (drizzle-kit push hung; SQL applied via postgres-js)",
+    "tests_run": "npx playwright test --config=tests/e2e/nbfc-loop.config.ts --project=nbfc-api tests/e2e/nbfc/E-093_score-override.api.spec.ts",
+    "tests_passed": "5/5"
+  }
+}
