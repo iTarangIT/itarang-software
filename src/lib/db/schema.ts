@@ -11,6 +11,7 @@ import {
   json,
   uuid,
   index,
+  uniqueIndex,
   bigint,
   date,
   serial,
@@ -3106,6 +3107,33 @@ export const nbfcComplianceDocuments = pgTable(
   (table) => ({
     nbfcIdx: index("nbfc_compliance_documents_nbfc_id_idx").on(table.nbfc_id),
     statusIdx: index("nbfc_compliance_documents_status_idx").on(table.status),
+  }),
+);
+
+// =============================================================================
+// E-006 — RBI CoR expiry alert ledger (Section 6.0.4)
+// Tracks which (nbfc_id, cor_expiry_date) pair has already received a 60-day
+// expiry-warning alert. Idempotency guard for the daily cron — without this
+// table the same alert would fan out daily for the entire 60-day window.
+// =============================================================================
+export const nbfcCorExpiryAlerts = pgTable(
+  "nbfc_cor_expiry_alerts",
+  {
+    id: serial("id").primaryKey(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    cor_expiry_date: date("cor_expiry_date").notNull(),
+    alerted_at: timestamp("alerted_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_cor_expiry_alerts_nbfc_id_idx").on(table.nbfc_id),
+    pairIdx: uniqueIndex("nbfc_cor_expiry_alerts_pair_idx").on(
+      table.nbfc_id,
+      table.cor_expiry_date,
+    ),
   }),
 );
 
