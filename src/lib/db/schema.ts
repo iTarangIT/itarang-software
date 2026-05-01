@@ -1215,6 +1215,11 @@ export const kycDocuments = pgTable(
     uploaded_by: uuid("uploaded_by"),
     verified_by: uuid("verified_by"),
     doc_for: varchar("doc_for", { length: 20 }).default('customer').notNull(),
+    // E-091 — DPDPA retention: when a KYC document is purged after the 7y
+    // RBI/IT-Act retention window, we keep the row (so foreign keys to lead
+    // remain intact) but null all PII columns and flip `purged` to true.
+    purged: boolean("purged").default(false).notNull(),
+    purged_at: timestamp("purged_at", { withTimezone: true }),
   },
   (table) => {
     return {
@@ -2932,6 +2937,42 @@ export const telemetryIngestionLog = pgTable(
     tenantIngestedIdx: index("telemetry_ingestion_log_tenant_ingested_idx").on(
       table.tenant_id,
       table.ingested_at,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-091 — DPDPA retention tombstones.
+//
+// Every DPDPA-driven deletion (KYC docs purged after 7y, telemetry raw events
+// purged after 2y, future categories) is recorded here as an immutable
+// attestation. The original PII is gone but the *fact* of the deletion is
+// auditable: which table, which id (or row count for batch deletes), why,
+// and where it was stored — DPDPA 2023 + RBI accountability.
+//
+// storage_region defaults to 'ap-south-1' (Mumbai) per the data-localisation
+// requirement: deletion never crosses borders.
+// -----------------------------------------------------------------------------
+
+export const nbfcRetentionTombstones = pgTable(
+  "nbfc_retention_tombstones",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    table_name: varchar("table_name", { length: 64 }).notNull(),
+    original_id: varchar("original_id", { length: 255 }),
+    row_count: integer("row_count").default(1).notNull(),
+    reason: varchar("reason", { length: 64 }).notNull(),
+    deleted_at: timestamp("deleted_at", { withTimezone: true }).defaultNow().notNull(),
+    storage_region: varchar("storage_region", { length: 24 })
+      .default('ap-south-1')
+      .notNull(),
+  },
+  (table) => ({
+    tableNameIdx: index("nbfc_retention_tombstones_table_name_idx").on(
+      table.table_name,
+    ),
+    deletedAtIdx: index("nbfc_retention_tombstones_deleted_at_idx").on(
+      table.deleted_at,
     ),
   }),
 );
