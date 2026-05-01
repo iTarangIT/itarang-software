@@ -4273,3 +4273,74 @@ export const telemetryDailySummary = pgTable(
     dateIdx: index("telemetry_daily_summary_date_idx").on(table.summary_date),
   }),
 );
+
+// =============================================================================
+// [E-049] Telemetry alert rules — Section 6.2.6
+// =============================================================================
+// Persistent ledger for the eight rule-based alerts triggered by the
+// per-packet evaluator (BMS Fault, High Temperature, Low SOC, Usage Drop,
+// Geo-Shift, SOH Decline) and the offline-scan cron (Battery Offline,
+// Battery Offline Extended).
+//
+// Reuse-vs-new rationale (per _audit_E-049.json — auto-approved):
+//   - battery_alerts already exists (line 2086) with shape (id, device_id,
+//     alert_type, severity, message, value, threshold, acknowledged*) — that
+//     table is owned by an earlier ad-hoc battery-monitor flow and uses a
+//     varchar(255) primary key plus an `alert_type`+`message` pair. The BRD
+//     6.2.6 model is rule-based with a fixed enum of `rule` names, an
+//     open/resolved lifecycle (`resolved_at`), a JSON `payload` and a JSON
+//     `notified_to` fan-out audit, plus a `cds_flagged` flag for the >48h
+//     escalation. Reusing battery_alerts would require renaming columns and
+//     widening the PK shape, which would break existing battery_alerts
+//     readers. Therefore telemetry_alerts is kept as a separate table; the
+//     `severity` and `resolved_at` name collisions are intentional —
+//     conventional resolution-timestamp / severity columns shared across
+//     alert tables.
+//   - serial_number is a logical FK to inventory.serial_number, mirroring
+//     the convention used in iot_devices, telemetry_events and
+//     telemetry_daily_summary. Not enforced at the DB level for write
+//     throughput (BRD 6.2.4).
+//
+// Dedup contract (BRD logic step 6): a single open alert per
+// (serial_number, rule). Once resolved_at is non-null the row is closed and
+// a new alert for the same rule may be opened. Enforced by a partial unique
+// index on (serial_number, rule) WHERE resolved_at IS NULL.
+// =============================================================================
+export const telemetryAlerts = pgTable(
+  "telemetry_alerts",
+  {
+    id: serial().primaryKey(),
+    serial_number: varchar("serial_number", { length: 50 }).notNull(),
+    // One of: 'BMS Fault' | 'High Temperature' | 'Low SOC' | 'Usage Drop' |
+    // 'Geo-Shift' | 'SOH Decline' | 'Battery Offline' | 'Battery Offline Extended'.
+    rule: varchar({ length: 50 }).notNull(),
+    // 'critical' | 'warning' | 'info'.
+    severity: varchar({ length: 20 }).notNull(),
+    triggered_at: timestamp("triggered_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    // Snapshot of evaluator inputs (e.g. {soc_percent: 8, charger_connected:
+    // false, threshold: 10}). Lets the dashboard render the firing context
+    // without round-tripping to telemetry_events.
+    payload: jsonb(),
+    // Array of audience ids notified, e.g.
+    // [{audience: 'nbfc-dashboard', at: '...'}, {audience: 'admin-email', at: '...'}].
+    notified_to: jsonb("notified_to"),
+    // Set true on Battery Offline Extended (>48h). Read by E-050/CDS scoring.
+    cds_flagged: boolean("cds_flagged").notNull().default(false),
+  },
+  (table) => ({
+    // Dedup: only one open alert per (serial_number, rule).
+    serialRuleOpenUnique: uniqueIndex("telemetry_alerts_serial_rule_open_uniq")
+      .on(table.serial_number, table.rule)
+      .where(sql`resolved_at IS NULL`),
+    // Dashboard read pattern — list open alerts for a serial, newest first.
+    serialTriggeredIdx: index("telemetry_alerts_serial_triggered_idx").on(
+      table.serial_number,
+      table.triggered_at,
+    ),
+    // Severity filter for the NBFC dashboard "Critical alerts" widget.
+    severityIdx: index("telemetry_alerts_severity_idx").on(table.severity),
+  }),
+);
