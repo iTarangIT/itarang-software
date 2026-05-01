@@ -61,6 +61,9 @@ function uuidToInt(uuid: string): number {
   return Math.abs(h) || 1;
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function resolveAdminActor(headers: Headers): Promise<AdminActor> {
   if (isTestBypassRequest(headers)) {
     const adminId = headers.get("x-nbfc-test-admin-id");
@@ -70,9 +73,21 @@ export async function resolveAdminActor(headers: Headers): Promise<AdminActor> {
         "UNAUTHORIZED: test bypass missing x-nbfc-test-admin-id header",
       );
     }
+    // E-068 added support for uuid admin ids — older tests still pass numeric
+    // surrogate ids which we keep working unchanged.
+    if (UUID_RE.test(adminId)) {
+      return {
+        user_id: adminId,
+        numeric_id: uuidToInt(adminId),
+        role,
+        via: "test_bypass",
+      };
+    }
     const numeric = Number.parseInt(adminId, 10);
     if (!Number.isFinite(numeric) || numeric <= 0) {
-      throw new Error("UNAUTHORIZED: x-nbfc-test-admin-id must be a positive integer");
+      throw new Error(
+        "UNAUTHORIZED: x-nbfc-test-admin-id must be a positive integer or a uuid",
+      );
     }
     return {
       user_id: adminId,
