@@ -2642,6 +2642,10 @@ export const loanSanctions = pgTable("loan_sanctions", {
   dealer_approved: boolean("dealer_approved").default(false),
   dealer_approved_at: timestamp("dealer_approved_at", { withTimezone: true }),
   dealer_approved_by: uuid("dealer_approved_by"),
+  // E-026 prereq (G-03): tenant scoping + lifecycle markers required by BRD §6.1.3.
+  nbfc_id: uuid("nbfc_id"),
+  disbursed_at: timestamp("disbursed_at", { withTimezone: true }),
+  closed_at: timestamp("closed_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -2785,6 +2789,53 @@ export const riskCardRuns = pgTable(
     tenantRunIdx: index("risk_card_runs_tenant_run_idx").on(table.tenant_id, table.run_at),
     tenantHypIdx: index("risk_card_runs_tenant_hyp_idx").on(table.tenant_id, table.hypothesis_id),
     severityIdx: index("risk_card_runs_severity_idx").on(table.severity),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-026 — Portfolio Overview summary cards (Section 6.1.3)
+// -----------------------------------------------------------------------------
+// Two new tables to support the portfolio summary endpoint:
+//   • borrower_risk_scores      — nightly-computed CDS / PCI per borrower
+//   • nbfc_recovery_pipeline    — recovered batteries moving through the
+//                                  recovery & auction stage flow
+// Tenant scoping enforced in application code (drizzle where-clauses).
+// -----------------------------------------------------------------------------
+
+export const borrowerRiskScores = pgTable(
+  "borrower_risk_scores",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    borrower_id: uuid("borrower_id").notNull(),
+    loan_sanction_id: uuid("loan_sanction_id").notNull(),
+    cds_score: numeric("cds_score", { precision: 5, scale: 2 }),
+    pci_score: numeric("pci_score", { precision: 4, scale: 3 }),
+    confidence: varchar({ length: 16 }),
+    computed_at: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("borrower_risk_scores_tenant_idx").on(table.tenant_id),
+    borrowerIdx: index("borrower_risk_scores_borrower_idx").on(table.borrower_id),
+    loanSanctionIdx: index("borrower_risk_scores_loan_sanction_idx").on(table.loan_sanction_id),
+  }),
+);
+
+export const nbfcRecoveryPipeline = pgTable(
+  "nbfc_recovery_pipeline",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    battery_serial: varchar("battery_serial", { length: 64 }).notNull(),
+    stage: varchar({ length: 32 }).notNull(),
+    estimated_recovery_value: numeric("estimated_recovery_value", { precision: 12, scale: 2 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_recovery_pipeline_tenant_idx").on(table.tenant_id),
+    stageIdx: index("nbfc_recovery_pipeline_stage_idx").on(table.stage),
+    tenantStageIdx: index("nbfc_recovery_pipeline_tenant_stage_idx").on(table.tenant_id, table.stage),
   }),
 );
 
