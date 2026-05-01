@@ -12,6 +12,7 @@ import {
 } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { finalizeSale } from "@/lib/sales/sale-finalization";
+import { toPaymentMode } from "@/lib/sales/payment-mode";
 import { notifyDispatchConfirmed } from "@/lib/notifications";
 import { sendDecentroSms } from "@/lib/decentro";
 
@@ -174,7 +175,13 @@ export async function POST(
           .where(eq(loanSanctions.id, loan.id));
       }
 
-      // Inventory sold + warranty + after-sales
+      // Inventory sold + warranty + after-sales.
+      // E-101: paymentMode is collapsed from leads.payment_method via the
+      // canonical utility — never inline. Step 5 only ever fires after a
+      // loan_sanctioned lead, so the collapsed value is expected to be
+      // 'finance'; we still derive it through the utility so warranty and
+      // after-sales rows can never disagree with the lead.
+      const collapsedPaymentMode = toPaymentMode(lead.payment_method);
       const sale = await finalizeSale({
         tx,
         leadId,
@@ -183,7 +190,7 @@ export async function POST(
         dealerId: user.dealer_id!,
         customerName: lead.full_name || lead.owner_name || null,
         customerPhone: lead.phone || lead.mobile || null,
-        paymentMode: "finance",
+        paymentMode: collapsedPaymentMode,
         performedBy: user.id,
         soldAt: now,
       });
@@ -227,9 +234,14 @@ export async function POST(
   } catch (error) {
     console.error("[Step 5 Confirm Dispatch] Error:", error);
     const message = error instanceof Error ? error.message : "Failed to confirm dispatch";
+    // E-101: bad payment_method on the lead is a client-mappable input error,
+    // not a server crash. Surface it as 400 so the dealer can be told to fix
+    // the lead before retrying dispatch.
+    const status =
+      error instanceof Error && error.name === "PaymentModeMappingError" ? 400 : 500;
     return NextResponse.json(
       { success: false, error: { message } },
-      { status: 500 },
+      { status },
     );
   }
 }
