@@ -12,6 +12,10 @@ import { finaliseExportIfApproved } from "@/lib/nbfc/audit-export/service";
 import { executeImmobilisationOnApproval } from "@/lib/nbfc/actions/battery-immobilisation/service";
 import { applyLoanRestructuring } from "@/lib/nbfc/actions/loan-restructuring";
 import { mintGrantIfApproved } from "@/lib/nbfc/pii-access/service";
+import {
+  applyApprovedThresholdChange,
+  RISK_RULE_THRESHOLD_ACTION_TYPE,
+} from "@/lib/nbfc/risk-rule-thresholds/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -65,6 +69,7 @@ export async function POST(
     // cron retries or double-clicks cannot double-execute. Failures here do
     // not roll back the approval — the approval is the record of authorisation,
     // each handler is the execution.
+    let applied: unknown = undefined;
     if (row.status === "approved") {
       switch (row.action_type) {
         case "bulk_immobilisation":
@@ -106,6 +111,21 @@ export async function POST(
             }
           }
           break;
+        case RISK_RULE_THRESHOLD_ACTION_TYPE: {
+          // E-085 — append a fresh nbfc_risk_rule_thresholds row with the
+          // proposed threshold and supersede the previously-active row for the
+          // same rule_key. Idempotent on approval_request_id.
+          const inserted = await applyApprovedThresholdChange({
+            approval_request_id: row.id,
+            applied_by: actor.user_id,
+          });
+          applied = {
+            risk_rule_threshold_id: inserted.id,
+            rule_key: inserted.rule_key,
+            is_active: inserted.is_active,
+          };
+          break;
+        }
         default:
           // No handler registered for this action_type — nothing to do.
           break;
@@ -118,6 +138,7 @@ export async function POST(
       action_type: row.action_type,
       approver_user_id: row.approver_user_id,
       approved_at: row.approved_at,
+      applied,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
