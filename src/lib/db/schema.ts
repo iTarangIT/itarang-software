@@ -2629,7 +2629,10 @@ export const productSelections = pgTable("product_selections", {
 
   // Classification (may differ from Step 1 if dealer changed category)
   category: varchar("category", { length: 100 }),
-  sub_category: varchar("sub_category", { length: 100 }),
+  // model_number — battery model identifier (e.g. '51.2V-105AH'). Renamed from
+  // sub_category per Sync Audit G-05 (E-103); width widened to 100 to allow
+  // INV models like 'Power Cube 1.4+'.
+  model_number: varchar("model_number", { length: 100 }),
 
   // Pricing (snapshot at submission time)
   battery_price: decimal("battery_price", { precision: 12, scale: 2 }),
