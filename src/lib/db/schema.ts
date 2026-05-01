@@ -3176,3 +3176,19 @@ export const nbfcLoanProducts = pgTable("nbfc_loan_products", {
     .defaultNow()
     .notNull(),
 });
+
+// =============================================================================
+// E-065 — NBFC Ecosystem Overview metrics cache (BRD §6.3.2)
+// Stores 15-minute IoT connectivity rollup and nightly Avg CDS network value
+// to satisfy BRD refresh cadence without recomputing on every request.
+// Keyed by metric_key so the route can fetch by well-known constants
+// (e.g. 'iot_connectivity_pct', 'avg_cds_network', 'platform_uptime_pct').
+// =============================================================================
+export const nbfcEcosystemMetricsCache = pgTable("nbfc_ecosystem_metrics_cache", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  metric_key: varchar("metric_key", { length: 64 }).notNull().unique(),
+  metric_value: numeric("metric_value", { precision: 18, scale: 4 }),
+  refreshed_at: timestamp("refreshed_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
