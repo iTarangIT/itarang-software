@@ -2942,6 +2942,43 @@ export const telemetryIngestionLog = pgTable(
 );
 
 // -----------------------------------------------------------------------------
+// E-029 — EMI schedules (Section 6.1.5)
+// -----------------------------------------------------------------------------
+// Per-loan EMI ledger feeding the nightly CDS computation (E-029) and the
+// PCI computation (E-030). One row per scheduled EMI with `status` in
+// {paid, paid_late, missed, overdue, scheduled}; `paid_at` is set when an
+// EMI is settled and `days_overdue` tracks how many days late (0 if paid
+// on or before due_date).
+//
+// This table is also referenced by E-028 (Lead Intelligence "EMI Status"
+// column) — read-only there.
+//
+// Naming: `days_overdue` mirrors the BRD field name; an audit fuzzy-match
+// flagged loan_files.overdue_days as a token-level twin (different table,
+// different concept — loan_files predates the nbfc dashboard era), so we
+// keep the BRD-canonical name on this new table.
+// -----------------------------------------------------------------------------
+export const emiSchedules = pgTable(
+  "emi_schedules",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
+    due_date: date("due_date").notNull(),
+    paid_at: timestamp("paid_at", { withTimezone: true }),
+    status: varchar({ length: 16 }).notNull(),
+    days_overdue: integer("days_overdue"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    loanIdx: index("emi_schedules_loan_idx").on(table.loan_sanction_id),
+    loanDueIdx: index("emi_schedules_loan_due_idx").on(
+      table.loan_sanction_id,
+      table.due_date,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
 // E-067 — Risk Rule Engine threshold configuration (Section 6.3.3)
 // -----------------------------------------------------------------------------
 // Single canonical platform-wide table that holds the eight tunable risk
