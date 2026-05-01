@@ -1,0 +1,75 @@
+id: E-004
+slug: nbfc-identity-format-validation
+name: "NBFC identity format validators — RBI CoR, GST, PAN, PIN regex enforcement"
+source_section: "6.0.3"
+brd_excerpt: |
+  RBI Registration Number — NBFC's RBI Certificate of Registration (CoR) number.
+  Validated format: N-XX.XXXXX.XX.XX.XXXX.XXXXX.XX. Unique constraint.
+  GST Number — Format: 2-digit state code + 10-char PAN + 1Z + 1 check. Validated.
+  PAN Number — Company PAN.
+  Primary Contact Phone — Numeric. 10-digit mobile.
+
+depends_on: []
+
+non_functional:
+  - "Validators are pure functions exposed via shared util — same code path used by master form (E-003) and any future portal-side editor."
+  - "Reject patterns must reject case-mismatch (PAN must be uppercase) — no silent normalisation that could mask data-entry errors."
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/nbfc/validate-identity
+      auth: admin
+      request_zod: |
+        z.object({
+          rbiRegistrationNo: z.string().optional(),
+          gstNumber: z.string().optional(),
+          panNumber: z.string().optional(),
+          primaryContactPhone: z.string().optional(),
+        })
+      response_shape:
+        ok: "boolean"
+        errors:
+          rbiRegistrationNo: "string|null"
+          gstNumber: "string|null"
+          panNumber: "string|null"
+          primaryContactPhone: "string|null"
+  components:
+    - "src/lib/nbfc/identityValidators.ts"
+  jobs: []
+  pages: []
+
+logic: |
+  1. For each provided field, run regex defined in BRD 6.0.3.
+  2. RBI CoR regex: ^N-\\d{2}\\.\\d{5}\\.\\d{2}\\.\\d{2}\\.\\d{4}\\.\\d{5}\\.\\d{2}$
+  3. GST regex: ^\\d{2}[A-Z]{5}\\d{4}[A-Z]{1}[A-Z\\d]{1}Z[A-Z\\d]{1}$
+  4. PAN regex: ^[A-Z]{5}\\d{4}[A-Z]$
+  5. Phone regex: ^\\d{10}$
+  6. Return ok=true only if all provided fields match; populate errors map otherwise.
+
+tables_columns:
+  reuse: []
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/admin/nbfc/validate-identity with rbiRegistrationNo='N-12.34567.89.01.2345.67890.12' returns ok=true."
+    test_layer: api
+    test_name: "valid RBI CoR pattern accepted"
+  - id: AC2
+    statement: "POST /api/admin/nbfc/validate-identity with rbiRegistrationNo='N-1234567' returns ok=false with errors.rbiRegistrationNo populated."
+    test_layer: api
+    test_name: "invalid RBI CoR pattern rejected"
+  - id: AC3
+    statement: "POST /api/admin/nbfc/validate-identity with panNumber='abcde1234f' (lowercase) returns ok=false."
+    test_layer: api
+    test_name: "lowercase PAN rejected"
+  - id: AC4
+    statement: "POST /api/admin/nbfc/validate-identity with gstNumber='22AAAAA0000A1Z5' returns ok=true."
+    test_layer: api
+    test_name: "valid GST pattern accepted"
+
+status: extracted
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
