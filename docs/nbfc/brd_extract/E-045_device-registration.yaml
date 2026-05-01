@@ -103,10 +103,18 @@ acceptance_criteria:
     test_layer: api
     test_name: "POST register-device rejects malformed imeiId with 422"
 
-status: needs_clarification
+status: passed
 loop_count: 0
 last_failure_signature: null
 human_checkpoints: []
+loop_results:
+  iteration: 0
+  verdict: pass
+  passed_ac_ids: [AC1, AC2, AC3]
+  failed_ac_ids: []
+  report_html: docs/nbfc/loop_report/E-045/loop_00.html
+  schema_approved_via: --auto-approve-schema
+  schema_pushed_to_db: true
 audit:
   unit_id: E-045
   audited_at: "2026-05-01T06:11:00Z"

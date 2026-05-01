@@ -2096,6 +2096,46 @@ export const batteryAlerts = pgTable("battery_alerts", {
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
+// --- IOT DEVICE REGISTRY (E-045) ---
+//
+// Canonical IoT device-state table. Owned by E-045 (device registration on
+// inventory upload) and consumed by E-046/E-047/E-048/E-049/E-050/E-051
+// (telemetry ingestion, query APIs, immobilisation gating, etc.).
+//
+// Reuse-vs-new rationale (per E-045 audit):
+//   - inventory.soc_percent / inventory.soc_last_sync_at hold per-asset SOC
+//     snapshots; this table holds the live device-side cache (last_seen,
+//     soc/soh/voltage/temperature/cycles, GPS, BMS) keyed off the IoT device
+//     itself (serial_number/imei_id), not the inventory unit.
+//   - device_battery_map links a device to a deployed battery once it ships;
+//     iot_devices is created earlier (at inventory upload) so the registry
+//     exists before deployment.
+//   - dealer_id is intentionally a logical FK (varchar) matching the dealer-id
+//     pattern used across after_sales_records / coupon_batches / dealer_leads.
+export const iotDevices = pgTable("iot_devices", {
+  id: serial().primaryKey(),
+  device_id: varchar("device_id", { length: 50 }).notNull().unique(),
+  serial_number: varchar("serial_number", { length: 50 }).notNull().unique(),
+  imei_id: varchar("imei_id", { length: 20 }).notNull().unique(),
+  dealer_id: varchar("dealer_id", { length: 50 }).notNull(),
+  model: varchar({ length: 100 }).notNull(),
+  category: varchar({ length: 50 }).notNull(),
+  device_status: varchar("device_status", { length: 20 }).notNull().default('registered'),
+  last_seen: timestamp("last_seen", { withTimezone: true }),
+  soc_percent: integer("soc_percent"),
+  soh_percent: integer("soh_percent"),
+  voltage_v: numeric("voltage_v", { precision: 6, scale: 2 }),
+  temperature_c: numeric("temperature_c", { precision: 5, scale: 2 }),
+  charge_cycles: integer("charge_cycles"),
+  gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
+  gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
+  gps_updated_at: timestamp("gps_updated_at", { withTimezone: true }),
+  bms_status: varchar("bms_status", { length: 50 }),
+  first_usage_at: timestamp("first_usage_at", { withTimezone: true }),
+  registered_at: timestamp("registered_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // --- APP SETTINGS ---
 
 export const appSettings = pgTable("app_settings", {
