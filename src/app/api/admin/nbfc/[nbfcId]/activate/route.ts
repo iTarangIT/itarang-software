@@ -1,0 +1,282 @@
+/**
+ * E-002 — POST /api/admin/nbfc/{nbfcId}/activate
+ *
+ * Activation gate (BRD §6.0.2 Step 6). Once an NBFC is approved (E-001),
+ * an admin clicks Activate which:
+ *   1. Verifies status='approved' (else 409).
+ *   2. Provisions a Supabase auth user for primary_contact_email if absent.
+ *   3. Generates a high-entropy one-time password (>=16 chars, mixed-case +
+ *      digit + symbol).
+ *   4. Records dispatch row in nbfc_portal_credentials.
+ *   5. Flips status to 'active' and stamps activated_at.
+ *   6. Enqueues an email job to primary_contact_email. On enqueue failure,
+ *      reverts status to 'approved' and returns 500 (NEVER silently lose
+ *      state — non_functional G-01).
+ *   7. Returns ok with the masked email.
+ *
+ * Triple-guarded test bypass mirrors E-001/E-003 — `x-nbfc-test-bypass` +
+ * `x-nbfc-test-user-id` headers, gated by NODE_ENV !== 'production' and
+ * NBFC_TEST_BYPASS_SECRET env.
+ */
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { eq } from "drizzle-orm";
+import { randomUUID, randomInt } from "node:crypto";
+import { db } from "@/lib/db";
+import { nbfc, nbfcPortalCredentials, auditLogs } from "@/lib/db/schema";
+import { requireAdminOrTestBypass } from "@/lib/auth/adminTestBypass";
+import { supabaseAdmin } from "@/lib/supabase/admin";
+import { enqueueNbfcPortalCredentialsJob } from "@/lib/queue/jobs/sendNbfcPortalCredentialsJob";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const ActivateBody = z.object({
+  resend: z.boolean().optional(),
+});
+
+const PWD_UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+const PWD_LOWER = "abcdefghjkmnpqrstuvwxyz";
+const PWD_DIGIT = "23456789";
+const PWD_SYMBOL = "!@#$%^&*-_=+";
+const PWD_ALL = PWD_UPPER + PWD_LOWER + PWD_DIGIT + PWD_SYMBOL;
+
+function pickFrom(set: string): string {
+  return set[randomInt(0, set.length)];
+}
+
+/**
+ * High-entropy password: 20 characters, drawn from upper/lower/digit/symbol
+ * pools so every category is represented at least once. Returns >= 16 chars
+ * per non_functional rule.
+ */
+export function generatePortalPassword(): string {
+  const chars: string[] = [
+    pickFrom(PWD_UPPER),
+    pickFrom(PWD_LOWER),
+    pickFrom(PWD_DIGIT),
+    pickFrom(PWD_SYMBOL),
+  ];
+  for (let i = chars.length; i < 20; i++) chars.push(pickFrom(PWD_ALL));
+  // Shuffle (Fisher-Yates) using crypto random.
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randomInt(0, i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
+}
+
+function maskEmail(email: string): string {
+  const at = email.indexOf("@");
+  if (at <= 1) return email;
+  const local = email.slice(0, at);
+  const domain = email.slice(at);
+  const head = local.slice(0, 2);
+  return `${head}${"*".repeat(Math.max(2, local.length - 2))}${domain}`;
+}
+
+async function ensureSupabaseUser(email: string): Promise<string> {
+  // Test mode — short-circuit Supabase round-trip. Triple-guarded.
+  if (
+    process.env.NODE_ENV !== "production" &&
+    process.env.NBFC_TEST_BYPASS_SECRET &&
+    process.env.NBFC_PORTAL_EMAIL_INMEMORY === "1"
+  ) {
+    return randomUUID();
+  }
+  // Try to find an existing user; if not, create one with random password
+  // (the credential password is held by Supabase itself — we never persist).
+  // Supabase admin API: listUsers paginated; for our scale a direct lookup
+  // by email is fine via createUser idempotent fallback.
+  const { data: created, error } = await supabaseAdmin.auth.admin.createUser({
+    email,
+    email_confirm: true,
+    password: generatePortalPassword(),
+    user_metadata: { role: "nbfc_partner" },
+  });
+  if (created?.user?.id) return created.user.id;
+  // If duplicate, look up by email via listUsers (small fleet — fine).
+  if (
+    error &&
+    /already|exists|registered/i.test(error.message ?? "")
+  ) {
+    const { data: list } = await supabaseAdmin.auth.admin.listUsers({
+      page: 1,
+      perPage: 200,
+    });
+    const found = list?.users?.find(
+      (u) => (u.email ?? "").toLowerCase() === email.toLowerCase(),
+    );
+    if (found?.id) return found.id;
+  }
+  throw new Error(
+    `Failed to provision Supabase auth user for ${email}: ${error?.message ?? "unknown"}`,
+  );
+}
+
+export async function POST(
+  req: NextRequest,
+  ctx: { params: Promise<{ nbfcId: string }> },
+) {
+  const auth = await requireAdminOrTestBypass(req.headers);
+  if (!auth.ok) return auth.response;
+  const adminUserId = auth.user.id;
+
+  const { nbfcId } = await ctx.params;
+  const id = Number.parseInt(nbfcId, 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    return NextResponse.json(
+      { ok: false, error: "Invalid nbfcId" },
+      { status: 400 },
+    );
+  }
+
+  // Tolerant body parse — body is optional.
+  let body: unknown = {};
+  try {
+    const text = await req.text();
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: "Invalid JSON body" },
+      { status: 400 },
+    );
+  }
+  const parsed = ActivateBody.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { ok: false, error: "VALIDATION", issues: parsed.error.issues },
+      { status: 400 },
+    );
+  }
+  const resend = parsed.data.resend === true;
+
+  // Resolve NBFC.
+  const [row] = await db
+    .select({
+      id: nbfc.id,
+      status: nbfc.status,
+      primary_contact_email: nbfc.primary_contact_email,
+    })
+    .from(nbfc)
+    .where(eq(nbfc.id, id))
+    .limit(1);
+
+  if (!row) {
+    return NextResponse.json(
+      { ok: false, error: "NBFC not found" },
+      { status: 404 },
+    );
+  }
+
+  // Idempotent guard: must be approved OR already active+resend.
+  const isApproved = row.status === "approved";
+  const isActiveResend = row.status === "active" && resend;
+  if (!isApproved && !isActiveResend) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "MUST_BE_APPROVED",
+        message: "must be approved before activation",
+        status: row.status,
+      },
+      { status: 409 },
+    );
+  }
+
+  // 1. Provision (or look up) the Supabase auth user.
+  let supabaseUserId: string;
+  try {
+    supabaseUserId = await ensureSupabaseUser(row.primary_contact_email);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "unknown";
+    return NextResponse.json(
+      { ok: false, error: "SUPABASE_USER_PROVISION_FAILED", message: msg },
+      { status: 500 },
+    );
+  }
+
+  // 2. Generate password and persist a credential audit row.
+  const password = generatePortalPassword();
+  const credentialId = randomUUID();
+  await db.insert(nbfcPortalCredentials).values({
+    id: credentialId,
+    nbfc_id: id,
+    supabase_user_id: supabaseUserId,
+    dispatch_status: "pending",
+  });
+
+  // 3. Flip status to active + stamp activated_at (only when first activating;
+  //    on resend we keep status active and just bump activated_at).
+  const now = new Date();
+  await db
+    .update(nbfc)
+    .set({
+      status: "active",
+      activated_at: now,
+      updated_at: now,
+    })
+    .where(eq(nbfc.id, id));
+
+  // 4. Enqueue email — on failure, revert status to 'approved' and bubble.
+  try {
+    await enqueueNbfcPortalCredentialsJob({
+      nbfcId: id,
+      credentialId,
+      toEmail: row.primary_contact_email,
+      password,
+      supabaseUserId,
+    });
+  } catch (e) {
+    // Revert: mark credential row failed and reset NBFC status only when this
+    // was the first activation (status was 'approved' before this call).
+    await db
+      .update(nbfcPortalCredentials)
+      .set({ dispatch_status: "credential_dispatch_failed" })
+      .where(eq(nbfcPortalCredentials.id, credentialId));
+    if (isApproved) {
+      await db
+        .update(nbfc)
+        .set({ status: "approved", activated_at: null, updated_at: new Date() })
+        .where(eq(nbfc.id, id));
+    }
+    const msg = e instanceof Error ? e.message : "unknown";
+    return NextResponse.json(
+      { ok: false, error: "EMAIL_ENQUEUE_FAILED", message: msg },
+      { status: 500 },
+    );
+  }
+
+  // 5. Mark dispatch as enqueued (email_dispatched_at is set when worker
+  //    actually sends — for now we record enqueue timestamp).
+  await db
+    .update(nbfcPortalCredentials)
+    .set({
+      dispatch_status: "dispatched",
+      email_dispatched_at: new Date(),
+    })
+    .where(eq(nbfcPortalCredentials.id, credentialId));
+
+  // 6. Audit log.
+  await db.insert(auditLogs).values({
+    id: randomUUID(),
+    entity_type: "nbfc",
+    entity_id: String(id),
+    action: resend ? "nbfc.credentials_resent" : "nbfc.activated",
+    performed_by:
+      typeof adminUserId === "string" ? adminUserId : String(adminUserId),
+    new_data: {
+      status: "active",
+      activated_at: now.toISOString(),
+      credentialId,
+      credentialDispatchedTo: maskEmail(row.primary_contact_email),
+    },
+  });
+
+  return NextResponse.json({
+    ok: true,
+    nbfcId: id,
+    status: "active",
+    credentialDispatchedTo: maskEmail(row.primary_contact_email),
+  });
+}
