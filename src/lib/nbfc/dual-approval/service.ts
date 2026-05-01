@@ -150,7 +150,46 @@ export async function approveDualApprovalRequest(input: ApproveInput) {
     },
   });
 
+  // E-083 — Gate dispatcher: route action_type to its side-effect handler.
+  // Handlers are idempotent on approval_request_id (their own table guards),
+  // so cron retries or double-clicks cannot double-execute.
+  await dispatchOnApproved(updated, input.approver_user_id);
+
   return updated;
+}
+
+/**
+ * Gate dispatcher — invoked exactly once per approve transition. Adds new
+ * action_types here as they ship. Imports are lazy to avoid circular module
+ * resolution between this service and per-action services.
+ */
+async function dispatchOnApproved(
+  approved: {
+    id: string;
+    action_type: string;
+    tenant_id: string;
+    entity_id: string;
+    evidence_snapshot: unknown;
+    borrower_notice_id: string | null;
+  },
+  approver_user_id: string,
+) {
+  if (approved.action_type === "battery_immobilisation") {
+    const { executeImmobilisationOnApproval } = await import(
+      "@/lib/nbfc/actions/battery-immobilisation/service"
+    );
+    await executeImmobilisationOnApproval({
+      approval_request_id: approved.id,
+      tenant_id: approved.tenant_id,
+      loan_application_id: approved.entity_id,
+      evidence_snapshot:
+        (approved.evidence_snapshot as Record<string, unknown>) ?? {},
+      approver_user_id,
+      borrower_notice_id: approved.borrower_notice_id,
+    });
+  }
+  // Other action_types (loan_restructuring, risk_rule_threshold_change, etc.)
+  // will register here as they ship.
 }
 
 export interface RejectInput {
