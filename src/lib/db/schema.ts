@@ -3066,6 +3066,38 @@ export const dualApprovalActionConfig = pgTable(
 );
 
 // =============================================================================
+// E-089 — PII Access Gated (BRD §6.4.3 — "PII Data Access")
+// Adds the requestor-MFA leg + time-boxed grant ledger on top of E-082's
+// dual-approval primitive. Action_type 'pii_data_access' flows through
+// dualApprovalRequests; once Compliance Officer approves, this table mints a
+// short-lived (30 min) access token for a single unmask call by the
+// requestor for one specific lead. Each unmask is logged in audit_logs.
+// =============================================================================
+export const nbfcPiiAccessGrants = pgTable(
+  "nbfc_pii_access_grants",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    requested_by: uuid("requested_by").notNull(),
+    approval_request_id: uuid("approval_request_id").notNull(),
+    access_token: varchar("access_token", { length: 128 }).notNull(),
+    fields: jsonb("fields").notNull(),
+    granted_at: timestamp("granted_at", { withTimezone: true }),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    used_count: integer("used_count").default(0).notNull(),
+  },
+  (table) => ({
+    accessTokenIdx: uniqueIndex("nbfc_pii_access_grants_access_token_idx").on(
+      table.access_token,
+    ),
+    approvalIdx: index("nbfc_pii_access_grants_approval_idx").on(
+      table.approval_request_id,
+    ),
+    leadIdx: index("nbfc_pii_access_grants_lead_idx").on(table.lead_id),
+  }),
+);
+
+// =============================================================================
 // E-003 — NBFC Master Details (Section 6.0.3)
 // Master NBFC partner table per BRD 6.0.7 — captures NBFC partner identities,
 // RBI registration data, statutory IDs (CIN, GST, PAN), grievance officer
