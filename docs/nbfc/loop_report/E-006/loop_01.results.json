@@ -1,0 +1,32 @@
+{
+  "unit_id": "E-006",
+  "loop_count": 1,
+  "verdict": "green",
+  "ac_results": {
+    "AC1": {
+      "test": "AC1: lists NBFCs within the 60-day window with correct daysToExpiry",
+      "status": "pass",
+      "duration_ms": 1500
+    },
+    "AC2": {
+      "test": "AC2: excludes NBFCs whose CoR expiry is beyond the window",
+      "status": "pass",
+      "duration_ms": 200
+    },
+    "AC3": {
+      "test": "AC3: cor-expiry job is idempotent per (nbfc_id, expiry_date)",
+      "status": "pass",
+      "duration_ms": 667
+    }
+  },
+  "passed": 3,
+  "failed": 0,
+  "schema_changes": {
+    "tables_added": ["nbfc_cor_expiry_alerts"],
+    "tables_referenced": ["nbfc"]
+  },
+  "notes": [
+    "All 3 ACs pass on first iteration.",
+    "Renamed src/app/api/admin/nbfc/[id] -> [nbfcId] to resolve pre-existing dynamic-slug conflict that was preventing the dev server from starting."
+  ]
+}
