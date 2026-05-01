@@ -1,0 +1,51 @@
+{
+  "id": "E-050",
+  "slug": "telemetry-query-battery",
+  "name": "Per-battery telemetry query APIs",
+  "status": "blocked",
+  "loop_count": 1,
+  "ac_results": {
+    "AC1": "passed",
+    "AC2": "passed",
+    "AC3": "passed",
+    "AC4": "skipped_blocked",
+    "AC5": "skipped_blocked"
+  },
+  "blocker": {
+    "reason": "Sandbox database (database-1) is missing telemetry_events and telemetry_daily_summary tables. The E-047 commit (c55b305) declared these in src/lib/db/schema.ts and stated they were auto-approved into sandbox via `/nbfc loop --auto-approve-schema`, but the sandbox we test against does not have them. AC4 (history) and AC5 (daily-summaries) cannot be exercised until E-047's DDL is applied. AC1/AC2/AC3 do not depend on these tables and pass.",
+    "ddl_to_apply": "drizzle/E-050_telemetry_schema_apply.sql (idempotent IF NOT EXISTS, mirrors E-047 schema verbatim — included for the operator who clears the schema-push gate)",
+    "next_step": "Operator applies the E-047 telemetry schema to database-1 and re-runs `bash ~/.claude/skills/nbfc/scripts/run_tests.sh E-050`. AC4/AC5 should turn green without code changes — the test detects the tables via pg_tables and seeds + asserts automatically."
+  },
+  "schema_changes": {
+    "tables_added": [],
+    "tables_referenced": ["iot_devices", "telemetry_events", "telemetry_daily_summary", "nbfc_tenants", "nbfc_loans", "dealer_nbfc_assignments", "nbfc"],
+    "auto_approved": false,
+    "applied_to_sandbox_at": null,
+    "migration_sql": "drizzle/E-050_telemetry_schema_apply.sql"
+  },
+  "files": {
+    "schema": "src/lib/db/schema.ts",
+    "lib": ["src/lib/nbfc/battery-scope.ts"],
+    "api": [
+      "src/app/api/nbfc/iot/battery/[serialNumber]/soc/route.ts",
+      "src/app/api/nbfc/iot/battery/[serialNumber]/state/route.ts",
+      "src/app/api/nbfc/iot/battery/[serialNumber]/history/route.ts",
+      "src/app/api/nbfc/iot/battery/[serialNumber]/daily-summaries/route.ts"
+    ],
+    "components": [],
+    "pages": [],
+    "tests": ["tests/e2e/nbfc/E-050_telemetry-query-battery.api.spec.ts"],
+    "config": []
+  },
+  "verification": {
+    "type_check": "0 new errors (2 pre-existing on apoorv-claude baseline: chromium types + E-005 nbfc test fixture)",
+    "lint": "not run separately — type-check covers static analysis",
+    "tests_run": "playwright api project (loop_00.api.results.json)",
+    "tests_passed": "3/5 ACs (AC1, AC2, AC3); 2/5 skipped pending E-047 DDL"
+  },
+  "notes": [
+    "Authentication uses the same triple-guarded NBFC test bypass idiom established by E-027/E-080/E-082 (NODE_ENV != production AND NBFC_TEST_BYPASS_SECRET on server AND matching x-nbfc-test-bypass header). Three role values are accepted on the bypass: admin, nbfc, dealer.",
+    "Portfolio scoping is implemented as a disjunction: nbfc_loans.vehicleno match (financing-stage serials) OR dealer_nbfc_assignments + nbfc-by-slug match (pre-financing dealer-owned serials). The audit explicitly flagged this linkage as 'reviewer should confirm' since the BRD does not pin a single column; both paths are documented inline.",
+    "Freshness classifier is inlined in src/lib/nbfc/battery-scope.ts because the canonical owner E-048 has not landed yet on apoorv-claude. Same 5-bucket convention { fresh, idle, stale, offline, never } that E-048 will own; the 3-bucket /soc shape collapses idle+stale to 'stale' and never to 'offline' per BRD §6.2.7."
+  ]
+}
