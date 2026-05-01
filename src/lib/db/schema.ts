@@ -3961,3 +3961,68 @@ export const nbfcAnomalyFlags = pgTable(
     ),
   }),
 );
+
+// =============================================================================
+// [E-102] Canonical dealers table — first-time definition (closes Sync Audit
+// G-04 + G-08). The integer `id` is the FK target for inventory.dealer_id,
+// leads.dealer_id, coupons.dealer_id, coupon_batches.dealer_id, etc.
+// (those FK migrations are out of scope for this unit). The human-readable
+// VARCHAR(50) `dealer_id` (DLR-NNN) is generated only when onboarding_status
+// transitions to 'active' and is what surfaces in APIs / UI / S3 paths.
+// dealer_onboarding_applications stays the in-flight application record;
+// dealers is the post-activation canonical entity. The 16 fuzzy column
+// collisions reported by the auditor (company_name, gst_number, owner_*,
+// bank_*, etc. against dealer_onboarding_applications and personal_details)
+// are intentional per BRD Resolution D and approved in audit_E-102.
+// =============================================================================
+export const dealers = pgTable(
+  "dealers",
+  {
+    id: serial("id").primaryKey(),
+    // Human-readable dealer code (DLR-001). NULL pre-activation, populated
+    // and uniqued at activation. Never used as a FK target in other tables.
+    dealer_id: varchar("dealer_id", { length: 50 }).unique(),
+    company_name: varchar("company_name", { length: 200 }).notNull(),
+    company_type: varchar("company_type", { length: 32 }).notNull(),
+    gst_number: varchar("gst_number", { length: 20 }),
+    pan_number: varchar("pan_number", { length: 20 }),
+    registered_address: jsonb("registered_address"),
+    bank_name: varchar("bank_name", { length: 200 }),
+    // DPDPA — financial PII; column-level encryption applied at the service
+    // layer before insert (see lib/dealers/encryption.ts when added).
+    bank_account_number: varchar("bank_account_number", { length: 200 }),
+    bank_ifsc: varchar("bank_ifsc", { length: 20 }),
+    bank_beneficiary: varchar("bank_beneficiary", { length: 200 }),
+    bank_branch: varchar("bank_branch", { length: 200 }),
+    bank_account_type: varchar("bank_account_type", { length: 16 }),
+    owner_name: varchar("owner_name", { length: 200 }),
+    owner_phone: varchar("owner_phone", { length: 20 }),
+    // Used as dealer login user id on activation.
+    owner_email: varchar("owner_email", { length: 200 }),
+    finance_enabled: boolean("finance_enabled").default(false).notNull(),
+    onboarding_status: varchar("onboarding_status", { length: 32 })
+      .default("draft")
+      .notNull(),
+    // Links to dealer_onboarding_applications.id (the in-flight application
+    // record from the V2-Feb-2 onboarding flow). Stored as varchar to mirror
+    // BRD Section D.1 and to avoid a hard FK while consumer-table FK
+    // migrations are still pending.
+    application_id: varchar("application_id", { length: 50 }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // Set when onboarding_status transitions to 'active'.
+    activated_at: timestamp("activated_at", { withTimezone: true }),
+  },
+  (table) => ({
+    onboardingStatusIdx: index("dealers_onboarding_status_idx").on(
+      table.onboarding_status,
+    ),
+    applicationIdIdx: index("dealers_application_id_idx").on(
+      table.application_id,
+    ),
+  }),
+);
