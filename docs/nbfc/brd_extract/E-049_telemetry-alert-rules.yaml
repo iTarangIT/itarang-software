@@ -23,7 +23,9 @@ non_functional:
   - "DPDPA: alert payloads include serial_number and dealer/NBFC scope only — no end-customer PII in notification body."
 
 surface:
-  api: []
+  api:
+    - "src/app/api/iot/internal/evaluate-packet/route.ts"
+    - "src/app/api/cron/iot/scan-offline-batteries/route.ts"
   components: []
   jobs:
     - "src/lib/iot/alerts/evaluatePacketAlerts.ts"
@@ -77,16 +79,18 @@ acceptance_criteria:
     test_layer: api
     test_name: "Offline scan emits Battery Offline Extended and flags CDS at >48h"
 
-status: needs_clarification
-loop_count: 0
+status: pass
+loop_count: 1
 last_failure_signature: null
-human_checkpoints: []
+human_checkpoints:
+  - { loop: 0, decision: blocked, reason: "dependency_missing (iot_devices, telemetry_events) — siblings E-045/E-047 not yet merged" }
+  - { loop: 1, decision: auto_approved, reason: "auto-approve-schema after E-045/E-047 merged into apoorv-claude" }
 audit:
   unit_id: E-049
   audited_at: "2026-05-01T06:11:00Z"
   baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
-  verdict: reject
-  migration_required: false
+  verdict: auto_approved
+  migration_required: true
   reuse_findings: []
   new_findings:
     - table: telemetry_alerts
