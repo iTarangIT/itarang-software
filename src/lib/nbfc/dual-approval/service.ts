@@ -150,7 +150,47 @@ export async function approveDualApprovalRequest(input: ApproveInput) {
     },
   });
 
+  // Post-approval dispatcher: certain action_types have side-effects that
+  // execute only once the dual-approval gate releases. Each handler is
+  // expected to be idempotent. Dispatch failures are logged via the audit
+  // trail but do not roll back the approval itself — the approval is the
+  // record of authorisation, the handler is the execution.
+  await dispatchPostApproval(updated).catch(async (err) => {
+    await appendAudit({
+      request_id: updated.id,
+      tenant_id: updated.tenant_id,
+      action: "dual_approval.post_approval_dispatch_failed",
+      performed_by: input.approver_user_id,
+      payload: {
+        action_type: updated.action_type,
+        entity_id: updated.entity_id,
+        error: err instanceof Error ? err.message : String(err),
+      },
+    });
+  });
+
   return updated;
+}
+
+/**
+ * Routes an approved dual_approval_requests row to its action-specific
+ * handler. Unknown action_types are no-ops (they may be handled by a future
+ * unit, or they may not require a side-effect — e.g. a pure governance
+ * acknowledgement).
+ */
+async function dispatchPostApproval(row: {
+  id: string;
+  action_type: string;
+  entity_id: string;
+  tenant_id: string;
+}): Promise<void> {
+  if (row.action_type === "loan_restructuring") {
+    // E-084 — apply the new EMI fields and append a restructure history row.
+    const mod = await import("@/lib/nbfc/actions/loan-restructuring");
+    await mod.applyLoanRestructuring(row.id);
+    return;
+  }
+  // No handler registered for this action_type — nothing to do.
 }
 
 export interface RejectInput {

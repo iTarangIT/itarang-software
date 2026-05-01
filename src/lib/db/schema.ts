@@ -3066,6 +3066,41 @@ export const dualApprovalActionConfig = pgTable(
 );
 
 // =============================================================================
+// E-084 — Loan Restructuring Restructure History (Section 6.4.3)
+// Records every loan-restructuring event executed via the dual-approval gate
+// (Risk Manager initiates → Credit Manager approves). Captures prior vs new
+// EMI terms and the link back to the dual_approval_requests row that
+// authorised the change. Distinct from nbfc_loans (mutable current state) so
+// the history of restructures is preserved across multiple events.
+// =============================================================================
+export const nbfcLoanRestructures = pgTable(
+  "nbfc_loan_restructures",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id")
+      .notNull()
+      .references(() => nbfcTenants.id),
+    loan_application_id: varchar("loan_application_id", { length: 255 }).notNull(),
+    approval_request_id: uuid("approval_request_id").notNull(),
+    prior_emi_amount: numeric("prior_emi_amount", { precision: 12, scale: 2 }),
+    new_emi_amount: numeric("new_emi_amount", { precision: 12, scale: 2 }).notNull(),
+    prior_tenure_months: integer("prior_tenure_months"),
+    new_tenure_months: integer("new_tenure_months").notNull(),
+    new_emi_due_dom: integer("new_emi_due_dom").notNull(),
+    executed_at: timestamp("executed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    tenantLoanIdx: index("nbfc_loan_restructures_tenant_loan_idx").on(
+      table.tenant_id,
+      table.loan_application_id,
+    ),
+    approvalIdx: index("nbfc_loan_restructures_approval_idx").on(
+      table.approval_request_id,
+    ),
+  }),
+);
+
+// =============================================================================
 // E-003 — NBFC Master Details (Section 6.0.3)
 // Master NBFC partner table per BRD 6.0.7 — captures NBFC partner identities,
 // RBI registration data, statutory IDs (CIN, GST, PAN), grievance officer
