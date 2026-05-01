@@ -97,10 +97,13 @@ acceptance_criteria:
     test_layer: ui
     test_name: "Ecosystem Overview page renders tiles and comparison table"
 
-status: needs_schema_approval
-loop_count: 0
+status: schema_approved_implemented
+loop_count: 1
 last_failure_signature: null
-human_checkpoints: []
+human_checkpoints:
+  - checkpoint: schema_auto_approved
+    timestamp: "2026-05-01T00:00:00Z"
+    note: "--auto-approve-schema mode; nbfc_ecosystem_metrics_cache added per audit verdict"
 audit:
   unit_id: E-065
   audited_at: "2026-05-01T06:10:31Z"
