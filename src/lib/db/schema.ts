@@ -3076,3 +3076,44 @@ export const nbfcLspAgreements = pgTable(
   }),
 );
 
+// =============================================================================
+// E-009 — NBFC loan-product catalogue (BRD 6.0.5)
+// Per-NBFC product definitions: amount/tenure ranges, ROI bounds, down-payment,
+// subvention, file charges, and disbursement method. Status gates which products
+// are offerable. References the canonical `nbfc` master from E-003.
+// =============================================================================
+export const nbfcLoanProducts = pgTable("nbfc_loan_products", {
+  id: serial("id").primaryKey(),
+  nbfc_id: integer("nbfc_id")
+    .notNull()
+    .references(() => nbfc.id),
+  product_name: varchar("product_name", { length: 120 }).notNull(),
+  eligible_battery_categories: jsonb("eligible_battery_categories")
+    .$type<string[]>()
+    .notNull(),
+  loan_amount_min: integer("loan_amount_min").notNull(),
+  loan_amount_max: integer("loan_amount_max").notNull(),
+  tenure_months_min: integer("tenure_months_min").notNull(),
+  tenure_months_max: integer("tenure_months_max").notNull(),
+  min_roi_pct: numeric("min_roi_pct", { precision: 5, scale: 2 }).notNull(),
+  max_roi_pct: numeric("max_roi_pct", { precision: 5, scale: 2 }).notNull(),
+  down_payment_pct: numeric("down_payment_pct", {
+    precision: 5,
+    scale: 2,
+  }).notNull(),
+  subvention_available: boolean("subvention_available")
+    .default(false)
+    .notNull(),
+  file_charge_fixed: numeric("file_charge_fixed", { precision: 12, scale: 2 }),
+  file_charge_pct: numeric("file_charge_pct", { precision: 5, scale: 2 }),
+  disbursement_method: varchar("disbursement_method", {
+    length: 32,
+  }).notNull(),
+  status: varchar("status", { length: 16 }).default("active").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
