@@ -99,8 +99,8 @@ acceptance_criteria:
     test_layer: api
     test_name: "duplicate (serial_number, summary_date) insert is rejected"
 
-status: needs_clarification
-loop_count: 0
+status: passed
+loop_count: 1
 last_failure_signature: null
 human_checkpoints: []
 audit:
