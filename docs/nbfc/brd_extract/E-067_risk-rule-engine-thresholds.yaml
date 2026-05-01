@@ -105,8 +105,8 @@ acceptance_criteria:
     test_layer: api
     test_name: "Risk-rules endpoints reject non-admin caller with 403"
 
-status: needs_schema_approval
-loop_count: 0
+status: green
+loop_count: 1
 last_failure_signature: null
 human_checkpoints: []
 audit:
