@@ -3581,3 +3581,64 @@ export const nbfcAuditLogExports = pgTable(
     ),
   }),
 );
+
+// =============================================================================
+// E-092 — CDS/PCI Score Explainability Drawer (BRD §6.4.5)
+// =============================================================================
+// Persists each CDS/PCI score computation along with the exact EMI inputs that
+// produced it, so the explainability drawer can render formula + inputs +
+// confidence with no recomputation drift.
+//
+//   • nbfc_score_runs            — one row per (loan, score_type) computation;
+//                                  carries score_value, computed_at, confidence
+//   • nbfc_score_input_snapshots — last-N EMI rows tied to a score run, with
+//                                  per-row contribution to the final score
+//
+// `borrower_risk_scores` (E-026) is the network-wide nightly cache; this pair
+// is the audit trail behind the *explainability* surface. They co-exist by
+// design — borrower_risk_scores is read-optimised; the snapshots are write-
+// once, append-only.
+// =============================================================================
+export const nbfcScoreRuns = pgTable(
+  "nbfc_score_runs",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    loan_application_id: varchar("loan_application_id", { length: 255 }).notNull(),
+    score_type: varchar("score_type", { length: 8 }).notNull(),
+    score_value: numeric("score_value", { precision: 6, scale: 2 }).notNull(),
+    computed_at: timestamp("computed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    confidence_level: varchar("confidence_level", { length: 8 }).notNull(),
+    confidence_reasons: jsonb("confidence_reasons"),
+  },
+  (table) => ({
+    loanIdx: index("nbfc_score_runs_loan_idx").on(table.loan_application_id),
+    loanTypeIdx: index("nbfc_score_runs_loan_type_idx").on(
+      table.loan_application_id,
+      table.score_type,
+    ),
+    computedAtIdx: index("nbfc_score_runs_computed_at_idx").on(table.computed_at),
+  }),
+);
+
+export const nbfcScoreInputSnapshots = pgTable(
+  "nbfc_score_input_snapshots",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    score_run_id: uuid("score_run_id").notNull(),
+    row_index: integer("row_index").notNull(),
+    due_date: timestamp("due_date", { withTimezone: true }),
+    amount: numeric("amount", { precision: 12, scale: 2 }),
+    status: varchar({ length: 24 }),
+    days_late: integer("days_late"),
+    contribution: numeric("contribution", { precision: 6, scale: 2 }),
+  },
+  (table) => ({
+    runIdx: index("nbfc_score_input_snapshots_run_idx").on(table.score_run_id),
+    runRowIdx: index("nbfc_score_input_snapshots_run_row_idx").on(
+      table.score_run_id,
+      table.row_index,
+    ),
+  }),
+);
