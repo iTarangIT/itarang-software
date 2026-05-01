@@ -1,0 +1,24 @@
+{
+  "id": "E-011",
+  "slug": "nbfc-status-lifecycle",
+  "name": "NBFC status lifecycle — 8-state machine with transition guards",
+  "status": "in_progress",
+  "loop_count": 0,
+  "ac_results": {},
+  "schema_changes": {
+    "tables_added": ["nbfc_status_history"],
+    "tables_referenced": ["nbfc"],
+    "auto_approved": true
+  },
+  "files": {
+    "schema": "src/lib/db/schema.ts",
+    "lib": ["src/lib/nbfc/admin/status-transitions.ts"],
+    "api": [
+      "src/app/api/admin/nbfc/[nbfcId]/transition/route.ts",
+      "src/app/api/admin/nbfc/[nbfcId]/status-history/route.ts"
+    ],
+    "components": [],
+    "pages": [],
+    "tests": ["tests/e2e/nbfc/E-011_nbfc-status-lifecycle.api.spec.ts"]
+  }
+}

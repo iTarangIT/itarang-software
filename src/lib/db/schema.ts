@@ -3176,3 +3176,34 @@ export const nbfcLoanProducts = pgTable("nbfc_loan_products", {
     .defaultNow()
     .notNull(),
 });
+
+// =============================================================================
+// E-011 — NBFC status lifecycle audit table (BRD 6.0.6)
+// Records every NBFC status transition with actor and reason for the RBI audit
+// trail. Append-only: rows are immutable. The 8-state transition graph itself
+// is enforced by `src/lib/nbfc/admin/status-transitions.ts`; this table is the
+// durable journal those transitions write to. actor_id is uuid to match the
+// rest of the codebase's user-id convention (audit_logs.performed_by is uuid).
+// =============================================================================
+export const nbfcStatusHistory = pgTable(
+  "nbfc_status_history",
+  {
+    id: serial("id").primaryKey(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    from_status: varchar("from_status", { length: 32 }),
+    to_status: varchar("to_status", { length: 32 }).notNull(),
+    actor_id: uuid("actor_id").notNull(),
+    reason: text("reason"),
+    occurred_at: timestamp("occurred_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_status_history_nbfc_id_idx").on(table.nbfc_id),
+    occurredAtIdx: index("nbfc_status_history_occurred_at_idx").on(
+      table.occurred_at,
+    ),
+  }),
+);
