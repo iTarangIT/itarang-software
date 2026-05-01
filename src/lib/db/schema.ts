@@ -2968,3 +2968,103 @@ export const dualApprovalActionConfig = pgTable(
   }),
 );
 
+// =============================================================================
+// NBFC onboarding (BRD §6.0) — admin-managed master records used by the final
+// approval gate (E-001), compliance doc workflow (E-005), LSP agreement
+// initiate/webhook (E-007/E-008), and dealer⇄NBFC assignment (E-012/E-013).
+//
+// These tables already exist in the sandbox/prod database (created out-of-band
+// from earlier Aditya migrations); the Drizzle schema mirrors them so admin
+// API routes and tests can reference them through the typed `db` client.
+//
+// Note: this `nbfc` table is the *master detail* CRUD record (integer PK,
+// keyed by `nbfc_id` business code) and is distinct from `nbfc_tenants`
+// (uuid-keyed multi-tenant partner-portal table above). E-003 will eventually
+// reconcile the two; for now they coexist.
+// =============================================================================
+
+export const nbfc = pgTable("nbfc", {
+  id: serial("id").primaryKey().notNull(),
+  nbfc_id: varchar("nbfc_id", { length: 50 }).notNull().unique(),
+  legal_name: varchar("legal_name", { length: 200 }).notNull(),
+  short_name: varchar("short_name", { length: 100 }).notNull(),
+  rbi_registration_no: varchar("rbi_registration_no", { length: 100 }).notNull().unique(),
+  cin: varchar({ length: 25 }).notNull(),
+  gst_number: varchar("gst_number", { length: 20 }).notNull(),
+  pan_number: varchar("pan_number", { length: 20 }).notNull(),
+  nbfc_type: varchar("nbfc_type", { length: 32 }).notNull(),
+  registered_address: jsonb("registered_address").notNull(),
+  active_geographies: jsonb("active_geographies").notNull(),
+  primary_contact_name: varchar("primary_contact_name", { length: 200 }).notNull(),
+  primary_contact_email: varchar("primary_contact_email", { length: 200 }).notNull(),
+  primary_contact_phone: varchar("primary_contact_phone", { length: 20 }).notNull(),
+  grievance_officer_name: varchar("grievance_officer_name", { length: 200 }).notNull(),
+  grievance_helpline: varchar("grievance_helpline", { length: 200 }).notNull(),
+  grievance_url: text("grievance_url").notNull(),
+  nodal_officer: varchar("nodal_officer", { length: 200 }),
+  partnership_date: date("partnership_date").notNull(),
+  fldg_terms: text("fldg_terms"),
+  cor_expiry_date: date("cor_expiry_date"),
+  lsp_agreement_id: integer("lsp_agreement_id"),
+  status: varchar({ length: 32 }).default("draft").notNull(),
+  // E-001 — final approval gate audit columns. approved_by stores the admin
+  // user uuid that released the gate; approved_at stamps when the gate fell.
+  // Both stay null until the gate passes; a 409 idempotency check rejects
+  // re-approving an already-approved NBFC.
+  approved_by: uuid("approved_by"),
+  approved_at: timestamp("approved_at", { withTimezone: true }),
+  created_by: integer("created_by").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const nbfcComplianceDocuments = pgTable(
+  "nbfc_compliance_documents",
+  {
+    id: serial("id").primaryKey().notNull(),
+    nbfc_id: integer("nbfc_id").notNull().references(() => nbfc.id),
+    document_type: varchar("document_type", { length: 64 }).notNull(),
+    file_url: text("file_url").notNull(),
+    expiry_date: date("expiry_date"),
+    status: varchar({ length: 32 }).default("pending_review").notNull(),
+    uploaded_by: integer("uploaded_by").notNull(),
+    verified_by: integer("verified_by"),
+    verified_at: timestamp("verified_at", { withTimezone: true }),
+    rejected_by: integer("rejected_by"),
+    rejected_at: timestamp("rejected_at", { withTimezone: true }),
+    rejection_reason: text("rejection_reason"),
+    verifier_notes: text("verifier_notes"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_compliance_documents_nbfc_id_idx").on(table.nbfc_id),
+    statusIdx: index("nbfc_compliance_documents_status_idx").on(table.status),
+  }),
+);
+
+// E-007/E-008 — Digio-driven LSP agreement record. agreement_status mirrors the
+// shared dealer agreement_status ENUM domain (DRAFT, INITIATED, IN_PROGRESS,
+// COMPLETED, FAILED, EXPIRED) per Sync Audit G-01. Stored as varchar so the
+// final-approval gate can re-validate it via a simple equality check.
+export const nbfcLspAgreements = pgTable(
+  "nbfc_lsp_agreements",
+  {
+    id: serial("id").primaryKey().notNull(),
+    nbfc_id: integer("nbfc_id").notNull().references(() => nbfc.id),
+    digio_request_id: varchar("digio_request_id", { length: 128 }),
+    digio_document_id: varchar("digio_document_id", { length: 128 }),
+    agreement_status: varchar("agreement_status", { length: 32 }).default("DRAFT").notNull(),
+    signed_pdf_url: text("signed_pdf_url"),
+    initiated_by: integer("initiated_by"),
+    initiated_at: timestamp("initiated_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    last_webhook_payload: jsonb("last_webhook_payload"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_lsp_agreements_nbfc_id_idx").on(table.nbfc_id),
+    statusIdx: index("nbfc_lsp_agreements_status_idx").on(table.agreement_status),
+  }),
+);
+
