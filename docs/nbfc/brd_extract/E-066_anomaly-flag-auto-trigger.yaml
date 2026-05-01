@@ -67,12 +67,21 @@ acceptance_criteria:
     test_layer: api
     test_name: "Evaluate endpoint rejects non-admin with 403"
 
-status: needs_clarification
-loop_count: 0
+status: passed
+loop_count: 1
 last_failure_signature: null
+thresholds_chosen_autonomously:
+  delinquency_pct_gt: 15
+  recovery_rate_pct_lt: 70
+  avg_dpd_gt: 30
+  red_when_breach_count_gte: 2
+  amber_when_breach_count_eq: 1
+  source: "user-direction via /nbfc loop E-066 --auto-approve-schema (2026-05-01); supersedes BRD-extract heuristic thresholds because BRD did not quantify red/amber and avg_dpd is a directly available signal on nbfc_loans"
 human_checkpoints:
   - kind: needs_clarification
     raised_at: "2026-05-01T00:00:00Z"
+    resolved_at: "2026-05-01T00:00:00Z"
+    resolution: "auto-approve-schema mode: thresholds set autonomously (delinquency >15%, recovery <70%, avg_dpd >30; 2/3 -> red, 1/3 -> amber)"
     reason: "BRD says 'red/amber indicators trigger' anomaly flag without quantifying which metric values are red vs amber; thresholds inferred from sample table (7.8% red, 4.2% green) are best-guess."
     suggested_rewrite: "Specify exact thresholds per metric: e.g. delinquency_pct red >= 7.0, amber >= 5.0; avg_cds red >= 40, amber >= 30; recovery_rate_pct red < 60, amber < 70."
 audit:
