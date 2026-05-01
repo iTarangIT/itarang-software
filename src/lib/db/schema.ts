@@ -4026,3 +4026,66 @@ export const dealers = pgTable(
     ),
   }),
 );
+
+// -----------------------------------------------------------------------------
+// E-038 — Auction Marketplace Lots and Bidding (BRD §6.1.7)
+// -----------------------------------------------------------------------------
+// `auction_lots` is the catalogue of recovered-battery lots offered to NBFC
+// tenants (bidders) on the auction marketplace. Each lot exposes the public
+// pricing parameters (base_price, bid_increment), a binding deadline
+// (ends_at), and a coarse status flag ("live" | "ended").
+//
+// `auction_bids` is the per-bid log for every binding bid placed against a
+// lot. It is append-only — bids are immutable and form the audit-grade record
+// for binding bid acceptance. Note: `tenant_id` here is the bidder's NBFC
+// tenant (one tenant places many bids); the column is intentionally named
+// `tenant_id` (not `bidder_tenant_id`) to align with the rest of the NBFC
+// schema's tenant_id naming convention. The bidder vs. seller distinction is
+// implicit: auction_lots has no tenant column (lots are platform-owned in this
+// release; seller_tenant_id is deferred to E-039), so the only tenant_id on
+// auction_bids is the bidder.
+// -----------------------------------------------------------------------------
+
+export const auctionLots = pgTable(
+  "auction_lots",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_code: varchar("lot_code", { length: 32 }).notNull().unique(),
+    capacity: varchar("capacity", { length: 32 }),
+    avg_soh: numeric("avg_soh", { precision: 5, scale: 2 }),
+    age_months: integer("age_months"),
+    quantity: integer("quantity").notNull(),
+    base_price: numeric("base_price", { precision: 12, scale: 2 }).notNull(),
+    bid_increment: numeric("bid_increment", {
+      precision: 12,
+      scale: 2,
+    }).notNull(),
+    ends_at: timestamp("ends_at", { withTimezone: true }).notNull(),
+    status: varchar("status", { length: 16 }).notNull().default("live"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    statusIdx: index("auction_lots_status_idx").on(table.status),
+    endsAtIdx: index("auction_lots_ends_at_idx").on(table.ends_at),
+  }),
+);
+
+export const auctionBids = pgTable(
+  "auction_bids",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    placed_at: timestamp("placed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    lotIdx: index("auction_bids_lot_idx").on(table.lot_id),
+    tenantIdx: index("auction_bids_tenant_idx").on(table.tenant_id),
+    placedAtIdx: index("auction_bids_placed_at_idx").on(table.placed_at),
+  }),
+);
