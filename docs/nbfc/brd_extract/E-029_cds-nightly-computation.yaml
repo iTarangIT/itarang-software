@@ -95,8 +95,8 @@ acceptance_criteria:
     test_layer: api
     test_name: "CDS score is bounded between 0 and 100 inclusive"
 
-status: needs_schema_approval
-loop_count: 0
+status: pass
+loop_count: 1
 last_failure_signature: null
 human_checkpoints: []
 audit:
