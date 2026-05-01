@@ -6,7 +6,7 @@ brd_excerpt: |
   Every Threshold Change Requires Dual Approval
   Step 1: Admin enters new value. Step 2: System shows impact preview — 'This change will affect N accounts. Accounts moving to higher risk band: X.' Step 3: MFA prompt. Step 4: Risk Head approval required (second admin login). Step 5: Change logged in audit with before/after values, both approvers, and timestamp. Change takes effect immediately after second approval.
 
-depends_on: []
+depends_on: [E-067, E-082]
 non_functional:
   - "Dual-approval is mandatory: requester and Risk Head must be different admin users"
   - "MFA re-confirmation required from requester (Step 3)"
@@ -100,10 +100,19 @@ acceptance_criteria:
     test_layer: api
     test_name: "Request-change rejects invalid MFA with 400"
 
-status: needs_schema_approval
-loop_count: 0
+status: pass
+loop_count: 1
 last_failure_signature: null
 human_checkpoints: []
+schema_auto_approved: true
+test_file: tests/nbfc/E-068.test.ts
+ddl_script: scripts/apply-E-068-ddl.mjs
+ac_results:
+  AC1: pass
+  AC2: pass
+  AC3: pass
+  AC4: pass
+  AC5: pass
 audit:
   unit_id: E-068
   audited_at: "2026-05-01T06:10:31Z"
