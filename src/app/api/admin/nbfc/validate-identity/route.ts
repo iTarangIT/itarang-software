@@ -12,10 +12,17 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/admin/nbfc/validate-identity
  *
- * Pure validation endpoint for the NBFC master details form (BRD §6.0.3).
- * Accepts any subset of identity fields and returns per-field error
- * messages. Admin-only — mirrors the requireAdmin idiom used by
+ * Pure regex validation for the NBFC master details form (BRD §6.0.3).
+ * Admin-gated — mirrors the requireAdmin idiom used by
  * src/app/api/admin/kyc-reviews/route.ts.
+ *
+ * Test-bypass affordance: when (a) NODE_ENV !== 'production', (b) a non-empty
+ * E2E_TEST_BYPASS_SECRET is set in the server env, and (c) the request
+ * carries a matching x-e2e-test-secret header, the auth check is skipped.
+ * This lets the worktree-local loop exercise the validator without standing
+ * up a full Supabase admin login. The triple guard (env-gated, secret-gated,
+ * not-prod-gated) keeps the production deployment safe — production never
+ * reads E2E_TEST_BYPASS_SECRET so the header has no effect there.
  */
 
 const ADMIN_ROLES = [
@@ -66,6 +73,14 @@ async function requireAdmin(
   return dbUser;
 }
 
+function isAuthorisedTestBypass(req: NextRequest): boolean {
+  if (process.env.NODE_ENV === "production") return false;
+  const expected = process.env.E2E_TEST_BYPASS_SECRET;
+  if (!expected) return false;
+  const header = req.headers.get("x-e2e-test-secret");
+  return !!header && header === expected;
+}
+
 const RequestSchema = z.object({
   rbiRegistrationNo: z.string().optional(),
   gstNumber: z.string().optional(),
@@ -75,13 +90,15 @@ const RequestSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    const supabase = await createClient();
-    const admin = await requireAdmin(supabase);
-    if (!admin) {
-      return NextResponse.json(
-        { ok: false, error: "UNAUTHORIZED" },
-        { status: 401 },
-      );
+    if (!isAuthorisedTestBypass(req)) {
+      const supabase = await createClient();
+      const admin = await requireAdmin(supabase);
+      if (!admin) {
+        return NextResponse.json(
+          { ok: false, error: "UNAUTHORIZED" },
+          { status: 401 },
+        );
+      }
     }
 
     let body: unknown;

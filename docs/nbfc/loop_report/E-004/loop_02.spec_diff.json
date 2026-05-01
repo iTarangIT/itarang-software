@@ -1,0 +1,12 @@
+{
+  "unit_id": "E-004",
+  "compared_at": "2026-05-01T06:41:35Z",
+  "added_acs": [],
+  "removed_acs": [],
+  "changed_acs": [],
+  "logic_drift": null,
+  "surface_drift": null,
+  "tables_columns_drift": null,
+  "non_functional_drift": null,
+  "verdict": "none"
+}

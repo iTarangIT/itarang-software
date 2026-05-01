@@ -1,1 +1,1 @@
-{"id": "E-004", "slug": "nbfc-identity-format-validation", "name": "NBFC identity format validators — RBI CoR, GST, PAN, PIN regex enforcement", "status": "looping", "loop_count": 1}
+{"id": "E-004", "slug": "nbfc-identity-format-validation", "name": "NBFC identity format validators — RBI CoR, GST, PAN, PIN regex enforcement", "status": "passed", "loop_count": 2, "last_failure_signature": null, "last_classification": null, "previous_classification_history": ["logic_bug"], "passed_acs": ["AC1", "AC2", "AC3", "AC4"], "failed_acs": [], "branch": "nbfc/E-004"}
