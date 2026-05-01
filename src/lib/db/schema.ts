@@ -2887,6 +2887,37 @@ export const nbfcRecoveryPipeline = pgTable(
 );
 
 // -----------------------------------------------------------------------------
+// E-037 — Battery Evaluation 3-step form (Section 6.1.7)
+// -----------------------------------------------------------------------------
+// nbfc_battery_evaluations stores the 3-step evaluation form a Recovery
+// operator fills in for a recovered battery before it is auctioned or
+// scrapped. step1/step2/step3 are kept as JSONB blobs because BRD §6.1.7
+// doesn't pin a flat shape and the UI wizard mirrors these step boundaries.
+// `base_auction_price` is computed deterministically from SOH and the
+// step3 original_value (see logic in
+// src/app/api/nbfc/recovery/[id]/evaluation/route.ts).
+// -----------------------------------------------------------------------------
+
+export const nbfcBatteryEvaluations = pgTable(
+  "nbfc_battery_evaluations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    recovery_pipeline_id: uuid("recovery_pipeline_id").notNull(),
+    step1: jsonb("step1").notNull(),
+    step2: jsonb("step2").notNull(),
+    step3: jsonb("step3").notNull(),
+    base_auction_price: numeric("base_auction_price", { precision: 12, scale: 2 }),
+    rejected: boolean("rejected").notNull().default(false),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_battery_evaluations_tenant_idx").on(table.tenant_id),
+    pipelineIdx: index("nbfc_battery_evaluations_pipeline_idx").on(table.recovery_pipeline_id),
+  }),
+);
+
+// -----------------------------------------------------------------------------
 // E-035 — Flag for Recovery action (Section 6.1.6)
 // -----------------------------------------------------------------------------
 // nbfc_borrower_actions records a Risk Head's executed actions against a
