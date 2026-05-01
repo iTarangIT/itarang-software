@@ -1,0 +1,99 @@
+id: E-010
+slug: nbfc-loan-amount-band-guard
+name: "Loan sanction band guard — reject sanction amount outside NBFC loan product range"
+source_section: "6.0.5"
+brd_excerpt: |
+  Loan Amount Range — Min (₹) — Max (₹). Dealer cannot sanction loans outside this band.
+  Status — Active | Inactive. Only active products appear in admin loan sanction form.
+
+depends_on: []
+
+non_functional:
+  - "Server is the source of truth — even if the dealer UI was bypassed, the API rejects out-of-band amounts."
+  - "Guard runs against the loan_product row referenced by the sanction request — uses the product's current min/max, not a cached snapshot."
+  - "Inactive loan products MUST NOT be selectable for new sanctions (returns 422)."
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/loan-sanctions/validate-band
+      auth: admin
+      request_zod: |
+        z.object({
+          loanProductId: z.number().int().positive(),
+          sanctionAmount: z.number().positive(),
+          tenureMonths: z.number().int().positive(),
+        })
+      response_shape:
+        ok: "boolean"
+        reason: "string|null"
+        product:
+          loanAmountMin: "number"
+          loanAmountMax: "number"
+          tenureMonthsMin: "number"
+          tenureMonthsMax: "number"
+          status: "string"
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Resolve nbfc_loan_products by loanProductId; 404 if not found.
+  2. If product.status != 'active', return ok=false with reason='product_inactive'.
+  3. If sanctionAmount < loan_amount_min OR > loan_amount_max, return ok=false with reason='amount_out_of_band'.
+  4. If tenureMonths < tenure_months_min OR > tenure_months_max, return ok=false with reason='tenure_out_of_band'.
+  5. Else return ok=true with the product range echoed.
+
+tables_columns:
+  reuse:
+    - table: nbfc_loan_products
+      schema_ts_line: 1
+      columns: [id, status, loan_amount_min, loan_amount_max, tenure_months_min, tenure_months_max]
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/admin/loan-sanctions/validate-band with sanctionAmount above the product's loanAmountMax returns ok=false with reason='amount_out_of_band'."
+    test_layer: api
+    test_name: "guard rejects sanction above max"
+  - id: AC2
+    statement: "POST with sanctionAmount below the product's loanAmountMin returns ok=false with reason='amount_out_of_band'."
+    test_layer: api
+    test_name: "guard rejects sanction below min"
+  - id: AC3
+    statement: "POST referencing an inactive loan product returns ok=false with reason='product_inactive'."
+    test_layer: api
+    test_name: "guard rejects inactive product"
+  - id: AC4
+    statement: "POST with sanctionAmount inside band and tenure inside band returns ok=true."
+    test_layer: api
+    test_name: "guard accepts in-band sanction"
+
+status: needs_clarification
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-010
+  audited_at: "2026-05-01T06:30:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc_loan_products
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - status
+        - loan_amount_min
+        - loan_amount_max
+        - tenure_months_min
+        - tenure_months_max
+      reason: table not present in baseline; introduced by sibling unit E-009
+      sibling_unit: E-009
+  new_findings: []
+  verdict: needs_clarification
+  migration_required: false
+  notes:
+    - reuse table 'nbfc_loan_products' not yet in baseline — introduced by sibling unit E-009 (depends_on must include E-009 before this unit codes)
+  checkpoint_html: docs/nbfc/loop_report/E-010/checkpoint_1.html

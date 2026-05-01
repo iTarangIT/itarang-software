@@ -1,0 +1,175 @@
+id: E-012
+slug: dealer-nbfc-assignment-crud
+name: "Dealer-NBFC assignment — link finance-enabled dealers to approved NBFCs"
+source_section: "6.0.8"
+brd_excerpt: |
+  6.0.8 New Table — dealer_nbfc_assignments (Sync Audit G-05)
+  Correction from Sync Audit G-05
+  Finance-enabled dealers had no link to specific NBFCs. A dealer could be finance-enabled but the loan sanction dropdown
+  would show no lenders. This junction table links finance-enabled dealers to their approved NBFCs.
+  Only NBFCs in this table appear in a given dealer's loan sanction dropdown.
+
+  Columns:
+    id INT PK AUTO
+    dealer_id INT FK references dealers.id
+    nbfc_id INT FK references nbfc.id
+    enabled_at TIMESTAMP — When iTarang admin linked this dealer to this NBFC
+    enabled_by INT FK admin_user_id
+    status ENUM 'active'|'suspended'|'terminated'
+    notes TEXT NULL Optional reason or terms
+    UNIQUE (dealer_id, nbfc_id) — One row per dealer-NBFC pair
+
+depends_on: []
+
+non_functional:
+  - "Sync Audit G-05 — junction table prevents dealers being finance-enabled with no associated lender."
+  - "UNIQUE (dealer_id, nbfc_id) constraint enforced at DB level — server returns 409 on duplicate."
+  - "Linking is allowed only when nbfc.status IN ('approved','active') — dealer cannot be assigned to a draft/rejected NBFC."
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/dealers/{dealerId}/nbfc-assignments
+      auth: admin
+      request_zod: |
+        z.object({
+          nbfcId: z.number().int().positive(),
+          notes: z.string().max(2000).optional(),
+        })
+      response_shape:
+        id: "number"
+        dealerId: "number"
+        nbfcId: "number"
+        status: "active"
+        enabledAt: "iso-datetime"
+    - method: GET
+      path: /api/admin/dealers/{dealerId}/nbfc-assignments
+      auth: admin
+      query_zod: |
+        z.object({
+          status: z.enum(["active","suspended","terminated"]).optional(),
+        })
+      response_shape:
+        items:
+          - id: "number"
+            nbfcId: "number"
+            shortName: "string"
+            status: "string"
+    - method: PATCH
+      path: /api/admin/nbfc-assignments/{assignmentId}
+      auth: admin
+      request_zod: |
+        z.object({
+          status: z.enum(["active","suspended","terminated"]).optional(),
+          notes: z.string().max(2000).optional(),
+        })
+      response_shape:
+        id: "number"
+        status: "string"
+  components:
+    - "src/components/admin/dealers/DealerNbfcAssignmentsPanel.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Validate body; resolve dealer (404) and nbfc (404).
+  2. Require nbfc.status IN ('approved','active'); else 422 'nbfc_not_approved'.
+  3. Insert dealer_nbfc_assignments row with status='active', enabled_by=admin_user_id, enabled_at=now().
+  4. On unique violation (dealer_id, nbfc_id), return 409 'already_assigned'.
+  5. PATCH supports status change and notes update; status transitions follow {active ↔ suspended, * → terminated terminal}.
+  6. GET filters by status when provided.
+
+tables_columns:
+  reuse:
+    - table: nbfc
+      schema_ts_line: 1
+      columns: [id, short_name, status]
+  new:
+    - table: dealer_nbfc_assignments
+      justification: "Junction table required by Sync Audit G-05 to bind finance-enabled dealers to approved NBFCs; no existing schema represents this many-to-many."
+      columns:
+        - { name: id, type: "serial().primaryKey()" }
+        - { name: dealer_id, type: "integer().notNull()" }
+        - { name: nbfc_id, type: "integer().notNull().references(() => nbfc.id)" }
+        - { name: enabled_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: enabled_by, type: "integer().notNull()" }
+        - { name: status, type: "varchar({ length: 16 }).notNull().default('active')" }
+        - { name: notes, type: "text()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/admin/dealers/{dealerId}/nbfc-assignments with a valid approved nbfcId returns 200 and inserts a row with status='active'."
+    test_layer: api
+    test_name: "create assignment persists active row"
+  - id: AC2
+    statement: "POST /api/admin/dealers/{dealerId}/nbfc-assignments referencing the same dealer-nbfc pair twice returns 409 on the second call."
+    test_layer: api
+    test_name: "duplicate assignment returns 409"
+  - id: AC3
+    statement: "POST returns 422 when target nbfc.status not in {'approved','active'}."
+    test_layer: api
+    test_name: "assignment to non-approved NBFC rejected"
+  - id: AC4
+    statement: "PATCH /api/admin/nbfc-assignments/{assignmentId} with status='suspended' updates the row's status to 'suspended'."
+    test_layer: api
+    test_name: "suspend transition updates row"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-012
+  audited_at: "2026-05-01T06:30:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - short_name
+        - status
+      reason: table not present in baseline; introduced by sibling unit E-003
+      sibling_unit: E-003
+  new_findings:
+    - table: dealer_nbfc_assignments
+      justification_present: true
+      justification_chars: 142
+      fuzzy_collisions: []
+      columns_proposed:
+        - name: id
+          type: serial().primaryKey()
+          drizzle_builder: serial
+        - name: dealer_id
+          type: integer().notNull()
+          drizzle_builder: integer
+        - name: nbfc_id
+          type: integer().notNull().references(() => nbfc.id)
+          drizzle_builder: integer
+        - name: enabled_at
+          type: "timestamp({ withTimezone: true }).defaultNow().notNull()"
+          drizzle_builder: timestamp
+        - name: enabled_by
+          type: integer().notNull()
+          drizzle_builder: integer
+        - name: status
+          type: "varchar({ length: 16 }).notNull().default('active')"
+          drizzle_builder: varchar
+        - name: notes
+          type: text()
+          drizzle_builder: text
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM"
+    - "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs"
+    - "G-04: Sync Audit G-04: dealers table never defined — referenced as FK target by many tables"
+    - "G-05: Sync Audit G-05: product_selections retains sub_category column (rename to model_number); junction table dealer_nbfc_assignments required"
+    - "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type"
+    - "G-10: Sync Audit G-10: Dealer onboarding status not linked to lead creation gate"
+    - reuse table 'nbfc' not yet in baseline — introduced by sibling unit E-003 (depends_on must include E-003 before this unit codes)
+    - Sync Audit G-04 — dealer_id is declared as integer FK but no `dealers` table exists in baseline; spec must clarify referenced table (likely dealer_onboarding_applications.id or a future dealers table per Sec D resolution)
+  checkpoint_html: docs/nbfc/loop_report/E-012/checkpoint_1.html

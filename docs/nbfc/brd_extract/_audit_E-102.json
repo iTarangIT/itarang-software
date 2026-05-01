@@ -1,0 +1,147 @@
+{
+  "unit_id": "E-102",
+  "audited_at": "2026-05-01T06:10:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [],
+  "new_findings": [
+    {
+      "table": "dealers",
+      "table_exists_in_baseline": false,
+      "justification_present": true,
+      "justification_length": 233,
+      "columns_proposed": 22,
+      "columns": [
+        {"name": "id", "type": "serial().primaryKey()", "type_lint": "ok"},
+        {"name": "dealer_id", "type": "varchar({ length: 50 }).unique()", "type_lint": "ok"},
+        {"name": "company_name", "type": "varchar({ length: 200 }).notNull()", "type_lint": "ok"},
+        {"name": "company_type", "type": "varchar({ length: 32 }).notNull()", "type_lint": "ok"},
+        {"name": "gst_number", "type": "varchar({ length: 20 })", "type_lint": "ok"},
+        {"name": "pan_number", "type": "varchar({ length: 20 })", "type_lint": "ok"},
+        {"name": "registered_address", "type": "jsonb()", "type_lint": "ok"},
+        {"name": "bank_name", "type": "varchar({ length: 200 })", "type_lint": "ok"},
+        {"name": "bank_account_number", "type": "varchar({ length: 200 })", "type_lint": "ok"},
+        {"name": "bank_ifsc", "type": "varchar({ length: 20 })", "type_lint": "ok"},
+        {"name": "bank_beneficiary", "type": "varchar({ length: 200 })", "type_lint": "ok"},
+        {"name": "bank_branch", "type": "varchar({ length: 200 })", "type_lint": "ok"},
+        {"name": "bank_account_type", "type": "varchar({ length: 16 })", "type_lint": "ok"},
+        {"name": "owner_name", "type": "varchar({ length: 200 })", "type_lint": "ok"},
+        {"name": "owner_phone", "type": "varchar({ length: 20 })", "type_lint": "ok"},
+        {"name": "owner_email", "type": "varchar({ length: 200 })", "type_lint": "ok"},
+        {"name": "finance_enabled", "type": "boolean().default(false).notNull()", "type_lint": "ok"},
+        {"name": "onboarding_status", "type": "varchar({ length: 32 }).notNull().default('draft')", "type_lint": "ok"},
+        {"name": "application_id", "type": "varchar({ length: 50 })", "type_lint": "ok"},
+        {"name": "created_at", "type": "timestamp({ withTimezone: true }).defaultNow().notNull()", "type_lint": "ok"},
+        {"name": "updated_at", "type": "timestamp({ withTimezone: true }).defaultNow().notNull()", "type_lint": "ok"},
+        {"name": "activated_at", "type": "timestamp({ withTimezone: true })", "type_lint": "ok"}
+      ],
+      "fuzzy_collisions": [
+        {
+          "proposed": "dealer_id",
+          "candidates": ["users.dealer_id", "service_tickets.dealer_id", "notifications.dealer_id", "loan_files.dealer_id", "loan_applications.dealer_id"],
+          "best_overlap": 1.0,
+          "reason": "Exact name 'dealer_id' already present on multiple FK columns. Acceptable here because this is the *display* dealer_id (DLR-NNN) on the new canonical dealers table, but reviewers must confirm semantics differ."
+        },
+        {
+          "proposed": "company_name",
+          "candidates": ["dealer_onboarding_applications.company_name"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on dealer_onboarding_applications. Likely synonym — onboarding_applications already stores the same field for the in-flight application; need human confirmation that the canonical dealers row should duplicate (vs FK to) the onboarding application."
+        },
+        {
+          "proposed": "company_type",
+          "candidates": ["dealer_onboarding_applications.company_type"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on dealer_onboarding_applications."
+        },
+        {
+          "proposed": "gst_number",
+          "candidates": ["dealer_onboarding_applications.gst_number", "scraped_dealer_leads.gst_number"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on dealer_onboarding_applications and scraped_dealer_leads."
+        },
+        {
+          "proposed": "pan_number",
+          "candidates": ["dealer_onboarding_applications.pan_number"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on dealer_onboarding_applications."
+        },
+        {
+          "proposed": "registered_address",
+          "candidates": ["dealer_onboarding_applications.registered_address"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on dealer_onboarding_applications."
+        },
+        {
+          "proposed": "bank_name",
+          "candidates": ["dealer_onboarding_applications.bank_name", "personal_details.bank_name", "oems.bank_name", "accounts.bank_name"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on dealer_onboarding_applications and three other tables."
+        },
+        {
+          "proposed": "bank_account_number",
+          "candidates": ["personal_details.bank_account_number", "oems.bank_account_number", "accounts.bank_account_number"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on three existing tables; encryption requirement noted."
+        },
+        {
+          "proposed": "bank_ifsc",
+          "candidates": ["personal_details.bank_ifsc"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on personal_details."
+        },
+        {
+          "proposed": "bank_branch",
+          "candidates": ["personal_details.bank_branch"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on personal_details."
+        },
+        {
+          "proposed": "owner_name",
+          "candidates": ["dealer_onboarding_applications.owner_name", "leads.owner_name"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on dealer_onboarding_applications and leads."
+        },
+        {
+          "proposed": "owner_phone",
+          "candidates": ["dealer_onboarding_applications.owner_phone"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on dealer_onboarding_applications."
+        },
+        {
+          "proposed": "owner_email",
+          "candidates": ["dealer_onboarding_applications.owner_email", "leads.owner_email"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on dealer_onboarding_applications and leads."
+        },
+        {
+          "proposed": "finance_enabled",
+          "candidates": ["dealer_onboarding_applications.finance_enabled"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on dealer_onboarding_applications. Strong signal that this is a duplicate column rather than a new one."
+        },
+        {
+          "proposed": "onboarding_status",
+          "candidates": ["dealer_onboarding_applications.onboarding_status", "oems.onboarding_status", "accounts.onboarding_status"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on three existing tables."
+        },
+        {
+          "proposed": "application_id",
+          "candidates": ["dealer_onboarding_applications.application_id (implicit via FK uses)", "dealer_correction_rounds.application_id", "dealer_agreement_signers.application_id", "dealer_agreement_events.application_id", "dealer_onboarding_documents.application_id"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on multiple onboarding-related tables."
+        }
+      ],
+      "decision": "fuzzy_collision_block"
+    }
+  ],
+  "verdict": "reject",
+  "migration_required": false,
+  "notes": [
+    "Sync Audit G-04 (CRITICAL) / G-08 (MEDIUM) — dealers table is referenced as FK target by 10+ tables yet not defined in any BRD. Resolution D defines it canonically.",
+    "Auditor flag: a `dealer_onboarding_applications` table already exists in schema.ts (ts_line 2278) and carries 13 of the 22 proposed columns under identical names. This is the textbook fuzzy-collision case the auditor must not auto-approve.",
+    "Recommended human resolution before approval: confirm whether (a) dealers should FK into dealer_onboarding_applications and copy fewer columns, (b) dealer_onboarding_applications should be renamed/folded into dealers, or (c) both tables are intentional and dealers is the 'post-activation' canonical record while dealer_onboarding_applications is the 'in-flight' application. The BRD excerpt (Resolution D) reads as (c) but the YAML must justify column duplication explicitly.",
+    "All proposed column types parse as valid Drizzle column builders (varchar / boolean / timestamp / jsonb / serial)."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-102/checkpoint_1.html"
+}

@@ -1,0 +1,109 @@
+id: E-049
+slug: telemetry-alert-rules
+name: Telemetry alert rule engine
+source_section: "6.2.6"
+brd_excerpt: |
+  6.2.6 Telemetry Alert Rules
+  Rule                       | Trigger Condition                                  | Severity     | Notification
+  Battery Offline            | last_seen > 24h                                    | 🔴 Critical  | NBFC dashboard alert + email to primary contact
+  Battery Offline Extended   | last_seen > 48h                                    | 🔴 Critical  | + iTarang admin alert. CDS score flagged.
+  Usage Drop                 | daily_km drops >40% vs 7-day avg                   | 🟡 Warning   | NBFC dashboard alert
+  Geo-Shift                  | GPS centroid moves >100km from home cluster        | 🔴 Critical  | NBFC alert + iTarang admin alert
+  BMS Fault                  | bms_status = 'fault' in any packet                 | 🔴 Critical  | NBFC alert + dealer alert + after-sales record flagged
+  SOH Decline                | soh_percent drops >5% in 30 days                   | 🟡 Warning   | NBFC dashboard alert. Warranty claim check triggered.
+  Low SOC                    | soc_percent < 10% and not charging                 | 🟢 Info      | Dealer dashboard notification only
+  High Temperature           | temperature_c > 55°C                               | 🔴 Critical  | NBFC alert + dealer alert. Safety flag.
+depends_on:
+  - E-046
+  - E-047
+non_functional:
+  - "Alert evaluation runs on every successful telemetry_events insert (E-046 step 6)."
+  - "Battery Offline (>24h) and Battery Offline Extended (>48h) require a scheduled scan since they fire on absence of packets — handled by a cron job."
+  - "Notifications: NBFC dashboard rows are persisted; email/admin/dealer fan-out is queued via existing notification infra."
+  - "DPDPA: alert payloads include serial_number and dealer/NBFC scope only — no end-customer PII in notification body."
+
+surface:
+  api: []
+  components: []
+  jobs:
+    - "src/lib/iot/alerts/evaluatePacketAlerts.ts"
+    - "src/lib/iot/alerts/scanOfflineBatteriesCron.ts"
+  pages: []
+
+logic: |
+  1. On telemetry_events insert, evaluate per-packet rules: BMS Fault (bms_status='fault'), Low SOC (soc_percent<10 AND charger_connected=false), High Temperature (temperature_c>55).
+  2. Compute Usage Drop: 7-day avg total_km from telemetry_daily_summary; if today's daily_km < 0.6 * avg, raise Warning alert.
+  3. Compute Geo-Shift: distance(current gps, telemetry_daily_summary.gps_home_lat/lng most-frequent) > 100km → Critical alert.
+  4. Compute SOH Decline: soh_percent today vs soh_percent 30 days ago from telemetry_daily_summary; drop >5pp → Warning.
+  5. Cron job (every 15 min): scan iot_devices for last_seen > now-24h → Battery Offline alert; >48h → Battery Offline Extended + iTarang admin alert + flag CDS score.
+  6. Insert telemetry_alerts row {serial_number, rule, severity, triggered_at, payload, notified_to[]}; deduplicate by (serial_number, rule, open_state).
+  7. Fan out notifications per rule's audience (NBFC dashboard, NBFC primary contact email, iTarang admin, dealer dashboard, after-sales flag).
+
+tables_columns:
+  reuse: []
+  new:
+    - table: telemetry_alerts
+      justification: "BRD 6.2.6 lists 8 alert rules with severities and notification fan-out; needs persistence to dedupe and to back the NBFC dashboard alert list."
+      columns:
+        - { name: id, type: "serial().primaryKey()" }
+        - { name: serial_number, type: "varchar({ length: 50 }).notNull()" }
+        - { name: rule, type: "varchar({ length: 50 }).notNull()" }
+        - { name: severity, type: "varchar({ length: 20 }).notNull()" }
+        - { name: triggered_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: resolved_at, type: "timestamp({ withTimezone: true })" }
+        - { name: payload, type: "jsonb()" }
+        - { name: notified_to, type: "jsonb()" }
+        - { name: cds_flagged, type: "boolean().notNull().default(false)" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "When a telemetry_events row is inserted with bms_status='fault', a telemetry_alerts row is created with rule='BMS Fault' and severity='critical'."
+    test_layer: api
+    test_name: "BMS fault packet creates critical telemetry_alerts row"
+  - id: AC2
+    statement: "When a telemetry_events row is inserted with temperature_c=60, a telemetry_alerts row is created with rule='High Temperature' and severity='critical'."
+    test_layer: api
+    test_name: "High temperature (>55C) packet creates critical alert"
+  - id: AC3
+    statement: "When a telemetry_events row is inserted with soc_percent=8 and charger_connected=false, a telemetry_alerts row is created with rule='Low SOC' and severity='info'."
+    test_layer: api
+    test_name: "Low SOC and not charging creates info alert"
+  - id: AC4
+    statement: "Offline scan job creates a telemetry_alerts row with rule='Battery Offline' for any iot_devices row whose last_seen is older than 24 hours."
+    test_layer: api
+    test_name: "Offline scan emits Battery Offline alert when last_seen >24h"
+  - id: AC5
+    statement: "Offline scan job creates a telemetry_alerts row with rule='Battery Offline Extended' and sets cds_flagged=true when last_seen is older than 48 hours."
+    test_layer: api
+    test_name: "Offline scan emits Battery Offline Extended and flags CDS at >48h"
+
+status: needs_clarification
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-049
+  audited_at: "2026-05-01T06:11:00Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  verdict: reject
+  migration_required: false
+  reuse_findings: []
+  new_findings:
+    - table: telemetry_alerts
+      justification_present: true
+      decision: rejected_pending_clarification
+      fuzzy_collisions:
+        - proposed: serial_number
+          candidates: [deployed_assets.serial_number, inventory.serial_number, oem_inventory_for_pdi.serial_number]
+          best_score: 1.0
+        - proposed: severity
+          candidates: [battery_alerts.severity, risk_card_runs.severity]
+          best_score: 1.0
+        - proposed: resolved_at
+          candidates: [order_disputes.resolved_at, service_tickets.resolved_at]
+          best_score: 1.0
+  notes:
+    - "CRITICAL: battery_alerts already exists with overlapping columns (id, device_id, alert_type, severity, message, value, threshold, acknowledged*). Reviewer must decide additive telemetry_alerts vs extending battery_alerts."
+    - "BRD 6.2.6 lists 8 named rules with severity tiers; telemetry_alerts justified as a rule-based store."
+    - "AC4/AC5 require a cron-driven offline scan (>24h, >48h)."
+  checkpoint_html: docs/nbfc/loop_report/E-049/checkpoint_1.html

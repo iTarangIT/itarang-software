@@ -1,0 +1,147 @@
+id: E-071
+slug: admin-audit-log-query
+name: Admin Audit Log query API with filters and tenant scoping
+source_section: "6.3.5"
+brd_excerpt: |
+  6.3.5 Admin Audit Log
+  The Audit Log is the compliance spine of the platform. Every privileged action across the system is recorded here — immutable, timestamped, and filterable. No record can be deleted or edited.
+
+  Column | Example | Source | Filterable?
+  Timestamp | 2026-07-28 10:32:14 | System | Yes — date range
+  IMEI / Entity | BAT12345 / NBFC-001 | Action context | Yes — search
+  Action | IMMOBILIZATION_REQUESTED | Action type ENUM | Yes — type filter | Standardised action codes
+  Reason Code | EMI overdue + high CDS | Mandatory dropdown | Yes
+  Requested By | Rajan Kumar (NBFC Risk Mgr) | JWT token | Yes — user filter
+  Approved By | Priya Sharma (Risk Head) | Second approver JWT | Yes | Blank if single-approval action
+  Exec. Status | Executed | Outcome | Yes | Executed | Pending | Rejected
+
+  GET /api/audit-log
+       ?from=2026-07-01&to=2026-07-28
+       &action=IMMOBILIZATION_REQUESTED
+       &requestedBy=user_id
+       &status=executed|pending|rejected
+       &entityId=BAT12345
+
+  Auth: Admin JWT only. NBFC JWT: returns only that NBFC's actions.
+
+depends_on: []
+non_functional:
+  - "Records are immutable: no DELETE / UPDATE allowed via API"
+  - "Admin JWT sees all rows; NBFC JWT only its own NBFC's rows"
+  - "Date range, action type, requestedBy, status, entityId are all filterable"
+  - "RBI Digital Lending Directions 2025 audit trail compliance"
+
+surface:
+  api:
+    - method: GET
+      path: /api/audit-log
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({
+          from: z.string().datetime().optional(),
+          to: z.string().datetime().optional(),
+          action: z.string().optional(),
+          requestedBy: z.string().uuid().optional(),
+          approvedBy: z.string().uuid().optional(),
+          status: z.enum(["executed", "pending", "rejected"]).optional(),
+          entityId: z.string().optional(),
+          page: z.coerce.number().int().min(1).default(1),
+          page_size: z.coerce.number().int().min(1).max(200).default(50)
+        }).strict()
+      response_shape:
+        rows:
+          - id: "uuid"
+            timestamp: "iso8601"
+            entity_id: "string"
+            action: "string"
+            reason_code: "string"
+            requested_by: { id: "uuid", name: "string", role: "string" }
+            approved_by: { id: "uuid|null", name: "string|null", role: "string|null" }
+            exec_status: "executed|pending|rejected"
+        page: "number"
+        page_size: "number"
+        total: "number"
+  components:
+    - "src/components/admin/nbfc/AuditLogTable.tsx"
+    - "src/components/admin/nbfc/AuditLogFilters.tsx"
+  pages:
+    - "/admin/nbfc/audit-log"
+  jobs: []
+
+logic: |
+  1. Parse query params against query_zod.
+  2. Resolve caller: if admin JWT, no tenant filter; if NBFC JWT, force tenant_id = caller's nbfc_id.
+  3. Build SQL filter from from, to, action, requestedBy, approvedBy, status, entityId.
+  4. Execute paginated SELECT against admin_audit_logs ordered by timestamp DESC.
+  5. Resolve requested_by and approved_by user IDs to {id, name, role} via nbfc_users join.
+  6. Return rows, page, page_size, total.
+
+tables_columns:
+  reuse: []
+  new:
+    - table: admin_audit_logs
+      justification: "Append-only audit spine recording every privileged action with requester, optional second approver, reason code, entity context, and execution status; required by RBI Digital Lending Directions 2025 and the BRD's compliance mandate. No existing table records cross-NBFC privileged actions in this canonical shape."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: tenant_id, type: "uuid()" }
+        - { name: timestamp, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: entity_id, type: "varchar({ length: 64 })" }
+        - { name: action, type: "varchar({ length: 64 }).notNull()" }
+        - { name: reason_code, type: "varchar({ length: 64 })" }
+        - { name: requested_by, type: "uuid().notNull()" }
+        - { name: approved_by, type: "uuid()" }
+        - { name: exec_status, type: "varchar({ length: 16 }).notNull()" }
+        - { name: payload, type: "jsonb()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/audit-log called with admin JWT returns rows from all NBFCs, paginated, ordered by timestamp DESC."
+    test_layer: api
+    test_name: "Admin JWT sees rows from all NBFCs in audit log"
+  - id: AC2
+    statement: "GET /api/audit-log called with NBFC JWT returns only rows where tenant_id matches the caller's nbfc_id."
+    test_layer: api
+    test_name: "NBFC JWT only sees its own NBFC audit rows"
+  - id: AC3
+    statement: "GET /api/audit-log with action=IMMOBILIZATION_REQUESTED filters rows so every returned row has action='IMMOBILIZATION_REQUESTED'."
+    test_layer: api
+    test_name: "Action filter restricts results to that action code"
+  - id: AC4
+    statement: "GET /api/audit-log with from and to ISO timestamps returns only rows whose timestamp is within the inclusive range."
+    test_layer: api
+    test_name: "Date range filter restricts rows to the inclusive window"
+  - id: AC5
+    statement: "GET /api/audit-log with status=rejected returns only rows where exec_status='rejected'."
+    test_layer: api
+    test_name: "Status filter returns only matching exec_status rows"
+
+status: needs_clarification
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-071
+  audited_at: "2026-05-01T06:10:31Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  reuse_findings: []
+  new_findings:
+    - table: admin_audit_logs
+      justification_present: true
+      fuzzy_collisions:
+        - proposed: "admin_audit_logs.entity_id"
+          candidates: ["audit_logs.entity_id"]
+          overlap: 1.0
+          reason: "tokens 'entity' + 'id' match an existing column on the existing audit_logs table (ts_line 671). The proposed admin_audit_logs table appears to be a near-duplicate of audit_logs with extra dual-approval/tenant fields; reviewer must decide whether to (a) extend audit_logs with tenant_id/reason_code/requested_by/approved_by/exec_status/payload columns, or (b) keep admin_audit_logs as a separate canonical privileged-action log distinct from the existing generic audit_logs."
+        - proposed: "admin_audit_logs.action"
+          candidates: ["audit_logs.action", "coupon_audit_log.action", "deployment_history.action"]
+          overlap: 1.0
+          reason: "Single-token 'action' column already exists on the closely-named audit_logs table (ts_line 671); reinforces the table-level synonym concern above."
+      type_lint: ok
+      decision: rejected_synonym
+  verdict: reject
+  migration_required: false
+  notes:
+    - "Existing audit_logs table at ts_line 671 already records id, entity_type, entity_id, action, performed_by, old_data, new_data, created_at, changes, timestamp. The proposed admin_audit_logs duplicates the entity_id+action+timestamp shape but adds tenant_id, reason_code, requested_by, approved_by, exec_status, payload. The BRD's RBI Digital Lending Directions 2025 compliance need is real — but the spec needs a human to choose between extending the existing audit_logs table or keeping a parallel admin_audit_logs."
+    - "If the team chooses to extend audit_logs, several downstream units (E-068, E-070, E-072) that write/reuse 'admin_audit_logs' must be re-targeted."
+    - "No cross-doc gap (G-01..G-10) directly impacts admin_audit_logs."
+  checkpoint_html: "docs/nbfc/loop_report/E-071/checkpoint_1.html"

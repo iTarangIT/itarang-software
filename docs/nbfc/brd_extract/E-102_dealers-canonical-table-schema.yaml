@@ -1,0 +1,158 @@
+id: E-102
+slug: dealers-canonical-table-schema
+name: "Canonical dealers table — first-time definition with INT PK id and human-readable VARCHAR dealer_id (DLR-NNN)"
+source_section: "sync-audit-G-04"
+brd_excerpt: |
+  Resolution D — dealers Table — Canonical Schema (G-04 / G-08)
+
+  D.1 CANONICAL dealers TABLE (Defined for the First Time)
+
+  Why This Is Critical
+  The dealers table is referenced as a FK target by: inventory.dealer_id, leads.dealer_id,
+  coupons.dealer_id, coupon_batches.dealer_id, kyc_documents.lead_id (indirectly),
+  product_selections.submitted_by, after_sales_records.dealer_id, warranties.dealer_id,
+  paraphernalia_stock.dealer_id, inventory_upload_events.dealer_id,
+  dealer_nbfc_assignments.dealer_id. None of the three BRDs define this table.
+  Resolving this eliminates G-04 and G-08.
+
+  Column                  | Type                 | Notes
+  id                      | INT PK AUTO          | Internal integer PK. Used for all FK references in other tables.
+  dealer_id               | VARCHAR(50) UNIQUE   | Human-readable ID: DLR-001, DLR-002. Generated on activation.
+  company_name            | VARCHAR(200)         | Legal company name from onboarding Step 1.
+  company_type            | ENUM                 | 'sole_proprietorship'|'partnership_firm'|'private_limited'
+  gst_number              | VARCHAR(20)          | Validated on onboarding.
+  pan_number              | VARCHAR(20)          |
+  registered_address      | JSON                 | {line1, line2, city, district, state, pin}
+  bank_name               | VARCHAR(200)         |
+  bank_account_number     | VARCHAR(50)          | Stored encrypted.
+  bank_ifsc               | VARCHAR(20)          |
+  bank_beneficiary        | VARCHAR(200)         |
+  bank_branch             | VARCHAR(200)         |
+  bank_account_type       | ENUM                 | 'current'|'savings'|'od'
+  owner_name              | VARCHAR(200)         | Primary owner / partner 1 / director 1
+  owner_phone             | VARCHAR(20)          |
+  owner_email             | VARCHAR(200)         | Used as dealer login User ID on activation.
+  finance_enabled         | BOOLEAN DEFAULT FALSE| Set TRUE when dealer finance agreement (Digio) COMPLETED and admin approves.
+  onboarding_status       | ENUM                 | 'draft'|'pending_admin_review'|'request_correction'|'approved'|'active'|'rejected'
+  application_id          | VARCHAR(50)          | Links to dealer_applications.application_id from V2-Feb-2 onboarding flow.
+  created_at              | TIMESTAMP            |
+  updated_at              | TIMESTAMP            |
+  activated_at            | TIMESTAMP NULL       | Set when onboarding_status = 'active'.
+
+  dealer_id vs dealers.id — Usage Rule
+  All FK references in other tables use dealers.id (INT). The human-readable dealer_id
+  VARCHAR (DLR-001) is used in APIs, UI displays, file paths (S3), and upload validation
+  messages. Never use the VARCHAR dealer_id as a DB FK — always use the INT id.
+  In API responses, always return both: { id: 42, dealerId: 'DLR-001' }.
+
+depends_on: []
+
+non_functional:
+  - "Sync Audit G-04: dealers table is referenced as FK target by inventory, leads, coupons, coupon_batches, after_sales_records, warranties, paraphernalia_stock, inventory_upload_events, dealer_nbfc_assignments — yet never defined in any of the three BRDs. This unit creates the canonical definition."
+  - "Sync Audit G-08: V2-Feb uses INT FK; V2-Feb-2 generates VARCHAR dealer_id (DLR-001); Sec6 uses INT FK. Resolution: INT PK 'id' for FKs, VARCHAR(50) UNIQUE 'dealer_id' for display."
+  - "bank_account_number column must be stored encrypted at rest (DPDPA — financial PII)."
+  - "API responses MUST always return both numeric id and human-readable dealerId; never use VARCHAR dealer_id as a DB FK."
+  - "dealer_id (DLR-NNN) is generated only when onboarding_status transitions to 'active' (mirrors V2-Feb-2 activation flow)."
+
+surface:
+  api:
+    - method: GET
+      path: /api/admin/dealers/{dealerId}
+      auth: admin
+      query_zod: |
+        z.object({})
+      response_shape:
+        id: "number"
+        dealerId: "string"
+        companyName: "string"
+        onboardingStatus: "'draft'|'pending_admin_review'|'request_correction'|'approved'|'active'|'rejected'"
+        financeEnabled: "boolean"
+        activatedAt: "iso-datetime|null"
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Create dealers table with the columns and types listed in Section D.1.
+  2. Make id the INT AUTO PK; make dealer_id a VARCHAR(50) UNIQUE with no default (populated at activation).
+  3. Encrypt bank_account_number at rest (column-level encryption helper).
+  4. GET /api/admin/dealers/{dealerId} accepts the path param as either the INT id OR the VARCHAR dealer_id and returns both fields in the response.
+  5. Response body always includes both keys: id (number) and dealerId (string), even when dealerId is null pre-activation.
+
+tables_columns:
+  reuse: []
+  new:
+    - table: dealers
+      justification: "First-time canonical definition of the dealers table. None of V2-Feb, V2-Feb-2, or Sec6 defines it, but >10 tables already FK to dealers.id. Required to close Sync Audit G-04 (CRITICAL) and G-08 (MEDIUM)."
+      columns:
+        - { name: id, type: "serial().primaryKey()" }
+        - { name: dealer_id, type: "varchar({ length: 50 }).unique()" }
+        - { name: company_name, type: "varchar({ length: 200 }).notNull()" }
+        - { name: company_type, type: "varchar({ length: 32 }).notNull()" }
+        - { name: gst_number, type: "varchar({ length: 20 })" }
+        - { name: pan_number, type: "varchar({ length: 20 })" }
+        - { name: registered_address, type: "jsonb()" }
+        - { name: bank_name, type: "varchar({ length: 200 })" }
+        - { name: bank_account_number, type: "varchar({ length: 200 })" }
+        - { name: bank_ifsc, type: "varchar({ length: 20 })" }
+        - { name: bank_beneficiary, type: "varchar({ length: 200 })" }
+        - { name: bank_branch, type: "varchar({ length: 200 })" }
+        - { name: bank_account_type, type: "varchar({ length: 16 })" }
+        - { name: owner_name, type: "varchar({ length: 200 })" }
+        - { name: owner_phone, type: "varchar({ length: 20 })" }
+        - { name: owner_email, type: "varchar({ length: 200 })" }
+        - { name: finance_enabled, type: "boolean().default(false).notNull()" }
+        - { name: onboarding_status, type: "varchar({ length: 32 }).notNull().default('draft')" }
+        - { name: application_id, type: "varchar({ length: 50 })" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: updated_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: activated_at, type: "timestamp({ withTimezone: true })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "Migration creates a 'dealers' table with INT PK 'id' and VARCHAR(50) UNIQUE 'dealer_id' columns and all 22 columns listed in Section D.1."
+    test_layer: api
+    test_name: "dealers table exists with canonical columns"
+  - id: AC2
+    statement: "Inserting two dealer rows with the same dealer_id value fails with a UNIQUE constraint violation."
+    test_layer: api
+    test_name: "dealer_id UNIQUE constraint enforced"
+  - id: AC3
+    statement: "GET /api/admin/dealers/{dealerId} resolves the path parameter when given either the numeric id (e.g. '42') or the VARCHAR dealer_id (e.g. 'DLR-001')."
+    test_layer: api
+    test_name: "lookup accepts both id and dealerId"
+  - id: AC4
+    statement: "Response body always contains both 'id' (number) and 'dealerId' (string|null) fields."
+    test_layer: api
+    test_name: "response always returns id and dealerId pair"
+  - id: AC5
+    statement: "onboarding_status defaults to 'draft' when a row is inserted without an explicit value."
+    test_layer: api
+    test_name: "onboarding_status defaults to draft"
+
+status: needs_clarification
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-102
+  audited_at: "2026-05-01T06:10:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings: []
+  new_findings:
+    - table: dealers
+      table_exists_in_baseline: false
+      justification_present: true
+      justification_length: 233
+      columns_proposed: 22
+      decision: fuzzy_collision_block
+      fuzzy_collisions_count: 16
+  verdict: reject
+  migration_required: false
+  notes:
+    - "Sync Audit G-04 (CRITICAL) / G-08 (MEDIUM) — dealers table is referenced as FK target by 10+ tables yet not defined in any BRD. Resolution D defines it canonically."
+    - "Auditor flag: a `dealer_onboarding_applications` table already exists in schema.ts (ts_line 2278) and carries 13 of the 22 proposed columns under identical names. This is the textbook fuzzy-collision case the auditor must not auto-approve."
+    - "Recommended human resolution before approval: confirm whether (a) dealers should FK into dealer_onboarding_applications and copy fewer columns, (b) dealer_onboarding_applications should be renamed/folded into dealers, or (c) both tables are intentional and dealers is the 'post-activation' canonical record while dealer_onboarding_applications is the 'in-flight' application. The BRD excerpt (Resolution D) reads as (c) but the YAML must justify column duplication explicitly."
+    - "All proposed column types parse as valid Drizzle column builders (varchar / boolean / timestamp / jsonb / serial)."
+    - "Detailed per-column collision list lives in docs/nbfc/brd_extract/_audit_E-102.json under new_findings[0].fuzzy_collisions."
+  checkpoint_html: docs/nbfc/loop_report/E-102/checkpoint_1.html

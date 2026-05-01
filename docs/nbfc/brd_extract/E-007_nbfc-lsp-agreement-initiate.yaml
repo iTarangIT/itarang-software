@@ -1,0 +1,198 @@
+id: E-007
+slug: nbfc-lsp-agreement-initiate
+name: "Initiate LSP Agreement via Digio multi-template create_sign_request"
+source_section: "6.0.4a"
+brd_excerpt: |
+  6.0.4a LSP Agreement — Digio Integration (Sync Audit G-01, G-08)
+  POST https://api.digio.in/v2/client/template/multi_templates/create_sign_request
+  Key parameters:
+    "sequential":    true,          // Enforces NBFC → iTarang1 → iTarang2 signing order
+    "expire_in_days": 5,
+    "notify_signers": true,
+    "customer_notification_mode": "ALL",
+    "callback":      "NBFC_{nbfc_id}",
+    "estamp_request": { "tags": { "iTarang_Test_DealerAgreement_100": 1 } }
+  Signing order (sequential): 1. NBFC Signatory 2. iTarang Signatory 1 3. iTarang Signatory 2.
+  agreement_status ENUM (shared with dealer agreements):
+    SENT_TO_EXTERNAL_PARTY → SIGN_PENDING → PARTIALLY_SIGNED → SIGNED → COMPLETED → FAILED | EXPIRED
+
+depends_on: []
+
+non_functional:
+  - "Sync Audit G-01 / G-08: reuses Digio integration and shared agreement_status ENUM with dealer onboarding."
+  - "agreement_id format: 'AGR-NBFC-YYYYMMDD-SEQ' — daily sequence reset; collisions surface as 5xx not silent overwrite."
+  - "Sequential signing order MUST be NBFC Signatory → iTarang Signatory 1 → iTarang Signatory 2."
+  - "expire_in_days default 5; configurable via CRM settings — server reads value, never trusts client."
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/nbfc/{nbfcId}/lsp-agreement/initiate
+      auth: admin
+      request_zod: |
+        z.object({
+          nbfcSignatoryName: z.string().min(1).max(200),
+          nbfcSignatoryEmail: z.string().email(),
+          itarangSignatory1Name: z.string().min(1).max(200),
+          itarangSignatory1Email: z.string().email(),
+          itarangSignatory2Name: z.string().min(1).max(200),
+          itarangSignatory2Email: z.string().email(),
+        })
+      response_shape:
+        id: "number"
+        agreementId: "string"
+        digioDocumentId: "string"
+        agreementStatus: "SENT_TO_EXTERNAL_PARTY"
+        expiresAt: "iso-datetime"
+  components:
+    - "src/components/admin/nbfc/NbfcLspAgreementPanel.tsx"
+  jobs: []
+  pages:
+    - "/admin/nbfc/[nbfcId]/lsp-agreement"
+
+logic: |
+  1. Validate body against request_zod.
+  2. Resolve NBFC; require status IN ('draft','pending_admin_review','request_correction').
+  3. Generate agreement_id of pattern 'AGR-NBFC-' + yyyymmdd + '-' + zero-padded daily seq.
+  4. Build Digio payload with sequential=true, expire_in_days=settings.lspExpireInDays (default 5), callback='NBFC_'+nbfc_id, signer order [NBFC, iTarang1, iTarang2].
+  5. POST to Digio create_sign_request; capture digio_document_id from response.
+  6. Insert nbfc_lsp_agreements row with agreement_status='SENT_TO_EXTERNAL_PARTY', expires_at=now()+expire_in_days days, signatory fields.
+  7. Return persisted row summary.
+
+tables_columns:
+  reuse:
+    - table: nbfc
+      schema_ts_line: 1
+      columns: [id, status, legal_name, gst_number, pan_number]
+  new:
+    - table: nbfc_lsp_agreements
+      justification: "Per BRD 6.0.4a — distinct table tracking Digio LSP agreement lifecycle for each NBFC partner; no existing dealer agreement table can host NBFC-scoped fields."
+      columns:
+        - { name: id, type: "serial().primaryKey()" }
+        - { name: agreement_id, type: "varchar({ length: 50 }).notNull().unique()" }
+        - { name: nbfc_id, type: "integer().notNull().references(() => nbfc.id)" }
+        - { name: digio_document_id, type: "varchar({ length: 100 })" }
+        - { name: agreement_status, type: "varchar({ length: 32 }).notNull()" }
+        - { name: signing_date, type: "date()" }
+        - { name: itarang_signatory_1_name, type: "varchar({ length: 200 })" }
+        - { name: itarang_signatory_1_email, type: "varchar({ length: 200 })" }
+        - { name: itarang_signatory_2_name, type: "varchar({ length: 200 })" }
+        - { name: itarang_signatory_2_email, type: "varchar({ length: 200 })" }
+        - { name: nbfc_signatory_name, type: "varchar({ length: 200 })" }
+        - { name: nbfc_signatory_email, type: "varchar({ length: 200 })" }
+        - { name: signed_pdf_url, type: "text()" }
+        - { name: audit_trail_url, type: "text()" }
+        - { name: expires_at, type: "timestamp({ withTimezone: true })" }
+        - { name: created_by, type: "integer().notNull()" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: updated_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/admin/nbfc/{nbfcId}/lsp-agreement/initiate calls Digio create_sign_request with sequential=true and callback='NBFC_'+nbfcId."
+    test_layer: api
+    test_name: "Digio request uses sequential=true and NBFC callback"
+  - id: AC2
+    statement: "On success, a nbfc_lsp_agreements row is inserted with agreement_status='SENT_TO_EXTERNAL_PARTY' and agreement_id matching 'AGR-NBFC-YYYYMMDD-\\d+'."
+    test_layer: api
+    test_name: "agreement row persisted with SENT_TO_EXTERNAL_PARTY"
+  - id: AC3
+    statement: "Digio payload signer array order is [NBFC Signatory, iTarang Signatory 1, iTarang Signatory 2]."
+    test_layer: api
+    test_name: "signer order is NBFC → iTarang1 → iTarang2"
+  - id: AC4
+    statement: "expires_at is set to created_at + expire_in_days days (default 5)."
+    test_layer: api
+    test_name: "expires_at honors expire_in_days setting"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-007
+  audited_at: "2026-05-01T06:30:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - status
+        - legal_name
+        - gst_number
+        - pan_number
+      reason: table not present in baseline; introduced by sibling unit E-003
+      sibling_unit: E-003
+  new_findings:
+    - table: nbfc_lsp_agreements
+      justification_present: true
+      justification_chars: 157
+      fuzzy_collisions: []
+      columns_proposed:
+        - name: id
+          type: serial().primaryKey()
+          drizzle_builder: serial
+        - name: agreement_id
+          type: "varchar({ length: 50 }).notNull().unique()"
+          drizzle_builder: varchar
+        - name: nbfc_id
+          type: integer().notNull().references(() => nbfc.id)
+          drizzle_builder: integer
+        - name: digio_document_id
+          type: "varchar({ length: 100 })"
+          drizzle_builder: varchar
+        - name: agreement_status
+          type: "varchar({ length: 32 }).notNull()"
+          drizzle_builder: varchar
+        - name: signing_date
+          type: date()
+          drizzle_builder: date
+        - name: itarang_signatory_1_name
+          type: "varchar({ length: 200 })"
+          drizzle_builder: varchar
+        - name: itarang_signatory_1_email
+          type: "varchar({ length: 200 })"
+          drizzle_builder: varchar
+        - name: itarang_signatory_2_name
+          type: "varchar({ length: 200 })"
+          drizzle_builder: varchar
+        - name: itarang_signatory_2_email
+          type: "varchar({ length: 200 })"
+          drizzle_builder: varchar
+        - name: nbfc_signatory_name
+          type: "varchar({ length: 200 })"
+          drizzle_builder: varchar
+        - name: nbfc_signatory_email
+          type: "varchar({ length: 200 })"
+          drizzle_builder: varchar
+        - name: signed_pdf_url
+          type: text()
+          drizzle_builder: text
+        - name: audit_trail_url
+          type: text()
+          drizzle_builder: text
+        - name: expires_at
+          type: "timestamp({ withTimezone: true })"
+          drizzle_builder: timestamp
+        - name: created_by
+          type: integer().notNull()
+          drizzle_builder: integer
+        - name: created_at
+          type: "timestamp({ withTimezone: true }).defaultNow().notNull()"
+          drizzle_builder: timestamp
+        - name: updated_at
+          type: "timestamp({ withTimezone: true }).defaultNow().notNull()"
+          drizzle_builder: timestamp
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM"
+    - "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs"
+    - "G-04: Sync Audit G-04: dealers table never defined — referenced as FK target by many tables"
+    - "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type"
+    - reuse table 'nbfc' not yet in baseline — introduced by sibling unit E-003 (depends_on must include E-003 before this unit codes)
+  checkpoint_html: docs/nbfc/loop_report/E-007/checkpoint_1.html

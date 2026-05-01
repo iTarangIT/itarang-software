@@ -1,0 +1,128 @@
+id: E-067
+slug: risk-rule-engine-thresholds
+name: Risk Rule Engine threshold configuration with impact preview
+source_section: "6.3.3"
+brd_excerpt: |
+  6.3.3 Risk Rule Engine
+  The Risk Rule Engine allows iTarang admin to configure the global thresholds that drive CDS bands, alert triggers, and action gates. Every change is subject to dual approval and full audit logging.
+
+  Parameter | Current Default | Effect of Change
+  CDS: Low/Medium threshold | 40 | Accounts with CDS < 40 = Low Risk. Raising this threshold marks more accounts as Medium Risk.
+  CDS: Medium/High threshold | 70 |
+  CDS: High/Very High threshold | 85 | Accounts above this trigger dual-approval gate for any action.
+  EMI Overdue Trigger (days) | 30 days | Alert generated when any EMI is overdue beyond this.
+  Usage Drop Threshold (%) | 40% | Alert if daily_km drops >X% below 7-day average.
+  Geo-Shift Threshold (km) | 100 km | Alert if GPS centroid moves >X km from home cluster.
+  Offline Alert Threshold (h) | 24 hours | Alert if no telemetry received for >X hours.
+  PCI: Concern threshold | 0.40 | Accounts below this PCI score flagged for monitoring.
+
+  Step 2: System shows impact preview — 'This change will affect N accounts. Accounts moving to higher risk band: X.'
+
+depends_on: []
+non_functional:
+  - "Admin-only access; thresholds are global (apply across all NBFCs)"
+  - "Every change is fully audit-logged with before/after values"
+  - "Impact preview must run before any commit"
+  - "Change takes effect only after second approval (see E-068 dual-approval gate)"
+
+surface:
+  api:
+    - method: GET
+      path: /api/admin/nbfc/risk-rules
+      auth: admin
+      query_zod: |
+        z.object({}).strict()
+      response_shape:
+        rules:
+          - key: "string"
+            label: "string"
+            current_value: "number"
+            unit: "string"
+    - method: POST
+      path: /api/admin/nbfc/risk-rules/preview
+      auth: admin
+      request_zod: |
+        z.object({
+          rule_key: z.enum([
+            "cds_low_medium",
+            "cds_medium_high",
+            "cds_high_very_high",
+            "emi_overdue_days",
+            "usage_drop_pct",
+            "geo_shift_km",
+            "offline_alert_hours",
+            "pci_concern"
+          ]),
+          new_value: z.number()
+        }).strict()
+      response_shape:
+        affected_accounts: "number"
+        accounts_moving_to_higher_band: "number"
+  components:
+    - "src/components/admin/nbfc/RiskRuleEngineForm.tsx"
+    - "src/components/admin/nbfc/ImpactPreviewModal.tsx"
+  pages:
+    - "/admin/nbfc/risk-rules"
+  jobs: []
+
+logic: |
+  1. GET /api/admin/nbfc/risk-rules returns the current value of all 8 thresholds from nbfc_risk_rules.
+  2. POST /preview validates rule_key and new_value against request_zod.
+  3. Compute affected_accounts: count of borrower accounts whose categorisation/alert state would change with new_value.
+  4. Compute accounts_moving_to_higher_band: subset of affected_accounts whose risk band increases.
+  5. Return preview JSON; do not mutate nbfc_risk_rules at this step.
+  6. Commit happens via the dual-approval gate (E-068) which writes to nbfc_risk_rules and audit log.
+
+tables_columns:
+  reuse: []
+  new:
+    - table: nbfc_risk_rules
+      justification: "Single global table holding the eight platform-wide risk thresholds; no existing table stores tunable risk parameters and the BRD requires every change to be auditable with before/after values."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: rule_key, type: "varchar({ length: 64 }).notNull().unique()" }
+        - { name: rule_label, type: "varchar({ length: 160 }).notNull()" }
+        - { name: current_value, type: "numeric({ precision: 12, scale: 4 }).notNull()" }
+        - { name: unit, type: "varchar({ length: 16 })" }
+        - { name: updated_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: updated_by, type: "uuid()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/admin/nbfc/risk-rules returns 200 with all 8 rule entries (cds_low_medium, cds_medium_high, cds_high_very_high, emi_overdue_days, usage_drop_pct, geo_shift_km, offline_alert_hours, pci_concern)."
+    test_layer: api
+    test_name: "GET risk-rules returns all 8 platform thresholds"
+  - id: AC2
+    statement: "POST /api/admin/nbfc/risk-rules/preview returns affected_accounts and accounts_moving_to_higher_band as numbers without mutating nbfc_risk_rules."
+    test_layer: api
+    test_name: "POST risk-rules/preview returns impact counts and does not mutate"
+  - id: AC3
+    statement: "POST /api/admin/nbfc/risk-rules/preview returns 400 when rule_key is not one of the 8 enum values."
+    test_layer: api
+    test_name: "POST risk-rules/preview rejects unknown rule_key with 400"
+  - id: AC4
+    statement: "Both endpoints return 403 when called by a non-admin caller."
+    test_layer: api
+    test_name: "Risk-rules endpoints reject non-admin caller with 403"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-067
+  audited_at: "2026-05-01T06:10:31Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  reuse_findings: []
+  new_findings:
+    - table: nbfc_risk_rules
+      justification_present: true
+      fuzzy_collisions: []
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "Eight rule_keys are defined as a Zod enum — implementer should seed nbfc_risk_rules with one row per key on migration."
+    - "No cross-doc gap (G-01..G-10) directly impacts nbfc_risk_rules."
+  checkpoint_html: "docs/nbfc/loop_report/E-067/checkpoint_1.html"

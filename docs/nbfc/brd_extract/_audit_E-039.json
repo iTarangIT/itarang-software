@@ -1,0 +1,67 @@
+{
+  "unit_id": "E-039",
+  "audited_at": "2026-05-01T07:00:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "auction_lots",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["id", "lot_code"],
+      "note": "Forward reference to table proposed in E-038."
+    },
+    {
+      "table": "nbfc_recovery_pipeline",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["id", "stage"],
+      "note": "Forward reference to table proposed in E-026."
+    },
+    {
+      "table": "nbfc_audit_log",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["tenant_id", "actor_user_id", "action_type", "action_id", "before_state", "after_state", "created_at"],
+      "note": "Forward reference to table proposed in E-031."
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "auction_settlements",
+      "justification_present": true,
+      "justification_chars": 121,
+      "columns": ["id", "lot_id", "seller_tenant_id", "winner_tenant_id", "final_price", "status", "created_at", "updated_at"],
+      "fuzzy_collisions": [
+        {
+          "proposed": "seller_tenant_id",
+          "candidates": ["nbfc_loans.tenant_id", "nbfc_users.tenant_id", "risk_card_runs.tenant_id"],
+          "overlap": 0.667,
+          "reason": "seller_tenant_id is a role-disambiguated tenant_id; ≥2 candidates flagged."
+        },
+        {
+          "proposed": "winner_tenant_id",
+          "candidates": ["nbfc_loans.tenant_id", "nbfc_users.tenant_id", "risk_card_runs.tenant_id"],
+          "overlap": 0.667,
+          "reason": "winner_tenant_id is a role-disambiguated tenant_id; ≥2 candidates flagged."
+        },
+        {
+          "proposed": "final_price",
+          "candidates": ["product_selections.final_price"],
+          "overlap": 1.0,
+          "reason": "final_price exactly matches product_selections.final_price (different table/concept). Single candidate; informational."
+        }
+      ],
+      "type_lint": "ok",
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "reject",
+  "migration_required": false,
+  "notes": [
+    "Same role-prefixed-tenant_id concern as E-038. Reviewer should resolve naming convention once for both units."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-039/checkpoint_1.html"
+}

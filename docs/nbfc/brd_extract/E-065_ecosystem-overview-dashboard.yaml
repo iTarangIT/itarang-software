@@ -1,0 +1,121 @@
+id: E-065
+slug: ecosystem-overview-dashboard
+name: Ecosystem Overview admin dashboard with metric tiles and cross-NBFC comparison
+source_section: "6.3.2"
+brd_excerpt: |
+  6.3.2 Ecosystem Overview
+  Metric Tile / Data
+  Connected NBFCs — COUNT(nbfc) WHERE status = 'active'
+  Total Portfolio (₹) — SUM(loan_amount) across all active NBFCs
+  Batteries in Field — COUNT(inventory) WHERE status = 'sold' AND iot_enabled = true
+  IoT Connectivity (%) — (online devices / total registered devices) × 100. Refreshed every 15 min.
+  Platform Uptime — Computed from API health check logs. Target: 99.7%
+  Alerts (24h) — COUNT(alerts) by severity: Critical / Warning / Info
+  Avg CDS (Network) — AVG(cds_score) across all active borrowers. Refreshed nightly.
+
+  Cross-NBFC Comparison Table
+  NBFC | Active Loans | Delinquency % | Avg CDS | Recovery Rate
+  ABC Finance | 1,245 | 4.2% | 28 | 71%
+  XYZ Capital | 892 | 7.8% | 41 | 58%
+  PQR NBFC | 2,109 | 3.1% | 22 | 79%
+
+depends_on: []
+non_functional:
+  - "Admin-only access (iTarang Ops); not exposed to NBFC tenants"
+  - "IoT Connectivity tile recomputed every 15 minutes (caching)"
+  - "Avg CDS recomputed nightly"
+  - "Numeric values rendered with INR/percent formatting per BRD"
+
+surface:
+  api:
+    - method: GET
+      path: /api/admin/nbfc/ecosystem-overview
+      auth: admin
+      query_zod: |
+        z.object({}).strict()
+      response_shape:
+        tiles:
+          connected_nbfcs: "number"
+          total_portfolio_inr: "number"
+          batteries_in_field: "number"
+          iot_connectivity_pct: "number"
+          platform_uptime_pct: "number"
+          alerts_24h: { critical: "number", warning: "number", info: "number" }
+          avg_cds_network: "number"
+        comparison:
+          - nbfc_id: "uuid"
+            nbfc_name: "string"
+            active_loans: "number"
+            delinquency_pct: "number"
+            avg_cds: "number"
+            recovery_rate_pct: "number"
+  components:
+    - "src/components/admin/nbfc/EcosystemOverview.tsx"
+    - "src/components/admin/nbfc/CrossNbfcComparisonTable.tsx"
+  pages:
+    - "/admin/nbfc/ecosystem-overview"
+  jobs: []
+
+logic: |
+  1. Authenticate caller as admin (iTarang Ops); reject otherwise with 403.
+  2. Compute connected_nbfcs as COUNT of nbfc_tenants where is_active = true.
+  3. Compute total_portfolio_inr as SUM of loan_amount across loans linked to active NBFCs.
+  4. Compute batteries_in_field as COUNT of inventory rows with status='sold' and iot_enabled=true.
+  5. Read iot_connectivity_pct from cached value (refreshed every 15 min); fallback to live compute if stale.
+  6. Read platform_uptime_pct from API health-check aggregator.
+  7. Aggregate alerts_24h grouped by severity from alerts table for last 24h.
+  8. Read avg_cds_network from nightly-refreshed materialised value.
+  9. For each active NBFC, project active_loans, delinquency_pct, avg_cds, recovery_rate_pct.
+  10. Return tiles plus comparison array as JSON.
+
+tables_columns:
+  reuse: []
+  new:
+    - table: nbfc_ecosystem_metrics_cache
+      justification: "Stores 15-minute IoT connectivity rollup and nightly Avg CDS network value to satisfy BRD refresh cadence without recomputing on every request."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: metric_key, type: "varchar({ length: 64 }).notNull().unique()" }
+        - { name: metric_value, type: "numeric({ precision: 18, scale: 4 })" }
+        - { name: refreshed_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/admin/nbfc/ecosystem-overview returns 200 with all seven tiles populated for an admin caller."
+    test_layer: api
+    test_name: "GET ecosystem-overview returns all metric tiles for admin"
+  - id: AC2
+    statement: "GET /api/admin/nbfc/ecosystem-overview returns 403 when called by a non-admin (NBFC tenant) JWT."
+    test_layer: api
+    test_name: "GET ecosystem-overview rejects non-admin caller with 403"
+  - id: AC3
+    statement: "Response includes a comparison array with one entry per active NBFC containing active_loans, delinquency_pct, avg_cds, recovery_rate_pct."
+    test_layer: api
+    test_name: "GET ecosystem-overview comparison row exists per active NBFC"
+  - id: AC4
+    statement: "Ecosystem Overview page renders the 7 metric tiles and the cross-NBFC comparison table when admin navigates to /admin/nbfc/ecosystem-overview."
+    test_layer: ui
+    test_name: "Ecosystem Overview page renders tiles and comparison table"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-065
+  audited_at: "2026-05-01T06:10:31Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  reuse_findings: []
+  new_findings:
+    - table: nbfc_ecosystem_metrics_cache
+      justification_present: true
+      fuzzy_collisions: []
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "logic references nbfc_tenants (exists, ts_line 11502), inventory (exists, ts_line 7204) and 'loans' (no table named 'loans' in baseline; the closest is 'nbfc_loans'). Implementer should resolve 'loans' to nbfc_loans or document the actual table when coding."
+    - "logic references an 'alerts' table for alerts_24h aggregation; baseline has battery_alerts but no generic alerts table — implementer should pick the canonical alert source."
+    - "No cross-doc gap (G-01..G-10) directly impacts the new nbfc_ecosystem_metrics_cache table."
+  checkpoint_html: "docs/nbfc/loop_report/E-065/checkpoint_1.html"
