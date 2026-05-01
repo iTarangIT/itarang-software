@@ -1,0 +1,146 @@
+id: E-039
+slug: auction-post-settlement-table
+name: Post-auction settlement table
+source_section: "6.1.7"
+brd_excerpt: |
+  Post-auction settlement table: Lot ID · Final Price · Winner · Status (Delivered / In Transit / Payment Pending)
+depends_on: []
+non_functional:
+  - "Settlement status transitions update auction_settlements and write to nbfc_audit_log."
+
+surface:
+  api:
+    - method: GET
+      path: /api/nbfc/auction/settlements
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({
+          status: z.enum(["delivered","in_transit","payment_pending"]).optional(),
+          page: z.coerce.number().int().min(1).default(1),
+        })
+      response_shape:
+        items:
+          - lot_id: string
+            final_price: number
+            winner_tenant_id: string
+            winner_name: string
+            status: string
+            updated_at: string
+        page: number
+        total: number
+    - method: PATCH
+      path: /api/nbfc/auction/settlements/[id]
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({
+          status: z.enum(["delivered","in_transit","payment_pending"]),
+        })
+      response_shape:
+        id: string
+        status: string
+        updated_at: string
+  components:
+    - "src/components/nbfc-portal/AuctionSettlementsTable.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. When an auction lot ends, an internal job (out of scope here) inserts an auction_settlements row with the highest bid as final_price and the bidder as winner_tenant_id; this unit assumes those rows exist.
+  2. GET endpoint returns paginated auction_settlements rows for lots whose seller_tenant matches caller; optional filter by status.
+  3. PATCH endpoint updates auction_settlements.status; allowed transitions: payment_pending → in_transit → delivered. Reject other transitions with 400.
+  4. Update nbfc_recovery_pipeline row to stage='resold' when status reaches 'delivered'.
+  5. Audit-log every PATCH with before_state and after_state.
+
+tables_columns:
+  reuse:
+    - table: auction_lots
+      schema_ts_line: 1
+      columns: [id, lot_code]
+    - table: nbfc_recovery_pipeline
+      schema_ts_line: 1
+      columns: [id, stage]
+    - table: nbfc_audit_log
+      schema_ts_line: 1
+      columns: [tenant_id, actor_user_id, action_type, action_id, before_state, after_state, created_at]
+  new:
+    - table: auction_settlements
+      justification: "Need a settlement record per ended lot capturing winner, final price, and fulfilment status; not present in any prior schema."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: lot_id, type: "uuid().notNull().unique()" }
+        - { name: seller_tenant_id, type: "uuid().notNull()" }
+        - { name: winner_tenant_id, type: "uuid().notNull()" }
+        - { name: final_price, type: "numeric({ precision: 12, scale: 2 }).notNull()" }
+        - { name: status, type: "varchar({ length: 24 }).notNull().default('payment_pending')" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).notNull().defaultNow()" }
+        - { name: updated_at, type: "timestamp({ withTimezone: true }).notNull().defaultNow()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/nbfc/auction/settlements returns 200 with items containing lot_id, final_price, winner_tenant_id, winner_name, status, updated_at."
+    test_layer: api
+    test_name: "Settlements list returns BRD columns"
+  - id: AC2
+    statement: "PATCH /api/nbfc/auction/settlements/[id] with status='in_transit' on a row currently in 'payment_pending' updates the row and returns 200."
+    test_layer: api
+    test_name: "Allowed status transition updates settlement"
+  - id: AC3
+    statement: "PATCH attempting to move from 'payment_pending' directly to 'delivered' returns 400."
+    test_layer: api
+    test_name: "Invalid settlement transition is rejected with 400"
+  - id: AC4
+    statement: "When a settlement reaches status='delivered' the linked nbfc_recovery_pipeline row's stage becomes 'resold'."
+    test_layer: api
+    test_name: "Delivered settlement marks recovery pipeline as resold"
+
+status: needs_clarification
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-039
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: auction_lots
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [id, lot_code]
+      note: "Forward reference to E-038."
+    - table: nbfc_recovery_pipeline
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [id, stage]
+      note: "Forward reference to E-026."
+    - table: nbfc_audit_log
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [tenant_id, actor_user_id, action_type, action_id, before_state, after_state, created_at]
+      note: "Forward reference to E-031."
+  new_findings:
+    - table: auction_settlements
+      justification_present: true
+      columns: [id, lot_id, seller_tenant_id, winner_tenant_id, final_price, status, created_at, updated_at]
+      fuzzy_collisions:
+        - proposed: seller_tenant_id
+          candidates: [nbfc_loans.tenant_id, nbfc_users.tenant_id, risk_card_runs.tenant_id]
+          overlap: 0.667
+          reason: "≥2 candidates; role-prefixed tenant_id."
+        - proposed: winner_tenant_id
+          candidates: [nbfc_loans.tenant_id, nbfc_users.tenant_id, risk_card_runs.tenant_id]
+          overlap: 0.667
+          reason: "≥2 candidates; role-prefixed tenant_id."
+        - proposed: final_price
+          candidates: [product_selections.final_price]
+          overlap: 1.0
+          reason: "exact match with product_selections.final_price (different table); single candidate; informational."
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: reject
+  migration_required: false
+  notes:
+    - "Same role-prefixed-tenant_id concern as E-038. Reviewer should resolve naming convention once for both units."
+  checkpoint_html: docs/nbfc/loop_report/E-039/checkpoint_1.html

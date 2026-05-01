@@ -1,0 +1,166 @@
+id: E-086
+slug: bulk-immobilisation-gated
+name: Bulk immobilisation (>5 batteries) gated by dual approval (Risk Head → iTarang Admin)
+source_section: "6.4.3"
+brd_excerpt: |
+  Action: Bulk Immobilisation (>5 batteries) — Approver 1: NBFC Risk Head — Approver 2: iTarang Admin.
+
+depends_on:
+  - E-082
+
+non_functional:
+  - "RBI Digital Lending Directions 2025: high-blast-radius recovery action requires elevated two-person rule."
+  - "Bulk size threshold: only triggers dual-approval when batch size > 5; ≤5 falls under per-loan E-083 path."
+  - "Handler executes per-loan immobilisation only after dual_approval_requests.status='approved'."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/actions/bulk-immobilisation/initiate
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ loan_application_ids: z.array(z.string().min(1)).min(6), reason_code: z.enum(['portfolio_dpd_sweep','fraud_cluster','manual']), reviewed_evidence_ack: z.literal(true) })
+      response_shape:
+        approval_request_id: string
+        status: pending_approval
+        action_type: bulk_immobilisation
+        batch_size: number
+  components:
+    - "src/components/nbfc/actions/BulkImmobiliseInitiateForm.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Validate body — require loan_application_ids.length > 5 (Zod min(6)); else 400.
+  2. Resolve tenant; verify initiator role 'nbfc_risk_head'; else 403.
+  3. Snapshot evidence: per-loan DPD, outstanding, last EMI status.
+  4. createDualApprovalRequest({ action_type: 'bulk_immobilisation', entity_id: batch_id, evidence_snapshot: { loan_ids, summary }, required_approver_role: 'itarang_admin' }).
+  5. On 'approved', handler enqueues per-loan immobilisation jobs writing rows to nbfc_immobilisation_actions and nbfc_bulk_immobilisation_batches.
+
+tables_columns:
+  reuse:
+    - table: nbfc_loans
+      schema_ts_line: 2729
+      columns: [loan_application_id, tenant_id, current_dpd, outstanding_amount]
+  new:
+    - table: nbfc_bulk_immobilisation_batches
+      justification: "Captures the batch identity and aggregate counts so audit reviewers can see a single approval covered N loans, not N separate approvals."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: tenant_id, type: "uuid().notNull().references(() => nbfcTenants.id)" }
+        - { name: approval_request_id, type: "uuid().notNull()" }
+        - { name: batch_size, type: "integer().notNull()" }
+        - { name: loan_application_ids, type: "jsonb().notNull()" }
+        - { name: executed_at, type: "timestamp({ withTimezone: true })" }
+        - { name: executed_count, type: "integer().default(0).notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/actions/bulk-immobilisation/initiate with 5 or fewer loan_application_ids returns 400."
+    test_layer: api
+    test_name: "Bulk immobilisation rejects batch size ≤ 5"
+  - id: AC2
+    statement: "POST initiate with 6 ids by 'nbfc_risk_head' returns 200 with approval_request_id, status='pending_approval', batch_size=6."
+    test_layer: api
+    test_name: "Bulk immobilisation initiate creates approval for >5 loans"
+  - id: AC3
+    statement: "POST initiate by user without role 'nbfc_risk_head' returns 403."
+    test_layer: api
+    test_name: "Only Risk Head can initiate bulk immobilisation"
+  - id: AC4
+    statement: "After approval by an iTarang Admin user, nbfc_bulk_immobilisation_batches has one row with executed_count==batch_size and per-loan rows exist in nbfc_immobilisation_actions."
+    test_layer: api
+    test_name: "Bulk immobilisation executes only after iTarang Admin approves"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit: |
+  {
+    "unit_id": "E-086",
+    "audited_at": "2026-05-01T06:16:03Z",
+    "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+    "reuse_findings": [
+      {
+        "table": "nbfc_loans",
+        "verified": true,
+        "ts_line": 2729,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "loan_application_id",
+          "tenant_id",
+          "current_dpd",
+          "outstanding_amount"
+        ],
+        "columns_missing": []
+      }
+    ],
+    "new_findings": [
+      {
+        "table": "nbfc_bulk_immobilisation_batches",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 136,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "tenant_id",
+            "type": "uuid().notNull().references(() => nbfcTenants.id)",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "approval_request_id",
+            "type": "uuid().notNull()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "batch_size",
+            "type": "integer().notNull()",
+            "type_lint_ok": true,
+            "type_head": "integer",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "loan_application_ids",
+            "type": "jsonb().notNull()",
+            "type_lint_ok": true,
+            "type_head": "jsonb",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "executed_at",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "executed_count",
+            "type": "integer().default(0).notNull()",
+            "type_lint_ok": true,
+            "type_head": "integer",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      }
+    ],
+    "verdict": "needs_schema_approval",
+    "migration_required": false,
+    "notes": [
+      "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+    ],
+    "checkpoint_html": "docs/nbfc/loop_report/E-086/checkpoint_1.html"
+  }

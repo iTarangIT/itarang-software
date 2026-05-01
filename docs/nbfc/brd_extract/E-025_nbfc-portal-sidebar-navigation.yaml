@@ -1,0 +1,66 @@
+id: E-025
+slug: nbfc-portal-sidebar-navigation
+name: NBFC portal sidebar navigation shell
+source_section: "6.1.2"
+brd_excerpt: |
+  6.1.2 NBFC Portal Navigation
+  Sidebar Item | Content
+  📊 Portfolio Overview — Summary cards: Total Active Loans, Portfolio Value (₹), Avg EMI, Delinquency Rate (%), Disbursement This Month (₹). Cross-time charts.
+  🔍 Lead Intelligence — Leads referred via iTarang. Status tracking: KYC → Sanctioned → Disbursed → Active → Closed. Filter by status, geography, product, date.
+  🔋 Battery Monitoring — Real-time view of all batteries in their portfolio. SOH trend, SOC, GPS, charge cycles, usage patterns. CDS and PCI scores per borrower.
+  ⚠️ Risk Alerts — Actionable alerts: EMI overdue, usage drop, offline battery, geo-shift. Each with recommended action and dual-approval gate where required.
+  🔄 Recovery & Auction — Recovered batteries pipeline. Evaluation status. Live auction lots. Bidding interface. Post-auction settlement.
+  📋 Audit Log — Immutable log of all NBFC-side actions. Filter by action type, date, user.
+  ⚙️ Settings — NBFC user management (add/remove portal users), notification preferences, report subscriptions.
+depends_on: []
+non_functional:
+  - "Sidebar must only render for users whose tenant has an active NBFC role."
+  - "Audit Log link must always render — RBI Digital Lending Directions 2025 require an immutable, auditable trail for lender-side actions."
+
+surface:
+  api: []
+  components:
+    - "src/components/nbfc-portal/SidebarNav.tsx"
+  jobs: []
+  pages:
+    - "/nbfc"
+
+logic: |
+  1. Render sidebar shell with seven items in fixed order: Portfolio Overview, Lead Intelligence, Battery Monitoring, Risk Alerts, Recovery & Auction, Audit Log, Settings.
+  2. Each item is a Next.js Link to its route under /nbfc/*.
+  3. Active item is highlighted based on current pathname prefix match.
+  4. Sidebar collapses into hamburger drawer below md breakpoint.
+
+tables_columns:
+  reuse: []
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "Sidebar renders all seven items in the order: Portfolio Overview, Lead Intelligence, Battery Monitoring, Risk Alerts, Recovery & Auction, Audit Log, Settings."
+    test_layer: ui
+    test_name: "Sidebar shows all seven NBFC nav items in BRD order"
+  - id: AC2
+    statement: "Clicking the Portfolio Overview item navigates the user to /nbfc/portfolio."
+    test_layer: ui
+    test_name: "Sidebar Portfolio Overview link routes to /nbfc/portfolio"
+  - id: AC3
+    statement: "When the current path starts with /nbfc/recovery the Recovery & Auction item has the active visual state."
+    test_layer: ui
+    test_name: "Recovery & Auction item shows active state on /nbfc/recovery routes"
+
+status: audited
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-025
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings: []
+  new_findings: []
+  verdict: audited
+  migration_required: false
+  notes:
+    - "Pure UI shell; no tables_columns.reuse or new entries. Sidebar links to routes that other units (E-026..E-039) implement."
+  checkpoint_html: null

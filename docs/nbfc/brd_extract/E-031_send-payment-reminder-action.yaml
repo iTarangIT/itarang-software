@@ -1,0 +1,123 @@
+id: E-031
+slug: send-payment-reminder-action
+name: Send Payment Reminder action
+source_section: "6.1.6"
+brd_excerpt: |
+  6.1.6 Risk Action Framework
+  Every NBFC-initiated action on a borrower account follows the Evidence → Decision → Action → Audit chain. Actions are tiered by impact:
+  Action | Approval Required | Reversible? | Audit Log
+  Send Payment Reminder — Single — NBFC User — N/A — Yes — auto
+depends_on: []
+non_functional:
+  - "Every invocation MUST write an immutable audit log entry — RBI Digital Lending Directions 2025 + BRD §6.1.2 Audit Log."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/actions/payment-reminder
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({
+          loan_sanction_id: z.string().uuid(),
+          channel: z.enum(["sms","whatsapp","email"]).default("sms"),
+        })
+      response_shape:
+        action_id: string
+        loan_sanction_id: string
+        channel: string
+        status: string
+        created_at: string
+  components:
+    - "src/components/nbfc-portal/SendPaymentReminderButton.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Validate request body against request_zod.
+  2. Resolve tenant; assert loan_sanctions.nbfc_id = tenant.id (else 403).
+  3. Insert nbfc_borrower_actions row (action_type='payment_reminder', requested_by=user_id, status='auto_approved').
+  4. Enqueue reminder send via existing notification channel (sms / whatsapp / email).
+  5. Insert an immutable nbfc_audit_log row with action_id, actor, before/after JSON.
+  6. Return action_id, loan_sanction_id, channel, status, created_at.
+
+tables_columns:
+  reuse:
+    - table: loan_sanctions
+      schema_ts_line: 1
+      columns: [id, nbfc_id]
+  new:
+    - table: nbfc_borrower_actions
+      justification: "Section 6.1.6 introduces a tiered Risk Action Framework with five distinct action types; need a unified table to record requested/approved/executed state per action."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: tenant_id, type: "uuid().notNull()" }
+        - { name: loan_sanction_id, type: "uuid().notNull()" }
+        - { name: action_type, type: "varchar({ length: 32 }).notNull()" }
+        - { name: requested_by, type: "uuid().notNull()" }
+        - { name: status, type: "varchar({ length: 24 }).notNull()" }
+        - { name: payload, type: "jsonb()" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).notNull().defaultNow()" }
+    - table: nbfc_audit_log
+      justification: "BRD §6.1.2 mandates an Immutable log of all NBFC-side actions; needs append-only table separate from mutable action records."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: tenant_id, type: "uuid().notNull()" }
+        - { name: actor_user_id, type: "uuid().notNull()" }
+        - { name: action_type, type: "varchar({ length: 32 }).notNull()" }
+        - { name: action_id, type: "uuid()" }
+        - { name: before_state, type: "jsonb()" }
+        - { name: after_state, type: "jsonb()" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).notNull().defaultNow()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/actions/payment-reminder with a valid loan_sanction_id returns 200 and persists an nbfc_borrower_actions row with action_type='payment_reminder' and status='auto_approved'."
+    test_layer: api
+    test_name: "Payment reminder creates auto-approved action row"
+  - id: AC2
+    statement: "Each successful invocation also inserts an nbfc_audit_log row referencing the new action_id."
+    test_layer: api
+    test_name: "Payment reminder writes an audit log entry"
+  - id: AC3
+    statement: "If the loan_sanction_id belongs to a different NBFC tenant the endpoint returns 403."
+    test_layer: api
+    test_name: "Payment reminder rejects cross-tenant loan ids with 403"
+
+status: needs_clarification
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-031
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: loan_sanctions
+      verified: false
+      ts_line: 2624
+      columns_verified: [id]
+      columns_missing: [nbfc_id]
+      note: "G-03: loan_sanctions.nbfc_id missing in baseline."
+  new_findings:
+    - table: nbfc_borrower_actions
+      justification_present: true
+      columns: [id, tenant_id, loan_sanction_id, action_type, requested_by, status, payload, created_at]
+      fuzzy_collisions: []
+      type_lint: ok
+      decision: approved_pending_human
+    - table: nbfc_audit_log
+      justification_present: true
+      columns: [id, tenant_id, actor_user_id, action_type, action_id, before_state, after_state, created_at]
+      fuzzy_collisions:
+        - proposed: actor_user_id
+          candidates: [lead_documents.user_id, nbfc_users.user_id, notifications.user_id]
+          overlap: 0.667
+          reason: "≥2 candidates with overlap >0.6 — silent-rename concern: actor_user_id vs user_id."
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: reject
+  migration_required: false
+  notes:
+    - "Fuzzy collision on nbfc_audit_log.actor_user_id with multiple existing user_id columns. Reviewer must confirm intent (role-disambiguator vs rename to user_id)."
+    - "nbfc_borrower_actions and nbfc_audit_log are foundational for E-032..E-035; resolve before approving downstream units."
+  checkpoint_html: docs/nbfc/loop_report/E-031/checkpoint_1.html

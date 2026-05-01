@@ -1,0 +1,196 @@
+id: E-005
+slug: nbfc-compliance-doc-workflow
+name: "NBFC compliance document upload, verify and reject workflow"
+source_section: "6.0.4"
+brd_excerpt: |
+  6.0.4 NBFC Compliance Documents
+  Admin uploads 11 compliance documents. Each through verified/rejected workflow identical to dealer document onboarding.
+  Status: Pending Admin Review.
+  Required documents: RBI Certificate of Registration (CoR) — expiry date captured;
+  Certificate of Incorporation; PAN Card (Company); GST Registration Certificate;
+  Audited Financials (Last 2 FYs); Board Resolution authorising iTarang partnership;
+  Fair Practices Code (FPC); KYC Policy Document; Executed LSP Agreement with iTarang.
+  Optional: NACH Mandate Template; Recovery & Immobilisation SOP.
+
+depends_on: []
+
+non_functional:
+  - "Workflow mirrors dealer document onboarding — reuse storage paths and verification semantics for consistency."
+  - "Document type list is bounded by an enum defined in code; uploads with unknown document_type return 422."
+  - "Rejection MUST require a reason — empty rejection_reason is rejected."
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/nbfc/{nbfcId}/compliance-documents
+      auth: admin
+      request_zod: |
+        z.object({
+          documentType: z.enum([
+            "rbi_cor",
+            "certificate_of_incorporation",
+            "pan_card_company",
+            "gst_registration",
+            "audited_financials",
+            "board_resolution",
+            "fair_practices_code",
+            "kyc_policy",
+            "lsp_agreement_executed",
+            "nach_mandate_template",
+            "recovery_immobilisation_sop"
+          ]),
+          fileUrl: z.string().url(),
+          expiryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        })
+      response_shape:
+        id: "number"
+        status: "pending_review"
+    - method: PATCH
+      path: /api/admin/nbfc/compliance-documents/{docId}/verify
+      auth: admin
+      request_zod: |
+        z.object({
+          verifierNotes: z.string().max(2000).optional(),
+        })
+      response_shape:
+        id: "number"
+        status: "verified"
+    - method: PATCH
+      path: /api/admin/nbfc/compliance-documents/{docId}/reject
+      auth: admin
+      request_zod: |
+        z.object({
+          rejectionReason: z.string().min(1).max(2000),
+        })
+      response_shape:
+        id: "number"
+        status: "rejected"
+        rejectionReason: "string"
+  components:
+    - "src/components/admin/nbfc/NbfcComplianceDocsTable.tsx"
+  jobs: []
+  pages:
+    - "/admin/nbfc/[nbfcId]/compliance"
+
+logic: |
+  1. POST: validate body; require nbfcId exists.
+  2. Insert nbfc_compliance_documents row with status='pending_review', uploaded_by=admin_user_id.
+  3. For documentType='rbi_cor', require expiryDate present and persist into nbfc_compliance_documents.expiry_date AND mirror onto nbfc.cor_expiry_date.
+  4. PATCH verify: set status='verified', verified_by, verified_at; emit audit log row.
+  5. PATCH reject: require rejectionReason non-empty; set status='rejected', rejected_by, rejected_at, rejection_reason.
+  6. Returning a 422 if a verify/reject is attempted on a doc not in pending_review.
+
+tables_columns:
+  reuse:
+    - table: nbfc
+      schema_ts_line: 1
+      columns: [id, cor_expiry_date]
+  new:
+    - table: nbfc_compliance_documents
+      justification: "Per-NBFC compliance document tracking with verify/reject lifecycle distinct from dealer documents — no existing table fits this NBFC-scoped use case."
+      columns:
+        - { name: id, type: "serial().primaryKey()" }
+        - { name: nbfc_id, type: "integer().notNull().references(() => nbfc.id)" }
+        - { name: document_type, type: "varchar({ length: 64 }).notNull()" }
+        - { name: file_url, type: "text().notNull()" }
+        - { name: expiry_date, type: "date()" }
+        - { name: status, type: "varchar({ length: 32 }).notNull().default('pending_review')" }
+        - { name: uploaded_by, type: "integer().notNull()" }
+        - { name: verified_by, type: "integer()" }
+        - { name: verified_at, type: "timestamp({ withTimezone: true })" }
+        - { name: rejected_by, type: "integer()" }
+        - { name: rejected_at, type: "timestamp({ withTimezone: true })" }
+        - { name: rejection_reason, type: "text()" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/admin/nbfc/{nbfcId}/compliance-documents with valid documentType and fileUrl returns 200 and inserts a row with status='pending_review'."
+    test_layer: api
+    test_name: "upload creates pending_review document row"
+  - id: AC2
+    statement: "POST with documentType='rbi_cor' and missing expiryDate returns 422."
+    test_layer: api
+    test_name: "RBI CoR upload requires expiry_date"
+  - id: AC3
+    statement: "PATCH /verify on a pending document sets status='verified' and persists verified_at and verified_by."
+    test_layer: api
+    test_name: "verify transitions doc to verified"
+  - id: AC4
+    statement: "PATCH /reject with empty rejectionReason returns 422; with a non-empty reason sets status='rejected' and stores the reason."
+    test_layer: api
+    test_name: "reject requires rejection reason"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-005
+  audited_at: "2026-05-01T06:30:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - cor_expiry_date
+      reason: table not present in baseline; introduced by sibling unit E-003
+      sibling_unit: E-003
+  new_findings:
+    - table: nbfc_compliance_documents
+      justification_present: true
+      justification_chars: 149
+      fuzzy_collisions: []
+      columns_proposed:
+        - name: id
+          type: serial().primaryKey()
+          drizzle_builder: serial
+        - name: nbfc_id
+          type: integer().notNull().references(() => nbfc.id)
+          drizzle_builder: integer
+        - name: document_type
+          type: "varchar({ length: 64 }).notNull()"
+          drizzle_builder: varchar
+        - name: file_url
+          type: text().notNull()
+          drizzle_builder: text
+        - name: expiry_date
+          type: date()
+          drizzle_builder: date
+        - name: status
+          type: "varchar({ length: 32 }).notNull().default('pending_review')"
+          drizzle_builder: varchar
+        - name: uploaded_by
+          type: integer().notNull()
+          drizzle_builder: integer
+        - name: verified_by
+          type: integer()
+          drizzle_builder: integer
+        - name: verified_at
+          type: "timestamp({ withTimezone: true })"
+          drizzle_builder: timestamp
+        - name: rejected_by
+          type: integer()
+          drizzle_builder: integer
+        - name: rejected_at
+          type: "timestamp({ withTimezone: true })"
+          drizzle_builder: timestamp
+        - name: rejection_reason
+          type: text()
+          drizzle_builder: text
+        - name: created_at
+          type: "timestamp({ withTimezone: true }).defaultNow().notNull()"
+          drizzle_builder: timestamp
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM"
+    - "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs"
+    - "G-04: Sync Audit G-04: dealers table never defined — referenced as FK target by many tables"
+    - "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type"
+    - reuse table 'nbfc' not yet in baseline — introduced by sibling unit E-003 (depends_on must include E-003 before this unit codes)
+  checkpoint_html: docs/nbfc/loop_report/E-005/checkpoint_1.html

@@ -1,0 +1,116 @@
+id: E-006
+slug: nbfc-cor-expiry-alert
+name: "RBI CoR expiry alert — notify admin 60 days before NBFC CoR expires"
+source_section: "6.0.4"
+brd_excerpt: |
+  RBI Certificate of Registration (CoR) — Yes — Scanned copy. Expiry date captured. Alert admin 60 days before expiry.
+
+depends_on: []
+
+non_functional:
+  - "Alert is idempotent for a given (nbfc_id, expiry_date) pair within the 60-day window — never send duplicates per scheduler tick."
+  - "Cron tick frequency: daily at 06:00 IST."
+  - "Alert delivery channel: email to all admin users with role IN (ceo, business_head, admin)."
+
+surface:
+  api:
+    - method: GET
+      path: /api/admin/nbfc/cor-expiry-alerts
+      auth: admin
+      query_zod: |
+        z.object({
+          windowDays: z.coerce.number().int().min(1).max(180).default(60),
+        })
+      response_shape:
+        items:
+          - nbfcId: "number"
+            shortName: "string"
+            corExpiryDate: "iso-date"
+            daysToExpiry: "number"
+  components: []
+  jobs:
+    - "src/lib/queue/jobs/checkNbfcCorExpiryJob.ts"
+  pages: []
+
+logic: |
+  1. Cron job runs daily.
+  2. SELECT nbfc rows where cor_expiry_date BETWEEN today AND today+60 days.
+  3. For each, look up nbfc_cor_expiry_alerts to see if an alert already sent for this (nbfc_id, cor_expiry_date) pair.
+  4. If not, send email to admin recipients and insert into nbfc_cor_expiry_alerts.
+  5. Return count of alerts sent.
+
+tables_columns:
+  reuse:
+    - table: nbfc
+      schema_ts_line: 1
+      columns: [id, short_name, cor_expiry_date]
+  new:
+    - table: nbfc_cor_expiry_alerts
+      justification: "Tracks which (nbfc_id, expiry_date) pair has already been alerted to ensure idempotency across daily cron ticks."
+      columns:
+        - { name: id, type: "serial().primaryKey()" }
+        - { name: nbfc_id, type: "integer().notNull().references(() => nbfc.id)" }
+        - { name: cor_expiry_date, type: "date().notNull()" }
+        - { name: alerted_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/admin/nbfc/cor-expiry-alerts returns NBFCs whose cor_expiry_date is within the next 60 days, with daysToExpiry computed correctly."
+    test_layer: api
+    test_name: "expiry list returns NBFCs in the 60-day window"
+  - id: AC2
+    statement: "GET /api/admin/nbfc/cor-expiry-alerts excludes NBFCs whose cor_expiry_date is more than 60 days away."
+    test_layer: api
+    test_name: "expiry list excludes NBFCs outside the window"
+  - id: AC3
+    statement: "Running the cor-expiry job twice on the same day for the same NBFC inserts only one row into nbfc_cor_expiry_alerts."
+    test_layer: api
+    test_name: "alert send is idempotent per (nbfc_id, expiry_date)"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-006
+  audited_at: "2026-05-01T06:30:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - short_name
+        - cor_expiry_date
+      reason: table not present in baseline; introduced by sibling unit E-003
+      sibling_unit: E-003
+  new_findings:
+    - table: nbfc_cor_expiry_alerts
+      justification_present: true
+      justification_chars: 112
+      fuzzy_collisions: []
+      columns_proposed:
+        - name: id
+          type: serial().primaryKey()
+          drizzle_builder: serial
+        - name: nbfc_id
+          type: integer().notNull().references(() => nbfc.id)
+          drizzle_builder: integer
+        - name: cor_expiry_date
+          type: date().notNull()
+          drizzle_builder: date
+        - name: alerted_at
+          type: "timestamp({ withTimezone: true }).defaultNow().notNull()"
+          drizzle_builder: timestamp
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM"
+    - "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs"
+    - "G-04: Sync Audit G-04: dealers table never defined — referenced as FK target by many tables"
+    - "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type"
+    - reuse table 'nbfc' not yet in baseline — introduced by sibling unit E-003 (depends_on must include E-003 before this unit codes)
+  checkpoint_html: docs/nbfc/loop_report/E-006/checkpoint_1.html

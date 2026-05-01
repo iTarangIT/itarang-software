@@ -1,0 +1,91 @@
+id: E-048
+slug: telemetry-freshness-rules
+name: Telemetry data freshness classifier
+source_section: "6.2.5"
+brd_excerpt: |
+  6.2.5 Telemetry Freshness Rules
+  Condition                         | Display                                    | Action
+  last_seen < 15 min ago            | SOC: 74% 🟢 | Just now                       | None
+  last_seen 15 min – 6 h            | SOC: 74% | 2h ago                          | None — normal idle
+  last_seen 6 h – 24 h              | SOC: 74% ⚠️ | 8h ago (stale)                | Amber badge. Possibly offline or stationary.
+  last_seen > 24 h                  | SOC: N/A 🔴 | Offline >24h                   | Alert generated: 'Battery BAT12345 offline >24h'. Notify NBFC.
+  Never seen (registered only)      | SOC: N/A | No data yet                       | Badge: '⏳ Awaiting first ping'
+depends_on:
+  - E-045
+non_functional:
+  - "Pure classifier on iot_devices.last_seen vs server now(); no DB writes."
+  - "Used by query APIs (E-050, E-051) to compute the freshness field."
+  - "Boundaries are inclusive at the lower end and exclusive at the upper end as commonly interpreted; orchestrator may surface checkpoint if disputed."
+
+surface:
+  api:
+    - method: GET
+      path: /api/iot/battery/[serialNumber]/freshness
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({})
+      response_shape:
+        serial: "string"
+        last_seen: "ISO8601 | null"
+        freshness: "fresh | idle | stale | offline | never"
+        badge: "string"
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Resolve tenant; load iot_devices row by serialNumber, scoped to tenant's portfolio.
+  2. If row missing return 404.
+  3. If last_seen IS NULL, freshness='never', badge='Awaiting first ping'.
+  4. Compute delta = now() - last_seen.
+  5. If delta < 15 min, freshness='fresh', badge='Just now'.
+  6. Else if delta < 6 h, freshness='idle', badge=`${hours}h ago`.
+  7. Else if delta < 24 h, freshness='stale', badge=`${hours}h ago (stale)`.
+  8. Else freshness='offline', badge='Offline >24h'.
+  9. Return { serial, last_seen, freshness, badge }.
+
+tables_columns:
+  reuse:
+    - table: iot_devices
+      schema_ts_line: 1
+      columns: [serial_number, last_seen, device_status]
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/iot/battery/{serial}/freshness returns freshness='fresh' when last_seen is 5 minutes before now."
+    test_layer: api
+    test_name: "freshness=fresh when last_seen <15 min ago"
+  - id: AC2
+    statement: "GET /api/iot/battery/{serial}/freshness returns freshness='stale' when last_seen is 8 hours before now."
+    test_layer: api
+    test_name: "freshness=stale when last_seen between 6h and 24h"
+  - id: AC3
+    statement: "GET /api/iot/battery/{serial}/freshness returns freshness='offline' when last_seen is 30 hours before now."
+    test_layer: api
+    test_name: "freshness=offline when last_seen >24h ago"
+  - id: AC4
+    statement: "GET /api/iot/battery/{serial}/freshness returns freshness='never' and badge='Awaiting first ping' when last_seen is NULL."
+    test_layer: api
+    test_name: "freshness=never when last_seen is null"
+
+status: audited
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-048
+  audited_at: "2026-05-01T06:11:00Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  verdict: audited
+  migration_required: false
+  reuse_findings:
+    - table: iot_devices
+      verified: false
+      verified_via: "depends_on:E-045 new[]"
+      columns_pending_dep_approval: [serial_number, last_seen, device_status]
+  new_findings: []
+  notes:
+    - "Pure classifier; only depends on iot_devices.last_seen / device_status from E-045."
+    - "schema_ts_line=1 in YAML is a placeholder (table not yet in schema.ts)."
+  checkpoint_html: null

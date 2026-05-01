@@ -1,0 +1,199 @@
+id: E-091
+slug: dpdpa-retention-job
+name: DPDPA retention policy enforcer (KYC 7y, telemetry 2y) with tombstone
+source_section: "6.4.4"
+brd_excerpt: |
+  Retention Policy: KYC documents: 7 years from lead creation (RBI + IT Act). Telemetry: raw events 2 years; daily summaries retained indefinitely. After retention period: automated deletion with tombstone record.
+  Data Localisation: All data stored on servers located in India. S3 bucket region: ap-south-1 (Mumbai). No cross-border transfer without explicit consent.
+
+depends_on: []
+
+non_functional:
+  - "DPDPA 2023 Retention: data must not be retained beyond purpose; automated deletion required."
+  - "RBI KYC Master Direction + IT Act: KYC documents retained 7 years from lead creation."
+  - "Tombstone: deletion produces an immutable record (table + identifier + reason + ts) — original PII is gone but the existence of the deletion is auditable."
+  - "Daily telemetry summaries are retained indefinitely; only raw events older than 2 years are deleted."
+  - "Storage region must remain ap-south-1 (Mumbai); no cross-region copies during deletion."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/dpdpa/retention/run
+      auth: admin
+      request_zod: |
+        z.object({ dry_run: z.boolean().default(false), as_of: z.string().datetime().optional() })
+      response_shape:
+        as_of: string
+        kyc_deleted_count: number
+        telemetry_raw_deleted_count: number
+        tombstones_written: number
+        dry_run: boolean
+  jobs:
+    - "src/lib/nbfc/dpdpa/retentionCron.ts"
+  components: []
+  pages: []
+
+logic: |
+  1. Validate body; default dry_run=false; default as_of=now().
+  2. Verify caller has admin role; else 403.
+  3. Compute kyc_cutoff = as_of - 7 years; telemetry_cutoff = as_of - 2 years.
+  4. Find kyc_documents rows where lead.created_at < kyc_cutoff and not already tombstoned.
+  5. For each: write nbfc_retention_tombstones row (table_name, original_id, reason='kyc_7y_expired', deleted_at); if dry_run=false, delete underlying file from S3 (ap-south-1) and set kyc_documents.purged=true with PII columns nulled.
+  6. Find telemetry raw_events rows older than telemetry_cutoff; delete in batches; for each batch write tombstone (table_name='telemetry_raw_events', count, reason='telemetry_2y_expired').
+  7. Daily telemetry summaries are NEVER deleted — query must filter by event_type='raw'.
+  8. Return aggregate counts.
+
+tables_columns:
+  reuse:
+    - table: kycVerifications
+      schema_ts_line: 1226
+      columns: [id]
+  new:
+    - table: nbfc_retention_tombstones
+      justification: "Immutable record of every DPDPA-driven deletion required for accountability under DPDPA 2023; no existing audit_logs row holds the table+id+reason shape needed for a deletion attestation."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: table_name, type: "varchar({ length: 64 }).notNull()" }
+        - { name: original_id, type: "varchar({ length: 255 })" }
+        - { name: row_count, type: "integer().default(1).notNull()" }
+        - { name: reason, type: "varchar({ length: 64 }).notNull()" }
+        - { name: deleted_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: storage_region, type: "varchar({ length: 24 }).default('ap-south-1').notNull()" }
+    - table: kyc_documents
+      justification: "Existing kyc_documents has no purged-flag or PII-nulled state; retention deletion needs a non-destructive purged marker so foreign keys to lead remain intact while PII is removed."
+      columns:
+        - { name: purged, type: "boolean().default(false).notNull()" }
+        - { name: purged_at, type: "timestamp({ withTimezone: true })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/dpdpa/retention/run with dry_run=true returns 200 with kyc_deleted_count and telemetry_raw_deleted_count > 0 for seeded expired data; no rows are actually deleted and no tombstones are written."
+    test_layer: api
+    test_name: "Retention dry-run reports counts without mutating data"
+  - id: AC2
+    statement: "POST with dry_run=false on seeded data writes one nbfc_retention_tombstones row per deleted KYC document with reason='kyc_7y_expired' and storage_region='ap-south-1'."
+    test_layer: api
+    test_name: "Retention deletion writes tombstones for KYC 7y expiry"
+  - id: AC3
+    statement: "POST with dry_run=false does NOT delete telemetry daily-summary rows; only raw_event rows older than 2 years are removed."
+    test_layer: api
+    test_name: "Retention preserves daily telemetry summaries indefinitely"
+  - id: AC4
+    statement: "POST by a non-admin user returns 403."
+    test_layer: api
+    test_name: "Retention run requires admin role"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit: |
+  {
+    "unit_id": "E-091",
+    "audited_at": "2026-05-01T06:16:03Z",
+    "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+    "reuse_findings": [
+      {
+        "table": "kyc_verifications",
+        "verified": true,
+        "ts_line": 1226,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "id"
+        ],
+        "columns_missing": [],
+        "note": "YAML referenced JS const 'kycVerifications'; baseline records SQL table name 'kyc_verifications' (same row at line 1226)."
+      }
+    ],
+    "new_findings": [
+      {
+        "table": "nbfc_retention_tombstones",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 187,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "table_name",
+            "type": "varchar({ length: 64 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "original_id",
+            "type": "varchar({ length: 255 })",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "row_count",
+            "type": "integer().default(1).notNull()",
+            "type_lint_ok": true,
+            "type_head": "integer",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "reason",
+            "type": "varchar({ length: 64 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "deleted_at",
+            "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "storage_region",
+            "type": "varchar({ length: 24 }).default('ap-south-1').notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      },
+      {
+        "table": "kyc_documents",
+        "is_existing_table": true,
+        "justification_present": true,
+        "justification_length": 179,
+        "columns": [
+          {
+            "name": "purged",
+            "type": "boolean().default(false).notNull()",
+            "type_lint_ok": true,
+            "type_head": "boolean",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "purged_at",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      }
+    ],
+    "verdict": "needs_schema_approval",
+    "migration_required": false,
+    "notes": [
+      "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+    ],
+    "checkpoint_html": "docs/nbfc/loop_report/E-091/checkpoint_1.html"
+  }

@@ -67,3 +67,9 @@ node_modules
 prod.txt
 env.txt
 /eval-reports
+
+# /nbfc skill — runtime artifacts (committed: brd_extract/*.yaml, _audit_*.json)
+docs/nbfc/_preflight.json
+docs/nbfc/manifest.json
+docs/nbfc/manifest/
+docs/nbfc/loop_report/

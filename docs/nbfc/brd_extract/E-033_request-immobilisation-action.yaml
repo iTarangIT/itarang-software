@@ -1,0 +1,120 @@
+id: E-033
+slug: request-immobilisation-action
+name: Request Immobilisation with borrower notice and dual approval
+source_section: "6.1.6"
+brd_excerpt: |
+  Action | Approval Required | Reversible? | Audit Log
+  Request Immobilisation — Dual — Risk Head + Ops — Yes — re-mobilisation after EMI settlement — Yes — full borrower notice preview required
+  Immobilisation — Borrower Notice Mandatory
+  Before any immobilisation request can be submitted, the NBFC portal must show a Borrower Notice Preview. The notice must include: (1) Lender identity (NBFC legal name), (2) LSP identity (iTarang Battery Solutions), (3) Outstanding amount + restoration steps, (4) Grievance channel URL + helpline, (5) Plain, non-coercive language. Admin must check 'I confirm the notice is accurate' before proceeding. Per RBI Digital Lending Directions 2025.
+depends_on: []
+non_functional:
+  - "Dual approval gate: requires Risk Head submit + Ops approve before status moves to 'approved'."
+  - "RBI Digital Lending Directions 2025: borrower notice must be shown and confirmed before submission."
+  - "Re-mobilisation must be possible only after EMI settlement is recorded."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/actions/immobilisation/request
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({
+          loan_sanction_id: z.string().uuid(),
+          notice_confirmed: z.literal(true),
+          notice_text: z.string().min(50),
+          outstanding_amount: z.number().nonnegative(),
+        })
+      response_shape:
+        action_id: string
+        status: string
+        created_at: string
+    - method: POST
+      path: /api/nbfc/actions/immobilisation/approve
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ action_id: z.string().uuid() })
+      response_shape:
+        action_id: string
+        status: string
+    - method: POST
+      path: /api/nbfc/actions/immobilisation/remobilise
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ action_id: z.string().uuid(), settlement_reference: z.string().min(3) })
+      response_shape:
+        action_id: string
+        status: string
+  components:
+    - "src/components/nbfc-portal/BorrowerNoticePreview.tsx"
+    - "src/components/nbfc-portal/ImmobilisationRequestDialog.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Request endpoint asserts caller role = 'risk_head' and notice_confirmed === true; rejects otherwise.
+  2. Validate notice_text contains the five mandatory components (lender identity, LSP identity, outstanding amount, grievance URL+helpline, plain-language clause) via structured field check.
+  3. Insert nbfc_borrower_actions row with action_type='immobilisation', status='pending_dual_approval', payload includes notice_text and outstanding_amount.
+  4. Audit-log the request.
+  5. Approve endpoint asserts caller role = 'ops_head' and the requested action is still 'pending_dual_approval'; flips status to 'approved' and audit-logs.
+  6. Remobilise endpoint asserts the original action is in status 'approved' and a settlement_reference is provided; flips status to 'reversed' and audit-logs the reason.
+
+tables_columns:
+  reuse:
+    - table: nbfc_borrower_actions
+      schema_ts_line: 1
+      columns: [id, tenant_id, loan_sanction_id, action_type, status, payload, requested_by, created_at]
+    - table: nbfc_audit_log
+      schema_ts_line: 1
+      columns: [tenant_id, actor_user_id, action_type, action_id, before_state, after_state, created_at]
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/actions/immobilisation/request with notice_confirmed=true and a notice_text containing all five mandated components creates an action with status='pending_dual_approval'."
+    test_layer: api
+    test_name: "Immobilisation request creates pending_dual_approval action when notice confirmed"
+  - id: AC2
+    statement: "POST /api/nbfc/actions/immobilisation/request with notice_confirmed omitted or false returns 400 and does not create an action row."
+    test_layer: api
+    test_name: "Immobilisation request blocked without notice confirmation"
+  - id: AC3
+    statement: "An Ops Head calling /approve transitions the action's status from 'pending_dual_approval' to 'approved'; a non-Ops user receives 403."
+    test_layer: api
+    test_name: "Immobilisation requires Ops Head dual approval to reach approved"
+  - id: AC4
+    statement: "Borrower Notice Preview component renders the five mandated components (lender identity, LSP identity, outstanding amount + restoration steps, grievance channel + helpline, plain-language confirmation checkbox) before the submit button enables."
+    test_layer: ui
+    test_name: "Borrower notice preview shows all five RBI-mandated components"
+  - id: AC5
+    statement: "POST /api/nbfc/actions/immobilisation/remobilise on an 'approved' action with settlement_reference provided transitions status to 'reversed'."
+    test_layer: api
+    test_name: "Re-mobilisation reverses an approved immobilisation"
+
+status: audited
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-033
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc_borrower_actions
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [id, tenant_id, loan_sanction_id, action_type, status, payload, requested_by, created_at]
+      note: "Forward reference to table proposed in E-031."
+    - table: nbfc_audit_log
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [tenant_id, actor_user_id, action_type, action_id, before_state, after_state, created_at]
+      note: "Forward reference to table proposed in E-031."
+  new_findings: []
+  verdict: audited
+  migration_required: false
+  notes:
+    - "All reuse points to tables proposed in E-031. Borrower-notice-mandatory flow is RBI-Digital-Lending-Directions critical (BRD §6.1.6)."
+  checkpoint_html: null

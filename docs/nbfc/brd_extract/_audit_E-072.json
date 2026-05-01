@@ -1,0 +1,32 @@
+{
+  "unit_id": "E-072",
+  "audited_at": "2026-05-01T06:10:31Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "admin_audit_logs",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["id", "tenant_id", "timestamp", "action", "requested_by", "payload"],
+      "reason": "admin_audit_logs does not exist in baseline; it is introduced by E-071 (which itself is currently in 'reject' verdict due to a synonym collision with the existing audit_logs table). depends_on should include E-071, and the synonym question must be resolved upstream."
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "admin_audit_log_exports",
+      "justification_present": true,
+      "fuzzy_collisions": [],
+      "type_lint": "ok",
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "Reuse target admin_audit_logs is a NEW table from E-071 that is itself in 'reject' (synonym with existing audit_logs). Resolve E-071 before this unit can ship.",
+    "depends_on should include E-071.",
+    "No cross-doc gap (G-01..G-10) directly impacts admin_audit_log_exports."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-072/checkpoint_1.html"
+}

@@ -1,0 +1,106 @@
+id: E-100
+slug: inventory-categories-canonical-endpoint
+name: "Canonical inventory categories endpoint — flat 6-code category list with battery model arrays (no vehicle-type sub-categories)"
+source_section: "sync-audit-G-01"
+brd_excerpt: |
+  Resolution A — Sub-Category = Battery Model Name (G-01 / G-05 / G-09)
+
+  A.2 Category / Model Matrix — Canonical (Replaces All Versions)
+  Category Code | Battery Models (sub_category / model values)
+  3W  | 51.2V-105AH | 51.2V-140AH | 51.2V-153AH | 60.8V-105AH | 60.8V-140AH | 60.8V-153AH | 64V-105AH | 64V-140AH | 64V-153AH
+  2W  | Defined in product master — NA for now
+  4W  | Defined in product master — NA for now
+  INV | Power Cube 1.4 | Power Cube 1.4+ | Power Cube 2.7 | Power Cube 2.7+ | 5KWh
+  SOL | Defined in product master — NA for now
+  OTH | Free-form entry allowed
+
+  // Canonical GET /api/inventory/categories response:
+  Response: [
+    { code: "3W",  label: "3-Wheeler",
+      models: ["51.2V-105AH","51.2V-140AH","51.2V-153AH",
+               "60.8V-105AH","60.8V-140AH","60.8V-153AH",
+               "64V-105AH","64V-140AH","64V-153AH"] },
+    { code: "INV", label: "Inverter",
+      models: ["Power Cube 1.4","Power Cube 1.4+","Power Cube 2.7","Power Cube 2.7+","5KWh"] },
+    { code: "2W",  label: "2-Wheeler", models: [] },
+    { code: "4W",  label: "4-Wheeler", models: [] },
+    { code: "SOL", label: "Solar",     models: [] },
+    { code: "OTH", label: "Other",     models: [] }
+  ]
+  // Field name returned as 'models' not 'subCategories' — matches the removal of
+  // vehicle-type sub-categories and confirms these are product/model identifiers.
+
+depends_on: []
+
+non_functional:
+  - "Sync Audit G-01: V2-Feb described sub_category as vehicle-type labels (E-Rickshaw, E-Cart, E-Auto); Sec6 removed sub-category concept. Canonical resolution: sub_category IS the battery model name."
+  - "Sync Audit G-09: V2-Feb category matrix used sub-categories as battery model specs; Sec6.B uses flat 3W|2W|4W|INV|SOL|OTH. Sec6.B codes are authoritative."
+  - "Response field MUST be named 'models' (not 'subCategories' or 'sub_category') to reflect the data-model decision."
+  - "Endpoint must be deterministic — return all six category codes in the documented order even when models[] is empty (2W/4W/SOL/OTH)."
+
+surface:
+  api:
+    - method: GET
+      path: /api/inventory/categories
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({})
+      response_shape:
+        categories:
+          - code: "string"
+            label: "string"
+            models: "string[]"
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Authenticate caller via nbfc-tenant guard.
+  2. Build the canonical six-entry array in fixed order: 3W, INV, 2W, 4W, SOL, OTH.
+  3. For 3W return the nine 51.2V/60.8V/64V battery-spec models verbatim from Section A.2.
+  4. For INV return the five Power Cube and 5KWh model strings verbatim from Section A.2.
+  5. For 2W, 4W, SOL, OTH return models: [] (NA-for-now placeholders).
+  6. Return 200 with the array under key 'categories'. Never return 'subCategories'.
+
+tables_columns:
+  reuse: []
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/inventory/categories returns 200 with exactly six entries whose codes are 3W, INV, 2W, 4W, SOL, OTH."
+    test_layer: api
+    test_name: "categories endpoint returns canonical six codes"
+  - id: AC2
+    statement: "Response entry for code='3W' has models array equal to ['51.2V-105AH','51.2V-140AH','51.2V-153AH','60.8V-105AH','60.8V-140AH','60.8V-153AH','64V-105AH','64V-140AH','64V-153AH']."
+    test_layer: api
+    test_name: "3W battery models match canonical Section A list"
+  - id: AC3
+    statement: "Response entry for code='INV' has models array equal to ['Power Cube 1.4','Power Cube 1.4+','Power Cube 2.7','Power Cube 2.7+','5KWh']."
+    test_layer: api
+    test_name: "INV models match canonical Section A list"
+  - id: AC4
+    statement: "Response entries for codes 2W, 4W, SOL, OTH each have models=[] (empty array)."
+    test_layer: api
+    test_name: "NA-for-now categories return empty models array"
+  - id: AC5
+    statement: "Response JSON does not contain any field named 'subCategories' or 'sub_category' at any level."
+    test_layer: api
+    test_name: "no legacy sub_category field in response"
+
+status: audited
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-100
+  audited_at: "2026-05-01T06:10:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings: []
+  new_findings: []
+  verdict: audited
+  migration_required: false
+  notes:
+    - "Sync Audit G-01 / G-05 / G-09 — purely a read-only canonical endpoint; returns hard-coded category/model matrix without touching any DB table."
+    - "tables_columns.reuse[] and tables_columns.new[] are both empty, which matches the logic block (no DB access)."
+  checkpoint_html: null

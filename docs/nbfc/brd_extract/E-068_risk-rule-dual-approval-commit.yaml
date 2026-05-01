@@ -1,0 +1,130 @@
+id: E-068
+slug: risk-rule-dual-approval-commit
+name: Dual-approval commit workflow for Risk Rule Engine threshold changes
+source_section: "6.3.3"
+brd_excerpt: |
+  Every Threshold Change Requires Dual Approval
+  Step 1: Admin enters new value. Step 2: System shows impact preview — 'This change will affect N accounts. Accounts moving to higher risk band: X.' Step 3: MFA prompt. Step 4: Risk Head approval required (second admin login). Step 5: Change logged in audit with before/after values, both approvers, and timestamp. Change takes effect immediately after second approval.
+
+depends_on: []
+non_functional:
+  - "Dual-approval is mandatory: requester and Risk Head must be different admin users"
+  - "MFA re-confirmation required from requester (Step 3)"
+  - "Audit log entry written to admin audit log with before/after values, both approver IDs, and timestamp"
+  - "Threshold takes effect atomically with second approval (no intermediate state)"
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/nbfc/risk-rules/request-change
+      auth: admin
+      request_zod: |
+        z.object({
+          rule_key: z.string(),
+          new_value: z.number(),
+          mfa_token: z.string().min(6)
+        }).strict()
+      response_shape:
+        request_id: "uuid"
+        status: "pending_second_approval"
+        previous_value: "number"
+        new_value: "number"
+    - method: POST
+      path: /api/admin/nbfc/risk-rules/approve
+      auth: admin
+      request_zod: |
+        z.object({
+          request_id: z.string().uuid(),
+          decision: z.enum(["approve", "reject"])
+        }).strict()
+      response_shape:
+        request_id: "uuid"
+        status: "executed|rejected"
+        applied_at: "iso8601|null"
+  components:
+    - "src/components/admin/nbfc/RiskRuleApprovalQueue.tsx"
+  pages:
+    - "/admin/nbfc/risk-rules/approvals"
+  jobs: []
+
+logic: |
+  1. POST /request-change validates rule_key, new_value, and MFA token; rejects if MFA invalid.
+  2. Confirm requester has admin role; insert nbfc_risk_rule_change_requests row with status='pending_second_approval', requested_by=current_user, previous_value, new_value.
+  3. Return request_id and pending status.
+  4. POST /approve loads the request; reject if request_id missing or status != pending_second_approval.
+  5. Reject if approver_id == requested_by (must be different admins).
+  6. If decision='reject', set status='rejected'; write audit log entry; return.
+  7. If decision='approve', confirm approver has Risk Head role.
+  8. Atomically: update nbfc_risk_rules.current_value, set request status='executed', applied_at=now, approved_by=current_user.
+  9. Insert admin audit log entry with action='RISK_RULE_CHANGED', before/after values, requester and approver IDs, and timestamp.
+  10. Return executed status.
+
+tables_columns:
+  reuse:
+    - table: nbfc_risk_rules
+      schema_ts_line: 1
+      columns: [id, rule_key, current_value, updated_at, updated_by]
+  new:
+    - table: nbfc_risk_rule_change_requests
+      justification: "Tracks pending dual-approval workflow state for risk threshold changes; required to hold the request between requester MFA submit and Risk Head approval, with both before and after values for audit."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: rule_key, type: "varchar({ length: 64 }).notNull()" }
+        - { name: previous_value, type: "numeric({ precision: 12, scale: 4 }).notNull()" }
+        - { name: new_value, type: "numeric({ precision: 12, scale: 4 }).notNull()" }
+        - { name: requested_by, type: "uuid().notNull()" }
+        - { name: approved_by, type: "uuid()" }
+        - { name: status, type: "varchar({ length: 32 }).notNull()" }
+        - { name: requested_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: applied_at, type: "timestamp({ withTimezone: true })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/admin/nbfc/risk-rules/request-change with valid MFA returns 200 with status='pending_second_approval' and creates a nbfc_risk_rule_change_requests row."
+    test_layer: api
+    test_name: "Request-change creates pending row with valid MFA"
+  - id: AC2
+    statement: "POST /api/admin/nbfc/risk-rules/approve with decision='approve' by a different admin (Risk Head) updates nbfc_risk_rules.current_value to new_value and sets request status='executed'."
+    test_layer: api
+    test_name: "Approve by second admin commits new threshold value"
+  - id: AC3
+    statement: "POST /api/admin/nbfc/risk-rules/approve returns 403 when approver_id equals requested_by (same admin cannot self-approve)."
+    test_layer: api
+    test_name: "Approve rejects self-approval with 403"
+  - id: AC4
+    statement: "On successful approval, an admin_audit_logs row is written with action='RISK_RULE_CHANGED' containing before and after values and both approver IDs."
+    test_layer: api
+    test_name: "Audit log row written with before/after values on approval"
+  - id: AC5
+    statement: "POST /api/admin/nbfc/risk-rules/request-change returns 400 when mfa_token is invalid or shorter than 6 chars."
+    test_layer: api
+    test_name: "Request-change rejects invalid MFA with 400"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-068
+  audited_at: "2026-05-01T06:10:31Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  reuse_findings:
+    - table: nbfc_risk_rules
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: ["id", "rule_key", "current_value", "updated_at", "updated_by"]
+      reason: "nbfc_risk_rules does not exist in baseline; it is being introduced by E-067. Add 'E-067' to depends_on or merge the two units before coding."
+  new_findings:
+    - table: nbfc_risk_rule_change_requests
+      justification_present: true
+      fuzzy_collisions: []
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "Reuse target nbfc_risk_rules is a NEW table from E-067, not in baseline. depends_on should include E-067."
+    - "Logic step 9 writes to admin_audit_logs (introduced by E-071). depends_on should also include E-071 for FK/table availability at code time."
+    - "No cross-doc gap (G-01..G-10) directly impacts nbfc_risk_rule_change_requests."
+  checkpoint_html: "docs/nbfc/loop_report/E-068/checkpoint_1.html"

@@ -1,0 +1,34 @@
+{
+  "unit_id": "E-051",
+  "audited_at": "2026-05-01T06:11:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "iot_devices",
+      "verified": false,
+      "verified_via": "depends_on:E-045 new[]",
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_pending_dep_approval": ["serial_number", "dealer_id", "device_status", "last_seen"],
+      "notes": "iot_devices proposed by E-045 (in depends_on)."
+    },
+    {
+      "table": "telemetry_alerts",
+      "verified": false,
+      "verified_via": "depends_on:E-049 new[]",
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_pending_dep_approval": ["serial_number", "rule", "severity", "triggered_at", "resolved_at"],
+      "notes": "telemetry_alerts proposed by E-049 (in depends_on)."
+    }
+  ],
+  "new_findings": [],
+  "verdict": "audited",
+  "migration_required": false,
+  "notes": [
+    "Unit declares no new tables/columns. All reuse[] entries are provided by depended-on units (E-045, E-049).",
+    "Fleet endpoint scope: nbfcId param must match caller's tenant — reviewer should confirm the NBFC↔dealer↔inventory linkage table (likely dealer_nbfc_assignments).",
+    "BRD sync audit shows no gap touching the fleet query API."
+  ],
+  "checkpoint_html": null
+}

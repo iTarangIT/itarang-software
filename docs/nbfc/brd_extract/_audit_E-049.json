@@ -1,0 +1,51 @@
+{
+  "unit_id": "E-049",
+  "audited_at": "2026-05-01T06:11:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [],
+  "new_findings": [
+    {
+      "table": "telemetry_alerts",
+      "justification_present": true,
+      "justification_chars": 158,
+      "columns_proposed": [
+        "id", "serial_number", "rule", "severity", "triggered_at", "resolved_at",
+        "payload", "notified_to", "cds_flagged"
+      ],
+      "type_lint": {
+        "all_drizzle_builders": true,
+        "builders_used": ["serial", "varchar", "timestamp", "jsonb", "boolean"]
+      },
+      "fuzzy_collisions": [
+        {
+          "proposed": "serial_number",
+          "candidates": ["deployed_assets.serial_number", "inventory.serial_number", "oem_inventory_for_pdi.serial_number"],
+          "best_score": 1.0,
+          "reason": "logical FK to inventory.serial_number; intentional"
+        },
+        {
+          "proposed": "severity",
+          "candidates": ["battery_alerts.severity", "risk_card_runs.severity"],
+          "best_score": 1.0,
+          "reason": "battery_alerts ALREADY exists with (id, device_id, alert_type, severity, message, value, threshold, acknowledged*) — strong table-level overlap; telemetry_alerts may be a synonym/extension of battery_alerts and reviewer must decide whether to extend battery_alerts or keep telemetry_alerts as a distinct rule-based store"
+        },
+        {
+          "proposed": "resolved_at",
+          "candidates": ["order_disputes.resolved_at", "service_tickets.resolved_at"],
+          "best_score": 1.0,
+          "reason": "tokens 'resolved' + 'at' match other tables' resolution timestamps; conventional pattern"
+        }
+      ],
+      "decision": "rejected_pending_clarification"
+    }
+  ],
+  "verdict": "reject",
+  "migration_required": false,
+  "notes": [
+    "CRITICAL: Existing schema has battery_alerts (line 2079) with overlapping columns (severity, alert_type, message, acknowledged, acknowledged_at, acknowledged_by, value, threshold, device_id, created_at). Reviewer must decide whether telemetry_alerts is (a) additive (new rule-based persistence with cds_flagged, payload jsonb, notified_to jsonb, resolved_at), or (b) should EXTEND battery_alerts with the missing fields (rule, triggered_at, resolved_at, payload, notified_to, cds_flagged) and reuse the existing table.",
+    "BRD 6.2.6 lists 8 named rules with severity tiers and notification fan-out — telemetry_alerts is justified as a rule-based store. battery_alerts uses alert_type+message rather than rule+payload; semantics differ.",
+    "BRD sync audit (line 495 of /tmp/nbfc_extract/sync_audit.txt) does not call out telemetry_alerts vs battery_alerts; this is a NEW collision surfaced by the auditor.",
+    "AC4 + AC5 require an offline-scan job that fires on absence of packets — depends on a cron worker (Vercel cron); ensure the cron is registered separately from the per-packet evaluator."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-049/checkpoint_1.html"
+}
