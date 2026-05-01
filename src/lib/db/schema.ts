@@ -15,6 +15,7 @@ import {
   bigint,
   date,
   serial,
+  bigserial,
   primaryKey,
   unique,
   customType,
@@ -4167,5 +4168,108 @@ export const auctionBids = pgTable(
     lotIdx: index("auction_bids_lot_idx").on(table.lot_id),
     tenantIdx: index("auction_bids_tenant_idx").on(table.tenant_id),
     placedAtIdx: index("auction_bids_placed_at_idx").on(table.placed_at),
+  }),
+);
+
+// =============================================================================
+// [E-047] Telemetry storage — Section 6.2.4
+// =============================================================================
+// Two new tables that own the canonical telemetry storage layer:
+//
+//   telemetry_events           — Raw per-packet time-series store. High-volume,
+//                                insert-only. Intended for monthly partitioning
+//                                in production; the BRD explicitly omits the
+//                                FK on serial_number for write throughput.
+//   telemetry_daily_summary    — One row per (battery, day) aggregated for risk
+//                                scoring. Upsert key is (serial_number,
+//                                summary_date) — enforced as a unique
+//                                constraint so concurrent ingest jobs cannot
+//                                duplicate a day's roll-up.
+//
+// Schema-only unit; no API surface. Ingestion (E-046), summary upsert
+// (E-048), and risk-scoring reads (E-050/E-051) are downstream units that
+// depend on this table existing. Auto-approved via /nbfc loop --auto-approve-schema.
+//
+// Fuzzy-collision dispositions from _audit_E-047.json:
+//   - serial_number on both tables is an intentional logical FK to
+//     inventory.serial_number; left un-FK'd at DB level (BRD 6.2.4 — write
+//     throughput) and same-named on purpose.
+//   - telemetry_events.soc_percent and telemetry_events.voltage_v reuse the
+//     names of inventory.soc_percent (last-known SOC) and products.voltage_v
+//     (nominal voltage) — distinct semantics (per-packet readings vs.
+//     last-known / nominal), kept identical for column-name clarity.
+// =============================================================================
+export const telemetryEvents = pgTable(
+  "telemetry_events",
+  {
+    id: bigserial("id", { mode: "bigint" }).primaryKey(),
+    serial_number: varchar("serial_number", { length: 50 }).notNull(),
+    imei_id: varchar("imei_id", { length: 20 }).notNull(),
+    // Device-reported UTC.
+    device_time: timestamp("device_time", { withTimezone: true }).notNull(),
+    // Server receipt time.
+    server_time: timestamp("server_time", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    soc_percent: integer("soc_percent"),
+    soh_percent: integer("soh_percent"),
+    voltage_v: numeric("voltage_v", { precision: 6, scale: 2 }),
+    // Positive = charging.
+    current_a: numeric("current_a", { precision: 7, scale: 2 }),
+    temperature_c: numeric("temperature_c", { precision: 5, scale: 2 }),
+    charge_cycles: integer("charge_cycles"),
+    gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
+    gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
+    daily_km: numeric("daily_km", { precision: 8, scale: 2 }),
+    idle_hours: numeric("idle_hours", { precision: 6, scale: 2 }),
+    bms_status: varchar("bms_status", { length: 50 }),
+    charger_connected: boolean("charger_connected"),
+  },
+  (table) => ({
+    // Primary read pattern — most-recent packets for a given battery.
+    serialDeviceTimeIdx: index("telemetry_events_serial_device_time_idx").on(
+      table.serial_number,
+      table.device_time,
+    ),
+    // Used by the daily-summary upsert job (E-048) to scan a day's packets
+    // for one battery.
+    serialServerTimeIdx: index("telemetry_events_serial_server_time_idx").on(
+      table.serial_number,
+      table.server_time,
+    ),
+  }),
+);
+
+export const telemetryDailySummary = pgTable(
+  "telemetry_daily_summary",
+  {
+    id: serial("id").primaryKey(),
+    serial_number: varchar("serial_number", { length: 50 }).notNull(),
+    // One row per battery per day.
+    summary_date: date("summary_date").notNull(),
+    avg_soc: numeric("avg_soc", { precision: 5, scale: 2 }),
+    min_soc: numeric("min_soc", { precision: 5, scale: 2 }),
+    max_soh: numeric("max_soh", { precision: 5, scale: 2 }),
+    total_km: numeric("total_km", { precision: 8, scale: 2 }),
+    total_idle_hours: numeric("total_idle_hours", { precision: 6, scale: 2 }),
+    // Number of charge events.
+    charge_sessions: integer("charge_sessions").default(0),
+    // Count of fault/warning bms_status events.
+    bms_faults: integer("bms_faults").default(0).notNull(),
+    // Data quality metric.
+    packets_received: integer("packets_received").default(0).notNull(),
+    // Most common GPS cluster for this day.
+    gps_home_lat: numeric("gps_home_lat", { precision: 10, scale: 7 }),
+    gps_home_lng: numeric("gps_home_lng", { precision: 10, scale: 7 }),
+  },
+  (table) => ({
+    // BRD AC2 — exactly one row per battery per day. Concurrent ingest
+    // jobs MUST collide on this constraint and fall back to upsert.
+    serialDateUnique: uniqueIndex("telemetry_daily_summary_serial_date_uniq").on(
+      table.serial_number,
+      table.summary_date,
+    ),
+    // Range-by-day reads for the risk dashboard (E-050).
+    dateIdx: index("telemetry_daily_summary_date_idx").on(table.summary_date),
   }),
 );
