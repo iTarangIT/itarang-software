@@ -4487,3 +4487,56 @@ export const nbfcAuctionCancelRequests = pgTable(
     ),
   }),
 );
+
+// -----------------------------------------------------------------------------
+// E-069 — Auction Control Centre admin actions audit trail (BRD §6.3.4)
+// -----------------------------------------------------------------------------
+// `nbfc_auction_lot_actions` is the per-lot audit log for every admin control
+// action issued from the Auction Control Centre. The five action codes
+// supported by the BRD are:
+//   - extend_time            (Extend Time +15m / +30m / +1h)
+//   - reduce_time            (Reduce Time -15m / End Now)
+//   - pause                  (Pause Auction; freeze countdown)
+//   - reserve_price_set      (Set Reserve Price; pre-bid only)
+//   - approve_winning_bid    (Post-auction; trigger payment flow)
+//
+// Per-action parameters and pre/post snapshots live in jsonb columns so we do
+// not need a column per action variant. `previous_value` and `new_value`
+// capture the field that changed (e.g. ends_at for extend_time, status for
+// pause, reserve_price for reserve_price_set). `reason` is a free-text field
+// surfaced by the UI; some actions (extend_time) require it, others
+// (approve_winning_bid) do not.
+//
+// This table is platform-global — auction lots themselves have no tenant_id
+// (lots are platform-owned in this release; same convention as
+// nbfc_auction_cancel_requests / E-070). The acting admin is recorded in
+// `acted_by` (uuid). Distinct from `audit_logs` (which spans the whole CRM):
+// this table is the queryable, lot-scoped index the Auction Control Centre
+// reads to render the per-lot history strip without scanning audit_logs.
+// -----------------------------------------------------------------------------
+
+export const nbfcAuctionLotActions = pgTable(
+  "nbfc_auction_lot_actions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull(),
+    action_code: varchar("action_code", { length: 48 }).notNull(),
+    previous_value: jsonb("previous_value"),
+    new_value: jsonb("new_value"),
+    reason: text("reason"),
+    acted_by: uuid("acted_by").notNull(),
+    acted_at: timestamp("acted_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    // Per-lot history-strip read pattern — list actions on a lot, newest first.
+    lotActedAtIdx: index("nbfc_auction_lot_actions_lot_acted_at_idx").on(
+      table.lot_id,
+      table.acted_at,
+    ),
+    actionCodeIdx: index("nbfc_auction_lot_actions_action_code_idx").on(
+      table.action_code,
+    ),
+  }),
+);
