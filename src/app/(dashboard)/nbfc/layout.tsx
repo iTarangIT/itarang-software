@@ -1,15 +1,6 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { getCurrentTenant } from "@/lib/nbfc/tenant";
-
-const NAV = [
-  { href: "/nbfc/overview", label: "Overview" },
-  { href: "/nbfc/risk", label: "Risk" },
-  { href: "/nbfc/batteries", label: "Batteries" },
-  { href: "/nbfc/recovery", label: "Recovery" },
-  { href: "/nbfc/audit", label: "Audit" },
-  { href: "/nbfc/settings", label: "Settings" },
-];
+import SidebarNav from "@/components/nbfc-portal/SidebarNav";
 
 export default async function NbfcLayout({ children }: { children: ReactNode }) {
   const tenant = await getCurrentTenant();
@@ -32,19 +23,11 @@ export default async function NbfcLayout({ children }: { children: ReactNode }) 
             </span>
           </div>
         </div>
-        <nav className="max-w-7xl mx-auto px-6 flex gap-2 -mb-px">
-          {NAV.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white border-b-2 border-transparent hover:border-slate-300"
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
       </header>
-      <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>
+      <div className="md:flex max-w-7xl mx-auto">
+        <SidebarNav />
+        <main className="flex-1 px-6 py-8">{children}</main>
+      </div>
     </div>
   );
 }
