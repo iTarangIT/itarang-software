@@ -23,6 +23,25 @@ export async function middleware(request: NextRequest) {
     );
   }
 
+  // NBFC self-coding loop UI test bypass. Triple-guarded:
+  //   1. NODE_ENV !== 'production'
+  //   2. NBFC_TEST_BYPASS_SECRET set on the server
+  //   3. Request carries header `x-nbfc-test-bypass` with that exact value
+  //      (Playwright's page.setExtraHTTPHeaders attaches it on every request)
+  // When all three match, skip auth and pass through. This lets E-001's AC4
+  // load /admin/nbfc/[id]/review without a Supabase session, mirroring the
+  // bypass already used by /api/admin/nbfc/** API tests.
+  if (
+    process.env.NODE_ENV !== "production" &&
+    process.env.NBFC_TEST_BYPASS_SECRET &&
+    request.headers.get("x-nbfc-test-bypass") ===
+      process.env.NBFC_TEST_BYPASS_SECRET
+  ) {
+    return addNoStoreHeaders(
+      NextResponse.next({ request: { headers: request.headers } }),
+    );
+  }
+
   let response = NextResponse.next({
     request: {
       headers: request.headers,

@@ -2974,6 +2974,9 @@ export const dualApprovalActionConfig = pgTable(
 // RBI registration data, statutory IDs (CIN, GST, PAN), grievance officer
 // fields (mandatory per RBI DL Directions 2025), and partnership metadata.
 // Distinct from `nbfc_tenants` which models the multi-tenant dashboard scope.
+//
+// E-001 augmentation: `approved_by` / `approved_at` capture the final approval
+// gate release (null until the gate passes; 409 idempotency on re-approval).
 // =============================================================================
 export const nbfc = pgTable("nbfc", {
   id: serial("id").primaryKey(),
@@ -2999,6 +3002,12 @@ export const nbfc = pgTable("nbfc", {
   cor_expiry_date: date("cor_expiry_date"),
   lsp_agreement_id: integer("lsp_agreement_id"),
   status: varchar("status", { length: 32 }).default("draft").notNull(),
+  // E-001 — final approval gate audit columns. approved_by stores the admin
+  // user uuid that released the gate; approved_at stamps when the gate fell.
+  // Both stay null until the gate passes; a 409 idempotency check rejects
+  // re-approving an already-approved NBFC.
+  approved_by: uuid("approved_by"),
+  approved_at: timestamp("approved_at", { withTimezone: true }),
   created_by: integer("created_by").notNull(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -3041,4 +3050,29 @@ export const nbfcComplianceDocuments = pgTable(
   }),
 );
 
+// E-007/E-008 — Digio-driven LSP agreement record. agreement_status mirrors the
+// shared dealer agreement_status ENUM domain (DRAFT, INITIATED, IN_PROGRESS,
+// COMPLETED, FAILED, EXPIRED) per Sync Audit G-01. Stored as varchar so the
+// final-approval gate can re-validate it via a simple equality check.
+export const nbfcLspAgreements = pgTable(
+  "nbfc_lsp_agreements",
+  {
+    id: serial("id").primaryKey().notNull(),
+    nbfc_id: integer("nbfc_id").notNull().references(() => nbfc.id),
+    digio_request_id: varchar("digio_request_id", { length: 128 }),
+    digio_document_id: varchar("digio_document_id", { length: 128 }),
+    agreement_status: varchar("agreement_status", { length: 32 }).default("DRAFT").notNull(),
+    signed_pdf_url: text("signed_pdf_url"),
+    initiated_by: integer("initiated_by"),
+    initiated_at: timestamp("initiated_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    last_webhook_payload: jsonb("last_webhook_payload"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_lsp_agreements_nbfc_id_idx").on(table.nbfc_id),
+    statusIdx: index("nbfc_lsp_agreements_status_idx").on(table.agreement_status),
+  }),
+);
 
