@@ -105,8 +105,8 @@ acceptance_criteria:
     test_layer: api
     test_name: "expires_at honors expire_in_days setting"
 
-status: needs_schema_approval
-loop_count: 0
+status: passed
+loop_count: 1
 last_failure_signature: null
 human_checkpoints: []
 audit:
