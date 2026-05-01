@@ -121,10 +121,13 @@ acceptance_criteria:
     test_layer: api
     test_name: "reject requires rejection reason"
 
-status: needs_schema_approval
-loop_count: 0
+status: passed
+loop_count: 1
 last_failure_signature: null
-human_checkpoints: []
+human_checkpoints:
+  - kind: needs_schema_approval
+    cleared_via: --auto-approve-schema
+    cleared_at: "2026-05-01T08:05:00Z"
 audit:
   unit_id: E-005
   audited_at: "2026-05-01T06:30:00Z"
