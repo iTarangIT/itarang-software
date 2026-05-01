@@ -275,8 +275,9 @@ async function run() {
             eq(schema.nbfcBorrowerActions.action_type, "battery_immobilisation"),
           ),
         );
-      const matchedPerLoan = perLoan.filter((r) =>
-        batchIds.includes(r.loan_sanction_id),
+      const matchedPerLoan = perLoan.filter(
+        (r: (typeof perLoan)[number]) =>
+          batchIds.includes(r.loan_sanction_id),
       );
       if (
         batches.length === 1 &&
