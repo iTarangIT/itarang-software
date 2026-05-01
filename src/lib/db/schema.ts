@@ -3090,6 +3090,37 @@ export const dualApprovalActionConfig = pgTable(
 );
 
 // =============================================================================
+// E-085 — Risk Rule Threshold Change (BRD §6.4.3)
+// Append-only history of risk-rule threshold mutations. Every approved change
+// is appended (never edited in place); the previously active row for the same
+// rule_key is flipped is_active=false at apply time. Tied to a
+// dual_approval_requests row via approval_request_id so RBI auditors can trace
+// any threshold mutation back to its two-person approval.
+// =============================================================================
+export const nbfcRiskRuleThresholds = pgTable(
+  "nbfc_risk_rule_thresholds",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    rule_key: varchar("rule_key", { length: 128 }).notNull(),
+    prior_threshold_json: jsonb("prior_threshold_json"),
+    new_threshold_json: jsonb("new_threshold_json").notNull(),
+    approval_request_id: uuid("approval_request_id").notNull(),
+    applied_at: timestamp("applied_at", { withTimezone: true }),
+    applied_by: uuid("applied_by"),
+    is_active: boolean("is_active").default(true).notNull(),
+  },
+  (table) => ({
+    ruleKeyActiveIdx: index("nbfc_risk_rule_thresholds_rule_key_active_idx").on(
+      table.rule_key,
+      table.is_active,
+    ),
+    approvalRequestIdx: index("nbfc_risk_rule_thresholds_approval_request_idx").on(
+      table.approval_request_id,
+    ),
+  }),
+);
+
+// =============================================================================
 // E-083 — Battery Immobilisation Action (Section 6.4.3)
 // One row per executed immobilisation outcome. Created ONLY after the upstream
 // dual_approval_requests row (action_type='battery_immobilisation') flips to
