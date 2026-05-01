@@ -3887,3 +3887,42 @@ export const nbfcScoreOverrides = pgTable(
     ),
   }),
 );
+
+// =============================================================================
+// E-066 — Auto Anomaly Flag on NBFC record (BRD §6.3.2)
+// Persists which NBFC tenants have had auto-anomaly flags raised by the
+// evaluator (delinquency_pct > 15, recovery_rate_pct < 70, avg_dpd > 30 — 2/3
+// breaches => red, 1/3 => amber). Rows are upserted by (nbfc_id) so the
+// open-flag state lives across metric refreshes; `cleared_at` is stamped when
+// the NBFC's metrics return to within thresholds. Reasons array is jsonb so
+// the Ops dashboard can render the breach checklist verbatim.
+// =============================================================================
+export const nbfcAnomalyFlags = pgTable(
+  "nbfc_anomaly_flags",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    nbfc_id: uuid("nbfc_id")
+      .notNull()
+      .references(() => nbfcTenants.id),
+    severity: varchar("severity", { length: 10 }).notNull(),
+    reasons: jsonb("reasons").notNull(),
+    flagged_at: timestamp("flagged_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    cleared_at: timestamp("cleared_at", { withTimezone: true }),
+  },
+  (table) => ({
+    // One open flag row per NBFC: queries always read the latest by flagged_at,
+    // and the evaluator upserts based on (nbfc_id, cleared_at IS NULL) — but
+    // since SQL unique can't easily express that, we keep a simple nbfc_id
+    // index and let the evaluator manage open-row uniqueness in code.
+    nbfcIdx: index("nbfc_anomaly_flags_nbfc_idx").on(table.nbfc_id),
+    severityIdx: index("nbfc_anomaly_flags_severity_idx").on(table.severity),
+    flaggedAtIdx: index("nbfc_anomaly_flags_flagged_at_idx").on(
+      table.flagged_at,
+    ),
+    clearedAtIdx: index("nbfc_anomaly_flags_cleared_at_idx").on(
+      table.cleared_at,
+    ),
+  }),
+);
