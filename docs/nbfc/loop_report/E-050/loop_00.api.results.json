@@ -1,0 +1,346 @@
+◇ injected env (3) from .env.test.local // tip: ⌁ auth for agents [www.vestauth.com]
+{
+  "config": {
+    "configFile": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/tests/e2e/nbfc-loop.config.ts",
+    "rootDir": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/tests/e2e",
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "setup",
+        "name": "setup",
+        "testDir": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/tests/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/global\\.setup\\.ts/"
+        ],
+        "timeout": 300000
+      },
+      {
+        "outputDir": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "nbfc-api",
+        "name": "nbfc-api",
+        "testDir": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/tests/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/nbfc\\/.*\\.api\\.spec\\.ts$/"
+        ],
+        "timeout": 300000
+      },
+      {
+        "outputDir": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "nbfc-ui-public",
+        "name": "nbfc-ui-public",
+        "testDir": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/tests/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/nbfc\\/E-027_freshness-badge\\.ui\\.spec\\.ts$/"
+        ],
+        "timeout": 300000
+      },
+      {
+        "outputDir": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "nbfc-ui",
+        "name": "nbfc-ui",
+        "testDir": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/tests/e2e",
+        "testIgnore": [
+          "/nbfc\\/E-027_freshness-badge\\.ui\\.spec\\.ts$/"
+        ],
+        "testMatch": [
+          "/nbfc\\/.*\\.ui\\.spec\\.ts$/"
+        ],
+        "timeout": 300000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.59.1",
+    "workers": 1,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "nbfc/E-050_telemetry-query-battery.api.spec.ts",
+      "file": "nbfc/E-050_telemetry-query-battery.api.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "E-050 — Per-battery telemetry query APIs",
+          "file": "nbfc/E-050_telemetry-query-battery.api.spec.ts",
+          "line": 280,
+          "column": 6,
+          "specs": [
+            {
+              "title": "AC1: GET /soc with NBFC JWT for in-portfolio serial returns expected fields",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 300000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "nbfc-api",
+                  "projectName": "nbfc-api",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1714,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [
+                        {
+                          "text": "(node:91441) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.\n(Use `node --trace-warnings ...` to show where the warning was created)\n"
+                        }
+                      ],
+                      "retry": 0,
+                      "startTime": "2026-05-01T16:51:08.061Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "b615a15f5ac2f3a26f36-2faef8a7c4065a5fdca4",
+              "file": "nbfc/E-050_telemetry-query-battery.api.spec.ts",
+              "line": 281,
+              "column": 7
+            },
+            {
+              "title": "AC2: GET /soc with Dealer JWT for serial outside dealer inventory returns 403",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 300000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "nbfc-api",
+                  "projectName": "nbfc-api",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 80,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-05-01T16:51:10.427Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "b615a15f5ac2f3a26f36-6035e07fea8b3aa3a534",
+              "file": "nbfc/E-050_telemetry-query-battery.api.spec.ts",
+              "line": 300,
+              "column": 7
+            },
+            {
+              "title": "AC3: GET /state with Admin JWT returns full iot_devices row + data_freshness",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 300000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "nbfc-api",
+                  "projectName": "nbfc-api",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 675,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-05-01T16:51:10.513Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "b615a15f5ac2f3a26f36-af9ccbd7725097c3268c",
+              "file": "nbfc/E-050_telemetry-query-battery.api.spec.ts",
+              "line": 311,
+              "column": 7
+            },
+            {
+              "title": "AC4: GET /history?metric=soc&from..to returns sorted points ASC by date",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 300000,
+                  "annotations": [
+                    {
+                      "type": "skip",
+                      "description": "Blocked on E-047 sandbox migration: telemetry_events / telemetry_daily_summary missing from database-1",
+                      "location": {
+                        "file": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/tests/e2e/nbfc/E-050_telemetry-query-battery.api.spec.ts",
+                        "line": 340,
+                        "column": 10
+                      }
+                    }
+                  ],
+                  "expectedStatus": "skipped",
+                  "projectId": "nbfc-api",
+                  "projectName": "nbfc-api",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "skipped",
+                      "duration": 1,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-05-01T16:51:11.193Z",
+                      "annotations": [
+                        {
+                          "type": "skip",
+                          "description": "Blocked on E-047 sandbox migration: telemetry_events / telemetry_daily_summary missing from database-1",
+                          "location": {
+                            "file": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/tests/e2e/nbfc/E-050_telemetry-query-battery.api.spec.ts",
+                            "line": 340,
+                            "column": 10
+                          }
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "skipped"
+                }
+              ],
+              "id": "b615a15f5ac2f3a26f36-b8ecacaa420c97aaffa2",
+              "file": "nbfc/E-050_telemetry-query-battery.api.spec.ts",
+              "line": 337,
+              "column": 7
+            },
+            {
+              "title": "AC5: GET /daily-summaries?days=30 returns at most 30 rows ordered desc",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 300000,
+                  "annotations": [
+                    {
+                      "type": "skip",
+                      "description": "Blocked on E-047 sandbox migration: telemetry_events / telemetry_daily_summary missing from database-1",
+                      "location": {
+                        "file": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/tests/e2e/nbfc/E-050_telemetry-query-battery.api.spec.ts",
+                        "line": 369,
+                        "column": 10
+                      }
+                    }
+                  ],
+                  "expectedStatus": "skipped",
+                  "projectId": "nbfc-api",
+                  "projectName": "nbfc-api",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "skipped",
+                      "duration": 1,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-05-01T16:51:11.203Z",
+                      "annotations": [
+                        {
+                          "type": "skip",
+                          "description": "Blocked on E-047 sandbox migration: telemetry_events / telemetry_daily_summary missing from database-1",
+                          "location": {
+                            "file": "/Users/apoorvgupta/Desktop/Itarang Files/itarang code/test_main/.claude/worktrees/agent-a9adbde48de54e1b4/tests/e2e/nbfc/E-050_telemetry-query-battery.api.spec.ts",
+                            "line": 369,
+                            "column": 10
+                          }
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "skipped"
+                }
+              ],
+              "id": "b615a15f5ac2f3a26f36-8ba46247ddd5116ed31f",
+              "file": "nbfc/E-050_telemetry-query-battery.api.spec.ts",
+              "line": 366,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-05-01T16:51:07.460Z",
+    "duration": 4134.478999999999,
+    "expected": 3,
+    "skipped": 2,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}
