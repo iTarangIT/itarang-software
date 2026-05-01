@@ -2859,3 +2859,62 @@ export const dealerCorrectionItems = pgTable(
     roundIdx: index("dealer_correction_items_round_id_idx").on(table.round_id),
   }),
 );
+
+// =============================================================================
+// NBFC partner master + per-NBFC loan-product catalogue (BRD 6.0.3 / 6.0.5)
+// E-009 introduces nbfc_loan_products. The minimal `nbfc` master table is
+// declared here so this unit can compile and run isolated tests; sibling
+// unit E-003 owns the canonical full master and may extend the column set.
+// =============================================================================
+
+// Mirrors the canonical NBFC master defined by sibling unit E-003. Only the
+// columns E-009 actually reads (id, status) are declared notNull so any
+// E-003-specific NOT NULL columns the DB enforces don't break compile.
+export const nbfc = pgTable("nbfc", {
+  id: serial("id").primaryKey(),
+  nbfc_id: varchar("nbfc_id", { length: 64 }).notNull(),
+  legal_name: varchar("legal_name", { length: 200 }).notNull(),
+  status: varchar("status", { length: 16 }).default("draft").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const nbfcLoanProducts = pgTable("nbfc_loan_products", {
+  id: serial("id").primaryKey(),
+  nbfc_id: integer("nbfc_id")
+    .notNull()
+    .references(() => nbfc.id),
+  product_name: varchar("product_name", { length: 120 }).notNull(),
+  eligible_battery_categories: jsonb("eligible_battery_categories")
+    .$type<string[]>()
+    .notNull(),
+  loan_amount_min: integer("loan_amount_min").notNull(),
+  loan_amount_max: integer("loan_amount_max").notNull(),
+  tenure_months_min: integer("tenure_months_min").notNull(),
+  tenure_months_max: integer("tenure_months_max").notNull(),
+  min_roi_pct: numeric("min_roi_pct", { precision: 5, scale: 2 }).notNull(),
+  max_roi_pct: numeric("max_roi_pct", { precision: 5, scale: 2 }).notNull(),
+  down_payment_pct: numeric("down_payment_pct", {
+    precision: 5,
+    scale: 2,
+  }).notNull(),
+  subvention_available: boolean("subvention_available")
+    .default(false)
+    .notNull(),
+  file_charge_fixed: numeric("file_charge_fixed", { precision: 12, scale: 2 }),
+  file_charge_pct: numeric("file_charge_pct", { precision: 5, scale: 2 }),
+  disbursement_method: varchar("disbursement_method", {
+    length: 32,
+  }).notNull(),
+  status: varchar("status", { length: 16 }).default("active").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
