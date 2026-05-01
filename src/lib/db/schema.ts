@@ -2968,3 +2968,39 @@ export const dualApprovalActionConfig = pgTable(
   }),
 );
 
+// =============================================================================
+// E-003 — NBFC Master Details (Section 6.0.3)
+// Master NBFC partner table per BRD 6.0.7 — captures NBFC partner identities,
+// RBI registration data, statutory IDs (CIN, GST, PAN), grievance officer
+// fields (mandatory per RBI DL Directions 2025), and partnership metadata.
+// Distinct from `nbfc_tenants` which models the multi-tenant dashboard scope.
+// =============================================================================
+export const nbfc = pgTable("nbfc", {
+  id: serial("id").primaryKey(),
+  nbfc_id: varchar("nbfc_id", { length: 50 }).notNull().unique(),
+  legal_name: varchar("legal_name", { length: 200 }).notNull(),
+  short_name: varchar("short_name", { length: 100 }).notNull(),
+  rbi_registration_no: varchar("rbi_registration_no", { length: 100 }).notNull().unique(),
+  cin: varchar("cin", { length: 25 }).notNull(),
+  gst_number: varchar("gst_number", { length: 20 }).notNull(),
+  pan_number: varchar("pan_number", { length: 20 }).notNull(),
+  nbfc_type: varchar("nbfc_type", { length: 32 }).notNull(),
+  registered_address: jsonb("registered_address").notNull(),
+  active_geographies: jsonb("active_geographies").notNull(),
+  primary_contact_name: varchar("primary_contact_name", { length: 200 }).notNull(),
+  primary_contact_email: varchar("primary_contact_email", { length: 200 }).notNull(),
+  primary_contact_phone: varchar("primary_contact_phone", { length: 20 }).notNull(),
+  grievance_officer_name: varchar("grievance_officer_name", { length: 200 }).notNull(),
+  grievance_helpline: varchar("grievance_helpline", { length: 200 }).notNull(),
+  grievance_url: text("grievance_url").notNull(),
+  nodal_officer: varchar("nodal_officer", { length: 200 }),
+  partnership_date: date("partnership_date").notNull(),
+  fldg_terms: text("fldg_terms"),
+  cor_expiry_date: date("cor_expiry_date"),
+  lsp_agreement_id: integer("lsp_agreement_id"),
+  status: varchar("status", { length: 32 }).default("draft").notNull(),
+  created_by: integer("created_by").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
