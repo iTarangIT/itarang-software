@@ -2946,6 +2946,41 @@ export const nbfcBorrowerActions = pgTable(
 );
 
 // -----------------------------------------------------------------------------
+// E-031 — Send Payment Reminder action (Section 6.1.6 — Risk Action Framework)
+// -----------------------------------------------------------------------------
+// nbfc_audit_log is the immutable, append-only audit trail mandated by BRD
+// §6.1.2 + RBI Digital Lending Directions 2025: every NBFC-initiated action
+// MUST emit a row here with before/after JSON state. It is intentionally
+// separate from the mutable `nbfc_borrower_actions` table (which records the
+// current status of an action) and from the shared `audit_logs` table (which
+// covers generic CRM mutations) — keeping the NBFC tier evidentiary log
+// isolated lets us export it cleanly for regulator inspection.
+//
+// `user_id` is the canonical column name (renamed from earlier draft
+// `actor_user_id`) to align with `nbfc_users.user_id` and `lead_documents.user_id`,
+// avoiding silent-rename divergence.
+// -----------------------------------------------------------------------------
+
+export const nbfcAuditLog = pgTable(
+  "nbfc_audit_log",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    user_id: uuid("user_id").notNull(),
+    action_type: varchar("action_type", { length: 32 }).notNull(),
+    action_id: uuid("action_id"),
+    before_state: jsonb("before_state"),
+    after_state: jsonb("after_state"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_audit_log_tenant_idx").on(table.tenant_id),
+    actionIdIdx: index("nbfc_audit_log_action_id_idx").on(table.action_id),
+    actionTypeIdx: index("nbfc_audit_log_action_type_idx").on(table.action_type),
+  }),
+);
+
+// -----------------------------------------------------------------------------
 // E-027 — Portfolio Data Freshness Badge (Section 6.1.3)
 // -----------------------------------------------------------------------------
 // telemetry_ingestion_log records each per-battery IoT ingestion event so the

@@ -83,8 +83,8 @@ acceptance_criteria:
     test_layer: api
     test_name: "Payment reminder rejects cross-tenant loan ids with 403"
 
-status: needs_clarification
-loop_count: 0
+status: pass
+loop_count: 1
 last_failure_signature: null
 human_checkpoints: []
 audit:
