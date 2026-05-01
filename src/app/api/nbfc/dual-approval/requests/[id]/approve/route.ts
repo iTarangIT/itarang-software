@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { approveDualApprovalRequest } from "@/lib/nbfc/dual-approval/service";
+import { executeApprovedBulkImmobilisation } from "@/lib/nbfc/actions/bulk-immobilisation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,9 +55,18 @@ export async function POST(
       approver_role: actor.role,
       comment: parsed.data.comment,
     });
+
+    // E-086 — bulk immobilisation handler runs synchronously after approval
+    // so per-loan rows in nbfc_borrower_actions and the batch's executed_count
+    // are visible to the caller in the same transaction window.
+    if (row.action_type === "bulk_immobilisation" && row.status === "approved") {
+      await executeApprovedBulkImmobilisation(row.id);
+    }
+
     return NextResponse.json({
       id: row.id,
       status: row.status,
+      action_type: row.action_type,
       approver_user_id: row.approver_user_id,
       approved_at: row.approved_at,
     });
