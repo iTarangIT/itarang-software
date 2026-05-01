@@ -136,7 +136,7 @@ function parseId(raw: string): number | null {
 
 export async function GET(
   req: NextRequest,
-  context: { params: Promise<{ id: string }> },
+  context: { params: Promise<{ nbfcId: string }> },
 ) {
   try {
     const admin = await requireAdmin(req);
@@ -146,7 +146,7 @@ export async function GET(
         { status: 403 },
       );
     }
-    const { id: rawId } = await context.params;
+    const { nbfcId: rawId } = await context.params;
     const id = parseId(rawId);
     if (id === null) {
       return NextResponse.json(
@@ -202,7 +202,7 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  context: { params: Promise<{ id: string }> },
+  context: { params: Promise<{ nbfcId: string }> },
 ) {
   try {
     const admin = await requireAdmin(req);
@@ -212,7 +212,7 @@ export async function PATCH(
         { status: 403 },
       );
     }
-    const { id: rawId } = await context.params;
+    const { nbfcId: rawId } = await context.params;
     const id = parseId(rawId);
     if (id === null) {
       return NextResponse.json(
