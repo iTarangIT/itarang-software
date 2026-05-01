@@ -2646,6 +2646,10 @@ export const loanSanctions = pgTable("loan_sanctions", {
   nbfc_id: uuid("nbfc_id"),
   disbursed_at: timestamp("disbursed_at", { withTimezone: true }),
   closed_at: timestamp("closed_at", { withTimezone: true }),
+  // E-035 (BRD §6.1.6): permanent recovery-flag markers — once set the row
+  // records a non-reversible recovery decision by the Risk Head.
+  recovery_flagged_at: timestamp("recovery_flagged_at", { withTimezone: true }),
+  recovery_reason: text("recovery_reason"),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -2836,6 +2840,34 @@ export const nbfcRecoveryPipeline = pgTable(
     tenantIdx: index("nbfc_recovery_pipeline_tenant_idx").on(table.tenant_id),
     stageIdx: index("nbfc_recovery_pipeline_stage_idx").on(table.stage),
     tenantStageIdx: index("nbfc_recovery_pipeline_tenant_stage_idx").on(table.tenant_id, table.stage),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-035 — Flag for Recovery action (Section 6.1.6)
+// -----------------------------------------------------------------------------
+// nbfc_borrower_actions records a Risk Head's executed actions against a
+// borrower / loan_sanction (single-approval, per BRD §6.1.6 row "Flag for
+// Recovery"). Used here for the irreversible flag and reused by future units
+// (e.g. E-031 send-payment-reminder) which carry the same shape.
+// -----------------------------------------------------------------------------
+
+export const nbfcBorrowerActions = pgTable(
+  "nbfc_borrower_actions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
+    action_type: varchar("action_type", { length: 64 }).notNull(),
+    status: varchar({ length: 32 }).notNull(),
+    requested_by: uuid("requested_by"),
+    payload: jsonb("payload"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_borrower_actions_tenant_idx").on(table.tenant_id),
+    loanIdx: index("nbfc_borrower_actions_loan_idx").on(table.loan_sanction_id),
+    actionTypeIdx: index("nbfc_borrower_actions_action_type_idx").on(table.action_type),
   }),
 );
 
