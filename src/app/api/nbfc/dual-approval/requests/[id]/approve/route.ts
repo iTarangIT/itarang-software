@@ -8,6 +8,7 @@ import { z } from "zod";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { approveDualApprovalRequest } from "@/lib/nbfc/dual-approval/service";
 import { executeApprovedBulkImmobilisation } from "@/lib/nbfc/actions/bulk-immobilisation";
+import { finaliseExportIfApproved } from "@/lib/nbfc/audit-export/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,11 +57,29 @@ export async function POST(
       comment: parsed.data.comment,
     });
 
+    // Post-approval action-type dispatcher (concat of all gated units).
+    // Each branch is idempotent on the approval_request_id / entity_id.
+
     // E-086 — bulk immobilisation handler runs synchronously after approval
     // so per-loan rows in nbfc_borrower_actions and the batch's executed_count
     // are visible to the caller in the same transaction window.
     if (row.action_type === "bulk_immobilisation" && row.status === "approved") {
       await executeApprovedBulkImmobilisation(row.id);
+    }
+
+    // E-088: post-approval side-effect for audit log exports — synthesise the
+    // signed download URL + checksum on the linked nbfc_audit_log_exports row.
+    if (row.action_type === "audit_log_export" && row.entity_id) {
+      try {
+        await finaliseExportIfApproved(row.entity_id);
+      } catch {
+        // Failure here must not undo the approval; the export can be
+        // retried by an out-of-band worker. We log via console only.
+        // eslint-disable-next-line no-console
+        console.error("[E-088] finaliseExportIfApproved failed", {
+          entity_id: row.entity_id,
+        });
+      }
     }
 
     return NextResponse.json({
