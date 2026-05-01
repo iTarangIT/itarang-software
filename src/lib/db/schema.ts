@@ -3340,3 +3340,36 @@ export const nbfcStatusHistory = pgTable(
     ),
   }),
 );
+
+// =============================================================================
+// E-086 — Bulk Immobilisation (>5 batteries) gated by dual approval
+// (BRD §6.4.3 row "Bulk Immobilisation"; Approver 1: NBFC Risk Head,
+// Approver 2: iTarang Admin). RBI Digital Lending Directions 2025 elevate
+// bulk recovery actions (>5 batteries in a single batch) to a two-person
+// rule beyond the standard per-loan dual approval (E-033 / E-082). This
+// table captures the batch identity and aggregate counts so audit reviewers
+// can see a single approval covered N loans, not N separate approvals.
+// =============================================================================
+export const nbfcBulkImmobilisationBatches = pgTable(
+  "nbfc_bulk_immobilisation_batches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenant_id: uuid("tenant_id")
+      .notNull()
+      .references(() => nbfcTenants.id),
+    approval_request_id: uuid("approval_request_id").notNull(),
+    batch_size: integer("batch_size").notNull(),
+    loan_application_ids: jsonb("loan_application_ids").notNull(),
+    executed_at: timestamp("executed_at", { withTimezone: true }),
+    executed_count: integer("executed_count").default(0).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_bulk_immob_batches_tenant_idx").on(table.tenant_id),
+    approvalIdx: index("nbfc_bulk_immob_batches_approval_idx").on(
+      table.approval_request_id,
+    ),
+  }),
+);
