@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>E-009 — NBFC Loan Product Configuration — Checkpoint 2 (GREEN)</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 920px; margin: 24px auto; padding: 0 16px; color: #111; }
+  h1 { border-bottom: 2px solid #16a34a; padding-bottom: 6px; }
+  .badge-green { background:#dcfce7; color:#166534; padding:2px 8px; border-radius:6px; font-weight:600; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; font-size: 14px; }
+  th { background: #f9fafb; }
+  code { background: #f3f4f6; padding: 1px 4px; border-radius: 4px; font-size: 13px; }
+  .pass { color: #15803d; font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>E-009 — NBFC Loan Product Configuration <span class="badge-green">GREEN</span></h1>
+<p>Source section: <code>BRD 6.0.5</code> · Loop count: 1 · Mode:
+<code>--auto-approve-schema</code> · Branch: <code>nbfc/E-009</code></p>
+
+<h2>Acceptance criteria</h2>
+<table>
+  <thead><tr><th>AC</th><th>Statement</th><th>Result</th></tr></thead>
+  <tbody>
+    <tr><td>AC1</td><td>POST with valid body returns 200 and persists row</td><td class="pass">PASS</td></tr>
+    <tr><td>AC2</td><td>POST returns 422 when loanAmountMax &le; loanAmountMin</td><td class="pass">PASS</td></tr>
+    <tr><td>AC3</td><td>GET ?status=active returns only active rows for that NBFC</td><td class="pass">PASS</td></tr>
+    <tr><td>AC4</td><td>POST returns 409 when target NBFC status is not approved/active</td><td class="pass">PASS</td></tr>
+  </tbody>
+</table>
+
+<h2>Schema</h2>
+<ul>
+  <li>Added: <code>nbfc_loan_products</code> (18 columns, FK to <code>nbfc.id</code>)</li>
+  <li>Reused: <code>nbfc</code> (canonical row defined by sibling unit E-003;
+  this unit declares only the columns it reads — <code>id</code>,
+  <code>status</code>, plus the canonical <code>nbfc_id</code> NOT NULL — to
+  keep Drizzle types valid without colliding with E-003's full master).</li>
+  <li>Migration applied via direct SQL fallback (CREATE TABLE IF NOT EXISTS)
+  against sandbox Postgres; matches Drizzle definition.</li>
+</ul>
+
+<h2>Files added</h2>
+<ul>
+  <li><code>src/lib/db/schema.ts</code> — appended <code>nbfc</code> stub +
+  <code>nbfcLoanProducts</code> table.</li>
+  <li><code>src/app/api/admin/nbfc/[nbfcId]/loan-products/route.ts</code> —
+  POST + GET handlers with Zod, NBFC-status gate, triple-guarded test bypass.</li>
+  <li><code>src/app/api/admin/nbfc/loan-products/[productId]/route.ts</code> —
+  PATCH partial update with cross-field invariants.</li>
+  <li><code>src/components/admin/nbfc/NbfcLoanProductForm.tsx</code> — admin
+  client form following the nearest-sibling admin idiom.</li>
+  <li><code>src/app/(dashboard)/admin/nbfc/[nbfcId]/loan-products/page.tsx</code></li>
+  <li><code>tests/nbfc/E-009.api.test.mjs</code> — in-process AC runner.</li>
+</ul>
+
+<h2>Notes carried from audit</h2>
+<ul>
+  <li>G-04 (no canonical <code>dealers</code> table) is unblocking this unit
+  because E-009 does not reference dealers directly; downstream units
+  (E-012/E-013) will.</li>
+  <li>Sibling dependency: when E-003 lands the canonical <code>nbfc</code>
+  master, this unit's stub declaration should merge into it; FK target
+  remains <code>nbfc.id</code>.</li>
+</ul>
+</body>
+</html>
