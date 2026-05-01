@@ -150,18 +150,38 @@ export async function approveDualApprovalRequest(input: ApproveInput) {
     },
   });
 
-  // E-083 — Gate dispatcher: route action_type to its side-effect handler.
-  // Handlers are idempotent on approval_request_id (their own table guards),
-  // so cron retries or double-clicks cannot double-execute.
-  await dispatchOnApproved(updated, input.approver_user_id);
+  // Gate dispatcher: route action_type to its side-effect handler. Handlers
+  // are idempotent on approval_request_id (their own table guards), so cron
+  // retries or double-clicks cannot double-execute. Dispatch failures are
+  // logged via the audit trail but do not roll back the approval itself —
+  // the approval is the record of authorisation, the handler is the
+  // execution.
+  await dispatchOnApproved(updated, input.approver_user_id).catch(
+    async (err) => {
+      await appendAudit({
+        request_id: updated.id,
+        tenant_id: updated.tenant_id,
+        action: "dual_approval.post_approval_dispatch_failed",
+        performed_by: input.approver_user_id,
+        payload: {
+          action_type: updated.action_type,
+          entity_id: updated.entity_id,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+    },
+  );
 
   return updated;
 }
 
 /**
- * Gate dispatcher — invoked exactly once per approve transition. Adds new
- * action_types here as they ship. Imports are lazy to avoid circular module
- * resolution between this service and per-action services.
+ * Gate dispatcher — invoked exactly once per approve transition. Routes an
+ * approved dual_approval_requests row to its action-specific handler.
+ * Unknown action_types are no-ops (they may be handled by a future unit, or
+ * may not require a side-effect — e.g. a pure governance acknowledgement).
+ * Imports are lazy to avoid circular module resolution between this service
+ * and per-action services.
  */
 async function dispatchOnApproved(
   approved: {
@@ -175,6 +195,7 @@ async function dispatchOnApproved(
   approver_user_id: string,
 ) {
   if (approved.action_type === "battery_immobilisation") {
+    // E-083 — IoT immobilisation dispatch + per-loan action row.
     const { executeImmobilisationOnApproval } = await import(
       "@/lib/nbfc/actions/battery-immobilisation/service"
     );
@@ -187,9 +208,17 @@ async function dispatchOnApproved(
       approver_user_id,
       borrower_notice_id: approved.borrower_notice_id,
     });
+    return;
   }
-  // Other action_types (loan_restructuring, risk_rule_threshold_change, etc.)
-  // will register here as they ship.
+  if (approved.action_type === "loan_restructuring") {
+    // E-084 — apply the new EMI fields and append a restructure history row.
+    const mod = await import("@/lib/nbfc/actions/loan-restructuring");
+    await mod.applyLoanRestructuring(approved.id);
+    return;
+  }
+  // Other action_types (bulk_immobilisation, audit_log_export,
+  // pii_data_access, risk_rule_threshold_change, etc.) register here as
+  // they ship.
 }
 
 export interface RejectInput {
