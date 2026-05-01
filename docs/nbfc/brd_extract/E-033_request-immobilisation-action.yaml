@@ -91,8 +91,8 @@ acceptance_criteria:
     test_layer: api
     test_name: "Re-mobilisation reverses an approved immobilisation"
 
-status: audited
-loop_count: 0
+status: pass
+loop_count: 1
 last_failure_signature: null
 human_checkpoints: []
 audit:
@@ -117,4 +117,4 @@ audit:
   migration_required: false
   notes:
     - "All reuse points to tables proposed in E-031. Borrower-notice-mandatory flow is RBI-Digital-Lending-Directions critical (BRD §6.1.6)."
-  checkpoint_html: null
+  checkpoint_html: docs/nbfc/loop_report/E-033/checkpoint_1.html
