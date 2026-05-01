@@ -1,3 +1,18 @@
+/**
+ * NBFC master GET/PATCH — preserves URL contract /api/admin/nbfc/{id}.
+ *
+ * Migrated here (E-007) so the param name matches its sibling segments
+ * (approve, approval-readiness, lsp-agreement, etc.) which all use
+ * `[nbfcId]`. Next.js 16 / Turbopack rejects sibling slugs with different
+ * names — this route formerly lived under `[id]/route.ts` and the new
+ * file replaces it without changing any caller-visible URL or response.
+ *
+ * Behaviour preserved bit-for-bit from the prior `[id]/route.ts`:
+ *   - GET returns the full NBFC master row (camelCase response keys).
+ *   - PATCH updates whitelisted fields, with LOCKED_STATUSES enforcing
+ *     the safelist contact/grievance carve-out.
+ *   - Auth: admin (or test bypass) — admin roles unchanged.
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
@@ -136,7 +151,7 @@ function parseId(raw: string): number | null {
 
 export async function GET(
   req: NextRequest,
-  context: { params: Promise<{ id: string }> },
+  context: { params: Promise<{ nbfcId: string }> },
 ) {
   try {
     const admin = await requireAdmin(req);
@@ -146,7 +161,7 @@ export async function GET(
         { status: 403 },
       );
     }
-    const { id: rawId } = await context.params;
+    const { nbfcId: rawId } = await context.params;
     const id = parseId(rawId);
     if (id === null) {
       return NextResponse.json(
@@ -192,7 +207,7 @@ export async function GET(
       updatedAt: row.updated_at,
     });
   } catch (err) {
-    console.error("GET /api/admin/nbfc/[id] error:", err);
+    console.error("GET /api/admin/nbfc/[nbfcId] error:", err);
     return NextResponse.json(
       { success: false, error: "server_error" },
       { status: 500 },
@@ -202,7 +217,7 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  context: { params: Promise<{ id: string }> },
+  context: { params: Promise<{ nbfcId: string }> },
 ) {
   try {
     const admin = await requireAdmin(req);
@@ -212,7 +227,7 @@ export async function PATCH(
         { status: 403 },
       );
     }
-    const { id: rawId } = await context.params;
+    const { nbfcId: rawId } = await context.params;
     const id = parseId(rawId);
     if (id === null) {
       return NextResponse.json(
@@ -256,8 +271,6 @@ export async function PATCH(
       );
     }
 
-    // Lifecycle gate: when status is in locked set, only safelisted fields
-    // (primary contact + grievance fields) may change.
     if (LOCKED_STATUSES.has(existing.status)) {
       for (const key of Object.keys(patch)) {
         if (!SAFELIST_FIELDS.has(key)) {
@@ -294,7 +307,7 @@ export async function PATCH(
       updatedAt: row.updated_at,
     });
   } catch (err) {
-    console.error("PATCH /api/admin/nbfc/[id] error:", err);
+    console.error("PATCH /api/admin/nbfc/[nbfcId] error:", err);
     return NextResponse.json(
       { success: false, error: "server_error" },
       { status: 500 },
