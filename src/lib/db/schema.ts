@@ -2968,3 +2968,54 @@ export const dualApprovalActionConfig = pgTable(
   }),
 );
 
+// =============================================================================
+// E-005 — NBFC compliance document upload/verify/reject workflow
+// (Section 6.0.4)
+// Reuses an `nbfc` master table introduced by sibling unit E-003. The minimal
+// fields needed by E-005 are id + cor_expiry_date; the full E-003 column set
+// will be merged when E-003 codes. We define a thin shim here so this unit can
+// compile and its FK target exists.
+// =============================================================================
+
+export const nbfc = pgTable("nbfc", {
+  id: serial("id").primaryKey(),
+  nbfc_id: varchar("nbfc_id", { length: 50 }).unique(),
+  legal_name: varchar("legal_name", { length: 200 }),
+  cor_expiry_date: date("cor_expiry_date"),
+  status: varchar("status", { length: 32 }).default("draft").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Per-NBFC compliance document tracking with verify/reject lifecycle, distinct
+// from dealer documents. Each row is one document upload by an admin, then
+// transitions through pending_review → verified | rejected.
+export const nbfcComplianceDocuments = pgTable(
+  "nbfc_compliance_documents",
+  {
+    id: serial("id").primaryKey(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    document_type: varchar("document_type", { length: 64 }).notNull(),
+    file_url: text("file_url").notNull(),
+    expiry_date: date("expiry_date"),
+    status: varchar("status", { length: 32 })
+      .default("pending_review")
+      .notNull(),
+    uploaded_by: integer("uploaded_by").notNull(),
+    verified_by: integer("verified_by"),
+    verified_at: timestamp("verified_at", { withTimezone: true }),
+    rejected_by: integer("rejected_by"),
+    rejected_at: timestamp("rejected_at", { withTimezone: true }),
+    rejection_reason: text("rejection_reason"),
+    verifier_notes: text("verifier_notes"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_compliance_documents_nbfc_id_idx").on(table.nbfc_id),
+    statusIdx: index("nbfc_compliance_documents_status_idx").on(table.status),
+  }),
+);
+
