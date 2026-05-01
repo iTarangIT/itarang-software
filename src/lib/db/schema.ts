@@ -2936,6 +2936,30 @@ export const telemetryIngestionLog = pgTable(
   }),
 );
 
+// -----------------------------------------------------------------------------
+// E-067 — Risk Rule Engine threshold configuration (Section 6.3.3)
+// -----------------------------------------------------------------------------
+// Single canonical platform-wide table that holds the eight tunable risk
+// thresholds (CDS bands, alert triggers, action gates). E-067 owns this table
+// (read + impact-preview); E-085's dual-approval gate writes back into
+// `current_value` here after the second approver signs off, and separately
+// records the change history in its own audit table
+// (`nbfc_risk_rule_thresholds`). See drizzle/E-067_nbfc_risk_rules.sql for
+// the seed of the eight platform rules.
+// -----------------------------------------------------------------------------
+export const nbfcRiskRules = pgTable(
+  "nbfc_risk_rules",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    rule_key: varchar("rule_key", { length: 64 }).notNull().unique(),
+    rule_label: varchar("rule_label", { length: 160 }).notNull(),
+    current_value: numeric("current_value", { precision: 12, scale: 4 }).notNull(),
+    unit: varchar("unit", { length: 16 }),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_by: uuid("updated_by"),
+  },
+);
+
 // =============================================================================
 // END NBFC additions
 // =============================================================================
