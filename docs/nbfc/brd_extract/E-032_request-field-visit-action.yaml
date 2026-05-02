@@ -71,8 +71,8 @@ acceptance_criteria:
     test_layer: api
     test_name: "Field visit cancellation reverses action and audits"
 
-status: passed
-loop_count: 1
+status: audited
+loop_count: 0
 last_failure_signature: null
 human_checkpoints: []
 audit:

@@ -68,11 +68,6 @@ prod.txt
 env.txt
 /eval-reports
 
-# Worktree-local playwright config that bypasses sandbox login setup —
-# used by the /nbfc loop sub-agent to point Playwright at the local dev
-# server without dragging in the global auth-state setup project.
-playwright.local.config.ts
-
 # /nbfc skill — runtime artifacts (committed: brd_extract/*.yaml, _audit_*.json)
 docs/nbfc/_preflight.json
 docs/nbfc/manifest.json

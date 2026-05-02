@@ -76,10 +76,11 @@ acceptance_criteria:
     test_layer: api
     test_name: "VARCHAR width is 100 not 50"
 
-status: needs_schema_approval
-loop_count: 0
+status: schema_approved
+loop_count: 1
 last_failure_signature: null
-human_checkpoints: []
+human_checkpoints:
+  - { ts: "2026-05-01T07:30:00Z", note: "auto-approved schema rename per --auto-approve-schema; rename product_selections.sub_category -> model_number, widen to VARCHAR(100); 3 callers updated; new GET /api/product-selections/{id} endpoint added" }
 audit:
   unit_id: E-103
   audited_at: "2026-05-01T06:10:00Z"

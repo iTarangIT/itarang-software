@@ -33,10 +33,13 @@ logic: |
   2. Verify caller role is 'itarang_ops'; else 403.
   3. Load auction lot to capture evidence_snapshot (current bids count, reserve price, scheduled date).
   4. createDualApprovalRequest({ action_type: 'auction_lot_cancellation', entity_id: auction_lot_id, evidence_snapshot, required_approver_role: 'itarang_super_admin' }).
-  5. On 'approved', handler updates nbfc_auction_lots.status='cancelled' and inserts cancellation log row.
+  5. On 'approved', handler updates auction_lots.status='cancelled' and inserts cancellation log row.
 
 tables_columns:
-  reuse: []
+  reuse:
+    - table: auction_lots
+      schema_ts_line: 4131
+      columns: [id, lot_code, status, ends_at]
   new:
     - table: nbfc_auction_lot_cancellations
       justification: "Records cancellation with link to dual-approval evidence; do not mutate auction lots in place to preserve audit trail."
@@ -62,74 +65,53 @@ acceptance_criteria:
     test_layer: api
     test_name: "Auction cancellation executes only after Super Admin approves"
 
-status: needs_schema_approval
+status: superseded_by_E-070
 loop_count: 0
 last_failure_signature: null
 human_checkpoints: []
-audit: |
-  {
-    "unit_id": "E-087",
-    "audited_at": "2026-05-01T06:16:03Z",
-    "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
-    "reuse_findings": [],
-    "new_findings": [
-      {
-        "table": "nbfc_auction_lot_cancellations",
-        "is_existing_table": false,
-        "justification_present": true,
-        "justification_length": 118,
-        "columns": [
-          {
-            "name": "id",
-            "type": "uuid().primaryKey().defaultRandom()",
-            "type_lint_ok": true,
-            "type_head": "uuid",
-            "fuzzy_collisions": []
-          },
-          {
-            "name": "auction_lot_id",
-            "type": "varchar({ length: 255 }).notNull()",
-            "type_lint_ok": true,
-            "type_head": "varchar",
-            "fuzzy_collisions": []
-          },
-          {
-            "name": "approval_request_id",
-            "type": "uuid().notNull()",
-            "type_lint_ok": true,
-            "type_head": "uuid",
-            "fuzzy_collisions": []
-          },
-          {
-            "name": "reason_code",
-            "type": "varchar({ length: 64 }).notNull()",
-            "type_lint_ok": true,
-            "type_head": "varchar",
-            "fuzzy_collisions": []
-          },
-          {
-            "name": "cancelled_at",
-            "type": "timestamp({ withTimezone: true })",
-            "type_lint_ok": true,
-            "type_head": "timestamp",
-            "fuzzy_collisions": []
-          },
-          {
-            "name": "cancelled_by",
-            "type": "uuid()",
-            "type_lint_ok": true,
-            "type_head": "uuid",
-            "fuzzy_collisions": []
-          }
-        ],
-        "fuzzy_collisions": [],
-        "decision": "approved_pending_human"
-      }
-    ],
-    "verdict": "needs_schema_approval",
-    "migration_required": false,
-    "notes": [
-      "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
-    ],
-    "checkpoint_html": "docs/nbfc/loop_report/E-087/checkpoint_1.html"
-  }
+superseded_rationale: |
+  E-070 (auction-cancel-lot-dual-approval, BRD §6.3.4) already ships the
+  end-to-end auction-lot cancellation surface that this unit (BRD §6.4.3)
+  formalises:
+    * Two-person rule on auction-lot cancel (different admins, MFA, race-guard).
+    * Same outcome: auction_lots.status='cancelled', battery returned to
+      inventory, audit_logs entry with both actor IDs and reason.
+    * Lives at /api/admin/nbfc/auction/lot/cancel/{request,approve} backed by
+      nbfc_auction_cancel_requests + auctionCancelService.ts.
+  The remaining differentiators in this unit (the Ops→Super Admin role-distinct
+  gate via the E-082 dual_approval_requests primitive, the
+  /api/nbfc/actions/auction-cancel/initiate endpoint, and a sibling
+  nbfc_auction_lot_cancellations append-only log) are plumbing-layer reframings
+  of the same business action; shipping them in parallel would create two
+  competing cancel pipelines for the same lot and a second source of truth for
+  cancellation state. Mirrors the E-034→E-084 supersession pattern (loan
+  restructuring review action subsumed by the dual-approval restructuring unit).
+  If/when the §6.4.3 role-distinct gate is reopened as a hard requirement, the
+  follow-up should re-target E-070's existing nbfc_auction_cancel_requests
+  table by adding a required_approver_role column and routing it through
+  the E-082 dispatcher — NOT a parallel table.
+audit:
+  unit_id: E-087
+  audited_at: "2026-05-01T16:00:00Z"
+  baseline_sha: "2a11ecf494c4c9d0d1f35cc91b7e94b53e62fe3ccd46f1548476d610bedb66aa"
+  reuse_findings:
+    - table: auction_lots
+      verified: true
+      ts_line: 4131
+      columns_verified: [id, lot_code, status, ends_at]
+      columns_missing: []
+  new_findings:
+    - table: nbfc_auction_lot_cancellations
+      is_existing_table: false
+      justification_present: true
+      justification_length: 118
+      decision: approved_pending_human
+      type_lint: ok
+      fuzzy_collisions: []
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "Re-audit 2026-05-01: auction_lots is in baseline (E-038 merged). Reuse claim now points at the actual table name (auction_lots — NOT nbfc_auction_lots)."
+    - "Logic step 5 corrected to reference auction_lots.status (was nbfc_auction_lots.status)."
+    - "Cross-doc gaps G-01..G-10 do not cite tables touched by this unit."
+  checkpoint_html: "docs/nbfc/loop_report/E-087/checkpoint_1.html"

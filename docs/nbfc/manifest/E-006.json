@@ -1,8 +1,8 @@
 {
   "id": "E-006",
   "slug": "nbfc-cor-expiry-alert",
-  "name": "RBI CoR expiry alert — notify admin 60 days before NBFC CoR expires",
-  "status": "green",
+  "name": "RBI CoR expiry alert \u2014 notify admin 60 days before NBFC CoR expires",
+  "status": "passed",
   "loop_count": 1,
   "ac_results": {
     "AC1": "pass",
@@ -10,8 +10,12 @@
     "AC3": "pass"
   },
   "schema_changes": {
-    "tables_added": ["nbfc_cor_expiry_alerts"],
-    "tables_referenced": ["nbfc"],
+    "tables_added": [
+      "nbfc_cor_expiry_alerts"
+    ],
+    "tables_referenced": [
+      "nbfc"
+    ],
     "auto_approved": true
   },
   "files": {
@@ -20,12 +24,18 @@
       "src/app/api/admin/nbfc/cor-expiry-alerts/route.ts",
       "src/app/api/cron/nbfc-cor-expiry/route.ts"
     ],
-    "jobs": ["src/lib/queue/jobs/checkNbfcCorExpiryJob.ts"],
-    "tests": ["tests/e2e/nbfc/E-006_nbfc-cor-expiry-alert.api.spec.ts"],
-    "config": ["vercel.json"]
+    "jobs": [
+      "src/lib/queue/jobs/checkNbfcCorExpiryJob.ts"
+    ],
+    "tests": [
+      "tests/e2e/nbfc/E-006_nbfc-cor-expiry-alert.api.spec.ts"
+    ],
+    "config": [
+      "vercel.json"
+    ]
   },
   "notes": [
-    "Daily cron at 30 0 * * * (00:30 UTC ≈ 06:00 IST) added to vercel.json",
+    "Daily cron at 30 0 * * * (00:30 UTC \u2248 06:00 IST) added to vercel.json",
     "Idempotency enforced by unique index on (nbfc_id, cor_expiry_date) with onConflictDoNothing in the job",
     "Resolved pre-existing slug conflict by renaming src/app/api/admin/nbfc/[id]/route.ts to [nbfcId]/route.ts (no URL change)"
   ],

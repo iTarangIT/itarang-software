@@ -101,7 +101,13 @@ logic: |
   7. All actions write to admin audit log with action code, lot_id, and acting admin user_id.
 
 tables_columns:
-  reuse: []
+  reuse:
+    - table: auction_lots
+      schema_ts_line: 4131
+      columns: [id, lot_code, status, ends_at, base_price, bid_increment]
+    - table: auction_bids
+      schema_ts_line: 4157
+      columns: [id, lot_id, tenant_id, amount, placed_at]
   new:
     - table: nbfc_auction_lot_actions
       justification: "Per-lot record of every admin control action (extend, reduce, pause, reserve-price set, winning-bid approval) with before/after where applicable; required for the Auction Control Centre's full audit trail."
@@ -147,9 +153,19 @@ last_failure_signature: null
 human_checkpoints: []
 audit:
   unit_id: E-069
-  audited_at: "2026-05-01T06:10:31Z"
-  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
-  reuse_findings: []
+  audited_at: "2026-05-01T16:00:00Z"
+  baseline_sha: "2a11ecf494c4c9d0d1f35cc91b7e94b53e62fe3ccd46f1548476d610bedb66aa"
+  reuse_findings:
+    - table: auction_lots
+      verified: true
+      ts_line: 4131
+      columns_verified: [id, lot_code, status, ends_at, base_price, bid_increment]
+      columns_missing: []
+    - table: auction_bids
+      verified: true
+      ts_line: 4157
+      columns_verified: [id, lot_id, tenant_id, amount, placed_at]
+      columns_missing: []
   new_findings:
     - table: nbfc_auction_lot_actions
       justification_present: true
@@ -159,7 +175,7 @@ audit:
   verdict: needs_schema_approval
   migration_required: false
   notes:
-    - "Logic references an auction lot table (lot.closing_at, lot.status) but baseline has no nbfc_auction_lots / auction_lots table. Implementer must add the lots table or document it as an upstream dependency before coding this unit."
-    - "Logic also writes to the admin audit log (action codes); depends_on should include E-071."
-    - "No cross-doc gap (G-01..G-10) directly impacts nbfc_auction_lot_actions."
+    - "Re-audit 2026-05-01: auction_lots and auction_bids are now in baseline (E-038 merged). Reuse claims point at the actual table names (auction_lots / auction_bids — NOT nbfc_-prefixed)."
+    - "Logic still references admin audit log; depends_on should include E-071 once that unit lands."
+    - "Unit still introduces nbfc_auction_lot_actions as new table — verdict remains needs_schema_approval pending human OK on the new table."
   checkpoint_html: "docs/nbfc/loop_report/E-069/checkpoint_1.html"
