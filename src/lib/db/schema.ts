@@ -4540,3 +4540,70 @@ export const nbfcAuctionLotActions = pgTable(
     ),
   }),
 );
+
+// =============================================================================
+// E-104 — Inventory Transfers — bundled base table + rejection extension
+// (Sync Audit G-06; BRD §6.S.5 reject-transfer workflow)
+// =============================================================================
+// `inventory_transfers` was referenced by Section 6.S.5's reject-transfer API
+// but never created in the iTarang baseline schema. This unit creates the
+// full table from scratch in one migration:
+//   1. base columns Aditya's V2-Feb spec listed (id, transfer_id, source/
+//      target dealer, serials JSON, reason, status, initiated_by, initiated_at,
+//      acknowledged_by, acknowledged_at);
+//   2. the three NEW rejection columns (rejected_by, rejected_at,
+//      rejection_reason);
+//   3. status implemented as varchar(32) (NOT a Postgres ENUM type) with a
+//      CHECK constraint that admits all four states from the BRD —
+//      'pending_acknowledgement' | 'completed' | 'rejected_by_target' |
+//      'cancelled_by_admin'. Using varchar avoids ALTER TYPE migrations when
+//      future states are added.
+//
+// CHECK constraint `inventory_transfers_rejection_triplet_check` enforces the
+// all-or-nothing invariant on (rejected_by, rejected_at, rejection_reason):
+// when status='rejected_by_target' the dealer-side reject API must populate
+// all three; otherwise all three remain NULL. This guarantees that any row
+// with a rejection cause carries who-rejected-it, when, and why — and
+// prevents partial-rejection states that the audit workflow can't reason
+// about.
+//
+// Transfer_id is the human-readable code (TRF-YYYYMMDD-SEQ) and carries a
+// UNIQUE constraint so the dealer-portal UI can dedupe on it.
+//
+// The reject API itself ships in a separate Sec6.S.5 unit; this unit only
+// delivers the storage layer.
+// =============================================================================
+export const inventoryTransfers = pgTable(
+  "inventory_transfers",
+  {
+    id: serial("id").primaryKey().notNull(),
+    transfer_id: varchar("transfer_id", { length: 50 }).notNull().unique(),
+    source_dealer_id: integer("source_dealer_id").notNull(),
+    target_dealer_id: integer("target_dealer_id").notNull(),
+    serials: jsonb("serials").notNull(),
+    reason: text("reason"),
+    // pending_acknowledgement | completed | rejected_by_target | cancelled_by_admin
+    status: varchar("status", { length: 32 }).notNull(),
+    initiated_by: integer("initiated_by").notNull(),
+    initiated_at: timestamp("initiated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    acknowledged_by: integer("acknowledged_by"),
+    acknowledged_at: timestamp("acknowledged_at", { withTimezone: true }),
+    // NEW (G-06): the three rejection-cause columns. Populated together by
+    // the Sec6.S.5 reject-transfer API; enforced as a triplet by the CHECK
+    // constraint emitted in the migration SQL.
+    rejected_by: integer("rejected_by"),
+    rejected_at: timestamp("rejected_at", { withTimezone: true }),
+    rejection_reason: text("rejection_reason"),
+  },
+  (table) => ({
+    sourceDealerIdx: index("inventory_transfers_source_dealer_idx").on(
+      table.source_dealer_id,
+    ),
+    targetDealerIdx: index("inventory_transfers_target_dealer_idx").on(
+      table.target_dealer_id,
+    ),
+    statusIdx: index("inventory_transfers_status_idx").on(table.status),
+  }),
+);
