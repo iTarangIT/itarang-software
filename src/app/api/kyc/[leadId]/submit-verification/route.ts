@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { kycVerifications, kycDocuments, leads, couponCodes, adminVerificationQueue } from '@/lib/db/schema';
+import { kycVerifications, kycDocuments, leads, couponCodes, adminVerificationQueue, consentRecords } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { validateDocument, verifyBankAccount } from '@/lib/decentro';
 import { createWorkflowId, getOpenQueueEntryForLead } from '@/lib/kyc/admin-workflow';
@@ -59,6 +59,49 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const lead = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
         if (!lead.length) {
             return NextResponse.json({ success: false, error: { message: 'Lead not found' } }, { status: 404 });
+        }
+
+        // Server-side precondition gate: dealer must have submitted consent
+        // for admin verification AND uploaded all required documents AND
+        // reserved a coupon. The client also blocks the button, but we recheck
+        // here so a forged request can't bypass it.
+        const consentRows = await db
+            .select({ status: consentRecords.consent_status })
+            .from(consentRecords)
+            .where(eq(consentRecords.lead_id, leadId))
+            .limit(1);
+        const consentStatusVal = (consentRows[0]?.status || lead[0].consent_status || '').toLowerCase();
+        const consentSubmitted =
+            ['admin_review_pending', 'admin_verified', 'manual_verified', 'verified'].includes(consentStatusVal);
+
+        const docRows = await db
+            .select({ doc_type: kycDocuments.doc_type, file_url: kycDocuments.file_url })
+            .from(kycDocuments)
+            .where(eq(kycDocuments.lead_id, leadId));
+        const uploadedTypes = new Set(
+            docRows.filter((d) => d.file_url).map((d) => d.doc_type),
+        );
+
+        const assetModelStr = String(lead[0].asset_model || '').toUpperCase();
+        const isVehicleAsset = ['2W', '3W', '4W'].includes(assetModelStr);
+        // Required core docs for a finance lead. RC is conditional on vehicle.
+        const requiredDocTypes = ['aadhaar', 'pan', 'photo', ...(isVehicleAsset ? ['rc_copy'] : [])];
+        const docsAllUploaded = requiredDocTypes.every((t) => uploadedTypes.has(t));
+
+        const couponReserved = (lead[0].coupon_status || '').toLowerCase() === 'reserved';
+
+        if (!consentSubmitted || !docsAllUploaded || !couponReserved) {
+            const missing: string[] = [];
+            if (!consentSubmitted) missing.push('consent must be submitted for admin verification');
+            if (!docsAllUploaded) missing.push('all required documents must be uploaded');
+            if (!couponReserved) missing.push('coupon must be validated');
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: { message: `Cannot submit yet — ${missing.join('; ')}` },
+                },
+                { status: 409 },
+            );
         }
 
         // Resolve the coupon attached to this lead (either passed in the body or already reserved on the lead)

@@ -160,6 +160,13 @@ export async function middleware(request: NextRequest) {
   const sharedRouteAccess: Record<string, string[]> = {
     "/admin/dealer-verification": ["sales_head"],
     "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
+    "/admin/inventory": [
+      "admin",
+      "ops_manager",
+      "super_admin",
+      "inventory_manager",
+      "ceo",
+    ],
   };
 
   const allowedSharedRoles = Object.entries(sharedRouteAccess).find(
