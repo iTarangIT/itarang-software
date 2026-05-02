@@ -189,10 +189,10 @@ export default function RCCard({
                 {rcNumber || "Not available"}
               </span>
             )}
-            {!editing && (status === "pending" || status === "failed") && (
+            {!editing && status !== "loading" && (
               <button onClick={() => setEditing(true)}
                 className="text-xs text-orange-600 hover:text-orange-700 font-medium">
-                Edit
+                {rcNumber ? "Edit" : "Add"}
               </button>
             )}
           </div>

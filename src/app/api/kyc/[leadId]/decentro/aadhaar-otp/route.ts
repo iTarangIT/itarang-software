@@ -25,10 +25,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
         const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
 
-        // Save initiating verification record with txn_id for OTP validation
+        // Upsert by (lead_id, type='aadhaar', applicant='primary') so the
+        // dealer-side Verification Status table never accumulates duplicate
+        // Aadhaar rows when re-sending OTP or after admin actions.
         const existing = await db.select({ id: kycVerifications.id })
             .from(kycVerifications)
-            .where(and(eq(kycVerifications.lead_id, leadId), eq(kycVerifications.verification_type, 'aadhaar')))
+            .where(and(
+                eq(kycVerifications.lead_id, leadId),
+                eq(kycVerifications.verification_type, 'aadhaar'),
+                eq(kycVerifications.applicant, 'primary'),
+            ))
             .limit(1);
 
         const verData = {
@@ -42,12 +48,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         if (existing.length > 0) {
             await db.update(kycVerifications).set(verData)
-                .where(and(eq(kycVerifications.lead_id, leadId), eq(kycVerifications.verification_type, 'aadhaar')));
+                .where(eq(kycVerifications.id, existing[0].id));
         } else {
             await db.insert(kycVerifications).values({
                 id: `KYCVER-${dateStr}-${seq}`,
                 lead_id: leadId,
                 verification_type: 'aadhaar',
+                applicant: 'primary',
                 submitted_at: now,
                 created_at: now,
                 ...verData,

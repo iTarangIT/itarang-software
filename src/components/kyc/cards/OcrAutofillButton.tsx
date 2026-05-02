@@ -8,6 +8,10 @@ interface OcrAutofillButtonProps {
   cachedOcrData?: Record<string, unknown> | null;
   onOcrResult: (data: Record<string, unknown>, source: string) => void;
   disabled?: boolean;
+  // When omitted, defaults to "primary" so the API picks the primary
+  // applicant's document. Pass "co_borrower" from a co-borrower card so the
+  // backend filters kyc_documents by doc_for and returns the right doc.
+  applicant?: "primary" | "co_borrower";
 }
 
 export default function OcrAutofillButton({
@@ -16,6 +20,7 @@ export default function OcrAutofillButton({
   cachedOcrData,
   onOcrResult,
   disabled,
+  applicant = "primary",
 }: OcrAutofillButtonProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -24,8 +29,17 @@ export default function OcrAutofillButton({
   const runOcr = async () => {
     setError("");
 
-    // If cached data exists, use it immediately
-    if (cachedOcrData && Object.keys(cachedOcrData).length > 0) {
+    // Treat tesseract-fallback rows as if there were no cache — those came
+    // from a previous Decentro failure and the admin clicking Autofill is
+    // the explicit signal to retry. Mirrors the backend cache-bypass in
+    // src/app/api/admin/kyc/[leadId]/ocr/route.ts.
+    const isFallbackCache =
+      !!cachedOcrData &&
+      ((cachedOcrData as Record<string, unknown>).source === "tesseract_fallback" ||
+        Object.keys(cachedOcrData).every((k) => k === "rawText" || k === "source"));
+
+    // If cached data exists and isn't a tesseract-fallback stub, use it immediately
+    if (cachedOcrData && Object.keys(cachedOcrData).length > 0 && !isFallbackCache) {
       setLastSource("cached");
       onOcrResult(cachedOcrData, "cached");
       return;
@@ -41,13 +55,25 @@ export default function OcrAutofillButton({
         const res = await fetch(`/api/admin/kyc/${leadId}/ocr`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ doc_type: dt }),
+          body: JSON.stringify({
+            doc_type: dt,
+            // 'borrower' / 'customer' match the values stamped at upload time
+            // by /api/kyc/[leadId]/upload-document so the OCR route can filter
+            // kyc_documents to the right applicant's doc.
+            doc_for: applicant === "co_borrower" ? "borrower" : "customer",
+          }),
         });
         const data = await res.json();
 
         if (data.success && data.ocr_data) {
           setLastSource(data.source || "ocr");
           onOcrResult(data.ocr_data, data.source || "ocr");
+          // Surface Decentro's own error if extraction had to fall back, so
+          // the admin understands why they got Tesseract instead of structured
+          // fields (plan disabled, invalid module_secret, etc.).
+          if (data.decentro_error) {
+            setError(`Decentro: ${data.decentro_error}`);
+          }
           setLoading(false);
           return;
         }

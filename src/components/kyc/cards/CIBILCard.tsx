@@ -91,6 +91,7 @@ export default function CIBILCard({
   });
   const [verificationId, setVerificationId] = useState(existingVerification?.id || "");
   const [error, setError] = useState("");
+  const [errorSuggestion, setErrorSuggestion] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
   const [showCoBorrowerModal, setShowCoBorrowerModal] = useState(false);
@@ -100,6 +101,7 @@ export default function CIBILCard({
   const handleFetch = async (type: "score" | "report") => {
     setStatus(type === "score" ? "loading_score" : "loading_report");
     setError("");
+    setErrorSuggestion("");
 
     const endpoint = type === "score"
       ? `${apiBase}/cibil/score`
@@ -134,18 +136,25 @@ export default function CIBILCard({
         setScore(null);
         setStatus("no_history");
       } else {
-        // Actual API failure
-        const rawKey = data.data?.rawResponse?.responseKey || "";
-        const rawMsg = data.data?.rawResponse?.message || data.error?.message || "";
-        if (rawKey === "error_credits_score_not_found" && type === "score") {
-          setError("Credit score not found via basic lookup. Try 'Get Report' for a full credit bureau search using PAN & DOB.");
+        // Actual API failure — use the friendly error returned by the route
+        // (humanizeCibilError on the server side maps Decentro responseKey /
+        // rawMessage / bureauError into a non-technical message + suggestion).
+        const friendlyMessage = data.error?.message || "";
+        const friendlySuggestion = data.error?.suggestion || "";
+        if (friendlyMessage) {
+          setError(friendlyMessage);
+          setErrorSuggestion(friendlySuggestion);
         } else {
+          // Fallback if an older deploy returns the bare raw message
+          const rawMsg = data.data?.rawResponse?.message || "";
           setError(rawMsg || "Failed to fetch CIBIL data");
+          setErrorSuggestion("");
         }
         setStatus("failed");
       }
     } catch {
-      setError("Network error. Please try again.");
+      setError("Network error reaching the credit bureau.");
+      setErrorSuggestion("Retry in a few seconds.");
       setStatus("failed");
     }
   };
@@ -567,7 +576,56 @@ export default function CIBILCard({
           </div>
         )}
 
-        {error && <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">{error}</div>}
+        {/* Admin Actions for failed state — admins still need to action a
+            permanently-failed CIBIL row (e.g. consumer-not-found edge cases on
+            the co-borrower side). Gated on a verification existing so we don't
+            offer admin actions before any row has been written. */}
+        {status === "failed" && (existingVerification?.id || verificationId) && (
+          <div className="space-y-3 pt-4 border-t border-gray-200">
+            {actionResult && (
+              <div className={`rounded-lg p-3 text-sm font-medium flex items-center gap-2 ${
+                actionResult.success ? "bg-green-50 border border-green-200 text-green-700" : "bg-red-50 border border-red-200 text-red-700"
+              }`}>
+                <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  {actionResult.success
+                    ? <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    : <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  }
+                </svg>
+                {actionResult.message}
+              </div>
+            )}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Admin Notes</p>
+              <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
+                placeholder="CIBIL verification remarks..."
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none" />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => handleAdminAction("accept")} disabled={!!actionLoading}
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
+                {actionLoading === "accept" ? "Accepting..." : "Accept"}
+              </button>
+              <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
+                {actionLoading === "reject" ? "Rejecting..." : "Reject"}
+              </button>
+              <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
+                className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
+                Request Docs
+              </button>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm">
+            <div className="text-red-700 font-medium">{error}</div>
+            {errorSuggestion && (
+              <div className="text-red-600/80 mt-1">{errorSuggestion}</div>
+            )}
+          </div>
+        )}
       </div>
 
       <RequestCoBorrowerModal

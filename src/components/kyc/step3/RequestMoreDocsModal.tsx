@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // BRD §2.9.3 "Request Additional Documents Form" — opened from any primary
 // KYC verification card's [Request More Docs] button, or from the supporting-
@@ -40,6 +40,10 @@ interface RequestMoreDocsModalProps {
   sourceVerificationId?: string | null;
   sourceCardLabel?: string; // e.g. "PAN Verification"
   defaultDocFor?: "primary" | "co_borrower";
+  // When true, hide the Primary/Co-Borrower radio toggle and lock the
+  // request scope to defaultDocFor. Use from card-triggered invocations
+  // where the scope is implied by which card was clicked.
+  lockScope?: boolean;
   onSuccess?: () => void;
 }
 
@@ -50,6 +54,7 @@ export default function RequestMoreDocsModal({
   sourceVerificationId,
   sourceCardLabel,
   defaultDocFor = "primary",
+  lockScope = false,
   onSuccess,
 }: RequestMoreDocsModalProps) {
   const [docFor, setDocFor] = useState<"primary" | "co_borrower">(
@@ -60,14 +65,31 @@ export default function RequestMoreDocsModal({
   ]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  // Per-field validation errors keyed by item index. Set on submit attempt and
+  // cleared per-field as the user types — gives immediate feedback instead of
+  // burying the message in the bottom red banner that admins were missing.
+  const [fieldErrors, setFieldErrors] = useState<
+    Record<number, { doc_label?: string; reason?: string }>
+  >({});
+  const labelRefs = useRef<(HTMLSelectElement | null)[]>([]);
+  const reasonRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
 
   useEffect(() => {
     if (open) {
       setDocFor(defaultDocFor);
       setItems([{ doc_label: "", is_required: true, reason: "" }]);
       setError("");
+      setFieldErrors({});
     }
   }, [open, defaultDocFor]);
+
+  // Disable Send Request when nothing is fillable yet — admin gets a tooltip
+  // instead of clicking a dead button.
+  const canSubmit =
+    items.some((i) => i.doc_label.trim()) &&
+    items.every(
+      (i) => !i.doc_label.trim() || i.reason.trim().length > 0,
+    );
 
   if (!open) return null;
 
@@ -75,6 +97,17 @@ export default function RequestMoreDocsModal({
     setItems((prev) =>
       prev.map((item, i) => (i === index ? { ...item, ...patch } : item)),
     );
+    // Clear matching per-field error as soon as the user types into that field.
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      const cur = next[index] || {};
+      const updated: { doc_label?: string; reason?: string } = { ...cur };
+      if ("doc_label" in patch && (patch.doc_label || "").trim()) delete updated.doc_label;
+      if ("reason" in patch && (patch.reason || "").trim()) delete updated.reason;
+      if (Object.keys(updated).length === 0) delete next[index];
+      else next[index] = updated;
+      return next;
+    });
   };
 
   const addItem = () => {
@@ -89,6 +122,55 @@ export default function RequestMoreDocsModal({
   };
 
   const handleSubmit = async () => {
+    // Validate every item the admin started filling out — set per-field errors
+    // and surface inline so the user can see exactly which fields blocked the
+    // submission. Also auto-scroll to the first invalid field.
+    const newFieldErrors: Record<number, { doc_label?: string; reason?: string }> = {};
+    let firstInvalidIndex: number | null = null;
+    let firstInvalidField: "label" | "reason" | null = null;
+
+    items.forEach((item, idx) => {
+      const label = item.doc_label.trim();
+      const reason = item.reason.trim();
+      if (!label) {
+        newFieldErrors[idx] = { ...newFieldErrors[idx], doc_label: "Document label is required" };
+        if (firstInvalidIndex === null) {
+          firstInvalidIndex = idx;
+          firstInvalidField = "label";
+        }
+      }
+      if (label && !reason) {
+        newFieldErrors[idx] = { ...newFieldErrors[idx], reason: "Reason is required — the dealer will see this" };
+        if (firstInvalidIndex === null) {
+          firstInvalidIndex = idx;
+          firstInvalidField = "reason";
+        }
+      }
+    });
+
+    const hasAnyLabel = items.some((i) => i.doc_label.trim());
+    if (!hasAnyLabel) {
+      setError("Add at least one document to request.");
+      setFieldErrors(newFieldErrors);
+      const ref = labelRefs.current[0];
+      ref?.scrollIntoView({ behavior: "smooth", block: "center" });
+      ref?.focus();
+      return;
+    }
+    if (Object.keys(newFieldErrors).length > 0) {
+      setError("Some fields need attention — see highlighted rows below.");
+      setFieldErrors(newFieldErrors);
+      if (firstInvalidIndex !== null) {
+        const ref =
+          firstInvalidField === "reason"
+            ? reasonRefs.current[firstInvalidIndex]
+            : labelRefs.current[firstInvalidIndex];
+        ref?.scrollIntoView({ behavior: "smooth", block: "center" });
+        ref?.focus();
+      }
+      return;
+    }
+
     const cleaned = items
       .map((i) => ({
         doc_label: i.doc_label.trim(),
@@ -97,15 +179,7 @@ export default function RequestMoreDocsModal({
       }))
       .filter((i) => i.doc_label.length > 0);
 
-    if (cleaned.length === 0) {
-      setError("Add at least one document to request.");
-      return;
-    }
-    if (cleaned.some((i) => !i.reason)) {
-      setError("Each document needs a reason for the dealer.");
-      return;
-    }
-
+    setFieldErrors({});
     setSubmitting(true);
     setError("");
     try {
@@ -164,24 +238,33 @@ export default function RequestMoreDocsModal({
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
               Request For
             </label>
-            <div className="flex gap-4 mt-2">
-              <label className="flex items-center gap-2 text-sm text-gray-700">
-                <input
-                  type="radio"
-                  checked={docFor === "primary"}
-                  onChange={() => setDocFor("primary")}
-                />
-                Primary Applicant
-              </label>
-              <label className="flex items-center gap-2 text-sm text-gray-700">
-                <input
-                  type="radio"
-                  checked={docFor === "co_borrower"}
-                  onChange={() => setDocFor("co_borrower")}
-                />
-                Co-Borrower
-              </label>
-            </div>
+            {lockScope ? (
+              <div className="mt-2 text-sm text-gray-700">
+                Requesting documents from:{" "}
+                <span className="font-semibold">
+                  {docFor === "co_borrower" ? "Co-Borrower" : "Primary Applicant"}
+                </span>
+              </div>
+            ) : (
+              <div className="flex gap-4 mt-2">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    checked={docFor === "primary"}
+                    onChange={() => setDocFor("primary")}
+                  />
+                  Primary Applicant
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    checked={docFor === "co_borrower"}
+                    onChange={() => setDocFor("co_borrower")}
+                  />
+                  Co-Borrower
+                </label>
+              </div>
+            )}
           </div>
 
           <div className="space-y-4">
@@ -208,9 +291,10 @@ export default function RequestMoreDocsModal({
                 <div className="space-y-3">
                   <div>
                     <label className="text-xs text-gray-500">
-                      Document Label
+                      Document Label <span className="text-red-500">*</span>
                     </label>
                     <select
+                      ref={(el) => { labelRefs.current[i] = el; }}
                       value={
                         PRESET_DOC_LABELS.includes(item.doc_label)
                           ? item.doc_label
@@ -222,7 +306,11 @@ export default function RequestMoreDocsModal({
                           doc_label: v === "Other (custom)" ? "" : v,
                         });
                       }}
-                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                      className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${
+                        fieldErrors[i]?.doc_label
+                          ? "border-red-400 focus:ring-2 focus:ring-red-300 focus:border-red-500"
+                          : "border-gray-200"
+                      }`}
                     >
                       <option value="">Select document…</option>
                       {PRESET_DOC_LABELS.map((label) => (
@@ -240,24 +328,47 @@ export default function RequestMoreDocsModal({
                           updateItem(i, { doc_label: e.target.value })
                         }
                         placeholder="Custom document label"
-                        className="w-full mt-2 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                        className={`w-full mt-2 border rounded-lg px-3 py-2 text-sm ${
+                          fieldErrors[i]?.doc_label
+                            ? "border-red-400"
+                            : "border-gray-200"
+                        }`}
                       />
+                    )}
+                    {fieldErrors[i]?.doc_label && (
+                      <p className="text-xs text-red-600 mt-1">
+                        {fieldErrors[i]?.doc_label}
+                      </p>
                     )}
                   </div>
 
                   <div>
                     <label className="text-xs text-gray-500">
-                      Reason (shown to dealer)
+                      Reason (shown to dealer) <span className="text-red-500">*</span>
                     </label>
                     <textarea
+                      ref={(el) => { reasonRefs.current[i] = el; }}
                       value={item.reason}
                       onChange={(e) =>
                         updateItem(i, { reason: e.target.value })
                       }
                       rows={2}
                       placeholder="e.g. Pincode on address proof is not readable"
-                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                      className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm focus:ring-2 ${
+                        fieldErrors[i]?.reason
+                          ? "border-red-400 focus:ring-red-300 focus:border-red-500"
+                          : "border-gray-200 focus:ring-teal-500 focus:border-teal-500"
+                      }`}
                     />
+                    {fieldErrors[i]?.reason ? (
+                      <p className="text-xs text-red-600 mt-1">
+                        {fieldErrors[i]?.reason}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-gray-400 mt-1">
+                        Required — the dealer will see this exact text on their portal.
+                      </p>
+                    )}
                   </div>
 
                   <label className="flex items-center gap-2 text-sm text-gray-700">
@@ -305,8 +416,15 @@ export default function RequestMoreDocsModal({
           </button>
           <button
             onClick={handleSubmit}
-            disabled={submitting}
-            className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg disabled:opacity-50"
+            disabled={submitting || !canSubmit}
+            title={
+              submitting
+                ? "Sending…"
+                : !canSubmit
+                  ? "Add a document label and reason for each row"
+                  : ""
+            }
+            className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {submitting ? "Sending request…" : "Send Request"}
           </button>

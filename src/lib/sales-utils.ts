@@ -68,25 +68,17 @@ export async function checkOrderFulfillmentBlock(orderId: string) {
 }
 
 /**
- * Calculates Reorder TAT for an account (SOP 3.6)
+ * Calculates Reorder TAT for an account (SOP 3.6).
+ *
+ * Disabled: depends on `accounts.last_order_fulfilled_at`, which does not
+ * exist in the current Drizzle schema or in database-1 (sandbox). Adding the
+ * column to the schema without first migrating the DB would break every other
+ * `select().from(accounts)`. Restore once a migration adds the column on the
+ * schema/sync-with-rds branch.
  */
-export async function updateReorderTat(accountId: string, currentOrderId: string) {
-    const [account] = await db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1);
-    if (!account || !account.last_order_fulfilled_at) {
-        // First order or no previous tracking
-        await db.update(accounts).set({ last_order_fulfilled_at: new Date() }).where(eq(accounts.id, accountId));
-        return null;
-    }
-
-    const lastDate = new Date(account.last_order_fulfilled_at);
-    const now = new Date();
-    const tatDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
-
-    // Update the current order with this TAT
-    await db.update(orders).set({ reorder_tat_days: tatDays }).where(eq(orders.id, currentOrderId));
-
-    // Update account for next cycle
-    await db.update(accounts).set({ last_order_fulfilled_at: now }).where(eq(accounts.id, accountId));
-
-    return tatDays;
+export async function updateReorderTat(_accountId: string, _currentOrderId: string) {
+    console.warn(
+        "[sales-utils] updateReorderTat skipped: accounts.last_order_fulfilled_at not present in schema",
+    );
+    return null;
 }

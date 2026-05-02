@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
 import { executeCoBorrowerDigilockerInit } from "@/lib/kyc/coborrower-verification";
+import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
 
 export async function POST(
   req: NextRequest,
@@ -19,10 +20,49 @@ export async function POST(
     const { leadId } = await params;
     const body = await req.json().catch(() => ({}));
 
+    // Resolve redirect_url through the same safe-host helper primary uses
+    // (src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/initiate/route.ts:128-147).
+    // Previously the helper read process.env.NEXT_PUBLIC_APP_URL directly, which
+    // on a sandbox where that env is set to http://localhost:3003 caused
+    // Decentro to redirect customers to localhost — unreachable from their
+    // browsers. publicOrigin rejects localhost / ngrok / .local in production
+    // and falls back to validated request headers, matching primary behaviour.
+    let callbackUrl: string;
+    try {
+      const callbackBase = publicOrigin({ req });
+      // Include leadId as a path segment so the callback handler can find
+      // the right co-borrower verification row by an unambiguous key
+      // instead of a fragile JSONB equality match on the Decentro txn id.
+      // Mirrors primary's pattern at
+      // src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/initiate/route.ts:147
+      // (primary uses its digiId; we use leadId — there's at most one
+      // in-progress co-borrower aadhaar verification per lead, so it's a
+      // safe natural key).
+      callbackUrl =
+        body.redirect_url ||
+        `${callbackBase}/api/kyc/digilocker/callback/coborrower/${encodeURIComponent(leadId)}`;
+    } catch (err) {
+      if (err instanceof PublicOriginError) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: {
+              message:
+                "Cannot initiate DigiLocker: no safe callback URL available. " +
+                "Ask ops to set NEXT_PUBLIC_APP_URL to the deployed origin.",
+              code: err.code,
+            },
+          },
+          { status: 500 },
+        );
+      }
+      throw err;
+    }
+
     const result = await executeCoBorrowerDigilockerInit(leadId, {
       phone: body.phone,
       email: body.email,
-      redirect_url: body.redirect_url,
+      redirect_url: callbackUrl,
     });
 
     if ("error" in result) {

@@ -9,6 +9,18 @@
     "src/app/api/kyc/[leadId]/generate-consent-pdf/route.ts": {
       "memory": 1024,
       "maxDuration": 60
+    },
+    "src/app/api/integrations/digio/create-agreement/route.ts": {
+      "memory": 1024,
+      "maxDuration": 60
+    },
+    "src/app/api/admin/dealer-verifications/[dealerId]/initiate-agreement/route.ts": {
+      "memory": 1024,
+      "maxDuration": 60
+    },
+    "src/app/api/admin/dealer-verifications/[dealerId]/audit-trail/route.ts": {
+      "memory": 1024,
+      "maxDuration": 60
     }
   }
 }

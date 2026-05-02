@@ -282,7 +282,7 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
 
 const BADGE_CONFIG: Record<string, { bg: string; text: string; label: string }> = {
     pending: { bg: 'bg-yellow-50', text: 'text-yellow-700', label: 'Pending' },
-    initiating: { bg: 'bg-orange-50', text: 'text-orange-700', label: 'Initiating' },
+    initiating: { bg: 'bg-yellow-50', text: 'text-yellow-700', label: 'Pending' },
     awaiting_action: { bg: 'bg-gray-100', text: 'text-gray-600', label: 'Awaiting Action' },
     in_progress: { bg: 'bg-blue-50', text: 'text-blue-700', label: 'In Progress' },
     processing: { bg: 'bg-blue-50', text: 'text-blue-700', label: 'Processing' },
@@ -302,21 +302,29 @@ export function StatusBadge({ status }: { status: string }) {
 // ─── Progress Header ────────────────────────────────────────────────────────
 
 export function ProgressHeader({
-    title, subtitle, step, totalSteps = 5,
-    onBack, onPrev, onNext, onStepClick,
+    title, subtitle, step, totalSteps = 5, workflowLabel = 'Workflow Progress',
+    onBack, onPrev, onNext, onStepClick, lockedSteps,
     rightAction,
 }: {
     title: string;
     subtitle?: string;
     step: number;
     totalSteps?: number;
+    workflowLabel?: string;
     onBack: () => void;
     onPrev?: () => void;
     onNext?: () => void;
     onStepClick?: (targetStep: number) => void;
+    // Step indices that should be visually disabled and unclickable in the
+    // progress bar (e.g. Step 4 while Step 3 is still under admin review).
+    // Locked steps also block the right-chevron's onNext.
+    lockedSteps?: number[];
     rightAction?: ReactNode;
 }) {
     const canGoPrev = step > 1;
+    const isLocked = (idx: number) => !!lockedSteps?.includes(idx);
+    // Note: lockedSteps only affects the progress-bar dots. The right
+    // chevron stays enabled and is the dealer's escape hatch.
     const canGoNext = step < totalSteps;
     return (
         <header className="mb-8 flex justify-between items-start gap-4">
@@ -336,7 +344,7 @@ export function ProgressHeader({
             <div className="flex flex-col items-end gap-4">
                 <div>
                     <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest text-right mb-1.5">
-                        Workflow Progress
+                        {workflowLabel}
                     </p>
                     <div className="flex items-center gap-4">
                         <span className="text-xs font-bold text-[#1D4ED8] whitespace-nowrap">
@@ -356,18 +364,20 @@ export function ProgressHeader({
                                 {Array.from({ length: totalSteps }, (_, i) => {
                                     const idx = i + 1;
                                     const reached = idx <= step;
-                                    const clickable = !!onStepClick;
+                                    const locked = isLocked(idx);
+                                    const clickable = !!onStepClick && !locked;
                                     return (
                                         <button
                                             type="button"
                                             key={idx}
                                             onClick={clickable ? () => onStepClick?.(idx) : undefined}
                                             disabled={!clickable}
-                                            aria-label={`Jump to step ${idx}`}
+                                            aria-label={locked ? `Step ${idx} locked` : `Jump to step ${idx}`}
                                             aria-current={idx === step ? 'step' : undefined}
+                                            title={locked ? 'Locked — complete the previous step first' : undefined}
                                             className={`h-[6px] w-[50px] rounded-full transition-all duration-300 ${
                                                 reached ? 'bg-[#0047AB]' : 'bg-gray-200'
-                                            } ${clickable ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
+                                            } ${locked ? 'opacity-40 cursor-not-allowed' : clickable ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
                                         />
                                     );
                                 })}
@@ -397,7 +407,7 @@ export function StickyBottomBar({ children, lastSaved }: {
     lastSaved?: string | null;
 }) {
     return (
-        <div className="sticky bottom-0 left-0 right-0 bg-[#F8F9FB] pt-4 pb-8 z-50">
+        <div className="sticky bottom-0 left-0 right-0 bg-[#F8F9FB] pt-4 pb-8 z-30">
             <div className="max-w-[1200px] mx-auto px-6">
                 <div className="flex justify-between items-center bg-white border border-gray-100 rounded-[20px] px-8 py-5 shadow-[0_-8px_30px_rgb(0,0,0,0.04)]">
                     <div className="bg-gray-100 px-4 py-1.5 rounded-full">

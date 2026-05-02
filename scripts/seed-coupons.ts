@@ -1,3 +1,7 @@
+// @ts-nocheck
+// Standalone seed script — depends on `pg` which is intentionally not in the
+// app's runtime dependencies. Install `pg` and remove this banner before
+// running.
 /**
  * Seed test coupons for all existing dealer accounts.
  * Run: npx tsx scripts/seed-coupons.ts

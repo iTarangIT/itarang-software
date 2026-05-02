@@ -1,6 +1,7 @@
 /**
  * Typed query helpers over the IoT VPS Postgres.
  *
+ * 
  * All queries take an explicit `vehiclenos: string[]` filter so a tenant only
  * ever sees telemetry for vehicles tied to its loans. The caller is
  * responsible for resolving the tenant → vehicleno set via `nbfc_loans`.
@@ -15,7 +16,7 @@
  *   alerts(time, vehicleno, alert_type, severity, message, resolved_at)
  *   daily_distance_per_vehicle(day, vehicleno, km, kwh, trips)
  */
-import { iotSql } from "./iot";
+import { getIotSql } from "./iot";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,7 @@ export async function getFleetSummary(vehiclenos: string[]): Promise<FleetSummar
     };
   }
 
+  const iotSql = getIotSql();
   const stateRows = await iotSql<
     Array<{
       total: string;
@@ -131,6 +133,7 @@ export async function getFleetSummary(vehiclenos: string[]): Promise<FleetSummar
  */
 export async function getVehicleStates(vehiclenos: string[]): Promise<VehicleStateRow[]> {
   if (vehiclenos.length === 0) return [];
+  const iotSql = getIotSql();
   const rows = await iotSql<
     Array<{
       vehicleno: string;
@@ -179,6 +182,7 @@ export async function getVehicleStates(vehiclenos: string[]): Promise<VehicleSta
  */
 export async function getDailyKm(vehiclenos: string[], days: number): Promise<DailyKmRow[]> {
   if (vehiclenos.length === 0) return [];
+  const iotSql = getIotSql();
   const rows = await iotSql<Array<{ day: string; vehicleno: string; km: string }>>`
     SELECT day, vehicleno, km
     FROM daily_distance_per_vehicle
@@ -198,6 +202,7 @@ export async function getDailyKm(vehiclenos: string[], days: number): Promise<Da
  * Used by the per-vehicle drawer and the LangGraph fetch_data tool.
  */
 export async function getCanHistory24h(vehicleno: string): Promise<CanSocPoint[]> {
+  const iotSql = getIotSql();
   const rows = await iotSql<
     Array<{
       time: string;
@@ -235,6 +240,7 @@ export async function getSohDelta30d(
   vehiclenos: string[],
 ): Promise<Array<{ vehicleno: string; soh_now: number; soh_30d_ago: number; delta: number }>> {
   if (vehiclenos.length === 0) return [];
+  const iotSql = getIotSql();
   const rows = await iotSql<
     Array<{ vehicleno: string; soh_now: string; soh_30d_ago: string; delta: string }>
   >`
@@ -272,6 +278,7 @@ export async function getSohDelta30d(
  */
 export async function getOpenAlerts(vehiclenos: string[]): Promise<OpenAlert[]> {
   if (vehiclenos.length === 0) return [];
+  const iotSql = getIotSql();
   const rows = await iotSql<
     Array<{ time: string; vehicleno: string; alert_type: string; severity: string; message: string }>
   >`

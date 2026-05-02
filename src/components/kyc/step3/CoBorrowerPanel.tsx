@@ -39,8 +39,19 @@ export type CoBorrowerDoc = {
   uploadedAt: string;
 };
 
+// Returned when the dealer hasn't yet hit Submit for Verification on Step 3.
+// The admin sees a banner instead of the doc grid / verification cards.
+export type CoBorrowerGated = {
+  id: string;
+  gated: true;
+  awaitingDealerSubmission: true;
+  requestedAt: string | null;
+  attemptNumber: number | null;
+};
+
 export type CoBorrowerData = {
   id: string;
+  gated: false;
   fullName: string;
   fatherOrHusbandName: string | null;
   dob: string | null;
@@ -330,6 +341,7 @@ export default function CoBorrowerPanel({
                     adminAction: getVerification("aadhaar")!.adminAction,
                     adminActionNotes:
                       getVerification("aadhaar")!.adminActionNotes,
+                    apiResponse: getVerification("aadhaar")!.apiResponse,
                   }
                 : null
             }

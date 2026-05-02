@@ -15,14 +15,14 @@ export const GET = withErrorHandler(
       .select({
         id: scrapeRuns.id,
         status: scrapeRuns.status,
-        totalChunks: scrapeRuns.totalChunks,
-        completedChunks: scrapeRuns.completedChunks,
-        totalFound: scrapeRuns.totalFound,
-        newLeadsSaved: scrapeRuns.newLeadsSaved,
-        duplicatesSkipped: scrapeRuns.duplicatesSkipped,
-        errorMessage: scrapeRuns.errorMessage,
-        startedAt: scrapeRuns.startedAt,
-        completedAt: scrapeRuns.completedAt,
+        totalChunks: scrapeRuns.total_chunks,
+        completedChunks: scrapeRuns.completed_chunks,
+        totalFound: scrapeRuns.total_found,
+        newLeadsSaved: scrapeRuns.new_leads_saved,
+        duplicatesSkipped: scrapeRuns.duplicates_skipped,
+        errorMessage: scrapeRuns.error_message,
+        startedAt: scrapeRuns.started_at,
+        completedAt: scrapeRuns.completed_at,
       })
       .from(scrapeRuns)
       .where(eq(scrapeRuns.id, id))
@@ -34,10 +34,10 @@ export const GET = withErrorHandler(
       .select({
         status: scraperRunChunks.status,
         count: sql<number>`count(*)::int`,
-        leadsSum: sql<number>`coalesce(sum(${scraperRunChunks.leadsCount}), 0)::int`,
+        leadsSum: sql<number>`coalesce(sum(${scraperRunChunks.leads_count}), 0)::int`,
       })
       .from(scraperRunChunks)
-      .where(eq(scraperRunChunks.runId, id))
+      .where(eq(scraperRunChunks.run_id, id))
       .groupBy(scraperRunChunks.status);
 
     const breakdown = {

@@ -1,0 +1,29 @@
+[
+  {
+    "file": "src/app/api/admin/dealer-verifications/[dealerId]/request-correction/route.ts",
+    "line": 172,
+    "col": -1,
+    "oldName": "requestedFields",
+    "newName": "requested_fields",
+    "kind": "inner",
+    "reason": "inner: key not found within 200 lines of header"
+  },
+  {
+    "file": "src/app/api/dealer-onboarding/save/route.ts",
+    "line": 347,
+    "col": -1,
+    "oldName": "dealerUserId",
+    "newName": "dealer_user_id",
+    "kind": "inner",
+    "reason": "inner: key not found within 200 lines of header"
+  },
+  {
+    "file": "src/lib/agreement/sync-signers.ts",
+    "line": 148,
+    "col": -1,
+    "oldName": "applicationId",
+    "newName": "application_id",
+    "kind": "inner",
+    "reason": "inner: key not found within 200 lines of header"
+  }
+]

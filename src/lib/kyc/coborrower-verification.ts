@@ -9,6 +9,10 @@ import {
   digilockerInitiateSession,
   digilockerGetEaadhaar,
 } from "@/lib/decentro";
+import {
+  crossMatchAadhaarData,
+  type CrossMatchResult,
+} from "@/lib/kyc/cross-match";
 
 // BRD §2.9.3 Panel 3 co-borrower API verification cards. These helpers
 // provide a thin Decentro wrapper scoped to a co-borrower row. They do NOT
@@ -43,6 +47,54 @@ function nameSimilarity(a: string, b: string): number {
   const intersection = [...wordsA].filter((w) => wordsB.has(w)).length;
   const union = new Set([...wordsA, ...wordsB]).size;
   return Math.round((intersection / union) * 100);
+}
+
+// Mirrors src/lib/kyc/pan-verification.ts:computeMatch so co-borrower PAN
+// cross-match rows ship with the same { score, pass } shape the primary
+// produces and PANCard.tsx already knows how to render.
+function computeMatch(
+  a: string | null | undefined,
+  b: string | null | undefined,
+  type: "similarity" | "exact" | "phone" = "similarity",
+): { score: number | null; pass: boolean } {
+  if (!a || !b) return { score: null, pass: true };
+  if (type === "exact") {
+    const match = a.trim().toLowerCase() === b.trim().toLowerCase();
+    return { score: match ? 100 : 0, pass: match };
+  }
+  if (type === "phone") {
+    const match =
+      a.replace(/\D/g, "").slice(-10) === b.replace(/\D/g, "").slice(-10);
+    return { score: match ? 100 : 0, pass: match };
+  }
+  const sim = nameSimilarity(a, b);
+  return { score: sim, pass: sim >= 80 };
+}
+
+function formatDob(value: unknown): string {
+  if (!value) return "";
+  const d = new Date(value as string);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+// Decentro's eAadhaar dob comes back as DD-MM-YYYY or DD/MM/YYYY most of the
+// time. PostgreSQL's date column wants YYYY-MM-DD, so normalise before the
+// write. Returns null on anything we don't recognise — caller should skip
+// the column update rather than risk a 500 mid-verification.
+function normalizeDobForDb(s: string | null | undefined): string | null {
+  if (!s) return null;
+  const v = String(s).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  let m = v.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  m = v.match(/^(\d{4})[-/](\d{2})[-/](\d{2})$/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  return null;
 }
 
 async function getCoBorrower(leadId: string) {
@@ -167,22 +219,92 @@ export async function executeCoBorrowerPanVerification(
   }
   const overallSuccess = isValid && (matchScore === null || matchScore >= 50);
 
+  // Mirror primary's allCrossMatchFields shape (pan-verification.ts:376-432)
+  // so the front-end Verification Match Results table renders the same set of
+  // rows on the co-borrower side. Aadhaar column stays null until we wire in
+  // the co-borrower DigiLocker extracted data.
+  const cbFatherName = (cb.father_or_husband_name as string | null) || null;
+  const cbAddress = (cb.address as string | null) || (cb.current_address as string | null) || null;
+  const cbDob = formatDob(cb.dob);
+  const cbPhone = (cb.phone as string | null) || null;
+
+  const panDob = (kycResult.dateOfBirth || kycResult.dob || "") as string;
+  const panAddressRaw = kycResult.address as unknown;
+  const panAddress =
+    panAddressRaw && typeof panAddressRaw === "object" && (panAddressRaw as { full?: string }).full
+      ? ((panAddressRaw as { full: string }).full)
+      : typeof panAddressRaw === "string"
+        ? panAddressRaw
+        : "";
+  const panMobile = (kycResult.mobile || kycResult.phone || kycResult.mobileNumber || "") as string;
+  const panGender = (kycResult.gender || "") as string;
+  const panFather = (kycResult.fatherName || "") as string;
+
+  const dobMatch = computeMatch(cbDob, panDob, "exact");
+  const addressMatch = computeMatch(cbAddress, panAddress);
+  const mobileMatch = computeMatch(cbPhone, panMobile, "phone");
+  const fatherMatch = computeMatch(cbFatherName, panFather);
+
+  const allCrossMatchFields = [
+    {
+      field: "Name",
+      leadValue: cb.full_name || null,
+      panValue: panName || null,
+      aadhaarValue: null,
+      matchScore,
+      pass: matchScore === null ? true : matchScore >= 80,
+    },
+    {
+      field: "Gender",
+      leadValue: null,
+      panValue: panGender || null,
+      aadhaarValue: null,
+      matchScore: null,
+      pass: true,
+    },
+    {
+      field: "DOB",
+      leadValue: cbDob || null,
+      panValue: panDob || null,
+      aadhaarValue: null,
+      matchScore: dobMatch.score,
+      pass: dobMatch.pass,
+    },
+    {
+      field: "Address",
+      leadValue: cbAddress,
+      panValue: panAddress || null,
+      aadhaarValue: null,
+      matchScore: addressMatch.score,
+      pass: addressMatch.pass,
+    },
+    {
+      field: "Mobile",
+      leadValue: cbPhone,
+      panValue: panMobile || null,
+      aadhaarValue: null,
+      matchScore: mobileMatch.score,
+      pass: mobileMatch.pass,
+    },
+    {
+      field: "Father/Husband Name",
+      leadValue: cbFatherName,
+      panValue: panFather || null,
+      aadhaarValue: null,
+      matchScore: fatherMatch.score,
+      pass: fatherMatch.pass,
+    },
+  ];
+
+  const crossMatchFields = allCrossMatchFields.filter((f) => f.leadValue || f.panValue);
+
   const verificationId = await upsertCoBorrowerVerification(leadId, "pan", {
     status: overallSuccess ? "success" : "failed",
     api_request: { pan_number: input.panNumber },
     api_response: {
       ...decentroRes,
       data: {
-        crossMatchFields: [
-          {
-            field: "Name",
-            leadValue: cb.full_name,
-            panValue: panName,
-            aadhaarValue: null,
-            matchScore,
-            pass: matchScore === null ? true : matchScore >= 80,
-          },
-        ],
+        crossMatchFields,
         pan_name: panName,
         pan_status: panStatus,
         name_match_score: matchScore,
@@ -193,10 +315,23 @@ export async function executeCoBorrowerPanVerification(
   });
 
   if (overallSuccess) {
-    await db
-      .update(coBorrowers)
-      .set({ pan_no: input.panNumber.toUpperCase().trim(), updated_at: new Date() })
-      .where(eq(coBorrowers.id, cb.id));
+    // Backfill what PAN reliably gives us. pan_no is the verification's
+    // authoritative output. Other columns only fill when null so dealer
+    // entries aren't overwritten.
+    const panUpdates: Record<string, unknown> = {
+      pan_no: input.panNumber.toUpperCase().trim(),
+      updated_at: new Date(),
+    };
+    if (panName && !cb.full_name) panUpdates.full_name = panName;
+    if (panFather && !cb.father_or_husband_name) {
+      panUpdates.father_or_husband_name = panFather;
+    }
+    if (panDob && !cb.dob) {
+      const normalisedPanDob = normalizeDobForDb(panDob);
+      if (normalisedPanDob) panUpdates.dob = normalisedPanDob;
+    }
+    if (panAddress && !cb.address) panUpdates.address = panAddress;
+    await db.update(coBorrowers).set(panUpdates).where(eq(coBorrowers.id, cb.id));
   }
 
   return {
@@ -210,16 +345,7 @@ export async function executeCoBorrowerPanVerification(
       lead_name: cb.full_name,
       pan_status: panStatus,
       name_match_score: matchScore,
-      crossMatchFields: [
-        {
-          field: "Name",
-          leadValue: cb.full_name,
-          panValue: panName,
-          aadhaarValue: null,
-          matchScore,
-          pass: matchScore === null ? true : matchScore >= 80,
-        },
-      ],
+      crossMatchFields,
     },
   };
 }
@@ -232,6 +358,8 @@ export async function executeCoBorrowerBankVerification(
     account_number: string;
     ifsc: string;
     name?: string;
+    perform_name_match?: boolean;
+    validation_type?: "penniless" | "pennydrop" | "hybrid";
   },
 ) {
   if (!input.account_number || !input.ifsc) {
@@ -249,15 +377,48 @@ export async function executeCoBorrowerBankVerification(
 
   const decentroRes = await verifyBankAccount({
     account_number: input.account_number,
-    ifsc: input.ifsc,
-    name: input.name || cb.full_name,
-    validation_type: "pennydrop",
+    ifsc: input.ifsc.toUpperCase().trim(),
+    name: input.name || cb.full_name || undefined,
+    perform_name_match: input.perform_name_match,
+    validation_type: input.validation_type ?? "pennydrop",
   });
 
-  const data = decentroRes.data || decentroRes.kycResult || {};
-  const accountStatus = (data.accountStatus || data.status || "").toUpperCase();
-  const beneficiaryName = data.beneficiaryName || data.accountHolderName || "";
-  const nameMatch = cb.full_name
+  // Mirror primary handler's misconfig short-circuit (bank-verification.ts:55-68)
+  // so the BankCard front-end's existing config-banner branch (BankCard.tsx:110-114)
+  // lights up cleanly on the co-borrower side too.
+  const isMisconfig =
+    typeof decentroRes.message === "string" &&
+    /must be set in \.env/i.test(decentroRes.message);
+  if (isMisconfig) {
+    return {
+      success: false,
+      status: 503,
+      error: {
+        message:
+          "Bank verification is not available on this server — contact the administrator to configure it.",
+        code: "bank_verify_misconfigured",
+      },
+    };
+  }
+
+  // Decentro v2 /core_banking returns fields at the top level (no `data` envelope),
+  // but the older mocked shape nests them under `data`. Flatten both like primary
+  // does at bank-verification.ts:135-136 so accountStatus / beneficiaryName resolve
+  // regardless of which shape we get.
+  const nested = (decentroRes.data || null) as Record<string, unknown> | null;
+  const flat: Record<string, unknown> = { ...decentroRes, ...(nested || {}) };
+  const accountStatus = String(
+    (flat.accountStatus as string) || (flat.status as string) || "",
+  ).toUpperCase();
+  const beneficiaryName = String(
+    (flat.beneficiaryName as string) || (flat.accountHolderName as string) || "",
+  );
+  const bankReferenceNumber =
+    (flat.bankReferenceNumber as string | undefined) ||
+    (flat.bank_reference_number as string | undefined) ||
+    null;
+
+  const nameMatch = cb.full_name && beneficiaryName
     ? nameSimilarity(beneficiaryName, cb.full_name)
     : null;
   const overallSuccess = accountStatus === "SUCCESS" || accountStatus === "VALID";
@@ -267,12 +428,15 @@ export async function executeCoBorrowerBankVerification(
     api_request: {
       account_number: input.account_number,
       ifsc: input.ifsc,
+      perform_name_match: input.perform_name_match,
+      validation_type: input.validation_type,
     },
     api_response: {
       ...decentroRes,
       data: {
         beneficiaryName,
         accountStatus,
+        bankReferenceNumber,
         nameMatchScore: nameMatch,
       },
     },
@@ -286,11 +450,12 @@ export async function executeCoBorrowerBankVerification(
     success: overallSuccess,
     message: overallSuccess
       ? `Bank verified. Name on account: ${beneficiaryName}`
-      : `Bank verification failed: ${accountStatus}`,
+      : `Bank verification failed${accountStatus ? `: ${accountStatus}` : ""}`,
     data: {
       verificationId,
       beneficiaryName,
       accountStatus,
+      bankReferenceNumber,
       nameMatchScore: nameMatch,
     },
   };
@@ -360,87 +525,6 @@ export async function executeCoBorrowerRcVerification(
   };
 }
 
-// -- CIBIL (score + report) --------------------------------------------------
-//
-// CIBIL isn't wired via Decentro for co-borrowers — the existing CIBIL helper
-// is tightly coupled to the primary tables. We store the fact that a CIBIL
-// check was attempted and leave the detail body in api_response; the admin
-// can accept/reject via the existing admin_action flow. This is a minimum-
-// viable v1 that satisfies BRD line 2679 (co-borrower must score ≥ 700) at
-// the UI level even if score fetch falls back to manual entry.
-
-export async function executeCoBorrowerCibilScore(
-  leadId: string,
-  input: { score?: number; reportId?: string; note?: string },
-) {
-  const cb = await getCoBorrower(leadId);
-  if (!cb) {
-    return { success: false, status: 404, error: "Co-borrower not found" };
-  }
-
-  const score = typeof input.score === "number" ? input.score : null;
-  const meetsThreshold = score !== null ? score >= 700 : null;
-  const overallSuccess = meetsThreshold === true;
-
-  const verificationId = await upsertCoBorrowerVerification(leadId, "cibil", {
-    status: overallSuccess
-      ? "success"
-      : score === null
-        ? "awaiting_action"
-        : "failed",
-    api_provider: "manual",
-    api_request: { score, reportId: input.reportId, note: input.note },
-    api_response: {
-      data: {
-        score,
-        reportId: input.reportId || null,
-        generatedAt: new Date().toISOString(),
-        interpretation: {
-          rating:
-            score === null
-              ? "PENDING"
-              : score >= 750
-                ? "EXCELLENT"
-                : score >= 700
-                  ? "GOOD"
-                  : score >= 650
-                    ? "MODERATE"
-                    : "POOR",
-          riskLevel: score === null ? "UNKNOWN" : score >= 700 ? "LOW" : "HIGH",
-          coBorrowerRequired: false,
-          color: score !== null && score >= 700 ? "green" : "red",
-          description:
-            score === null
-              ? "Awaiting score input"
-              : `Co-borrower CIBIL score: ${score}`,
-        },
-      },
-    },
-    failed_reason:
-      score === null
-        ? null
-        : meetsThreshold
-          ? null
-          : `Co-borrower CIBIL ${score} is below the 700 threshold`,
-    match_score: score !== null ? score.toString() : null,
-  });
-
-  return {
-    success: overallSuccess,
-    message:
-      score === null
-        ? "Awaiting CIBIL score"
-        : meetsThreshold
-          ? `Co-borrower CIBIL ${score} meets the 700 threshold`
-          : `Co-borrower CIBIL ${score} is below 700 — request a replacement`,
-    data: {
-      verificationId,
-      score,
-      reportId: input.reportId || null,
-    },
-  };
-}
-
 // -- Aadhaar DigiLocker ------------------------------------------------------
 //
 // Re-uses the same Decentro DigiLocker session flow as primary but writes
@@ -463,40 +547,142 @@ export async function executeCoBorrowerDigilockerInit(
   }
 
   const reference_id = `CB-${cb.id}-${Date.now()}`;
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+  // Caller must pass a validated redirect_url. The route handler runs it
+  // through publicOrigin() which rejects unsafe hosts (localhost, ngrok,
+  // .local) in production — this used to fall back to a raw
+  // process.env.NEXT_PUBLIC_APP_URL which on sandbox was set to
+  // http://localhost:3003 and caused Decentro to redirect customers to a
+  // host their browsers couldn't reach.
+  if (!input.redirect_url) {
+    return {
+      success: false,
+      status: 500,
+      error:
+        "redirect_url is required (caller must resolve it via publicOrigin to ensure a safe public host)",
+    };
+  }
   const decentroRes = await digilockerInitiateSession({
     reference_id,
-    redirect_url:
-      input.redirect_url || `${appUrl}/api/kyc/digilocker/callback`,
+    redirect_url: input.redirect_url,
     consent_purpose: "Co-borrower KYC Aadhaar verification",
     notification_channel: "sms",
     mobile_number: phone,
     email: input.email,
   });
 
+  // Decentro's /v2/kyc/digilocker/initiate_session returns the auth URL under
+  // `data.authorizationUrl` (camelCase) — see how the primary handler extracts
+  // it at src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/initiate/route.ts:165.
+  // The previous co-borrower extraction read `data.digilockerUrl`, which Decentro
+  // never returns, so digilocker_url was always null and the URL panel never
+  // rendered. Mirror primary's priority chain.
+  const resData = (decentroRes?.data as Record<string, unknown> | undefined) || {};
   const sessionId =
-    decentroRes.data?.sessionId || decentroRes.sessionId || null;
+    (resData.session_id as string | undefined) ||
+    (resData.sessionId as string | undefined) ||
+    (decentroRes?.sessionId as string | undefined) ||
+    null;
   const digilocker_url =
-    decentroRes.data?.digilockerUrl || decentroRes.digilockerUrl || null;
+    (resData.authorizationUrl as string | undefined) ||
+    (resData.authorization_url as string | undefined) ||
+    (resData.digilocker_url as string | undefined) ||
+    (resData.url as string | undefined) ||
+    null;
+  // Decentro's transaction id — REQUIRED for the eAadhaar status fetch.
+  // /v2/kyc/digilocker/eaadhaar's `initial_decentro_transaction_id` field
+  // expects THIS value, not our internal verificationId. Mirrors primary's
+  // extraction at src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/initiate/route.ts:166,
+  // with extra key candidates so a Decentro tenant returning the id under a
+  // less-common name still gets captured.
+  const decentroTxnId =
+    (decentroRes?.decentroTxnId as string | undefined) ||
+    (decentroRes?.decentro_transaction_id as string | undefined) ||
+    (decentroRes?.transactionId as string | undefined) ||
+    (decentroRes?.txn_id as string | undefined) ||
+    (resData.decentroTxnId as string | undefined) ||
+    (resData.decentro_transaction_id as string | undefined) ||
+    (resData.decentro_txn_id as string | undefined) ||
+    (resData.transaction_id as string | undefined) ||
+    (resData.txn_id as string | undefined) ||
+    null;
+
+  // Log enough of the Decentro response to debug missing-decentroTxnId
+  // reports without dumping full PII into logs.
+  console.log(
+    "[Co-Borrower DigiLocker Init] Decentro response shape:",
+    JSON.stringify({
+      status: decentroRes?.status,
+      responseStatus: decentroRes?.responseStatus,
+      api_status: decentroRes?.api_status,
+      responseKey: decentroRes?.responseKey,
+      decentroTxnIdCaptured: decentroTxnId,
+      topLevelKeys: decentroRes ? Object.keys(decentroRes) : [],
+      dataKeys: resData ? Object.keys(resData) : [],
+    }),
+  );
+
+  // If Decentro didn't actually generate a URL, surface the failure rather than
+  // storing a useless in_progress row that the UI can't act on.
+  const apiSuccess =
+    (decentroRes?.status === "SUCCESS" ||
+      decentroRes?.responseStatus === "SUCCESS" ||
+      decentroRes?.api_status === "Success") &&
+    !!digilocker_url;
+  if (!apiSuccess) {
+    return {
+      success: false,
+      status: 502,
+      error:
+        (decentroRes?.message as string | undefined) ||
+        "Failed to initiate DigiLocker session for co-borrower",
+    };
+  }
+
+  // Decentro sends the DigiLocker SMS itself when notification_channel='sms'.
+  // We don't get back a per-channel ack on co-borrower today, so optimistically
+  // mark sms as delivered (matches what the primary path does when its own SMS
+  // send succeeds). The resend-sms endpoint will overwrite these on retry.
+  const now = new Date();
+  const initData: Record<string, unknown> = {
+    sessionId,
+    digilocker_url,
+    reference_id,
+    decentro_txn_id: decentroTxnId,
+    sms_attempts: 1,
+    sms_delivered_at: now.toISOString(),
+    sms_failed_reason: null,
+  };
 
   const verificationId = await upsertCoBorrowerVerification(leadId, "aadhaar", {
     status: "in_progress",
     api_request: { reference_id, phone },
     api_response: {
       ...decentroRes,
-      data: { sessionId, digilocker_url, reference_id },
+      data: initData,
     },
     failed_reason: null,
   });
 
+  // Mirror primary's response shape (src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/initiate/route.ts:329-345)
+  // so AadhaarCard.tsx:handleInitiate (which reads camelCase keys) populates
+  // digilockerUrl + smsStatus + smsAttempts after a fresh init on the
+  // co-borrower side too. snake_case keys are kept for any consumer that
+  // already speaks them.
   return {
     success: true,
     message: "DigiLocker session initiated for co-borrower.",
     data: {
       verificationId,
+      transactionId: verificationId,
       sessionId,
+      digilockerUrl: digilocker_url,
       digilocker_url,
       reference_id,
+      linkSent: true,
+      smsStatus: "delivered" as const,
+      smsStatusMessage: null,
+      smsAttempts: 1,
+      sentTo: { mobile: phone },
     },
   };
 }
@@ -510,44 +696,280 @@ export async function executeCoBorrowerDigilockerStatus(
     return { success: false, status: 404, error: "Co-borrower not found" };
   }
 
+  // The route's `transactionId` path segment is our internal verificationId
+  // (KYCVER-...). Decentro's /v2/kyc/digilocker/eaadhaar expects ITS OWN
+  // transaction id (decentroTxnId, captured during initiate). Without this
+  // lookup, the previous code passed our KYCVER id straight to Decentro,
+  // which returned an empty/error response — that's why the data table
+  // showed only "Name" with leadValue and a blank Aadhaar column.
+  const verRows = await db
+    .select({
+      id: kycVerifications.id,
+      api_request: kycVerifications.api_request,
+      api_response: kycVerifications.api_response,
+    })
+    .from(kycVerifications)
+    .where(eq(kycVerifications.id, transactionId))
+    .limit(1);
+  const verRow = verRows[0];
+  const apiResp = (verRow?.api_response ?? {}) as Record<string, unknown>;
+  const apiData = (apiResp.data ?? {}) as Record<string, unknown>;
+  const apiReq = (verRow?.api_request ?? {}) as Record<string, unknown>;
+  const decentroTxnId =
+    (apiData.decentro_txn_id as string | undefined) ||
+    (apiData.decentroTxnId as string | undefined) ||
+    (apiData.decentro_transaction_id as string | undefined) ||
+    (apiData.transaction_id as string | undefined) ||
+    (apiData.txn_id as string | undefined) ||
+    (apiResp.decentroTxnId as string | undefined) ||
+    (apiResp.decentro_transaction_id as string | undefined) ||
+    (apiReq.decentro_txn_id as string | undefined) ||
+    (apiReq.transaction_id as string | undefined) ||
+    null;
+
+  if (!decentroTxnId) {
+    console.warn("[Co-Borrower DigiLocker Status] decentro_txn_id missing", {
+      verificationId: transactionId,
+      apiResponseDataKeys: Object.keys(apiData),
+      apiResponseTopLevelKeys: Object.keys(apiResp),
+      apiRequestKeys: Object.keys(apiReq),
+    });
+    return {
+      success: false,
+      status: 400,
+      error:
+        "Decentro transaction id missing on this verification. Click \"Re-run Aadhaar Verification\" to start a fresh DigiLocker session.",
+    };
+  }
+
+  // Don't poll Decentro's eAadhaar endpoint before the customer has
+  // consented — primary's status route warns that early calls can
+  // invalidate the session, after which Decentro keeps returning "no
+  // consent" even when the customer signs successfully. The no-segment
+  // callback at src/app/api/kyc/digilocker/callback/route.ts now records
+  // consent_given_at on the verification row when Decentro redirects
+  // post-consent. If we don't see that timestamp yet, return a soft
+  // "awaiting consent" response without ever hitting Decentro.
+  const consentGivenAt =
+    typeof apiData.consent_given_at === "string"
+      ? (apiData.consent_given_at as string)
+      : null;
+  // Already-fetched data short-circuits the gate too — once we have
+  // aadhaarData stored we don't need to keep polling.
+  const alreadyHasData =
+    !!(apiData.aadhaarData && Object.keys(apiData.aadhaarData as Record<string, unknown>).length > 0) ||
+    !!apiData.proofOfIdentity ||
+    !!apiData.aadhaarUid ||
+    !!apiData.name;
+
+  if (!consentGivenAt && !alreadyHasData) {
+    // Primary's status route returns success: true even pre-fetch — the
+    // documentFetched boolean conveys whether eAadhaar is on file. Match
+    // that so AadhaarCard's pollStatus doesn't surface this as an error
+    // banner; the customer just hasn't consented yet.
+    return {
+      success: true,
+      message: "Awaiting co-borrower consent on DigiLocker.",
+      data: {
+        verificationId: transactionId,
+        transactionId,
+        status: "awaiting_consent",
+        documentFetched: false,
+        consentGiven: false,
+        linkOpened: false,
+        aadhaarData: {},
+        crossMatchResult: null,
+      },
+    };
+  }
+
   const reference_id = `CB-STATUS-${cb.id}-${Date.now()}`;
   const decentroRes = await digilockerGetEaadhaar({
-    initial_decentro_transaction_id: transactionId,
+    initial_decentro_transaction_id: decentroTxnId,
     reference_id,
   });
 
-  const fetched = !!decentroRes.data?.aadhaarXmlUrl || !!decentroRes.data?.name;
-  const aadhaarData = decentroRes.data || {};
+  // Mirror primary's status-route parsing
+  // (src/app/api/admin/kyc/[leadId]/aadhaar/digilocker/status/[transactionId]/route.ts:159-200).
+  // Decentro's eAadhaar response nests fields under proofOfIdentity /
+  // proofOfAddress (not flat data.name). The previous co-borrower code read
+  // data.name / data.aadhaarXmlUrl which only worked for an old/alternate
+  // shape, so AadhaarCard ended up with `null` and the data table never
+  // rendered.
+  const remoteData = (decentroRes?.data ?? {}) as Record<string, unknown>;
+  const poi = (remoteData.proofOfIdentity ?? {}) as Record<string, unknown>;
+  const poa = (remoteData.proofOfAddress ?? {}) as Record<string, unknown>;
+  const raw = (remoteData.aadhaar_data ??
+    decentroRes?.kycResult ??
+    remoteData) as Record<string, unknown>;
 
+  const hasDocument =
+    !!remoteData.document_fetched ||
+    !!remoteData.aadhaar_data ||
+    !!remoteData.kycResult ||
+    !!remoteData.name ||
+    !!remoteData.proofOfIdentity ||
+    !!remoteData.aadhaarUid ||
+    !!decentroRes?.kycResult ||
+    (decentroRes?.status === "SUCCESS" &&
+      typeof decentroRes?.responseKey === "string" &&
+      (decentroRes.responseKey as string).includes("eaadhaar"));
+
+  const addressParts = [
+    poa.house, poa.street, poa.landmark, poa.locality,
+    poa.vtc, poa.subDistrict, poa.district, poa.state, poa.pincode,
+  ].filter(Boolean) as string[];
+  const fullAddress =
+    addressParts.length > 0
+      ? addressParts.join(", ")
+      : (raw.address as string | undefined) ||
+        (raw.full_address as string | undefined) ||
+        null;
+
+  const aadhaarData: Record<string, string | null> = hasDocument
+    ? {
+        uid:
+          (remoteData.aadhaarUid as string | undefined) ||
+          (raw.uid as string | undefined) ||
+          (raw.aadhaar_number as string | undefined) ||
+          null,
+        name: (poi.name as string | undefined) || (raw.name as string | undefined) || null,
+        gender: (poi.gender as string | undefined) || (raw.gender as string | undefined) || null,
+        dob:
+          (poi.dob as string | undefined) ||
+          (raw.dob as string | undefined) ||
+          (raw.date_of_birth as string | undefined) ||
+          null,
+        careof:
+          (poa.careOf as string | undefined) ||
+          (poa.careof as string | undefined) ||
+          (raw.careof as string | undefined) ||
+          (raw.care_of as string | undefined) ||
+          null,
+        address: fullAddress,
+        district:
+          (poa.district as string | undefined) ||
+          (raw.dist as string | undefined) ||
+          (raw.district as string | undefined) ||
+          null,
+        state: (poa.state as string | undefined) || (raw.state as string | undefined) || null,
+        pincode:
+          (poa.pincode as string | undefined) ||
+          (raw.pincode as string | undefined) ||
+          (raw.zip as string | undefined) ||
+          null,
+        photo_base64:
+          (remoteData.image as string | undefined) ||
+          (raw.photo_base64 as string | undefined) ||
+          (raw.photo as string | undefined) ||
+          null,
+        mobile:
+          (poi.hashedMobileNumber as string | undefined) ||
+          (raw.mobile as string | undefined) ||
+          (raw.phone as string | undefined) ||
+          null,
+      }
+    : {};
+
+  // Cross-match against co-borrower fields (mirrors primary's
+  // crossMatchAadhaarData call). Maps to the leadValue/aadhaarValue/pass
+  // shape AadhaarCard.tsx:96-103 reads from.
+  let crossMatchResult: CrossMatchResult | null = null;
+  if (hasDocument) {
+    const rawCrossMatch = crossMatchAadhaarData(
+      {
+        name: aadhaarData.name,
+        dob: aadhaarData.dob,
+        phone: aadhaarData.mobile,
+        address: aadhaarData.address,
+        gender: aadhaarData.gender,
+        fatherOrHusbandName: aadhaarData.careof,
+      },
+      {
+        name: cb.full_name,
+        dob: cb.dob ? new Date(cb.dob).toISOString().slice(0, 10) : null,
+        phone: cb.phone,
+        address: cb.address || cb.current_address || null,
+        gender: null,
+        fatherOrHusbandName: cb.father_or_husband_name,
+      },
+    );
+    crossMatchResult = {
+      ...rawCrossMatch,
+      fields: rawCrossMatch.fields.map((f) => ({
+        field: f.field,
+        leadValue: f.inputValue,
+        aadhaarValue: f.documentValue,
+        similarity: f.similarity,
+        threshold: f.threshold,
+        pass: f.matchResult === "strong" || f.matchResult === "moderate",
+      })),
+    } as unknown as CrossMatchResult;
+  }
+
+  // Persist normalised data into kyc_verifications.api_response.data so
+  // AadhaarCard can hydrate aadhaarData / crossMatchResult on page reload
+  // (we don't write a digilockerTransactions row for co-borrowers, so the
+  // existingTransaction prop primary uses isn't available here).
   const verificationId = await upsertCoBorrowerVerification(leadId, "aadhaar", {
-    status: fetched ? "success" : "in_progress",
+    status: hasDocument ? "success" : "in_progress",
     api_request: { transaction_id: transactionId },
     api_response: {
       ...decentroRes,
-      data: aadhaarData,
+      data: {
+        ...remoteData,
+        aadhaarData,
+        crossMatchResult,
+      },
     },
-    failed_reason: fetched ? null : "Aadhaar document not yet fetched",
+    failed_reason: hasDocument ? null : "Aadhaar document not yet fetched",
   });
 
-  if (fetched && aadhaarData.aadhaarNumber) {
-    await db
-      .update(coBorrowers)
-      .set({
-        aadhaar_no: String(aadhaarData.aadhaarNumber),
-        updated_at: new Date(),
-      })
-      .where(eq(coBorrowers.id, cb.id));
+  if (hasDocument) {
+    // Persist eAadhaar fields onto coBorrowers columns. aadhaar_no is the
+    // authoritative output of the verification and always overwritten.
+    // For full_name / dob / father / address we only backfill when the
+    // existing column is null/empty so dealer-entered values aren't
+    // clobbered by Aadhaar text variations. The full eAadhaar payload
+    // also lives in kyc_verifications.api_response.data for audit.
+    const updates: Record<string, unknown> = { updated_at: new Date() };
+    if (aadhaarData.uid) updates.aadhaar_no = String(aadhaarData.uid);
+    if (aadhaarData.name && !cb.full_name) updates.full_name = aadhaarData.name;
+    if (aadhaarData.dob && !cb.dob) {
+      const normalisedDob = normalizeDobForDb(aadhaarData.dob);
+      if (normalisedDob) updates.dob = normalisedDob;
+    }
+    if (aadhaarData.careof && !cb.father_or_husband_name) {
+      updates.father_or_husband_name = aadhaarData.careof;
+    }
+    if (aadhaarData.address) {
+      if (!cb.address) updates.address = aadhaarData.address;
+      if (!cb.permanent_address) updates.permanent_address = aadhaarData.address;
+    }
+    await db.update(coBorrowers).set(updates).where(eq(coBorrowers.id, cb.id));
   }
 
   return {
-    success: fetched,
-    message: fetched
+    // Always success: true — primary's status route uses the same
+    // convention. documentFetched conveys whether the eAadhaar is on
+    // file. AadhaarCard.pollStatus's `if (!data.success) setError` path
+    // is reserved for genuine errors (missing decentro_txn_id, network).
+    success: true,
+    message: hasDocument
       ? "Co-borrower Aadhaar fetched from DigiLocker."
       : "Awaiting co-borrower consent on DigiLocker.",
     data: {
       verificationId,
-      status: fetched ? "document_fetched" : "awaiting_consent",
-      aadhaarExtractedData: aadhaarData,
+      transactionId,
+      status: hasDocument ? "document_fetched" : "awaiting_consent",
+      // Match primary status-route response shape (lines 297-318) so
+      // AadhaarCard's pollStatus (which reads s.documentFetched +
+      // s.aadhaarData + s.crossMatchResult) finds the values it expects.
+      documentFetched: hasDocument,
+      consentGiven: hasDocument,
+      linkOpened: hasDocument,
+      aadhaarData,
+      crossMatchResult,
     },
   };
 }

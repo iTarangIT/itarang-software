@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db/index";
 import { dealerOnboardingApplications, dealerOnboardingDocuments } from "@/lib/db/schema";
-import { desc, sql } from "drizzle-orm";
+import { desc, isNotNull, ne, or, sql } from "drizzle-orm";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyApplicationsBatch } from "@/lib/dealer/duplicate-check";
 
@@ -12,30 +12,42 @@ export async function GET() {
     const applications = await db
       .select({
         id: dealerOnboardingApplications.id,
-        companyName: dealerOnboardingApplications.companyName,
-        companyType: dealerOnboardingApplications.companyType,
-        gstNumber: dealerOnboardingApplications.gstNumber,
-        panNumber: dealerOnboardingApplications.panNumber,
-        businessAddress: dealerOnboardingApplications.businessAddress,
-        dealerCode: dealerOnboardingApplications.dealerCode,
-        financeEnabled: dealerOnboardingApplications.financeEnabled,
-        onboardingStatus: dealerOnboardingApplications.onboardingStatus,
-        reviewStatus: dealerOnboardingApplications.reviewStatus,
-        agreementStatus: dealerOnboardingApplications.agreementStatus,
-        isBranchDealer: dealerOnboardingApplications.isBranchDealer,
-        submittedAt: dealerOnboardingApplications.submittedAt,
-        updatedAt: dealerOnboardingApplications.updatedAt,
-        createdAt: dealerOnboardingApplications.createdAt,
-        ownerName: dealerOnboardingApplications.ownerName,
-        ownerEmail: dealerOnboardingApplications.ownerEmail,
-        salesManagerName: dealerOnboardingApplications.salesManagerName,
-        salesManagerEmail: dealerOnboardingApplications.salesManagerEmail,
-        salesManagerMobile: dealerOnboardingApplications.salesManagerMobile,
+        companyName: dealerOnboardingApplications.company_name,
+        companyType: dealerOnboardingApplications.company_type,
+        gstNumber: dealerOnboardingApplications.gst_number,
+        panNumber: dealerOnboardingApplications.pan_number,
+        businessAddress: dealerOnboardingApplications.business_address,
+        dealerCode: dealerOnboardingApplications.dealer_code,
+        financeEnabled: dealerOnboardingApplications.finance_enabled,
+        onboardingStatus: dealerOnboardingApplications.onboarding_status,
+        reviewStatus: dealerOnboardingApplications.review_status,
+        agreementStatus: dealerOnboardingApplications.agreement_status,
+        isBranchDealer: dealerOnboardingApplications.is_branch_dealer,
+        submittedAt: dealerOnboardingApplications.submitted_at,
+        updatedAt: dealerOnboardingApplications.updated_at,
+        createdAt: dealerOnboardingApplications.created_at,
+        ownerName: dealerOnboardingApplications.owner_name,
+        ownerEmail: dealerOnboardingApplications.owner_email,
+        salesManagerName: dealerOnboardingApplications.sales_manager_name,
+        salesManagerEmail: dealerOnboardingApplications.sales_manager_email,
+        salesManagerMobile: dealerOnboardingApplications.sales_manager_mobile,
       })
       .from(dealerOnboardingApplications)
+      // Hide rows the dealer never finished. A pure draft (status = "draft"
+      // AND submitted_at IS NULL) is in-progress dealer work that admins
+      // can't action anyway — including it just produces the misleading
+      // "Dealer onboarding must be submitted before approval." alert when
+      // an admin opens the row and clicks Approve. Submitted, approved,
+      // rejected, and correction_requested rows are still returned.
+      .where(
+        or(
+          ne(dealerOnboardingApplications.onboarding_status, "draft"),
+          isNotNull(dealerOnboardingApplications.submitted_at),
+        ),
+      )
       .orderBy(
-        desc(dealerOnboardingApplications.updatedAt),
-        desc(dealerOnboardingApplications.createdAt)
+        desc(dealerOnboardingApplications.updated_at),
+        desc(dealerOnboardingApplications.created_at)
       );
 
     if (applications.length === 0) {
@@ -46,17 +58,17 @@ export async function GET() {
 
     const docCounts = await db
       .select({
-        applicationId: dealerOnboardingDocuments.applicationId,
+        applicationId: dealerOnboardingDocuments.application_id,
         count: sql<number>`cast(count(*) as integer)`,
       })
       .from(dealerOnboardingDocuments)
       .where(
-        sql`${dealerOnboardingDocuments.applicationId} = ANY(ARRAY[${sql.join(
+        sql`${dealerOnboardingDocuments.application_id} = ANY(ARRAY[${sql.join(
           applicationIds.map((id) => sql`${id}::uuid`),
           sql`, `
         )}])`
       )
-      .groupBy(dealerOnboardingDocuments.applicationId);
+      .groupBy(dealerOnboardingDocuments.application_id);
 
     // Build a quick lookup map: applicationId → document count
     const docCountMap = new Map<string, number>();
@@ -67,7 +79,15 @@ export async function GET() {
     // Batch-classify GSTIN conflicts in a SINGLE accounts query (no N+1).
     // Rows already approved as branches of another account are deliberately
     // kept flagged as `branch` so admins can see the linkage.
-    const classificationMap = await classifyApplicationsBatch(applications);
+    const classificationMap = await classifyApplicationsBatch(
+      applications.map((a) => ({
+        id: a.id,
+        gst_number: a.gstNumber,
+        pan_number: a.panNumber,
+        business_address: a.businessAddress as string | null,
+        dealer_code: a.dealerCode,
+      })),
+    );
 
     // Shape the response for the admin dashboard table
     const formatted = applications.map((item) => {

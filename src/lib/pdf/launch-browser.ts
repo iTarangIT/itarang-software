@@ -1,16 +1,14 @@
 /**
  * Puppeteer launcher that works in both local/dev (system Chrome via `puppeteer`)
  * and serverless runtimes (Vercel/AWS Lambda, via `puppeteer-core` +
- * `@sparticuz/chromium-min`).
+ * `@sparticuz/chromium`).
  *
- * @sparticuz/chromium-min is a JS shim that fetches the Chromium binary from
- * GitHub at cold-start, keeping the serverless bundle well under Vercel's
- * 50 MB zipped limit. The remote-pack URL must match the installed
- * @sparticuz/chromium-min version.
+ * We use the full `@sparticuz/chromium` package (not `-min`) so the binary
+ * ships in node_modules with proper +x permissions. The `-min` variant
+ * downloads the binary from GitHub at cold-start and extracts it to /tmp,
+ * which on Vercel was racing/timing out and leaving a non-executable
+ * `/tmp/chromium` that triggered EACCES on every retry.
  */
-
-const CHROMIUM_REMOTE_PACK =
-  "https://github.com/Sparticuz/chromium/releases/download/v147.0.0/chromium-v147.0.0-pack.x64.tar";
 
 // Extra Chromium flags that skip work we don't need for one-shot PDF rendering
 // (audio, GPU, shared-memory, translation, background tasks). Shaves ~1-2s off
@@ -42,6 +40,24 @@ const FAST_FLAGS = [
 type BrowserHandle = Awaited<ReturnType<typeof launchBrowserOnce>>;
 let browserPromise: Promise<BrowserHandle> | null = null;
 
+async function tryLaunchServerless() {
+  const [{ default: puppeteerCore }, { default: chromium }, fs] = await Promise.all([
+    import("puppeteer-core"),
+    import("@sparticuz/chromium"),
+    import("node:fs/promises"),
+  ]);
+  const executablePath = await chromium.executablePath();
+  // Belt-and-suspenders: Vercel's file tracer occasionally drops the +x bit
+  // off bundled binaries. chmod is a no-op when the bit is already set.
+  await fs.chmod(executablePath, 0o755).catch(() => {});
+  return puppeteerCore.launch({
+    args: [...chromium.args, ...FAST_FLAGS],
+    defaultViewport: (chromium as unknown as { defaultViewport?: unknown }).defaultViewport as never,
+    executablePath,
+    headless: true,
+  });
+}
+
 async function launchBrowserOnce() {
   const isServerless =
     !!process.env.VERCEL ||
@@ -49,16 +65,7 @@ async function launchBrowserOnce() {
     process.env.USE_SPARTICUZ_CHROMIUM === "1";
 
   if (isServerless) {
-    const [{ default: puppeteerCore }, { default: chromium }] = await Promise.all([
-      import("puppeteer-core"),
-      import("@sparticuz/chromium-min"),
-    ]);
-    return puppeteerCore.launch({
-      args: [...chromium.args, ...FAST_FLAGS],
-      defaultViewport: (chromium as unknown as { defaultViewport?: unknown }).defaultViewport as never,
-      executablePath: await chromium.executablePath(CHROMIUM_REMOTE_PACK),
-      headless: true,
-    });
+    return await tryLaunchServerless();
   }
 
   const { default: puppeteer } = await import("puppeteer");

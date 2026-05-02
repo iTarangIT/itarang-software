@@ -60,7 +60,8 @@ async function checkIotBridge(): Promise<DepStatus> {
   }
   try {
     // Lazy import — don't load the IoT client unless we have to.
-    const { iotSql } = await import("@/lib/db/iot");
+    const { getIotSql } = await import("@/lib/db/iot");
+    const iotSql = getIotSql();
     await withTimeout(iotSql`SELECT 1` as unknown as Promise<unknown>, CHECK_TIMEOUT_MS);
     return { ok: true, ms: Date.now() - t0 };
   } catch (e) {

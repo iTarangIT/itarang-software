@@ -281,13 +281,33 @@ export async function classifyDocument(documentBlob: Blob, filename: string) {
 export type OcrDocType = 'PAN' | 'AADHAAR' | 'DRIVING_LICENSE' | 'VOTERID' | 'PASSPORT';
 export type OcrDocSide = 'FRONT' | 'BACK' | undefined;
 
+export interface ExtractDocumentOcrOptions {
+    /**
+     * When true, do NOT send the `module_secret` header even if
+     * DECENTRO_MODULE_SECRET_KYC is set in env. Use this when the
+     * SKU you're calling rejects requests carrying module_secret —
+     * e.g. PAN OCR on our prod module returns metadata-only error
+     * responses when module_secret is included, but works when it's
+     * omitted (mirrors the curl shape we've verified end-to-end).
+     */
+    skipModuleSecret?: boolean;
+    /**
+     * Override the `consent_purpose` form field. Defaults to
+     * 'Document OCR extraction for KYC verification'. Set to
+     * 'for bank account purpose only' for PAN to mirror the working
+     * curl exactly.
+     */
+    consentPurpose?: string;
+}
+
 export async function extractDocumentOcr(
     document_type: OcrDocType,
     documentBlob: Blob,
     filename: string,
     document_side?: OcrDocSide,
     signal?: AbortSignal,
-    kycValidate: boolean = true,
+    kycValidate?: boolean,
+    options?: ExtractDocumentOcrOptions,
 ) {
     // Decentro rejects filenames with multiple periods — sanitize by keeping only the last one (extension)
     const lastDot = filename.lastIndexOf('.');
@@ -299,12 +319,18 @@ export async function extractDocumentOcr(
     form.append('reference_id', genRefId());
     form.append('document_type', document_type);
     form.append('consent', 'Y');
-    form.append('consent_purpose', 'Document OCR extraction for KYC verification');
+    form.append(
+        'consent_purpose',
+        options?.consentPurpose || 'Document OCR extraction for KYC verification',
+    );
     // kyc_validate=1 makes Decentro cross-check the doc against UIDAI/NSDL
-    // (requires OTP for Aadhaar → fails for plain extraction flows). Pure OCR
-    // auto-fill must pass kycValidate=false so Decentro returns just the
-    // extracted fields.
-    form.append('kyc_validate', kycValidate ? '1' : '0');
+    // (requires OTP for Aadhaar → fails for plain extraction flows). Default
+    // is now to not send the param at all — that matches the curl shape known
+    // to succeed on our prod module. Callers can still opt in by passing
+    // kycValidate=true when they actually want NSDL/UIDAI validation.
+    if (kycValidate !== undefined) {
+        form.append('kyc_validate', kycValidate ? '1' : '0');
+    }
     form.append('document', documentBlob, sanitizedFilename);
     // Tell Decentro which side of the document this is — needed for Aadhaar to know whether
     // to prioritize name/DOB (front) or address/id-number (back) extraction.
@@ -320,7 +346,9 @@ export async function extractDocumentOcr(
     // Production Decentro tiers scope KYC OCR on a separate pricing SKU gated by
     // `module_secret`. Staging doesn't require it; prod rejects with
     // "API usage disallowed due to missing pricing configuration" when absent.
-    if (isRealSecret(MODULE_SECRET_KYC)) {
+    // Some SKUs (e.g. PAN OCR on our prod module) work the OPPOSITE way and
+    // reject when module_secret is sent — caller can opt out via options.
+    if (!options?.skipModuleSecret && isRealSecret(MODULE_SECRET_KYC)) {
         headers['module_secret'] = MODULE_SECRET_KYC!;
     }
 
@@ -363,6 +391,7 @@ export async function extractAadhaarOcr(
     backBlob: Blob,
     backFilename: string,
     signal?: AbortSignal,
+    options?: ExtractDocumentOcrOptions,
 ) {
     const sanitize = (n: string): string => {
         const lastDot = n.lastIndexOf('.');
@@ -375,7 +404,10 @@ export async function extractAadhaarOcr(
     form.append('reference_id', genRefId());
     form.append('document_type', 'AADHAAR');
     form.append('consent', 'Y');
-    form.append('consent_purpose', 'Document OCR extraction for KYC verification');
+    form.append(
+        'consent_purpose',
+        options?.consentPurpose || 'Document OCR extraction for KYC verification',
+    );
     // kyc_validate is N/A for Aadhaar per Decentro docs (offline verification).
     // We omit it entirely rather than send 0 or 1 — the docs say default is 1
     // when absent, but since it's ignored for Aadhaar either way, we rely on
@@ -387,7 +419,9 @@ export async function extractAadhaarOcr(
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
     };
-    if (isRealSecret(MODULE_SECRET_KYC)) {
+    // Some SKUs reject the OCR request when module_secret is included even
+    // though it's required by other endpoints. Caller can opt out via options.
+    if (!options?.skipModuleSecret && isRealSecret(MODULE_SECRET_KYC)) {
         headers['module_secret'] = MODULE_SECRET_KYC!;
     }
 

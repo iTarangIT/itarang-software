@@ -66,17 +66,17 @@ export async function startChunkedRun(runId: string, baseQuery: string) {
 
     const chunkRows = combinations.map((combo, idx) => ({
       id: `CHUNK-${runId}-${String(idx).padStart(4, "0")}`,
-      runId,
-      combinationQuery: combo,
+      run_id: runId,
+      combination_query: combo,
       status: "pending",
-      leadsCount: 0,
+      leads_count: 0,
     }));
 
     await db.insert(scraperRunChunks).values(chunkRows);
 
     await db
       .update(scrapeRuns)
-      .set({ totalChunks: combinations.length, completedChunks: 0 })
+      .set({ total_chunks: combinations.length, completed_chunks: 0 })
       .where(eq(scrapeRuns.id, runId));
 
     console.log(
@@ -125,15 +125,15 @@ export async function startChunkedRun(runId: string, baseQuery: string) {
           .update(scraperRunChunks)
           .set({
             status: "failed",
-            errorMessage: "QStash publish failed",
-            completedAt: failedAt,
+            error_message: "QStash publish failed",
+            completed_at: failedAt,
           })
           .where(eq(scraperRunChunks.id, chunkId));
       }
       await db
         .update(scrapeRuns)
         .set({
-          completedChunks: sql`${scrapeRuns.completedChunks} + ${failedChunkIds.length}`,
+          completed_chunks: sql`${scrapeRuns.completed_chunks} + ${failedChunkIds.length}`,
         })
         .where(eq(scrapeRuns.id, runId));
     }
@@ -179,7 +179,7 @@ export async function executeChunk(chunkId: string) {
   const [parentRun] = await db
     .select({ status: scrapeRuns.status })
     .from(scrapeRuns)
-    .where(eq(scrapeRuns.id, chunk.runId))
+    .where(eq(scrapeRuns.id, chunk.run_id))
     .limit(1);
 
   if (
@@ -192,8 +192,8 @@ export async function executeChunk(chunkId: string) {
       .update(scraperRunChunks)
       .set({
         status: "cancelled",
-        completedAt: new Date(),
-        errorMessage: `run ${parentRun.status}`,
+        completed_at: new Date(),
+        error_message: `run ${parentRun.status}`,
       })
       .where(eq(scraperRunChunks.id, chunkId));
     console.log(
@@ -211,16 +211,16 @@ export async function executeChunk(chunkId: string) {
   let errorMessage: string | null = null;
 
   try {
-    const leads = await fetchFromGooglePlaces(chunk.combinationQuery, {
+    const leads = await fetchFromGooglePlaces(chunk.combination_query, {
       maxPages: MAX_PAGES_PER_QUERY,
     });
 
     if (leads.length) {
       const tagged = leads.map((lead) => ({
         ...lead,
-        source_query: chunk.combinationQuery,
+        source_query: chunk.combination_query,
       }));
-      await saveRawLeads(chunk.runId, tagged);
+      await saveRawLeads(chunk.run_id, tagged);
       leadsCount = leads.length;
     }
 
@@ -228,13 +228,13 @@ export async function executeChunk(chunkId: string) {
       .update(scraperRunChunks)
       .set({
         status: "done",
-        leadsCount,
-        completedAt: new Date(),
+        leads_count: leadsCount,
+        completed_at: new Date(),
       })
       .where(eq(scraperRunChunks.id, chunkId));
 
     console.log(
-      `[SCRAPER][chunk] ${chunkId} done — ${leadsCount} leads for "${chunk.combinationQuery}"`,
+      `[SCRAPER][chunk] ${chunkId} done — ${leadsCount} leads for "${chunk.combination_query}"`,
     );
   } catch (err: any) {
     errorMessage = sanitizeDbError(err) || "chunk failed";
@@ -242,8 +242,8 @@ export async function executeChunk(chunkId: string) {
       .update(scraperRunChunks)
       .set({
         status: "failed",
-        errorMessage,
-        completedAt: new Date(),
+        error_message: errorMessage,
+        completed_at: new Date(),
       })
       .where(eq(scraperRunChunks.id, chunkId));
 
@@ -253,11 +253,11 @@ export async function executeChunk(chunkId: string) {
   // Atomically bump completedChunks and check if we're last.
   const [updated] = await db
     .update(scrapeRuns)
-    .set({ completedChunks: sql`${scrapeRuns.completedChunks} + 1` })
-    .where(eq(scrapeRuns.id, chunk.runId))
+    .set({ completed_chunks: sql`${scrapeRuns.completed_chunks} + 1` })
+    .where(eq(scrapeRuns.id, chunk.run_id))
     .returning({
-      completed: scrapeRuns.completedChunks,
-      total: scrapeRuns.totalChunks,
+      completed: scrapeRuns.completed_chunks,
+      total: scrapeRuns.total_chunks,
     });
 
   if (
@@ -277,14 +277,14 @@ export async function executeChunk(chunkId: string) {
     // finalize step is idempotent at the DB level, so a duplicate is
     // strictly better than a dropped finalize.
     const { claimed } = await safeRedisLock(
-      `scraper:finalize-lock:${chunk.runId}`,
+      `scraper:finalize-lock:${chunk.run_id}`,
       60 * 60,
       "scraper:finalize-lock",
     );
 
     if (claimed) {
       console.log(
-        `[SCRAPER][${chunk.runId}] all chunks done, queueing finalize`,
+        `[SCRAPER][${chunk.run_id}] all chunks done, queueing finalize`,
       );
       // Try QStash first; if the publish fails (quota, callback URL not
       // reachable, network blip), run finalize inline as a fallback. It's
@@ -294,14 +294,14 @@ export async function executeChunk(chunkId: string) {
       try {
         await publishToPath({
           path: "/api/scraper/finalize",
-          body: { runId: chunk.runId },
+          body: { runId: chunk.run_id },
         });
       } catch (publishErr) {
         console.warn(
-          `[SCRAPER][${chunk.runId}] QStash finalize publish failed, running inline:`,
+          `[SCRAPER][${chunk.run_id}] QStash finalize publish failed, running inline:`,
           publishErr,
         );
-        await finalizeChunkedRun(chunk.runId);
+        await finalizeChunkedRun(chunk.run_id);
       }
     }
   }
@@ -315,9 +315,9 @@ export async function finalizeChunkedRun(runId: string) {
 
   try {
     const rawRows = await db
-      .select({ rawData: scraperRaw.rawData })
+      .select({ rawData: scraperRaw.raw_data })
       .from(scraperRaw)
-      .where(eq(scraperRaw.runId, runId));
+      .where(eq(scraperRaw.run_id, runId));
 
     const allLeads = rawRows
       .map((r) => {
@@ -380,7 +380,7 @@ export async function cancelChunkedRun(runId: string) {
 
   // Idempotency guard — refuse to cancel terminal runs.
   const [run] = await db
-    .select({ status: scrapeRuns.status, startedAt: scrapeRuns.startedAt })
+    .select({ status: scrapeRuns.status, startedAt: scrapeRuns.started_at })
     .from(scrapeRuns)
     .where(eq(scrapeRuns.id, runId))
     .limit(1);
@@ -409,12 +409,12 @@ export async function cancelChunkedRun(runId: string) {
     .update(scraperRunChunks)
     .set({
       status: "cancelled",
-      completedAt: new Date(),
-      errorMessage: "cancelled by user",
+      completed_at: new Date(),
+      error_message: "cancelled by user",
     })
     .where(
       and(
-        eq(scraperRunChunks.runId, runId),
+        eq(scraperRunChunks.run_id, runId),
         sql`${scraperRunChunks.status} IN ('pending','running')`,
       ),
     );
@@ -423,9 +423,9 @@ export async function cancelChunkedRun(runId: string) {
   //    as finalize, but final status is 'cancelled'.
   try {
     const rawRows = await db
-      .select({ rawData: scraperRaw.rawData })
+      .select({ rawData: scraperRaw.raw_data })
       .from(scraperRaw)
-      .where(eq(scraperRaw.runId, runId));
+      .where(eq(scraperRaw.run_id, runId));
 
     const allLeads = rawRows
       .map((r) => {
@@ -492,7 +492,7 @@ export async function reconcileRun(runId: string) {
     .from(scraperRunChunks)
     .where(
       and(
-        eq(scraperRunChunks.runId, runId),
+        eq(scraperRunChunks.run_id, runId),
         sql`${scraperRunChunks.status} IN ('pending','running')`,
       ),
     )

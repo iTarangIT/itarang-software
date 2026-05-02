@@ -38,6 +38,23 @@ const VALID_DECISIONS = [
 
 type Decision = (typeof VALID_DECISIONS)[number];
 
+// Only verification types that have a corresponding admin review card in
+// /admin/kyc-review can gate Step 3 approval. System-level rows
+// (esign_consent, esign_consent_sync, address, mobile, photo, etc.) track
+// upstream/customer flows and have no Accept/Reject UI for the admin to act
+// on, so they must not block the final decision.
+const ADMIN_CARD_VERIFICATION_TYPES = [
+  "aadhaar",
+  "pan",
+  "bank",
+  "cibil",
+  "rc",
+] as const;
+
+function isAdminCardType(t: string | null | undefined): boolean {
+  return !!t && (ADMIN_CARD_VERIFICATION_TYPES as readonly string[]).includes(t);
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ leadId: string }> },
@@ -128,42 +145,63 @@ export async function POST(
     const coBorrowerAllApproved =
       hasCoBorrower &&
       step3Verifications
-        .filter((v) => v.applicant === "co_borrower")
+        .filter((v) => v.applicant === "co_borrower" && isAdminCardType(v.verification_type))
         .every((v) => v.admin_action === "accepted");
-
-    const allPrimaryApproved = step3Verifications
-      .filter((v) => (v.applicant ?? "primary") === "primary")
-      .every((v) => v.admin_action === "accepted");
-
-    const allPrimaryRejected =
-      step3Verifications.filter((v) => (v.applicant ?? "primary") === "primary")
-        .length > 0 &&
-      step3Verifications
-        .filter((v) => (v.applicant ?? "primary") === "primary")
-        .every((v) => v.admin_action === "rejected");
-
-    const allSupportingDocsRejected = step3SupportingDocs.every(
-      (d) => d.upload_status === "rejected",
-    );
 
     const coBorrowerAllRejected =
       hasCoBorrower &&
       step3Verifications
-        .filter((v) => v.applicant === "co_borrower")
+        .filter((v) => v.applicant === "co_borrower" && isAdminCardType(v.verification_type))
         .every((v) => v.admin_action === "rejected");
 
     if (decision === "approved") {
-      const approvable =
-        allPrimaryApproved &&
-        !hasOpenSupportingDoc &&
-        (!hasCoBorrower || coBorrowerAllApproved);
-      if (!approvable) {
+      const blockers: string[] = [];
+
+      for (const v of step3Verifications) {
+        const applicant = v.applicant ?? "primary";
+        if (applicant !== "primary") continue;
+        if (!isAdminCardType(v.verification_type)) continue;
+        if (v.admin_action !== "accepted") {
+          blockers.push(
+            `${v.verification_type} verification is "${v.admin_action ?? "pending"}" — accept it on the card`,
+          );
+        }
+      }
+
+      for (const d of step3SupportingDocs) {
+        if (d.upload_status !== "verified") {
+          blockers.push(
+            `Supporting doc "${d.doc_label}" is "${d.upload_status}" — verify or close the request`,
+          );
+        }
+      }
+
+      if (hasCoBorrower && !coBorrowerAllApproved) {
+        const cbVers = step3Verifications.filter(
+          (v) => v.applicant === "co_borrower" && isAdminCardType(v.verification_type),
+        );
+        if (cbVers.length === 0) {
+          blockers.push(
+            'Co-borrower record exists but no co-borrower verifications have been run — either complete co-borrower KYC or remove the co-borrower record',
+          );
+        } else {
+          for (const v of cbVers) {
+            if (v.admin_action !== "accepted") {
+              blockers.push(
+                `Co-borrower ${v.verification_type} is "${v.admin_action ?? "pending"}" — accept it`,
+              );
+            }
+          }
+        }
+      }
+
+      if (blockers.length > 0) {
         return NextResponse.json(
           {
             success: false,
             error: {
-              message:
-                "Cannot approve: every verification, supporting doc, and co-borrower check must be approved.",
+              message: `Cannot approve. Resolve these first:\n• ${blockers.join("\n• ")}`,
+              blockers,
             },
           },
           { status: 400 },
@@ -172,17 +210,52 @@ export async function POST(
     }
 
     if (decision === "rejected") {
-      const rejectable =
-        allPrimaryRejected &&
-        allSupportingDocsRejected &&
-        (!hasCoBorrower || coBorrowerAllRejected);
-      if (!rejectable) {
+      const blockers: string[] = [];
+
+      const primaryVers = step3Verifications.filter(
+        (v) =>
+          (v.applicant ?? "primary") === "primary" &&
+          isAdminCardType(v.verification_type),
+      );
+      if (primaryVers.length === 0) {
+        blockers.push("No primary verifications exist on this lead — nothing to reject");
+      }
+      for (const v of primaryVers) {
+        if (v.admin_action !== "rejected") {
+          blockers.push(
+            `${v.verification_type} verification is "${v.admin_action ?? "pending"}" — reject it on the card`,
+          );
+        }
+      }
+
+      for (const d of step3SupportingDocs) {
+        if (d.upload_status !== "rejected") {
+          blockers.push(
+            `Supporting doc "${d.doc_label}" is "${d.upload_status}" — reject it`,
+          );
+        }
+      }
+
+      if (hasCoBorrower && !coBorrowerAllRejected) {
+        const cbVers = step3Verifications.filter(
+          (v) => v.applicant === "co_borrower" && isAdminCardType(v.verification_type),
+        );
+        for (const v of cbVers) {
+          if (v.admin_action !== "rejected") {
+            blockers.push(
+              `Co-borrower ${v.verification_type} is "${v.admin_action ?? "pending"}" — reject it`,
+            );
+          }
+        }
+      }
+
+      if (blockers.length > 0) {
         return NextResponse.json(
           {
             success: false,
             error: {
-              message:
-                "Cannot reject: every verification, supporting doc, and co-borrower check must be rejected.",
+              message: `Cannot reject. Resolve these first:\n• ${blockers.join("\n• ")}`,
+              blockers,
             },
           },
           { status: 400 },

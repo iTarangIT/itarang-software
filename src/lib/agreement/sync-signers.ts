@@ -66,7 +66,7 @@ export async function syncSignersFromDigio(
   const existing = await db
     .select()
     .from(dealerAgreementSigners)
-    .where(eq(dealerAgreementSigners.applicationId, applicationId));
+    .where(eq(dealerAgreementSigners.application_id, applicationId));
 
   if (!existing.length) return { updated: 0, transitions: 0 };
 
@@ -81,12 +81,12 @@ export async function syncSignersFromDigio(
 
     const match =
       existing.find((s) => {
-        const sigEmail = normalizeEmail(s.signerEmail);
+        const sigEmail = normalizeEmail(s.signer_email);
         return !!partyEmail && !!sigEmail && partyEmail === sigEmail;
       }) ||
       existing.find((s) => {
         if (!partyReason) return false;
-        const roleKey = String(s.signerRole || "").toLowerCase();
+        const roleKey = String(s.signer_role || "").toLowerCase();
         // Exact alias match covers the role/reason vocabulary gap
         // (e.g. signerRole='itarang_signatory_1' ↔ reason='iTarang signer 1').
         const expectedReason = SIGNER_ROLE_TO_DIGIO_REASON[roleKey];
@@ -116,14 +116,14 @@ export async function syncSignersFromDigio(
       party?.type,
     );
 
-    const statusChanged = newStatus !== match.signerStatus;
+    const statusChanged = newStatus !== match.signer_status;
     const signedAtChanged =
-      !!signedAt && (!match.signedAt || match.signedAt.getTime() !== signedAt.getTime());
+      !!signedAt && (!match.signed_at || match.signed_at.getTime() !== signedAt.getTime());
 
     if (!statusChanged && !signedAtChanged) {
       await db
         .update(dealerAgreementSigners)
-        .set({ providerRawResponse: party, updatedAt: new Date() })
+        .set({ provider_raw_response: party, updated_at: new Date() })
         .where(eq(dealerAgreementSigners.id, match.id));
       continue;
     }
@@ -131,12 +131,12 @@ export async function syncSignersFromDigio(
     await db
       .update(dealerAgreementSigners)
       .set({
-        signerStatus: newStatus,
-        signedAt: signedAt ?? match.signedAt,
-        lastEventAt: new Date(),
-        signingMethod: newSigningMethod ?? match.signingMethod,
-        providerRawResponse: party,
-        updatedAt: new Date(),
+        signer_status: newStatus,
+        signed_at: signedAt ?? match.signed_at,
+        last_event_at: new Date(),
+        signing_method: newSigningMethod ?? match.signing_method,
+        provider_raw_response: party,
+        updated_at: new Date(),
       })
       .where(eq(dealerAgreementSigners.id, match.id));
     updated++;
@@ -145,14 +145,14 @@ export async function syncSignersFromDigio(
       transitions++;
       try {
         await db.insert(dealerAgreementEvents).values({
-          applicationId,
-          providerDocumentId,
-          requestId,
-          eventType: newStatus === "signed" ? "signer_signed" : `signer_${newStatus}`,
-          signerRole: match.signerRole,
-          eventStatus: newStatus,
-          eventPayload: party,
-          createdAt: new Date(),
+          application_id: applicationId,
+          provider_document_id: providerDocumentId,
+          request_id: requestId,
+          event_type: newStatus === "signed" ? "signer_signed" : `signer_${newStatus}`,
+          signer_role: match.signer_role,
+          event_status: newStatus,
+          event_payload: party,
+          created_at: new Date(),
         });
       } catch (err) {
         console.warn("[SYNC SIGNERS] failed to insert signer event:", err);
@@ -168,11 +168,11 @@ export async function syncSignersFromDigio(
  * Returns the parsed Digio response on success, null on failure.
  */
 export async function fetchDigioAndSyncSigners(params: {
-  applicationId: string;
+  application_id: string;
   providerDocumentId: string;
   requestId?: string | null;
 }): Promise<Record<string, unknown> | null> {
-  const { applicationId, providerDocumentId, requestId } = params;
+  const { application_id: applicationId, providerDocumentId, requestId } = params;
 
   const clientId = process.env.DIGIO_CLIENT_ID?.trim();
   const clientSecret = process.env.DIGIO_CLIENT_SECRET?.trim();

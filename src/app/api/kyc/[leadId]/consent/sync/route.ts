@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { consentRecords, kycVerifications, leads } from '@/lib/db/schema';
+import { coBorrowers, consentRecords, kycVerifications, leads } from '@/lib/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 import { fetchAndStoreSignedConsent } from '@/lib/digio/fetch-signed-consent';
@@ -41,15 +41,23 @@ async function fetchDigioDocument(baseUrl: string, auth: string, documentId: str
     return null;
 }
 
-export async function POST(_req: NextRequest, { params }: RouteContext) {
+export async function POST(req: NextRequest, { params }: RouteContext) {
     try {
         await requireRole(['dealer', 'admin', 'ceo', 'business_head', 'sales_head']);
         const { leadId } = await params;
 
+        // Sync the primary applicant by default; Step 3 page passes
+        // ?consent_for=borrower to sync the co-borrower consent instead.
+        const rawConsentFor = (req.nextUrl.searchParams.get('consent_for') || 'customer').toLowerCase();
+        const consentForRole: 'primary' | 'co_borrower' =
+            rawConsentFor === 'borrower' || rawConsentFor === 'co_borrower'
+                ? 'co_borrower'
+                : 'primary';
+
         const [record] = await db
             .select()
             .from(consentRecords)
-            .where(and(eq(consentRecords.lead_id, leadId), eq(consentRecords.consent_for, 'primary')))
+            .where(and(eq(consentRecords.lead_id, leadId), eq(consentRecords.consent_for, consentForRole)))
             .orderBy(desc(consentRecords.updated_at))
             .limit(1);
 
@@ -58,7 +66,7 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
         }
 
         // If already completed but missing signed PDF, try to backfill it
-        if (!WAITING_STATUSES.includes(record.consent_status)) {
+        if (!WAITING_STATUSES.includes(record.consent_status ?? '')) {
             if (record.consent_status === 'esign_completed' && !record.signed_consent_url && record.esign_transaction_id) {
                 const stored = await fetchAndStoreSignedConsent(record.esign_transaction_id, leadId);
                 if (stored?.publicUrl) {
@@ -89,24 +97,54 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
         const auth = basicAuthHeader(clientId, clientSecret);
         const parsed = await fetchDigioDocument(baseUrl, auth, record.esign_transaction_id);
 
-        // Persist the raw DigiO document-status response for audit. Non-fatal.
+        // Persist the raw DigiO document-status response for audit. Upsert by
+        // (lead_id, verification_type='esign_consent_sync', applicant) so each
+        // poll updates the same row instead of inserting a duplicate. Old code
+        // inserted on every poll → 7 stale rows piled up per lead and silently
+        // blocked the final-decision approval gate. Non-fatal.
         if (parsed) {
             try {
                 const syncNow = new Date();
-                await db.insert(kycVerifications).values({
-                    id: createWorkflowId('KYCVER', syncNow),
-                    lead_id: leadId,
-                    verification_type: 'esign_consent_sync',
-                    applicant: 'primary',
-                    status: 'success',
-                    api_provider: 'digio',
-                    api_request: { document_id: record.esign_transaction_id, consent_id: record.id },
-                    api_response: parsed as Record<string, unknown>,
-                    submitted_at: syncNow,
-                    completed_at: syncNow,
-                });
+                const existingSync = await db
+                    .select({ id: kycVerifications.id })
+                    .from(kycVerifications)
+                    .where(
+                        and(
+                            eq(kycVerifications.lead_id, leadId),
+                            eq(kycVerifications.verification_type, 'esign_consent_sync'),
+                            eq(kycVerifications.applicant, consentForRole),
+                        ),
+                    )
+                    .limit(1);
+
+                if (existingSync[0]) {
+                    await db
+                        .update(kycVerifications)
+                        .set({
+                            status: 'success',
+                            api_provider: 'digio',
+                            api_request: { document_id: record.esign_transaction_id, consent_id: record.id },
+                            api_response: parsed as Record<string, unknown>,
+                            completed_at: syncNow,
+                            updated_at: syncNow,
+                        })
+                        .where(eq(kycVerifications.id, existingSync[0].id));
+                } else {
+                    await db.insert(kycVerifications).values({
+                        id: createWorkflowId('KYCVER', syncNow),
+                        lead_id: leadId,
+                        verification_type: 'esign_consent_sync',
+                        applicant: consentForRole,
+                        status: 'success',
+                        api_provider: 'digio',
+                        api_request: { document_id: record.esign_transaction_id, consent_id: record.id },
+                        api_response: parsed as Record<string, unknown>,
+                        submitted_at: syncNow,
+                        completed_at: syncNow,
+                    });
+                }
             } catch (persistErr) {
-                console.error('[consent/sync] kyc_verifications insert failed:', persistErr);
+                console.error('[consent/sync] kyc_verifications upsert failed:', persistErr);
             }
         }
 
@@ -161,7 +199,18 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
         if (statusChanged || backfillingPdf) {
             await db.update(consentRecords).set(updates).where(eq(consentRecords.id, record.id));
             if (statusChanged) {
-                await db.update(leads).set({ consent_status: newStatus, updated_at: now }).where(eq(leads.id, leadId));
+                if (consentForRole === 'co_borrower') {
+                    await db.update(coBorrowers)
+                        .set({ consent_status: newStatus, updated_at: now })
+                        .where(eq(coBorrowers.lead_id, leadId));
+                    await db.update(leads)
+                        .set({ borrower_consent_status: newStatus, updated_at: now })
+                        .where(eq(leads.id, leadId));
+                } else {
+                    await db.update(leads)
+                        .set({ consent_status: newStatus, updated_at: now })
+                        .where(eq(leads.id, leadId));
+                }
             }
         }
 

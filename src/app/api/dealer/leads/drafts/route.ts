@@ -9,10 +9,10 @@ export const GET = withErrorHandler(async (req: Request) => {
     let dealer_id = user.dealer_id;
 
     if (!dealer_id) {
-        const onboardingRows = await db.select({ dealerCode: dealerOnboardingApplications.dealerCode })
+        const onboardingRows = await db.select({ dealerCode: dealerOnboardingApplications.dealer_code })
             .from(dealerOnboardingApplications)
-            .where(eq(dealerOnboardingApplications.dealerUserId, user.id))
-            .orderBy(desc(dealerOnboardingApplications.updatedAt))
+            .where(eq(dealerOnboardingApplications.dealer_user_id, user.id))
+            .orderBy(desc(dealerOnboardingApplications.updated_at))
             .limit(1);
         if (onboardingRows[0]?.dealerCode) {
             dealer_id = onboardingRows[0].dealerCode;

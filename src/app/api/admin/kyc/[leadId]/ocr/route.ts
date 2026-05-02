@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { supabaseAdmin } from '@/lib/supabase/admin';
 import { db } from '@/lib/db';
 import { kycDocuments, personalDetails } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
@@ -7,15 +8,52 @@ import { extractDocumentOcr, type OcrDocType } from '@/lib/decentro';
 import { extractTextFromImageBuffer } from '@/lib/ocr/tesseractOcr';
 import { parseBankDocument } from '@/lib/ocr/bankDocParser';
 
-// Map internal doc types to Decentro OCR doc types
+// Supabase signed URLs expire (default 1 hour). Old leads have stale URLs in
+// kyc_documents.file_url, so a direct fetch returns 403 → the catch block
+// previously surfaced an opaque "Server error". Detect signed URLs, parse the
+// bucket + object path, and re-sign right before fetching.
+async function resolveFetchableUrl(storedUrl: string): Promise<string> {
+    if (!storedUrl) return storedUrl;
+    try {
+        const u = new URL(storedUrl);
+        // Format: /storage/v1/object/sign/<bucket>/<path...>
+        const signMatch = u.pathname.match(/\/storage\/v1\/object\/sign\/([^/]+)\/(.+)$/);
+        if (signMatch) {
+            const [, bucket, objectPath] = signMatch;
+            const { data, error } = await supabaseAdmin.storage
+                .from(bucket)
+                .createSignedUrl(decodeURIComponent(objectPath), 120);
+            if (!error && data?.signedUrl) {
+                return data.signedUrl;
+            }
+            console.warn(`[OCR] re-sign failed for ${bucket}/${objectPath}: ${error?.message ?? 'no url'}`);
+        }
+    } catch (e) {
+        console.warn('[OCR] resolveFetchableUrl: not a URL, using as-is', e);
+    }
+    return storedUrl;
+}
+
+// Map internal doc types to Decentro OCR doc types.
 const DECENTRO_OCR_MAP: Record<string, OcrDocType> = {
     pan_card: 'PAN',
     aadhaar_front: 'AADHAAR',
     aadhaar_back: 'AADHAAR',
 };
 
-// Doc types that use Tesseract fallback
+// Doc types that use Tesseract OCR (regex-extracted from raw text).
 const TESSERACT_TYPES = ['bank_statement', 'cheque_1', 'cheque_2', 'cheque_3', 'cheque_4', 'rc_copy'];
+
+// Per-doc-type Decentro options that mirror the working curl shape exactly.
+// PAN on our prod module rejects requests carrying `module_secret` and uses
+// a different `consent_purpose` than Aadhaar — sending the same shape we
+// verified end-to-end via curl avoids the metadata-only error response.
+const DECENTRO_OCR_OPTIONS: Record<string, { skipModuleSecret?: boolean; consentPurpose?: string }> = {
+    pan_card: {
+        skipModuleSecret: true,
+        consentPurpose: 'for bank account purpose only',
+    },
+};
 
 /** Helper: extract a string field from nested OCR response. Walks common nesting levels
  *  (kycResult, extractedData, result, ocrResult, data) and accepts both strings and numbers.
@@ -152,6 +190,7 @@ async function saveToPersonalDetails(leadId: string, fields: Record<string, unkn
             .where(eq(personalDetails.lead_id, leadId));
     } else {
         await db.insert(personalDetails).values({
+            id: crypto.randomUUID(),
             lead_id: leadId,
             ...cleanFields,
             ocr_processed_at: new Date(),
@@ -166,25 +205,35 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
         const { leadId } = await params;
-        const { doc_type } = await req.json();
+        const body = await req.json();
+        const doc_type: string | undefined = body.doc_type;
+        // doc_for filters by applicant: 'customer' = primary, 'borrower' = co-borrower.
+        // Default 'customer' keeps existing callers (that don't send doc_for) on the
+        // primary doc — backward compatible with the autofill button before this fix.
+        const doc_for: string = typeof body.doc_for === 'string' ? body.doc_for : 'customer';
 
         if (!doc_type) {
             return NextResponse.json({ success: false, error: 'doc_type is required' }, { status: 400 });
         }
 
-        // Find the document record by exact doc_type
+        // Find the document record by exact doc_type AND doc_for so a co-borrower
+        // OCR call doesn't accidentally pick up the primary's PAN (or vice versa).
         let [doc] = await db.select({
             id: kycDocuments.id,
             fileUrl: kycDocuments.file_url,
             fileName: kycDocuments.file_name,
             ocrData: kycDocuments.ocr_data,
         }).from(kycDocuments)
-            .where(and(eq(kycDocuments.lead_id, leadId), eq(kycDocuments.doc_type, doc_type)))
+            .where(and(
+                eq(kycDocuments.lead_id, leadId),
+                eq(kycDocuments.doc_type, doc_type),
+                eq(kycDocuments.doc_for, doc_for),
+            ))
             .limit(1);
 
-        // Fallback: if no exact match, search all docs for this lead and try to identify the right one
+        // Fallback: if no exact match, search docs for this lead+doc_for and try to identify the right one
         if (!doc) {
-            console.log(`[OCR Fallback] No exact match for doc_type="${doc_type}" on lead=${leadId}. Searching all docs...`);
+            console.log(`[OCR Fallback] No exact match for doc_type="${doc_type}" doc_for="${doc_for}" on lead=${leadId}. Searching all docs...`);
             const allDocs = await db.select({
                 id: kycDocuments.id,
                 fileUrl: kycDocuments.file_url,
@@ -192,14 +241,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 ocrData: kycDocuments.ocr_data,
                 docType: kycDocuments.doc_type,
             }).from(kycDocuments)
-                .where(eq(kycDocuments.lead_id, leadId));
+                .where(and(
+                    eq(kycDocuments.lead_id, leadId),
+                    eq(kycDocuments.doc_for, doc_for),
+                ));
 
             console.log(`[OCR Fallback] Found ${allDocs.length} docs:`, allDocs.map(d => ({ id: d.id, docType: d.docType, fileName: d.fileName })));
 
             for (const candidate of allDocs) {
                 if (!candidate.fileUrl) continue;
                 try {
-                    const fileRes = await fetch(candidate.fileUrl);
+                    const fetchUrl = await resolveFetchableUrl(candidate.fileUrl);
+                    const fileRes = await fetch(fetchUrl);
                     if (!fileRes.ok) { console.log(`[OCR Fallback] Failed to fetch file for doc ${candidate.id}: ${fileRes.status}`); continue; }
                     const buf = Buffer.from(await fileRes.arrayBuffer());
                     const ct = fileRes.headers.get('content-type') || 'image/jpeg';
@@ -214,10 +267,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                                 doc_type === 'aadhaar_front' ? 'FRONT'
                                 : doc_type === 'aadhaar_back' ? 'BACK'
                                 : undefined;
-                            const ocrRes = await extractDocumentOcr(decentroOcrType, blob, fname, side);
+                            const ocrRes = await extractDocumentOcr(
+                                decentroOcrType,
+                                blob,
+                                fname,
+                                side,
+                                undefined,
+                                undefined,
+                                DECENTRO_OCR_OPTIONS[doc_type],
+                            );
                             // Decentro may use responseStatus or status field
                             const isSuccess = ocrRes.responseStatus === 'SUCCESS' || ocrRes.status === 'SUCCESS' || ocrRes.status === 200;
-                            const ocrPayload = ocrRes.data || ocrRes.result || ocrRes.kycResult;
+                            const ocrPayload = ocrRes.data || ocrRes.result || ocrRes.kycResult || ocrRes.ocrResult;
                             console.log(`[OCR Fallback] Decentro OCR for doc ${candidate.id}: isSuccess=${isSuccess}, hasData=${!!ocrPayload}`);
                             if (isSuccess && ocrPayload) {
                                 await db.update(kycDocuments)
@@ -309,11 +370,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             return NextResponse.json({ success: false, error: `No ${doc_type} document found for this lead` }, { status: 404 });
         }
 
-        // Return cached OCR data if available (already saved to DB on first run)
-        if (doc.ocrData && Object.keys(doc.ocrData as object).length > 0) {
+        // Return cached OCR data if available (already saved to DB on first run).
+        // BUT skip the cache when the cached payload is a Tesseract fallback —
+        // those rows were saved when Decentro was misconfigured (kyc_validate=1
+        // rejected by the prod module) and only contain rawText. Falling through
+        // to a fresh Decentro call gives us real structured fields instead of
+        // perpetually returning the bad cached result.
+        const cached = doc.ocrData as Record<string, unknown> | null;
+        const isFallbackCache =
+            !!cached &&
+            (cached.source === 'tesseract_fallback' ||
+                (Object.keys(cached).every((k) => k === 'rawText' || k === 'source')));
+        if (cached && Object.keys(cached).length > 0 && !isFallbackCache) {
             return NextResponse.json({
                 success: true,
-                ocr_data: doc.ocrData,
+                ocr_data: cached,
                 source: 'db',
                 doc_type,
             });
@@ -324,9 +395,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             return NextResponse.json({ success: false, error: 'Document has no file URL' }, { status: 400 });
         }
 
-        const fileRes = await fetch(doc.fileUrl);
+        const fetchUrl = await resolveFetchableUrl(doc.fileUrl);
+        const fileRes = await fetch(fetchUrl);
         if (!fileRes.ok) {
-            return NextResponse.json({ success: false, error: 'Failed to fetch document file' }, { status: 500 });
+            const detail = `HTTP ${fileRes.status} ${fileRes.statusText || ''}`.trim();
+            console.error(`[Admin OCR] file fetch failed for doc ${doc.id}: ${detail}. URL host: ${(() => { try { return new URL(fetchUrl).host; } catch { return 'unknown'; } })()}`);
+            return NextResponse.json({
+                success: false,
+                error: fileRes.status === 403 || fileRes.status === 401
+                    ? 'Document file URL has expired or is no longer accessible. Ask the dealer to re-upload.'
+                    : `Failed to fetch document file (${detail}).`,
+            }, { status: 500 });
         }
 
         const fileBuffer = Buffer.from(await fileRes.arrayBuffer());
@@ -335,6 +414,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         let ocrData: Record<string, unknown> = {};
         let source: 'decentro' | 'tesseract' = 'decentro';
+        // Capture Decentro's own error message when extraction fails so the
+        // front-end can show admins the real cause (plan disabled, invalid
+        // module_secret, expired creds) instead of silently rendering the
+        // Tesseract fallback as if it were the truth.
+        let decentroError: string | null = null;
 
         const decentroType = DECENTRO_OCR_MAP[doc_type];
 
@@ -345,17 +429,76 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 doc_type === 'aadhaar_front' ? 'FRONT'
                 : doc_type === 'aadhaar_back' ? 'BACK'
                 : undefined;
-            const decentroRes = await extractDocumentOcr(decentroType, blob, fileName, side);
+            const decentroRes = await extractDocumentOcr(
+                decentroType,
+                blob,
+                fileName,
+                side,
+                undefined,
+                undefined,
+                DECENTRO_OCR_OPTIONS[doc_type],
+            );
             const success = decentroRes.responseStatus === 'SUCCESS' || decentroRes.status === 'SUCCESS' || decentroRes.status === 200;
-            const decentroPayload = decentroRes.data || decentroRes.result || decentroRes.kycResult;
+            // Decentro varies the wrapping key by document/SKU. Cover the
+            // shapes we've seen across PAN/Aadhaar/forensics endpoints.
+            const decentroPayload =
+                decentroRes.data ||
+                decentroRes.result ||
+                decentroRes.kycResult ||
+                decentroRes.ocrResult ||
+                decentroRes.ocr_result ||
+                decentroRes.kyc_result;
             if (success && decentroPayload) {
                 ocrData = decentroPayload;
                 source = 'decentro';
             } else {
-                // Fallback to Tesseract
+                // Decentro didn't give us usable structured data — capture why
+                // before falling back. The `error` field can be either a plain
+                // string OR a nested { message, code } / { message } / { errorMessage }
+                // object depending on the SKU and failure mode. Try every shape
+                // before falling back to a "couldn't read it" diagnostic.
+                const pickErrorMessage = (val: unknown): string | null => {
+                    if (typeof val === 'string' && val.trim()) return val.trim();
+                    if (val && typeof val === 'object') {
+                        const o = val as Record<string, unknown>;
+                        const candidate =
+                            (typeof o.message === 'string' && o.message) ||
+                            (typeof o.errorMessage === 'string' && o.errorMessage) ||
+                            (typeof o.error === 'string' && o.error) ||
+                            (typeof o.responseMessage === 'string' && o.responseMessage);
+                        const code =
+                            (typeof o.responseCode === 'string' && o.responseCode) ||
+                            (typeof o.code === 'string' && o.code) ||
+                            (typeof o.errorCode === 'string' && o.errorCode);
+                        if (candidate) {
+                            return code ? `${candidate} (${code})` : candidate;
+                        }
+                    }
+                    return null;
+                };
+                decentroError =
+                    pickErrorMessage(decentroRes.message) ||
+                    pickErrorMessage(decentroRes.error) ||
+                    pickErrorMessage(decentroRes.responseMessage) ||
+                    pickErrorMessage((decentroRes.data as Record<string, unknown> | undefined)?.error) ||
+                    `Decentro returned no extractable data (keys: ${Object.keys(decentroRes ?? {}).join(', ')})`;
+                console.error(
+                    `[Admin OCR] Decentro extraction failed for ${doc_type} on lead ${leadId}: success=${success} payload=${!!decentroPayload} message=${decentroError}`,
+                );
+
+                // Fallback to Tesseract — and salvage what we can from the raw
+                // text so the admin still gets autofill in degraded mode.
                 const text = await extractTextFromImageBuffer(fileBuffer);
                 ocrData = { rawText: text, source: 'tesseract_fallback' };
                 source = 'tesseract';
+
+                // PAN: regex out the 5-letter / 4-digit / 1-letter pattern.
+                if (doc_type === 'pan_card') {
+                    const panMatch = text.match(/[A-Z]{5}\d{4}[A-Z]/);
+                    if (panMatch) {
+                        (ocrData as Record<string, unknown>).pan_number = panMatch[0];
+                    }
+                }
             }
         } else if (TESSERACT_TYPES.includes(doc_type)) {
             // Use Tesseract for bank docs and RC
@@ -388,6 +531,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             .where(eq(kycDocuments.id, doc.id));
 
         // ── 2. Save extracted fields to personalDetails (persistent DB storage) ──
+        // personalDetails holds the PRIMARY applicant's data only — skip the
+        // save for co-borrower OCR runs (doc_for !== 'customer') so we don't
+        // overwrite primary's PAN / Aadhaar / address with co-borrower values.
+        // Co-borrower OCR results still get persisted to kycDocuments.ocr_data
+        // above and surface on the co-borrower card via the case-review fetch.
+        if (doc_for === 'customer') {
         if (doc_type === 'pan_card') {
             const panNo = getField(ocrData, 'pan_number', 'panNumber', 'id_number', 'idNumber', 'pan', 'panNo');
             const fatherName = getField(ocrData, 'fatherName', 'father_name', 'fatherOrHusbandName');
@@ -460,15 +609,30 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 bank_branch: ocrData.branch,
             });
         }
+        } // end doc_for === 'customer' gate
 
         return NextResponse.json({
             success: true,
             ocr_data: ocrData,
             source,
             doc_type,
+            ...(decentroError ? { decentro_error: decentroError } : {}),
         });
     } catch (error) {
-        console.error('Admin OCR error:', error);
-        return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 });
+        // Surface the actual cause to the admin instead of a generic
+        // "Server error" — non-technical users were stuck staring at a red
+        // tag with zero context. Full stack still goes to pm2 logs via
+        // console.error, but the response carries the message itself.
+        console.error('[Admin OCR] error:', error);
+        const message =
+            error instanceof Error
+                ? error.message
+                : typeof error === 'string'
+                    ? error
+                    : 'OCR failed';
+        return NextResponse.json(
+            { success: false, error: `OCR failed: ${message}` },
+            { status: 500 },
+        );
     }
 }

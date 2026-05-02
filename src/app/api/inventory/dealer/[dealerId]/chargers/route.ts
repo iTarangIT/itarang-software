@@ -2,13 +2,27 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, asc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { inventory, products } from "@/lib/db/schema";
+import { inventory, products, productCategories } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 
+// inventory.asset_category stores the productCategories.name. Callers
+// may pass either the category id or the name — resolve to the name.
+async function resolveCategoryName(input: string): Promise<string> {
+  const [cat] = await db
+    .select({ name: productCategories.name })
+    .from(productCategories)
+    .where(eq(productCategories.id, input))
+    .limit(1);
+  return cat?.name ?? input;
+}
+
 // BRD V2 §2.3 — dealer charger inventory list for Step 4.
-// Chargers are filtered by compatibility with the selected battery model.
-// Since the schema does not track explicit compatibility yet, we filter by
-// matching `model_type` on the inventory row when batteryModel is supplied.
+// The schema has no battery↔charger compatibility table yet, and chargers
+// have their own `model_type` (different from the battery's), so a strict
+// equality match on model_type returns zero rows in practice. Until a real
+// compatibility mapping exists, we filter by category and return every
+// available charger in the dealer's inventory. The frontend renders the
+// selected battery's model alongside the list so the dealer can pair them.
 
 export async function GET(
   req: NextRequest,
@@ -26,7 +40,6 @@ export async function GET(
     }
 
     const { searchParams } = new URL(req.url);
-    const batteryModel = searchParams.get("batteryModel");
     const category = searchParams.get("category");
 
     const filters = [
@@ -34,9 +47,10 @@ export async function GET(
       eq(inventory.asset_type, "Charger"),
       eq(inventory.status, "available"),
     ];
-    if (category) filters.push(eq(inventory.asset_category, category));
-    // Best-effort compatibility filter: match on model_type if supplied.
-    if (batteryModel) filters.push(eq(inventory.model_type, batteryModel));
+    if (category) {
+      const categoryName = await resolveCategoryName(category);
+      filters.push(eq(inventory.asset_category, categoryName));
+    }
 
     const rows = await db
       .select({
@@ -48,6 +62,11 @@ export async function GET(
         invoice_date: inventory.oem_invoice_date,
         status: inventory.status,
         price: products.price,
+        warranty_months: products.warranty_months,
+        gross_amount: inventory.inventory_amount,
+        gst_percent: inventory.gst_percent,
+        gst_amount: inventory.gst_amount,
+        net_amount: inventory.final_amount,
       })
       .from(inventory)
       .leftJoin(products, eq(inventory.product_id, products.id))

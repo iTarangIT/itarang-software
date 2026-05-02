@@ -1,0 +1,334 @@
+import { NextRequest, NextResponse } from "next/server";
+import { and, eq, inArray } from "drizzle-orm";
+import { db } from "@/lib/db/index";
+import {
+  dealerCorrectionItems,
+  dealerCorrectionRounds,
+  dealerOnboardingApplications,
+  dealerOnboardingDocuments,
+} from "@/lib/db/schema";
+import { hashCorrectionToken } from "@/lib/onboarding/correction-token";
+import {
+  documentLabel,
+  fieldLabel,
+  isCorrectionDocumentKey,
+  isCorrectionFieldKey,
+} from "@/lib/onboarding/correction-catalog";
+
+// Public, token-authenticated endpoints used by the dealer correction form.
+// No Supabase auth — middleware already lets /api/* through unauthenticated;
+// security here is the 32-byte random token (sha256-hashed in DB).
+
+type RouteContext = {
+  params: Promise<{ token: string }>;
+};
+
+function badRequest(message: string, status = 400) {
+  return NextResponse.json({ success: false, message }, { status });
+}
+
+async function loadRoundByToken(rawToken: string) {
+  if (!rawToken || typeof rawToken !== "string") return null;
+  const tokenHash = hashCorrectionToken(rawToken);
+  const rows = await db
+    .select()
+    .from(dealerCorrectionRounds)
+    .where(eq(dealerCorrectionRounds.token_hash, tokenHash))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function GET(_req: NextRequest, context: RouteContext) {
+  try {
+    const { token } = await context.params;
+    const round = await loadRoundByToken(token);
+
+    if (!round) return badRequest("Invalid correction link", 404);
+
+    if (round.token_expires_at && new Date(round.token_expires_at).getTime() < Date.now()) {
+      return NextResponse.json({
+        success: false,
+        state: "expired",
+        message: "This correction link has expired. Please contact iTarang.",
+      });
+    }
+
+    if (round.status === "superseded") {
+      return NextResponse.json({
+        success: false,
+        state: "superseded",
+        message:
+          "A newer correction request has been issued — please use the latest email.",
+      });
+    }
+
+    if (round.status === "submitted" || round.status === "applied") {
+      return NextResponse.json({
+        success: false,
+        state: "already_submitted",
+        message:
+          "Your corrections have already been submitted. We'll be in touch shortly.",
+      });
+    }
+
+    const [application] = await db
+      .select({
+        id: dealerOnboardingApplications.id,
+        companyName: dealerOnboardingApplications.company_name,
+      })
+      .from(dealerOnboardingApplications)
+      .where(eq(dealerOnboardingApplications.id, round.application_id))
+      .limit(1);
+
+    if (!application) return badRequest("Application not found", 404);
+
+    const items = await db
+      .select()
+      .from(dealerCorrectionItems)
+      .where(eq(dealerCorrectionItems.round_id, round.id));
+
+    const previousDocIds = items
+      .map((it) => it.previous_document_id)
+      .filter((v): v is string => !!v);
+
+    const previousDocs =
+      previousDocIds.length > 0
+        ? await db
+            .select({
+              id: dealerOnboardingDocuments.id,
+              documentType: dealerOnboardingDocuments.document_type,
+              fileName: dealerOnboardingDocuments.file_name,
+              fileUrl: dealerOnboardingDocuments.file_url,
+              uploadedAt: dealerOnboardingDocuments.uploaded_at,
+            })
+            .from(dealerOnboardingDocuments)
+            .where(inArray(dealerOnboardingDocuments.id, previousDocIds))
+        : [];
+    const previousDocsById = new Map(previousDocs.map((d) => [d.id, d]));
+
+    const responseItems = items.map((it) => {
+      const previousDoc = it.previous_document_id
+        ? previousDocsById.get(it.previous_document_id) ?? null
+        : null;
+      return {
+        id: it.id,
+        kind: it.kind,
+        key: it.key,
+        label: it.kind === "field" ? fieldLabel(it.key) : documentLabel(it.key),
+        previousValue: it.previous_value,
+        previousDocument: previousDoc
+          ? {
+              fileName: previousDoc.fileName,
+              fileUrl: previousDoc.fileUrl,
+              uploadedAt: previousDoc.uploadedAt,
+            }
+          : null,
+      };
+    });
+
+    return NextResponse.json({
+      success: true,
+      state: "ready",
+      data: {
+        applicationId: application.id,
+        companyName: application.companyName,
+        roundNumber: round.round_number,
+        remarks: round.remarks,
+        expiresAt: round.token_expires_at,
+        items: responseItems,
+      },
+    });
+  } catch (error: any) {
+    console.error("CORRECTION GET ERROR:", error);
+    return NextResponse.json(
+      { success: false, message: error?.message || "Error" },
+      { status: 500 },
+    );
+  }
+}
+
+type SubmitDocumentInput = {
+  documentType?: unknown;
+  bucketName?: unknown;
+  storagePath?: unknown;
+  fileUrl?: unknown;
+  fileName?: unknown;
+  mimeType?: unknown;
+  fileSize?: unknown;
+};
+
+function cleanString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export async function POST(req: NextRequest, context: RouteContext) {
+  try {
+    const { token } = await context.params;
+    const round = await loadRoundByToken(token);
+
+    if (!round) return badRequest("Invalid correction link", 404);
+
+    if (round.token_expires_at && new Date(round.token_expires_at).getTime() < Date.now()) {
+      return badRequest("This correction link has expired", 410);
+    }
+    if (round.status !== "pending") {
+      return badRequest(
+        "This correction request is no longer accepting submissions",
+        409,
+      );
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const fieldUpdatesRaw = (body?.fieldUpdates ?? {}) as Record<string, unknown>;
+    const documentUpdatesRaw = Array.isArray(body?.documentUpdates)
+      ? (body.documentUpdates as SubmitDocumentInput[])
+      : [];
+    const dealerNote = cleanString(body?.dealerNote) || null;
+
+    const requestedFieldSet = new Set(round.requested_fields ?? []);
+    const requestedDocumentSet = new Set(round.requested_documents ?? []);
+
+    const items = await db
+      .select()
+      .from(dealerCorrectionItems)
+      .where(eq(dealerCorrectionItems.round_id, round.id));
+
+    // ── Validate field updates ──────────────────────────────────────────────
+    const fieldUpdates: Record<string, string> = {};
+    for (const [key, rawValue] of Object.entries(fieldUpdatesRaw)) {
+      if (!isCorrectionFieldKey(key) || !requestedFieldSet.has(key)) continue;
+      const value = cleanString(rawValue);
+      if (!value) {
+        return badRequest(`Please fill in: ${fieldLabel(key)}`);
+      }
+      fieldUpdates[key] = value;
+    }
+
+    // Every requested field must have a value.
+    for (const requiredKey of requestedFieldSet) {
+      if (!(requiredKey in fieldUpdates)) {
+        return badRequest(`Missing field: ${fieldLabel(requiredKey)}`);
+      }
+    }
+
+    // ── Validate document updates ───────────────────────────────────────────
+    const sanitizedDocs: Array<{
+      documentType: string;
+      bucketName: string;
+      storagePath: string;
+      fileUrl: string | null;
+      fileName: string;
+      mimeType: string | null;
+      fileSize: number | null;
+    }> = [];
+
+    for (const doc of documentUpdatesRaw) {
+      const documentType = cleanString(doc.documentType);
+      if (!isCorrectionDocumentKey(documentType)) continue;
+      if (!requestedDocumentSet.has(documentType)) continue;
+
+      const bucketName = cleanString(doc.bucketName);
+      const storagePath = cleanString(doc.storagePath);
+      const fileName = cleanString(doc.fileName);
+      const fileUrl = cleanString(doc.fileUrl) || null;
+      const mimeType = cleanString(doc.mimeType) || null;
+      const fileSize =
+        typeof doc.fileSize === "number" && Number.isFinite(doc.fileSize)
+          ? doc.fileSize
+          : null;
+
+      if (!bucketName || !storagePath || !fileName) {
+        return badRequest(
+          `Re-upload appears incomplete for: ${documentLabel(documentType)}`,
+        );
+      }
+      sanitizedDocs.push({
+        documentType,
+        bucketName,
+        storagePath,
+        fileName,
+        fileUrl,
+        mimeType,
+        fileSize,
+      });
+    }
+
+    const submittedDocTypes = new Set(sanitizedDocs.map((d) => d.documentType));
+    for (const requiredKey of requestedDocumentSet) {
+      if (!submittedDocTypes.has(requiredKey)) {
+        return badRequest(`Missing document: ${documentLabel(requiredKey)}`);
+      }
+    }
+
+    // ── Persist new docs, then link to items, then update field newValues ──
+    if (sanitizedDocs.length > 0) {
+      const inserted = await db
+        .insert(dealerOnboardingDocuments)
+        .values(
+          sanitizedDocs.map((d) => ({
+            application_id: round.application_id,
+            document_type: d.documentType,
+            bucket_name: d.bucketName,
+            storage_path: d.storagePath,
+            file_name: d.fileName,
+            file_url: d.fileUrl,
+            mime_type: d.mimeType,
+            file_size: d.fileSize,
+            doc_status: "pending_correction",
+            verification_status: "pending",
+            metadata: {
+              source: "dealer_correction_submission",
+              correction_round_id: round.id,
+            },
+          })),
+        )
+        .returning({
+          id: dealerOnboardingDocuments.id,
+          documentType: dealerOnboardingDocuments.document_type,
+        });
+
+      const newDocIdByType = new Map(inserted.map((i) => [i.documentType, i.id]));
+
+      for (const item of items) {
+        if (item.kind !== "document") continue;
+        const newId = newDocIdByType.get(item.key);
+        if (!newId) continue;
+        await db
+          .update(dealerCorrectionItems)
+          .set({ new_document_id: newId })
+          .where(eq(dealerCorrectionItems.id, item.id));
+      }
+    }
+
+    for (const item of items) {
+      if (item.kind !== "field") continue;
+      const value = fieldUpdates[item.key];
+      if (value === undefined) continue;
+      await db
+        .update(dealerCorrectionItems)
+        .set({ new_value: value })
+        .where(eq(dealerCorrectionItems.id, item.id));
+    }
+
+    await db
+      .update(dealerCorrectionRounds)
+      .set({
+        status: "submitted",
+        dealer_submitted_at: new Date(),
+        dealer_note: dealerNote,
+        updated_at: new Date(),
+      })
+      .where(eq(dealerCorrectionRounds.id, round.id));
+
+    return NextResponse.json({
+      success: true,
+      message: "Correction submitted",
+    });
+  } catch (error: any) {
+    console.error("CORRECTION POST ERROR:", error);
+    return NextResponse.json(
+      { success: false, message: error?.message || "Error" },
+      { status: 500 },
+    );
+  }
+}

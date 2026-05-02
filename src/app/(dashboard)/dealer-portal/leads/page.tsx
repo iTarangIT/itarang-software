@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { PlusCircle, Search, Filter, Loader2, Trash2, X, AlertTriangle, Pencil, Save } from 'lucide-react';
 import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { isCashMethod, isFinanceMethod } from '@/components/dealer-portal/lead-wizard/constants';
 
 function DealerLeadsContent() {
     const router = useRouter();
@@ -206,9 +207,33 @@ function DealerLeadsContent() {
                                         </td>
                                         <td className="px-6 py-4 text-right">
                                             <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <Link href={`/dealer-portal/leads/${lead.id}/kyc`} className="text-brand-600 hover:text-brand-800 font-medium text-xs">
-                                                    View Details
-                                                </Link>
+                                                {(() => {
+                                                    const isHot = lead.interest_level === 'hot';
+                                                    const cash = isCashMethod(lead.payment_method);
+                                                    const finance = isFinanceMethod(lead.payment_method);
+                                                    if (isHot && finance) {
+                                                        return (
+                                                            <Link href={`/dealer-portal/leads/${lead.id}/kyc`} className="text-brand-600 hover:text-brand-800 font-medium text-xs">
+                                                                View Details
+                                                            </Link>
+                                                        );
+                                                    }
+                                                    if (isHot && cash) {
+                                                        return (
+                                                            <Link href={`/dealer-portal/leads/${lead.id}/product-selection`} className="text-brand-600 hover:text-brand-800 font-medium text-xs">
+                                                                View Details
+                                                            </Link>
+                                                        );
+                                                    }
+                                                    return (
+                                                        <span
+                                                            className="text-gray-400 font-medium text-xs cursor-not-allowed"
+                                                            title="Warm/Cold leads stay at Step 1. Promote to Hot to proceed."
+                                                        >
+                                                            Step 1 only
+                                                        </span>
+                                                    );
+                                                })()}
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); openEdit(lead); }}
                                                     className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
