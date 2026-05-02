@@ -1271,9 +1271,6 @@ export default function DealerReviewPage() {
                   >
                     <div className="min-w-0">
                       <p className="font-semibold text-slate-900">{doc.name}</p>
-                      <p className="mt-1 text-sm text-slate-500">
-                        {(doc.verificationStatus || doc.docStatus || doc.status || "Uploaded").replaceAll("_", " ")}
-                      </p>
                       {doc.documentType && <p className="mt-1 text-xs text-slate-400">Type: {doc.documentType.replaceAll("_", " ")}</p>}
                       {doc.rejectionReason && <p className="mt-1 text-xs text-rose-500">Reason: {doc.rejectionReason}</p>}
                     </div>

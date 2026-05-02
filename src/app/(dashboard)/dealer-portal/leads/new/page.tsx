@@ -45,6 +45,10 @@ function NewLeadWizardContent() {
     const fromScraped = searchParams.get('from_scraped');
     const prefillName = searchParams.get('name');
     const prefillPhone = searchParams.get('phone');
+    // ?id=LEAD-... → load that specific lead and prefill the wizard so the
+    // dealer can edit an existing Step 1 (e.g. update address). Without this
+    // the form always loaded a fresh draft.
+    const editLeadId = searchParams.get('id');
     const { user } = useAuth();
 
     const [leadId, setLeadId] = useState<string | null>(null);
@@ -116,9 +120,36 @@ function NewLeadWizardContent() {
         await initDraft(true);
     };
 
+    // Load an existing lead by id (edit mode) — bypasses the draft system.
+    const loadExistingLead = async (id: string) => {
+        setInitLoading(true);
+        setApiError(null);
+        try {
+            const res = await fetch(`/api/dealer/leads/${id}`);
+            const result = await res.json();
+            if (result.success) {
+                setLeadId(result.data.leadId);
+                setReferenceId(result.data.referenceId);
+                setFormData((prev: any) => ({ ...prev, ...result.data.formData }));
+                setLastSaved('Loaded for editing');
+            } else {
+                setApiError(result.error?.message || 'Could not load lead.');
+            }
+        } catch {
+            setApiError('Could not load lead.');
+        } finally {
+            setInitLoading(false);
+        }
+    };
+
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const fresh = params.get('fresh') === 'true';
+        const idParam = params.get('id');
+        if (idParam) {
+            loadExistingLead(idParam);
+            return;
+        }
         initDraft(fresh);
     }, []);
 

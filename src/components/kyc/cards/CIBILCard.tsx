@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import RequestCoBorrowerModal from "../step3/RequestCoBorrowerModal";
-import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface CIBILCardProps {
   leadId: string;
@@ -95,7 +94,6 @@ export default function CIBILCard({
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
   const [showCoBorrowerModal, setShowCoBorrowerModal] = useState(false);
-  const [showMoreDocsModal, setShowMoreDocsModal] = useState(false);
   const [actionResult, setActionResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const handleFetch = async (type: "score" | "report") => {
@@ -159,8 +157,7 @@ export default function CIBILCard({
     }
   };
 
-  const handleAdminAction = async (action: "accept" | "reject" | "request_more_docs") => {
-    if (action === "request_more_docs") { setShowMoreDocsModal(true); return; }
+  const handleAdminAction = async (action: "accept" | "reject") => {
     if (action === "reject" && !adminNotes.trim()) { setError("Please add rejection reason"); return; }
     setActionLoading(action);
     setError("");
@@ -232,9 +229,23 @@ export default function CIBILCard({
             <p className="text-xs text-gray-500">via Decentro</p>
           </div>
         </div>
-        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusLabel[status].bg}`}>
-          {statusLabel[status].label}
-        </span>
+        {(() => {
+          // Admin's accept/reject decision overrides the bureau response for
+          // the badge — admins want the badge to mirror their action
+          // ("Accepted"/"Rejected") not the underlying API state.
+          const adminBadge =
+            existingVerification?.adminAction === "accepted"
+              ? { bg: "bg-green-100 text-green-700", label: "Accepted" }
+              : existingVerification?.adminAction === "rejected"
+                ? { bg: "bg-red-100 text-red-700", label: "Rejected" }
+                : null;
+          const badge = adminBadge ?? statusLabel[status];
+          return (
+            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${badge.bg}`}>
+              {badge.label}
+            </span>
+          );
+        })()}
       </div>
 
       <div className="p-5 space-y-5">
@@ -266,55 +277,57 @@ export default function CIBILCard({
         </div>
 
 
-        {/* VERIFICATION OPTIONS — always visible so admin can re-run after a verify/accept/reject */}
-        {!isLoading && (
-          <div>
-            <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide mb-3">Verification Options</p>
-            <div className="overflow-hidden rounded-lg border border-gray-200">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-200">
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Report Type</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Cost</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  <tr>
-                    <td className="px-4 py-3 text-gray-800">Credit Score Only</td>
-                    <td className="px-4 py-3 text-gray-600 font-mono">&#8377;4.00</td>
-                    <td className="px-4 py-3">
-                      <button onClick={() => handleFetch("score")}
-                        className="px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-medium transition-colors">
-                        Get Score
-                      </button>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="px-4 py-3 text-gray-800">Credit Report Summary</td>
-                    <td className="px-4 py-3 text-gray-600 font-mono">&#8377;20.00</td>
-                    <td className="px-4 py-3">
-                      <button onClick={() => handleFetch("report")}
-                        className="px-4 py-1.5 bg-purple-800 hover:bg-purple-900 text-white rounded-lg text-xs font-medium transition-colors">
-                        Get Report
-                      </button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+        {/* VERIFICATION OPTIONS — always visible so admin can re-run after a
+            verify/accept/reject. Per-button loading: only the clicked button
+            shows a spinner; the other one is merely disabled so the admin can
+            see both options remain on screen and isn't tempted to think the
+            card has crashed. */}
+        <div>
+          <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide mb-3">Verification Options</p>
+          <div className="overflow-hidden rounded-lg border border-gray-200">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Report Type</th>
+                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Cost</th>
+                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                <tr>
+                  <td className="px-4 py-3 text-gray-800">Credit Score Only</td>
+                  <td className="px-4 py-3 text-gray-600 font-mono">&#8377;4.00</td>
+                  <td className="px-4 py-3">
+                    <button onClick={() => handleFetch("score")} disabled={isLoading}
+                      className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                      {status === "loading_score" ? (
+                        <>
+                          <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                          Fetching…
+                        </>
+                      ) : "Get Score"}
+                    </button>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 text-gray-800">Credit Report Summary</td>
+                  <td className="px-4 py-3 text-gray-600 font-mono">&#8377;20.00</td>
+                  <td className="px-4 py-3">
+                    <button onClick={() => handleFetch("report")} disabled={isLoading}
+                      className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-purple-800 hover:bg-purple-900 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                      {status === "loading_report" ? (
+                        <>
+                          <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                          Fetching…
+                        </>
+                      ) : "Get Report"}
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-        )}
-
-        {/* Loading */}
-        {isLoading && (
-          <div className="flex items-center justify-center py-8">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600" />
-            <span className="ml-3 text-sm text-gray-600">
-              Fetching CIBIL {status === "loading_report" ? "report" : "score"}...
-            </span>
-          </div>
-        )}
+        </div>
 
         {/* NO CREDIT HISTORY RESULT */}
         {status === "no_history" && (
@@ -395,7 +408,7 @@ export default function CIBILCard({
                   </button>
                   <button onClick={() => setShowCoBorrowerModal(true)} disabled={!!actionLoading}
                     className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                    Request Docs
+                    Request Co-Borrower
                   </button>
                 </div>
               </div>
@@ -540,10 +553,6 @@ export default function CIBILCard({
                     className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
                     {actionLoading === "reject" ? "Rejecting..." : "Reject"}
                   </button>
-                  <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
-                    className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                    Request Docs
-                  </button>
                 </div>
               </div>
             )}
@@ -567,10 +576,6 @@ export default function CIBILCard({
               <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
                 className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
                 {actionLoading === "reject" ? "Rejecting..." : "Reject"}
-              </button>
-              <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
-                className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                Request Docs
               </button>
             </div>
           </div>
@@ -610,10 +615,6 @@ export default function CIBILCard({
                 className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
                 {actionLoading === "reject" ? "Rejecting..." : "Reject"}
               </button>
-              <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
-                className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                Request Docs
-              </button>
             </div>
           </div>
         )}
@@ -632,14 +633,6 @@ export default function CIBILCard({
         open={showCoBorrowerModal}
         onClose={() => setShowCoBorrowerModal(false)}
         leadId={leadId}
-        onSuccess={() => onActionComplete?.()}
-      />
-      <RequestMoreDocsModal
-        open={showMoreDocsModal}
-        onClose={() => setShowMoreDocsModal(false)}
-        leadId={leadId}
-        sourceVerificationId={verificationId || existingVerification?.id || null}
-        sourceCardLabel="CIBIL Verification"
         onSuccess={() => onActionComplete?.()}
       />
     </div>

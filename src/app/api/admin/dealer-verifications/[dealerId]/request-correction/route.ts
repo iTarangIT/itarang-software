@@ -13,10 +13,12 @@ import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import {
   CORRECTION_DOCUMENTS,
   CORRECTION_FIELDS,
+  FIELD_KEY_TO_COLUMN,
   documentLabel,
   fieldLabel,
   isCorrectionDocumentKey,
   isCorrectionFieldKey,
+  type CorrectionFieldKey,
 } from "@/lib/onboarding/correction-catalog";
 import {
   buildCorrectionLink,
@@ -45,14 +47,19 @@ function uniqueStrings(values: unknown): string[] {
 }
 
 // Snapshot the current value of a field on the application row so the dealer
-// can see "you previously entered X" on the correction form.
+// can see "you previously entered X" on the correction form. Catalog keys are
+// camelCase but the Drizzle row uses snake_case property names, so we look up
+// the column name via FIELD_KEY_TO_COLUMN before reading.
 function snapshotFieldValue(
   application: Record<string, unknown>,
   fieldKey: string,
 ): string | null {
-  const value = application[fieldKey];
+  const column = FIELD_KEY_TO_COLUMN[fieldKey as CorrectionFieldKey];
+  if (!column) return null;
+  const value = application[column];
   if (value === undefined || value === null) return null;
-  return String(value);
+  const str = String(value).trim();
+  return str.length > 0 ? str : null;
 }
 
 export async function POST(req: NextRequest, context: RouteContext) {
