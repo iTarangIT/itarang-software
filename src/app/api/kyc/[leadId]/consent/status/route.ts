@@ -15,7 +15,10 @@ export async function GET(req: NextRequest, { params }: RouteContext) {
 
         // consent_for: "customer" (Step 2 KYC) or "borrower" (Step 3 Borrower Consent)
         const consentFor = req.nextUrl.searchParams.get('consent_for') || 'primary';
-        const dbConsentFor = consentFor === 'customer' ? 'primary' : consentFor;
+        const dbConsentFor =
+            consentFor === 'customer' ? 'primary'
+            : consentFor === 'borrower' ? 'co_borrower'
+            : consentFor;
 
         const records = await db.select()
             .from(consentRecords)

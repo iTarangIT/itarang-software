@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { kycVerifications, kycDocuments, leads, couponCodes } from '@/lib/db/schema';
+import { kycVerifications, kycDocuments, leads, couponCodes, adminVerificationQueue } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { validateDocument, verifyBankAccount } from '@/lib/decentro';
+import { createWorkflowId, getOpenQueueEntryForLead } from '@/lib/kyc/admin-workflow';
 
 const VERIFICATION_LABELS: Record<string, string> = {
     aadhaar: 'Aadhaar Verification',
@@ -18,14 +19,21 @@ async function upsertVerification(leadId: string, type: string, values: Record<s
     const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
     const seq = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
 
+    // submit-verification is the dealer-side primary submit flow — always
+    // scope the upsert by applicant='primary' so it cannot collide with or
+    // overwrite a co-borrower row for the same lead/type.
     const existing = await db.select({ id: kycVerifications.id })
         .from(kycVerifications)
-        .where(and(eq(kycVerifications.lead_id, leadId), eq(kycVerifications.verification_type, type)))
+        .where(and(
+            eq(kycVerifications.lead_id, leadId),
+            eq(kycVerifications.verification_type, type),
+            eq(kycVerifications.applicant, 'primary'),
+        ))
         .limit(1);
 
     if (existing.length > 0) {
         await db.update(kycVerifications).set({ ...values, updated_at: now })
-            .where(and(eq(kycVerifications.lead_id, leadId), eq(kycVerifications.verification_type, type)));
+            .where(eq(kycVerifications.id, existing[0].id));
         return existing[0].id;
     } else {
         const id = `KYCVER-${dateStr}-${seq}`;
@@ -33,6 +41,7 @@ async function upsertVerification(leadId: string, type: string, values: Record<s
             id,
             lead_id: leadId,
             verification_type: type,
+            applicant: 'primary',
             submitted_at: now,
             created_at: now,
             updated_at: now,
@@ -145,8 +154,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             api_provider: 'decentro',
         });
 
-        // ── 4. Other checks (address, mobile, rc) — mark initiating ────────
-        const otherTypes = ['address', 'mobile', ...(isVehicle ? ['rc'] : [])];
+        // ── 4. Other checks (address, rc) — mark initiating ────────────────
+        const otherTypes = ['address', ...(isVehicle ? ['rc'] : [])];
         for (const type of otherTypes) {
             await upsertVerification(leadId, type, {
                 status: 'initiating',
@@ -158,6 +167,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         await db.update(leads)
             .set({ kyc_status: 'in_progress', updated_at: now })
             .where(eq(leads.id, leadId));
+
+        // Add the lead to the admin verification queue so it surfaces on the
+        // admin KYC review page. Idempotent — re-submitting reuses the open
+        // entry instead of inserting duplicates.
+        const existingQueueEntry = await getOpenQueueEntryForLead(leadId);
+        if (!existingQueueEntry) {
+            await db.insert(adminVerificationQueue).values({
+                id: createWorkflowId('ADMQ', now),
+                queue_type: 'kyc_verification',
+                lead_id: leadId,
+                priority: 'normal',
+                assigned_to: null,
+                submitted_by: null,
+                status: 'pending_itarang_verification',
+                submitted_at: now,
+                created_at: now,
+                updated_at: now,
+            });
+        }
 
         // Return current verification state
         const allVers = await db.select().from(kycVerifications).where(eq(kycVerifications.lead_id, leadId));

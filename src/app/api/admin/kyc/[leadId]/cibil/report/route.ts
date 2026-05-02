@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
@@ -10,6 +10,7 @@ import {
 } from "@/lib/db/schema";
 import { fetchCibilReport } from "@/lib/decentro";
 import { interpretCibilScore } from "@/lib/kyc/cibil-interpreter";
+import { humanizeCibilError } from "@/lib/kyc/cibil-friendly-errors";
 import {
   createWorkflowId,
   requireAdminAppUser,
@@ -245,7 +246,9 @@ export async function POST(
       enquiries: reportData.enquiryDetails || responseData.enquiries || responseData.enquiryDetails || [],
     };
 
-    // Upsert kycVerifications
+    // Filter by applicant so a co-borrower CIBIL row doesn't get hijacked by
+    // the primary report run (would otherwise produce a row with primary's
+    // data tagged co_borrower, breaking the Final Decision validator).
     const existingRows = await db
       .select({ id: kycVerifications.id })
       .from(kycVerifications)
@@ -253,6 +256,10 @@ export async function POST(
         and(
           eq(kycVerifications.lead_id, leadId),
           eq(kycVerifications.verification_type, "cibil"),
+          or(
+            eq(kycVerifications.applicant, "primary"),
+            isNull(kycVerifications.applicant),
+          ),
         ),
       )
       .limit(1);
@@ -321,6 +328,7 @@ export async function POST(
         id: verificationId,
         lead_id: leadId,
         verification_type: "cibil",
+        applicant: "primary",
         status: dbStatus,
         api_provider: "decentro",
         api_request: apiRequest,
@@ -353,6 +361,16 @@ export async function POST(
         .where(eq(kycVerificationMetadata.lead_id, leadId));
     }
 
+    const friendly =
+      overallSuccess || consumerNotFound
+        ? null
+        : humanizeCibilError({
+            endpoint: "report",
+            responseKey,
+            rawMessage: decentroRes?.message ?? null,
+            bureauErrorDesc: bureauError?.errorDesc ?? null,
+          });
+
     return NextResponse.json({
       success: overallSuccess || consumerNotFound,
       data: {
@@ -367,14 +385,15 @@ export async function POST(
         generatedAt: now.toISOString(),
         rawResponse: decentroRes,
       },
-      ...(overallSuccess || consumerNotFound
-        ? {}
-        : {
+      ...(friendly
+        ? {
             error: {
-              message:
-                decentroRes?.message || "Failed to fetch CIBIL report",
+              message: friendly.message,
+              suggestion: friendly.suggestion,
+              code: friendly.code,
             },
-          }),
+          }
+        : {}),
     });
   } catch (error) {
     console.error("[CIBIL Report] Error:", error);

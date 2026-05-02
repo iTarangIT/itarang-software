@@ -189,6 +189,17 @@ jobs:
             export NEXT_TELEMETRY_DISABLED=1
 
             time npm run build
+
+            echo "--- staging standalone bundle ---"
+            # Next.js standalone output excludes static + public by design.
+            # Copy them into the standalone tree so server.js can serve assets.
+            rm -rf .next/standalone/.next/static .next/standalone/public
+            cp -r .next/static .next/standalone/.next/static
+            if [ -d public ]; then cp -r public .next/standalone/public; fi
+            echo "standalone tree:"
+            ls -la .next/standalone/.next/static | head -3
+            ls -la .next/standalone/public 2>/dev/null | head -3 || echo "(no public dir)"
+
             echo "Free mem after build:"; free -m || true
             echo "<<< [$(date -u +%H:%M:%S)] Build done"
 
@@ -365,6 +376,11 @@ jobs:
             export CI=1
             export NEXT_TELEMETRY_DISABLED=1
             time npm run build
+
+            echo "--- staging standalone bundle (rollback) ---"
+            rm -rf .next/standalone/.next/static .next/standalone/public
+            cp -r .next/static .next/standalone/.next/static
+            if [ -d public ]; then cp -r public .next/standalone/public; fi
 
             for app in sandbox-web sandbox-worker; do
               if pm2 describe "$app" > /dev/null 2>&1; then pm2 delete "$app" || true; fi

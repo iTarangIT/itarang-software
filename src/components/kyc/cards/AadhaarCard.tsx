@@ -24,6 +24,12 @@ interface AadhaarCardProps {
     status: string;
     adminAction?: string | null;
     adminActionNotes?: string | null;
+    // Co-borrower DigiLocker sessions store the URL / SMS state inside
+    // kyc_verifications.api_response.data instead of digilockerTransactions
+    // (executeCoBorrowerDigilockerInit doesn't write a transaction row), so
+    // we forward the raw response and hydrate from it on mount when applicant
+    // is co_borrower. Primary continues to use the existingTransaction prop.
+    apiResponse?: Record<string, unknown> | null;
   } | null;
   onActionComplete?: () => void;
 }
@@ -71,6 +77,115 @@ interface AadhaarTableRow {
   leadValue: string | null;
   aadhaarValue: string | null;
   match: { similarity: number; threshold: number; pass: boolean } | null;
+}
+
+/**
+ * Normalise eAadhaar fields out of whatever shape sits in
+ * `kyc_verifications.api_response.data` for a co-borrower verification row.
+ *
+ * Three shapes coexist in the wild:
+ *  1. New (post latest server fix) — `data.aadhaarData = { uid, name, dob, ... }`.
+ *  2. Decentro-raw nested — `data.proofOfIdentity.{name,gender,dob}` /
+ *     `data.proofOfAddress.{careOf,house,street,...}` / `data.aadhaarUid`.
+ *  3. Decentro-raw flat — `data.name`, `data.aadhaar_number` /
+ *     `data.aadhaarNumber`, `data.dob` / `data.date_of_birth`, `data.gender`,
+ *     `data.address` / `data.full_address`, `data.careof` / `data.care_of` /
+ *     `data.fatherName`.
+ *
+ * Returns `null` when no field can be extracted. Field shape matches what
+ * `buildAadhaarTableRows` already consumes.
+ */
+function normalizeAadhaarFromVerData(
+  data: Record<string, unknown> | undefined,
+): Record<string, string | null> | null {
+  if (!data) return null;
+
+  const newShape =
+    (data.aadhaarData ?? null) as Record<string, unknown> | null;
+  const poi = (data.proofOfIdentity ?? {}) as Record<string, unknown>;
+  const poa = (data.proofOfAddress ?? {}) as Record<string, unknown>;
+
+  const pick = (...candidates: unknown[]): string | null => {
+    for (const c of candidates) {
+      if (typeof c === "string" && c.trim()) return c;
+      if (typeof c === "number") return String(c);
+    }
+    return null;
+  };
+
+  const uid = pick(
+    newShape?.uid,
+    data.aadhaarUid,
+    data.aadhaar_number,
+    data.aadhaarNumber,
+    data.uid,
+  );
+  const name = pick(newShape?.name, poi.name, data.name, data.full_name);
+  const dob = pick(
+    newShape?.dob,
+    poi.dob,
+    data.dob,
+    data.date_of_birth,
+  );
+  const gender = pick(newShape?.gender, poi.gender, data.gender);
+  const careof = pick(
+    newShape?.careof,
+    poa.careOf,
+    poa.careof,
+    data.careof,
+    data.care_of,
+    data.fatherName,
+    data.father_name,
+  );
+
+  // Decentro nests address under proofOfAddress as discrete components —
+  // join them when present, fall back to flat `address` / `full_address`.
+  const poaAddressParts = [
+    poa.house, poa.street, poa.landmark, poa.locality,
+    poa.vtc, poa.subDistrict, poa.district, poa.state, poa.pincode,
+  ]
+    .filter((p) => typeof p === "string" && p.trim())
+    .join(", ");
+  const address = pick(
+    newShape?.address,
+    poaAddressParts || null,
+    data.address,
+    data.full_address,
+  );
+
+  const district = pick(newShape?.district, poa.district, data.district, data.dist);
+  const state = pick(newShape?.state, poa.state, data.state);
+  const pincode = pick(newShape?.pincode, poa.pincode, data.pincode, data.zip);
+  const mobile = pick(
+    newShape?.mobile,
+    poi.hashedMobileNumber,
+    data.mobile,
+    data.phone,
+  );
+  const photo = pick(newShape?.photo_base64, data.image, data.photo_base64, data.photo);
+
+  // If literally nothing was extracted, return null so the calling card can
+  // keep aadhaarData state at null (and render the empty-state CTA).
+  if (
+    !uid && !name && !dob && !gender && !careof && !address &&
+    !district && !state && !pincode && !mobile && !photo
+  ) {
+    return null;
+  }
+
+  return {
+    uid,
+    name,
+    dob,
+    gender,
+    careof,
+    address,
+    district,
+    state,
+    pincode,
+    mobile,
+    photo_base64: photo,
+  };
 }
 
 function buildAadhaarTableRows({
@@ -172,6 +287,15 @@ export default function AadhaarCard({
     applicant === "co_borrower"
       ? `/api/admin/kyc/${leadId}/coborrower`
       : `/api/admin/kyc/${leadId}`;
+  // Co-borrower DigiLocker session data lives in kyc_verifications.api_response.data
+  // (executeCoBorrowerDigilockerInit doesn't write a digilockerTransactions row).
+  // Pull it once here so cardStatus + URL/SMS state initializers can read from
+  // the same place. Primary keeps using existingTransaction unchanged.
+  const cbVerData =
+    applicant === "co_borrower"
+      ? ((existingVerification?.apiResponse as { data?: Record<string, unknown> } | undefined)?.data ?? undefined)
+      : undefined;
+  const cbHasDigilockerUrl = typeof cbVerData?.digilocker_url === "string" && (cbVerData.digilocker_url as string).length > 0;
   const [cardStatus, setCardStatus] = useState<CardStatus>(() => {
     if (existingVerification?.adminAction === "accepted") return "success";
     if (existingVerification?.adminAction === "rejected") return "failed";
@@ -179,17 +303,45 @@ export default function AadhaarCard({
     if (existingTransaction?.status === "expired") return "expired";
     if (existingTransaction?.status === "failed") return "failed";
     if (existingTransaction?.status && existingTransaction.status !== "idle") return "awaiting_consent";
+    // Co-borrower path: an in-flight DigiLocker session has the URL but no
+    // existingTransaction. Treat it like awaiting_consent so the link panel
+    // (gated on cardStatus === "awaiting_consent" + digilockerUrl truthy)
+    // renders on a hard reload.
+    if (applicant === "co_borrower" && cbHasDigilockerUrl && existingVerification?.status !== "success") {
+      return "awaiting_consent";
+    }
     return "pending";
   });
 
   const digiOrder: DigilockerStep[] = ["link_sent", "link_opened", "consent_given", "document_fetched"];
   const [digiStatus, setDigiStatus] = useState<string>(existingTransaction?.status || "idle");
-  const [transactionId, setTransactionId] = useState(existingTransaction?.id || "");
+  // For co-borrower, the verificationId doubles as the transactionId on the
+  // status route (executeCoBorrowerDigilockerStatus accepts the saved
+  // verificationId via the [transactionId] path segment). Hydrating it lets
+  // pollStatus run on reload without waiting for handleInitiate.
+  const [transactionId, setTransactionId] = useState(
+    existingTransaction?.id ||
+      (applicant === "co_borrower" && existingVerification?.id ? existingVerification.id : "")
+  );
+  // For co-borrower, executeCoBorrowerDigilockerStatus persists the
+  // normalised aadhaarData / crossMatchResult into kyc_verifications.api_response.data
+  // (mirroring primary's digilockerTransactions.aadhaar_extracted_data path).
+  // Hydrate from there on mount so the data table renders without waiting
+  // for the next poll tick. Use normalizeAadhaarFromVerData so legacy rows
+  // (raw Decentro shape, no nested aadhaarData key) also populate — that
+  // helper tries the new shape first, then proofOfIdentity/proofOfAddress
+  // nesting, then flat fields.
+  const cbAadhaarFromVer =
+    applicant === "co_borrower" ? normalizeAadhaarFromVerData(cbVerData) : null;
+  const cbCrossMatchFromVer =
+    applicant === "co_borrower"
+      ? (cbVerData?.crossMatchResult as CrossMatchResult | null | undefined)
+      : undefined;
   const [aadhaarData, setAadhaarData] = useState<Record<string, string | null> | null>(
-    existingTransaction?.aadhaarExtractedData || null
+    existingTransaction?.aadhaarExtractedData || cbAadhaarFromVer || null
   );
   const [crossMatch, setCrossMatch] = useState<CrossMatchResult | null>(
-    existingTransaction?.crossMatchResult || null
+    existingTransaction?.crossMatchResult || cbCrossMatchFromVer || null
   );
   const [linkExpiry, setLinkExpiry] = useState(existingTransaction?.expiresAt || "");
   const [timeRemaining, setTimeRemaining] = useState("");
@@ -202,13 +354,30 @@ export default function AadhaarCard({
   // extracted data. Stays false by default so the default view is the
   // extracted-data panel, not a "Re-send DigiLocker link" prompt.
   const [rerunMode, setRerunMode] = useState(false);
-  const [digilockerUrl, setDigilockerUrl] = useState("");
+  // For co-borrower, hydrate digilockerUrl / SMS state from cbVerData (see the
+  // computation above the cardStatus initialiser) so the link panel renders on
+  // hard reload, not just after a fresh handleInitiate() response.
+  const [digilockerUrl, setDigilockerUrl] = useState<string>(
+    typeof cbVerData?.digilocker_url === "string" ? (cbVerData.digilocker_url as string) : "",
+  );
   const [linkCopied, setLinkCopied] = useState(false);
   const [smsStatus, setSmsStatus] = useState<
     "delivered" | "failed" | "skipped" | "retrying" | null
-  >(null);
-  const [smsAttempts, setSmsAttempts] = useState(0);
-  const [smsStatusMessage, setSmsStatusMessage] = useState<string | null>(null);
+  >(
+    cbVerData?.sms_delivered_at
+      ? "delivered"
+      : cbVerData?.sms_failed_reason
+        ? "failed"
+        : null,
+  );
+  const [smsAttempts, setSmsAttempts] = useState<number>(
+    typeof cbVerData?.sms_attempts === "number" ? (cbVerData.sms_attempts as number) : 0,
+  );
+  const [smsStatusMessage, setSmsStatusMessage] = useState<string | null>(
+    typeof cbVerData?.sms_failed_reason === "string"
+      ? (cbVerData.sms_failed_reason as string)
+      : null,
+  );
   const [resendingSms, setResendingSms] = useState(false);
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
@@ -221,7 +390,23 @@ export default function AadhaarCard({
     try {
       const res = await fetch(`${apiBase}/aadhaar/digilocker/status/${transactionId}`);
       const data = await res.json();
-      if (!data.success) return;
+      if (!data.success) {
+        // Surface actionable errors instead of silently dropping the response.
+        // Common case for co-borrower: api_response.data.decentro_txn_id is
+        // missing on the row (admin manual-accepted before any DigiLocker
+        // session ran, or the row predates the decentro_txn_id capture fix),
+        // and there's no path to recovery without a fresh init. Stop the
+        // poll loop on that terminal error so we don't hammer the route.
+        const msg =
+          (typeof data?.error?.message === "string" && data.error.message) ||
+          (typeof data?.message === "string" && data.message) ||
+          "Failed to fetch DigiLocker status";
+        setError(msg);
+        if (msg.toLowerCase().includes("decentro transaction id missing")) {
+          if (pollRef.current) clearInterval(pollRef.current);
+        }
+        return;
+      }
       const s = data.data;
 
       if (s.documentFetched) {
@@ -798,6 +983,8 @@ export default function AadhaarCard({
         leadId={leadId}
         sourceVerificationId={existingVerification?.id || null}
         sourceCardLabel="Aadhaar Verification"
+        defaultDocFor={applicant === "co_borrower" ? "co_borrower" : "primary"}
+        lockScope
         onSuccess={() => onActionComplete?.()}
       />
     </div>

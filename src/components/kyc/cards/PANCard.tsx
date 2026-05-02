@@ -225,6 +225,7 @@ export default function PANCard({
               docType="pan_card"
               cachedOcrData={ocrData}
               disabled={status === "loading"}
+              applicant={applicant}
               onOcrResult={(data) => {
                 const searchTargets = [data];
                 for (const k of ["kycResult", "extractedData", "result", "ocrResult"]) {
@@ -450,6 +451,8 @@ export default function PANCard({
         leadId={leadId}
         sourceVerificationId={verificationId || existingVerification?.id || null}
         sourceCardLabel="PAN Verification"
+        defaultDocFor={applicant === "co_borrower" ? "co_borrower" : "primary"}
+        lockScope
         onSuccess={() => onActionComplete?.()}
       />
     </div>

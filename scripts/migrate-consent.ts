@@ -1,3 +1,7 @@
+// @ts-nocheck
+// Standalone migration script — depends on `pg` which is intentionally not in
+// the app's runtime dependencies. Install `pg` and remove this banner before
+// running.
 import 'dotenv/config';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';

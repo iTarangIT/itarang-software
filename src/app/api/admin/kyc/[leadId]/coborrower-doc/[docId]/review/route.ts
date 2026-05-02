@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import {
   auditLogs,
   coBorrowerDocuments,
+  coBorrowers,
 } from "@/lib/db/schema";
 import {
   createWorkflowId,
@@ -82,6 +83,28 @@ export async function POST(
       );
     }
 
+    // Gate: admin can only act on co-borrower docs after the dealer has
+    // submitted Step 3 (verification_submitted_at is non-null). The UI
+    // hides the panel pre-submission, but a stale tab or direct call would
+    // otherwise bypass the workflow.
+    const [cb] = await db
+      .select({ submittedAt: coBorrowers.verification_submitted_at })
+      .from(coBorrowers)
+      .where(eq(coBorrowers.lead_id, leadId))
+      .limit(1);
+    if (!cb?.submittedAt) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            message:
+              "Co-borrower KYC has not been submitted by the dealer yet.",
+          },
+        },
+        { status: 403 },
+      );
+    }
+
     const now = new Date();
     const newStatus = action === "approve" ? "verified" : "rejected";
 
@@ -97,7 +120,7 @@ export async function POST(
       action,
       changes: {
         lead_id: leadId,
-        doc_type: row.doc_type,
+        doc_type: row.document_type,
         previous_status: row.status,
         new_status: newStatus,
         note: note ?? null,

@@ -76,11 +76,11 @@ export async function loadDealerRds(): Promise<RdsUser[]> {
 export async function loadOpenApplications(): Promise<AppRow[]> {
   const rows = await db
     .select({
-      ownerEmail: dealerOnboardingApplications.ownerEmail,
-      onboardingStatus: dealerOnboardingApplications.onboardingStatus,
+      ownerEmail: dealerOnboardingApplications.owner_email,
+      onboardingStatus: dealerOnboardingApplications.onboarding_status,
     })
     .from(dealerOnboardingApplications)
-    .where(ne(dealerOnboardingApplications.onboardingStatus, "approved"));
+    .where(ne(dealerOnboardingApplications.onboarding_status, "approved"));
   return rows
     .filter((r): r is { ownerEmail: string; onboardingStatus: string } =>
       typeof r.ownerEmail === "string" && r.ownerEmail.length > 0,

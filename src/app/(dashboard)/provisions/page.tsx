@@ -41,7 +41,7 @@ export default async function ProvisionsPage() {
 
             <div className="grid gap-6">
                 {allProvisions.map((prov) => {
-                    const status = STATUS_CONFIG[prov.status] || STATUS_CONFIG.pending;
+                    const status = STATUS_CONFIG[prov.status ?? ''] || STATUS_CONFIG.pending;
                     const StatusIcon = status.icon;
 
                     return (
@@ -60,11 +60,11 @@ export default async function ProvisionsPage() {
                                 <div className="text-right">
                                     <p className="text-xs text-gray-400 font-medium uppercase tracking-wider mb-1">Expected Delivery</p>
                                     <p className="text-sm font-bold text-gray-800">
-                                        {new Date(prov.expected_delivery_date).toLocaleDateString('en-IN', {
+                                        {prov.expected_delivery_date ? new Date(prov.expected_delivery_date).toLocaleDateString('en-IN', {
                                             day: '2-digit',
                                             month: 'short',
                                             year: 'numeric'
-                                        })}
+                                        }) : '—'}
                                     </p>
                                 </div>
                             </div>

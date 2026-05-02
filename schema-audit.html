@@ -1,0 +1,234 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>iTarang Schema Audit - Unused Columns</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: #1a1a1a; margin: 32px; font-size: 11pt; line-height: 1.45; }
+  h1 { font-size: 22pt; margin: 0 0 4px; color: #0b3d91; }
+  h2 { font-size: 13pt; margin: 18px 0 6px; color: #0b3d91; border-bottom: 1px solid #d0d7de; padding-bottom: 3px; }
+  .meta { color: #57606a; font-size: 9.5pt; margin-bottom: 18px; }
+  .summary { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 12px 16px; margin-bottom: 20px; }
+  .summary h3 { margin: 0 0 8px; font-size: 11pt; }
+  .summary ul { margin: 6px 0 0 18px; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 4px; page-break-inside: avoid; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 8px; text-align: left; vertical-align: top; font-size: 10pt; }
+  th { background: #f6f8fa; font-weight: 600; }
+  td:first-child { width: 28%; }
+  td:nth-child(2) { width: 14%; text-align: center; }
+  code { font-family: "Consolas", "Menlo", monospace; font-size: 9.5pt; background: #f6f8fa; padding: 1px 4px; border-radius: 3px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 9pt; font-weight: 600; letter-spacing: 0.3px; }
+  .badge.del  { background: #ffd7d5; color: #82071e; }
+  .badge.rev  { background: #fff8c5; color: #693e00; }
+  .badge.keep { background: #d2f4d3; color: #064d12; }
+  .ok { color: #1a7f37; font-style: italic; margin: 4px 0 0; }
+  .tbl { page-break-inside: avoid; margin-bottom: 14px; }
+  .legend { font-size: 9.5pt; color: #57606a; margin-top: 4px; }
+  .footer { margin-top: 28px; padding-top: 10px; border-top: 1px solid #d0d7de; font-size: 9pt; color: #57606a; }
+</style>
+</head>
+<body>
+  <h1>iTarang — Database Schema Audit</h1>
+  <div class="meta">Database: <strong>database-1</strong> &nbsp;·&nbsp; Generated: 2026-04-27 &nbsp;·&nbsp; Source: <code>src/lib/db/schema.ts</code></div>
+
+  <div class="summary">
+    <h3>Summary</h3>
+    <ul>
+      <li><strong>Tables analyzed:</strong> 27</li>
+      <li><strong>DELETE candidates:</strong> 3 (safe to remove — not read or written outside schema)</li>
+      <li><strong>REVIEW candidates:</strong> 21 (write-only, redundant, or ambiguous — confirm with domain owner)</li>
+      <li><strong>Fully orphaned tables:</strong> 0</li>
+    </ul>
+    <p class="legend"><span class="badge del">DELETE</span> unused — safe to drop &nbsp;·&nbsp; <span class="badge rev">REVIEW</span> ambiguous — verify before dropping &nbsp;·&nbsp; <span class="badge keep">KEEP</span> actively used (not listed)</p>
+  </div>
+
+  
+    <section class="tbl">
+      <h2>accounts</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Verdict</th><th>Notes</th></tr></thead>
+        <tbody><tr><td><code>created_by</code></td><td><span class="badge del">DELETE</span></td><td>Never referenced in code; likely intended for audit but not used.</td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="tbl">
+      <h2>admin_verification_queue</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Verdict</th><th>Notes</th></tr></thead>
+        <tbody><tr><td><code>submitted_by</code></td><td><span class="badge rev">REVIEW</span></td><td>Set during submission but rarely read; check if needed for audit trail.</td></tr></tbody>
+      </table>
+    </section>
+
+      <section class="tbl">
+        <h2>audit_logs</h2>
+        <p class="ok">No unused columns detected. All columns are either indexed or actively referenced in code.</p>
+      </section>
+
+    <section class="tbl">
+      <h2>co_borrower_documents</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Verdict</th><th>Notes</th></tr></thead>
+        <tbody><tr><td><code>status</code></td><td><span class="badge rev">REVIEW</span></td><td>Duplicate with verification_status; unclear which is authoritative.</td></tr><tr><td><code>uploaded_at</code></td><td><span class="badge rev">REVIEW</span></td><td>Appears redundant with created_at; verify if temporal distinction is needed.</td></tr></tbody>
+      </table>
+    </section>
+
+      <section class="tbl">
+        <h2>co_borrowers</h2>
+        <p class="ok">No unused columns detected. All fields actively used in KYC workflow.</p>
+      </section>
+
+    <section class="tbl">
+      <h2>consent_records</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Verdict</th><th>Notes</th></tr></thead>
+        <tbody><tr><td><code>admin_viewed_by</code></td><td><span class="badge rev">REVIEW</span></td><td>Set but rarely read; used only in audit contexts.</td></tr><tr><td><code>admin_viewed_at</code></td><td><span class="badge rev">REVIEW</span></td><td>Paired with above; verify if admin view tracking is essential.</td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="tbl">
+      <h2>coupon_audit_log</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Verdict</th><th>Notes</th></tr></thead>
+        <tbody><tr><td><code>ip_address</code></td><td><span class="badge del">DELETE</span></td><td>Never read in code; only written during coupon actions.</td></tr><tr><td><code>notes</code></td><td><span class="badge rev">REVIEW</span></td><td>Optional text field; used sparingly; verify if necessary for compliance.</td></tr></tbody>
+      </table>
+    </section>
+
+      <section class="tbl">
+        <h2>coupon_batches</h2>
+        <p class="ok">No unused columns detected. All columns actively used in batch management.</p>
+      </section>
+
+      <section class="tbl">
+        <h2>coupon_codes</h2>
+        <p class="ok">No unused columns detected. All columns actively used in coupon lifecycle.</p>
+      </section>
+
+    <section class="tbl">
+      <h2>dealer_agreement_signers</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Verdict</th><th>Notes</th></tr></thead>
+        <tbody><tr><td><code>last_event_at</code></td><td><span class="badge rev">REVIEW</span></td><td>Set on webhook events but not prominently displayed; verify if needed for sorting/filtering.</td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="tbl">
+      <h2>dealer_agreement_events</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Verdict</th><th>Notes</th></tr></thead>
+        <tbody><tr><td><code>signer_role</code></td><td><span class="badge rev">REVIEW</span></td><td>Redundant with information in parent dealer_agreement_signers; denormalization may not be necessary.</td></tr></tbody>
+      </table>
+    </section>
+
+      <section class="tbl">
+        <h2>dealer_correction_rounds</h2>
+        <p class="ok">No unused columns detected. All fields actively used in correction workflow.</p>
+      </section>
+
+      <section class="tbl">
+        <h2>dealer_correction_items</h2>
+        <p class="ok">No unused columns detected. All fields actively used in item-level corrections.</p>
+      </section>
+
+    <section class="tbl">
+      <h2>dealer_onboarding_applications</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Verdict</th><th>Notes</th></tr></thead>
+        <tbody><tr><td><code>admin_notes</code></td><td><span class="badge rev">REVIEW</span></td><td>Accepts input but rarely rendered in UI; verify if field is actively used.</td></tr><tr><td><code>rejection_remarks</code></td><td><span class="badge rev">REVIEW</span></td><td>Written on rejection but appears to duplicate rejection_reason; consider consolidating.</td></tr><tr><td><code>correction_remarks</code></td><td><span class="badge rev">REVIEW</span></td><td>Set during corrections but not clearly distinguished from other remark fields.</td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="tbl">
+      <h2>dealer_onboarding_documents</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Verdict</th><th>Notes</th></tr></thead>
+        <tbody><tr><td><code>uploaded_by</code></td><td><span class="badge rev">REVIEW</span></td><td>Set but not prominently used; only stored for audit trail.</td></tr></tbody>
+      </table>
+    </section>
+
+      <section class="tbl">
+        <h2>kyc_documents</h2>
+        <p class="ok">No unused columns detected. All columns actively used in KYC document flow.</p>
+      </section>
+
+    <section class="tbl">
+      <h2>kyc_verification_metadata</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Verdict</th><th>Notes</th></tr></thead>
+        <tbody><tr><td><code>case_type</code></td><td><span class="badge rev">REVIEW</span></td><td>Set during submission but never read; possibly a legacy field.</td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="tbl">
+      <h2>kyc_verifications</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Verdict</th><th>Notes</th></tr></thead>
+        <tbody><tr><td><code>api_request</code></td><td><span class="badge rev">REVIEW</span></td><td>Stored but typically never read; only written for audit purposes.</td></tr><tr><td><code>admin_action_notes</code></td><td><span class="badge rev">REVIEW</span></td><td>Optional text; set only in edge cases; verify if actively used in workflows.</td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="tbl">
+      <h2>leads</h2>
+      <table>
+        <thead><tr><th>Column</th><th>Verdict</th><th>Notes</th></tr></thead>
+        <tbody><tr><td><code>battery_order_expected</code></td><td><span class="badge rev">REVIEW</span></td><td>Set during lead creation; never read in queries; appears to be write-only.</td></tr><tr><td><code>conversation_summary</code></td><td><span class="badge rev">REVIEW</span></td><td>Populated by AI dialer but never displayed in UI; verify if used downstream.</td></tr><tr><td><code>interest_level</code></td><td><span class="badge rev">REVIEW</span></td><td>Set but often duplicated by lead_score; consider consolidation.</td></tr><tr><td><code>lead_type</code></td><td><span class="badge rev">REVIEW</span></td><td>Rarely used; overlaps with interest_level and lead_score.</td></tr><tr><td><code>ocr_error</code></td><td><span class="badge del">DELETE</span></td><td>Set on OCR failure but never read; logging would be sufficient.</td></tr><tr><td><code>ocr_status</code></td><td><span class="badge rev">REVIEW</span></td><td>Written but rarely queried; verify if filtering by this status is actually done.</td></tr><tr><td><code>workflow_step</code></td><td><span class="badge rev">REVIEW</span></td><td>Defaults to 1 but not incremented; appears unused or incomplete.</td></tr></tbody>
+      </table>
+    </section>
+
+      <section class="tbl">
+        <h2>lead_documents</h2>
+        <p class="ok">No unused columns detected. All columns actively referenced.</p>
+      </section>
+
+      <section class="tbl">
+        <h2>lead_assignments</h2>
+        <p class="ok">No unused columns detected. All columns actively used in assignment tracking.</p>
+      </section>
+
+      <section class="tbl">
+        <h2>personal_details</h2>
+        <p class="ok">No unused columns detected. Table actively used in KYC personal data storage.</p>
+      </section>
+
+      <section class="tbl">
+        <h2>other_document_requests</h2>
+        <p class="ok">No unused columns detected. All columns actively used in document request flow.</p>
+      </section>
+
+      <section class="tbl">
+        <h2>product_categories</h2>
+        <p class="ok">No unused columns detected. All columns actively used.</p>
+      </section>
+
+      <section class="tbl">
+        <h2>product_selections</h2>
+        <p class="ok">No unused columns detected. All columns actively used in product selection workflow.</p>
+      </section>
+
+      <section class="tbl">
+        <h2>products</h2>
+        <p class="ok">No unused columns detected. All columns actively used in inventory/catalog.</p>
+      </section>
+
+      <section class="tbl">
+        <h2>users</h2>
+        <p class="ok">No unused columns detected. Core user table with all fields actively used.</p>
+      </section>
+
+  <div class="summary" style="margin-top: 22px;">
+    <h3>Recommendations Before Dropping Columns</h3>
+    <ul>
+      <li>Check any raw SQL, Postgres views, or external reports that may reference these columns — TypeScript-only search will not find them.</li>
+      <li>Drop in phases: deprecate in code first, ship for 2–3 sprints, then drop the column in a migration.</li>
+      <li>For <code>leads</code>: consolidate <code>interest_level</code>, <code>lead_type</code>, and <code>lead_score</code> into a single classification.</li>
+      <li>For <code>dealer_onboarding_applications</code>: standardize the three remark fields (<code>admin_notes</code>, <code>rejection_remarks</code>, <code>correction_remarks</code>) into one.</li>
+      <li>Consider a dedicated audit table instead of scattering <code>*_by</code> / <code>*_at</code> pairs across functional tables.</li>
+    </ul>
+  </div>
+
+  <div class="footer">
+    Report generated from a static analysis of <code>src/lib/db/schema.ts</code> against application code under <code>src/</code>.
+    REVIEW verdicts should be confirmed with the relevant domain owner before deletion.
+  </div>
+</body>
+</html>

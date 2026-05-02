@@ -37,7 +37,7 @@ export default async function ReorderTracking({ accountId }: ReorderTrackingProp
                 <div className="space-y-1">
                     <p className="text-xs text-gray-500">Last Order</p>
                     <p className="text-sm font-bold text-gray-800">
-                        {account.last_order_fulfilled_at ? new Date(account.last_order_fulfilled_at).toLocaleDateString() : 'Never'}
+                        {(account as { last_order_fulfilled_at?: string | Date | null }).last_order_fulfilled_at ? new Date((account as { last_order_fulfilled_at?: string | Date | null }).last_order_fulfilled_at!).toLocaleDateString() : 'Never'}
                     </p>
                 </div>
             </div>

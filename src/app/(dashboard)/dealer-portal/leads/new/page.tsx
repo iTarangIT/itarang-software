@@ -13,7 +13,7 @@ import {
 } from '@/components/dealer-portal/lead-wizard/shared';
 import {
     INTEREST_LEVELS, PAYMENT_METHODS, VEHICLE_OWNERSHIP_OPTIONS,
-    VEHICLE_CATEGORIES, isFinanceMethod,
+    VEHICLE_CATEGORIES, isFinanceMethod, isCashMethod,
 } from '@/components/dealer-portal/lead-wizard/constants';
 
 const emptyFormData = {
@@ -289,9 +289,17 @@ function NewLeadWizardContent() {
                     }).catch(console.error);
                 }
 
-                if (formData.payment_method === 'cash' || formData.payment_method === 'upfront') {
-                    router.push('/dealer-portal/leads');
-                } else if (formData.interest_level === 'hot' && isFinanceMethod(formData.payment_method)) {
+                // Post-Step-1 routing matrix (BRD §2.1):
+                //                        Non-Cash (finance)        Cash
+                //   Hot                  → Step 2 (KYC)            → Step 4 (Product Selection)
+                //   Warm / Cold          → exit to Lead List       → exit to Lead List (cash flag stored, no Step 4 yet)
+                const isHot = formData.interest_level === 'hot';
+                const cash = isCashMethod(formData.payment_method);
+                const finance = isFinanceMethod(formData.payment_method);
+
+                if (isHot && cash && updatedLeadId) {
+                    router.push(`/dealer-portal/leads/${updatedLeadId}/product-selection`);
+                } else if (isHot && finance && updatedLeadId) {
                     router.push(`/dealer-portal/leads/${updatedLeadId}/kyc`);
                 } else {
                     router.push('/dealer-portal/leads');
@@ -333,6 +341,11 @@ function NewLeadWizardContent() {
 
     const isVehicleCategory = formData.is_vehicle_category;
     const finFlow = isFinanceMethod(formData.payment_method);
+    const cashFlow = isCashMethod(formData.payment_method);
+    const isHotLead = formData.interest_level === 'hot';
+    const willGoToKyc = isHotLead && finFlow;          // Step 2
+    const willGoToProductSelection = isHotLead && cashFlow; // Step 4
+    const willStayAtStep1 = !isHotLead;                // Warm/Cold — parked at Step 1
 
     return (
         <div className="min-h-screen bg-[#F8F9FB]">
@@ -399,19 +412,23 @@ function NewLeadWizardContent() {
 
                             {/* Next step info */}
                             <div className={`flex items-start gap-3 p-3 rounded-xl border ${
-                                formData.interest_level === 'hot' && finFlow
+                                willGoToKyc
                                     ? 'bg-emerald-50 border-emerald-200'
+                                    : willGoToProductSelection
+                                    ? 'bg-violet-50 border-violet-200'
                                     : 'bg-blue-50 border-blue-200'
                             }`}>
                                 <ShieldCheck className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
-                                    formData.interest_level === 'hot' && finFlow ? 'text-emerald-600' : 'text-blue-600'
+                                    willGoToKyc ? 'text-emerald-600' : willGoToProductSelection ? 'text-violet-600' : 'text-blue-600'
                                 }`} />
                                 <p className={`text-xs leading-relaxed ${
-                                    formData.interest_level === 'hot' && finFlow ? 'text-emerald-700' : 'text-blue-700'
+                                    willGoToKyc ? 'text-emerald-700' : willGoToProductSelection ? 'text-violet-700' : 'text-blue-700'
                                 }`}>
-                                    {formData.interest_level === 'hot' && finFlow
+                                    {willGoToKyc
                                         ? 'This lead will be created and you will proceed directly to KYC verification (Step 2).'
-                                        : 'This lead will be created and saved. You can initiate KYC later from the leads list.'}
+                                        : willGoToProductSelection
+                                        ? 'This lead will be created and you will proceed directly to Product Selection (Step 4). KYC is skipped for cash.'
+                                        : 'This lead will be created and saved at Step 1. You can advance it later from the leads list.'}
                                 </p>
                             </div>
                         </div>

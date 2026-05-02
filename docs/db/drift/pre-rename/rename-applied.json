@@ -1,0 +1,6991 @@
+{
+  "renames": [
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "businessEntityName",
+      "newField": "business_entity_name"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "addressLine1",
+      "newField": "address_line1"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "addressLine2",
+      "newField": "address_line2"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "bankName",
+      "newField": "bank_name"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "bankAccountNumber",
+      "newField": "bank_account_number"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "ifscCode",
+      "newField": "ifsc_code"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "bankProofUrl",
+      "newField": "bank_proof_url"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "dealerCode",
+      "newField": "dealer_code"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "contactName",
+      "newField": "contact_name"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "contactEmail",
+      "newField": "contact_email"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "contactPhone",
+      "newField": "contact_phone"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "onboardingStatus",
+      "newField": "onboarding_status"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "accounts",
+      "tableName": "accounts",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "adminKycReviews",
+      "tableName": "admin_kyc_reviews",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "adminKycReviews",
+      "tableName": "admin_kyc_reviews",
+      "tsField": "reviewFor",
+      "newField": "review_for"
+    },
+    {
+      "tableSymbol": "adminKycReviews",
+      "tableName": "admin_kyc_reviews",
+      "tsField": "documentId",
+      "newField": "document_id"
+    },
+    {
+      "tableSymbol": "adminKycReviews",
+      "tableName": "admin_kyc_reviews",
+      "tsField": "documentType",
+      "newField": "document_type"
+    },
+    {
+      "tableSymbol": "adminKycReviews",
+      "tableName": "admin_kyc_reviews",
+      "tsField": "rejectionReason",
+      "newField": "rejection_reason"
+    },
+    {
+      "tableSymbol": "adminKycReviews",
+      "tableName": "admin_kyc_reviews",
+      "tsField": "additionalDocRequested",
+      "newField": "additional_doc_requested"
+    },
+    {
+      "tableSymbol": "adminKycReviews",
+      "tableName": "admin_kyc_reviews",
+      "tsField": "reviewerId",
+      "newField": "reviewer_id"
+    },
+    {
+      "tableSymbol": "adminKycReviews",
+      "tableName": "admin_kyc_reviews",
+      "tsField": "reviewerNotes",
+      "newField": "reviewer_notes"
+    },
+    {
+      "tableSymbol": "adminKycReviews",
+      "tableName": "admin_kyc_reviews",
+      "tsField": "reviewedAt",
+      "newField": "reviewed_at"
+    },
+    {
+      "tableSymbol": "adminKycReviews",
+      "tableName": "admin_kyc_reviews",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "adminVerificationQueue",
+      "tableName": "admin_verification_queue",
+      "tsField": "queueType",
+      "newField": "queue_type"
+    },
+    {
+      "tableSymbol": "adminVerificationQueue",
+      "tableName": "admin_verification_queue",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "adminVerificationQueue",
+      "tableName": "admin_verification_queue",
+      "tsField": "assignedTo",
+      "newField": "assigned_to"
+    },
+    {
+      "tableSymbol": "adminVerificationQueue",
+      "tableName": "admin_verification_queue",
+      "tsField": "submittedBy",
+      "newField": "submitted_by"
+    },
+    {
+      "tableSymbol": "adminVerificationQueue",
+      "tableName": "admin_verification_queue",
+      "tsField": "submittedAt",
+      "newField": "submitted_at"
+    },
+    {
+      "tableSymbol": "adminVerificationQueue",
+      "tableName": "admin_verification_queue",
+      "tsField": "reviewedAt",
+      "newField": "reviewed_at"
+    },
+    {
+      "tableSymbol": "adminVerificationQueue",
+      "tableName": "admin_verification_queue",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "adminVerificationQueue",
+      "tableName": "admin_verification_queue",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "afterSalesRecords",
+      "tableName": "after_sales_records",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "afterSalesRecords",
+      "tableName": "after_sales_records",
+      "tsField": "warrantyId",
+      "newField": "warranty_id"
+    },
+    {
+      "tableSymbol": "afterSalesRecords",
+      "tableName": "after_sales_records",
+      "tsField": "batterySerial",
+      "newField": "battery_serial"
+    },
+    {
+      "tableSymbol": "afterSalesRecords",
+      "tableName": "after_sales_records",
+      "tsField": "customerId",
+      "newField": "customer_id"
+    },
+    {
+      "tableSymbol": "afterSalesRecords",
+      "tableName": "after_sales_records",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "afterSalesRecords",
+      "tableName": "after_sales_records",
+      "tsField": "paymentMode",
+      "newField": "payment_mode"
+    },
+    {
+      "tableSymbol": "afterSalesRecords",
+      "tableName": "after_sales_records",
+      "tsField": "openedAt",
+      "newField": "opened_at"
+    },
+    {
+      "tableSymbol": "afterSalesRecords",
+      "tableName": "after_sales_records",
+      "tsField": "closedAt",
+      "newField": "closed_at"
+    },
+    {
+      "tableSymbol": "afterSalesRecords",
+      "tableName": "after_sales_records",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "afterSalesRecords",
+      "tableName": "after_sales_records",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "startedAt",
+      "newField": "started_at"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "endedAt",
+      "newField": "ended_at"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "modelUsed",
+      "newField": "model_used"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "intentScore",
+      "newField": "intent_score"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "intentReason",
+      "newField": "intent_reason"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "nextAction",
+      "newField": "next_action"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "agentId",
+      "newField": "agent_id"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "phoneNumber",
+      "newField": "phone_number"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "recordingUrl",
+      "newField": "recording_url"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "callDuration",
+      "newField": "call_duration"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "aiCallLogs",
+      "tableName": "ai_call_logs",
+      "tsField": "callId",
+      "newField": "call_id"
+    },
+    {
+      "tableSymbol": "appSettings",
+      "tableName": "app_settings",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "approvals",
+      "tableName": "approvals",
+      "tsField": "entityType",
+      "newField": "entity_type"
+    },
+    {
+      "tableSymbol": "approvals",
+      "tableName": "approvals",
+      "tsField": "entityId",
+      "newField": "entity_id"
+    },
+    {
+      "tableSymbol": "approvals",
+      "tableName": "approvals",
+      "tsField": "approverRole",
+      "newField": "approver_role"
+    },
+    {
+      "tableSymbol": "approvals",
+      "tableName": "approvals",
+      "tsField": "approverId",
+      "newField": "approver_id"
+    },
+    {
+      "tableSymbol": "approvals",
+      "tableName": "approvals",
+      "tsField": "approvedAt",
+      "newField": "approved_at"
+    },
+    {
+      "tableSymbol": "approvals",
+      "tableName": "approvals",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "approvals",
+      "tableName": "approvals",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "approvals",
+      "tableName": "approvals",
+      "tsField": "decisionAt",
+      "newField": "decision_at"
+    },
+    {
+      "tableSymbol": "approvals",
+      "tableName": "approvals",
+      "tsField": "rejectionReason",
+      "newField": "rejection_reason"
+    },
+    {
+      "tableSymbol": "assignmentChangeLogs",
+      "tableName": "assignment_change_logs",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "assignmentChangeLogs",
+      "tableName": "assignment_change_logs",
+      "tsField": "oldUserId",
+      "newField": "old_user_id"
+    },
+    {
+      "tableSymbol": "assignmentChangeLogs",
+      "tableName": "assignment_change_logs",
+      "tsField": "newUserId",
+      "newField": "new_user_id"
+    },
+    {
+      "tableSymbol": "assignmentChangeLogs",
+      "tableName": "assignment_change_logs",
+      "tsField": "changedBy",
+      "newField": "changed_by"
+    },
+    {
+      "tableSymbol": "assignmentChangeLogs",
+      "tableName": "assignment_change_logs",
+      "tsField": "changeType",
+      "newField": "change_type"
+    },
+    {
+      "tableSymbol": "assignmentChangeLogs",
+      "tableName": "assignment_change_logs",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "assignmentChangeLogs",
+      "tableName": "assignment_change_logs",
+      "tsField": "changeReason",
+      "newField": "change_reason"
+    },
+    {
+      "tableSymbol": "assignmentChangeLogs",
+      "tableName": "assignment_change_logs",
+      "tsField": "changedAt",
+      "newField": "changed_at"
+    },
+    {
+      "tableSymbol": "auditLogs",
+      "tableName": "audit_logs",
+      "tsField": "entityType",
+      "newField": "entity_type"
+    },
+    {
+      "tableSymbol": "auditLogs",
+      "tableName": "audit_logs",
+      "tsField": "entityId",
+      "newField": "entity_id"
+    },
+    {
+      "tableSymbol": "auditLogs",
+      "tableName": "audit_logs",
+      "tsField": "performedBy",
+      "newField": "performed_by"
+    },
+    {
+      "tableSymbol": "auditLogs",
+      "tableName": "audit_logs",
+      "tsField": "oldData",
+      "newField": "old_data"
+    },
+    {
+      "tableSymbol": "auditLogs",
+      "tableName": "audit_logs",
+      "tsField": "newData",
+      "newField": "new_data"
+    },
+    {
+      "tableSymbol": "auditLogs",
+      "tableName": "audit_logs",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "batteryAlerts",
+      "tableName": "battery_alerts",
+      "tsField": "deviceId",
+      "newField": "device_id"
+    },
+    {
+      "tableSymbol": "batteryAlerts",
+      "tableName": "battery_alerts",
+      "tsField": "alertType",
+      "newField": "alert_type"
+    },
+    {
+      "tableSymbol": "batteryAlerts",
+      "tableName": "battery_alerts",
+      "tsField": "acknowledgedAt",
+      "newField": "acknowledged_at"
+    },
+    {
+      "tableSymbol": "batteryAlerts",
+      "tableName": "battery_alerts",
+      "tsField": "acknowledgedBy",
+      "newField": "acknowledged_by"
+    },
+    {
+      "tableSymbol": "batteryAlerts",
+      "tableName": "battery_alerts",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "bolnaCallId",
+      "newField": "bolna_call_id"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "agentId",
+      "newField": "agent_id"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "recordingUrl",
+      "newField": "recording_url"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "durationSeconds",
+      "newField": "duration_seconds"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "currentPhase",
+      "newField": "current_phase"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "startedAt",
+      "newField": "started_at"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "endedAt",
+      "newField": "ended_at"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "transcriptChunk",
+      "newField": "transcript_chunk"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "chunkReceivedAt",
+      "newField": "chunk_received_at"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "fullTranscript",
+      "newField": "full_transcript"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "transcriptFetchedAt",
+      "newField": "transcript_fetched_at"
+    },
+    {
+      "tableSymbol": "bolnaCalls",
+      "tableName": "bolna_calls",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "callRecords",
+      "tableName": "call_records",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "callRecords",
+      "tableName": "call_records",
+      "tsField": "sessionId",
+      "newField": "session_id"
+    },
+    {
+      "tableSymbol": "callRecords",
+      "tableName": "call_records",
+      "tsField": "recordingUrl",
+      "newField": "recording_url"
+    },
+    {
+      "tableSymbol": "callRecords",
+      "tableName": "call_records",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "callRecords",
+      "tableName": "call_records",
+      "tsField": "bolnaCallId",
+      "newField": "bolna_call_id"
+    },
+    {
+      "tableSymbol": "callRecords",
+      "tableName": "call_records",
+      "tsField": "durationSeconds",
+      "newField": "duration_seconds"
+    },
+    {
+      "tableSymbol": "callRecords",
+      "tableName": "call_records",
+      "tsField": "endedAt",
+      "newField": "ended_at"
+    },
+    {
+      "tableSymbol": "callSessions",
+      "tableName": "call_sessions",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "callSessions",
+      "tableName": "call_sessions",
+      "tsField": "initiatedBy",
+      "newField": "initiated_by"
+    },
+    {
+      "tableSymbol": "callSessions",
+      "tableName": "call_sessions",
+      "tsField": "providerSessionId",
+      "newField": "provider_session_id"
+    },
+    {
+      "tableSymbol": "callSessions",
+      "tableName": "call_sessions",
+      "tsField": "startedAt",
+      "newField": "started_at"
+    },
+    {
+      "tableSymbol": "callSessions",
+      "tableName": "call_sessions",
+      "tsField": "endedAt",
+      "newField": "ended_at"
+    },
+    {
+      "tableSymbol": "callSessions",
+      "tableName": "call_sessions",
+      "tsField": "durationSeconds",
+      "newField": "duration_seconds"
+    },
+    {
+      "tableSymbol": "callSessions",
+      "tableName": "call_sessions",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "callSessions",
+      "tableName": "call_sessions",
+      "tsField": "sessionId",
+      "newField": "session_id"
+    },
+    {
+      "tableSymbol": "campaignSegments",
+      "tableName": "campaign_segments",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "campaignSegments",
+      "tableName": "campaign_segments",
+      "tsField": "segmentType",
+      "newField": "segment_type"
+    },
+    {
+      "tableSymbol": "campaignSegments",
+      "tableName": "campaign_segments",
+      "tsField": "estimatedCount",
+      "newField": "estimated_count"
+    },
+    {
+      "tableSymbol": "campaignSegments",
+      "tableName": "campaign_segments",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "campaignSegments",
+      "tableName": "campaign_segments",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "campaignSegments",
+      "tableName": "campaign_segments",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "campaignSegments",
+      "tableName": "campaign_segments",
+      "tsField": "isPrebuilt",
+      "newField": "is_prebuilt"
+    },
+    {
+      "tableSymbol": "campaignSegments",
+      "tableName": "campaign_segments",
+      "tsField": "estimatedAudience",
+      "newField": "estimated_audience"
+    },
+    {
+      "tableSymbol": "campaignSegments",
+      "tableName": "campaign_segments",
+      "tsField": "filterCriteria",
+      "newField": "filter_criteria"
+    },
+    {
+      "tableSymbol": "campaigns",
+      "tableName": "campaigns",
+      "tsField": "messageContent",
+      "newField": "message_content"
+    },
+    {
+      "tableSymbol": "campaigns",
+      "tableName": "campaigns",
+      "tsField": "audienceFilter",
+      "newField": "audience_filter"
+    },
+    {
+      "tableSymbol": "campaigns",
+      "tableName": "campaigns",
+      "tsField": "totalAudience",
+      "newField": "total_audience"
+    },
+    {
+      "tableSymbol": "campaigns",
+      "tableName": "campaigns",
+      "tsField": "sentCount",
+      "newField": "sent_count"
+    },
+    {
+      "tableSymbol": "campaigns",
+      "tableName": "campaigns",
+      "tsField": "deliveredCount",
+      "newField": "delivered_count"
+    },
+    {
+      "tableSymbol": "campaigns",
+      "tableName": "campaigns",
+      "tsField": "failedCount",
+      "newField": "failed_count"
+    },
+    {
+      "tableSymbol": "campaigns",
+      "tableName": "campaigns",
+      "tsField": "scheduledAt",
+      "newField": "scheduled_at"
+    },
+    {
+      "tableSymbol": "campaigns",
+      "tableName": "campaigns",
+      "tsField": "sentAt",
+      "newField": "sent_at"
+    },
+    {
+      "tableSymbol": "campaigns",
+      "tableName": "campaigns",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "campaigns",
+      "tableName": "campaigns",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "campaigns",
+      "tableName": "campaigns",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "campaigns",
+      "tableName": "campaigns",
+      "tsField": "startedAt",
+      "newField": "started_at"
+    },
+    {
+      "tableSymbol": "coBorrowerDocuments",
+      "tableName": "co_borrower_documents",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "coBorrowerDocuments",
+      "tableName": "co_borrower_documents",
+      "tsField": "coBorrowerId",
+      "newField": "co_borrower_id"
+    },
+    {
+      "tableSymbol": "coBorrowerDocuments",
+      "tableName": "co_borrower_documents",
+      "tsField": "documentType",
+      "newField": "document_type"
+    },
+    {
+      "tableSymbol": "coBorrowerDocuments",
+      "tableName": "co_borrower_documents",
+      "tsField": "documentUrl",
+      "newField": "document_url"
+    },
+    {
+      "tableSymbol": "coBorrowerDocuments",
+      "tableName": "co_borrower_documents",
+      "tsField": "ocrData",
+      "newField": "ocr_data"
+    },
+    {
+      "tableSymbol": "coBorrowerDocuments",
+      "tableName": "co_borrower_documents",
+      "tsField": "uploadedAt",
+      "newField": "uploaded_at"
+    },
+    {
+      "tableSymbol": "coBorrowerDocuments",
+      "tableName": "co_borrower_documents",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "coBorrowerDocuments",
+      "tableName": "co_borrower_documents",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "coBorrowerDocuments",
+      "tableName": "co_borrower_documents",
+      "tsField": "fileName",
+      "newField": "file_name"
+    },
+    {
+      "tableSymbol": "coBorrowerDocuments",
+      "tableName": "co_borrower_documents",
+      "tsField": "fileSize",
+      "newField": "file_size"
+    },
+    {
+      "tableSymbol": "coBorrowerDocuments",
+      "tableName": "co_borrower_documents",
+      "tsField": "verificationStatus",
+      "newField": "verification_status"
+    },
+    {
+      "tableSymbol": "coBorrowerRequests",
+      "tableName": "co_borrower_requests",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "coBorrowerRequests",
+      "tableName": "co_borrower_requests",
+      "tsField": "attemptNumber",
+      "newField": "attempt_number"
+    },
+    {
+      "tableSymbol": "coBorrowerRequests",
+      "tableName": "co_borrower_requests",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "coBorrowerRequests",
+      "tableName": "co_borrower_requests",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "coBorrowerRequests",
+      "tableName": "co_borrower_requests",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "fullName",
+      "newField": "full_name"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "aadhaarNo",
+      "newField": "aadhaar_no"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "panNo",
+      "newField": "pan_no"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "fatherOrHusbandName",
+      "newField": "father_or_husband_name"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "permanentAddress",
+      "newField": "permanent_address"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "currentAddress",
+      "newField": "current_address"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "isCurrentSame",
+      "newField": "is_current_same"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "autoFilled",
+      "newField": "auto_filled"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "kycStatus",
+      "newField": "kyc_status"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "consentStatus",
+      "newField": "consent_status"
+    },
+    {
+      "tableSymbol": "coBorrowers",
+      "tableName": "co_borrowers",
+      "tsField": "verificationSubmittedAt",
+      "newField": "verification_submitted_at"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "consentType",
+      "newField": "consent_type"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "consentToken",
+      "newField": "consent_token"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "consentLinkUrl",
+      "newField": "consent_link_url"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "consentStatus",
+      "newField": "consent_status"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "signedAt",
+      "newField": "signed_at"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "generatedPdfUrl",
+      "newField": "generated_pdf_url"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "consentFor",
+      "newField": "consent_for"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "consentLinkSentAt",
+      "newField": "consent_link_sent_at"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "signedConsentUrl",
+      "newField": "signed_consent_url"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "verifiedBy",
+      "newField": "verified_by"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "verifiedAt",
+      "newField": "verified_at"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "consentLinkExpiresAt",
+      "newField": "consent_link_expires_at"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "consentDeliveryChannel",
+      "newField": "consent_delivery_channel"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "signMethod",
+      "newField": "sign_method"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "esignTransactionId",
+      "newField": "esign_transaction_id"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "esignCertificateId",
+      "newField": "esign_certificate_id"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "esignProvider",
+      "newField": "esign_provider"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "esignErrorCode",
+      "newField": "esign_error_code"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "esignErrorMessage",
+      "newField": "esign_error_message"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "signerAadhaarMasked",
+      "newField": "signer_aadhaar_masked"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "rejectedBy",
+      "newField": "rejected_by"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "rejectedAt",
+      "newField": "rejected_at"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "rejectionReason",
+      "newField": "rejection_reason"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "reviewerNotes",
+      "newField": "reviewer_notes"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "consentAttemptCount",
+      "newField": "consent_attempt_count"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "esignRetryCount",
+      "newField": "esign_retry_count"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "adminViewedBy",
+      "newField": "admin_viewed_by"
+    },
+    {
+      "tableSymbol": "consentRecords",
+      "tableName": "consent_records",
+      "tsField": "adminViewedAt",
+      "newField": "admin_viewed_at"
+    },
+    {
+      "tableSymbol": "conversationMessages",
+      "tableName": "conversation_messages",
+      "tsField": "callRecordId",
+      "newField": "call_record_id"
+    },
+    {
+      "tableSymbol": "couponAuditLog",
+      "tableName": "coupon_audit_log",
+      "tsField": "couponId",
+      "newField": "coupon_id"
+    },
+    {
+      "tableSymbol": "couponAuditLog",
+      "tableName": "coupon_audit_log",
+      "tsField": "oldStatus",
+      "newField": "old_status"
+    },
+    {
+      "tableSymbol": "couponAuditLog",
+      "tableName": "coupon_audit_log",
+      "tsField": "newStatus",
+      "newField": "new_status"
+    },
+    {
+      "tableSymbol": "couponAuditLog",
+      "tableName": "coupon_audit_log",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "couponAuditLog",
+      "tableName": "coupon_audit_log",
+      "tsField": "performedBy",
+      "newField": "performed_by"
+    },
+    {
+      "tableSymbol": "couponAuditLog",
+      "tableName": "coupon_audit_log",
+      "tsField": "ipAddress",
+      "newField": "ip_address"
+    },
+    {
+      "tableSymbol": "couponAuditLog",
+      "tableName": "coupon_audit_log",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "couponBatches",
+      "tableName": "coupon_batches",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "couponBatches",
+      "tableName": "coupon_batches",
+      "tsField": "couponValue",
+      "newField": "coupon_value"
+    },
+    {
+      "tableSymbol": "couponBatches",
+      "tableName": "coupon_batches",
+      "tsField": "totalQuantity",
+      "newField": "total_quantity"
+    },
+    {
+      "tableSymbol": "couponBatches",
+      "tableName": "coupon_batches",
+      "tsField": "expiryDate",
+      "newField": "expiry_date"
+    },
+    {
+      "tableSymbol": "couponBatches",
+      "tableName": "coupon_batches",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "couponBatches",
+      "tableName": "coupon_batches",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "couponBatches",
+      "tableName": "coupon_batches",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "isUsed",
+      "newField": "is_used"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "usedByLeadId",
+      "newField": "used_by_lead_id"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "usedAt",
+      "newField": "used_at"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "expiresAt",
+      "newField": "expires_at"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "creditsAvailable",
+      "newField": "credits_available"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "usedBy",
+      "newField": "used_by"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "validatedAt",
+      "newField": "validated_at"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "discountType",
+      "newField": "discount_type"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "discountValue",
+      "newField": "discount_value"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "maxDiscountCap",
+      "newField": "max_discount_cap"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "minAmount",
+      "newField": "min_amount"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "batchId",
+      "newField": "batch_id"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "reservedAt",
+      "newField": "reserved_at"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "reservedBy",
+      "newField": "reserved_by"
+    },
+    {
+      "tableSymbol": "couponCodes",
+      "tableName": "coupon_codes",
+      "tsField": "reservedForLeadId",
+      "newField": "reserved_for_lead_id"
+    },
+    {
+      "tableSymbol": "dealerAgreementEvents",
+      "tableName": "dealer_agreement_events",
+      "tsField": "applicationId",
+      "newField": "application_id"
+    },
+    {
+      "tableSymbol": "dealerAgreementEvents",
+      "tableName": "dealer_agreement_events",
+      "tsField": "providerDocumentId",
+      "newField": "provider_document_id"
+    },
+    {
+      "tableSymbol": "dealerAgreementEvents",
+      "tableName": "dealer_agreement_events",
+      "tsField": "requestId",
+      "newField": "request_id"
+    },
+    {
+      "tableSymbol": "dealerAgreementEvents",
+      "tableName": "dealer_agreement_events",
+      "tsField": "eventType",
+      "newField": "event_type"
+    },
+    {
+      "tableSymbol": "dealerAgreementEvents",
+      "tableName": "dealer_agreement_events",
+      "tsField": "signerRole",
+      "newField": "signer_role"
+    },
+    {
+      "tableSymbol": "dealerAgreementEvents",
+      "tableName": "dealer_agreement_events",
+      "tsField": "eventStatus",
+      "newField": "event_status"
+    },
+    {
+      "tableSymbol": "dealerAgreementEvents",
+      "tableName": "dealer_agreement_events",
+      "tsField": "eventPayload",
+      "newField": "event_payload"
+    },
+    {
+      "tableSymbol": "dealerAgreementEvents",
+      "tableName": "dealer_agreement_events",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "applicationId",
+      "newField": "application_id"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "providerDocumentId",
+      "newField": "provider_document_id"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "requestId",
+      "newField": "request_id"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "signerRole",
+      "newField": "signer_role"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "signerName",
+      "newField": "signer_name"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "signerEmail",
+      "newField": "signer_email"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "signerMobile",
+      "newField": "signer_mobile"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "signingMethod",
+      "newField": "signing_method"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "providerSignerIdentifier",
+      "newField": "provider_signer_identifier"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "providerSigningUrl",
+      "newField": "provider_signing_url"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "signerStatus",
+      "newField": "signer_status"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "signedAt",
+      "newField": "signed_at"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "lastEventAt",
+      "newField": "last_event_at"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "providerRawResponse",
+      "newField": "provider_raw_response"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "dealerAgreementSigners",
+      "tableName": "dealer_agreement_signers",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "dealerCorrectionItems",
+      "tableName": "dealer_correction_items",
+      "tsField": "roundId",
+      "newField": "round_id"
+    },
+    {
+      "tableSymbol": "dealerCorrectionItems",
+      "tableName": "dealer_correction_items",
+      "tsField": "previousValue",
+      "newField": "previous_value"
+    },
+    {
+      "tableSymbol": "dealerCorrectionItems",
+      "tableName": "dealer_correction_items",
+      "tsField": "newValue",
+      "newField": "new_value"
+    },
+    {
+      "tableSymbol": "dealerCorrectionItems",
+      "tableName": "dealer_correction_items",
+      "tsField": "previousDocumentId",
+      "newField": "previous_document_id"
+    },
+    {
+      "tableSymbol": "dealerCorrectionItems",
+      "tableName": "dealer_correction_items",
+      "tsField": "newDocumentId",
+      "newField": "new_document_id"
+    },
+    {
+      "tableSymbol": "dealerCorrectionItems",
+      "tableName": "dealer_correction_items",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "applicationId",
+      "newField": "application_id"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "roundNumber",
+      "newField": "round_number"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "requestedBy",
+      "newField": "requested_by"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "requestedFields",
+      "newField": "requested_fields"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "requestedDocuments",
+      "newField": "requested_documents"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "dealerSubmittedAt",
+      "newField": "dealer_submitted_at"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "dealerNote",
+      "newField": "dealer_note"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "appliedBy",
+      "newField": "applied_by"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "appliedAt",
+      "newField": "applied_at"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "tokenHash",
+      "newField": "token_hash"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "tokenExpiresAt",
+      "newField": "token_expires_at"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "dealerCorrectionRounds",
+      "tableName": "dealer_correction_rounds",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "dealerName",
+      "newField": "dealer_name"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "followUpHistory",
+      "newField": "follow_up_history"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "currentStatus",
+      "newField": "current_status"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "totalAttempts",
+      "newField": "total_attempts"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "finalIntentScore",
+      "newField": "final_intent_score"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "nextCallAt",
+      "newField": "next_call_at"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "shopName",
+      "newField": "shop_name"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "overallSummary",
+      "newField": "overall_summary"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "assignedTo",
+      "newField": "assigned_to"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "approvedBy",
+      "newField": "approved_by"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "rejectedBy",
+      "newField": "rejected_by"
+    },
+    {
+      "tableSymbol": "dealerLeads",
+      "tableName": "dealer_leads",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "dealerUserId",
+      "newField": "dealer_user_id"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "companyName",
+      "newField": "company_name"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "companyType",
+      "newField": "company_type"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "gstNumber",
+      "newField": "gst_number"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "panNumber",
+      "newField": "pan_number"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "cinNumber",
+      "newField": "cin_number"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "financeEnabled",
+      "newField": "finance_enabled"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "onboardingStatus",
+      "newField": "onboarding_status"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "reviewStatus",
+      "newField": "review_status"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "submittedAt",
+      "newField": "submitted_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "approvedAt",
+      "newField": "approved_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "rejectedAt",
+      "newField": "rejected_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "rejectionReason",
+      "newField": "rejection_reason"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "adminNotes",
+      "newField": "admin_notes"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "ownerName",
+      "newField": "owner_name"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "ownerPhone",
+      "newField": "owner_phone"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "ownerEmail",
+      "newField": "owner_email"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "bankName",
+      "newField": "bank_name"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "accountNumber",
+      "newField": "account_number"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "beneficiaryName",
+      "newField": "beneficiary_name"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "ifscCode",
+      "newField": "ifsc_code"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "correctionRemarks",
+      "newField": "correction_remarks"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "rejectionRemarks",
+      "newField": "rejection_remarks"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "dealerAccountStatus",
+      "newField": "dealer_account_status"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "dealerCode",
+      "newField": "dealer_code"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "correctionRequestedAt",
+      "newField": "correction_requested_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "revalidatedAt",
+      "newField": "revalidated_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "lastActionBy",
+      "newField": "last_action_by"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "lastActionAt",
+      "newField": "last_action_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "approvedBy",
+      "newField": "approved_by"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "rejectedBy",
+      "newField": "rejected_by"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "correctionCount",
+      "newField": "correction_count"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "isLocked",
+      "newField": "is_locked"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "businessAddressNew",
+      "newField": "business_address_new"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "contactName",
+      "newField": "contact_name"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "contactPhone",
+      "newField": "contact_phone"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "contactEmail",
+      "newField": "contact_email"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "agreementId",
+      "newField": "agreement_id"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "registeredAddress",
+      "newField": "registered_address"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "businessAddress",
+      "newField": "business_address"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "requestId",
+      "newField": "request_id"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "providerDocumentId",
+      "newField": "provider_document_id"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "providerSigningUrl",
+      "newField": "provider_signing_url"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "signedAt",
+      "newField": "signed_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "lastActionTimestamp",
+      "newField": "last_action_timestamp"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "stampStatus",
+      "newField": "stamp_status"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "completionStatus",
+      "newField": "completion_status"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "agreementAuditTrailUrl",
+      "newField": "agreement_audit_trail_url"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "salesManagerName",
+      "newField": "sales_manager_name"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "salesManagerEmail",
+      "newField": "sales_manager_email"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "salesManagerMobile",
+      "newField": "sales_manager_mobile"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "itarangSignatory1Name",
+      "newField": "itarang_signatory_1_name",
+      "note": "non-pure-casing (numeric or extra boundary)"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "itarangSignatory1Email",
+      "newField": "itarang_signatory_1_email",
+      "note": "non-pure-casing (numeric or extra boundary)"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "itarangSignatory1Mobile",
+      "newField": "itarang_signatory_1_mobile",
+      "note": "non-pure-casing (numeric or extra boundary)"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "itarangSignatory2Name",
+      "newField": "itarang_signatory_2_name",
+      "note": "non-pure-casing (numeric or extra boundary)"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "itarangSignatory2Email",
+      "newField": "itarang_signatory_2_email",
+      "note": "non-pure-casing (numeric or extra boundary)"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "itarangSignatory2Mobile",
+      "newField": "itarang_signatory_2_mobile",
+      "note": "non-pure-casing (numeric or extra boundary)"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "agreementLastInitiatedAt",
+      "newField": "agreement_last_initiated_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "agreementExpiredAt",
+      "newField": "agreement_expired_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "agreementFailedAt",
+      "newField": "agreement_failed_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "agreementFailureReason",
+      "newField": "agreement_failure_reason"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "agreementCompletedAt",
+      "newField": "agreement_completed_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "signedAgreementStoragePath",
+      "newField": "signed_agreement_storage_path"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "auditTrailStoragePath",
+      "newField": "audit_trail_storage_path"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "agreementStatus",
+      "newField": "agreement_status"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "providerRawResponse",
+      "newField": "provider_raw_response"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "signedAgreementUrl",
+      "newField": "signed_agreement_url"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "auditTrailUrl",
+      "newField": "audit_trail_url"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "ownerLandline",
+      "newField": "owner_landline"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "agreementLanguage",
+      "newField": "agreement_language"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "isBranchDealer",
+      "newField": "is_branch_dealer"
+    },
+    {
+      "tableSymbol": "dealerOnboardingApplications",
+      "tableName": "dealer_onboarding_applications",
+      "tsField": "stampCertificateIds",
+      "newField": "stamp_certificate_ids"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "applicationId",
+      "newField": "application_id"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "documentType",
+      "newField": "document_type"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "bucketName",
+      "newField": "bucket_name"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "storagePath",
+      "newField": "storage_path"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "fileName",
+      "newField": "file_name"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "fileUrl",
+      "newField": "file_url"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "mimeType",
+      "newField": "mime_type"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "fileSize",
+      "newField": "file_size"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "uploadedBy",
+      "newField": "uploaded_by"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "uploadedAt",
+      "newField": "uploaded_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "docStatus",
+      "newField": "doc_status"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "verificationStatus",
+      "newField": "verification_status"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "verifiedAt",
+      "newField": "verified_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "verifiedBy",
+      "newField": "verified_by"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "rejectionReason",
+      "newField": "rejection_reason"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "extractedData",
+      "newField": "extracted_data"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "apiVerificationResults",
+      "newField": "api_verification_results"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "dealerOnboardingDocuments",
+      "tableName": "dealer_onboarding_documents",
+      "tsField": "adminComment",
+      "newField": "admin_comment"
+    },
+    {
+      "tableSymbol": "dealerSubscriptions",
+      "tableName": "dealer_subscriptions",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "dealerSubscriptions",
+      "tableName": "dealer_subscriptions",
+      "tsField": "planName",
+      "newField": "plan_name"
+    },
+    {
+      "tableSymbol": "dealerSubscriptions",
+      "tableName": "dealer_subscriptions",
+      "tsField": "startedAt",
+      "newField": "started_at"
+    },
+    {
+      "tableSymbol": "dealerSubscriptions",
+      "tableName": "dealer_subscriptions",
+      "tsField": "expiresAt",
+      "newField": "expires_at"
+    },
+    {
+      "tableSymbol": "dealerSubscriptions",
+      "tableName": "dealer_subscriptions",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "lineTotal",
+      "newField": "line_total"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "gstAmount",
+      "newField": "gst_amount"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "transportationCost",
+      "newField": "transportation_cost"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "transportationGstPercent",
+      "newField": "transportation_gst_percent"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "totalPayable",
+      "newField": "total_payable"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "paymentTerm",
+      "newField": "payment_term"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "creditPeriodMonths",
+      "newField": "credit_period_months"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "dealStatus",
+      "newField": "deal_status"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "isImmutable",
+      "newField": "is_immutable"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "invoiceNumber",
+      "newField": "invoice_number"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "invoiceUrl",
+      "newField": "invoice_url"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "invoiceIssuedAt",
+      "newField": "invoice_issued_at"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "expiresAt",
+      "newField": "expires_at"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "expiredBy",
+      "newField": "expired_by"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "expiredAt",
+      "newField": "expired_at"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "expiryReason",
+      "newField": "expiry_reason"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "rejectedBy",
+      "newField": "rejected_by"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "rejectedAt",
+      "newField": "rejected_at"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "rejectionReason",
+      "newField": "rejection_reason"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "deals",
+      "tableName": "deals",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "inventoryId",
+      "newField": "inventory_id"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "dealId",
+      "newField": "deal_id"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "customerName",
+      "newField": "customer_name"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "customerPhone",
+      "newField": "customer_phone"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "serialNumber",
+      "newField": "serial_number"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "assetCategory",
+      "newField": "asset_category"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "assetType",
+      "newField": "asset_type"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "modelType",
+      "newField": "model_type"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "deploymentDate",
+      "newField": "deployment_date"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "deploymentLocation",
+      "newField": "deployment_location"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "qrCodeUrl",
+      "newField": "qr_code_url"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "qrCodeData",
+      "newField": "qr_code_data"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "paymentType",
+      "newField": "payment_type"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "paymentStatus",
+      "newField": "payment_status"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "batteryHealthPercent",
+      "newField": "battery_health_percent"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "lastVoltage",
+      "newField": "last_voltage"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "lastSoc",
+      "newField": "last_soc"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "lastTelemetryAt",
+      "newField": "last_telemetry_at"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "telemetryData",
+      "newField": "telemetry_data"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "totalCycles",
+      "newField": "total_cycles"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "warrantyStartDate",
+      "newField": "warranty_start_date"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "warrantyEndDate",
+      "newField": "warranty_end_date"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "warrantyStatus",
+      "newField": "warranty_status"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "lastMaintenanceAt",
+      "newField": "last_maintenance_at"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "nextMaintenanceDue",
+      "newField": "next_maintenance_due"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "deployedAssets",
+      "tableName": "deployed_assets",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "deploymentHistory",
+      "tableName": "deployment_history",
+      "tsField": "deployedAssetId",
+      "newField": "deployed_asset_id"
+    },
+    {
+      "tableSymbol": "deploymentHistory",
+      "tableName": "deployment_history",
+      "tsField": "performedBy",
+      "newField": "performed_by"
+    },
+    {
+      "tableSymbol": "deploymentHistory",
+      "tableName": "deployment_history",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "deviceBatteryMap",
+      "tableName": "device_battery_map",
+      "tsField": "deviceId",
+      "newField": "device_id"
+    },
+    {
+      "tableSymbol": "deviceBatteryMap",
+      "tableName": "device_battery_map",
+      "tsField": "batterySerial",
+      "newField": "battery_serial"
+    },
+    {
+      "tableSymbol": "deviceBatteryMap",
+      "tableName": "device_battery_map",
+      "tsField": "vehicleNumber",
+      "newField": "vehicle_number"
+    },
+    {
+      "tableSymbol": "deviceBatteryMap",
+      "tableName": "device_battery_map",
+      "tsField": "vehicleType",
+      "newField": "vehicle_type"
+    },
+    {
+      "tableSymbol": "deviceBatteryMap",
+      "tableName": "device_battery_map",
+      "tsField": "customerName",
+      "newField": "customer_name"
+    },
+    {
+      "tableSymbol": "deviceBatteryMap",
+      "tableName": "device_battery_map",
+      "tsField": "customerPhone",
+      "newField": "customer_phone"
+    },
+    {
+      "tableSymbol": "deviceBatteryMap",
+      "tableName": "device_battery_map",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "deviceBatteryMap",
+      "tableName": "device_battery_map",
+      "tsField": "installedAt",
+      "newField": "installed_at"
+    },
+    {
+      "tableSymbol": "deviceBatteryMap",
+      "tableName": "device_battery_map",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "deviceBatteryMap",
+      "tableName": "device_battery_map",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "verificationId",
+      "newField": "verification_id"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "referenceId",
+      "newField": "reference_id"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "decentroTxnId",
+      "newField": "decentro_txn_id"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "sessionId",
+      "newField": "session_id"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "customerPhone",
+      "newField": "customer_phone"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "customerEmail",
+      "newField": "customer_email"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "digilockerUrl",
+      "newField": "digilocker_url"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "shortUrl",
+      "newField": "short_url"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "notificationChannel",
+      "newField": "notification_channel"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "linkSentAt",
+      "newField": "link_sent_at"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "linkOpenedAt",
+      "newField": "link_opened_at"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "customerAuthorizedAt",
+      "newField": "customer_authorized_at"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "digilockerRawResponse",
+      "newField": "digilocker_raw_response"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "aadhaarExtractedData",
+      "newField": "aadhaar_extracted_data"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "crossMatchResult",
+      "newField": "cross_match_result"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "expiresAt",
+      "newField": "expires_at"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "smsMessageId",
+      "newField": "sms_message_id"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "smsDeliveredAt",
+      "newField": "sms_delivered_at"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "smsFailedReason",
+      "newField": "sms_failed_reason"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "smsAttempts",
+      "newField": "sms_attempts"
+    },
+    {
+      "tableSymbol": "digilockerTransactions",
+      "tableName": "digilocker_transactions",
+      "tsField": "aadhaarPdf",
+      "newField": "aadhaar_pdf"
+    },
+    {
+      "tableSymbol": "documents",
+      "tableName": "documents",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "documents",
+      "tableName": "documents",
+      "tsField": "uploadedAt",
+      "newField": "uploaded_at"
+    },
+    {
+      "tableSymbol": "documents",
+      "tableName": "documents",
+      "tsField": "documentType",
+      "newField": "document_type"
+    },
+    {
+      "tableSymbol": "documents",
+      "tableName": "documents",
+      "tsField": "fileUrl",
+      "newField": "file_url"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "paymentMethod",
+      "newField": "payment_method"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "facilitationFeeBaseAmount",
+      "newField": "facilitation_fee_base_amount"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "couponCode",
+      "newField": "coupon_code"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "couponId",
+      "newField": "coupon_id"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "couponDiscountType",
+      "newField": "coupon_discount_type"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "couponDiscountValue",
+      "newField": "coupon_discount_value"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "couponDiscountAmount",
+      "newField": "coupon_discount_amount"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "facilitationFeeFinalAmount",
+      "newField": "facilitation_fee_final_amount"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "razorpayQrId",
+      "newField": "razorpay_qr_id"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "razorpayQrStatus",
+      "newField": "razorpay_qr_status"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "razorpayQrImageUrl",
+      "newField": "razorpay_qr_image_url"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "razorpayQrShortUrl",
+      "newField": "razorpay_qr_short_url"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "razorpayQrExpiresAt",
+      "newField": "razorpay_qr_expires_at"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "razorpayPaymentId",
+      "newField": "razorpay_payment_id"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "razorpayOrderId",
+      "newField": "razorpay_order_id"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "razorpayPaymentStatus",
+      "newField": "razorpay_payment_status"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "utrNumberManual",
+      "newField": "utr_number_manual"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "paymentScreenshotUrl",
+      "newField": "payment_screenshot_url"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "facilitationFeeStatus",
+      "newField": "facilitation_fee_status"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "paymentPaidAt",
+      "newField": "payment_paid_at"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "paymentVerifiedAt",
+      "newField": "payment_verified_at"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "paymentVerificationSource",
+      "newField": "payment_verification_source"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "facilitationPayments",
+      "tableName": "facilitation_payments",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "oemId",
+      "newField": "oem_id"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "oemName",
+      "newField": "oem_name"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "productCatalogId",
+      "newField": "product_catalog_id"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "hsnCode",
+      "newField": "hsn_code"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "assetCategory",
+      "newField": "asset_category"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "assetType",
+      "newField": "asset_type"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "modelType",
+      "newField": "model_type"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "serialNumber",
+      "newField": "serial_number"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "isSerialized",
+      "newField": "is_serialized"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "warrantyMonths",
+      "newField": "warranty_months"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "batchNumber",
+      "newField": "batch_number"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "receivedDate",
+      "newField": "received_date"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "pdiStatus",
+      "newField": "pdi_status"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "pdiCompletedAt",
+      "newField": "pdi_completed_at"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "pdiBy",
+      "newField": "pdi_by"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "allocatedToDealerAt",
+      "newField": "allocated_to_dealer_at"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "soldAt",
+      "newField": "sold_at"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "dealId",
+      "newField": "deal_id"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "productId",
+      "newField": "product_id"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "inventoryAmount",
+      "newField": "inventory_amount"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "gstPercent",
+      "newField": "gst_percent"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "gstAmount",
+      "newField": "gst_amount"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "finalAmount",
+      "newField": "final_amount"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "oemInvoiceNumber",
+      "newField": "oem_invoice_number"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "oemInvoiceDate",
+      "newField": "oem_invoice_date"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "oemInvoiceUrl",
+      "newField": "oem_invoice_url"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "productManualUrl",
+      "newField": "product_manual_url"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "warrantyDocumentUrl",
+      "newField": "warranty_document_url"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "warehouseLocation",
+      "newField": "warehouse_location"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "manufacturingDate",
+      "newField": "manufacturing_date"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "expiryDate",
+      "newField": "expiry_date"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "iotImeiNo",
+      "newField": "iot_imei_no"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "linkedLeadId",
+      "newField": "linked_lead_id"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "dispatchDate",
+      "newField": "dispatch_date"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "socPercent",
+      "newField": "soc_percent"
+    },
+    {
+      "tableSymbol": "inventory",
+      "tableName": "inventory",
+      "tsField": "socLastSyncAt",
+      "newField": "soc_last_sync_at"
+    },
+    {
+      "tableSymbol": "kycDataAudit",
+      "tableName": "kyc_data_audit",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "kycDataAudit",
+      "tableName": "kyc_data_audit",
+      "tsField": "fieldName",
+      "newField": "field_name"
+    },
+    {
+      "tableSymbol": "kycDataAudit",
+      "tableName": "kyc_data_audit",
+      "tsField": "fieldValue",
+      "newField": "field_value"
+    },
+    {
+      "tableSymbol": "kycDataAudit",
+      "tableName": "kyc_data_audit",
+      "tsField": "dataSource",
+      "newField": "data_source"
+    },
+    {
+      "tableSymbol": "kycDataAudit",
+      "tableName": "kyc_data_audit",
+      "tsField": "enteredBy",
+      "newField": "entered_by"
+    },
+    {
+      "tableSymbol": "kycDataAudit",
+      "tableName": "kyc_data_audit",
+      "tsField": "enteredAt",
+      "newField": "entered_at"
+    },
+    {
+      "tableSymbol": "kycDataAudit",
+      "tableName": "kyc_data_audit",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "docType",
+      "newField": "doc_type"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "fileUrl",
+      "newField": "file_url"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "verificationStatus",
+      "newField": "verification_status"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "ocrData",
+      "newField": "ocr_data"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "apiResponse",
+      "newField": "api_response"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "uploadedAt",
+      "newField": "uploaded_at"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "verifiedAt",
+      "newField": "verified_at"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "fileName",
+      "newField": "file_name"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "fileSize",
+      "newField": "file_size"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "failedReason",
+      "newField": "failed_reason"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "fileType",
+      "newField": "file_type"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "docStatus",
+      "newField": "doc_status"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "rejectionReason",
+      "newField": "rejection_reason"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "uploadedBy",
+      "newField": "uploaded_by"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "verifiedBy",
+      "newField": "verified_by"
+    },
+    {
+      "tableSymbol": "kycDocuments",
+      "tableName": "kyc_documents",
+      "tsField": "docFor",
+      "newField": "doc_for"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "submissionTimestamp",
+      "newField": "submission_timestamp"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "caseType",
+      "newField": "case_type"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "couponCode",
+      "newField": "coupon_code"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "couponStatus",
+      "newField": "coupon_status"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "documentsCount",
+      "newField": "documents_count"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "consentVerified",
+      "newField": "consent_verified"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "dealerEditsLocked",
+      "newField": "dealer_edits_locked"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "verificationStartedAt",
+      "newField": "verification_started_at"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "firstApiExecutionAt",
+      "newField": "first_api_execution_at"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "firstApiType",
+      "newField": "first_api_type"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "finalDecision",
+      "newField": "final_decision"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "finalDecisionAt",
+      "newField": "final_decision_at"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "finalDecisionBy",
+      "newField": "final_decision_by"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "finalDecisionNotes",
+      "newField": "final_decision_notes"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "kycVerificationMetadata",
+      "tableName": "kyc_verification_metadata",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "verificationType",
+      "newField": "verification_type"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "apiProvider",
+      "newField": "api_provider"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "apiRequest",
+      "newField": "api_request"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "apiResponse",
+      "newField": "api_response"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "failedReason",
+      "newField": "failed_reason"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "submittedAt",
+      "newField": "submitted_at"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "completedAt",
+      "newField": "completed_at"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "matchScore",
+      "newField": "match_score"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "retryCount",
+      "newField": "retry_count"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "adminAction",
+      "newField": "admin_action"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "adminActionBy",
+      "newField": "admin_action_by"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "adminActionAt",
+      "newField": "admin_action_at"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "adminActionNotes",
+      "newField": "admin_action_notes"
+    },
+    {
+      "tableSymbol": "kycVerifications",
+      "tableName": "kyc_verifications",
+      "tsField": "verificationFor",
+      "newField": "verification_for"
+    },
+    {
+      "tableSymbol": "leadAssignments",
+      "tableName": "lead_assignments",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "leadAssignments",
+      "tableName": "lead_assignments",
+      "tsField": "leadOwner",
+      "newField": "lead_owner"
+    },
+    {
+      "tableSymbol": "leadAssignments",
+      "tableName": "lead_assignments",
+      "tsField": "assignedBy",
+      "newField": "assigned_by"
+    },
+    {
+      "tableSymbol": "leadAssignments",
+      "tableName": "lead_assignments",
+      "tsField": "assignedAt",
+      "newField": "assigned_at"
+    },
+    {
+      "tableSymbol": "leadAssignments",
+      "tableName": "lead_assignments",
+      "tsField": "leadActor",
+      "newField": "lead_actor"
+    },
+    {
+      "tableSymbol": "leadAssignments",
+      "tableName": "lead_assignments",
+      "tsField": "actorAssignedBy",
+      "newField": "actor_assigned_by"
+    },
+    {
+      "tableSymbol": "leadAssignments",
+      "tableName": "lead_assignments",
+      "tsField": "actorAssignedAt",
+      "newField": "actor_assigned_at"
+    },
+    {
+      "tableSymbol": "leadAssignments",
+      "tableName": "lead_assignments",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "leadDocuments",
+      "tableName": "lead_documents",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "leadDocuments",
+      "tableName": "lead_documents",
+      "tsField": "documentType",
+      "newField": "document_type"
+    },
+    {
+      "tableSymbol": "leadDocuments",
+      "tableName": "lead_documents",
+      "tsField": "documentUrl",
+      "newField": "document_url"
+    },
+    {
+      "tableSymbol": "leadDocuments",
+      "tableName": "lead_documents",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "leadDocuments",
+      "tableName": "lead_documents",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "leadDocuments",
+      "tableName": "lead_documents",
+      "tsField": "userId",
+      "newField": "user_id"
+    },
+    {
+      "tableSymbol": "leadDocuments",
+      "tableName": "lead_documents",
+      "tsField": "docType",
+      "newField": "doc_type"
+    },
+    {
+      "tableSymbol": "leadDocuments",
+      "tableName": "lead_documents",
+      "tsField": "storagePath",
+      "newField": "storage_path"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "assignedTo",
+      "newField": "assigned_to"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "ownerName",
+      "newField": "owner_name"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "ownerContact",
+      "newField": "owner_contact"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "permanentAddress",
+      "newField": "permanent_address"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "localAddress",
+      "newField": "local_address"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "vehicleOwnership",
+      "newField": "vehicle_ownership"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "batteryType",
+      "newField": "battery_type"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "assetModel",
+      "newField": "asset_model"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "assetPrice",
+      "newField": "asset_price"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "familyMembers",
+      "newField": "family_members"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "drivingExperience",
+      "newField": "driving_experience"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "loanRequired",
+      "newField": "loan_required"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "interestLevel",
+      "newField": "interest_level"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "leadScore",
+      "newField": "lead_score"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "kycStatus",
+      "newField": "kyc_status"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "kycScore",
+      "newField": "kyc_score"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "kycCompletedAt",
+      "newField": "kyc_completed_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "paymentMethod",
+      "newField": "payment_method"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentStatus",
+      "newField": "consent_status"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "hasCoBorrower",
+      "newField": "has_co_borrower"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "hasAdditionalDocsRequired",
+      "newField": "has_additional_docs_required"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "interimStepStatus",
+      "newField": "interim_step_status"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "kycDraftData",
+      "newField": "kyc_draft_data"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "stepStatus",
+      "newField": "step_status"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "leadSource",
+      "newField": "lead_source"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "leadStatus",
+      "newField": "lead_status"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "businessName",
+      "newField": "business_name"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "ownerEmail",
+      "newField": "owner_email"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "shopAddress",
+      "newField": "shop_address"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "leadType",
+      "newField": "lead_type"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "vehicleRc",
+      "newField": "vehicle_rc"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "fullName",
+      "newField": "full_name"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "fatherOrHusbandName",
+      "newField": "father_or_husband_name"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "currentAddress",
+      "newField": "current_address"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "isCurrentSame",
+      "newField": "is_current_same"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "productCategoryId",
+      "newField": "product_category_id"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "productTypeId",
+      "newField": "product_type_id"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "vehicleOwnerName",
+      "newField": "vehicle_owner_name"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "vehicleOwnerPhone",
+      "newField": "vehicle_owner_phone"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "autoFilled",
+      "newField": "auto_filled"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "ocrStatus",
+      "newField": "ocr_status"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "ocrError",
+      "newField": "ocr_error"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "referenceId",
+      "newField": "reference_id"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "interestedIn",
+      "newField": "interested_in"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "batteryOrderExpected",
+      "newField": "battery_order_expected"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "investmentCapacity",
+      "newField": "investment_capacity"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "businessType",
+      "newField": "business_type"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "qualifiedBy",
+      "newField": "qualified_by"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "qualifiedAt",
+      "newField": "qualified_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "qualificationNotes",
+      "newField": "qualification_notes"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "convertedDealId",
+      "newField": "converted_deal_id"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "convertedAt",
+      "newField": "converted_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "totalAiCalls",
+      "newField": "total_ai_calls"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "lastAiCallAt",
+      "newField": "last_ai_call_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "lastCallOutcome",
+      "newField": "last_call_outcome"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "aiPriorityScore",
+      "newField": "ai_priority_score"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "nextCallAfter",
+      "newField": "next_call_after"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "doNotCall",
+      "newField": "do_not_call"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "workflowStep",
+      "newField": "workflow_step"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "primaryProductId",
+      "newField": "primary_product_id"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "uploaderId",
+      "newField": "uploader_id"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "aiManaged",
+      "newField": "ai_managed"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "aiOwner",
+      "newField": "ai_owner"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "manualTakeover",
+      "newField": "manual_takeover"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "lastAiActionAt",
+      "newField": "last_ai_action_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "intentScore",
+      "newField": "intent_score"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "intentReason",
+      "newField": "intent_reason"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "nextCallAt",
+      "newField": "next_call_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "callPriority",
+      "newField": "call_priority"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "conversationSummary",
+      "newField": "conversation_summary"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "lastCallStatus",
+      "newField": "last_call_status"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "smReviewStatus",
+      "newField": "sm_review_status"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "submittedToSmAt",
+      "newField": "submitted_to_sm_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "smAssignedTo",
+      "newField": "sm_assigned_to"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentLinkUrl",
+      "newField": "consent_link_url"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentLinkSentAt",
+      "newField": "consent_link_sent_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentLinkExpiresAt",
+      "newField": "consent_link_expires_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentDeliveryChannel",
+      "newField": "consent_delivery_channel"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "esignTransactionId",
+      "newField": "esign_transaction_id"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "esignCertificateId",
+      "newField": "esign_certificate_id"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "esignCompletedAt",
+      "newField": "esign_completed_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "esignFailedAt",
+      "newField": "esign_failed_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "esignErrorCode",
+      "newField": "esign_error_code"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "esignErrorMessage",
+      "newField": "esign_error_message"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentVerifiedBy",
+      "newField": "consent_verified_by"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentVerifiedAt",
+      "newField": "consent_verified_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentVerificationNotes",
+      "newField": "consent_verification_notes"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentFinal",
+      "newField": "consent_final"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentRejectionReason",
+      "newField": "consent_rejection_reason"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentRejectionNotes",
+      "newField": "consent_rejection_notes"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentRejectedBy",
+      "newField": "consent_rejected_by"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentRejectedAt",
+      "newField": "consent_rejected_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "consentAttemptCount",
+      "newField": "consent_attempt_count"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "googlePlaceId",
+      "newField": "google_place_id"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "googleMapsUri",
+      "newField": "google_maps_uri"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "googleRating",
+      "newField": "google_rating"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "googleRatingsCount",
+      "newField": "google_ratings_count"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "googleBusinessStatus",
+      "newField": "google_business_status"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "googleBusinessTypes",
+      "newField": "google_business_types"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "rawSourcePayload",
+      "newField": "raw_source_payload"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "scrapeQuery",
+      "newField": "scrape_query"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "scrapeBatchId",
+      "newField": "scrape_batch_id"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "scrapedAt",
+      "newField": "scraped_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "phoneQuality",
+      "newField": "phone_quality"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "normalizedPhone",
+      "newField": "normalized_phone"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "intentBand",
+      "newField": "intent_band"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "intentScoredAt",
+      "newField": "intent_scored_at"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "intentDetails",
+      "newField": "intent_details"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "couponCode",
+      "newField": "coupon_code"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "couponStatus",
+      "newField": "coupon_status"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "borrowerConsentStatus",
+      "newField": "borrower_consent_status"
+    },
+    {
+      "tableSymbol": "leads",
+      "tableName": "leads",
+      "tsField": "soldAt",
+      "newField": "sold_at"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "applicantName",
+      "newField": "applicant_name"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "loanAmount",
+      "newField": "loan_amount"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "interestRate",
+      "newField": "interest_rate"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "tenureMonths",
+      "newField": "tenure_months"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "emiAmount",
+      "newField": "emi_amount"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "downPayment",
+      "newField": "down_payment"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "facilitationFee",
+      "newField": "facilitation_fee"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "facilitationFeeStatus",
+      "newField": "facilitation_fee_status"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "documentsUploaded",
+      "newField": "documents_uploaded"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "nbfcName",
+      "newField": "nbfc_name"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "nbfcRefId",
+      "newField": "nbfc_ref_id"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "submittedAt",
+      "newField": "submitted_at"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "approvedAt",
+      "newField": "approved_at"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "disbursedAt",
+      "newField": "disbursed_at"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "rejectionReason",
+      "newField": "rejection_reason"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "companyValidationStatus",
+      "newField": "company_validation_status"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "applicationStatus",
+      "newField": "application_status"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "facilitationFeeAmount",
+      "newField": "facilitation_fee_amount"
+    },
+    {
+      "tableSymbol": "loanApplications",
+      "tableName": "loan_applications",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "loanRequired",
+      "newField": "loan_required"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "loanAmount",
+      "newField": "loan_amount"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "interestRate",
+      "newField": "interest_rate"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "tenureMonths",
+      "newField": "tenure_months"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "processingFee",
+      "newField": "processing_fee"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "downPayment",
+      "newField": "down_payment"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "financeType",
+      "newField": "finance_type"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "assetType",
+      "newField": "asset_type"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "loanType",
+      "newField": "loan_type"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "vehicleRc",
+      "newField": "vehicle_rc"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "loanDetails",
+      "tableName": "loan_details",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "loanApplicationId",
+      "newField": "loan_application_id"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "borrowerName",
+      "newField": "borrower_name"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "coBorrowerName",
+      "newField": "co_borrower_name"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "loanAmount",
+      "newField": "loan_amount"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "interestRate",
+      "newField": "interest_rate"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "tenureMonths",
+      "newField": "tenure_months"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "emiAmount",
+      "newField": "emi_amount"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "downPayment",
+      "newField": "down_payment"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "processingFee",
+      "newField": "processing_fee"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "disbursalStatus",
+      "newField": "disbursal_status"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "disbursedAmount",
+      "newField": "disbursed_amount"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "disbursedAt",
+      "newField": "disbursed_at"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "disbursalReference",
+      "newField": "disbursal_reference"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "totalPaid",
+      "newField": "total_paid"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "totalOutstanding",
+      "newField": "total_outstanding"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "nextEmiDate",
+      "newField": "next_emi_date"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "emiSchedule",
+      "newField": "emi_schedule"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "overdueAmount",
+      "newField": "overdue_amount"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "overdueDays",
+      "newField": "overdue_days"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "loanStatus",
+      "newField": "loan_status"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "closureDate",
+      "newField": "closure_date"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "closureType",
+      "newField": "closure_type"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "loanFiles",
+      "tableName": "loan_files",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "loanOffers",
+      "tableName": "loan_offers",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "loanOffers",
+      "tableName": "loan_offers",
+      "tsField": "financierName",
+      "newField": "financier_name"
+    },
+    {
+      "tableSymbol": "loanOffers",
+      "tableName": "loan_offers",
+      "tsField": "loanAmount",
+      "newField": "loan_amount"
+    },
+    {
+      "tableSymbol": "loanOffers",
+      "tableName": "loan_offers",
+      "tsField": "interestRate",
+      "newField": "interest_rate"
+    },
+    {
+      "tableSymbol": "loanOffers",
+      "tableName": "loan_offers",
+      "tsField": "tenureMonths",
+      "newField": "tenure_months"
+    },
+    {
+      "tableSymbol": "loanOffers",
+      "tableName": "loan_offers",
+      "tsField": "processingFee",
+      "newField": "processing_fee"
+    },
+    {
+      "tableSymbol": "loanOffers",
+      "tableName": "loan_offers",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "loanOffers",
+      "tableName": "loan_offers",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "loanOffers",
+      "tableName": "loan_offers",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "loanPayments",
+      "tableName": "loan_payments",
+      "tsField": "loanFileId",
+      "newField": "loan_file_id"
+    },
+    {
+      "tableSymbol": "loanPayments",
+      "tableName": "loan_payments",
+      "tsField": "paymentType",
+      "newField": "payment_type"
+    },
+    {
+      "tableSymbol": "loanPayments",
+      "tableName": "loan_payments",
+      "tsField": "paymentMode",
+      "newField": "payment_mode"
+    },
+    {
+      "tableSymbol": "loanPayments",
+      "tableName": "loan_payments",
+      "tsField": "transactionId",
+      "newField": "transaction_id"
+    },
+    {
+      "tableSymbol": "loanPayments",
+      "tableName": "loan_payments",
+      "tsField": "paymentDate",
+      "newField": "payment_date"
+    },
+    {
+      "tableSymbol": "loanPayments",
+      "tableName": "loan_payments",
+      "tsField": "emiMonth",
+      "newField": "emi_month"
+    },
+    {
+      "tableSymbol": "loanPayments",
+      "tableName": "loan_payments",
+      "tsField": "receiptUrl",
+      "newField": "receipt_url"
+    },
+    {
+      "tableSymbol": "loanPayments",
+      "tableName": "loan_payments",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "productSelectionId",
+      "newField": "product_selection_id"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "loanAmount",
+      "newField": "loan_amount"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "downPayment",
+      "newField": "down_payment"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "fileCharge",
+      "newField": "file_charge"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "disbursementAmount",
+      "newField": "disbursement_amount"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "tenureMonths",
+      "newField": "tenure_months"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "loanApprovedBy",
+      "newField": "loan_approved_by"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "loanFileNumber",
+      "newField": "loan_file_number"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "rejectionReason",
+      "newField": "rejection_reason"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "sanctionedBy",
+      "newField": "sanctioned_by"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "sanctionedAt",
+      "newField": "sanctioned_at"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "dealerApproved",
+      "newField": "dealer_approved"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "dealerApprovedAt",
+      "newField": "dealer_approved_at"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "dealerApprovedBy",
+      "newField": "dealer_approved_by"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "loanSanctions",
+      "tableName": "loan_sanctions",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "nbfcLoans",
+      "tableName": "nbfc_loans",
+      "tsField": "loanApplicationId",
+      "newField": "loan_application_id"
+    },
+    {
+      "tableSymbol": "nbfcLoans",
+      "tableName": "nbfc_loans",
+      "tsField": "tenantId",
+      "newField": "tenant_id"
+    },
+    {
+      "tableSymbol": "nbfcLoans",
+      "tableName": "nbfc_loans",
+      "tsField": "emiAmount",
+      "newField": "emi_amount"
+    },
+    {
+      "tableSymbol": "nbfcLoans",
+      "tableName": "nbfc_loans",
+      "tsField": "emiDueDateDom",
+      "newField": "emi_due_date_dom"
+    },
+    {
+      "tableSymbol": "nbfcLoans",
+      "tableName": "nbfc_loans",
+      "tsField": "currentDpd",
+      "newField": "current_dpd"
+    },
+    {
+      "tableSymbol": "nbfcLoans",
+      "tableName": "nbfc_loans",
+      "tsField": "outstandingAmount",
+      "newField": "outstanding_amount"
+    },
+    {
+      "tableSymbol": "nbfcLoans",
+      "tableName": "nbfc_loans",
+      "tsField": "isActive",
+      "newField": "is_active"
+    },
+    {
+      "tableSymbol": "nbfcLoans",
+      "tableName": "nbfc_loans",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "nbfcLoans",
+      "tableName": "nbfc_loans",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "nbfcTenants",
+      "tableName": "nbfc_tenants",
+      "tsField": "displayName",
+      "newField": "display_name"
+    },
+    {
+      "tableSymbol": "nbfcTenants",
+      "tableName": "nbfc_tenants",
+      "tsField": "contactEmail",
+      "newField": "contact_email"
+    },
+    {
+      "tableSymbol": "nbfcTenants",
+      "tableName": "nbfc_tenants",
+      "tsField": "aumInr",
+      "newField": "aum_inr"
+    },
+    {
+      "tableSymbol": "nbfcTenants",
+      "tableName": "nbfc_tenants",
+      "tsField": "activeLoans",
+      "newField": "active_loans"
+    },
+    {
+      "tableSymbol": "nbfcTenants",
+      "tableName": "nbfc_tenants",
+      "tsField": "isActive",
+      "newField": "is_active"
+    },
+    {
+      "tableSymbol": "nbfcTenants",
+      "tableName": "nbfc_tenants",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "nbfcTenants",
+      "tableName": "nbfc_tenants",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "nbfcUsers",
+      "tableName": "nbfc_users",
+      "tsField": "userId",
+      "newField": "user_id"
+    },
+    {
+      "tableSymbol": "nbfcUsers",
+      "tableName": "nbfc_users",
+      "tsField": "tenantId",
+      "newField": "tenant_id"
+    },
+    {
+      "tableSymbol": "nbfcUsers",
+      "tableName": "nbfc_users",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "notifications",
+      "tableName": "notifications",
+      "tsField": "userId",
+      "newField": "user_id"
+    },
+    {
+      "tableSymbol": "notifications",
+      "tableName": "notifications",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "notifications",
+      "tableName": "notifications",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "notifications",
+      "tableName": "notifications",
+      "tsField": "readAt",
+      "newField": "read_at"
+    },
+    {
+      "tableSymbol": "notifications",
+      "tableName": "notifications",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "oemContacts",
+      "tableName": "oem_contacts",
+      "tsField": "oemId",
+      "newField": "oem_id"
+    },
+    {
+      "tableSymbol": "oemContacts",
+      "tableName": "oem_contacts",
+      "tsField": "isPrimary",
+      "newField": "is_primary"
+    },
+    {
+      "tableSymbol": "oemContacts",
+      "tableName": "oem_contacts",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "oemContacts",
+      "tableName": "oem_contacts",
+      "tsField": "contactRole",
+      "newField": "contact_role"
+    },
+    {
+      "tableSymbol": "oemContacts",
+      "tableName": "oem_contacts",
+      "tsField": "contactName",
+      "newField": "contact_name"
+    },
+    {
+      "tableSymbol": "oemContacts",
+      "tableName": "oem_contacts",
+      "tsField": "contactPhone",
+      "newField": "contact_phone"
+    },
+    {
+      "tableSymbol": "oemContacts",
+      "tableName": "oem_contacts",
+      "tsField": "contactEmail",
+      "newField": "contact_email"
+    },
+    {
+      "tableSymbol": "oemInventoryForPDI",
+      "tableName": "oem_inventory_for_pdi",
+      "tsField": "inventoryId",
+      "newField": "inventory_id"
+    },
+    {
+      "tableSymbol": "oemInventoryForPDI",
+      "tableName": "oem_inventory_for_pdi",
+      "tsField": "oemId",
+      "newField": "oem_id"
+    },
+    {
+      "tableSymbol": "oemInventoryForPDI",
+      "tableName": "oem_inventory_for_pdi",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "oemInventoryForPDI",
+      "tableName": "oem_inventory_for_pdi",
+      "tsField": "serialNumber",
+      "newField": "serial_number"
+    },
+    {
+      "tableSymbol": "oemInventoryForPDI",
+      "tableName": "oem_inventory_for_pdi",
+      "tsField": "pdiStatus",
+      "newField": "pdi_status"
+    },
+    {
+      "tableSymbol": "oemInventoryForPDI",
+      "tableName": "oem_inventory_for_pdi",
+      "tsField": "pdiRecordId",
+      "newField": "pdi_record_id"
+    },
+    {
+      "tableSymbol": "oemInventoryForPDI",
+      "tableName": "oem_inventory_for_pdi",
+      "tsField": "provisionId",
+      "newField": "provision_id"
+    },
+    {
+      "tableSymbol": "oems",
+      "tableName": "oems",
+      "tsField": "businessEntityName",
+      "newField": "business_entity_name"
+    },
+    {
+      "tableSymbol": "oems",
+      "tableName": "oems",
+      "tsField": "addressLine1",
+      "newField": "address_line1"
+    },
+    {
+      "tableSymbol": "oems",
+      "tableName": "oems",
+      "tsField": "addressLine2",
+      "newField": "address_line2"
+    },
+    {
+      "tableSymbol": "oems",
+      "tableName": "oems",
+      "tsField": "bankName",
+      "newField": "bank_name"
+    },
+    {
+      "tableSymbol": "oems",
+      "tableName": "oems",
+      "tsField": "bankAccountNumber",
+      "newField": "bank_account_number"
+    },
+    {
+      "tableSymbol": "oems",
+      "tableName": "oems",
+      "tsField": "ifscCode",
+      "newField": "ifsc_code"
+    },
+    {
+      "tableSymbol": "oems",
+      "tableName": "oems",
+      "tsField": "bankProofUrl",
+      "newField": "bank_proof_url"
+    },
+    {
+      "tableSymbol": "oems",
+      "tableName": "oems",
+      "tsField": "onboardingStatus",
+      "newField": "onboarding_status"
+    },
+    {
+      "tableSymbol": "oems",
+      "tableName": "oems",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "oems",
+      "tableName": "oems",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "oems",
+      "tableName": "oems",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "orderId",
+      "newField": "order_id"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "disputeType",
+      "newField": "dispute_type"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "raisedBy",
+      "newField": "raised_by"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "resolvedBy",
+      "newField": "resolved_by"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "photosUrls",
+      "newField": "photos_urls"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "resolutionStatus",
+      "newField": "resolution_status"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "resolutionDetails",
+      "newField": "resolution_details"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "actionTaken",
+      "newField": "action_taken"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "resolvedAt",
+      "newField": "resolved_at"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "assignedTo",
+      "newField": "assigned_to"
+    },
+    {
+      "tableSymbol": "orderDisputes",
+      "tableName": "order_disputes",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "provisionId",
+      "newField": "provision_id"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "oemId",
+      "newField": "oem_id"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "accountId",
+      "newField": "account_id"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "orderItems",
+      "newField": "order_items"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "totalAmount",
+      "newField": "total_amount"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "paymentTerm",
+      "newField": "payment_term"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "creditPeriodDays",
+      "newField": "credit_period_days"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "piUrl",
+      "newField": "pi_url"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "piAmount",
+      "newField": "pi_amount"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "invoiceUrl",
+      "newField": "invoice_url"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "grnId",
+      "newField": "grn_id"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "grnDate",
+      "newField": "grn_date"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "paymentStatus",
+      "newField": "payment_status"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "paymentAmount",
+      "newField": "payment_amount"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "paymentMode",
+      "newField": "payment_mode"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "transactionId",
+      "newField": "transaction_id"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "paymentDate",
+      "newField": "payment_date"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "orderStatus",
+      "newField": "order_status"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "deliveryStatus",
+      "newField": "delivery_status"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "expectedDeliveryDate",
+      "newField": "expected_delivery_date"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "actualDeliveryDate",
+      "newField": "actual_delivery_date"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "orders",
+      "tableName": "orders",
+      "tsField": "reorderTatDays",
+      "newField": "reorder_tat_days"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "requestedBy",
+      "newField": "requested_by"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "docLabel",
+      "newField": "doc_label"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "fileUrl",
+      "newField": "file_url"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "uploadStatus",
+      "newField": "upload_status"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "uploadedAt",
+      "newField": "uploaded_at"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "uploadToken",
+      "newField": "upload_token"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "tokenExpiresAt",
+      "newField": "token_expires_at"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "docFor",
+      "newField": "doc_for"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "docKey",
+      "newField": "doc_key"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "isRequired",
+      "newField": "is_required"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "rejectionReason",
+      "newField": "rejection_reason"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "reviewedBy",
+      "newField": "reviewed_by"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "reviewedAt",
+      "newField": "reviewed_at"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "documentName",
+      "newField": "document_name"
+    },
+    {
+      "tableSymbol": "otherDocumentRequests",
+      "tableName": "other_document_requests",
+      "tsField": "documentUrl",
+      "newField": "document_url"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "otpType",
+      "newField": "otp_type"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "otpHash",
+      "newField": "otp_hash"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "phoneSentTo",
+      "newField": "phone_sent_to"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "expiresAt",
+      "newField": "expires_at"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "sendCount",
+      "newField": "send_count"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "attemptCount",
+      "newField": "attempt_count"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "lockedUntil",
+      "newField": "locked_until"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "isUsed",
+      "newField": "is_used"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "usedAt",
+      "newField": "used_at"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "usedBy",
+      "newField": "used_by"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "overrideByAdmin",
+      "newField": "override_by_admin"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "overrideReason",
+      "newField": "override_reason"
+    },
+    {
+      "tableSymbol": "otpConfirmations",
+      "tableName": "otp_confirmations",
+      "tsField": "overrideBy",
+      "newField": "override_by"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "inventoryId",
+      "newField": "inventory_id"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "performedBy",
+      "newField": "performed_by"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "completedAt",
+      "newField": "completed_at"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "iotImeiNo",
+      "newField": "iot_imei_no"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "capacityAh",
+      "newField": "capacity_ah"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "resistanceMohm",
+      "newField": "resistance_mohm"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "temperatureCelsius",
+      "newField": "temperature_celsius"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "locationAddress",
+      "newField": "location_address"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "productManualUrl",
+      "newField": "product_manual_url"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "warrantyDocumentUrl",
+      "newField": "warranty_document_url"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "pdiPhotos",
+      "newField": "pdi_photos"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "failureReason",
+      "newField": "failure_reason"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "inspectedAt",
+      "newField": "inspected_at"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "oemInventoryId",
+      "newField": "oem_inventory_id"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "provisionId",
+      "newField": "provision_id"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "serviceEngineerId",
+      "newField": "service_engineer_id"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "physicalCondition",
+      "newField": "physical_condition"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "dischargingConnector",
+      "newField": "discharging_connector"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "chargingConnector",
+      "newField": "charging_connector"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "productorSticker",
+      "newField": "productor_sticker"
+    },
+    {
+      "tableSymbol": "pdiRecords",
+      "tableName": "pdi_records",
+      "tsField": "pdiStatus",
+      "newField": "pdi_status"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "leadId",
+      "newField": "lead_id"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "aadhaarNo",
+      "newField": "aadhaar_no"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "panNo",
+      "newField": "pan_no"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "fatherHusbandName",
+      "newField": "father_husband_name"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "maritalStatus",
+      "newField": "marital_status"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "spouseName",
+      "newField": "spouse_name"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "financeType",
+      "newField": "finance_type"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "assetType",
+      "newField": "asset_type"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "vehicleRc",
+      "newField": "vehicle_rc"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "loanType",
+      "newField": "loan_type"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "localAddress",
+      "newField": "local_address"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "dobConfidence",
+      "newField": "dob_confidence"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "nameConfidence",
+      "newField": "name_confidence"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "addressConfidence",
+      "newField": "address_confidence"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "ocrProcessedAt",
+      "newField": "ocr_processed_at"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "permanentAddress",
+      "newField": "permanent_address"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "bankAccountNumber",
+      "newField": "bank_account_number"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "bankIfsc",
+      "newField": "bank_ifsc"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "bankName",
+      "newField": "bank_name"
+    },
+    {
+      "tableSymbol": "personalDetails",
+      "tableName": "personal_details",
+      "tsField": "bankBranch",
+      "newField": "bank_branch"
+    },
+    {
+      "tableSymbol": "productCategories",
+      "tableName": "product_categories",
+      "tsField": "isActive",
+      "newField": "is_active"
+    },
+    {
+      "tableSymbol": "productCategories",
+      "tableName": "product_categories",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "productCategories",
+      "tableName": "product_categories",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "products",
+      "tableName": "products",
+      "tsField": "categoryId",
+      "newField": "category_id"
+    },
+    {
+      "tableSymbol": "products",
+      "tableName": "products",
+      "tsField": "voltageV",
+      "newField": "voltage_v"
+    },
+    {
+      "tableSymbol": "products",
+      "tableName": "products",
+      "tsField": "capacityAh",
+      "newField": "capacity_ah"
+    },
+    {
+      "tableSymbol": "products",
+      "tableName": "products",
+      "tsField": "sortOrder",
+      "newField": "sort_order"
+    },
+    {
+      "tableSymbol": "products",
+      "tableName": "products",
+      "tsField": "isActive",
+      "newField": "is_active"
+    },
+    {
+      "tableSymbol": "products",
+      "tableName": "products",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "products",
+      "tableName": "products",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "products",
+      "tableName": "products",
+      "tsField": "hsnCode",
+      "newField": "hsn_code"
+    },
+    {
+      "tableSymbol": "products",
+      "tableName": "products",
+      "tsField": "assetType",
+      "newField": "asset_type"
+    },
+    {
+      "tableSymbol": "products",
+      "tableName": "products",
+      "tsField": "isSerialized",
+      "newField": "is_serialized"
+    },
+    {
+      "tableSymbol": "products",
+      "tableName": "products",
+      "tsField": "warrantyMonths",
+      "newField": "warranty_months"
+    },
+    {
+      "tableSymbol": "provisions",
+      "tableName": "provisions",
+      "tsField": "orderId",
+      "newField": "order_id"
+    },
+    {
+      "tableSymbol": "provisions",
+      "tableName": "provisions",
+      "tsField": "oemId",
+      "newField": "oem_id"
+    },
+    {
+      "tableSymbol": "provisions",
+      "tableName": "provisions",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "provisions",
+      "tableName": "provisions",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "provisions",
+      "tableName": "provisions",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "provisions",
+      "tableName": "provisions",
+      "tsField": "oemName",
+      "newField": "oem_name"
+    },
+    {
+      "tableSymbol": "provisions",
+      "tableName": "provisions",
+      "tsField": "expectedDeliveryDate",
+      "newField": "expected_delivery_date"
+    },
+    {
+      "tableSymbol": "riskCardRuns",
+      "tableName": "risk_card_runs",
+      "tsField": "tenantId",
+      "newField": "tenant_id"
+    },
+    {
+      "tableSymbol": "riskCardRuns",
+      "tableName": "risk_card_runs",
+      "tsField": "hypothesisId",
+      "newField": "hypothesis_id"
+    },
+    {
+      "tableSymbol": "riskCardRuns",
+      "tableName": "risk_card_runs",
+      "tsField": "runAt",
+      "newField": "run_at"
+    },
+    {
+      "tableSymbol": "riskCardRuns",
+      "tableName": "risk_card_runs",
+      "tsField": "findingSummary",
+      "newField": "finding_summary"
+    },
+    {
+      "tableSymbol": "riskCardRuns",
+      "tableName": "risk_card_runs",
+      "tsField": "affectedCount",
+      "newField": "affected_count"
+    },
+    {
+      "tableSymbol": "riskCardRuns",
+      "tableName": "risk_card_runs",
+      "tsField": "totalCount",
+      "newField": "total_count"
+    },
+    {
+      "tableSymbol": "riskCardRuns",
+      "tableName": "risk_card_runs",
+      "tsField": "evidenceJson",
+      "newField": "evidence_json"
+    },
+    {
+      "tableSymbol": "riskCardRuns",
+      "tableName": "risk_card_runs",
+      "tsField": "llmCritique",
+      "newField": "llm_critique"
+    },
+    {
+      "tableSymbol": "riskCardRuns",
+      "tableName": "risk_card_runs",
+      "tsField": "llmModel",
+      "newField": "llm_model"
+    },
+    {
+      "tableSymbol": "riskCardRuns",
+      "tableName": "risk_card_runs",
+      "tsField": "llmPromptTokens",
+      "newField": "llm_prompt_tokens"
+    },
+    {
+      "tableSymbol": "riskCardRuns",
+      "tableName": "risk_card_runs",
+      "tsField": "llmCompletionTokens",
+      "newField": "llm_completion_tokens"
+    },
+    {
+      "tableSymbol": "riskHypotheses",
+      "tableName": "risk_hypotheses",
+      "tsField": "testMethod",
+      "newField": "test_method"
+    },
+    {
+      "tableSymbol": "riskHypotheses",
+      "tableName": "risk_hypotheses",
+      "tsField": "testDefinition",
+      "newField": "test_definition"
+    },
+    {
+      "tableSymbol": "riskHypotheses",
+      "tableName": "risk_hypotheses",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "riskHypotheses",
+      "tableName": "risk_hypotheses",
+      "tsField": "retiredAt",
+      "newField": "retired_at"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "triggeredBy",
+      "newField": "triggered_by"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "startedAt",
+      "newField": "started_at"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "completedAt",
+      "newField": "completed_at"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "searchQueries",
+      "newField": "search_queries"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "totalFound",
+      "newField": "total_found"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "newLeadsSaved",
+      "newField": "new_leads_saved"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "duplicatesSkipped",
+      "newField": "duplicates_skipped"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "errorMessage",
+      "newField": "error_message"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "cleanedLeads",
+      "newField": "cleaned_leads"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "durationMs",
+      "newField": "duration_ms"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "totalChunks",
+      "newField": "total_chunks"
+    },
+    {
+      "tableSymbol": "scrapeRuns",
+      "tableName": "scraper_runs",
+      "tsField": "completedChunks",
+      "newField": "completed_chunks"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "scraperRunId",
+      "newField": "scraper_run_id"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "dealerName",
+      "newField": "dealer_name"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "locationCity",
+      "newField": "location_city"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "locationState",
+      "newField": "location_state"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "sourceUrl",
+      "newField": "source_url"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "rawData",
+      "newField": "raw_data"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "assignedTo",
+      "newField": "assigned_to"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "assignedBy",
+      "newField": "assigned_by"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "assignedAt",
+      "newField": "assigned_at"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "explorationStatus",
+      "newField": "exploration_status"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "explorationNotes",
+      "newField": "exploration_notes"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "exploredAt",
+      "newField": "explored_at"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "convertedLeadId",
+      "newField": "converted_lead_id"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "gstNumber",
+      "newField": "gst_number"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "businessType",
+      "newField": "business_type"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "productsSold",
+      "newField": "products_sold"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "qualityScore",
+      "newField": "quality_score"
+    },
+    {
+      "tableSymbol": "scrapedDealerLeads",
+      "tableName": "scraped_dealer_leads",
+      "tsField": "phoneValid",
+      "newField": "phone_valid"
+    },
+    {
+      "tableSymbol": "scraperCityQueue",
+      "tableName": "scraper_city_queue",
+      "tsField": "baseQuery",
+      "newField": "base_query"
+    },
+    {
+      "tableSymbol": "scraperCityQueue",
+      "tableName": "scraper_city_queue",
+      "tsField": "fullQuery",
+      "newField": "full_query"
+    },
+    {
+      "tableSymbol": "scraperCityQueue",
+      "tableName": "scraper_city_queue",
+      "tsField": "leadsFound",
+      "newField": "leads_found"
+    },
+    {
+      "tableSymbol": "scraperCityQueue",
+      "tableName": "scraper_city_queue",
+      "tsField": "newLeads",
+      "newField": "new_leads"
+    },
+    {
+      "tableSymbol": "scraperCityQueue",
+      "tableName": "scraper_city_queue",
+      "tsField": "scrapedAt",
+      "newField": "scraped_at"
+    },
+    {
+      "tableSymbol": "scraperCityQueue",
+      "tableName": "scraper_city_queue",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "scraperDedupLogs",
+      "tableName": "scraper_dedup_logs",
+      "tsField": "scraperRunId",
+      "newField": "scraper_run_id"
+    },
+    {
+      "tableSymbol": "scraperDedupLogs",
+      "tableName": "scraper_dedup_logs",
+      "tsField": "rawDealerName",
+      "newField": "raw_dealer_name"
+    },
+    {
+      "tableSymbol": "scraperDedupLogs",
+      "tableName": "scraper_dedup_logs",
+      "tsField": "rawPhone",
+      "newField": "raw_phone"
+    },
+    {
+      "tableSymbol": "scraperDedupLogs",
+      "tableName": "scraper_dedup_logs",
+      "tsField": "rawLocation",
+      "newField": "raw_location"
+    },
+    {
+      "tableSymbol": "scraperDedupLogs",
+      "tableName": "scraper_dedup_logs",
+      "tsField": "rawSourceUrl",
+      "newField": "raw_source_url"
+    },
+    {
+      "tableSymbol": "scraperDedupLogs",
+      "tableName": "scraper_dedup_logs",
+      "tsField": "skipReason",
+      "newField": "skip_reason"
+    },
+    {
+      "tableSymbol": "scraperDedupLogs",
+      "tableName": "scraper_dedup_logs",
+      "tsField": "matchedLeadId",
+      "newField": "matched_lead_id"
+    },
+    {
+      "tableSymbol": "scraperDedupLogs",
+      "tableName": "scraper_dedup_logs",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "scraperLeads",
+      "tableName": "scraper_leads",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "scraperLeadsDuplicates",
+      "tableName": "scraper_leads_duplicates",
+      "tsField": "originalLeadId",
+      "newField": "original_lead_id"
+    },
+    {
+      "tableSymbol": "scraperLeadsDuplicates",
+      "tableName": "scraper_leads_duplicates",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "scraperRaw",
+      "tableName": "scraper_raw",
+      "tsField": "runId",
+      "newField": "run_id"
+    },
+    {
+      "tableSymbol": "scraperRaw",
+      "tableName": "scraper_raw",
+      "tsField": "rawData",
+      "newField": "raw_data"
+    },
+    {
+      "tableSymbol": "scraperRaw",
+      "tableName": "scraper_raw",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "scraperRunChunks",
+      "tableName": "scraper_run_chunks",
+      "tsField": "runId",
+      "newField": "run_id"
+    },
+    {
+      "tableSymbol": "scraperRunChunks",
+      "tableName": "scraper_run_chunks",
+      "tsField": "combinationQuery",
+      "newField": "combination_query"
+    },
+    {
+      "tableSymbol": "scraperRunChunks",
+      "tableName": "scraper_run_chunks",
+      "tsField": "leadsCount",
+      "newField": "leads_count"
+    },
+    {
+      "tableSymbol": "scraperRunChunks",
+      "tableName": "scraper_run_chunks",
+      "tsField": "errorMessage",
+      "newField": "error_message"
+    },
+    {
+      "tableSymbol": "scraperRunChunks",
+      "tableName": "scraper_run_chunks",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "scraperRunChunks",
+      "tableName": "scraper_run_chunks",
+      "tsField": "completedAt",
+      "newField": "completed_at"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "triggeredBy",
+      "newField": "triggered_by"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "startedAt",
+      "newField": "started_at"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "completedAt",
+      "newField": "completed_at"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "searchQueries",
+      "newField": "search_queries"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "totalFound",
+      "newField": "total_found"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "newLeadsSaved",
+      "newField": "new_leads_saved"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "duplicatesSkipped",
+      "newField": "duplicates_skipped"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "errorMessage",
+      "newField": "error_message"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "cleanedLeads",
+      "newField": "cleaned_leads"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "durationMs",
+      "newField": "duration_ms"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "totalChunks",
+      "newField": "total_chunks"
+    },
+    {
+      "tableSymbol": "scraperRuns",
+      "tableName": "scraper_runs",
+      "tsField": "completedChunks",
+      "newField": "completed_chunks"
+    },
+    {
+      "tableSymbol": "scraperSchedules",
+      "tableName": "scraper_schedules",
+      "tsField": "dayOfWeek",
+      "newField": "day_of_week"
+    },
+    {
+      "tableSymbol": "scraperSchedules",
+      "tableName": "scraper_schedules",
+      "tsField": "timeOfDay",
+      "newField": "time_of_day"
+    },
+    {
+      "tableSymbol": "scraperSchedules",
+      "tableName": "scraper_schedules",
+      "tsField": "isActive",
+      "newField": "is_active"
+    },
+    {
+      "tableSymbol": "scraperSchedules",
+      "tableName": "scraper_schedules",
+      "tsField": "lastRunAt",
+      "newField": "last_run_at"
+    },
+    {
+      "tableSymbol": "scraperSchedules",
+      "tableName": "scraper_schedules",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "scraperSchedules",
+      "tableName": "scraper_schedules",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "scraperSchedules",
+      "tableName": "scraper_schedules",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "scraperSearchQueries",
+      "tableName": "scraper_search_queries",
+      "tsField": "queryText",
+      "newField": "query_text"
+    },
+    {
+      "tableSymbol": "scraperSearchQueries",
+      "tableName": "scraper_search_queries",
+      "tsField": "isActive",
+      "newField": "is_active"
+    },
+    {
+      "tableSymbol": "scraperSearchQueries",
+      "tableName": "scraper_search_queries",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "scraperSearchQueries",
+      "tableName": "scraper_search_queries",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "scraperSearchQueries",
+      "tableName": "scraper_search_queries",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "deployedAssetId",
+      "newField": "deployed_asset_id"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "customerName",
+      "newField": "customer_name"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "customerPhone",
+      "newField": "customer_phone"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "issueType",
+      "newField": "issue_type"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "issueDescription",
+      "newField": "issue_description"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "photosUrls",
+      "newField": "photos_urls"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "assignedTo",
+      "newField": "assigned_to"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "assignedAt",
+      "newField": "assigned_at"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "resolutionType",
+      "newField": "resolution_type"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "resolutionNotes",
+      "newField": "resolution_notes"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "resolvedBy",
+      "newField": "resolved_by"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "resolvedAt",
+      "newField": "resolved_at"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "slaDeadline",
+      "newField": "sla_deadline"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "slaBreached",
+      "newField": "sla_breached"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "createdBy",
+      "newField": "created_by"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "serviceTickets",
+      "tableName": "service_tickets",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "slas",
+      "tableName": "slas",
+      "tsField": "entityType",
+      "newField": "entity_type"
+    },
+    {
+      "tableSymbol": "slas",
+      "tableName": "slas",
+      "tsField": "entityId",
+      "newField": "entity_id"
+    },
+    {
+      "tableSymbol": "slas",
+      "tableName": "slas",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "slas",
+      "tableName": "slas",
+      "tsField": "assignedTo",
+      "newField": "assigned_to"
+    },
+    {
+      "tableSymbol": "slas",
+      "tableName": "slas",
+      "tsField": "completedAt",
+      "newField": "completed_at"
+    },
+    {
+      "tableSymbol": "slas",
+      "tableName": "slas",
+      "tsField": "escalatedTo",
+      "newField": "escalated_to"
+    },
+    {
+      "tableSymbol": "slas",
+      "tableName": "slas",
+      "tsField": "escalatedAt",
+      "newField": "escalated_at"
+    },
+    {
+      "tableSymbol": "slas",
+      "tableName": "slas",
+      "tsField": "workflowStep",
+      "newField": "workflow_step"
+    },
+    {
+      "tableSymbol": "slas",
+      "tableName": "slas",
+      "tsField": "slaDeadline",
+      "newField": "sla_deadline"
+    },
+    {
+      "tableSymbol": "users",
+      "tableName": "users",
+      "tsField": "dealerId",
+      "newField": "dealer_id"
+    },
+    {
+      "tableSymbol": "users",
+      "tableName": "users",
+      "tsField": "avatarUrl",
+      "newField": "avatar_url"
+    },
+    {
+      "tableSymbol": "users",
+      "tableName": "users",
+      "tsField": "isActive",
+      "newField": "is_active"
+    },
+    {
+      "tableSymbol": "users",
+      "tableName": "users",
+      "tsField": "createdAt",
+      "newField": "created_at"
+    },
+    {
+      "tableSymbol": "users",
+      "tableName": "users",
+      "tsField": "updatedAt",
+      "newField": "updated_at"
+    },
+    {
+      "tableSymbol": "users",
+      "tableName": "users",
+      "tsField": "passwordHash",
+      "newField": "password_hash"
+    },
+    {
+      "tableSymbol": "users",
+      "tableName": "users",
+      "tsField": "mustChangePassword",
+      "newField": "must_change_password"
+    }
+  ],
+  "perBlock": {
+    "accounts": 15,
+    "adminKycReviews": 10,
+    "adminVerificationQueue": 11,
+    "afterSalesRecords": 10,
+    "aiCallLogs": 16,
+    "appSettings": 1,
+    "approvals": 9,
+    "assignmentChangeLogs": 8,
+    "auditLogs": 6,
+    "batteryAlerts": 5,
+    "bolnaCalls": 17,
+    "callRecords": 7,
+    "callSessions": 8,
+    "campaignSegments": 9,
+    "campaigns": 12,
+    "coBorrowerDocuments": 11,
+    "coBorrowerRequests": 6,
+    "coBorrowers": 15,
+    "consentRecords": 31,
+    "conversationMessages": 1,
+    "couponAuditLog": 9,
+    "couponBatches": 8,
+    "couponCodes": 17,
+    "dealerAgreementEvents": 11,
+    "dealerAgreementSigners": 19,
+    "dealerCorrectionItems": 7,
+    "dealerCorrectionRounds": 15,
+    "dealerLeads": 13,
+    "dealerOnboardingApplications": 74,
+    "dealerOnboardingDocuments": 21,
+    "dealerSubscriptions": 5,
+    "deals": 23,
+    "deployedAssets": 31,
+    "deploymentHistory": 3,
+    "deviceBatteryMap": 10,
+    "digilockerTransactions": 26,
+    "documents": 4,
+    "facilitationPayments": 29,
+    "inventory": 40,
+    "kycDataAudit": 8,
+    "kycDocuments": 21,
+    "kycVerificationMetadata": 19,
+    "kycVerifications": 19,
+    "leadAssignments": 8,
+    "leadDocuments": 8,
+    "leads": 115,
+    "loanApplications": 23,
+    "loanDetails": 13,
+    "loanFiles": 28,
+    "loanOffers": 10,
+    "loanPayments": 8,
+    "loanSanctions": 17,
+    "nbfcLoans": 11,
+    "nbfcTenants": 7,
+    "nbfcUsers": 6,
+    "notifications": 5,
+    "oemContacts": 7,
+    "oemInventoryForPDI": 7,
+    "oems": 11,
+    "orderDisputes": 13,
+    "orders": 27,
+    "otherDocumentRequests": 18,
+    "otpConfirmations": 15,
+    "pdiRecords": 22,
+    "personalDetails": 22,
+    "productCategories": 3,
+    "products": 15,
+    "provisions": 7,
+    "riskCardRuns": 15,
+    "riskHypotheses": 4,
+    "scrapeRuns": 13,
+    "scrapedDealerLeads": 26,
+    "scraperCityQueue": 6,
+    "scraperDedupLogs": 9,
+    "scraperLeads": 1,
+    "scraperLeadsDuplicates": 2,
+    "scraperRaw": 3,
+    "scraperRunChunks": 6,
+    "scraperRuns": 14,
+    "scraperSchedules": 7,
+    "scraperSearchQueries": 6,
+    "serviceTickets": 20,
+    "slas": 9,
+    "users": 7
+  },
+  "fileWide": 80
+}
