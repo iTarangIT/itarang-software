@@ -3,7 +3,6 @@
 import Image from "next/image";
 import { useState } from "react";
 
-import RequestMoreDocsModal from "./RequestMoreDocsModal";
 
 // BRD §2.9.3 "Panel 2 — Supporting Documents Review" — rendered on the admin
 // case-review screen whenever the lead has any otherDocumentRequests rows.
@@ -61,7 +60,6 @@ export default function SupportingDocsPanel({
   const [loadingId, setLoadingId] = useState("");
   const [error, setError] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
-  const [moreDocsFor, setMoreDocsFor] = useState<SupportingDoc | null>(null);
 
   if (docs.length === 0) return null;
 
@@ -253,13 +251,6 @@ export default function SupportingDocsPanel({
                     >
                       {loadingId === `${d.id}:reject` ? "…" : "Reject"}
                     </button>
-                    <button
-                      onClick={() => setMoreDocsFor(d)}
-                      disabled={loadingId.startsWith(d.id)}
-                      className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50"
-                    >
-                      Request Docs
-                    </button>
                   </div>
                 </div>
               )}
@@ -316,17 +307,6 @@ export default function SupportingDocsPanel({
         </div>
       )}
 
-      <RequestMoreDocsModal
-        open={!!moreDocsFor}
-        onClose={() => setMoreDocsFor(null)}
-        leadId={leadId}
-        sourceVerificationId={moreDocsFor?.id ?? null}
-        sourceCardLabel={
-          moreDocsFor ? `Supporting Doc: ${moreDocsFor.docLabel}` : undefined
-        }
-        defaultDocFor={moreDocsFor?.docFor ?? "primary"}
-        onSuccess={onRefresh}
-      />
     </div>
   );
 }
