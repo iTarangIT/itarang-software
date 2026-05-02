@@ -87,6 +87,29 @@ export const CORRECTION_DOCUMENTS: CorrectionDocument[] = [
 const FIELD_KEYS = new Set<string>(CORRECTION_FIELDS.map((f) => f.key));
 const DOCUMENT_KEYS = new Set<string>(CORRECTION_DOCUMENTS.map((d) => d.key));
 
+// CamelCase catalog key → snake_case dealer_onboarding_applications column.
+// Catalog keys are public/UI-facing camelCase; the table columns are
+// snake_case. Without this map, snapshotting a "previous value" returns
+// undefined (so the admin sees "empty") and applying a correction silently
+// drops every field update because Drizzle ignores unknown column names.
+export const FIELD_KEY_TO_COLUMN: Record<CorrectionFieldKey, string> = {
+  companyName: "company_name",
+  companyType: "company_type",
+  gstNumber: "gst_number",
+  panNumber: "pan_number",
+  cinNumber: "cin_number",
+  ownerName: "owner_name",
+  ownerPhone: "owner_phone",
+  ownerEmail: "owner_email",
+  bankName: "bank_name",
+  accountNumber: "account_number",
+  beneficiaryName: "beneficiary_name",
+  ifscCode: "ifsc_code",
+  salesManagerName: "sales_manager_name",
+  salesManagerEmail: "sales_manager_email",
+  salesManagerMobile: "sales_manager_mobile",
+};
+
 export function isCorrectionFieldKey(value: unknown): value is CorrectionFieldKey {
   return typeof value === "string" && FIELD_KEYS.has(value);
 }

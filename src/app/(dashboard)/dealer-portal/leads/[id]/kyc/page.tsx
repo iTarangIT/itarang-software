@@ -254,6 +254,28 @@ export default function KYCPage() {
         return { total: required.length, uploadedCount: uploaded.length, pending };
     }, [requiredDocs, uploadedDocs]);
 
+    // Submit-for-Verification gate: dealer can only submit when consent has
+    // been submitted (or already verified) AND every required document has a
+    // file AND coupon is reserved. The button stays disabled with a hint
+    // listing the missing prerequisites until all three are satisfied.
+    const consentSubmittedOrFinal = useMemo(() => {
+        const s = (consentStatus || '').toLowerCase();
+        return s === 'admin_review_pending' || isFinalConsentStatus(s);
+    }, [consentStatus]);
+
+    const allRequiredDocsUploaded = useMemo(
+        () => docStats.total > 0 && docStats.pending.length === 0,
+        [docStats],
+    );
+
+    const submitGate = useMemo(() => {
+        const missing: string[] = [];
+        if (!consentSubmittedOrFinal) missing.push('Submit consent for admin verification');
+        if (!allRequiredDocsUploaded) missing.push(`Upload ${docStats.pending.length || 'all'} required document${docStats.pending.length === 1 ? '' : 's'}`);
+        if (lead?.coupon_status !== 'reserved') missing.push('Validate coupon');
+        return { ok: missing.length === 0, missing };
+    }, [consentSubmittedOrFinal, allRequiredDocsUploaded, docStats.pending.length, lead?.coupon_status]);
+
     // ─── Document Upload ────────────────────────────────────────────────────
 
     const handleDocUpload = async (documentType: string, file: File) => {
@@ -1067,10 +1089,21 @@ export default function KYCPage() {
                                         Change Coupon
                                     </button>
                                 </div>
+                                {!submitGate.ok && (
+                                    <div className="px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                                        <p className="font-bold mb-1">Complete these steps before submitting:</p>
+                                        <ul className="list-disc list-inside space-y-0.5">
+                                            {submitGate.missing.map((m) => (
+                                                <li key={m}>{m}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
                                 <button
                                     onClick={handleSubmitForVerification}
-                                    disabled={submitting}
-                                    className="w-full px-6 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                                    disabled={submitting || !submitGate.ok}
+                                    title={submitGate.ok ? 'Submit for admin verification' : 'Complete all steps above first'}
+                                    className="w-full px-6 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                                 >
                                     {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
                                     Submit for Verification

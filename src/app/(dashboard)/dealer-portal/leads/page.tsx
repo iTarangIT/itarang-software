@@ -225,13 +225,16 @@ function DealerLeadsContent() {
                                                             </Link>
                                                         );
                                                     }
+                                                    // Cold / Warm leads stay at Step 1. Open the wizard with
+                                                    // ?id=… so the dealer can edit fields like address.
                                                     return (
-                                                        <span
-                                                            className="text-gray-400 font-medium text-xs cursor-not-allowed"
-                                                            title="Warm/Cold leads stay at Step 1. Promote to Hot to proceed."
+                                                        <Link
+                                                            href={`/dealer-portal/leads/new?id=${lead.id}`}
+                                                            className="text-brand-600 hover:text-brand-800 font-medium text-xs"
+                                                            title="Open Step 1 to edit this lead"
                                                         >
-                                                            Step 1 only
-                                                        </span>
+                                                            View Details
+                                                        </Link>
                                                     );
                                                 })()}
                                                 <button
