@@ -10,6 +10,7 @@ import {
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import {
   CORRECTION_FIELDS,
+  FIELD_KEY_TO_COLUMN,
   type CorrectionFieldKey,
 } from "@/lib/onboarding/correction-catalog";
 
@@ -90,14 +91,18 @@ export async function POST(req: NextRequest, context: RouteContext) {
       .where(eq(dealerCorrectionItems.round_id, round.id));
 
     // ── Merge field updates ─────────────────────────────────────────────────
-    const fieldUpdates: Partial<Record<CorrectionFieldKey, string>> = {};
+    // Catalog keys are camelCase; the table columns are snake_case. Translate
+    // each key via FIELD_KEY_TO_COLUMN so Drizzle actually writes to the right
+    // column. Without this, Drizzle silently dropped every field update and
+    // the application row never picked up the dealer's new values.
+    const fieldUpdates: Record<string, string> = {};
     for (const item of items) {
       if (item.kind !== "field") continue;
       if (!ALLOWED_FIELD_KEYS.has(item.key as CorrectionFieldKey)) continue;
-      // Skip items the dealer didn't actually fill in (defense — shouldn't
-      // happen because the POST submit handler enforces all-or-nothing).
       if (item.new_value === null || item.new_value === undefined) continue;
-      fieldUpdates[item.key as CorrectionFieldKey] = item.new_value;
+      const column = FIELD_KEY_TO_COLUMN[item.key as CorrectionFieldKey];
+      if (!column) continue;
+      fieldUpdates[column] = item.new_value;
     }
 
     // ── Promote new docs / supersede old docs ───────────────────────────────
