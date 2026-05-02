@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import RequestCoBorrowerModal from "../step3/RequestCoBorrowerModal";
-import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface CIBILCardProps {
   leadId: string;
@@ -92,10 +91,9 @@ export default function CIBILCard({
   const [verificationId, setVerificationId] = useState(existingVerification?.id || "");
   const [error, setError] = useState("");
   const [errorSuggestion, setErrorSuggestion] = useState("");
-  const [adminNotes, setAdminNotes] = useState("");
+  const [adminNotes, setAdminNotes] = useState(existingVerification?.adminActionNotes || "");
   const [actionLoading, setActionLoading] = useState("");
   const [showCoBorrowerModal, setShowCoBorrowerModal] = useState(false);
-  const [showMoreDocsModal, setShowMoreDocsModal] = useState(false);
   const [actionResult, setActionResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const handleFetch = async (type: "score" | "report") => {
@@ -159,8 +157,7 @@ export default function CIBILCard({
     }
   };
 
-  const handleAdminAction = async (action: "accept" | "reject" | "request_more_docs") => {
-    if (action === "request_more_docs") { setShowMoreDocsModal(true); return; }
+  const handleAdminAction = async (action: "accept" | "reject") => {
     if (action === "reject" && !adminNotes.trim()) { setError("Please add rejection reason"); return; }
     setActionLoading(action);
     setError("");
@@ -232,9 +229,23 @@ export default function CIBILCard({
             <p className="text-xs text-gray-500">via Decentro</p>
           </div>
         </div>
-        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusLabel[status].bg}`}>
-          {statusLabel[status].label}
-        </span>
+        {(() => {
+          // Admin's accept/reject decision overrides the bureau response for
+          // the badge — admins want the badge to mirror their action
+          // ("Accepted"/"Rejected") not the underlying API state.
+          const adminBadge =
+            existingVerification?.adminAction === "accepted"
+              ? { bg: "bg-green-100 text-green-700", label: "Accepted" }
+              : existingVerification?.adminAction === "rejected"
+                ? { bg: "bg-red-100 text-red-700", label: "Rejected" }
+                : null;
+          const badge = adminBadge ?? statusLabel[status];
+          return (
+            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${badge.bg}`}>
+              {badge.label}
+            </span>
+          );
+        })()}
       </div>
 
       <div className="p-5 space-y-5">
@@ -266,55 +277,57 @@ export default function CIBILCard({
         </div>
 
 
-        {/* VERIFICATION OPTIONS — always visible so admin can re-run after a verify/accept/reject */}
-        {!isLoading && (
-          <div>
-            <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide mb-3">Verification Options</p>
-            <div className="overflow-hidden rounded-lg border border-gray-200">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-200">
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Report Type</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Cost</th>
-                    <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  <tr>
-                    <td className="px-4 py-3 text-gray-800">Credit Score Only</td>
-                    <td className="px-4 py-3 text-gray-600 font-mono">&#8377;4.00</td>
-                    <td className="px-4 py-3">
-                      <button onClick={() => handleFetch("score")}
-                        className="px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-medium transition-colors">
-                        Get Score
-                      </button>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="px-4 py-3 text-gray-800">Credit Report Summary</td>
-                    <td className="px-4 py-3 text-gray-600 font-mono">&#8377;20.00</td>
-                    <td className="px-4 py-3">
-                      <button onClick={() => handleFetch("report")}
-                        className="px-4 py-1.5 bg-purple-800 hover:bg-purple-900 text-white rounded-lg text-xs font-medium transition-colors">
-                        Get Report
-                      </button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+        {/* VERIFICATION OPTIONS — always visible so admin can re-run after a
+            verify/accept/reject. Per-button loading: only the clicked button
+            shows a spinner; the other one is merely disabled so the admin can
+            see both options remain on screen and isn't tempted to think the
+            card has crashed. */}
+        <div>
+          <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide mb-3">Verification Options</p>
+          <div className="overflow-hidden rounded-lg border border-gray-200">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Report Type</th>
+                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Cost</th>
+                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                <tr>
+                  <td className="px-4 py-3 text-gray-800">Credit Score Only</td>
+                  <td className="px-4 py-3 text-gray-600 font-mono">&#8377;4.00</td>
+                  <td className="px-4 py-3">
+                    <button onClick={() => handleFetch("score")} disabled={isLoading}
+                      className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                      {status === "loading_score" ? (
+                        <>
+                          <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                          Fetching…
+                        </>
+                      ) : "Get Score"}
+                    </button>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 text-gray-800">Credit Report Summary</td>
+                  <td className="px-4 py-3 text-gray-600 font-mono">&#8377;20.00</td>
+                  <td className="px-4 py-3">
+                    <button onClick={() => handleFetch("report")} disabled={isLoading}
+                      className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-purple-800 hover:bg-purple-900 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                      {status === "loading_report" ? (
+                        <>
+                          <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                          Fetching…
+                        </>
+                      ) : "Get Report"}
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-        )}
-
-        {/* Loading */}
-        {isLoading && (
-          <div className="flex items-center justify-center py-8">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600" />
-            <span className="ml-3 text-sm text-gray-600">
-              Fetching CIBIL {status === "loading_report" ? "report" : "score"}...
-            </span>
-          </div>
-        )}
+        </div>
 
         {/* NO CREDIT HISTORY RESULT */}
         {status === "no_history" && (
@@ -362,44 +375,13 @@ export default function CIBILCard({
               <span className="font-semibold">Recommendation:</span> Since no CIBIL score exists, consider requiring a co-borrower with established credit history, or proceed with alternative assessment.
             </div>
 
-            {/* Admin actions for no_history */}
-            {verificationId && (
-              <div className="space-y-3 pt-3 border-t border-gray-100">
-                {actionResult && (
-                  <div className={`rounded-lg p-3 text-sm font-medium flex items-center gap-2 ${
-                    actionResult.success ? "bg-green-50 border border-green-200 text-green-700" : "bg-red-50 border border-red-200 text-red-700"
-                  }`}>
-                    <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                      {actionResult.success
-                        ? <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                        : <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                      }
-                    </svg>
-                    {actionResult.message}
-                  </div>
-                )}
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Admin Notes</p>
-                  <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
-                    placeholder="CIBIL verification remarks..."
-                    className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none" />
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => handleAdminAction("accept")} disabled={!!actionLoading}
-                    className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                    {actionLoading === "accept" ? "Accepting..." : "Accept"}
-                  </button>
-                  <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
-                    className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                    {actionLoading === "reject" ? "Rejecting..." : "Reject"}
-                  </button>
-                  <button onClick={() => setShowCoBorrowerModal(true)} disabled={!!actionLoading}
-                    className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                    Request Docs
-                  </button>
-                </div>
-              </div>
-            )}
+            {/* Request Co-Borrower — contextual to the no-credit-history
+                outcome. Accept/Reject lives in the persistent decision panel
+                at the bottom of the card. */}
+            <button onClick={() => setShowCoBorrowerModal(true)} disabled={!!actionLoading}
+              className="w-full bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
+              Request Co-Borrower
+            </button>
           </div>
         )}
 
@@ -509,114 +491,54 @@ export default function CIBILCard({
               </div>
             )}
 
-            {/* ADMIN NOTES + DECISION */}
-            {(existingVerification?.id || verificationId) && (
-              <div className="space-y-3 pt-3 border-t border-gray-100">
-                {actionResult && (
-                  <div className={`rounded-lg p-3 text-sm font-medium flex items-center gap-2 ${
-                    actionResult.success ? "bg-green-50 border border-green-200 text-green-700" : "bg-red-50 border border-red-200 text-red-700"
-                  }`}>
-                    <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                      {actionResult.success
-                        ? <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                        : <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                      }
-                    </svg>
-                    {actionResult.message}
-                  </div>
-                )}
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Admin Notes</p>
-                  <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
-                    placeholder="CIBIL verification remarks..."
-                    className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none" />
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => handleAdminAction("accept")} disabled={!!actionLoading}
-                    className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                    {actionLoading === "accept" ? "Accepting..." : "Accept"}
-                  </button>
-                  <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
-                    className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                    {actionLoading === "reject" ? "Rejecting..." : "Reject"}
-                  </button>
-                  <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
-                    className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                    Request Docs
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
-        {/* Permanent Admin Actions for pending state */}
-        {status === "pending" && (
-          <div className="space-y-3 pt-4 border-t border-gray-200">
-            <div>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Admin Notes</p>
-              <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
-                placeholder="CIBIL verification remarks..."
-                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none" />
+        {/* Persistent Admin Decision — admins can accept or reject CIBIL at
+            any time (before fetching a score, after a score, after a previous
+            decision). Notes pre-fill from the last admin action so prior
+            reasoning is visible/editable. */}
+        <div className="space-y-3 pt-4 border-t border-gray-200">
+          {existingVerification?.adminAction === "accepted" && (
+            <div className="rounded-lg p-3 text-sm font-medium bg-green-50 border border-green-200 text-green-700">
+              Previously accepted{existingVerification.adminActionNotes ? ` — "${existingVerification.adminActionNotes}"` : ""}. You can update this decision below.
             </div>
-            <div className="flex gap-2">
-              <button onClick={() => handleAdminAction("accept")} disabled={!!actionLoading}
-                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                {actionLoading === "accept" ? "Accepting..." : "Accept"}
-              </button>
-              <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                {actionLoading === "reject" ? "Rejecting..." : "Reject"}
-              </button>
-              <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
-                className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                Request Docs
-              </button>
+          )}
+          {existingVerification?.adminAction === "rejected" && (
+            <div className="rounded-lg p-3 text-sm font-medium bg-red-50 border border-red-200 text-red-700">
+              Previously rejected{existingVerification.adminActionNotes ? ` — "${existingVerification.adminActionNotes}"` : ""}. You can update this decision below.
             </div>
+          )}
+          {actionResult && (
+            <div className={`rounded-lg p-3 text-sm font-medium flex items-center gap-2 ${
+              actionResult.success ? "bg-green-50 border border-green-200 text-green-700" : "bg-red-50 border border-red-200 text-red-700"
+            }`}>
+              <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                {actionResult.success
+                  ? <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  : <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                }
+              </svg>
+              {actionResult.message}
+            </div>
+          )}
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Admin Notes</p>
+            <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
+              placeholder="CIBIL verification remarks..."
+              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none" />
           </div>
-        )}
-
-        {/* Admin Actions for failed state — admins still need to action a
-            permanently-failed CIBIL row (e.g. consumer-not-found edge cases on
-            the co-borrower side). Gated on a verification existing so we don't
-            offer admin actions before any row has been written. */}
-        {status === "failed" && (existingVerification?.id || verificationId) && (
-          <div className="space-y-3 pt-4 border-t border-gray-200">
-            {actionResult && (
-              <div className={`rounded-lg p-3 text-sm font-medium flex items-center gap-2 ${
-                actionResult.success ? "bg-green-50 border border-green-200 text-green-700" : "bg-red-50 border border-red-200 text-red-700"
-              }`}>
-                <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                  {actionResult.success
-                    ? <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                    : <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                  }
-                </svg>
-                {actionResult.message}
-              </div>
-            )}
-            <div>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Admin Notes</p>
-              <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
-                placeholder="CIBIL verification remarks..."
-                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none" />
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => handleAdminAction("accept")} disabled={!!actionLoading}
-                className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                {actionLoading === "accept" ? "Accepting..." : "Accept"}
-              </button>
-              <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                {actionLoading === "reject" ? "Rejecting..." : "Reject"}
-              </button>
-              <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
-                className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                Request Docs
-              </button>
-            </div>
+          <div className="flex gap-2">
+            <button onClick={() => handleAdminAction("accept")} disabled={!!actionLoading}
+              className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
+              {actionLoading === "accept" ? "Accepting..." : "Accept"}
+            </button>
+            <button onClick={() => handleAdminAction("reject")} disabled={!!actionLoading}
+              className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
+              {actionLoading === "reject" ? "Rejecting..." : "Reject"}
+            </button>
           </div>
-        )}
+        </div>
 
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm">
@@ -632,14 +554,6 @@ export default function CIBILCard({
         open={showCoBorrowerModal}
         onClose={() => setShowCoBorrowerModal(false)}
         leadId={leadId}
-        onSuccess={() => onActionComplete?.()}
-      />
-      <RequestMoreDocsModal
-        open={showMoreDocsModal}
-        onClose={() => setShowMoreDocsModal(false)}
-        leadId={leadId}
-        sourceVerificationId={verificationId || existingVerification?.id || null}
-        sourceCardLabel="CIBIL Verification"
         onSuccess={() => onActionComplete?.()}
       />
     </div>
