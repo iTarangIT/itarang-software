@@ -4174,53 +4174,6 @@ export const auctionBids = pgTable(
   }),
 );
 
-// -----------------------------------------------------------------------------
-// E-039 — Post-auction Settlement Table (BRD §6.1.7)
-// -----------------------------------------------------------------------------
-// `auction_settlements` is the per-lot settlement record created when an
-// auction lot ends. It captures the winner tenant, the seller tenant (the
-// platform tenant that owned the underlying recovery batch), the binding
-// final price, and the fulfilment status moving through:
-//   payment_pending → in_transit → delivered.
-//
-// Naming: `seller_tenant_id` and `winner_tenant_id` are intentionally
-// role-prefixed because a single settlement row references TWO different
-// nbfc_tenants in DIFFERENT roles (seller vs. winning bidder) — the unprefixed
-// `tenant_id` convention used elsewhere in the schema cannot disambiguate two
-// such columns on the same row. This is the same pattern this codebase will
-// reach for whenever a row genuinely has multiple tenant references.
-// -----------------------------------------------------------------------------
-
-export const auctionSettlements = pgTable(
-  "auction_settlements",
-  {
-    id: uuid().defaultRandom().primaryKey().notNull(),
-    lot_id: uuid("lot_id").notNull().unique(),
-    seller_tenant_id: uuid("seller_tenant_id").notNull(),
-    winner_tenant_id: uuid("winner_tenant_id").notNull(),
-    final_price: numeric("final_price", { precision: 12, scale: 2 }).notNull(),
-    status: varchar("status", { length: 24 })
-      .notNull()
-      .default("payment_pending"),
-    created_at: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => ({
-    lotIdx: index("auction_settlements_lot_idx").on(table.lot_id),
-    sellerTenantIdx: index("auction_settlements_seller_tenant_idx").on(
-      table.seller_tenant_id,
-    ),
-    winnerTenantIdx: index("auction_settlements_winner_tenant_idx").on(
-      table.winner_tenant_id,
-    ),
-    statusIdx: index("auction_settlements_status_idx").on(table.status),
-  }),
-);
-
 // =============================================================================
 // [E-047] Telemetry storage — Section 6.2.4
 // =============================================================================
@@ -4538,5 +4491,55 @@ export const nbfcAuctionLotActions = pgTable(
     actionCodeIdx: index("nbfc_auction_lot_actions_action_code_idx").on(
       table.action_code,
     ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-039 — Post-auction Settlement Table (BRD §6.1.7)
+// -----------------------------------------------------------------------------
+// `auction_settlements` is the per-lot settlement record created when an
+// auction lot ends. It captures the winner tenant, the seller tenant (the
+// platform tenant that owned the underlying recovery batch), the binding
+// final price, and the fulfilment status moving through:
+//   payment_pending → in_transit → delivered.
+//
+// Naming: `seller_tenant_id` and `winner_tenant_id` are intentionally
+// role-prefixed because a single settlement row references TWO different
+// nbfc_tenants in DIFFERENT roles (seller vs. winning bidder) — the unprefixed
+// `tenant_id` convention used elsewhere in the schema cannot disambiguate two
+// such columns on the same row. This is the same pattern this codebase will
+// reach for whenever a row genuinely has multiple tenant references.
+//
+// Restored after merge regression (one-time recovery patch); originally added
+// by E-039.
+// -----------------------------------------------------------------------------
+
+export const auctionSettlements = pgTable(
+  "auction_settlements",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull().unique(),
+    seller_tenant_id: uuid("seller_tenant_id").notNull(),
+    winner_tenant_id: uuid("winner_tenant_id").notNull(),
+    final_price: numeric("final_price", { precision: 12, scale: 2 }).notNull(),
+    status: varchar("status", { length: 24 })
+      .notNull()
+      .default("payment_pending"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    lotIdx: index("auction_settlements_lot_idx").on(table.lot_id),
+    sellerTenantIdx: index("auction_settlements_seller_tenant_idx").on(
+      table.seller_tenant_id,
+    ),
+    winnerTenantIdx: index("auction_settlements_winner_tenant_idx").on(
+      table.winner_tenant_id,
+    ),
+    statusIdx: index("auction_settlements_status_idx").on(table.status),
   }),
 );
