@@ -17,6 +17,7 @@ import CoBorrowerPanel, {
   type CoBorrowerGated,
 } from "./step3/CoBorrowerPanel";
 import RequestCoBorrowerModal from "./step3/RequestCoBorrowerModal";
+import RequestMoreDocsModal from "./step3/RequestMoreDocsModal";
 
 interface CrossMatchResult {
   overallPass: boolean;
@@ -213,6 +214,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const [autoFetchAttempted, setAutoFetchAttempted] = useState<Set<string>>(new Set());
   const [consentExpanded, setConsentExpanded] = useState(false);
   const [showCoBorrowerModal, setShowCoBorrowerModal] = useState(false);
+  const [showGlobalDocsModal, setShowGlobalDocsModal] = useState(false);
   // Transient toast for admin actions that succeed but have no obvious UI
   // change (e.g., a request was sent to the dealer who is on a different
   // device). Auto-clears after 6s.
@@ -452,10 +454,6 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
 
   const handleFinalDecision = async () => {
     if (!decision) return;
-    if (decision === "rejected" && !rejectionReason.trim()) {
-      setDecisionResult({ success: false, message: "Rejection reason is required" });
-      return;
-    }
     setDecisionLoading(true);
     setDecisionResult(null);
     try {
@@ -566,23 +564,14 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const verifCompleted = verifStats.filter((v) => v.status === "success" || v.status === "completed").length;
   const verifProgress = Math.round((verifCompleted / verifTypes.length) * 100);
 
-  // Compute optimistic approve/reject readiness from card state, mirroring
+  // Compute optimistic approve readiness from card state, mirroring
   // the server-side gate at /api/admin/kyc/[leadId]/final-decision. When this
-  // returns a non-empty list we disable the matching button and show the
-  // reasons in a tooltip — admin no longer clicks Submit, gets bounced, and
-  // re-clicks. Server still validates authoritatively.
+  // returns a non-empty list we disable the Approve button and show the
+  // reasons in a tooltip. Reject is intentionally always allowed — admins
+  // need to be able to close junk leads at any time without first rejecting
+  // every individual card.
   const approveBlockers: string[] = [];
   const rejectBlockers: string[] = [];
-  // Pull co-borrower's verification cards once — they substitute for the
-  // primary's slot when admin accepts on the co-borrower side. Common case:
-  // primary's number isn't linked to CIBIL, admin accepts the co-borrower
-  // CIBIL instead. Treating co-borrower acceptance as satisfying the same
-  // requirement matches the BRD intent — co-borrower exists specifically
-  // to backstop primary.
-  // data.coBorrower may be CoBorrowerData (full payload, has
-  // verificationCards) OR CoBorrowerGated (a stub used when co-borrower
-  // KYC is gated and the verifications haven't been collected yet).
-  // Only the full shape carries verificationCards — narrow before reading.
   const cbCards: Array<{ type: string; adminAction: string | null }> =
     data.coBorrower && "verificationCards" in data.coBorrower
       ? (data.coBorrower.verificationCards as Array<{ type: string; adminAction: string | null }>)
@@ -592,35 +581,23 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
     const coBorrowerCard = cbCards.find((c) => c.type === t);
 
     const primaryAccepted = primaryCard?.adminAction === "accepted";
-    const primaryRejected = primaryCard?.adminAction === "rejected";
     const coBorrowerAccepted = coBorrowerCard?.adminAction === "accepted";
-    const coBorrowerRejected = coBorrowerCard?.adminAction === "rejected";
 
     if (!primaryCard && !coBorrowerCard) {
       approveBlockers.push(`${t.toUpperCase()} verification not run yet`);
-      rejectBlockers.push(`${t.toUpperCase()} verification not run yet`);
       continue;
     }
     if (!primaryAccepted && !coBorrowerAccepted) {
       approveBlockers.push(`Click Accept on the ${t.toUpperCase()} card`);
     }
-    if (!primaryRejected && !coBorrowerRejected) {
-      rejectBlockers.push(`Click Reject on the ${t.toUpperCase()} card`);
-    }
   }
-  // Supporting docs gate
   if (Array.isArray(data.supportingDocs)) {
     for (const d of data.supportingDocs) {
       if ((d as { uploadStatus?: string }).uploadStatus !== "verified") {
         approveBlockers.push(`Supporting doc "${(d as { docLabel?: string }).docLabel ?? "(unnamed)"}" must be verified`);
       }
-      if ((d as { uploadStatus?: string }).uploadStatus !== "rejected") {
-        rejectBlockers.push(`Supporting doc "${(d as { docLabel?: string }).docLabel ?? "(unnamed)"}" must be rejected`);
-      }
     }
   }
-  const canApprove = approveBlockers.length === 0;
-  const canReject = rejectBlockers.length === 0;
 
   return (
     <div className="space-y-6 pb-6">
@@ -1083,6 +1060,22 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
         </button>
       </div>
 
+      {/* Single global "Request Docs" button — replaces the per-card buttons
+          that used to live on every verification card and the supporting-doc
+          rows. Modal carries its own Primary / Co-Borrower radio so admin
+          picks the applicant inside the dialog. */}
+      {activeTab === "verifications" && (
+        <div className="flex justify-end">
+          <button
+            onClick={() => setShowGlobalDocsModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-amber-500 hover:bg-amber-600 text-white shadow-sm transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+            Request Docs
+          </button>
+        </div>
+      )}
+
       {/* Verification Cards */}
       {activeTab === "verifications" && (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
@@ -1511,10 +1504,10 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               <div className="bg-red-50/50 border border-red-100 rounded-xl p-4">
                 <label className="flex items-center gap-1.5 text-[11px] font-bold text-red-700 uppercase tracking-wider mb-2">
                   <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
-                  Rejection Reason *
+                  Rejection Reason (optional)
                 </label>
                 <textarea value={rejectionReason} onChange={(e) => setRejectionReason(e.target.value)} rows={2}
-                  placeholder="Why is this being rejected?"
+                  placeholder="Why is this being rejected? (optional)"
                   className="w-full text-sm border border-red-200 bg-white rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition" />
               </div>
             )}
@@ -1622,6 +1615,26 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           setRequestToast({
             kind: "success",
             title: "Co-borrower KYC request sent",
+            detail: "The dealer will see this on their portal.",
+          });
+          fetchData();
+        }}
+      />
+
+      {/* Global Request Additional Documents modal — opened by the single
+          fixed "Request Docs" button. lockScope omitted so the dialog renders
+          its Primary / Co-Borrower radio. sourceCardLabel omitted so the
+          "From: …" subtitle is not shown. */}
+      <RequestMoreDocsModal
+        open={showGlobalDocsModal}
+        onClose={() => setShowGlobalDocsModal(false)}
+        leadId={leadId}
+        defaultDocFor="primary"
+        onSuccess={() => {
+          setShowGlobalDocsModal(false);
+          setRequestToast({
+            kind: "success",
+            title: "Document request sent",
             detail: "The dealer will see this on their portal.",
           });
           fetchData();
