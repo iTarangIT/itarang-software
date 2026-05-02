@@ -18,6 +18,7 @@
     "db:seed-step4": "infisical run -- tsx scripts/seed-step4-inventory.ts",
     "db:catalog": "infisical run -- tsx scripts/db-catalog.ts",
     "db:drift": "infisical run -- tsx scripts/db-drift.ts",
+    "db:redundancy-audit": "infisical run -- tsx scripts/db-redundancy-audit.ts",
     "test:e2e": "infisical run -- playwright test",
     "test:e2e:ui": "infisical run -- playwright test --ui",
     "test:e2e:headed": "infisical run -- playwright test --headed",
