@@ -66,6 +66,8 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
                 marital_status: borrowerForm.marital_status || null,
                 local_address: borrowerForm.current_address || null,
                 permanent_address: borrowerForm.permanent_address || null,
+                relationship: borrowerForm.relationship || null,
+                is_current_same: borrowerForm.is_current_same ?? false,
             },
         });
     } catch (error) {
