@@ -319,7 +319,27 @@ export async function GET(
               finalDecision: metadata.final_decision,
               finalDecisionAt: metadata.final_decision_at,
             }
-          : null,
+          : lead.coupon_status
+            // Fallback for leads that submitted via the legacy
+            // /submit-verification path before it began upserting
+            // kyc_verification_metadata. Without this, the admin gate sees no
+            // metadata and shows "Awaiting Dealer Submission" even though the
+            // dealer has already validated a coupon and submitted.
+            ? {
+                caseType: null,
+                couponCode: lead.coupon_code,
+                couponStatus: lead.coupon_status,
+                documentsCount: documents.length,
+                consentVerified: null,
+                dealerEditsLocked: null,
+                submissionTimestamp: queueEntry?.submitted_at ?? null,
+                verificationStartedAt: null,
+                firstApiExecutionAt: null,
+                firstApiType: null,
+                finalDecision: null,
+                finalDecisionAt: null,
+              }
+            : null,
         queueEntry: queueEntry
           ? {
               id: queueEntry.id,
