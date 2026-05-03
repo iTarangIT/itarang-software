@@ -86,6 +86,12 @@ const roleNavigation: Record<string, any[]> = {
           icon: Shield,
           href: "/admin/kyc-review",
         },
+        {
+          id: "product-review",
+          label: "Product Review",
+          icon: Package,
+          href: "/admin/product-review",
+        },
       ],
     },
   ],
@@ -124,6 +130,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "KYC Review",
           icon: Shield,
           href: "/admin/kyc-review",
+        },
+        {
+          id: "product-review",
+          label: "Product Review",
+          icon: Package,
+          href: "/admin/product-review",
         },
         {
           id: "dealer-validation",
@@ -221,6 +233,12 @@ const roleNavigation: Record<string, any[]> = {
           icon: Shield,
           href: "/admin/kyc-review",
         },
+        {
+          id: "product-review",
+          label: "Product Review",
+          icon: Package,
+          href: "/admin/product-review",
+        },
       ],
     },
     {
@@ -310,6 +328,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "KYC Review",
           icon: Shield,
           href: "/admin/kyc-review",
+        },
+        {
+          id: "product-review",
+          label: "Product Review",
+          icon: Package,
+          href: "/admin/product-review",
         },
       ],
     },

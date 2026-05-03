@@ -4,7 +4,7 @@ export const FINANCE_DOCUMENTS = [
     { key: 'pan_card', label: 'PAN Card', required: true },
     { key: 'passport_photo', label: 'Passport Size Photo', required: true },
     { key: 'address_proof', label: 'Address Proof', required: true },
-    { key: 'rc_copy', label: 'RC Copy', required: false, conditional: true },
+    { key: 'rc_copy', label: 'RC Copy', required: false },
     { key: 'bank_statement', label: 'Bank Statement', required: false },
     { key: 'cheque_1', label: 'Undated Cheque 1', required: true },
     { key: 'cheque_2', label: 'Undated Cheque 2', required: true },

@@ -5,6 +5,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
 import {
     buildDealerEditLockMessage,
+    ensureAdminKycQueueEntry,
     isDealerKycEditsLocked,
 } from '@/lib/kyc/admin-workflow';
 
@@ -112,6 +113,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 .set({ consent_status: 'admin_review_pending', updated_at: now })
                 .where(eq(leads.id, leadId));
         }
+
+        // Surface the lead on the admin KYC Review queue so an admin can
+        // verify the signed consent. Without this the case is invisible to
+        // admins until the dealer submits-for-verification, but the dealer
+        // can't submit until consent is admin-verified — chicken-and-egg.
+        await ensureAdminKycQueueEntry(leadId);
 
         return NextResponse.json({ success: true, fileUrl: urlData.publicUrl });
     } catch (error) {
