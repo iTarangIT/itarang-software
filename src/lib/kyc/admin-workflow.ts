@@ -254,3 +254,29 @@ export async function getOpenQueueEntryForLead(leadId: string) {
 
   return rows[0] ?? null;
 }
+
+// Idempotently make sure an open admin-queue entry exists for the lead so it
+// surfaces on /admin/kyc-review. Used by consent finalisation paths (manual
+// signed-PDF upload, digital esign sync) — without it the case stays invisible
+// to admins until the dealer hits Submit-for-Verification, which itself
+// requires admin-verified consent. Returns the entry id (existing or new).
+export async function ensureAdminKycQueueEntry(leadId: string): Promise<string> {
+  const existing = await getOpenQueueEntryForLead(leadId);
+  if (existing) return existing.id;
+
+  const now = new Date();
+  const id = createWorkflowId("ADMQ", now);
+  await db.insert(adminVerificationQueue).values({
+    id,
+    queue_type: "kyc_verification",
+    lead_id: leadId,
+    priority: "normal",
+    assigned_to: null,
+    submitted_by: null,
+    status: "pending_itarang_verification",
+    submitted_at: now,
+    created_at: now,
+    updated_at: now,
+  });
+  return id;
+}

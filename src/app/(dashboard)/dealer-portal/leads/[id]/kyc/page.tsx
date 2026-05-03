@@ -13,6 +13,7 @@ import {
     OutlineButton, FullPageLoader,
 } from '@/components/dealer-portal/lead-wizard/shared';
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
+import OtherDocumentsSection, { type RequestedDoc } from '@/components/dealer-portal/lead-wizard/OtherDocumentsSection';
 
 type UploadedDoc = {
     id?: string;
@@ -98,6 +99,7 @@ export default function KYCPage() {
 
     const [uploadedDocs, setUploadedDocs] = useState<Record<string, UploadedDoc>>({});
     const [verifications, setVerifications] = useState<VerificationRow[]>(DEFAULT_CUSTOMER_VERIFICATIONS);
+    const [additionalDocs, setAdditionalDocs] = useState<RequestedDoc[]>([]);
     const [consentStatus, setConsentStatus] = useState<string>('awaiting_signature');
 
     const [savingDraft, setSavingDraft] = useState(false);
@@ -239,13 +241,9 @@ export default function KYCPage() {
 
     // ─── Document Stats ─────────────────────────────────────────────────────
 
-    const requiredDocs = useMemo(() => {
-        const assetModel = String(lead?.asset_model || lead?.asset_category || '').toUpperCase();
-        const isVehicle = ['2W', '3W', '4W'].includes(assetModel);
-        return FINANCE_DOCUMENTS.map(doc =>
-            doc.key === 'rc_copy' ? { ...doc, required: isVehicle } : doc
-        );
-    }, [lead]);
+    // RC Copy and Bank Statement are always optional; every other document
+    // in FINANCE_DOCUMENTS is required regardless of asset type.
+    const requiredDocs = useMemo(() => FINANCE_DOCUMENTS.map(doc => ({ ...doc })), []);
 
     const docStats = useMemo(() => {
         const required = requiredDocs.filter(d => d.required);
@@ -254,14 +252,14 @@ export default function KYCPage() {
         return { total: required.length, uploadedCount: uploaded.length, pending };
     }, [requiredDocs, uploadedDocs]);
 
-    // Submit-for-Verification gate: dealer can only submit when consent has
-    // been submitted (or already verified) AND every required document has a
-    // file AND coupon is reserved. The button stays disabled with a hint
-    // listing the missing prerequisites until all three are satisfied.
-    const consentSubmittedOrFinal = useMemo(() => {
-        const s = (consentStatus || '').toLowerCase();
-        return s === 'admin_review_pending' || isFinalConsentStatus(s);
-    }, [consentStatus]);
+    // Submit-for-Verification gate: dealer can only submit when admin has
+    // verified the customer consent AND every required document has a file
+    // AND coupon is reserved. Optional documents (cheques, bank statement,
+    // RC for non-vehicle leads) never gate this button.
+    const consentAdminVerified = useMemo(
+        () => isFinalConsentStatus((consentStatus || '').toLowerCase()),
+        [consentStatus],
+    );
 
     const allRequiredDocsUploaded = useMemo(
         () => docStats.total > 0 && docStats.pending.length === 0,
@@ -270,11 +268,28 @@ export default function KYCPage() {
 
     const submitGate = useMemo(() => {
         const missing: string[] = [];
-        if (!consentSubmittedOrFinal) missing.push('Submit consent for admin verification');
+        if (!consentAdminVerified) missing.push('Wait for admin to verify customer consent');
         if (!allRequiredDocsUploaded) missing.push(`Upload ${docStats.pending.length || 'all'} required document${docStats.pending.length === 1 ? '' : 's'}`);
         if (lead?.coupon_status !== 'reserved') missing.push('Validate coupon');
         return { ok: missing.length === 0, missing };
-    }, [consentSubmittedOrFinal, allRequiredDocsUploaded, docStats.pending.length, lead?.coupon_status]);
+    }, [consentAdminVerified, allRequiredDocsUploaded, docStats.pending.length, lead?.coupon_status]);
+
+    // Surface dealer-uploaded additional documents inside the customer
+    // verification table so admins/dealers see them alongside the standard
+    // KYC checks. Each row is labelled "<doc name> (Additional Doc)" so it's
+    // visually distinct from the fixed Aadhaar/PAN/Bank/etc. rows. Re-uploads
+    // for these docs happen via the Additional Documents section above; the
+    // Action column intentionally stays "—" here.
+    const customerVerificationRows = useMemo<VerificationRow[]>(() => {
+        const additionalRows: VerificationRow[] = additionalDocs.map((d) => ({
+            type: `additional:${d.id}`,
+            label: `${d.doc_label} (Additional Doc)`,
+            status: d.upload_status || 'not_uploaded',
+            last_update: d.uploaded_at || d.created_at || null,
+            failed_reason: d.rejection_reason || null,
+        }));
+        return [...verifications, ...additionalRows];
+    }, [verifications, additionalDocs]);
 
     // ─── Document Upload ────────────────────────────────────────────────────
 
@@ -1049,6 +1064,13 @@ export default function KYCPage() {
                         </div>
                     </SectionCard>
 
+                    {/* ─── Additional Documents (BRD §2.9.3) ──────────── */}
+                    {/* Dealer-extensible extras: any admin-requested supporting
+                        docs surface here, and the dealer can add custom items
+                        proactively. These never gate Submit-for-Verification —
+                        only the standard 9 required docs do. */}
+                    <OtherDocumentsSection leadId={leadId} docFor="primary" scopeLabel="Primary Borrower (Customer)" onChanged={setAdditionalDocs} />
+
                     {/* ─── Verification Action ────────────────────────── */}
                     <SectionCard title="Verification Action" action={
                         lead?.coupon_status === 'used'
@@ -1174,8 +1196,8 @@ export default function KYCPage() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {verifications.map((v, i) => (
-                                            <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50">
+                                        {customerVerificationRows.map((v, i) => (
+                                            <tr key={`${v.type}-${i}`} className="border-b border-gray-50 hover:bg-gray-50/50">
                                                 <td className="py-3 px-3 font-medium text-gray-900">{v.label}</td>
                                                 <td className="py-3 px-3"><StatusBadge status={v.status} /></td>
                                                 <td className="py-3 px-3 text-gray-500 text-xs">

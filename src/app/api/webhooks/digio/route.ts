@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { coBorrowers, consentRecords, leads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
+import { ensureAdminKycQueueEntry } from "@/lib/kyc/admin-workflow";
 
 // Update consent_status on the appropriate applicant-level rows so initial
 // page loads and downstream consumers see the latest state without having to
@@ -95,6 +96,10 @@ export async function POST(req: NextRequest) {
 
       await db.update(consentRecords).set(updates).where(eq(consentRecords.id, record.id));
       await syncApplicantConsentStatus(record.consent_for, record.lead_id, "esign_completed", now);
+
+      // Surface the lead on /admin/kyc-review now that the customer has signed
+      // — admin still needs to verify the consent before the dealer can submit.
+      await ensureAdminKycQueueEntry(record.lead_id);
 
     } else if (failedStatuses.includes(rawStatus)) {
       console.log("[DigiO Webhook] Document failed:", documentId, rawStatus);
