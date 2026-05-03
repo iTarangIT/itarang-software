@@ -34,6 +34,7 @@ interface Props {
   leadId: string;
   docs: SupportingDoc[];
   onRefresh: () => void;
+  onRequestDocs?: () => void;
 }
 
 function fmt(ts: string | null): string {
@@ -52,6 +53,7 @@ export default function SupportingDocsPanel({
   leadId,
   docs,
   onRefresh,
+  onRequestDocs,
 }: Props) {
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [rejectionDrafts, setRejectionDrafts] = useState<
@@ -60,8 +62,6 @@ export default function SupportingDocsPanel({
   const [loadingId, setLoadingId] = useState("");
   const [error, setError] = useState("");
   const [lightbox, setLightbox] = useState<string | null>(null);
-
-  if (docs.length === 0) return null;
 
   const handleReview = async (
     doc: SupportingDoc,
@@ -118,18 +118,34 @@ export default function SupportingDocsPanel({
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-      <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-amber-50 to-white flex items-center justify-between">
+      <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-amber-50 to-white flex items-center justify-between gap-4">
         <div>
           <h2 className="text-base font-semibold text-gray-900">
-            Supporting Documents (Step 3)
+            Document Requests
           </h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            {docs.length} request{docs.length === 1 ? "" : "s"} — BRD §2.9.3
-            Panel 2
+            {docs.length === 0
+              ? "No additional documents requested yet"
+              : `${docs.length} request${docs.length === 1 ? "" : "s"} — BRD §2.9.3 Panel 2`}
           </p>
         </div>
+        {onRequestDocs && (
+          <button
+            type="button"
+            onClick={onRequestDocs}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-amber-500 hover:bg-amber-600 text-white shadow-sm transition-colors flex-shrink-0"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+            Request Docs
+          </button>
+        )}
       </div>
 
+      {docs.length === 0 ? (
+        <div className="px-5 py-8 text-sm text-gray-500 text-center">
+          Click <span className="font-semibold text-gray-700">Request Docs</span> to ask the dealer for additional documents from the primary borrower or co-borrower.
+        </div>
+      ) : (
       <div className="divide-y divide-gray-100">
         {docs.map((d) => {
           const note = noteDrafts[d.id] ?? "";
@@ -264,6 +280,7 @@ export default function SupportingDocsPanel({
           );
         })}
       </div>
+      )}
 
       {error && (
         <div className="px-5 py-3 bg-red-50 border-t border-red-200 text-sm text-red-700">
