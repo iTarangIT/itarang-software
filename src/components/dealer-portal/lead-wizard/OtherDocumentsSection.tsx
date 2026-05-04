@@ -154,9 +154,12 @@ export default function OtherDocumentsSection({ leadId, docFor, onChanged, scope
     const [creating, setCreating] = useState(false);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-    const notify = useCallback((next: RequestedDoc[]) => {
-        if (onChanged) onChanged(next);
-    }, [onChanged]);
+    // Hold the latest onChanged in a ref so fetchDocs stays stable even when
+    // the parent passes an inline arrow function — avoids an infinite refetch
+    // loop where a new onChanged reference each render would re-create fetchDocs
+    // and re-trigger the effect.
+    const onChangedRef = useRef(onChanged);
+    useEffect(() => { onChangedRef.current = onChanged; }, [onChanged]);
 
     const fetchDocs = useCallback(async () => {
         try {
@@ -167,14 +170,14 @@ export default function OtherDocumentsSection({ leadId, docFor, onChanged, scope
                     return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
                 });
                 setDocs(sorted);
-                notify(sorted);
+                onChangedRef.current?.(sorted);
             }
         } catch {
             setError('Failed to load additional documents');
         } finally {
             setLoading(false);
         }
-    }, [leadId, docFor, notify]);
+    }, [leadId, docFor]);
 
     useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
