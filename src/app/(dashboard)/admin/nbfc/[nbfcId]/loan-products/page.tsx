@@ -1,7 +1,10 @@
 import NbfcLoanProductForm from "@/components/admin/nbfc/NbfcLoanProductForm";
+import { PageShell, buildNbfcSteps } from "@/components/layout/PageShell";
 
 // E-009 — /admin/nbfc/[nbfcId]/loan-products
-// Admin page for configuring per-NBFC loan products (BRD 6.0.5).
+// Admin page for configuring per-NBFC loan products (BRD §6.0.5).
+
+export const dynamic = "force-dynamic";
 
 export default async function Page({
   params,
@@ -12,15 +15,22 @@ export default async function Page({
   const nbfcId = Number.parseInt(nbfcIdRaw, 10);
 
   return (
-    <div className="p-6">
-      <h1 className="text-2xl font-semibold mb-4">
-        NBFC Loan Products
-      </h1>
-      <p className="text-sm text-gray-600 mb-6">
-        Configure loan products for this NBFC. Only products with status
-        &ldquo;active&rdquo; will appear in the dealer loan-sanction form.
-      </p>
+    <PageShell
+      eyebrow="Loan Products"
+      title="Per-NBFC catalogue"
+      subtitle={`Only products with status "active" appear in the dealer loan-sanction form. Per BRD §6.0.5.`}
+      breadcrumb={[
+        { label: "Admin", href: "/admin" },
+        { label: "NBFC", href: "/admin/nbfc" },
+        { label: nbfcIdRaw },
+        { label: "Loan Products" },
+      ]}
+      steps={buildNbfcSteps({
+        active: "loan-products",
+        done: ["master", "documents", "lsp", "approval", "activation"],
+      })}
+    >
       <NbfcLoanProductForm nbfcId={nbfcId} />
-    </div>
+    </PageShell>
   );
 }

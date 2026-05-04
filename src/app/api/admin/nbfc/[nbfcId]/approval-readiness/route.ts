@@ -30,7 +30,15 @@ export async function GET(
   const r = await evaluateApprovalReadiness(id);
   if (!r.exists) {
     return NextResponse.json(
-      { canApprove: false, missingDocs: [], lspAgreementStatus: "MISSING", reason: "NBFC not found" },
+      {
+        canApprove: false,
+        missingDocs: [],
+        lspAgreementStatus: "MISSING",
+        missingEntityKyc: ["cin", "pan", "gstin"],
+        missingDirectorKyc: ["pan", "aadhaar", "rc"],
+        reason: "NBFC not found",
+        currentStatus: null,
+      },
       { status: 404 },
     );
   }
@@ -39,6 +47,9 @@ export async function GET(
     canApprove: r.canApprove,
     missingDocs: r.missingDocs,
     lspAgreementStatus: r.lspAgreementStatus,
+    missingEntityKyc: r.missingEntityKyc,
+    missingDirectorKyc: r.missingDirectorKyc,
     reason: r.reason,
+    currentStatus: r.currentStatus ?? null,
   });
 }

@@ -1,13 +1,18 @@
 "use client";
 
 /**
- * E-007 — NBFC LSP Agreement initiation panel.
+ * NbfcLspAgreementPanel — E-007 LSP agreement initiation.
  *
- * Six required signatory fields (NBFC + iTarang1 + iTarang2). Submitting POSTs
- * to /api/admin/nbfc/{nbfcId}/lsp-agreement/initiate. Returns the persisted
- * row summary on success.
+ * Visual: BRD §6.B. Three numbered signer cards rendered in sequential
+ * cadence (NBFC → iTarang Signatory 1 → iTarang Signatory 2). The layout
+ * makes the order of signing legible at a glance.
+ *
+ * Test contract — every existing data-testid is preserved verbatim:
+ *   lsp-agreement-form, nbfc-signatory-{name,email}, itarang{1,2}-{name,email},
+ *   initiate-button, initiate-result, initiate-error.
  */
 import { useState, type FormEvent } from "react";
+import { Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 
 interface InitiateResult {
   ok?: boolean;
@@ -29,7 +34,77 @@ const initialForm = {
   itarangSignatory2Email: "",
 };
 
-export default function NbfcLspAgreementPanel({ nbfcId }: { nbfcId: number }) {
+interface SignerCardProps {
+  step: 1 | 2 | 3;
+  eyebrow: string;
+  title: string;
+  nameTestId: string;
+  emailTestId: string;
+  nameValue: string;
+  emailValue: string;
+  onNameChange: (v: string) => void;
+  onEmailChange: (v: string) => void;
+}
+
+function SignerCard({
+  step,
+  eyebrow,
+  title,
+  nameTestId,
+  emailTestId,
+  nameValue,
+  emailValue,
+  onNameChange,
+  onEmailChange,
+}: SignerCardProps) {
+  return (
+    <div className="card-iTarang p-5 md:p-6 relative">
+      <div className="flex items-center gap-3 mb-4">
+        <div className="step-dot-active text-base">{step}</div>
+        <div>
+          <p className="section-label">{eyebrow}</p>
+          <h3 className="text-base font-semibold text-[color:var(--color-brand-navy)]">
+            {title}
+          </h3>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <label className="flex flex-col gap-1.5">
+          <span className="text-xs font-semibold text-[color:var(--color-ink)]">
+            Full name
+          </span>
+          <input
+            type="text"
+            required
+            value={nameValue}
+            onChange={(e) => onNameChange(e.target.value)}
+            className="input-itarang"
+            data-testid={nameTestId}
+          />
+        </label>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-xs font-semibold text-[color:var(--color-ink)]">
+            Email
+          </span>
+          <input
+            type="email"
+            required
+            value={emailValue}
+            onChange={(e) => onEmailChange(e.target.value)}
+            className="input-itarang"
+            data-testid={emailTestId}
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+export default function NbfcLspAgreementPanel({
+  nbfcId,
+}: {
+  nbfcId: number;
+}) {
   const [form, setForm] = useState(initialForm);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<InitiateResult | null>(null);
@@ -63,153 +138,154 @@ export default function NbfcLspAgreementPanel({ nbfcId }: { nbfcId: number }) {
   }
 
   return (
-    <div className="max-w-2xl space-y-6 p-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Initiate LSP Agreement</h1>
-        <p className="text-sm text-muted-foreground">
-          Sequential signing order: NBFC Signatory → iTarang Signatory 1 → iTarang Signatory 2.
+    <div className="space-y-6">
+      <div>
+        <p className="section-label">LSP Agreement</p>
+        <h2 className="text-2xl font-semibold text-[color:var(--color-brand-navy)] mt-1">
+          Sequential signing via Digio
+        </h2>
+        <p className="text-sm text-[color:var(--color-ink-muted)] mt-1 max-w-2xl">
+          Signers are notified in order — NBFC first, then iTarang's two
+          authorised signatories. The agreement is fully signed when all three
+          have completed Digio's request and the document is downloaded.
         </p>
-      </header>
+      </div>
 
       <form
         onSubmit={onSubmit}
         className="space-y-4"
         data-testid="lsp-agreement-form"
       >
-        <fieldset className="rounded-md border p-4">
-          <legend className="px-2 text-sm font-medium">NBFC Signatory</legend>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className="text-sm">Name</span>
-              <input
-                type="text"
-                required
-                value={form.nbfcSignatoryName}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, nbfcSignatoryName: e.target.value }))
-                }
-                className="mt-1 w-full rounded border px-3 py-2"
-                data-testid="nbfc-signatory-name"
-              />
-            </label>
-            <label className="block">
-              <span className="text-sm">Email</span>
-              <input
-                type="email"
-                required
-                value={form.nbfcSignatoryEmail}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, nbfcSignatoryEmail: e.target.value }))
-                }
-                className="mt-1 w-full rounded border px-3 py-2"
-                data-testid="nbfc-signatory-email"
-              />
-            </label>
-          </div>
-        </fieldset>
+        <SignerCard
+          step={1}
+          eyebrow="Signer 1 of 3"
+          title="NBFC Authorised Signatory"
+          nameTestId="nbfc-signatory-name"
+          emailTestId="nbfc-signatory-email"
+          nameValue={form.nbfcSignatoryName}
+          emailValue={form.nbfcSignatoryEmail}
+          onNameChange={(v) =>
+            setForm((f) => ({ ...f, nbfcSignatoryName: v }))
+          }
+          onEmailChange={(v) =>
+            setForm((f) => ({ ...f, nbfcSignatoryEmail: v }))
+          }
+        />
+        <SignerCard
+          step={2}
+          eyebrow="Signer 2 of 3"
+          title="iTarang Signatory 1"
+          nameTestId="itarang1-name"
+          emailTestId="itarang1-email"
+          nameValue={form.itarangSignatory1Name}
+          emailValue={form.itarangSignatory1Email}
+          onNameChange={(v) =>
+            setForm((f) => ({ ...f, itarangSignatory1Name: v }))
+          }
+          onEmailChange={(v) =>
+            setForm((f) => ({ ...f, itarangSignatory1Email: v }))
+          }
+        />
+        <SignerCard
+          step={3}
+          eyebrow="Signer 3 of 3"
+          title="iTarang Signatory 2"
+          nameTestId="itarang2-name"
+          emailTestId="itarang2-email"
+          nameValue={form.itarangSignatory2Name}
+          emailValue={form.itarangSignatory2Email}
+          onNameChange={(v) =>
+            setForm((f) => ({ ...f, itarangSignatory2Name: v }))
+          }
+          onEmailChange={(v) =>
+            setForm((f) => ({ ...f, itarangSignatory2Email: v }))
+          }
+        />
 
-        <fieldset className="rounded-md border p-4">
-          <legend className="px-2 text-sm font-medium">iTarang Signatory 1</legend>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className="text-sm">Name</span>
-              <input
-                type="text"
-                required
-                value={form.itarangSignatory1Name}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, itarangSignatory1Name: e.target.value }))
-                }
-                className="mt-1 w-full rounded border px-3 py-2"
-                data-testid="itarang1-name"
-              />
-            </label>
-            <label className="block">
-              <span className="text-sm">Email</span>
-              <input
-                type="email"
-                required
-                value={form.itarangSignatory1Email}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, itarangSignatory1Email: e.target.value }))
-                }
-                className="mt-1 w-full rounded border px-3 py-2"
-                data-testid="itarang1-email"
-              />
-            </label>
-          </div>
-        </fieldset>
-
-        <fieldset className="rounded-md border p-4">
-          <legend className="px-2 text-sm font-medium">iTarang Signatory 2</legend>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className="text-sm">Name</span>
-              <input
-                type="text"
-                required
-                value={form.itarangSignatory2Name}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, itarangSignatory2Name: e.target.value }))
-                }
-                className="mt-1 w-full rounded border px-3 py-2"
-                data-testid="itarang2-name"
-              />
-            </label>
-            <label className="block">
-              <span className="text-sm">Email</span>
-              <input
-                type="email"
-                required
-                value={form.itarangSignatory2Email}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, itarangSignatory2Email: e.target.value }))
-                }
-                className="mt-1 w-full rounded border px-3 py-2"
-                data-testid="itarang2-email"
-              />
-            </label>
-          </div>
-        </fieldset>
-
-        <button
-          type="submit"
-          disabled={submitting}
-          className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50"
-          data-testid="initiate-button"
-        >
-          {submitting ? "Initiating…" : "Initiate Agreement"}
-        </button>
+        <div className="flex justify-end pt-2">
+          <button
+            type="submit"
+            disabled={submitting}
+            className="btn-primary"
+            data-testid="initiate-button"
+          >
+            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+            {submitting ? "Initiating…" : "Initiate Agreement"}
+          </button>
+        </div>
       </form>
 
       {error && (
         <div
-          className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800"
+          role="alert"
           data-testid="initiate-error"
+          className="flex items-start gap-3 rounded-xl px-4 py-3 border"
+          style={{
+            background: "var(--color-danger-bg)",
+            borderColor: "rgba(192, 57, 43, 0.3)",
+            color: "var(--color-danger)",
+          }}
         >
-          {error}
+          <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold">Couldn't initiate agreement</p>
+            <p className="opacity-90">{error}</p>
+          </div>
         </div>
       )}
 
       {result?.ok && (
         <div
-          className="rounded border border-green-300 bg-green-50 p-3 text-sm text-green-800"
           data-testid="initiate-result"
+          className="card-iTarang p-5"
+          style={{ borderColor: "rgba(30,126,52,0.25)" }}
         >
-          <div>
-            <strong>Agreement ID:</strong> {result.agreementId}
-          </div>
-          <div>
-            <strong>Digio Document ID:</strong> {result.digioDocumentId}
-          </div>
-          <div>
-            <strong>Status:</strong> {result.agreementStatus}
-          </div>
-          <div>
-            <strong>Expires At:</strong> {result.expiresAt}
+          <div className="flex items-start gap-3">
+            <CheckCircle2
+              className="w-5 h-5 shrink-0 mt-0.5"
+              style={{ color: "var(--color-success)" }}
+            />
+            <div className="flex-1 space-y-2">
+              <p className="font-semibold text-[color:var(--color-brand-navy)]">
+                Sent to NBFC for signing
+              </p>
+              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                <Row label="Agreement ID" mono value={result.agreementId} />
+                <Row
+                  label="Digio Document ID"
+                  mono
+                  value={result.digioDocumentId}
+                />
+                <Row label="Status" value={result.agreementStatus} />
+                <Row label="Expires at" value={result.expiresAt ?? undefined} />
+              </dl>
+            </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function Row({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value?: string;
+  mono?: boolean;
+}) {
+  return (
+    <div>
+      <dt className="section-label-muted text-[10px]">{label}</dt>
+      <dd
+        className={`mt-0.5 text-[color:var(--color-brand-navy)] ${
+          mono ? "font-mono text-[13px]" : ""
+        }`}
+      >
+        {value ?? "—"}
+      </dd>
     </div>
   );
 }

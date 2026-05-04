@@ -77,3 +77,14 @@ docs/nbfc/_preflight.json
 docs/nbfc/manifest.json
 docs/nbfc/manifest/
 docs/nbfc/loop_report/
+docs/nbfc/_convergence/
+docs/nbfc/_simple/
+.nbfc-loop/
+
+# Playwright per-host storage state (contains live session cookies — never push)
+/tests/.auth.localhost-state/
+/tests/.auth.*/
+
+# ad-hoc inspection screenshots at repo root
+/*.png
+!/public/*.png

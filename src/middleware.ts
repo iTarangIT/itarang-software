@@ -179,6 +179,11 @@ export async function middleware(request: NextRequest) {
   const sharedRouteAccess: Record<string, string[]> = {
     "/admin/dealer-verification": ["sales_head"],
     "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
+    // NBFC onboarding (BRD §6.0): sales_head submits, CEO approves. Admin and
+    // business_head also need read access for support and oversight. The
+    // /api/admin/nbfc/* routes still gate writes per role; this just allows
+    // the dashboard pages to render.
+    "/admin/nbfc": ["admin", "ceo", "business_head", "sales_head"],
   };
 
   const allowedSharedRoles = Object.entries(sharedRouteAccess).find(

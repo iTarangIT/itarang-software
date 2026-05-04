@@ -145,6 +145,22 @@ acceptance_criteria:
     statement: "POST /requests with reviewed_evidence_ack omitted or false returns 400."
     test_layer: api
     test_name: "Initiator must acknowledge evidence review"
+  - id: AC7
+    statement: "Given a dual-approval gate item with status='pending_approval' and approver_a logged, calling `/api/dual-approval/{itemId}/execute` BEFORE approver_b confirms returns 409 with code='SECOND_APPROVAL_PENDING'. After approver_b confirms (POST /confirm with distinct user_id), the next /execute call performs the gated action and returns 200 with the action's effects. The second approver must independently confirm before the action executes."
+    test_layer: api
+    persona: nbfc_tenant_user
+    expected_response_shape:
+      pending:
+        status: 409
+        body:
+          code: SECOND_APPROVAL_PENDING
+      executed:
+        status: 200
+        body:
+          id: string
+          status: approved
+          executed: true
+    test_name: "Second approver must independently confirm before action executes"
 
 status: passed
 loop_count: 1

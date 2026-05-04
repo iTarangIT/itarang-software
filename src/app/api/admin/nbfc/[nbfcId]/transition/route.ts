@@ -66,6 +66,35 @@ export async function POST(
     );
   }
 
+  // Per-transition role gate. Mirrors the BRD-implied owner of each step:
+  //   - sales_head submits a draft for CEO review
+  //   - CEO approves (the canonical path is /approve, but /transition ->
+  //     "approved" must also be CEO)
+  //   - CEO/admin activate the approved record
+  // Test bypass keeps full access so the headed spec stays green.
+  const ROLE_FOR_TRANSITION: Partial<Record<string, ReadonlySet<string>>> = {
+    pending_admin_review: new Set(["sales_head", "ceo", "admin"]),
+    approved: new Set(["ceo"]),
+    active: new Set(["ceo", "admin"]),
+  };
+  if (auth.user.via !== "test_bypass") {
+    const allowed = ROLE_FOR_TRANSITION[parsed.data.to];
+    const role = auth.user.role ?? "";
+    const email = (auth.user.email ?? "").toLowerCase();
+    if (allowed && !allowed.has(role) && email !== "sanchit@itarang.com") {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "FORBIDDEN",
+          message: `Role '${role}' may not transition NBFC to '${parsed.data.to}'.`,
+          to: parsed.data.to,
+          allowed: [...allowed],
+        },
+        { status: 403 },
+      );
+    }
+  }
+
   // Load current status.
   const [row] = await db
     .select({

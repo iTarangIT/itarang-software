@@ -94,6 +94,24 @@ acceptance_criteria:
     statement: "GET /api/nbfc/scores/override?loan_application_id=L1&score_type=cds returns active_override populated and history sorted newest-first."
     test_layer: api
     test_name: "Override GET returns active and full history"
+  - id: AC6
+    statement: "Score override requires a documented reason: POST /api/nbfc/scores/override with `reason` field empty or shorter than 20 characters returns 422 with code='REASON_REQUIRED'. With a valid documented reason (≥20 chars), returns 200 and writes a row to `score_override_audit` with `original_score`, `override_score`, `reason`, `actor_id`, `occurred_at`."
+    test_layer: api
+    persona: nbfc_tenant_user
+    expected_response_shape:
+      invalid:
+        code: "REASON_REQUIRED"
+        message: string
+      valid:
+        id: string
+        loan_application_id: string
+        score_type: string
+        original_score: number
+        override_score: number
+        reason: string
+        actor_id: string
+        occurred_at: string
+    test_name: "Override requires documented reason and writes audit row"
 
 status: passed
 loop_count: 1

@@ -103,6 +103,17 @@ acceptance_criteria:
     statement: "Both endpoints return the resolved 2-value paymentMode field in the response body matching the persisted value."
     test_layer: api
     test_name: "response paymentMode equals persisted column"
+  - id: AC6
+    statement: "The payment-mode mapping must be implemented as a named utility function and must be documented in code: exported from `src/lib/payments/mapPaymentMode.ts` as a named function `mapPaymentMode(input: 'cash'|'finance'|'credit') => 'CASH'|'FIN'|'CRED'` with a TSDoc comment listing each mapping. A unit test imports the function, asserts the three known mappings, and asserts that an unknown input returns `null` (not throws)."
+    test_layer: unit
+    test_name: "mapPaymentMode is a named, TSDoc-documented utility with exhaustive mapping and null fallback"
+    persona: itarang_super_admin
+    expected_response_shape:
+      module: "src/lib/payments/mapPaymentMode.ts"
+      export: "named function mapPaymentMode"
+      signature: "mapPaymentMode(input: 'cash'|'finance'|'credit') => 'CASH'|'FIN'|'CRED'"
+      tsdoc: "TSDoc comment lists each input→output mapping"
+      unknown_input_behavior: "returns null (does not throw)"
 
 status: green
 loop_count: 1

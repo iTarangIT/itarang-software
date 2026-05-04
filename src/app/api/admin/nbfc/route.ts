@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
-import { nbfc, users } from "@/lib/db/schema";
+import { nbfc, nbfcDirectors, users } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import crypto from "node:crypto";
 
@@ -204,6 +204,20 @@ export async function POST(req: NextRequest) {
           });
 
         const row = inserted[0];
+
+        // Seed the director record from primary contact so sanchit can run
+        // PAN/Aadhaar/RC against an addressable subject during KYC review.
+        // PAN reuses the entity PAN by default; the reviewer can edit it on
+        // the KYC review page before kicking off the verification.
+        await db.insert(nbfcDirectors).values({
+          nbfc_id: row.id,
+          full_name: v.primaryContactName,
+          email: v.primaryContactEmail,
+          phone: v.primaryContactPhone,
+          pan_number: v.panNumber,
+          kyc_status: "pending",
+        });
+
         return NextResponse.json(
           {
             success: true,

@@ -111,6 +111,18 @@ acceptance_criteria:
     statement: "POST /api/leads/create with paymentMethod='Other finance' for an active dealer with finance_enabled=true and at least one active dealer_nbfc_assignments row returns 200 and inserts a leads row."
     test_layer: api
     test_name: "all guards pass — finance lead created"
+  - id: AC6
+    statement: "POST /api/leads with dealer_id pointing at a dealer whose `onboarding_status` is in {'pending', 'rejected', 'inactive'} returns 422 with code='DEALER_NOT_ACTIVE' and the dealer's current status in the body. The lead row is NOT created. Only dealers with status='active' can have new leads. The server must validate the dealer and prevents leads from being created against unactivated or rejected dealers."
+    test_layer: api
+    test_name: "server validates dealer status and prevents lead creation for unactivated or rejected dealers"
+    persona: dealer_user
+    expected_response_shape:
+      status: 422
+      body:
+        code: "DEALER_NOT_ACTIVE"
+        currentStatus: "<one of: pending | rejected | inactive>"
+      side_effects:
+        leads_row_inserted: false
 
 status: needs_clarification
 loop_count: 0

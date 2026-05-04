@@ -95,6 +95,14 @@ acceptance_criteria:
     statement: "POST withdraw with withdrawal_channel not in {'grievance_portal','helpline','email'} returns 400."
     test_layer: api
     test_name: "Withdraw rejects unknown channel"
+  - id: AC5
+    statement: "After POST /api/dpdpa/consent/withdraw with consent_id=X, any subsequent processing endpoint that depends on consent_id=X returns 451 with code='CONSENT_WITHDRAWN'. To resume, the data subject must record fresh consent (POST /consent with a timestamp greater than the withdraw timestamp); after that, processing endpoints succeed."
+    test_layer: api
+    persona: dealer_user
+    expected_response_shape:
+      ok: false
+      code: "CONSENT_WITHDRAWN"
+    test_name: "Withdrawn consent blocks downstream processing with 451 CONSENT_WITHDRAWN until fresh consent is recorded"
 
 status: needs_schema_approval
 loop_count: 0
