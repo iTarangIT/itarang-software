@@ -21,8 +21,12 @@ export type DualApprovalStatus =
 
 export const DUAL_APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 
+// Per BRD §6.4.3 / user direction (2026-05-04): NBFC creates the
+// battery_immobilisation request; the iTarang `sales_head` approves it.
+// (Was previously `nbfc_risk_head` — kept here for posterity in commit
+// history.)
 const FALLBACK_APPROVER_ROLES: Record<string, string> = {
-  battery_immobilisation: "nbfc_risk_head",
+  battery_immobilisation: "sales_head",
   loan_restructuring: "nbfc_credit_manager",
   risk_rule_threshold_change: "itarang_risk_head",
   bulk_immobilisation: "itarang_admin",

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getCurrentTenant, getTenantLoanSlice } from "@/lib/nbfc/tenant";
 import { getFleetSummary } from "@/lib/db/iot-queries";
 import RiskDistributionDonut from "../_components/RiskDistributionDonut";
@@ -17,15 +18,20 @@ export default async function NbfcOverview() {
     .filter((v): v is string => typeof v === "string" && v.length > 0);
   const summary = await getFleetSummary(vehiclenos);
 
-  const tiles = [
-    { label: "Active Loans", value: loans.length },
-    { label: "Vehicles Tracked", value: summary.total },
-    { label: "Online (1h)", value: summary.online, accent: "text-emerald-600" },
-    { label: "Reporting (5m)", value: summary.fresh_5m },
-    { label: "With GPS Fix", value: summary.with_lat },
+  const tiles: Array<{
+    label: string;
+    value: number | string;
+    accent?: string;
+    href?: string;
+  }> = [
+    { label: "Active Loans", value: loans.length, href: "/nbfc/leads?status=active" },
+    { label: "Vehicles Tracked", value: summary.total, href: "/nbfc/batteries" },
+    { label: "Online (1h)", value: summary.online, accent: "text-emerald-600", href: "/nbfc/batteries?status=fresh" },
+    { label: "Reporting (5m)", value: summary.fresh_5m, href: "/nbfc/batteries?status=fresh" },
+    { label: "With GPS Fix", value: summary.with_lat, href: "/nbfc/batteries" },
     { label: "Avg SOC", value: fmtNum(summary.avg_soc, "%") },
     { label: "Avg Pack V", value: fmtNum(summary.avg_pack_voltage, " V") },
-    { label: "Open Alerts", value: summary.open_alerts, accent: "text-red-600" },
+    { label: "Open Alerts", value: summary.open_alerts, accent: "text-red-600", href: "/nbfc/batteries?severity=open" },
   ];
 
   return (
@@ -36,17 +42,31 @@ export default async function NbfcOverview() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {tiles.map((t) => (
-          <div
-            key={t.label}
-            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-4 py-3"
-          >
-            <div className="text-xs uppercase tracking-wider text-slate-500">{t.label}</div>
-            <div className={`text-2xl font-semibold mt-1 ${t.accent ?? ""}`}>
-              {typeof t.value === "number" ? t.value.toLocaleString("en-IN") : t.value}
+        {tiles.map((t) => {
+          const inner = (
+            <>
+              <div className="text-xs uppercase tracking-wider text-slate-500">{t.label}</div>
+              <div className={`text-2xl font-semibold mt-1 ${t.accent ?? ""}`}>
+                {typeof t.value === "number" ? t.value.toLocaleString("en-IN") : t.value}
+              </div>
+            </>
+          );
+          const className =
+            "bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-4 py-3 transition";
+          return t.href ? (
+            <Link
+              key={t.label}
+              href={t.href}
+              className={`${className} hover:border-slate-400 hover:shadow-sm`}
+            >
+              {inner}
+            </Link>
+          ) : (
+            <div key={t.label} className={className}>
+              {inner}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

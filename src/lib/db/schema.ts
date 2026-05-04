@@ -2811,6 +2811,7 @@ export const nbfcUsers = pgTable(
     user_id: uuid("user_id").notNull(),
     tenant_id: uuid("tenant_id").notNull(),
     role: varchar({ length: 32 }).default('viewer').notNull(),
+    notification_prefs: jsonb("notification_prefs").default({}).notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
