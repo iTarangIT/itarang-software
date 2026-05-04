@@ -75,6 +75,25 @@ acceptance_criteria:
     statement: "A 100-char string can be written and read back from product_selections.model_number without truncation."
     test_layer: api
     test_name: "VARCHAR width is 100 not 50"
+  - id: AC5
+    statement: "After running the migration that renames `product_selections.model_number` to `product_selections.product_selections`, no code in `src/` references `model_number` (verify via grep). Inserting a row with the new column name succeeds; inserting with the old name fails. Any orphan endpoints that referenced model_number have been deleted from `src/app/api/` (no 404 fallbacks). All queries using product_selections.sub_category must be updated to product_selections.model_number, and product_selections.sub_category must also be removed or repurposed so no compatibility alias remains."
+    test_layer: api
+    test_name: "model_number rename complete and old column removed"
+    persona: itarang_super_admin
+    expected_response_shape:
+      success_write:
+        status: 200
+        body:
+          id: "number"
+          leadId: "number"
+          modelNumber: "string"
+      failure_write:
+        status: 400
+        body:
+          error: "string"
+          code: "string"
+          details:
+            unknown_column: "string"
 
 status: schema_approved
 loop_count: 1

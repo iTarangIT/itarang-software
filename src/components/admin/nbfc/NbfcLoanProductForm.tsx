@@ -1,10 +1,16 @@
 "use client";
 
+/**
+ * NbfcLoanProductForm — E-009 per-NBFC loan product creation.
+ *
+ * Visual: BRD §6.B. Sectioned (Product, Eligibility, Amount band, Tenure,
+ * ROI, Charges, Disbursement) with a chip group for battery categories.
+ *
+ * Test contract — every existing `name="..."` and the form-root
+ * `data-testid="nbfc-loan-product-form"` are preserved verbatim.
+ */
 import { useState } from "react";
-
-// E-009 — Admin form to create a per-NBFC loan product. Submits to
-// POST /api/admin/nbfc/{nbfcId}/loan-products and surfaces server-side
-// validation errors verbatim (server enforces every rule per BRD 6.0.5).
+import { Loader2, AlertCircle } from "lucide-react";
 
 const BATTERY_CATEGORIES = ["3W", "2W", "4W", "INVERTER", "SOLAR"] as const;
 type BatteryCategory = (typeof BATTERY_CATEGORIES)[number];
@@ -39,13 +45,12 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const toggleCategory = (cat: BatteryCategory) => {
+  const toggleCategory = (cat: BatteryCategory) =>
     setCategories((prev) =>
       prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat],
     );
-  };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
@@ -64,19 +69,15 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
       disbursementMethod: disbursement,
       status,
     };
-    if (fileChargeFixed !== "")
-      body.fileChargeFixed = Number(fileChargeFixed);
+    if (fileChargeFixed !== "") body.fileChargeFixed = Number(fileChargeFixed);
     if (fileChargePct !== "") body.fileChargePct = Number(fileChargePct);
 
     try {
-      const res = await fetch(
-        `/api/admin/nbfc/${nbfcId}/loan-products`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        },
-      );
+      const res = await fetch(`/api/admin/nbfc/${nbfcId}/loan-products`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
       const data = await res.json();
       if (!res.ok) {
         setError(data?.message ?? `Request failed (${res.status})`);
@@ -88,96 +89,136 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
     } finally {
       setSubmitting(false);
     }
-  };
+  }
 
   return (
     <form
       onSubmit={handleSubmit}
-      className="space-y-4 max-w-2xl"
+      className="space-y-6"
       data-testid="nbfc-loan-product-form"
     >
-      <div>
-        <label className="block text-sm font-medium">Product Name</label>
-        <input
-          type="text"
-          value={productName}
-          onChange={(e) => setProductName(e.target.value)}
-          required
-          maxLength={120}
-          className="mt-1 w-full border rounded px-2 py-1"
-          name="productName"
-        />
-      </div>
+      <Section eyebrow="Product" title="Identity & Status">
+        <Field label="Product name" full>
+          <input
+            type="text"
+            value={productName}
+            onChange={(e) => setProductName(e.target.value)}
+            required
+            maxLength={120}
+            className="input-itarang"
+            name="productName"
+            placeholder="e.g. Bajaj E-Rickshaw Finance 2026"
+          />
+        </Field>
+        <Field label="Status">
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value as "active" | "inactive")}
+            className="input-itarang"
+            name="status"
+          >
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </Field>
+      </Section>
 
-      <fieldset>
-        <legend className="text-sm font-medium">
-          Eligible Battery Categories
-        </legend>
-        <div className="flex gap-3 mt-1">
-          {BATTERY_CATEGORIES.map((cat) => (
-            <label key={cat} className="flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={categories.includes(cat)}
-                onChange={() => toggleCategory(cat)}
-              />
-              <span>{cat}</span>
-            </label>
-          ))}
+      <Section
+        eyebrow="Eligibility"
+        title="Battery categories this product finances"
+        helper="Pick every category the NBFC will underwrite. Only `Active` products show in the dealer sanction dropdown."
+      >
+        <div className="md:col-span-3">
+          <div className="flex flex-wrap gap-2">
+            {BATTERY_CATEGORIES.map((cat) => {
+              const selected = categories.includes(cat);
+              return (
+                <label
+                  key={cat}
+                  className={
+                    "relative inline-flex items-center gap-2 px-3 h-9 rounded-full text-sm font-semibold cursor-pointer transition-colors border select-none " +
+                    (selected
+                      ? "text-white border-transparent shadow-[0_2px_8px_-2px_rgba(19,143,198,0.4)]"
+                      : "text-[color:var(--color-ink-muted)] hover:text-[color:var(--color-brand-navy)] border-[color:var(--color-border)] bg-white")
+                  }
+                  style={
+                    selected
+                      ? { background: "var(--color-brand-sky)" }
+                      : undefined
+                  }
+                >
+                  {/* Native checkbox covers the entire chip and stays
+                      clickable by Playwright's `check()`. Visual is the
+                      label itself. */}
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={() => toggleCategory(cat)}
+                    className="absolute inset-0 opacity-0 cursor-pointer"
+                  />
+                  <span className="relative z-10 pointer-events-none">{cat}</span>
+                </label>
+              );
+            })}
+          </div>
         </div>
-      </fieldset>
+      </Section>
 
-      <div className="grid grid-cols-2 gap-3">
-        <label className="block text-sm">
-          Loan Amount Min (₹)
+      <Section
+        eyebrow="Amount band"
+        title="Min and max sanction amount in ₹"
+      >
+        <Field label="Loan amount min (₹)">
           <input
             type="number"
             value={loanAmountMin}
             onChange={(e) => setLoanAmountMin(e.target.value)}
             required
             min={0}
-            className="mt-1 w-full border rounded px-2 py-1"
+            className="input-itarang"
             name="loanAmountMin"
           />
-        </label>
-        <label className="block text-sm">
-          Loan Amount Max (₹)
+        </Field>
+        <Field label="Loan amount max (₹)">
           <input
             type="number"
             value={loanAmountMax}
             onChange={(e) => setLoanAmountMax(e.target.value)}
             required
             min={1}
-            className="mt-1 w-full border rounded px-2 py-1"
+            className="input-itarang"
             name="loanAmountMax"
           />
-        </label>
-        <label className="block text-sm">
-          Tenure Min (months)
+        </Field>
+      </Section>
+
+      <Section eyebrow="Tenure" title="Allowed tenure window">
+        <Field label="Min tenure (months)">
           <input
             type="number"
             value={tenureMin}
             onChange={(e) => setTenureMin(e.target.value)}
             required
             min={1}
-            className="mt-1 w-full border rounded px-2 py-1"
+            className="input-itarang"
             name="tenureMonthsMin"
           />
-        </label>
-        <label className="block text-sm">
-          Tenure Max (months)
+        </Field>
+        <Field label="Max tenure (months)">
           <input
             type="number"
             value={tenureMax}
             onChange={(e) => setTenureMax(e.target.value)}
             required
             min={1}
-            className="mt-1 w-full border rounded px-2 py-1"
+            className="input-itarang"
             name="tenureMonthsMax"
           />
-        </label>
-        <label className="block text-sm">
-          Min ROI (%)
+        </Field>
+      </Section>
+
+      <Section eyebrow="ROI & Down payment" title="Pricing knobs">
+        <Field label="Min ROI (%)">
           <input
             type="number"
             value={minRoi}
@@ -185,12 +226,11 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
             required
             step="0.01"
             min={0}
-            className="mt-1 w-full border rounded px-2 py-1"
+            className="input-itarang"
             name="minRoiPct"
           />
-        </label>
-        <label className="block text-sm">
-          Max ROI (%)
+        </Field>
+        <Field label="Max ROI (%)">
           <input
             type="number"
             value={maxRoi}
@@ -198,12 +238,11 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
             required
             step="0.01"
             min={0}
-            className="mt-1 w-full border rounded px-2 py-1"
+            className="input-itarang"
             name="maxRoiPct"
           />
-        </label>
-        <label className="block text-sm">
-          Down Payment (%)
+        </Field>
+        <Field label="Down payment (%)">
           <input
             type="number"
             value={downPayment}
@@ -212,33 +251,38 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
             step="0.01"
             min={0}
             max={100}
-            className="mt-1 w-full border rounded px-2 py-1"
+            className="input-itarang"
             name="downPaymentPct"
           />
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={subventionAvailable}
-            onChange={(e) => setSubventionAvailable(e.target.checked)}
-            name="subventionAvailable"
-          />
-          Subvention Available
-        </label>
-        <label className="block text-sm">
-          File Charge — Fixed (₹)
+        </Field>
+      </Section>
+
+      <Section eyebrow="Charges" title="Subvention and file charges">
+        <Field label="Subvention available">
+          <label
+            className="inline-flex items-center gap-2 h-11 px-3 rounded-lg border border-[color:var(--color-border)] bg-white cursor-pointer text-sm"
+          >
+            <input
+              type="checkbox"
+              checked={subventionAvailable}
+              onChange={(e) => setSubventionAvailable(e.target.checked)}
+              name="subventionAvailable"
+            />
+            <span>{subventionAvailable ? "Yes" : "No"}</span>
+          </label>
+        </Field>
+        <Field label="File charge — fixed (₹)">
           <input
             type="number"
             value={fileChargeFixed}
             onChange={(e) => setFileChargeFixed(e.target.value)}
             step="0.01"
             min={0}
-            className="mt-1 w-full border rounded px-2 py-1"
+            className="input-itarang"
             name="fileChargeFixed"
           />
-        </label>
-        <label className="block text-sm">
-          File Charge — % of Loan
+        </Field>
+        <Field label="File charge — % of loan">
           <input
             type="number"
             value={fileChargePct}
@@ -246,56 +290,101 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
             step="0.01"
             min={0}
             max={100}
-            className="mt-1 w-full border rounded px-2 py-1"
+            className="input-itarang"
             name="fileChargePct"
           />
-        </label>
-      </div>
+        </Field>
+      </Section>
 
-      <label className="block text-sm">
-        Disbursement Method
-        <select
-          value={disbursement}
-          onChange={(e) => setDisbursement(e.target.value)}
-          className="mt-1 w-full border rounded px-2 py-1"
-          name="disbursementMethod"
-        >
-          {DISBURSEMENT_METHODS.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label className="block text-sm">
-        Status
-        <select
-          value={status}
-          onChange={(e) =>
-            setStatus(e.target.value as "active" | "inactive")
-          }
-          className="mt-1 w-full border rounded px-2 py-1"
-          name="status"
-        >
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-        </select>
-      </label>
+      <Section eyebrow="Disbursement" title="Where the funds land">
+        <Field label="Disbursement method" full>
+          <select
+            value={disbursement}
+            onChange={(e) => setDisbursement(e.target.value)}
+            className="input-itarang"
+            name="disbursementMethod"
+          >
+            {DISBURSEMENT_METHODS.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </Section>
 
       {error && (
-        <p className="text-sm text-red-600" role="alert">
-          {error}
-        </p>
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-xl px-4 py-3 border"
+          style={{
+            background: "var(--color-danger-bg)",
+            borderColor: "rgba(192, 57, 43, 0.3)",
+            color: "var(--color-danger)",
+          }}
+        >
+          <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold">Couldn't create loan product</p>
+            <p className="opacity-90">{error}</p>
+          </div>
+        </div>
       )}
 
-      <button
-        type="submit"
-        disabled={submitting}
-        className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-      >
-        {submitting ? "Saving..." : "Create Loan Product"}
-      </button>
+      <div className="flex justify-end pt-2">
+        <button type="submit" disabled={submitting} className="btn-primary">
+          {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+          {submitting ? "Saving…" : "Create Loan Product"}
+        </button>
+      </div>
     </form>
+  );
+}
+
+/* Local primitives mirroring NbfcMasterDetailsForm. */
+
+function Section({
+  eyebrow,
+  title,
+  helper,
+  children,
+}: {
+  eyebrow: string;
+  title: string;
+  helper?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="card-iTarang p-6 md:p-7 space-y-5">
+      <header className="space-y-1">
+        <p className="section-label">{eyebrow}</p>
+        <h2 className="text-lg font-semibold text-[color:var(--color-brand-navy)]">
+          {title}
+        </h2>
+        {helper && (
+          <p className="text-xs text-[color:var(--color-ink-muted)]">{helper}</p>
+        )}
+      </header>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">{children}</div>
+    </section>
+  );
+}
+
+function Field({
+  label,
+  full,
+  children,
+}: {
+  label: string;
+  full?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className={`flex flex-col gap-1.5 ${full ? "md:col-span-3" : ""}`}>
+      <span className="text-xs font-semibold text-[color:var(--color-ink)]">
+        {label}
+      </span>
+      {children}
+    </label>
   );
 }

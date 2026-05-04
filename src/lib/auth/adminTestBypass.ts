@@ -61,7 +61,10 @@ export async function requireAdminOrTestBypass(
         ),
       };
     }
-    return { ok: true, user: { id: userId, email: null, role } };
+    return {
+      ok: true,
+      user: { id: userId, email: null, role, via: "test_bypass" },
+    };
   }
   return requireAdmin();
 }

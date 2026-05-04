@@ -98,6 +98,15 @@ acceptance_criteria:
     statement: "On successful cancellation, an admin_audit_logs row is written with action='AUCTION_LOT_CANCELLED', the reason, lot_id, and both requester and approver IDs."
     test_layer: api
     test_name: "Audit log row written with reason and approver IDs on cancellation"
+  - id: AC6
+    statement: "On successful cancellation of an auction lot (after dual approval), every asset in the cancelled lot returns to inventory: its `status` is updated to 'in_inventory' (or equivalent), `auction_lot_id` cleared, and an audit row written to `inventory_movements` with `reason='auction_cancelled'`. Returns 200 with `{ ok: true, lotId: ..., assetsReturned: <integer> }`."
+    test_layer: api
+    persona: nbfc_tenant_user
+    expected_response_shape:
+      ok: "boolean"
+      lotId: "uuid"
+      assetsReturned: "integer"
+    test_name: "Approved cancellation returns assets to inventory with movement audit"
 
 status: passed
 loop_count: 1

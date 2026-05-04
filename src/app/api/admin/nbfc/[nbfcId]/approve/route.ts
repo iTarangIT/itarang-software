@@ -29,6 +29,25 @@ export async function POST(
   if (!auth.ok) return auth.response;
   const adminUserId = auth.user.id;
 
+  // CEO-only gate. The /nbfc-onboarding headed test exercises the full flow
+  // through `via: "test_bypass"` and skips the CEO check; in production every
+  // session-authenticated caller must be CEO Sanchit (or a user explicitly
+  // carrying role='ceo').
+  if (auth.user.via !== "test_bypass") {
+    const role = auth.user.role ?? "";
+    const email = (auth.user.email ?? "").toLowerCase();
+    const isCeo = role === "ceo" || email === "sanchit@itarang.com";
+    if (!isCeo) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "FORBIDDEN: only the CEO can approve NBFC onboarding",
+        },
+        { status: 403 },
+      );
+    }
+  }
+
   const { nbfcId } = await ctx.params;
   const id = Number.parseInt(nbfcId, 10);
   if (!Number.isInteger(id) || id <= 0) {
@@ -84,6 +103,8 @@ export async function POST(
         reason: r.reason,
         missingDocs: r.missingDocs,
         lspAgreementStatus: r.lspAgreementStatus,
+        missingEntityKyc: r.missingEntityKyc,
+        missingDirectorKyc: r.missingDirectorKyc,
       },
       { status: 422 },
     );

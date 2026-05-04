@@ -23,7 +23,15 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { randomUUID, randomInt } from "node:crypto";
 import { db } from "@/lib/db";
-import { nbfc, nbfcPortalCredentials, auditLogs } from "@/lib/db/schema";
+import {
+  nbfc,
+  nbfcPortalCredentials,
+  nbfcTenants,
+  nbfcUsers,
+  users,
+  auditLogs,
+} from "@/lib/db/schema";
+import { sql } from "drizzle-orm";
 import { requireAdminOrTestBypass } from "@/lib/auth/adminTestBypass";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { enqueueNbfcPortalCredentialsJob } from "@/lib/queue/jobs/sendNbfcPortalCredentialsJob";
@@ -75,31 +83,30 @@ function maskEmail(email: string): string {
   return `${head}${"*".repeat(Math.max(2, local.length - 2))}${domain}`;
 }
 
-async function ensureSupabaseUser(email: string): Promise<string> {
-  // Test mode — short-circuit Supabase round-trip. Triple-guarded.
+async function ensureSupabaseUser(
+  email: string,
+  password: string,
+): Promise<string> {
+  // Bypass only when Supabase admin credentials are unavailable (e.g. agent
+  // worktrees that don't carry .env.local). With keys present we always go
+  // through the real path so the password we email actually unlocks login.
   if (
     process.env.NODE_ENV !== "production" &&
-    process.env.NBFC_TEST_BYPASS_SECRET &&
-    process.env.NBFC_PORTAL_EMAIL_INMEMORY === "1"
+    (!process.env.NEXT_PUBLIC_SUPABASE_URL ||
+      !process.env.SUPABASE_SERVICE_ROLE_KEY)
   ) {
     return randomUUID();
   }
-  // Try to find an existing user; if not, create one with random password
-  // (the credential password is held by Supabase itself — we never persist).
-  // Supabase admin API: listUsers paginated; for our scale a direct lookup
-  // by email is fine via createUser idempotent fallback.
   const { data: created, error } = await supabaseAdmin.auth.admin.createUser({
     email,
     email_confirm: true,
-    password: generatePortalPassword(),
+    password,
     user_metadata: { role: "nbfc_partner" },
   });
   if (created?.user?.id) return created.user.id;
-  // If duplicate, look up by email via listUsers (small fleet — fine).
-  if (
-    error &&
-    /already|exists|registered/i.test(error.message ?? "")
-  ) {
+  // Duplicate — look up by email and reset the password so the credential
+  // we're about to email matches what Supabase actually accepts.
+  if (error && /already|exists|registered/i.test(error.message ?? "")) {
     const { data: list } = await supabaseAdmin.auth.admin.listUsers({
       page: 1,
       perPage: 200,
@@ -107,7 +114,10 @@ async function ensureSupabaseUser(email: string): Promise<string> {
     const found = list?.users?.find(
       (u) => (u.email ?? "").toLowerCase() === email.toLowerCase(),
     );
-    if (found?.id) return found.id;
+    if (found?.id) {
+      await supabaseAdmin.auth.admin.updateUserById(found.id, { password });
+      return found.id;
+    }
   }
   throw new Error(
     `Failed to provision Supabase auth user for ${email}: ${error?.message ?? "unknown"}`,
@@ -155,8 +165,15 @@ export async function POST(
   const [row] = await db
     .select({
       id: nbfc.id,
+      nbfc_id: nbfc.nbfc_id,
+      legal_name: nbfc.legal_name,
+      short_name: nbfc.short_name,
       status: nbfc.status,
       primary_contact_email: nbfc.primary_contact_email,
+      primary_contact_name: nbfc.primary_contact_name,
+      rbi_registration_no: nbfc.rbi_registration_no,
+      grievance_url: nbfc.grievance_url,
+      grievance_helpline: nbfc.grievance_helpline,
     })
     .from(nbfc)
     .where(eq(nbfc.id, id))
@@ -184,10 +201,17 @@ export async function POST(
     );
   }
 
-  // 1. Provision (or look up) the Supabase auth user.
+  // 2. Generate password first so we can plumb it into Supabase user creation;
+  // the email-bound copy must match what Supabase actually accepts.
+  const password = generatePortalPassword();
+
+  // 1. Provision (or look up) the Supabase auth user with that exact password.
   let supabaseUserId: string;
   try {
-    supabaseUserId = await ensureSupabaseUser(row.primary_contact_email);
+    supabaseUserId = await ensureSupabaseUser(
+      row.primary_contact_email,
+      password,
+    );
   } catch (e) {
     const msg = e instanceof Error ? e.message : "unknown";
     return NextResponse.json(
@@ -195,9 +219,6 @@ export async function POST(
       { status: 500 },
     );
   }
-
-  // 2. Generate password and persist a credential audit row.
-  const password = generatePortalPassword();
   const credentialId = randomUUID();
   await db.insert(nbfcPortalCredentials).values({
     id: credentialId,
@@ -217,6 +238,76 @@ export async function POST(
       updated_at: now,
     })
     .where(eq(nbfc.id, id));
+
+  // 3b. Seed the portal tenancy: nbfc_tenants row + users row + nbfc_users
+  //     membership. Without these the supabase user can authenticate but the
+  //     /nbfc routes 500 on getCurrentTenant(). All three are upserts so a
+  //     resend is safe.
+  const tenantSlug = row.nbfc_id.toLowerCase();
+  let tenantId: string;
+  const existingTenant = await db
+    .select({ id: nbfcTenants.id })
+    .from(nbfcTenants)
+    .where(eq(nbfcTenants.slug, tenantSlug))
+    .limit(1);
+  if (existingTenant.length) {
+    tenantId = existingTenant[0].id;
+    await db
+      .update(nbfcTenants)
+      .set({
+        display_name: row.legal_name,
+        contact_email: row.primary_contact_email,
+        is_active: true,
+        nbfc_legal_name: row.legal_name,
+        rbi_registration_no: row.rbi_registration_no,
+        grievance_url: row.grievance_url,
+        grievance_helpline: row.grievance_helpline,
+        updated_at: now,
+      })
+      .where(eq(nbfcTenants.id, tenantId));
+  } else {
+    const [created] = await db
+      .insert(nbfcTenants)
+      .values({
+        slug: tenantSlug,
+        display_name: row.legal_name,
+        contact_email: row.primary_contact_email,
+        is_active: true,
+        nbfc_legal_name: row.legal_name,
+        rbi_registration_no: row.rbi_registration_no,
+        grievance_url: row.grievance_url,
+        grievance_helpline: row.grievance_helpline,
+      })
+      .returning({ id: nbfcTenants.id });
+    tenantId = created.id;
+  }
+
+  // The middleware reads role from supabase user_metadata first, but the
+  // /api/user/profile sync endpoint and various server-side helpers also
+  // consult the public.users table. Upsert a row so both code paths agree.
+  await db
+    .insert(users)
+    .values({
+      id: supabaseUserId,
+      email: row.primary_contact_email,
+      name: row.primary_contact_name,
+      role: "nbfc_partner",
+    })
+    .onConflictDoUpdate({
+      target: users.id,
+      set: { role: "nbfc_partner", updated_at: now },
+    });
+
+  // nbfc_users has no PK on (user_id, tenant_id); guard the duplicate via a
+  // raw NOT EXISTS check so a resend doesn't pile up rows.
+  await db.execute(sql`
+    INSERT INTO nbfc_users (user_id, tenant_id, role)
+    SELECT ${supabaseUserId}::uuid, ${tenantId}::uuid, 'admin'
+    WHERE NOT EXISTS (
+      SELECT 1 FROM nbfc_users
+      WHERE user_id = ${supabaseUserId}::uuid AND tenant_id = ${tenantId}::uuid
+    )
+  `);
 
   // 4. Enqueue email — on failure, revert status to 'approved' and bubble.
   try {

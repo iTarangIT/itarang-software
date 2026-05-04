@@ -78,6 +78,29 @@ const roleNavigation: Record<string, any[]> = {
       ],
     },
     {
+      section: "NBFC APPROVALS",
+      items: [
+        {
+          id: "nbfc-approvals",
+          label: "Pending NBFC Approvals",
+          icon: ClipboardCheck,
+          href: "/admin/nbfc/approvals",
+        },
+        {
+          id: "nbfc-directory",
+          label: "NBFC Directory",
+          icon: Building,
+          href: "/admin/nbfc",
+        },
+        {
+          id: "nbfc-ecosystem",
+          label: "Ecosystem Overview",
+          icon: PieChart,
+          href: "/admin/nbfc/ecosystem-overview",
+        },
+      ],
+    },
+    {
       section: "ADMIN",
       items: [
         {
@@ -112,6 +135,29 @@ const roleNavigation: Record<string, any[]> = {
           label: "Approvals",
           icon: FileText,
           href: "/sales-head/approvals",
+        },
+      ],
+    },
+    {
+      section: "NBFC",
+      items: [
+        {
+          id: "nbfc-onboard",
+          label: "Onboard NBFC",
+          icon: Building,
+          href: "/admin/nbfc/new",
+        },
+        {
+          id: "nbfc-directory",
+          label: "NBFC Directory",
+          icon: Landmark,
+          href: "/admin/nbfc",
+        },
+        {
+          id: "nbfc-my-drafts",
+          label: "My Submitted Drafts",
+          icon: FileText,
+          href: "/admin/nbfc?owner=me",
         },
       ],
     },
@@ -524,49 +570,51 @@ export function Sidebar() {
         }))
       : rawMenuItems;
 
+  // BRD §6.B sidebar — solid #02314e navy, 9px ALL CAPS section labels at
+  // rgba(255,255,255,0.30), 13px DM Sans Medium nav items, 3px transparent
+  // left border, active = `rgba(19,143,198,0.15)` bg + `#138fc6` left border
+  // + white text. Width pinned at w-64 to keep LayoutWrapper margin (md:ml-64).
   return (
-    <div className="w-64 bg-slate-50/50 h-screen border-r border-gray-100 flex-col fixed left-0 top-0 z-10 hidden md:flex">
-      <div className="px-5 py-5 flex items-center">
+    <div className="sidebar-shell w-64 h-screen flex-col fixed left-0 top-0 z-10 hidden md:flex">
+      {/* Logo lockup */}
+      <div className="px-5 h-[68px] flex items-center border-b border-white/[0.07]">
         <img
-          src="/itarang-logo.png"
+          src="/itarang-logo-white.png"
           alt="iTarang"
-          className="w-full max-w-[200px] h-auto object-contain select-none"
+          className="h-7 w-auto object-contain select-none"
           draggable={false}
         />
       </div>
 
-      <div className="flex-1 overflow-y-auto py-4 px-4 space-y-8">
+      <div className="flex-1 overflow-y-auto py-6 space-y-7">
         {menuItems.map((group: any) => (
           <div key={group.section}>
-            <h3 className="text-xs font-semibold text-gray-400 mb-3 px-2 tracking-wider">
+            <h3 className="sidebar-section-label px-5 mb-2">
               {group.section}
             </h3>
-            <div className="space-y-1">
+            <div>
               {group.items.map((item: any) => {
-                const isActive = pathname === item.href;
+                // active = exact match OR active for `/admin/nbfc?owner=me` style hrefs
+                const itemPath = item.href.split("?")[0];
+                const isActive =
+                  pathname === itemPath ||
+                  (itemPath !== "/" && pathname.startsWith(itemPath + "/"));
                 return (
                   <Link
                     key={item.id}
                     href={item.href}
                     className={cn(
-                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 relative group",
-                      isActive
-                        ? "bg-brand-50 text-brand-700 shadow-sm"
-                        : "text-gray-500 hover:bg-gray-50 hover:text-gray-900",
+                      isActive ? "sidebar-nav-item-active" : "sidebar-nav-item",
                     )}
                   >
-                    {isActive && (
-                      <div className="absolute left-0 top-1.5 bottom-1.5 w-[3px] bg-brand-600 rounded-r-full" />
-                    )}
                     <item.icon
                       className={cn(
-                        "w-5 h-5",
-                        isActive
-                          ? "text-brand-600"
-                          : "text-gray-400 group-hover:text-gray-600",
+                        "w-[18px] h-[18px] shrink-0",
+                        isActive ? "text-white" : "text-white/55",
                       )}
+                      strokeWidth={1.75}
                     />
-                    {item.label}
+                    <span className="truncate">{item.label}</span>
                   </Link>
                 );
               })}
@@ -575,26 +623,38 @@ export function Sidebar() {
         ))}
       </div>
 
-      <div className="p-4 border-t border-gray-100/50 space-y-2">
-        <div className="flex items-center gap-3 p-3 rounded-xl hover:bg-white hover:shadow-sm transition-all group cursor-default">
+      {/* Profile mini-card — NOTE: `displayRole` is sourced from users.role
+          via /api/user/profile. The known "dealer for sales_head" data
+          glitch is upstream of the UI; see docs/nbfc/NOTES.md. */}
+      <div className="px-4 py-4 border-t border-white/[0.07]">
+        <div className="flex items-center gap-3">
           {loading && !user ? (
             <>
-              <div className="w-9 h-9 bg-gray-200 rounded-full animate-pulse" />
+              <div className="w-9 h-9 bg-white/10 rounded-full animate-pulse" />
               <div className="flex-1 min-w-0 space-y-2">
-                <div className="h-4 w-24 bg-gray-200 rounded animate-pulse" />
-                <div className="h-3 w-16 bg-gray-200 rounded animate-pulse" />
+                <div className="h-3.5 w-24 bg-white/10 rounded animate-pulse" />
+                <div className="h-3 w-16 bg-white/10 rounded animate-pulse" />
               </div>
             </>
           ) : (
             <>
-              <div className="w-9 h-9 bg-brand-600 rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm uppercase">
-                {user?.name?.[0] || user?.email?.[0] || "U"}
+              <div
+                className="w-9 h-9 rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm"
+                style={{ background: "var(--gradient-primary)" }}
+              >
+                {(user?.name?.[0] || user?.email?.[0] || "U").toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900 truncate">
+                <p className="text-[13px] font-semibold text-white truncate">
                   {user?.name || "User"}
                 </p>
-                <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium mt-1 bg-brand-100 text-brand-700 uppercase">
+                <span
+                  className="inline-block mt-1 px-2 py-0.5 rounded text-[9px] font-bold tracking-[0.14em] uppercase"
+                  style={{
+                    background: "rgba(19,143,198,0.18)",
+                    color: "#9fcfe8",
+                  }}
+                >
                   {user?.role || inferredRole}
                 </span>
               </div>

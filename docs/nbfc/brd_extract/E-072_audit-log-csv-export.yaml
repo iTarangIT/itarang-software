@@ -85,6 +85,20 @@ acceptance_criteria:
     statement: "When called with NBFC JWT, the exported CSV row_count equals only that NBFC's matching audit rows (not all NBFCs')."
     test_layer: api
     test_name: "NBFC export scope is limited to caller's tenant_id"
+  - id: AC6
+    statement: "Export requires MFA re-confirmation: POST /api/admin/audit-log/export without an `mfa_token` query param returns 401 with code='MFA_REQUIRED'. With a valid mfa_token (verified server-side, max 5-min age), returns 200 with the CSV stream and writes an audit row referencing the export confirmation."
+    test_layer: api
+    persona: itarang_super_admin
+    expected_response_shape:
+      missing_mfa:
+        status: 401
+        body:
+          code: "MFA_REQUIRED"
+      valid_mfa:
+        status: 200
+        content_type: "text/csv"
+        audit_row_written: true
+    test_name: "Export requires fresh MFA re-confirmation (max 5-min token age)"
 
 status: needs_schema_approval
 loop_count: 0

@@ -96,6 +96,22 @@ acceptance_criteria:
     statement: "Every successful transition inserts one row in nbfc_status_history with from_status, to_status, actor_id matching the request."
     test_layer: api
     test_name: "transitions are recorded in status history"
+  - id: AC5
+    statement: "When transitioning an NBFC to status='terminated', any leads attached to that NBFC with status='active' must be reassigned to a different active NBFC OR closed (status set to 'closed' with reason='nbfc_terminated'). Returns 422 if active leads exist and the request body doesn't supply a `reassign_to_nbfc_id` or `close_active_leads: true` directive; on success returns 200 with the transition payload plus an `affectedLeads` count."
+    test_layer: api
+    persona: itarang_super_admin
+    expected_response_shape:
+      error_422:
+        ok: "boolean (false)"
+        code: "string (UNRESOLVED_ACTIVE_LEADS)"
+        count: "integer"
+      success_200:
+        nbfcId: "number"
+        from: "string"
+        to: "string"
+        occurredAt: "iso-datetime"
+        affectedLeads: "integer"
+    test_name: "terminate transition guards active leads"
 
 status: needs_schema_approval
 loop_count: 0

@@ -112,6 +112,15 @@ acceptance_criteria:
     statement: "After a successful POST /api/iot/ingest, iot_devices.last_seen and iot_devices.device_status='online' are updated for the serialNumber."
     test_layer: api
     test_name: "POST ingest updates iot_devices.last_seen and device_status='online'"
+  - id: AC6
+    statement: "POST /api/nbfc/telemetry/ingest must validate timestamp within a configurable freshness window (default 5 minutes) and reject stale packets: when Math.abs(now - ts) exceeds the bound, the endpoint returns HTTP 400 with { ok: false, code: 'STALE_PACKET', processed_count: 0 } (processed_count must be 0)."
+    test_layer: api
+    persona: nbfc_tenant_user
+    expected_response_shape:
+      ok: false
+      code: "STALE_PACKET"
+      processed_count: 0
+    test_name: "POST nbfc telemetry ingest rejects stale packet (ts outside freshness window) with 400 STALE_PACKET and processed_count=0"
 
 status: blocked
 loop_count: 0

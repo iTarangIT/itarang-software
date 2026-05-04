@@ -14,11 +14,21 @@ import {
   nbfcLspAgreements,
 } from "@/lib/db/schema";
 import { REQUIRED_NBFC_DOC_TYPES } from "./required-docs";
+import {
+  hasSuccessfulEntityVerifications,
+  type EntityVerificationType,
+} from "./entity-kyc";
+import {
+  hasSuccessfulDirectorVerifications,
+  type DirectorVerificationType,
+} from "./director-kyc";
 
 export type ReadinessResult = {
   canApprove: boolean;
   missingDocs: string[];
   lspAgreementStatus: string;
+  missingEntityKyc: EntityVerificationType[];
+  missingDirectorKyc: DirectorVerificationType[];
   reason: string | null;
 };
 
@@ -37,6 +47,8 @@ export async function evaluateApprovalReadiness(
       canApprove: false,
       missingDocs: [],
       lspAgreementStatus: "MISSING",
+      missingEntityKyc: ["cin", "pan", "gstin"],
+      missingDirectorKyc: ["pan", "aadhaar", "rc"],
       reason: "NBFC not found",
     };
   }
@@ -65,19 +77,36 @@ export async function evaluateApprovalReadiness(
     .limit(1);
   const lspAgreementStatus = lsp?.agreement_status ?? "MISSING";
 
+  // 4) NBFC entity KYC — CIN, PAN, GSTIN must each have at least one
+  // status='success' row in nbfc_entity_kyc_verifications.
+  const entityKyc = await hasSuccessfulEntityVerifications(nbfcId);
+  // 5) Director KYC — PAN, Aadhaar, RC must each have at least one
+  // status='success' row in nbfc_director_kyc_verifications.
+  const directorKyc = await hasSuccessfulDirectorVerifications(nbfcId);
+
   let reason: string | null = null;
   if (missingDocs.length > 0) {
     reason = `Required compliance documents not verified: ${missingDocs.join(", ")}`;
   } else if (lspAgreementStatus !== "COMPLETED") {
     reason = "Cannot activate until LSP Agreement is fully signed and downloaded from Digio.";
+  } else if (!entityKyc.ok) {
+    reason = `NBFC entity KYC not verified: ${entityKyc.missing.map((t) => t.toUpperCase()).join(", ")}`;
+  } else if (!directorKyc.ok) {
+    reason = `Director KYC not verified: ${directorKyc.missing.map((t) => t.toUpperCase()).join(", ")}`;
   }
 
   return {
     exists: true,
     currentStatus: row.status,
-    canApprove: missingDocs.length === 0 && lspAgreementStatus === "COMPLETED",
+    canApprove:
+      missingDocs.length === 0 &&
+      lspAgreementStatus === "COMPLETED" &&
+      entityKyc.ok &&
+      directorKyc.ok,
     missingDocs: [...missingDocs],
     lspAgreementStatus,
+    missingEntityKyc: entityKyc.missing,
+    missingDirectorKyc: directorKyc.missing,
     reason,
   };
 }

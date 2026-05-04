@@ -99,6 +99,19 @@ acceptance_criteria:
     statement: "POST /api/admin/nbfc/risk-rules/request-change returns 400 when mfa_token is invalid or shorter than 6 chars."
     test_layer: api
     test_name: "Request-change rejects invalid MFA with 400"
+  - id: AC6
+    statement: "POST /api/nbfc/risk-rules/{ruleId}/commit by approver_a returns 200 with status='pending_second_approval'. A second POST by approver_b (distinct user_id) flips status to 'committed'. POST by the same user_id twice returns 409 with code='DUPLICATE_APPROVER'. Requires Dual Approval — a single approver is insufficient; a second distinct approver must confirm before the rule commits."
+    test_layer: api
+    persona: nbfc_tenant_user
+    expected_response_shape:
+      rule_id: "uuid"
+      status: "pending_second_approval|committed"
+      approvers: "array<uuid>"
+      committed_at: "iso8601|null"
+      error:
+        code: "DUPLICATE_APPROVER"
+        message: "string"
+    test_name: "Dual approval commit requires two distinct approvers; same user twice returns 409"
 
 status: pass
 loop_count: 1

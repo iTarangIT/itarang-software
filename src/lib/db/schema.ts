@@ -4610,3 +4610,101 @@ export const inventoryTransfers = pgTable(
     statusIdx: index("inventory_transfers_status_idx").on(table.status),
   }),
 );
+
+// =============================================================================
+// NBFC entity KYC verifications (CIN, PAN, GSTIN)
+// Sanchit (CEO) runs these from /admin/nbfc/[id]/kyc-review before the final
+// approval gate releases. The gate (E-001) requires at least one row with
+// status='success' for each of (cin, pan, gstin). Provider raw payload is
+// retained verbatim for the RBI audit trail.
+// =============================================================================
+export const nbfcEntityKycVerifications = pgTable(
+  "nbfc_entity_kyc_verifications",
+  {
+    id: serial("id").primaryKey(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    verification_type: varchar("verification_type", { length: 16 }).notNull(),
+    id_number: varchar("id_number", { length: 32 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull(),
+    provider_reference_id: varchar("provider_reference_id", { length: 64 }),
+    raw_response: jsonb("raw_response"),
+    verified_by: uuid("verified_by"),
+    verified_at: timestamp("verified_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_entity_kyc_verifications_nbfc_id_idx").on(
+      table.nbfc_id,
+    ),
+    typeIdx: index("nbfc_entity_kyc_verifications_type_idx").on(
+      table.verification_type,
+    ),
+  }),
+);
+
+// =============================================================================
+// NBFC directors — one row per NBFC, seeded from primary_contact_* at create
+// time. Holds the subject of the director-side KYC (PAN / Aadhaar / RC). This
+// is intentionally a 1:1 with `nbfc` for now; the table key still indexes by
+// nbfc_id so multi-director support can land later without a migration.
+// =============================================================================
+export const nbfcDirectors = pgTable(
+  "nbfc_directors",
+  {
+    id: serial("id").primaryKey(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    full_name: varchar("full_name", { length: 200 }).notNull(),
+    email: varchar("email", { length: 200 }),
+    phone: varchar("phone", { length: 20 }),
+    pan_number: varchar("pan_number", { length: 20 }),
+    aadhaar_last4: varchar("aadhaar_last4", { length: 4 }),
+    rc_number: varchar("rc_number", { length: 30 }),
+    kyc_status: varchar("kyc_status", { length: 16 })
+      .default("pending")
+      .notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_directors_nbfc_id_idx").on(table.nbfc_id),
+  }),
+);
+
+// =============================================================================
+// NBFC director KYC verifications (PAN, Aadhaar, RC). Mirrors the entity table
+// but keys off director_id. Verification type is one of: pan | aadhaar | rc.
+// =============================================================================
+export const nbfcDirectorKycVerifications = pgTable(
+  "nbfc_director_kyc_verifications",
+  {
+    id: serial("id").primaryKey(),
+    director_id: integer("director_id")
+      .notNull()
+      .references(() => nbfcDirectors.id),
+    verification_type: varchar("verification_type", { length: 16 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull(),
+    provider_reference_id: varchar("provider_reference_id", { length: 64 }),
+    raw_response: jsonb("raw_response"),
+    verified_by: uuid("verified_by"),
+    verified_at: timestamp("verified_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    directorIdx: index("nbfc_director_kyc_verifications_director_idx").on(
+      table.director_id,
+    ),
+    typeIdx: index("nbfc_director_kyc_verifications_type_idx").on(
+      table.verification_type,
+    ),
+  }),
+);
