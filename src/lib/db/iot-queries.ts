@@ -273,6 +273,265 @@ export async function getSohDelta30d(
   }));
 }
 
+// ─── New tables shipped via docs/nbfc/vps_tables.sql ────────────────────────
+// All five helpers below degrade gracefully (return null / []) when the
+// table does not yet exist on the VPS — that lets the NBFC portal render
+// before the user runs the DDL on their iot_stack DB.
+
+export interface BatteryHealthRow {
+  vehicleno: string;
+  sample_date: Date;
+  soh_pct: number;
+  degradation_rate_30d: number | null;
+  predicted_eol_date: Date | null;
+  cycles_since_install: number | null;
+}
+
+export interface GeofenceEventRow {
+  id: number;
+  vehicleno: string;
+  geofence_id: string;
+  event_type: "enter" | "exit" | "violation";
+  event_time: Date;
+  lat: number | null;
+  lon: number | null;
+  distance_km: number | null;
+}
+
+export interface ImmobilizerStateRow {
+  vehicleno: string;
+  enabled: boolean;
+  last_toggled_at: Date | null;
+  last_reason: string | null;
+  last_request_id: string | null;
+}
+
+export interface ChargeEventRow {
+  id: number;
+  vehicleno: string;
+  start_time: Date;
+  end_time: Date | null;
+  start_soc_pct: number | null;
+  end_soc_pct: number | null;
+  energy_kwh: number | null;
+  duration_s: number | null;
+  charger_kind: string | null;
+}
+
+export interface FaultCodeRow {
+  id: number;
+  vehicleno: string;
+  dtc_code: string;
+  description: string | null;
+  severity: "info" | "warning" | "critical";
+  raised_at: Date;
+  resolved_at: Date | null;
+}
+
+function isMissingTable(err: unknown): boolean {
+  // postgres.js sets `code` on driver errors; 42P01 = undefined_table.
+  const e = err as { code?: string } | null | undefined;
+  return e?.code === "42P01";
+}
+
+export async function getBatteryHealth(
+  vehicleno: string,
+): Promise<BatteryHealthRow | null> {
+  try {
+    const iotSql = getIotSql();
+    const rows = await iotSql<
+      Array<{
+        vehicleno: string;
+        sample_date: string;
+        soh_pct: string;
+        degradation_rate_30d: string | null;
+        predicted_eol_date: string | null;
+        cycles_since_install: number | null;
+      }>
+    >`
+      SELECT vehicleno, sample_date, soh_pct, degradation_rate_30d,
+             predicted_eol_date, cycles_since_install
+      FROM battery_health_metrics
+      WHERE vehicleno = ${vehicleno}
+      ORDER BY sample_date DESC
+      LIMIT 1
+    `;
+    if (rows.length === 0) return null;
+    const r = rows[0];
+    return {
+      vehicleno: r.vehicleno,
+      sample_date: new Date(r.sample_date),
+      soh_pct: Number(r.soh_pct),
+      degradation_rate_30d:
+        r.degradation_rate_30d != null ? Number(r.degradation_rate_30d) : null,
+      predicted_eol_date: r.predicted_eol_date
+        ? new Date(r.predicted_eol_date)
+        : null,
+      cycles_since_install: r.cycles_since_install,
+    };
+  } catch (err) {
+    if (isMissingTable(err)) return null;
+    throw err;
+  }
+}
+
+export async function getGeofenceEvents(
+  vehicleno: string,
+  days: number,
+): Promise<GeofenceEventRow[]> {
+  try {
+    const iotSql = getIotSql();
+    const rows = await iotSql<
+      Array<{
+        id: string;
+        vehicleno: string;
+        geofence_id: string;
+        event_type: "enter" | "exit" | "violation";
+        event_time: string;
+        lat: string | null;
+        lon: string | null;
+        distance_km: string | null;
+      }>
+    >`
+      SELECT id, vehicleno, geofence_id, event_type, event_time, lat, lon, distance_km
+      FROM geofence_events
+      WHERE vehicleno = ${vehicleno}
+        AND event_time > NOW() - (${days}::int || ' days')::interval
+      ORDER BY event_time DESC
+      LIMIT 200
+    `;
+    return rows.map((r) => ({
+      id: Number(r.id),
+      vehicleno: r.vehicleno,
+      geofence_id: r.geofence_id,
+      event_type: r.event_type,
+      event_time: new Date(r.event_time),
+      lat: r.lat != null ? Number(r.lat) : null,
+      lon: r.lon != null ? Number(r.lon) : null,
+      distance_km: r.distance_km != null ? Number(r.distance_km) : null,
+    }));
+  } catch (err) {
+    if (isMissingTable(err)) return [];
+    throw err;
+  }
+}
+
+export async function getImmobilizerState(
+  vehicleno: string,
+): Promise<ImmobilizerStateRow | null> {
+  try {
+    const iotSql = getIotSql();
+    const rows = await iotSql<
+      Array<{
+        vehicleno: string;
+        enabled: boolean;
+        last_toggled_at: string | null;
+        last_reason: string | null;
+        last_request_id: string | null;
+      }>
+    >`
+      SELECT vehicleno, enabled, last_toggled_at, last_reason, last_request_id
+      FROM immobilizer_state
+      WHERE vehicleno = ${vehicleno}
+      LIMIT 1
+    `;
+    if (rows.length === 0) return null;
+    const r = rows[0];
+    return {
+      vehicleno: r.vehicleno,
+      enabled: r.enabled,
+      last_toggled_at: r.last_toggled_at ? new Date(r.last_toggled_at) : null,
+      last_reason: r.last_reason,
+      last_request_id: r.last_request_id,
+    };
+  } catch (err) {
+    if (isMissingTable(err)) return null;
+    throw err;
+  }
+}
+
+export async function getChargeEvents(
+  vehicleno: string,
+  days: number,
+): Promise<ChargeEventRow[]> {
+  try {
+    const iotSql = getIotSql();
+    const rows = await iotSql<
+      Array<{
+        id: string;
+        vehicleno: string;
+        start_time: string;
+        end_time: string | null;
+        start_soc_pct: string | null;
+        end_soc_pct: string | null;
+        energy_kwh: string | null;
+        duration_s: number | null;
+        charger_kind: string | null;
+      }>
+    >`
+      SELECT id, vehicleno, start_time, end_time, start_soc_pct, end_soc_pct,
+             energy_kwh, duration_s, charger_kind
+      FROM charge_events
+      WHERE vehicleno = ${vehicleno}
+        AND start_time > NOW() - (${days}::int || ' days')::interval
+      ORDER BY start_time DESC
+      LIMIT 200
+    `;
+    return rows.map((r) => ({
+      id: Number(r.id),
+      vehicleno: r.vehicleno,
+      start_time: new Date(r.start_time),
+      end_time: r.end_time ? new Date(r.end_time) : null,
+      start_soc_pct: r.start_soc_pct != null ? Number(r.start_soc_pct) : null,
+      end_soc_pct: r.end_soc_pct != null ? Number(r.end_soc_pct) : null,
+      energy_kwh: r.energy_kwh != null ? Number(r.energy_kwh) : null,
+      duration_s: r.duration_s,
+      charger_kind: r.charger_kind,
+    }));
+  } catch (err) {
+    if (isMissingTable(err)) return [];
+    throw err;
+  }
+}
+
+export async function getOpenFaultCodes(
+  vehicleno: string,
+): Promise<FaultCodeRow[]> {
+  try {
+    const iotSql = getIotSql();
+    const rows = await iotSql<
+      Array<{
+        id: string;
+        vehicleno: string;
+        dtc_code: string;
+        description: string | null;
+        severity: "info" | "warning" | "critical";
+        raised_at: string;
+        resolved_at: string | null;
+      }>
+    >`
+      SELECT id, vehicleno, dtc_code, description, severity, raised_at, resolved_at
+      FROM fault_codes
+      WHERE vehicleno = ${vehicleno}
+        AND resolved_at IS NULL
+      ORDER BY raised_at DESC
+      LIMIT 50
+    `;
+    return rows.map((r) => ({
+      id: Number(r.id),
+      vehicleno: r.vehicleno,
+      dtc_code: r.dtc_code,
+      description: r.description,
+      severity: r.severity,
+      raised_at: new Date(r.raised_at),
+      resolved_at: r.resolved_at ? new Date(r.resolved_at) : null,
+    }));
+  } catch (err) {
+    if (isMissingTable(err)) return [];
+    throw err;
+  }
+}
+
 /**
  * Open alerts for a vehicleno set.
  */

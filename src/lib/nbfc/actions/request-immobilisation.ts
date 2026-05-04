@@ -45,7 +45,12 @@ export const RISK_HEAD_ROLES = new Set([
   "risk_head",
 ]);
 
+// Per BRD §6.4.3 / user direction (2026-05-04): the iTarang `sales_head` is
+// the canonical approver for immobilisation. The original NBFC-side roles
+// are kept so the §6.1.6 governance log (parallel path) still works for
+// existing tests, but new flows route to sales_head.
 export const OPS_HEAD_ROLES = new Set([
+  "sales_head",
   "nbfc_ops_head",
   "ops_head",
   "nbfc_ops",
