@@ -6,12 +6,14 @@ import { db } from "@/lib/db";
 import { leads, loanSanctions, otpConfirmations } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { generateId } from "@/lib/api-utils";
-import { sendDecentroSms } from "@/lib/decentro";
+import { sendMsg91Otp } from "@/lib/msg91";
 
 // BRD V2 §3.2 — Step 5 OTP send.
 // Generates a 6-digit OTP, stores a SHA-256 hash with 10-minute expiry, and
-// sends the OTP via Decentro SMS. Max 3 sends per session — after the 3rd
-// send, a 30-minute cooldown is enforced before a new OTP session can begin.
+// sends the OTP via MSG91 (server passes the OTP to MSG91; MSG91 substitutes
+// it into the approved template body and delivers the SMS). Max 3 sends per
+// session — after the 3rd send, a 30-minute cooldown is enforced before a
+// new OTP session can begin.
 
 const OTP_LIFETIME_MS = 10 * 60 * 1000; // 10 minutes
 const MAX_SENDS = 3;
@@ -110,14 +112,23 @@ export async function POST(
       .orderBy(desc(loanSanctions.created_at))
       .limit(1);
 
-    // Generate new OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // OTP value:
+    //   - If MSG91 env is configured → random 6-digit, MSG91 delivers the SMS.
+    //   - Otherwise (dev / not yet integrated) → hardcoded "123456" so the
+    //     team can run end-to-end Step 5 testing without a live SMS provider.
+    //     Verification (in confirm-dispatch) still hash-compares, so this path
+    //     uses the exact same code that production will use once MSG91 is
+    //     wired — only the SMS delivery step is short-circuited.
+    void loan;
+    const msg91Configured = !!(
+      process.env.MSG91_AUTH_KEY?.trim() &&
+      process.env.MSG91_TEMPLATE_ID?.trim()
+    );
+    const otp = msg91Configured
+      ? Math.floor(100000 + Math.random() * 900000).toString()
+      : "123456";
     const otpHash = hashOtp(otp);
     const expiresAt = new Date(now.getTime() + OTP_LIFETIME_MS);
-
-    const smsMessage = loan
-      ? `Your iTarang loan is sanctioned. Loan: Rs.${loan.loan_amount} | EMI: Rs.${loan.emi}/mo | Tenure: ${loan.tenure_months}m | Lender: ${loan.loan_approved_by}. OTP to confirm: ${otp}. Valid for 10 min. Do not share.`
-      : `Your iTarang sale OTP: ${otp}. Valid for 10 min. Do not share.`;
 
     let otpRecordId: string;
     if (existing && existing.send_count < MAX_SENDS) {
@@ -149,12 +160,36 @@ export async function POST(
       });
     }
 
-    // Fire SMS (non-blocking on delivery errors — the dealer can resend)
-    const smsResult = await sendDecentroSms({
-      mobile_number: phone,
-      message: smsMessage,
-      reference_id: `otp-${leadId}-${Date.now()}`,
-    });
+    // Deliver via MSG91 only when configured. In dev/no-provider mode we
+    // skip the network call and return the hardcoded OTP to the dealer UI
+    // so the tester can paste it back into the form (acting as both
+    // customer and dealer).
+    const isDev = process.env.NODE_ENV !== "production";
+    let smsStatus: "sent" | "dev_hardcoded" = "dev_hardcoded";
+
+    if (msg91Configured) {
+      const smsResult = await sendMsg91Otp({
+        mobile_number: phone,
+        otp,
+        otp_expiry_minutes: Math.floor(OTP_LIFETIME_MS / 60000),
+      });
+      if (!smsResult.success) {
+        const reason = `SMS delivery failed: ${smsResult.error || "unknown error"}`;
+        return NextResponse.json(
+          { success: false, error: { message: reason, smsStatus: "failed" } },
+          { status: 502 },
+        );
+      }
+      smsStatus = "sent";
+    } else {
+      console.log(
+        `[Step 5 Send OTP] MSG91 not configured — using hardcoded OTP ${otp} for ${leadId}. Set MSG91_AUTH_KEY + MSG91_TEMPLATE_ID to switch to live SMS.`,
+      );
+    }
+
+    if (isDev) {
+      console.log(`[Step 5 Send OTP] DEV-ONLY plaintext OTP for ${leadId}: ${otp}`);
+    }
 
     return NextResponse.json({
       success: true,
@@ -163,8 +198,10 @@ export async function POST(
         expiresInSeconds: Math.floor(OTP_LIFETIME_MS / 1000),
         sendCount: existing ? existing.send_count + 1 : 1,
         maxSends: MAX_SENDS,
-        smsStatus: smsResult.success ? "sent" : smsResult.skipped ? "skipped" : "failed",
-        smsError: smsResult.error,
+        smsStatus,
+        // Surface the OTP to the UI in dev OR whenever we used the
+        // hardcoded path — the dealer needs to see it to test the flow.
+        ...(smsStatus === "dev_hardcoded" || isDev ? { _devOtp: otp } : {}),
       },
     });
   } catch (error) {

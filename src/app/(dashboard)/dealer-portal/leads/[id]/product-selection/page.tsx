@@ -98,6 +98,34 @@ interface ParaRow {
   unit_net?: number | null;
 }
 
+interface PriorSelection {
+  id: string;
+  battery_serial: string | null;
+  charger_serial: string | null;
+  paraphernalia: Record<string, number | string> | null;
+  paraphernalia_lines: unknown;
+  category: string | null;
+  sub_category: string | null;
+  battery_price: string | null;
+  charger_price: string | null;
+  paraphernalia_cost: string | null;
+  dealer_margin: string | null;
+  final_price: string | null;
+  battery_gross: string | null;
+  battery_gst_percent: string | null;
+  battery_gst_amount: string | null;
+  battery_net: string | null;
+  charger_gross: string | null;
+  charger_gst_percent: string | null;
+  charger_gst_amount: string | null;
+  charger_net: string | null;
+  gross_subtotal: string | null;
+  gst_subtotal: string | null;
+  net_subtotal: string | null;
+  admin_decision: string | null;
+  submitted_at: string | null;
+}
+
 interface AccessData {
   allowed: boolean;
   paymentMode?: "cash" | "finance";
@@ -112,6 +140,7 @@ interface AccessData {
   redirectTo?: string;
   readOnly?: boolean;
   reason?: string;
+  priorSelection?: PriorSelection | null;
 }
 
 const DRAFT_KEY = (leadId: string) => `step4-draft-${leadId}`;
@@ -360,11 +389,39 @@ export default function ProductSelectionPage() {
     void loadBatteriesAndPara();
   }, [loadBatteriesAndPara]);
 
-  // ── Restore draft from localStorage once batteries are loaded ───────
+  // ── Hydrate prior selection (server-side first, then localStorage) ───
+  // Server-side (productSelections) is the source of truth once the dealer
+  // has submitted Step 4 — those choices must persist across devices,
+  // browsers, incognito sessions and cache clears. localStorage is only a
+  // fallback for in-progress drafts that were never submitted.
   useEffect(() => {
     if (draftRestoredRef.current) return;
     if (!batteries.length || !access?.allowed) return;
     try {
+      const prior = access.priorSelection;
+      if (prior) {
+        const b = batteries.find((x) => x.serial_number === prior.battery_serial);
+        if (b) setSelectedBattery(b);
+        const para = prior.paraphernalia as Record<string, number | string> | null;
+        if (para && typeof para === "object") {
+          const normalised: Record<string, number> = {};
+          for (const [k, v] of Object.entries(para)) {
+            const n = Number(v);
+            if (Number.isFinite(n) && n > 0) normalised[k] = n;
+          }
+          if (Object.keys(normalised).length > 0) setParaQty(normalised);
+        }
+        if (prior.dealer_margin) {
+          setMarginMode("rupees");
+          setMarginInput(String(prior.dealer_margin));
+        }
+        if (prior.submitted_at) {
+          setLastSaved(formatLastSaved(new Date(prior.submitted_at)));
+        }
+        draftRestoredRef.current = true;
+        return;
+      }
+
       const raw = localStorage.getItem(DRAFT_KEY(leadId));
       if (!raw) {
         draftRestoredRef.current = true;
@@ -416,22 +473,34 @@ export default function ProductSelectionPage() {
       try {
         const qs = new URLSearchParams();
         if (access?.category) qs.set("category", access.category);
+        // Pragmatic compatibility filter: only chargers whose voltage matches
+        // the selected battery's voltage are considered safe to pair.
+        if (selectedBattery?.voltage_v) {
+          qs.set("batteryVoltage", String(selectedBattery.voltage_v));
+        }
         const res = await fetch(`/api/inventory/dealer/${dealerId}/chargers?${qs.toString()}`);
         const json = await res.json();
         if (cancelled) return;
         if (json.success) {
           setChargers(json.data || []);
-          // Restore selected charger from draft if applicable
+          // Restore selected charger — prefer the server-side priorSelection
+          // (the canonical record once the dealer has submitted) and fall back
+          // to localStorage drafts for unsubmitted in-progress sessions.
           try {
-            const raw = localStorage.getItem(DRAFT_KEY(leadId));
-            if (raw) {
-              const draft = JSON.parse(raw) as { chargerSerial?: string };
-              if (draft.chargerSerial) {
-                const c = (json.data || []).find(
-                  (x: ChargerRow) => x.serial_number === draft.chargerSerial,
-                );
-                if (c) setSelectedCharger(c);
+            const priorChargerSerial = access?.priorSelection?.charger_serial ?? null;
+            let serial: string | null = priorChargerSerial;
+            if (!serial) {
+              const raw = localStorage.getItem(DRAFT_KEY(leadId));
+              if (raw) {
+                const draft = JSON.parse(raw) as { chargerSerial?: string };
+                serial = draft.chargerSerial ?? null;
               }
+            }
+            if (serial) {
+              const c = (json.data || []).find(
+                (x: ChargerRow) => x.serial_number === serial,
+              );
+              if (c) setSelectedCharger(c);
             }
           } catch {
             // ignore
@@ -625,9 +694,11 @@ export default function ProductSelectionPage() {
     }
   };
 
-  const handleSaveDraft = () => {
+  const handleSaveDraft = async () => {
+    // Local snapshot first — keeps the page hydrated on reload without a
+    // round-trip and survives offline.
     try {
-      const payload = {
+      const localPayload = {
         batterySerial: selectedBattery?.serial_number ?? null,
         chargerSerial: selectedCharger?.serial_number ?? null,
         paraQty,
@@ -637,10 +708,54 @@ export default function ProductSelectionPage() {
         marginPercentInput,
         savedAt: new Date().toISOString(),
       };
-      localStorage.setItem(DRAFT_KEY(leadId), JSON.stringify(payload));
+      localStorage.setItem(DRAFT_KEY(leadId), JSON.stringify(localPayload));
       setLastSaved(formatLastSaved(new Date()));
     } catch {
-      setError("Could not save draft locally");
+      // ignore storage quota / private-mode errors
+    }
+
+    // Server persist — this is what makes the lead show up in /My Drafts.
+    // Mirrors the submit body shape, but every field is optional on the API
+    // so partial drafts work.
+    try {
+      const body: Record<string, unknown> = {
+        batterySerial: selectedBattery?.serial_number ?? null,
+        chargerSerial: selectedCharger?.serial_number ?? null,
+        paraphernalia: paramList,
+        paraphernaliaLines: paraLines,
+        dealerMargin: Number(dealerMargin || 0),
+        finalPrice,
+        batteryPrice,
+        chargerPrice,
+        paraphernaliaCost: paraCost,
+        batteryGross: batteryPriceTriple.gross,
+        batteryGstPercent: batteryPriceTriple.gstPct,
+        batteryGstAmount: batteryPriceTriple.gst,
+        batteryNet: batteryPriceTriple.net,
+        chargerGross: chargerPriceTriple.gross,
+        chargerGstPercent: chargerPriceTriple.gstPct,
+        chargerGstAmount: chargerPriceTriple.gst,
+        chargerNet: chargerPriceTriple.net,
+        grossSubtotal,
+        gstSubtotal,
+        netSubtotal,
+        category: access?.category ?? undefined,
+        subCategory: access?.productId ?? undefined,
+      };
+      const res = await fetch(
+        `/api/lead/${leadId}/product-selection/draft`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      const json = await res.json();
+      if (!json.success) {
+        setError(json.error?.message || "Could not save draft on server");
+      }
+    } catch {
+      setError("Could not save draft on server");
     }
   };
 
@@ -1037,23 +1152,50 @@ export default function ProductSelectionPage() {
 
       <StickyBottomBar lastSaved={lastSaved}>
         <OutlineButton onClick={() => router.back()}>Back</OutlineButton>
-        <SecondaryButton onClick={handleSaveDraft} disabled={!!access.readOnly}>
-          Save Draft
-        </SecondaryButton>
-        {isCash ? (
-          <button
-            onClick={handleSubmit}
-            disabled={!canSubmit}
-            className="px-8 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {submitting ? "Confirming…" : "Confirm Sale"}
-            <ChevronRight className="w-4 h-4" />
-          </button>
+        {access.readOnly ? (
+          // Read-only follow-ups by lead state. Once admin has acted, the
+          // dealer's next move lives at Step 5 — surface a clear CTA so they
+          // are not stranded staring at a disabled Submit button.
+          access.kycStatus === "loan_sanctioned" ||
+          access.kycStatus === "loan_rejected" ? (
+            <PrimaryButton
+              onClick={() => router.push(`/dealer-portal/leads/${leadId}/step-5`)}
+            >
+              Go to Step 5
+              <ChevronRight className="w-4 h-4" />
+            </PrimaryButton>
+          ) : access.kycStatus === "pending_final_approval" ? (
+            <span className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm font-bold">
+              <Clock className="w-4 h-4" />
+              Awaiting admin approval
+            </span>
+          ) : access.kycStatus === "sold" ? (
+            <span className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-bold">
+              <CheckCircle2 className="w-4 h-4" />
+              Sale completed
+            </span>
+          ) : null
         ) : (
-          <PrimaryButton onClick={handleSubmit} disabled={!canSubmit} loading={submitting}>
-            Submit for Final Approval
-            <ChevronRight className="w-4 h-4" />
-          </PrimaryButton>
+          <>
+            <SecondaryButton onClick={handleSaveDraft}>
+              Save Draft
+            </SecondaryButton>
+            {isCash ? (
+              <button
+                onClick={handleSubmit}
+                disabled={!canSubmit}
+                className="px-8 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {submitting ? "Confirming…" : "Confirm Sale"}
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            ) : (
+              <PrimaryButton onClick={handleSubmit} disabled={!canSubmit} loading={submitting}>
+                Submit for Final Approval
+                <ChevronRight className="w-4 h-4" />
+              </PrimaryButton>
+            )}
+          </>
         )}
       </StickyBottomBar>
 
@@ -1356,22 +1498,38 @@ function BatteryCard({
   onSelect: () => void;
   disabled?: boolean;
 }) {
+  // BRD §B: Reserved units are visible-but-not-selectable. They appear in the
+  // list so the dealer knows the unit physically exists but is locked to
+  // another lead, but the card cannot be clicked.
+  const isReserved = (battery.status ?? "").toLowerCase() === "reserved";
+  const isDisabled = disabled || isReserved;
   const ageBorder = selected
     ? "border-[#0047AB] bg-blue-50/50 ring-4 ring-blue-100"
-    : battery.age_badge === "old"
-      ? "border-red-200 hover:border-red-400"
-      : battery.age_badge === "ageing"
-        ? "border-amber-200 hover:border-amber-400"
-        : "border-gray-100 hover:border-gray-300";
+    : isReserved
+      ? "border-amber-200 bg-amber-50/40"
+      : battery.age_badge === "old"
+        ? "border-red-200 hover:border-red-400"
+        : battery.age_badge === "ageing"
+          ? "border-amber-200 hover:border-amber-400"
+          : "border-gray-100 hover:border-gray-300";
   return (
     <button
       onClick={onSelect}
-      disabled={disabled}
-      className={`relative text-left p-4 rounded-2xl border-2 transition-all bg-white shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed ${ageBorder}`}
+      disabled={isDisabled}
+      aria-disabled={isDisabled}
+      title={isReserved ? "This unit is reserved against another lead" : undefined}
+      className={`relative text-left p-4 rounded-2xl border-2 transition-all bg-white shadow-sm hover:shadow-md disabled:cursor-not-allowed ${
+        isReserved ? "opacity-60" : "disabled:opacity-50"
+      } ${ageBorder}`}
     >
-      {battery.recommended && (
+      {battery.recommended && !isReserved && (
         <span className="absolute -top-2 -right-2 inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-500 text-white rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm">
           <Sparkles className="w-3 h-3" /> Recommended
+        </span>
+      )}
+      {isReserved && (
+        <span className="absolute -top-2 -right-2 inline-flex items-center gap-1 px-2.5 py-0.5 bg-amber-500 text-white rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm">
+          <Clock className="w-3 h-3" /> Reserved
         </span>
       )}
       <div className="flex items-start justify-between gap-3">
@@ -1431,15 +1589,28 @@ function ChargerCard({
   onSelect: () => void;
   disabled?: boolean;
 }) {
+  const isReserved = (charger.status ?? "").toLowerCase() === "reserved";
+  const isDisabled = disabled || isReserved;
   const border = selected
     ? "border-[#0047AB] bg-blue-50/50 ring-4 ring-blue-100"
-    : "border-gray-100 hover:border-gray-300";
+    : isReserved
+      ? "border-amber-200 bg-amber-50/40"
+      : "border-gray-100 hover:border-gray-300";
   return (
     <button
       onClick={onSelect}
-      disabled={disabled}
-      className={`relative text-left p-4 rounded-2xl border-2 transition-all bg-white shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed ${border}`}
+      disabled={isDisabled}
+      aria-disabled={isDisabled}
+      title={isReserved ? "This unit is reserved against another lead" : undefined}
+      className={`relative text-left p-4 rounded-2xl border-2 transition-all bg-white shadow-sm hover:shadow-md disabled:cursor-not-allowed ${
+        isReserved ? "opacity-60" : "disabled:opacity-50"
+      } ${border}`}
     >
+      {isReserved && (
+        <span className="absolute -top-2 -right-2 inline-flex items-center gap-1 px-2.5 py-0.5 bg-amber-500 text-white rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm">
+          <Clock className="w-3 h-3" /> Reserved
+        </span>
+      )}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="font-black text-gray-900 font-mono tracking-tight truncate">

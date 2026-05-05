@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { inventory, products, productCategories } from "@/lib/db/schema";
@@ -18,8 +18,11 @@ async function resolveCategoryName(input: string): Promise<string> {
 }
 
 // BRD V2 §2.3 — dealer battery inventory list for Step 4.
-// Filters: dealer_id + asset_type=Battery + status=available.
-// Optional query params: category, subCategory.
+// Filters: dealer_id + asset_type=Battery + status in (available, reserved).
+// Per BRD: Available are selectable, Reserved are visible-but-greyed-out
+// (so the dealer knows the unit exists but is locked to another lead),
+// Dispatched/Sold are hidden entirely.
+// Optional query params: category, subCategory, productId.
 // Sort: oem_invoice_date ASC (oldest first — BRD ageing priority rule).
 
 export async function GET(
@@ -46,7 +49,7 @@ export async function GET(
     const filters = [
       eq(inventory.dealer_id, dealerId),
       eq(inventory.asset_type, "Battery"),
-      eq(inventory.status, "available"),
+      inArray(inventory.status, ["available", "reserved"]),
     ];
     if (category) {
       const categoryName = await resolveCategoryName(category);
@@ -99,11 +102,16 @@ export async function GET(
       };
     });
 
-    // Recommendation flag = oldest available (first row in ASC sort).
-    const withRecommend = enriched.map((r, i) => ({
-      ...r,
-      recommended: i === 0,
-    }));
+    // Recommendation flag = oldest *available* unit. Reserved units are
+    // visible-but-not-selectable, so they should never carry the recommended
+    // badge even if they happen to be the oldest invoice date in the list.
+    let recommendedAssigned = false;
+    const withRecommend = enriched.map((r) => {
+      const isAvailable = r.status === "available";
+      const recommended = !recommendedAssigned && isAvailable;
+      if (recommended) recommendedAssigned = true;
+      return { ...r, recommended };
+    });
 
     return NextResponse.json({ success: true, data: withRecommend });
   } catch (error) {

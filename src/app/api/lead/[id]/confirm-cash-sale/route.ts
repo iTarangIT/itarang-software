@@ -115,6 +115,16 @@ export async function POST(
         throw new Error(`Charger ${body.chargerSerial} is not available`);
       }
 
+      // Clear any existing draft so this lead disappears from /My Drafts.
+      await tx
+        .delete(productSelections)
+        .where(
+          and(
+            eq(productSelections.lead_id, leadId),
+            eq(productSelections.admin_decision, "draft"),
+          ),
+        );
+
       // 2. Product selection — dealer_confirmed immediately (no admin step)
       await tx.insert(productSelections).values({
         id: productSelectionId,
@@ -150,6 +160,8 @@ export async function POST(
       });
 
       // 3. Finalize sale: inventory sold + warranty + after-sales
+      // BRD §3.5: cash flow skips 'dispatched' entirely — inventory goes
+      // straight to 'sold' on dealer confirmation.
       const sale = await finalizeSale({
         tx,
         leadId,
@@ -161,6 +173,7 @@ export async function POST(
         paymentMode: "cash",
         performedBy: user.id,
         soldAt: now,
+        phase: "sold",
       });
 
       // 4. Close lead

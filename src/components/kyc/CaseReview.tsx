@@ -1060,14 +1060,13 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
         </div>
       </div>
 
-      {/* Verification & Documents are gated on the dealer having committed a
-          coupon. Both 'reserved' (coupon validated, dealer ready to submit)
-          and 'used' (already submitted-for-verification) reveal the panels.
-          While the coupon is unset/expired, the case isn't ready for review —
-          show a placeholder so the admin sees lead info only. A small notice
-          on top of the panels tells the admin when the dealer has not yet
-          clicked Submit-for-Verification. */}
-      {!(metadata?.couponStatus === "reserved" || metadata?.couponStatus === "used") ? (
+      {/* Verifications + Documents only appear once the dealer has clicked
+          "Submit for Verification" on their KYC page. That action consumes
+          the reserved coupon and flips metadata.couponStatus from 'reserved'
+          to 'used'. Until then (no coupon, or coupon merely 'reserved' after
+          validate-coupon), the admin sees a placeholder — early review of
+          documents the dealer might still be replacing is not allowed. */}
+      {metadata?.couponStatus !== "used" ? (
         <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-sm">
           <div className="w-12 h-12 rounded-full bg-amber-50 ring-1 ring-amber-200 mx-auto mb-3 flex items-center justify-center">
             <svg className="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1076,21 +1075,12 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           </div>
           <p className="text-sm font-bold text-gray-900">Awaiting Dealer Submission</p>
           <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
-            Documents and verification cards will appear here once the dealer validates a coupon for this case.
+            {metadata?.couponStatus === "reserved"
+              ? "Dealer has validated the coupon but has not yet clicked Submit for Verification. Documents will appear here once the dealer formally submits."
+              : "Documents and verification cards will appear here once the dealer uploads documents, validates the coupon, and clicks Submit for Verification."}
           </p>
         </div>
       ) : (<>
-      {metadata?.couponStatus === "reserved" && (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-3">
-          <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          </svg>
-          <div>
-            <p className="text-xs font-bold text-amber-800">Dealer has not yet clicked Submit-for-Verification</p>
-            <p className="text-xs text-amber-700 mt-0.5">Coupon is reserved and documents are visible below for early review. Verification APIs will only be initiated once the dealer formally submits.</p>
-          </div>
-        </div>
-      )}
       {/* Tab Navigation */}
       <div className="inline-flex gap-1 bg-gray-100 p-1.5 rounded-2xl border border-gray-200 shadow-sm">
         <button onClick={() => setActiveTab("verifications")}
