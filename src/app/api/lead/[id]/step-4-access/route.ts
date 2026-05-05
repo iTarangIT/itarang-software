@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { leads, productCategories, products } from "@/lib/db/schema";
+import {
+  leads,
+  productCategories,
+  productSelections,
+  products,
+} from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 
 // BRD V2 Part E §2.1 — access gate for Step 4 Product Selection.
@@ -123,6 +128,44 @@ export async function GET(
       }
     }
 
+    // Most-recent product_selection row (set once the dealer submits Step 4).
+    // Returned so the page can rehydrate the dealer's prior battery / charger /
+    // paraphernalia / margin choices instead of relying on browser localStorage,
+    // which is lost across devices, incognito sessions, or cache clears.
+    const [priorSelectionRow] = await db
+      .select({
+        id: productSelections.id,
+        battery_serial: productSelections.battery_serial,
+        charger_serial: productSelections.charger_serial,
+        paraphernalia: productSelections.paraphernalia,
+        paraphernalia_lines: productSelections.paraphernalia_lines,
+        category: productSelections.category,
+        sub_category: productSelections.sub_category,
+        battery_price: productSelections.battery_price,
+        charger_price: productSelections.charger_price,
+        paraphernalia_cost: productSelections.paraphernalia_cost,
+        dealer_margin: productSelections.dealer_margin,
+        final_price: productSelections.final_price,
+        battery_gross: productSelections.battery_gross,
+        battery_gst_percent: productSelections.battery_gst_percent,
+        battery_gst_amount: productSelections.battery_gst_amount,
+        battery_net: productSelections.battery_net,
+        charger_gross: productSelections.charger_gross,
+        charger_gst_percent: productSelections.charger_gst_percent,
+        charger_gst_amount: productSelections.charger_gst_amount,
+        charger_net: productSelections.charger_net,
+        gross_subtotal: productSelections.gross_subtotal,
+        gst_subtotal: productSelections.gst_subtotal,
+        net_subtotal: productSelections.net_subtotal,
+        admin_decision: productSelections.admin_decision,
+        submitted_at: productSelections.submitted_at,
+      })
+      .from(productSelections)
+      .where(eq(productSelections.lead_id, leadId))
+      .orderBy(desc(productSelections.created_at))
+      .limit(1);
+    const priorSelection = priorSelectionRow ?? null;
+
     const sharedFields = {
       dealerId: lead.dealer_id,
       customerName,
@@ -131,6 +174,7 @@ export async function GET(
       productId: lead.primary_product_id,
       productTypeName,
       productSku,
+      priorSelection,
     };
 
     // Cash path — unlocked right after Step 1
