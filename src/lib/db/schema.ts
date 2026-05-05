@@ -4709,3 +4709,34 @@ export const nbfcDirectorKycVerifications = pgTable(
     ),
   }),
 );
+
+// --- ADMIN INVENTORY UPLOAD AUDIT (Step 4 upstream feeder) ---
+
+export const inventoryUploadReports = pgTable(
+  "inventory_upload_reports",
+  {
+    id: varchar({ length: 64 }).primaryKey().notNull(),
+    dealer_id: varchar("dealer_id", { length: 255 }).notNull(),
+    asset_type: varchar("asset_type", { length: 30 }).notNull(),
+    uploaded_by: uuid("uploaded_by").notNull(),
+    uploaded_at: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+    total_rows: integer("total_rows").default(0).notNull(),
+    inserted_rows: integer("inserted_rows").default(0).notNull(),
+    skipped_rows: integer("skipped_rows").default(0).notNull(),
+    errors_json: jsonb("errors_json"),
+    inserted_inventory_ids: jsonb("inserted_inventory_ids"),
+    source: varchar({ length: 20 }).default('bulk').notNull(),
+    notes: text(),
+  },
+  (table) => ({
+    invUplDealerIdx: index("inventory_upload_reports_dealer_idx").on(
+      table.dealer_id,
+    ),
+    invUplUploadedByIdx: index("inventory_upload_reports_uploaded_by_idx").on(
+      table.uploaded_by,
+    ),
+    invUplUploadedAtIdx: index("inventory_upload_reports_uploaded_at_idx").on(
+      table.uploaded_at,
+    ),
+  }),
+);

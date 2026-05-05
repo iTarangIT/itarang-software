@@ -93,17 +93,9 @@ export async function POST(
     }
     const decision = decisionRaw as Decision;
 
-    if (decision === "rejected" && !rejectionReason) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            message: "rejection_reason is required when rejecting",
-          },
-        },
-        { status: 400 },
-      );
-    }
+    // Rejection no longer requires a reason or that every card be individually
+    // rejected first — admin can close junk leads in a single click. Approve
+    // gating below stays intact.
 
     // For approved / dealer_action_required we also need the Step 3 state so
     // we can gate the Approve button and compute the correct awaiting status.
@@ -148,12 +140,6 @@ export async function POST(
         .filter((v) => v.applicant === "co_borrower" && isAdminCardType(v.verification_type))
         .every((v) => v.admin_action === "accepted");
 
-    const coBorrowerAllRejected =
-      hasCoBorrower &&
-      step3Verifications
-        .filter((v) => v.applicant === "co_borrower" && isAdminCardType(v.verification_type))
-        .every((v) => v.admin_action === "rejected");
-
     if (decision === "approved") {
       const blockers: string[] = [];
 
@@ -169,6 +155,9 @@ export async function POST(
       }
 
       for (const d of step3SupportingDocs) {
+        // Optional supporting docs (is_required=false) never block approval —
+        // an admin can reject an optional doc and still approve the lead.
+        if (d.is_required === false) continue;
         if (d.upload_status !== "verified") {
           blockers.push(
             `Supporting doc "${d.doc_label}" is "${d.upload_status}" — verify or close the request`,
@@ -201,60 +190,6 @@ export async function POST(
             success: false,
             error: {
               message: `Cannot approve. Resolve these first:\n• ${blockers.join("\n• ")}`,
-              blockers,
-            },
-          },
-          { status: 400 },
-        );
-      }
-    }
-
-    if (decision === "rejected") {
-      const blockers: string[] = [];
-
-      const primaryVers = step3Verifications.filter(
-        (v) =>
-          (v.applicant ?? "primary") === "primary" &&
-          isAdminCardType(v.verification_type),
-      );
-      if (primaryVers.length === 0) {
-        blockers.push("No primary verifications exist on this lead — nothing to reject");
-      }
-      for (const v of primaryVers) {
-        if (v.admin_action !== "rejected") {
-          blockers.push(
-            `${v.verification_type} verification is "${v.admin_action ?? "pending"}" — reject it on the card`,
-          );
-        }
-      }
-
-      for (const d of step3SupportingDocs) {
-        if (d.upload_status !== "rejected") {
-          blockers.push(
-            `Supporting doc "${d.doc_label}" is "${d.upload_status}" — reject it`,
-          );
-        }
-      }
-
-      if (hasCoBorrower && !coBorrowerAllRejected) {
-        const cbVers = step3Verifications.filter(
-          (v) => v.applicant === "co_borrower" && isAdminCardType(v.verification_type),
-        );
-        for (const v of cbVers) {
-          if (v.admin_action !== "rejected") {
-            blockers.push(
-              `Co-borrower ${v.verification_type} is "${v.admin_action ?? "pending"}" — reject it`,
-            );
-          }
-        }
-      }
-
-      if (blockers.length > 0) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: {
-              message: `Cannot reject. Resolve these first:\n• ${blockers.join("\n• ")}`,
               blockers,
             },
           },

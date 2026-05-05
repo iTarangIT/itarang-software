@@ -63,3 +63,24 @@ export async function requireRole(roles: string[]) {
 
   return user;
 }
+
+// Roles allowed to upload, edit, write-off, or assign inventory.
+// BRD: Ops Manager and Super Admin only — KYC officers cannot.
+// `admin` is included as a transitional role until ops_manager / super_admin
+// are formally seeded.
+export const INVENTORY_ADMIN_ROLES = new Set([
+  "admin",
+  "ops_manager",
+  "super_admin",
+  "inventory_manager",
+]);
+
+export async function requireInventoryAdmin() {
+  const user = await requireAuth();
+
+  if (!INVENTORY_ADMIN_ROLES.has(user.role)) {
+    throw new Error("Forbidden: Inventory admin role required");
+  }
+
+  return user;
+}

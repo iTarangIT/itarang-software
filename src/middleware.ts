@@ -184,6 +184,14 @@ export async function middleware(request: NextRequest) {
     // /api/admin/nbfc/* routes still gate writes per role; this just allows
     // the dashboard pages to render.
     "/admin/nbfc": ["admin", "ceo", "business_head", "sales_head"],
+    "/admin/product-review": ["admin", "sales_head", "business_head", "ceo"],
+    "/admin/inventory": [
+      "admin",
+      "ops_manager",
+      "super_admin",
+      "inventory_manager",
+      "ceo",
+    ],
   };
 
   const allowedSharedRoles = Object.entries(sharedRouteAccess).find(
