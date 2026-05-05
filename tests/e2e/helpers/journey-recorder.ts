@@ -32,6 +32,63 @@ type Event = {
   units?: string[];
 };
 
+/**
+ * Pause-on-failure (opt-in via NBFC_E2E_PAUSE_ON_FAIL=1).
+ *
+ * Writes a single sentinel file at docs/nbfc/_convergence/_paused/_active.json
+ * describing the failed step, then calls page.pause() so the headed browser
+ * stays open. The test process still throws so the runner exits non-zero —
+ * Claude reads the sentinel + JSONL to drive the clarifying-question loop.
+ */
+async function maybePauseOnFailure(
+  page: Page,
+  payload: {
+    step: string;
+    unit_id?: string;
+    ac_id?: string;
+    last_response?: { status: number; url: string; body: string } | null;
+    error_message?: string;
+  },
+): Promise<void> {
+  if (process.env.NBFC_E2E_PAUSE_ON_FAIL !== '1') return;
+  const dir = path.resolve(process.cwd(), 'docs/nbfc/_convergence/_paused');
+  fs.mkdirSync(dir, { recursive: true });
+
+  // Parse unit_id / ac_id from a step label of the form "E-007:AC2:short_name".
+  let unit = payload.unit_id;
+  let ac = payload.ac_id;
+  if ((!unit || !ac) && payload.step) {
+    const m = payload.step.match(/^(E-\d{3}):(AC\d+)/i);
+    if (m) { unit = unit ?? m[1]; ac = ac ?? m[2]; }
+  }
+
+  let screenshotPath: string | undefined;
+  try {
+    const safe = payload.step.replace(/[^a-z0-9_-]+/gi, '_').slice(0, 80);
+    screenshotPath = path.join(dir, `${safe}.png`);
+    await page.screenshot({ path: screenshotPath, fullPage: true, timeout: 5000 });
+  } catch {}
+
+  const sentinel = {
+    paused_at: new Date().toISOString(),
+    unit_id: unit,
+    ac_id: ac,
+    step: payload.step,
+    url: page.url(),
+    last_response: payload.last_response ?? null,
+    error_message: payload.error_message ?? null,
+    screenshot: screenshotPath ?? null,
+    raw_jsonl: process.env.NBFC_E2E_RAW_JSONL ?? null,
+  };
+  try {
+    fs.writeFileSync(path.join(dir, '_active.json'), JSON.stringify(sentinel, null, 2), { encoding: 'utf8' });
+  } catch {}
+
+  // page.pause() is a no-op outside headed/Inspector but harmless. Wrap so
+  // we never block the throw if the page is already closed.
+  try { await page.pause(); } catch {}
+}
+
 function rawPath(): string {
   const p = process.env.NBFC_E2E_RAW_JSONL;
   if (!p) {
@@ -63,6 +120,7 @@ export type RecorderHandle = {
 
 export function attachRecorder(page: Page): RecorderHandle {
   let currentStep = '';
+  let lastErrorResponse: { status: number; url: string; body: string } | null = null;
 
   page.on('console', (msg: ConsoleMessage) => {
     const t = msg.type();
@@ -85,6 +143,7 @@ export function attachRecorder(page: Page): RecorderHandle {
     if (status < 400) return;
     let body = '';
     try { body = (await resp.text()).slice(0, 2000); } catch {}
+    lastErrorResponse = { status, url: resp.url(), body };
     appendEvent({
       kind: 'response_error',
       step: currentStep,
@@ -98,6 +157,7 @@ export function attachRecorder(page: Page): RecorderHandle {
   return {
     async step<T>(label: string, fn: () => Promise<T>): Promise<T> {
       currentStep = label;
+      lastErrorResponse = null;
       const ts = new Date().toISOString();
       try {
         const out = await fn();
@@ -109,12 +169,18 @@ export function attachRecorder(page: Page): RecorderHandle {
         }
         return out;
       } catch (err) {
+        const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
         appendEvent({
           kind: 'step_failure',
           step: label,
           ts,
           url: page.url(),
-          message: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+          message,
+        });
+        await maybePauseOnFailure(page, {
+          step: label,
+          last_response: lastErrorResponse,
+          error_message: message,
         });
         throw err;
       } finally {
@@ -145,6 +211,11 @@ export function attachRecorder(page: Page): RecorderHandle {
           url: resp.url(),
           status,
           body,
+        });
+        await maybePauseOnFailure(page, {
+          step: label,
+          last_response: { status, url: resp.url(), body },
+          error_message: `${label}: expected 2xx, got ${status} from ${resp.url()}`,
         });
         // Surface as test failure too — recorder records, expect() throws.
         expect(status, `${label}: expected 2xx, got ${status} from ${resp.url()}`).toBeLessThan(400);
