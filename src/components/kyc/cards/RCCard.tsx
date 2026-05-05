@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import OcrAutofillButton from "./OcrAutofillButton";
-import RequestMoreDocsModal from "../step3/RequestMoreDocsModal";
 
 interface RCCardProps {
   leadId: string;
@@ -52,7 +51,6 @@ export default function RCCard({
   const [error, setError] = useState("");
   const [adminNotes, setAdminNotes] = useState("");
   const [actionLoading, setActionLoading] = useState("");
-  const [showMoreDocsModal, setShowMoreDocsModal] = useState(false);
   const [actionResult, setActionResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const handleVerify = async () => {
@@ -98,8 +96,7 @@ export default function RCCard({
     }
   };
 
-  const handleAdminAction = async (action: "accept" | "reject" | "request_more_docs") => {
-    if (action === "request_more_docs") { setShowMoreDocsModal(true); return; }
+  const handleAdminAction = async (action: "accept" | "reject") => {
     if (action === "reject" && !adminNotes.trim()) { setError("Please add rejection reason"); return; }
     setActionLoading(action);
     setError("");
@@ -151,9 +148,23 @@ export default function RCCard({
             <p className="text-xs text-gray-500">via Decentro</p>
           </div>
         </div>
-        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusConfig[status].bg}`}>
-          {statusConfig[status].label}
-        </span>
+        {(() => {
+          // Admin's accept/reject decision overrides the API result for the
+          // badge — admins want the badge to mirror their action
+          // ("Accepted"/"Rejected") not the underlying API state.
+          const adminBadge =
+            existingVerification?.adminAction === "accepted"
+              ? { bg: "bg-green-100 text-green-700", label: "Accepted" }
+              : existingVerification?.adminAction === "rejected"
+                ? { bg: "bg-red-100 text-red-700", label: "Rejected" }
+                : null;
+          const badge = adminBadge ?? statusConfig[status];
+          return (
+            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${badge.bg}`}>
+              {badge.label}
+            </span>
+          );
+        })()}
       </div>
 
       <div className="p-5 space-y-5">
@@ -276,25 +287,12 @@ export default function RCCard({
                 className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
                 {actionLoading === "reject" ? "Rejecting..." : "Reject"}
               </button>
-              <button onClick={() => handleAdminAction("request_more_docs")} disabled={!!actionLoading}
-                className="flex-1 bg-amber-500 hover:bg-amber-600 text-white py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors shadow-sm">
-                Request Docs
-              </button>
             </div>
           </div>
         )}
 
         {error && <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">{error}</div>}
       </div>
-
-      <RequestMoreDocsModal
-        open={showMoreDocsModal}
-        onClose={() => setShowMoreDocsModal(false)}
-        leadId={leadId}
-        sourceVerificationId={verificationId || existingVerification?.id || null}
-        sourceCardLabel="RC Verification"
-        onSuccess={() => onActionComplete?.()}
-      />
     </div>
   );
 }

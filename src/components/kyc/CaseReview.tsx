@@ -17,6 +17,7 @@ import CoBorrowerPanel, {
   type CoBorrowerGated,
 } from "./step3/CoBorrowerPanel";
 import RequestCoBorrowerModal from "./step3/RequestCoBorrowerModal";
+import RequestMoreDocsModal from "./step3/RequestMoreDocsModal";
 
 interface CrossMatchResult {
   overallPass: boolean;
@@ -213,6 +214,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const [autoFetchAttempted, setAutoFetchAttempted] = useState<Set<string>>(new Set());
   const [consentExpanded, setConsentExpanded] = useState(false);
   const [showCoBorrowerModal, setShowCoBorrowerModal] = useState(false);
+  const [showGlobalDocsModal, setShowGlobalDocsModal] = useState(false);
   // Transient toast for admin actions that succeed but have no obvious UI
   // change (e.g., a request was sent to the dealer who is on a different
   // device). Auto-clears after 6s.
@@ -452,10 +454,6 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
 
   const handleFinalDecision = async () => {
     if (!decision) return;
-    if (decision === "rejected" && !rejectionReason.trim()) {
-      setDecisionResult({ success: false, message: "Rejection reason is required" });
-      return;
-    }
     setDecisionLoading(true);
     setDecisionResult(null);
     try {
@@ -493,12 +491,34 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 gap-4">
-        <div className="relative w-16 h-16">
-          <div className="absolute inset-0 rounded-full border-4 border-teal-100" />
-          <div className="absolute inset-0 rounded-full border-4 border-teal-600 border-t-transparent animate-spin" />
+      <div className="space-y-4 animate-pulse">
+        <div className="rounded-2xl border border-gray-200 bg-white p-6">
+          <div className="flex items-center gap-4">
+            <div className="h-12 w-12 rounded-full bg-gray-100" />
+            <div className="flex-1 space-y-2">
+              <div className="h-3 w-24 rounded bg-gray-100" />
+              <div className="h-5 w-64 rounded bg-gray-200" />
+              <div className="h-3 w-40 rounded bg-gray-100" />
+            </div>
+            <div className="flex gap-2">
+              <div className="h-7 w-20 rounded-full bg-gray-100" />
+              <div className="h-7 w-24 rounded-full bg-gray-100" />
+              <div className="h-7 w-20 rounded-full bg-gray-100" />
+            </div>
+          </div>
+          <div className="mt-6 h-2 w-full rounded-full bg-gray-100" />
         </div>
-        <span className="text-sm font-medium text-gray-600">Loading case review…</span>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2 space-y-4">
+            <div className="rounded-2xl border border-gray-200 bg-white p-6 h-56" />
+            <div className="rounded-2xl border border-gray-200 bg-white p-6 h-72" />
+          </div>
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-gray-200 bg-white p-6 h-40" />
+            <div className="rounded-2xl border border-gray-200 bg-white p-6 h-40" />
+          </div>
+        </div>
       </div>
     );
   }
@@ -566,23 +586,14 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const verifCompleted = verifStats.filter((v) => v.status === "success" || v.status === "completed").length;
   const verifProgress = Math.round((verifCompleted / verifTypes.length) * 100);
 
-  // Compute optimistic approve/reject readiness from card state, mirroring
+  // Compute optimistic approve readiness from card state, mirroring
   // the server-side gate at /api/admin/kyc/[leadId]/final-decision. When this
-  // returns a non-empty list we disable the matching button and show the
-  // reasons in a tooltip — admin no longer clicks Submit, gets bounced, and
-  // re-clicks. Server still validates authoritatively.
+  // returns a non-empty list we disable the Approve button and show the
+  // reasons in a tooltip. Reject is intentionally always allowed — admins
+  // need to be able to close junk leads at any time without first rejecting
+  // every individual card.
   const approveBlockers: string[] = [];
   const rejectBlockers: string[] = [];
-  // Pull co-borrower's verification cards once — they substitute for the
-  // primary's slot when admin accepts on the co-borrower side. Common case:
-  // primary's number isn't linked to CIBIL, admin accepts the co-borrower
-  // CIBIL instead. Treating co-borrower acceptance as satisfying the same
-  // requirement matches the BRD intent — co-borrower exists specifically
-  // to backstop primary.
-  // data.coBorrower may be CoBorrowerData (full payload, has
-  // verificationCards) OR CoBorrowerGated (a stub used when co-borrower
-  // KYC is gated and the verifications haven't been collected yet).
-  // Only the full shape carries verificationCards — narrow before reading.
   const cbCards: Array<{ type: string; adminAction: string | null }> =
     data.coBorrower && "verificationCards" in data.coBorrower
       ? (data.coBorrower.verificationCards as Array<{ type: string; adminAction: string | null }>)
@@ -592,35 +603,26 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
     const coBorrowerCard = cbCards.find((c) => c.type === t);
 
     const primaryAccepted = primaryCard?.adminAction === "accepted";
-    const primaryRejected = primaryCard?.adminAction === "rejected";
     const coBorrowerAccepted = coBorrowerCard?.adminAction === "accepted";
-    const coBorrowerRejected = coBorrowerCard?.adminAction === "rejected";
 
     if (!primaryCard && !coBorrowerCard) {
       approveBlockers.push(`${t.toUpperCase()} verification not run yet`);
-      rejectBlockers.push(`${t.toUpperCase()} verification not run yet`);
       continue;
     }
     if (!primaryAccepted && !coBorrowerAccepted) {
       approveBlockers.push(`Click Accept on the ${t.toUpperCase()} card`);
     }
-    if (!primaryRejected && !coBorrowerRejected) {
-      rejectBlockers.push(`Click Reject on the ${t.toUpperCase()} card`);
-    }
   }
-  // Supporting docs gate
   if (Array.isArray(data.supportingDocs)) {
     for (const d of data.supportingDocs) {
+      // Optional supporting docs (isRequired=false) never block approval —
+      // an admin can reject an optional doc and still approve the lead.
+      if (d.isRequired === false) continue;
       if ((d as { uploadStatus?: string }).uploadStatus !== "verified") {
         approveBlockers.push(`Supporting doc "${(d as { docLabel?: string }).docLabel ?? "(unnamed)"}" must be verified`);
       }
-      if ((d as { uploadStatus?: string }).uploadStatus !== "rejected") {
-        rejectBlockers.push(`Supporting doc "${(d as { docLabel?: string }).docLabel ?? "(unnamed)"}" must be rejected`);
-      }
     }
   }
-  const canApprove = approveBlockers.length === 0;
-  const canReject = rejectBlockers.length === 0;
 
   return (
     <div className="space-y-6 pb-6">
@@ -1058,6 +1060,37 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
         </div>
       </div>
 
+      {/* Verification & Documents are gated on the dealer having committed a
+          coupon. Both 'reserved' (coupon validated, dealer ready to submit)
+          and 'used' (already submitted-for-verification) reveal the panels.
+          While the coupon is unset/expired, the case isn't ready for review —
+          show a placeholder so the admin sees lead info only. A small notice
+          on top of the panels tells the admin when the dealer has not yet
+          clicked Submit-for-Verification. */}
+      {!(metadata?.couponStatus === "reserved" || metadata?.couponStatus === "used") ? (
+        <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-sm">
+          <div className="w-12 h-12 rounded-full bg-amber-50 ring-1 ring-amber-200 mx-auto mb-3 flex items-center justify-center">
+            <svg className="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <p className="text-sm font-bold text-gray-900">Awaiting Dealer Submission</p>
+          <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
+            Documents and verification cards will appear here once the dealer validates a coupon for this case.
+          </p>
+        </div>
+      ) : (<>
+      {metadata?.couponStatus === "reserved" && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-3">
+          <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <div>
+            <p className="text-xs font-bold text-amber-800">Dealer has not yet clicked Submit-for-Verification</p>
+            <p className="text-xs text-amber-700 mt-0.5">Coupon is reserved and documents are visible below for early review. Verification APIs will only be initiated once the dealer formally submits.</p>
+          </div>
+        </div>
+      )}
       {/* Tab Navigation */}
       <div className="inline-flex gap-1 bg-gray-100 p-1.5 rounded-2xl border border-gray-200 shadow-sm">
         <button onClick={() => setActiveTab("verifications")}
@@ -1190,12 +1223,15 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
         </div>
       )}
 
-      {/* Step 3 — Panel 2: Supporting Documents Review (BRD §2.9.3) */}
-      {activeTab === "verifications" && data.supportingDocs.length > 0 && (
+      {/* Step 3 — Panel 2: Document Requests card (BRD §2.9.3). Always
+          rendered while on the verifications tab so admins can request docs
+          from a card-style UI; the panel body shows requested docs below. */}
+      {activeTab === "verifications" && (
         <SupportingDocsPanel
           leadId={leadId}
           docs={data.supportingDocs}
           onRefresh={fetchData}
+          onRequestDocs={() => setShowGlobalDocsModal(true)}
         />
       )}
 
@@ -1356,6 +1392,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           </div>
         );
       })()}
+      </>)}
 
       {/* Document Lightbox */}
       {lightboxUrl && (
@@ -1511,10 +1548,10 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               <div className="bg-red-50/50 border border-red-100 rounded-xl p-4">
                 <label className="flex items-center gap-1.5 text-[11px] font-bold text-red-700 uppercase tracking-wider mb-2">
                   <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
-                  Rejection Reason *
+                  Rejection Reason (optional)
                 </label>
                 <textarea value={rejectionReason} onChange={(e) => setRejectionReason(e.target.value)} rows={2}
-                  placeholder="Why is this being rejected?"
+                  placeholder="Why is this being rejected? (optional)"
                   className="w-full text-sm border border-red-200 bg-white rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition" />
               </div>
             )}
@@ -1622,6 +1659,26 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           setRequestToast({
             kind: "success",
             title: "Co-borrower KYC request sent",
+            detail: "The dealer will see this on their portal.",
+          });
+          fetchData();
+        }}
+      />
+
+      {/* Global Request Additional Documents modal — opened by the single
+          fixed "Request Docs" button. lockScope omitted so the dialog renders
+          its Primary / Co-Borrower radio. sourceCardLabel omitted so the
+          "From: …" subtitle is not shown. */}
+      <RequestMoreDocsModal
+        open={showGlobalDocsModal}
+        onClose={() => setShowGlobalDocsModal(false)}
+        leadId={leadId}
+        defaultDocFor="primary"
+        onSuccess={() => {
+          setShowGlobalDocsModal(false);
+          setRequestToast({
+            kind: "success",
+            title: "Document request sent",
             detail: "The dealer will see this on their portal.",
           });
           fetchData();
