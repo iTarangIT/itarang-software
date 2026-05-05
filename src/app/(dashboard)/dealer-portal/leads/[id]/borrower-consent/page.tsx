@@ -467,18 +467,53 @@ export default function BorrowerConsentPage() {
         return () => clearInterval(interval);
     }, [consentStatus, leadId]);
 
-    // Auto-poll Step 3 verification status every 5s once the dealer has
-    // submitted for re-verification — the admin's accept/reject and final
-    // approval should appear without a manual refresh, and the
-    // "Next: Product Selection" button should light up as soon as kyc_status
-    // flips to step_3_cleared / kyc_approved.
+    // Auto-poll Step 3 verification status every 5s while the lead is in any
+    // pending-admin state — the admin's accept/reject and final approval
+    // should appear without a manual refresh, and the "Next: Product
+    // Selection" button should light up as soon as kyc_status flips to
+    // step_3_cleared / kyc_approved. Polling also runs once the dealer has
+    // submitted a co-borrower so the supporting-docs-only path is covered too.
     useEffect(() => {
-        const submitted = !!step3Ctx?.co_borrower_submitted_at;
-        const cleared = ['step_3_cleared', 'kyc_approved'].includes(lead?.kyc_status || '');
-        if (!submitted || cleared) return;
+        const PENDING_ADMIN = new Set([
+            'pending_itarang_verification',
+            'pending_itarang_reverification',
+            'awaiting_additional_docs',
+            'awaiting_co_borrower_kyc',
+            'awaiting_co_borrower_replacement',
+            'awaiting_doc_reupload',
+            'awaiting_both',
+        ]);
+        const status = lead?.kyc_status || '';
+        const cleared = ['step_3_cleared', 'kyc_approved'].includes(status);
+        const submittedCo = !!step3Ctx?.co_borrower_submitted_at;
+        if (cleared) return;
+        if (!submittedCo && !PENDING_ADMIN.has(status)) return;
         const interval = setInterval(() => loadPageData(true), 5000);
         return () => clearInterval(interval);
     }, [step3Ctx?.co_borrower_submitted_at, lead?.kyc_status, leadId]);
+
+    // Browsers throttle setInterval in inactive tabs to ~60s, so the 5s poll
+    // above can stall while the dealer's tab is backgrounded. Refresh on
+    // visibility / focus return so the Next button surfaces immediately when
+    // the dealer comes back to the tab after admin has approved.
+    useEffect(() => {
+        const onVisible = () => {
+            if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+                loadPageData(true);
+            }
+        };
+        const onFocus = () => loadPageData(true);
+        if (typeof document !== 'undefined') {
+            document.addEventListener('visibilitychange', onVisible);
+        }
+        window.addEventListener('focus', onFocus);
+        return () => {
+            if (typeof document !== 'undefined') {
+                document.removeEventListener('visibilitychange', onVisible);
+            }
+            window.removeEventListener('focus', onFocus);
+        };
+    }, [leadId]);
 
     // Detect consent path
     useEffect(() => {
@@ -1039,7 +1074,12 @@ export default function BorrowerConsentPage() {
 
     // Admin has finished verifying Step 3. Lead is unlocked for Step 4
     // (Product Selection). Show the Next button so the dealer can advance.
-    const step3Cleared = ['step_3_cleared', 'kyc_approved'].includes(lead?.kyc_status || '');
+    // Also unlock when the admin's metadata.final_decision is 'approved' —
+    // the admin "Already APPROVED" badge reads that field, so honouring it
+    // keeps the dealer in sync even if leads.kyc_status hasn't propagated yet.
+    const step3Cleared =
+        ['step_3_cleared', 'kyc_approved'].includes(lead?.kyc_status || '') ||
+        (lead as any)?.final_decision === 'approved';
     const stepRoutes: Record<number, string> = {
         1: '/dealer-portal/leads/new',
         2: `/dealer-portal/leads/${leadId}/kyc`,

@@ -13,7 +13,7 @@ import {
 import { requireRole } from "@/lib/auth-utils";
 import { finalizeSale } from "@/lib/sales/sale-finalization";
 import { notifyDispatchConfirmed } from "@/lib/notifications";
-import { sendDecentroSms } from "@/lib/decentro";
+import { sendKycSms } from "@/lib/sms";
 
 // BRD V2 §3.3 — Step 5 OTP validation + dispatch confirmation.
 // On success, a single DB transaction finalizes the sale:
@@ -174,7 +174,10 @@ export async function POST(
           .where(eq(loanSanctions.id, loan.id));
       }
 
-      // Inventory sold + warranty + after-sales
+      // BRD §3.5: finance flow goes to 'dispatched' first. Warranty +
+      // after-sales are still created (BRD §3.6 says creation is triggered
+      // on dispatch, not on sold). Inventory.sold_at stays null until the
+      // dealer hits Mark Delivered or the daily cron fires.
       const sale = await finalizeSale({
         tx,
         leadId,
@@ -186,12 +189,13 @@ export async function POST(
         paymentMode: "finance",
         performedBy: user.id,
         soldAt: now,
+        phase: "dispatched",
       });
 
-      // Close lead
+      // Lead enters the dispatched state. sold_at stays null.
       await tx
         .update(leads)
-        .set({ kyc_status: "sold", sold_at: now, updated_at: now })
+        .set({ kyc_status: "dispatched", updated_at: now })
         .where(eq(leads.id, leadId));
 
       return sale;
@@ -204,10 +208,12 @@ export async function POST(
       batterySerial: selection.battery_serial!,
     }).catch(() => {});
 
+    // BRD §3.5: customer is told their battery is dispatched. The "fully
+    // sold" SMS goes out later from mark-delivered / cron.
     if (lead.phone || lead.mobile) {
-      sendDecentroSms({
+      sendKycSms({
         mobile_number: (lead.phone || lead.mobile) as string,
-        message: `Congratulations! Your iTarang battery ${selection.battery_serial} has been dispatched. Warranty ID: ${result.warrantyId}. Loan: ${loan?.loan_file_number ?? "—"}.`,
+        message: `Your iTarang battery ${selection.battery_serial} has been dispatched. Warranty ${result.warrantyId} is now active. Loan ref: ${loan?.loan_file_number ?? "—"}. Track delivery in your iTarang portal.`,
         reference_id: `dispatch-${leadId}-${Date.now()}`,
       }).catch(() => {});
     }
@@ -215,13 +221,14 @@ export async function POST(
     return NextResponse.json({
       success: true,
       data: {
-        leadStatus: "sold",
+        leadStatus: "dispatched",
         warrantyId: result.warrantyId,
         warrantyStart: result.warrantyStart.toISOString(),
         warrantyEnd: result.warrantyEnd.toISOString(),
         afterSalesId: result.afterSalesId,
         loanStatus: "dealer_approved",
-        message: "Dispatch confirmed. Inventory sold. Warranty activated. Loan recorded.",
+        message:
+          "Dispatch confirmed. Inventory dispatched. Warranty activated. Lead will auto-finalize on delivery (or click Mark Delivered when handed over).",
       },
     });
   } catch (error) {

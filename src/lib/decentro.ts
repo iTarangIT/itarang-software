@@ -589,8 +589,20 @@ const SMS_MODULE_SECRET = process.env.DECENTRO_SMS_MODULE_SECRET;
 const SMS_TEMPLATE_ID   = process.env.DECENTRO_SMS_TEMPLATE_ID;
 const SMS_SENDER_ID     = process.env.DECENTRO_SMS_SENDER_ID;
 
+// Allow SMS to point at a different Decentro tenant/env (e.g. staging) than
+// the rest of the modules. KYC/Banking/Credit are typically on prod, but SMS
+// can run on staging while DLT templates are being approved on prod.
+const SMS_BASE_URL      = process.env.DECENTRO_SMS_BASE_URL || BASE_URL;
+const SMS_CLIENT_ID     = process.env.DECENTRO_SMS_CLIENT_ID || CLIENT_ID;
+const SMS_CLIENT_SECRET = process.env.DECENTRO_SMS_CLIENT_SECRET || CLIENT_SECRET;
+
 function smsHeaders(): Record<string, string> {
-    const h: Record<string, string> = { ...kycHeaders() };
+    const h: Record<string, string> = {
+        'client_id': SMS_CLIENT_ID,
+        'client_secret': SMS_CLIENT_SECRET,
+        'Content-Type': 'application/json',
+        'accept': 'application/json',
+    };
     if (isRealSecret(SMS_MODULE_SECRET)) h['module_secret'] = SMS_MODULE_SECRET!;
     return h;
 }
@@ -653,17 +665,13 @@ export async function sendDecentroSms(p: SendSmsParams): Promise<SendSmsResult> 
     if (SMS_TEMPLATE_ID) body.template_id = SMS_TEMPLATE_ID;
     if (SMS_SENDER_ID)   body.sender_id   = SMS_SENDER_ID;
 
-    const url = `${BASE_URL}${SMS_ENDPOINT}`;
+    const url = `${SMS_BASE_URL}${SMS_ENDPOINT}`;
     console.log(`[Decentro SMS] POST ${url} to=${phone.slice(0, 2)}XXXX${phone.slice(-2)} ref=${body.reference_id}`);
 
     try {
         const res = await fetch(url, {
             method: 'POST',
-            headers: {
-                ...smsHeaders(),
-                'Content-Type': 'application/json',
-                'accept': 'application/json',
-            },
+            headers: smsHeaders(),
             body: JSON.stringify(body),
         });
         const data = await res.json().catch(() => ({}));
