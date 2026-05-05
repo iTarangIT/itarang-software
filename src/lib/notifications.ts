@@ -45,6 +45,68 @@ export async function notifyInventoryAssigned(params: {
 }
 
 /**
+ * BRD V2 §5.4 — incoming inter-dealer transfer.
+ * Tells the target dealer they need to acknowledge receipt.
+ */
+export async function notifyInventoryTransferIncoming(params: {
+  targetDealerId: string;
+  transferId: string;
+  serialCount: number;
+  sourceDealerName?: string | null;
+}) {
+  try {
+    await db.insert(notifications).values({
+      id: genId(),
+      dealer_id: params.targetDealerId,
+      type: "inventory_transfer_incoming",
+      title: "Incoming inventory transfer",
+      message:
+        `${params.serialCount} item${params.serialCount === 1 ? "" : "s"} are being transferred to you` +
+        (params.sourceDealerName ? ` from ${params.sourceDealerName}` : "") +
+        ". Acknowledge receipt when stock arrives.",
+      data: {
+        transfer_id: params.transferId,
+        serial_count: params.serialCount,
+        source_dealer_name: params.sourceDealerName ?? null,
+      },
+    });
+  } catch (error) {
+    console.error("[Notification] notifyInventoryTransferIncoming failed:", error);
+  }
+}
+
+/**
+ * BRD V2 §5.4 — transfer acknowledged by target dealer.
+ * Confirms back to source dealer that the transfer cleared.
+ */
+export async function notifyInventoryTransferAcknowledged(params: {
+  sourceDealerId: string;
+  transferId: string;
+  serialCount: number;
+  targetDealerName?: string | null;
+}) {
+  try {
+    await db.insert(notifications).values({
+      id: genId(),
+      dealer_id: params.sourceDealerId,
+      type: "inventory_transfer_acknowledged",
+      title: "Transfer acknowledged",
+      message:
+        `${params.serialCount} item${params.serialCount === 1 ? "" : "s"} acknowledged` +
+        (params.targetDealerName ? ` by ${params.targetDealerName}` : "") +
+        ". Stock has left your inventory.",
+      data: {
+        transfer_id: params.transferId,
+        serial_count: params.serialCount,
+        target_dealer_name: params.targetDealerName ?? null,
+      },
+    });
+  } catch (error) {
+    console.error("[Notification] notifyInventoryTransferAcknowledged failed:", error);
+  }
+}
+
+/**
  * Creates a notification for the dealer who owns the lead.
  * Looks up dealer_id from the lead record.
  */

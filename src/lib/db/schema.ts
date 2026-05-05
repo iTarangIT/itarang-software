@@ -2890,3 +2890,53 @@ export const inventoryUploadReports = pgTable(
     ),
   }),
 );
+
+// BRD V2 §5.4 — inter-dealer inventory transfers.
+// One row per transfer event, regardless of how many serials it covers.
+// `serials` is a jsonb array of inventory.serial_number values; `status`
+// transitions: pending_acknowledgement → completed | cancelled.
+//
+//   pending_acknowledgement: source serials already flipped to
+//     'transferred_out'; target dealer has been notified but hasn't yet
+//     hit /acknowledge-transfer.
+//   completed:               target dealer ack'd; serials now flipped to
+//     'available' under the target dealer.
+//   cancelled:               admin rolled the transfer back before ack —
+//     serials returned to the source dealer in 'available'.
+export const inventoryTransfers = pgTable(
+  "inventory_transfers",
+  {
+    id: varchar({ length: 64 }).primaryKey().notNull(),
+    source_dealer_id: varchar("source_dealer_id", { length: 255 }).notNull(),
+    target_dealer_id: varchar("target_dealer_id", { length: 255 }).notNull(),
+    serials: jsonb("serials").notNull(), // string[]
+    reason: text(),
+    initiated_by: uuid("initiated_by").notNull(),
+    initiated_at: timestamp("initiated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    acknowledged_by: uuid("acknowledged_by"),
+    acknowledged_at: timestamp("acknowledged_at", { withTimezone: true }),
+    cancelled_by: uuid("cancelled_by"),
+    cancelled_at: timestamp("cancelled_at", { withTimezone: true }),
+    cancellation_reason: text("cancellation_reason"),
+    status: varchar({ length: 30 })
+      .default("pending_acknowledgement")
+      .notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    invXferSourceIdx: index("inventory_transfers_source_idx").on(
+      table.source_dealer_id,
+    ),
+    invXferTargetIdx: index("inventory_transfers_target_idx").on(
+      table.target_dealer_id,
+    ),
+    invXferStatusIdx: index("inventory_transfers_status_idx").on(table.status),
+  }),
+);

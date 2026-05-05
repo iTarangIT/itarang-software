@@ -167,6 +167,7 @@ export async function middleware(request: NextRequest) {
       "super_admin",
       "inventory_manager",
       "ceo",
+      "sales_head",
     ],
   };
 
