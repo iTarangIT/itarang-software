@@ -90,6 +90,77 @@ export const products = pgTable(
   }),
 );
 
+// BRD strict product-master split (battery / charger / paraphernalia).
+// Existing `products` continues to power current flows while these tables
+// become the authoritative BRD contract surfaces.
+export const productMasterBatteries = pgTable(
+  "product_master_batteries",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    model_id: varchar("model_id", { length: 50 }).notNull(),
+    model_name: varchar("model_name", { length: 100 }).notNull(),
+    compatible_categories: jsonb("compatible_categories").default([]).notNull(),
+    compatible_sub_categories: jsonb("compatible_sub_categories").default([]).notNull(),
+    voltage_v: decimal("voltage_v", { precision: 6, scale: 2 }),
+    capacity_ah: decimal("capacity_ah", { precision: 8, scale: 2 }),
+    battery_chemistry: varchar("battery_chemistry", { length: 20 }),
+    warranty_months: integer("warranty_months").default(0).notNull(),
+    iot_compatible: boolean("iot_compatible").default(false).notNull(),
+    compatible_charger_models: jsonb("compatible_charger_models").default([]).notNull(),
+    status: varchar("status", { length: 20 }).default("active").notNull(),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pmBatteryModelIdUnique: unique("pm_battery_model_id_unique").on(table.model_id),
+    pmBatteryStatusIdx: index("pm_battery_status_idx").on(table.status),
+  }),
+);
+
+export const productMasterChargers = pgTable(
+  "product_master_chargers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    model_id: varchar("model_id", { length: 50 }).notNull(),
+    model_name: varchar("model_name", { length: 100 }).notNull(),
+    output_voltage_v: decimal("output_voltage_v", { precision: 6, scale: 2 }),
+    output_current_a: decimal("output_current_a", { precision: 6, scale: 2 }),
+    charging_type: varchar("charging_type", { length: 30 }),
+    compatible_battery_models: jsonb("compatible_battery_models").default([]).notNull(),
+    base_price: numeric("base_price", { precision: 12, scale: 2 }),
+    warranty_months: integer("warranty_months").default(0).notNull(),
+    status: varchar("status", { length: 20 }).default("active").notNull(),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pmChargerModelIdUnique: unique("pm_charger_model_id_unique").on(table.model_id),
+    pmChargerStatusIdx: index("pm_charger_status_idx").on(table.status),
+  }),
+);
+
+export const productMasterParaphernalia = pgTable(
+  "product_master_paraphernalia",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    item_type_code: varchar("item_type_code", { length: 50 }).notNull(),
+    display_label: varchar("display_label", { length: 100 }).notNull(),
+    compatible_categories: jsonb("compatible_categories").default([]).notNull(),
+    max_qty_per_lead: integer("max_qty_per_lead").default(0).notNull(),
+    harness_variant: boolean("harness_variant").default(false).notNull(),
+    status: varchar("status", { length: 20 }).default("active").notNull(),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pmParaItemTypeUnique: unique("pm_para_item_type_unique").on(table.item_type_code),
+    pmParaStatusIdx: index("pm_para_status_idx").on(table.status),
+  }),
+);
+
 export const oems = pgTable("oems", {
   id: varchar({ length: 255 }).primaryKey().notNull(),
   business_entity_name: text("business_entity_name").notNull(),
@@ -126,51 +197,82 @@ export const oemContacts = pgTable("oem_contacts", {
   contact_email: text("contact_email"),
 });
 
-export const inventory = pgTable("inventory", {
-  id: varchar({ length: 255 }).primaryKey().notNull(),
-  oem_id: varchar("oem_id", { length: 255 }),
-  oem_name: text("oem_name"),
-  product_catalog_id: varchar("product_catalog_id", { length: 255 }),
-  hsn_code: varchar("hsn_code", { length: 8 }),
-  asset_category: varchar("asset_category", { length: 20 }).notNull(),
-  asset_type: varchar("asset_type", { length: 50 }).notNull(),
-  model_type: text("model_type").notNull(),
-  serial_number: varchar("serial_number", { length: 255 }),
-  is_serialized: boolean("is_serialized").default(true).notNull(),
-  warranty_months: integer("warranty_months").default(0).notNull(),
-  status: varchar({ length: 30 }).default('in_stock').notNull(),
-  batch_number: varchar("batch_number", { length: 100 }),
-  received_date: timestamp("received_date", { withTimezone: true }),
-  pdi_status: varchar("pdi_status", { length: 20 }).default('pending'),
-  pdi_completed_at: timestamp("pdi_completed_at", { withTimezone: true }),
-  pdi_by: uuid("pdi_by"),
-  dealer_id: varchar("dealer_id", { length: 255 }),
-  allocated_to_dealer_at: timestamp("allocated_to_dealer_at", { withTimezone: true }),
-  sold_at: timestamp("sold_at", { withTimezone: true }),
-  deal_id: varchar("deal_id", { length: 255 }),
-  created_by: uuid("created_by").notNull(),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-  product_id: uuid("product_id"),
-  inventory_amount: numeric("inventory_amount", { precision: 12, scale:  2 }),
-  gst_percent: numeric("gst_percent", { precision: 5, scale:  2 }),
-  gst_amount: numeric("gst_amount", { precision: 12, scale:  2 }),
-  final_amount: numeric("final_amount", { precision: 12, scale:  2 }),
-  oem_invoice_number: text("oem_invoice_number"),
-  oem_invoice_date: timestamp("oem_invoice_date", { withTimezone: true }),
-  oem_invoice_url: text("oem_invoice_url"),
-  product_manual_url: text("product_manual_url"),
-  warranty_document_url: text("warranty_document_url"),
-  warehouse_location: text("warehouse_location"),
-  manufacturing_date: timestamp("manufacturing_date", { withTimezone: true }),
-  expiry_date: timestamp("expiry_date", { withTimezone: true }),
-  quantity: integer(),
-  iot_imei_no: varchar("iot_imei_no", { length: 255 }),
-  linked_lead_id: varchar("linked_lead_id", { length: 255 }),
-  dispatch_date: timestamp("dispatch_date", { withTimezone: true }),
-  soc_percent: numeric("soc_percent", { precision: 5, scale:  2 }),
-  soc_last_sync_at: timestamp("soc_last_sync_at", { withTimezone: true }),
-});
+export const inventory = pgTable(
+  "inventory",
+  {
+    id: varchar({ length: 255 }).primaryKey().notNull(),
+    oem_id: varchar("oem_id", { length: 255 }),
+    oem_name: text("oem_name"),
+    product_catalog_id: varchar("product_catalog_id", { length: 255 }),
+    hsn_code: varchar("hsn_code", { length: 8 }),
+    // BRD canonical inventory type.
+    inventory_type: varchar("inventory_type", { length: 30 }),
+    asset_category: varchar("asset_category", { length: 20 }).notNull(),
+    asset_type: varchar("asset_type", { length: 50 }).notNull(),
+    sub_category: varchar("sub_category", { length: 100 }),
+    model_type: text("model_type").notNull(),
+    serial_number: varchar("serial_number", { length: 255 }),
+    material_code: varchar("material_code", { length: 100 }),
+    is_serialized: boolean("is_serialized").default(true).notNull(),
+    warranty_months: integer("warranty_months").default(0).notNull(),
+    status: varchar({ length: 30 }).default("available").notNull(),
+    batch_number: varchar("batch_number", { length: 100 }),
+    received_date: timestamp("received_date", { withTimezone: true }),
+    pdi_status: varchar("pdi_status", { length: 20 }).default("pending"),
+    pdi_completed_at: timestamp("pdi_completed_at", { withTimezone: true }),
+    pdi_by: uuid("pdi_by"),
+    dealer_id: varchar("dealer_id", { length: 255 }),
+    allocated_to_dealer_at: timestamp("allocated_to_dealer_at", { withTimezone: true }),
+    sold_at: timestamp("sold_at", { withTimezone: true }),
+    deal_id: varchar("deal_id", { length: 255 }),
+    created_by: uuid("created_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    product_id: uuid("product_id"),
+    inventory_amount: numeric("inventory_amount", { precision: 12, scale: 2 }),
+    gst_percent: numeric("gst_percent", { precision: 5, scale: 2 }),
+    gst_amount: numeric("gst_amount", { precision: 12, scale: 2 }),
+    final_amount: numeric("final_amount", { precision: 12, scale: 2 }),
+    oem_invoice_number: text("oem_invoice_number"),
+    oem_invoice_date: timestamp("oem_invoice_date", { withTimezone: true }),
+    oem_invoice_url: text("oem_invoice_url"),
+    product_manual_url: text("product_manual_url"),
+    warranty_document_url: text("warranty_document_url"),
+    warehouse_location: text("warehouse_location"),
+    manufacturing_date: timestamp("manufacturing_date", { withTimezone: true }),
+    expiry_date: timestamp("expiry_date", { withTimezone: true }),
+    quantity: integer(),
+    iot_imei_no: varchar("iot_imei_no", { length: 255 }),
+    iot_enabled: boolean("iot_enabled").default(false).notNull(),
+    linked_lead_id: varchar("linked_lead_id", { length: 255 }),
+    dispatch_date: timestamp("dispatch_date", { withTimezone: true }),
+    soc_percent: numeric("soc_percent", { precision: 5, scale: 2 }),
+    soc_last_sync_at: timestamp("soc_last_sync_at", { withTimezone: true }),
+    // BRD upload + detail fields.
+    voltage_v: decimal("voltage_v", { precision: 6, scale: 2 }),
+    capacity_ah: decimal("capacity_ah", { precision: 8, scale: 2 }),
+    output_current_a: decimal("output_current_a", { precision: 6, scale: 2 }),
+    compatible_models: jsonb("compatible_models"),
+    star_rating: integer("star_rating"),
+    physical_condition: varchar("physical_condition", { length: 20 }),
+    oem_warranty_date: date("oem_warranty_date"),
+    oem_warranty_months: integer("oem_warranty_months"),
+    oem_warranty_expiry: date("oem_warranty_expiry"),
+    oem_warranty_clauses: text("oem_warranty_clauses"),
+    upload_event_id: varchar("upload_event_id", { length: 64 }),
+  },
+  (table) => ({
+    inventoryDealerStatusIdx: index("inventory_dealer_status_idx").on(
+      table.dealer_id,
+      table.status,
+    ),
+    inventoryInvoiceDateIdx: index("inventory_invoice_date_idx").on(
+      table.oem_invoice_date,
+    ),
+    inventorySerialUnique: unique("inventory_serial_unique").on(table.serial_number),
+    inventoryImeiUnique: unique("inventory_imei_unique").on(table.iot_imei_no),
+  }),
+);
 
 // --- DEALER SALES ---
 export const leads = pgTable("leads", {
@@ -2868,13 +2970,19 @@ export const inventoryUploadReports = pgTable(
     id: varchar({ length: 64 }).primaryKey().notNull(),
     dealer_id: varchar("dealer_id", { length: 255 }).notNull(),
     asset_type: varchar("asset_type", { length: 30 }).notNull(),
+    inventory_type: varchar("inventory_type", { length: 30 }),
+    upload_method: varchar("upload_method", { length: 20 }),
     uploaded_by: uuid("uploaded_by").notNull(),
     uploaded_at: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
     total_rows: integer("total_rows").default(0).notNull(),
     inserted_rows: integer("inserted_rows").default(0).notNull(),
     skipped_rows: integer("skipped_rows").default(0).notNull(),
+    rows_imported: integer("rows_imported").default(0).notNull(),
+    rows_skipped: integer("rows_skipped").default(0).notNull(),
     errors_json: jsonb("errors_json"),
     inserted_inventory_ids: jsonb("inserted_inventory_ids"),
+    file_url: text("file_url"),
+    report_url: text("report_url"),
     source: varchar({ length: 20 }).default('bulk').notNull(),
     notes: text(),
   },
@@ -2938,5 +3046,85 @@ export const inventoryTransfers = pgTable(
       table.target_dealer_id,
     ),
     invXferStatusIdx: index("inventory_transfers_status_idx").on(table.status),
+  }),
+);
+
+// BRD strict audit stream for every inventory status mutation.
+export const inventoryEvents = pgTable(
+  "inventory_events",
+  {
+    id: varchar({ length: 64 }).primaryKey().notNull(),
+    serial_number: varchar("serial_number", { length: 255 }).notNull(),
+    inventory_id: varchar("inventory_id", { length: 255 }),
+    event_type: varchar("event_type", { length: 40 }).notNull(),
+    from_status: varchar("from_status", { length: 30 }),
+    to_status: varchar("to_status", { length: 30 }),
+    lead_id: varchar("lead_id", { length: 255 }),
+    performed_by: uuid("performed_by"),
+    performed_at: timestamp("performed_at", { withTimezone: true }).defaultNow().notNull(),
+    notes: text("notes"),
+    metadata: jsonb("metadata"),
+  },
+  (table) => ({
+    inventoryEventsSerialIdx: index("inventory_events_serial_idx").on(
+      table.serial_number,
+      table.performed_at,
+    ),
+    inventoryEventsTypeIdx: index("inventory_events_type_idx").on(table.event_type),
+  }),
+);
+
+export const inventoryWriteOffs = pgTable(
+  "inventory_write_offs",
+  {
+    id: varchar({ length: 64 }).primaryKey().notNull(),
+    inventory_id: varchar("inventory_id", { length: 255 }).notNull(),
+    serial_number: varchar("serial_number", { length: 255 }).notNull(),
+    reason: varchar("reason", { length: 50 }).notNull(),
+    reason_notes: text("reason_notes"),
+    supporting_doc_url: text("supporting_doc_url"),
+    write_off_value: numeric("write_off_value", { precision: 12, scale: 2 }).notNull(),
+    requires_second_approval: boolean("requires_second_approval").default(false).notNull(),
+    approval_status: varchar("approval_status", { length: 30 }).default("completed").notNull(),
+    second_approved_by: uuid("second_approved_by"),
+    second_approved_at: timestamp("second_approved_at", { withTimezone: true }),
+    written_off_by: uuid("written_off_by").notNull(),
+    written_off_at: timestamp("written_off_at", { withTimezone: true }).defaultNow().notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    writeOffsInventoryIdx: index("inventory_write_offs_inventory_idx").on(
+      table.inventory_id,
+    ),
+    writeOffsSerialIdx: index("inventory_write_offs_serial_idx").on(
+      table.serial_number,
+    ),
+  }),
+);
+
+// Quantity-tracked paraphernalia stock ledger (separate from serialized rows).
+export const paraphernaliaStock = pgTable(
+  "paraphernalia_stock",
+  {
+    id: varchar({ length: 64 }).primaryKey().notNull(),
+    dealer_id: varchar("dealer_id", { length: 255 }).notNull(),
+    item_type: varchar("item_type", { length: 50 }).notNull(),
+    item_label: varchar("item_label", { length: 100 }).notNull(),
+    compatible_categories: jsonb("compatible_categories").default([]).notNull(),
+    available_qty: integer("available_qty").default(0).notNull(),
+    reserved_qty: integer("reserved_qty").default(0).notNull(),
+    sold_qty: integer("sold_qty").default(0).notNull(),
+    unit_cost: numeric("unit_cost", { precision: 10, scale: 2 }).default("0").notNull(),
+    last_upload_at: timestamp("last_upload_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    paraStockDealerTypeUnique: unique("paraphernalia_stock_dealer_type_unique").on(
+      table.dealer_id,
+      table.item_type,
+    ),
+    paraStockDealerIdx: index("paraphernalia_stock_dealer_idx").on(table.dealer_id),
   }),
 );

@@ -83,7 +83,7 @@ export const GET = withErrorHandler(async (req: Request) => {
               dealerIds.map((d) => sql`${d}`),
               sql`, `,
             )}]::varchar[])`,
-            sql`${inventory.status} NOT IN ('sold','dispatched','write_off')`,
+            sql`${inventory.status} NOT IN ('sold','written_off')`,
           ),
         )
         .groupBy(inventory.dealer_id, inventory.asset_category, inventory.status);

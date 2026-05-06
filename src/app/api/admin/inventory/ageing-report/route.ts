@@ -9,7 +9,7 @@ import { successResponse, withErrorHandler } from "@/lib/api-utils";
 //
 // Surfaces stock that has been sitting in dealer warehouses for too long.
 // Default minAge = 90 days (BRD ops cadence). Status filter is hard-pinned to
-// items still on the shelf — sold / write_off rows are excluded.
+// items still on the shelf - sold / written_off rows are excluded.
 
 const csvEscape = (v: unknown): string => {
   if (v === null || v === undefined) return "";
@@ -34,7 +34,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     lte(inventory.oem_invoice_date, cutoff),
     // Only ageing matters for items still on the shelf — exclude sold and
     // written-off rows.
-    sql`${inventory.status} NOT IN ('sold','dispatched','write_off')`,
+    sql`${inventory.status} NOT IN ('sold','written_off')`,
   ];
   if (dealerId) conditions.push(eq(inventory.dealer_id, dealerId));
   if (category) conditions.push(eq(inventory.asset_category, category));
@@ -42,26 +42,22 @@ export const GET = withErrorHandler(async (req: Request) => {
   const rows = await db
     .select({
       battery_id: inventory.id,
-      material_code: inventory.hsn_code,
+      material_code: inventory.material_code,
       dealer_id: inventory.dealer_id,
       dealer_name: accounts.business_entity_name,
       category: inventory.asset_category,
-      sub_category: inventory.asset_type,
+      sub_category: inventory.sub_category,
       model_number: inventory.model_type,
       serial_number: inventory.serial_number,
       sold_date: inventory.oem_invoice_date,
       status: inventory.status,
       invoice_value: inventory.inventory_amount,
-      // BRD field 10 — star rating column not yet on inventory schema; surface
-      // null so the report shape stays stable when we add it later.
-      star_rating: sql<number | null>`NULL::int`,
+      star_rating: inventory.star_rating,
       soc_percent: inventory.soc_percent,
       imei_id: inventory.iot_imei_no,
-      // iot_enabled derived from imei presence — BRD calls for the boolean,
-      // dedicated column not yet present.
-      iot_enabled: sql<boolean>`(${inventory.iot_imei_no} IS NOT NULL)`,
-      oem_warranty_date: inventory.manufacturing_date,
-      oem_warranty_expiry: inventory.expiry_date,
+      iot_enabled: inventory.iot_enabled,
+      oem_warranty_date: inventory.oem_warranty_date,
+      oem_warranty_expiry: inventory.oem_warranty_expiry,
       // Computed days-on-shelf so the page can sort + filter without redoing math.
       inventory_age_days: sql<number>`EXTRACT(DAY FROM (NOW() - ${inventory.oem_invoice_date}))::int`,
     })

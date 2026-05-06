@@ -55,7 +55,7 @@ export default function InventoryDetailPage() {
       } else {
         setError(json.error?.message || "Failed to load");
       }
-    } catch (e) {
+    } catch {
       setError("Failed to load");
     } finally {
       setLoading(false);
@@ -88,7 +88,7 @@ export default function InventoryDetailPage() {
       } else {
         setError(json.error?.message || "Write-off failed");
       }
-    } catch (e) {
+    } catch {
       setError("Request failed");
     } finally {
       setSubmitting(false);
@@ -178,7 +178,7 @@ export default function InventoryDetailPage() {
               Edit
             </Link>
           )}
-          {item.status !== "write_off" && item.status !== "sold" && (
+          {item.status !== "written_off" && item.status !== "sold" && (
             <button
               onClick={() => setWriteOffOpen(true)}
               className="px-4 py-2 bg-red-600 text-white rounded text-sm font-bold hover:bg-red-700"
@@ -244,8 +244,9 @@ function StatusBadge({ status }: { status: string }) {
     available: "bg-emerald-100 text-emerald-800",
     reserved: "bg-amber-100 text-amber-800",
     sold: "bg-blue-100 text-blue-800",
-    write_off: "bg-gray-100 text-gray-600",
-    in_stock: "bg-emerald-100 text-emerald-800",
+    written_off: "bg-gray-100 text-gray-600",
+    transferred_in: "bg-cyan-100 text-cyan-800",
+    transferred_out: "bg-purple-100 text-purple-800",
   };
   return (
     <span

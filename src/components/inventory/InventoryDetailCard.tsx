@@ -331,10 +331,9 @@ function StatusPill({ status }: { status: string }) {
   const map: Record<string, string> = {
     available: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
     reserved: "bg-amber-50 text-amber-700 ring-amber-600/20",
-    dispatched: "bg-blue-50 text-blue-700 ring-blue-600/20",
     sold: "bg-indigo-50 text-indigo-700 ring-indigo-600/20",
-    write_off: "bg-gray-100 text-gray-600 ring-gray-600/20",
-    in_stock: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+    written_off: "bg-gray-100 text-gray-600 ring-gray-600/20",
+    transferred_in: "bg-cyan-50 text-cyan-700 ring-cyan-600/20",
     transferred_out: "bg-purple-50 text-purple-700 ring-purple-600/20",
   };
   return (

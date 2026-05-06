@@ -1,29 +1,48 @@
 import { db } from "@/lib/db";
 import {
+  accounts,
   inventory,
   inventoryUploadReports,
-  oems,
-  productCategories,
+  paraphernaliaStock,
   products,
-  accounts,
 } from "@/lib/db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireInventoryAdmin } from "@/lib/auth-utils";
 import { successResponse, errorResponse, withErrorHandler, generateId } from "@/lib/api-utils";
 import { ASSET_TYPES, AssetType } from "@/lib/inventory/csv-templates";
-import { getRowSchema, formatZodErrors } from "@/lib/inventory/validation";
+import { formatZodErrors, getRowSchema } from "@/lib/inventory/validation";
 import { notifyInventoryAssigned } from "@/lib/notifications";
+import { logInventoryEvent } from "@/lib/inventory/events";
 
-// Step 2 of the bulk-upload flow: takes the validated rows from /validate,
-// re-runs the schema for safety, and inserts only error-free rows in a single
-// transaction. Writes a single inventory_upload_reports audit row.
+type StructuredError = {
+  row: number;
+  field: string;
+  code: string;
+  message: string;
+};
+
+function hasPgCode(error: unknown, code: string): boolean {
+  let curr: unknown = error;
+  while (curr && typeof curr === "object") {
+    const rec = curr as { code?: string; cause?: unknown };
+    if (rec.code === code) return true;
+    curr = rec.cause;
+  }
+  return false;
+}
 
 const bodySchema = z.object({
   dealerId: z.string().min(1, "dealerId required"),
   assetType: z.enum(["battery", "charger", "paraphernalia"]),
   rows: z.array(z.record(z.string(), z.any())).min(1, "rows required"),
 });
+
+const splitList = (value: unknown): string[] =>
+  String(value || "")
+    .split("|")
+    .map((v) => v.trim())
+    .filter(Boolean);
 
 export const POST = withErrorHandler(async (req: Request) => {
   const user = await requireInventoryAdmin();
@@ -34,187 +53,447 @@ export const POST = withErrorHandler(async (req: Request) => {
     rows: Record<string, unknown>[];
   };
 
-  if (!ASSET_TYPES.includes(assetType))
-    return errorResponse("Invalid assetType", 400);
+  if (!ASSET_TYPES.includes(assetType)) return errorResponse("Invalid assetType", 400);
 
-  // Confirm dealer exists
-  const dealerRow = await db
-    .select({ id: accounts.id, name: accounts.business_entity_name })
+  const [dealer] = await db
+    .select({
+      id: accounts.id,
+      status: accounts.status,
+      name: accounts.business_entity_name,
+    })
     .from(accounts)
     .where(eq(accounts.id, dealerId))
     .limit(1);
-  if (!dealerRow[0]) return errorResponse(`Dealer ${dealerId} not found`, 404);
+  if (!dealer || dealer.status !== "active") {
+    return errorResponse(`Dealer '${dealerId}' not found or inactive`, 400);
+  }
 
-  const schema = getRowSchema(assetType);
+  // Pre-fetch duplicate checks.
+  const incomingSerials =
+    assetType === "battery"
+      ? rows.map((r) => String(r.battery_id || "").trim()).filter(Boolean)
+      : assetType === "charger"
+        ? rows.map((r) => String(r.serial_number || "").trim()).filter(Boolean)
+        : [];
+  const incomingImeis =
+    assetType === "battery"
+      ? rows.map((r) => String(r.imei_id || "").trim()).filter(Boolean)
+      : [];
 
-  // Lookup OEMs and products in batch
-  const oemNames = Array.from(
-    new Set(rows.map((r) => String(r.oem_name || "").trim()).filter(Boolean)),
-  );
-  const oemRows = oemNames.length
-    ? await db.select().from(oems).where(inArray(oems.business_entity_name, oemNames))
-    : [];
-  const oemMap = new Map(oemRows.map((o) => [o.business_entity_name, o]));
-
-  const hsnCodes = Array.from(
-    new Set(rows.map((r) => String(r.hsn_code || "").trim()).filter(Boolean)),
-  );
-  const productJoin = hsnCodes.length
-    ? await db
-        .select({
-          id: products.id,
-          name: products.name,
-          hsn_code: products.hsn_code,
-          asset_type: products.asset_type,
-          is_serialized: products.is_serialized,
-          warranty_months: products.warranty_months,
-          asset_category: productCategories.name,
-        })
-        .from(products)
-        .innerJoin(productCategories, eq(products.category_id, productCategories.id))
-        .where(inArray(products.hsn_code, hsnCodes))
-    : [];
-  const productMap = new Map(productJoin.map((p) => [p.hsn_code, p]));
-
-  // Re-check dup serials against inventory table
-  const incomingSerials = rows
-    .map((r) => String(r.serial_number || "").trim())
-    .filter(Boolean);
-  const existing = incomingSerials.length
+  const existingSerialRows = incomingSerials.length
     ? await db
         .select({ serial_number: inventory.serial_number })
         .from(inventory)
         .where(inArray(inventory.serial_number, incomingSerials))
     : [];
-  const existingSet = new Set(
-    existing.map((r) => r.serial_number).filter((s): s is string => !!s),
+  const existingSerialSet = new Set(
+    existingSerialRows.map((r) => r.serial_number).filter((s): s is string => !!s),
+  );
+  const existingImeiRows = incomingImeis.length
+    ? await db
+        .select({ iot_imei_no: inventory.iot_imei_no })
+        .from(inventory)
+        .where(inArray(inventory.iot_imei_no, incomingImeis))
+    : [];
+  const existingImeiSet = new Set(
+    existingImeiRows.map((r) => r.iot_imei_no).filter((s): s is string => !!s),
   );
 
-  const errors: { row: number; error: string }[] = [];
-  const inserted: string[] = [];
-  const seenInBatch = new Set<string>();
+  const schema = getRowSchema(assetType);
 
-  for (let i = 0; i < rows.length; i++) {
-    const rowNumber = i + 2;
-    try {
+  // Optional mapping to legacy products table so existing Step 4 joins continue
+  // to work where possible.
+  const modelKeys =
+    assetType === "battery"
+      ? rows.map((r) => String(r.model_number || "").trim()).filter(Boolean)
+      : assetType === "charger"
+        ? rows.map((r) => String(r.charger_model || "").trim()).filter(Boolean)
+        : [];
+  const productRows = modelKeys.length
+    ? await db
+        .select({ id: products.id, name: products.name, sku: products.sku })
+        .from(products)
+        .where(inArray(products.sku, modelKeys))
+    : [];
+  const productBySku = new Map(productRows.map((p) => [p.sku, p]));
+
+  const errors: StructuredError[] = [];
+  const insertedIds: string[] = [];
+  const seenSerials = new Set<string>();
+  const seenImeis = new Set<string>();
+
+  const response = await db.transaction(async (tx) => {
+    for (let i = 0; i < rows.length; i++) {
+      const rowNumber = i + 2;
       const parsed = schema.safeParse(rows[i]);
       if (!parsed.success) {
-        errors.push({ row: rowNumber, error: formatZodErrors(parsed.error).join("; ") });
-        continue;
-      }
-      const data = parsed.data as Record<string, unknown>;
-
-      const oem = oemMap.get(String(data.oem_name));
-      if (!oem) {
-        errors.push({ row: rowNumber, error: `OEM '${data.oem_name}' not registered` });
-        continue;
-      }
-
-      const product = productMap.get(String(data.hsn_code));
-      if (!product) {
-        errors.push({ row: rowNumber, error: `No catalog product for HSN ${data.hsn_code}` });
+        for (const msg of formatZodErrors(parsed.error)) {
+          const [field, rest] = msg.split(":");
+          errors.push({
+            row: rowNumber,
+            field: field || "row",
+            code: "VALIDATION_ERROR",
+            message: rest ? rest.trim() : msg,
+          });
+        }
         continue;
       }
 
-      let serial: string | null = null;
-      let isSerialized = true;
-      let quantity = 1;
-      let modelType = product.name;
-      let assetTypeValue = product.asset_type ?? assetType;
+      const r = parsed.data as Record<string, unknown>;
 
-      if (assetType === "paraphernalia") {
-        isSerialized = false;
-        quantity = Number(data.quantity);
-        assetTypeValue = String(data.asset_type);
-        modelType = String(data.model_type);
+      // Global duplicate checks.
+      const serial =
+        assetType === "battery"
+          ? String(r.battery_id || "").trim()
+          : assetType === "charger"
+            ? String(r.serial_number || "").trim()
+            : "";
+      if (serial) {
+        if (existingSerialSet.has(serial)) {
+          errors.push({
+            row: rowNumber,
+            field: assetType === "battery" ? "battery_id" : "serial_number",
+            code: "DUPLICATE_SERIAL",
+            message: `Serial '${serial}' already exists in the system.`,
+          });
+          continue;
+        }
+        if (seenSerials.has(serial)) {
+          errors.push({
+            row: rowNumber,
+            field: assetType === "battery" ? "battery_id" : "serial_number",
+            code: "DUPLICATE_SERIAL_IN_FILE",
+            message: `Serial '${serial}' appears more than once in this file.`,
+          });
+          continue;
+        }
+        seenSerials.add(serial);
+      }
+
+      const imei = assetType === "battery" ? String(r.imei_id || "").trim() : "";
+      if (imei) {
+        if (existingImeiSet.has(imei)) {
+          errors.push({
+            row: rowNumber,
+            field: "imei_id",
+            code: "IMEI_ALREADY_EXISTS",
+            message: `IMEI '${imei}' is already assigned to another battery.`,
+          });
+          continue;
+        }
+        if (seenImeis.has(imei)) {
+          errors.push({
+            row: rowNumber,
+            field: "imei_id",
+            code: "IMEI_DUPLICATE_IN_FILE",
+            message: `IMEI '${imei}' appears more than once in this file.`,
+          });
+          continue;
+        }
+        seenImeis.add(imei);
+      }
+
+      const now = new Date();
+      const inventoryId = await generateId("INV");
+
+      if (assetType === "battery") {
+        const soldDate = new Date(String(r.sold_date));
+        const warrantyDate = new Date(String(r.oem_warranty_date));
+        const warrantyMonths = Number(r.oem_warranty_months);
+        const expiry = new Date(warrantyDate);
+        expiry.setMonth(expiry.getMonth() + warrantyMonths);
+        const value = Number(r.invoice_value);
+        const product = productBySku.get(String(r.model_number || ""));
+
+        try {
+          await tx.insert(inventory).values({
+            id: inventoryId,
+            inventory_type: "battery",
+            serial_number: serial,
+            iot_imei_no: imei || null,
+            iot_enabled: Boolean(r.iot_enabled),
+            material_code: String(r.material_code || ""),
+            asset_category: String(r.category || ""),
+            asset_type: "battery",
+            sub_category: String(r.sub_category || ""),
+            model_type: String(r.model_number || ""),
+            product_id: product?.id ?? null,
+            voltage_v: String(r.voltage_v || ""),
+            capacity_ah: String(r.capacity_ah || ""),
+            star_rating: Number(r.star_rating),
+            oem_invoice_number: String(r.invoice_number || ""),
+            oem_invoice_date: soldDate,
+            inventory_amount: value.toString(),
+            final_amount: value.toString(),
+            oem_name: String(r.supplier_name || ""),
+            oem_warranty_date: warrantyDate.toISOString().slice(0, 10),
+            oem_warranty_months: warrantyMonths,
+            oem_warranty_expiry: expiry.toISOString().slice(0, 10),
+            oem_warranty_clauses: r.oem_warranty_clauses ? String(r.oem_warranty_clauses) : null,
+            batch_number: r.batch_reference ? String(r.batch_reference) : null,
+            physical_condition: String(r.physical_condition || "").toLowerCase(),
+            warehouse_location: r.warehouse_location ? String(r.warehouse_location) : null,
+            is_serialized: true,
+            status: "available",
+            dealer_id: dealerId,
+            allocated_to_dealer_at: now,
+            created_by: user.id,
+            upload_event_id: null,
+            created_at: now,
+            updated_at: now,
+          });
+        } catch (error) {
+          if (!hasPgCode(error, "42703")) throw error;
+          await tx.execute(sql`
+            insert into inventory
+              (id, oem_name, hsn_code, asset_category, asset_type, model_type, serial_number,
+               is_serialized, warranty_months, status, batch_number, dealer_id, allocated_to_dealer_at,
+               created_by, created_at, updated_at, product_id, inventory_amount, final_amount,
+               oem_invoice_number, oem_invoice_date, warehouse_location, iot_imei_no)
+            values
+              (${inventoryId}, ${String(r.supplier_name || "")}, ${String(r.material_code || "")},
+               ${String(r.category || "")}, ${"battery"}, ${String(r.model_number || "")}, ${serial},
+               ${true}, ${warrantyMonths}, ${"available"}, ${r.batch_reference ? String(r.batch_reference) : null},
+               ${dealerId}, ${now}, ${user.id}, ${now}, ${now}, ${product?.id ?? null},
+               ${value.toString()}, ${value.toString()}, ${String(r.invoice_number || "")}, ${soldDate},
+               ${r.warehouse_location ? String(r.warehouse_location) : null}, ${imei || null})
+          `);
+        }
+      } else if (assetType === "charger") {
+        const invoiceDate = new Date(String(r.invoice_date));
+        const value = Number(r.invoice_value);
+        const chargerModel = String(r.charger_model || "");
+        const product = productBySku.get(chargerModel);
+        const compatible = splitList(r.compatible_battery_models);
+
+        try {
+          await tx.insert(inventory).values({
+            id: inventoryId,
+            inventory_type: "charger",
+            serial_number: serial,
+            iot_enabled: false,
+            asset_category: compatible[0] || "Other",
+            asset_type: "charger",
+            sub_category: chargerModel,
+            model_type: chargerModel,
+            compatible_models: compatible,
+            output_current_a: String(r.output_current_a || ""),
+            voltage_v: String(r.output_voltage_v || ""),
+            product_id: product?.id ?? null,
+            oem_invoice_number: String(r.invoice_number || ""),
+            oem_invoice_date: invoiceDate,
+            inventory_amount: value.toString(),
+            final_amount: value.toString(),
+            oem_name: String(r.supplier_name || ""),
+            physical_condition: String(r.physical_condition || "").toLowerCase(),
+            warehouse_location: r.warehouse_location ? String(r.warehouse_location) : null,
+            is_serialized: true,
+            status: "available",
+            dealer_id: dealerId,
+            allocated_to_dealer_at: now,
+            created_by: user.id,
+            upload_event_id: null,
+            created_at: now,
+            updated_at: now,
+          });
+        } catch (error) {
+          if (!hasPgCode(error, "42703")) throw error;
+          await tx.execute(sql`
+            insert into inventory
+              (id, oem_name, asset_category, asset_type, model_type, serial_number,
+               is_serialized, status, dealer_id, allocated_to_dealer_at, created_by, created_at, updated_at,
+               product_id, inventory_amount, final_amount, oem_invoice_number, oem_invoice_date, warehouse_location)
+            values
+              (${inventoryId}, ${String(r.supplier_name || "")}, ${compatible[0] || "Other"}, ${"charger"},
+               ${chargerModel}, ${serial}, ${true}, ${"available"}, ${dealerId}, ${now}, ${user.id},
+               ${now}, ${now}, ${product?.id ?? null}, ${value.toString()}, ${value.toString()},
+               ${String(r.invoice_number || "")}, ${invoiceDate}, ${r.warehouse_location ? String(r.warehouse_location) : null})
+          `);
+        }
       } else {
-        serial = String(data.serial_number).trim();
-        if (existingSet.has(serial)) {
-          errors.push({ row: rowNumber, error: `Serial ${serial} already exists` });
-          continue;
+        const invoiceDate = new Date(String(r.invoice_date));
+        const value = Number(r.unit_cost);
+        const qty = Number(r.quantity);
+        const itemType = String(r.item_type || "");
+        const compatible = splitList(r.compatible_category);
+        const label = itemType
+          .split("_")
+          .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+          .join(" ");
+
+        try {
+          await tx.insert(inventory).values({
+            id: inventoryId,
+            inventory_type: "paraphernalia_lot",
+            serial_number: null,
+            iot_enabled: false,
+            asset_category: compatible[0] || "Other",
+            asset_type: itemType,
+            sub_category: compatible[0] || "Other",
+            model_type: label,
+            quantity: qty,
+            oem_invoice_number: String(r.invoice_number || ""),
+            oem_invoice_date: invoiceDate,
+            inventory_amount: value.toString(),
+            final_amount: value.toString(),
+            oem_name: r.supplier ? String(r.supplier) : null,
+            warehouse_location: r.warehouse_location ? String(r.warehouse_location) : null,
+            is_serialized: false,
+            status: "available",
+            dealer_id: dealerId,
+            allocated_to_dealer_at: now,
+            created_by: user.id,
+            upload_event_id: null,
+            created_at: now,
+            updated_at: now,
+          });
+        } catch (error) {
+          if (!hasPgCode(error, "42703")) throw error;
+          await tx.execute(sql`
+            insert into inventory
+              (id, oem_name, asset_category, asset_type, model_type, serial_number, quantity,
+               is_serialized, status, dealer_id, allocated_to_dealer_at, created_by, created_at, updated_at,
+               inventory_amount, final_amount, oem_invoice_number, oem_invoice_date, warehouse_location)
+            values
+              (${inventoryId}, ${r.supplier ? String(r.supplier) : null}, ${compatible[0] || "Other"},
+               ${itemType}, ${label}, ${null}, ${qty}, ${false}, ${"available"}, ${dealerId}, ${now},
+               ${user.id}, ${now}, ${now}, ${value.toString()}, ${value.toString()},
+               ${String(r.invoice_number || "")}, ${invoiceDate},
+               ${r.warehouse_location ? String(r.warehouse_location) : null})
+          `);
         }
-        if (seenInBatch.has(serial)) {
-          errors.push({ row: rowNumber, error: `Serial ${serial} duplicated in batch` });
-          continue;
+
+        try {
+          const [existing] = await tx
+            .select()
+            .from(paraphernaliaStock)
+            .where(
+              and(
+                eq(paraphernaliaStock.dealer_id, dealerId),
+                eq(paraphernaliaStock.item_type, itemType),
+              ),
+            )
+            .limit(1);
+          if (existing) {
+            await tx
+              .update(paraphernaliaStock)
+              .set({
+                available_qty: existing.available_qty + qty,
+                unit_cost: value.toString(),
+                compatible_categories: compatible,
+                item_label: label,
+                last_upload_at: now,
+                updated_at: now,
+              })
+              .where(eq(paraphernaliaStock.id, existing.id));
+          } else {
+            await tx.insert(paraphernaliaStock).values({
+              id: await generateId("PARA"),
+              dealer_id: dealerId,
+              item_type: itemType,
+              item_label: label,
+              compatible_categories: compatible,
+              available_qty: qty,
+              reserved_qty: 0,
+              sold_qty: 0,
+              unit_cost: value.toString(),
+              last_upload_at: now,
+              created_at: now,
+              updated_at: now,
+            });
+          }
+        } catch (error) {
+          if (!hasPgCode(error, "42P01")) throw error;
         }
-        seenInBatch.add(serial);
-        existingSet.add(serial); // prevent re-insert in same loop
       }
 
-      const inventoryAmount = Number(data.inventory_amount);
-      const gstPercent = Number(data.gst_percent);
-      const gstAmount = +(inventoryAmount * (gstPercent / 100)).toFixed(2);
-      const finalAmount = +(inventoryAmount + gstAmount).toFixed(2);
-
-      const newId = await generateId("INV");
-
-      await db.insert(inventory).values({
-        id: newId,
-        oem_id: oem.id,
-        oem_name: oem.business_entity_name,
-        product_catalog_id: null,
-        product_id: product.id,
-        hsn_code: String(data.hsn_code),
-        asset_category: product.asset_category,
-        asset_type: assetTypeValue,
-        model_type: modelType,
-        serial_number: serial,
-        is_serialized: isSerialized,
-        warranty_months: Number(data.warranty_months ?? product.warranty_months ?? 0),
-        quantity,
-        manufacturing_date: new Date(String(data.manufacturing_date)),
-        expiry_date: new Date(String(data.expiry_date)),
-        oem_invoice_number: String(data.oem_invoice_number),
-        oem_invoice_date: new Date(String(data.oem_invoice_date)),
-        warehouse_location: data.warehouse_location ? String(data.warehouse_location) : null,
-        iot_imei_no: data.iot_imei_no ? String(data.iot_imei_no) : null,
-        batch_number: data.batch_number ? String(data.batch_number) : null,
-        inventory_amount: inventoryAmount.toString(),
-        gst_percent: gstPercent.toString(),
-        gst_amount: gstAmount.toString(),
-        final_amount: finalAmount.toString(),
-        status: "available",
-        dealer_id: dealerId,
-        allocated_to_dealer_at: new Date(),
-        created_by: user.id,
-      });
-
-      inserted.push(newId);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Unknown error";
-      errors.push({ row: rowNumber, error: msg });
+      insertedIds.push(inventoryId);
+      try {
+        await logInventoryEvent({
+          tx,
+          serialNumber: serial || `${assetType}:${inventoryId}`,
+          inventoryId,
+          eventType: "uploaded",
+          fromStatus: null,
+          toStatus: "available",
+          performedBy: user.id,
+          notes: `Bulk upload row ${rowNumber}`,
+          metadata: { dealerId, assetType, row: rowNumber },
+          performedAt: now,
+        });
+      } catch (error) {
+        if (!hasPgCode(error, "42P01") && !hasPgCode(error, "42703")) {
+          throw error;
+        }
+      }
     }
-  }
 
-  // Persist audit row
-  const reportId = `UPL-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${dealerId.slice(-6)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
-  await db.insert(inventoryUploadReports).values({
-    id: reportId,
-    dealer_id: dealerId,
-    asset_type: assetType,
-    uploaded_by: user.id,
-    total_rows: rows.length,
-    inserted_rows: inserted.length,
-    skipped_rows: errors.length,
-    errors_json: errors,
-    inserted_inventory_ids: inserted,
-    source: "bulk",
-  });
+    const reportId = await generateId("UPL");
+    const reportUrl = `/api/admin/inventory/upload-report/${reportId}`;
+    const skippedRowCount = new Set(errors.map((e) => e.row)).size;
+    try {
+      await tx.insert(inventoryUploadReports).values({
+        id: reportId,
+        dealer_id: dealerId,
+        asset_type: assetType,
+        inventory_type: assetType,
+        upload_method: "csv",
+        uploaded_by: user.id,
+        uploaded_at: new Date(),
+        total_rows: rows.length,
+        inserted_rows: insertedIds.length,
+        skipped_rows: skippedRowCount,
+        rows_imported: insertedIds.length,
+        rows_skipped: skippedRowCount,
+        errors_json: errors,
+        inserted_inventory_ids: insertedIds,
+        source: "bulk",
+        report_url: reportUrl,
+      });
+    } catch (error) {
+      if (!hasPgCode(error, "42703")) throw error;
+      await tx.execute(sql`
+        insert into inventory_upload_reports
+          (id, dealer_id, asset_type, uploaded_by, uploaded_at, total_rows, inserted_rows,
+           skipped_rows, errors_json, inserted_inventory_ids, source)
+        values
+          (${reportId}, ${dealerId}, ${assetType}, ${user.id}, ${new Date()}, ${rows.length},
+           ${insertedIds.length}, ${skippedRowCount}, ${JSON.stringify(errors)}::jsonb,
+           ${JSON.stringify(insertedIds)}::jsonb, ${"bulk"})
+      `);
+    }
 
-  if (inserted.length > 0) {
-    await notifyInventoryAssigned({
-      dealerId,
-      assetType,
-      count: inserted.length,
-      reportId,
+    // Back-fill upload_event_id for inserted rows.
+    if (insertedIds.length) {
+      try {
+        await tx
+          .update(inventory)
+          .set({ upload_event_id: reportId, updated_at: new Date() })
+          .where(inArray(inventory.id, insertedIds));
+      } catch (error) {
+        if (!hasPgCode(error, "42703")) throw error;
+      }
+    }
+
+    if (insertedIds.length > 0) {
+      await notifyInventoryAssigned({
+        dealerId,
+        assetType,
+        count: insertedIds.length,
+        reportId,
+      });
+    }
+
+    return successResponse({
+      success: true,
+      uploadEventId: reportId,
+      totalRows: rows.length,
+      imported: insertedIds.length,
+      skipped: skippedRowCount,
+      errors,
+      reportUrl,
     });
-  }
-
-  return successResponse({
-    reportId,
-    inserted: inserted.length,
-    skipped: errors.length,
-    errors,
-    insertedIds: inserted,
   });
+
+  return response;
 });

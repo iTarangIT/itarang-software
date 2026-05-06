@@ -41,12 +41,6 @@ interface ValidationResponse {
   rows: ValidatedRow[];
 }
 
-const ASSET_TYPE_LABELS: Record<AssetType, string> = {
-  battery: "Battery (serialized)",
-  charger: "Charger (serialized)",
-  paraphernalia: "Paraphernalia (count-based)",
-};
-
 // BRD §5.0.2.3 — Inventory type spec for Step 2 cards.
 const ASSET_TYPE_META: Record<
   AssetType,
@@ -99,10 +93,9 @@ export default function BulkUploadWizard() {
             json.error?.message ||
               "Failed to load dealers. Confirm the admin/dealers endpoint is reachable.",
           );
-      } catch (e) {
-        console.error(e);
-        setError("Failed to load dealers (network error).");
-      }
+    } catch {
+      setError("Failed to load dealers (network error).");
+    }
     })();
   }, []);
 
@@ -125,7 +118,7 @@ export default function BulkUploadWizard() {
       } else {
         setError(json.error?.message || "Validation failed");
       }
-    } catch (e) {
+    } catch {
       setError("Validation request failed");
     } finally {
       setSubmitting(false);
@@ -151,11 +144,11 @@ export default function BulkUploadWizard() {
       });
       const json = await res.json();
       if (json.success) {
-        router.push(`/admin/inventory/upload-report/${json.data.reportId}`);
+        router.push(`/admin/inventory/upload-report/${json.data.uploadEventId}`);
       } else {
         setError(json.error?.message || "Commit failed");
       }
-    } catch (e) {
+    } catch {
       setError("Commit request failed");
     } finally {
       setSubmitting(false);
@@ -381,10 +374,10 @@ export default function BulkUploadWizard() {
                         )}
                       </td>
                       <td className="px-3 py-2 font-mono">
-                        {String(d.serial_number || d.model_type || "—")}
+                        {String(d.battery_id || d.serial_number || d.item_type || d.model_number || "—")}
                       </td>
                       <td className="px-3 py-2">
-                        {String(d.hsn_code || "—")} / {String(d.oem_name || "—")}
+                        {String(d.material_code || "—")} / {String(d.supplier_name || d.supplier || "—")}
                       </td>
                       <td className="px-3 py-2 text-red-700">
                         {r.errors.length > 0 ? r.errors.join("; ") : ""}
