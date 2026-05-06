@@ -15,10 +15,10 @@ interface DealerOption {
 
 interface InventoryRow {
   id: string;
-  serial_number: string | null;
-  asset_category: string | null;
-  asset_type: string | null;
-  model_type: string | null;
+  serialNumber: string | null;
+  category: string | null;
+  subCategory: string | null;
+  modelNumber: string | null;
   status: string;
 }
 
@@ -77,11 +77,11 @@ export default function AdminInventoryTransferPage() {
       setError(null);
       try {
         const res = await fetch(
-          `/api/admin/inventory/all?dealer_id=${encodeURIComponent(sourceDealerId)}&status=available&limit=500`,
+          `/api/admin/inventory/all?dealerId=${encodeURIComponent(sourceDealerId)}&status=available&limit=500`,
         );
         const json = await res.json();
         if (cancelled) return;
-        if (json.success) setAvailable(json.data?.rows || []);
+        if (json.success) setAvailable(json.data?.items || []);
         else setError(json.error?.message || "Failed to load source inventory");
       } catch {
         if (!cancelled) setError("Failed to load source inventory");
@@ -121,7 +121,7 @@ export default function AdminInventoryTransferPage() {
   };
 
   const selectAll = () => {
-    setSelected(new Set(available.map((r) => r.serial_number ?? "").filter(Boolean)));
+    setSelected(new Set(available.map((r) => r.serialNumber ?? "").filter(Boolean)));
   };
   const clearAll = () => setSelected(new Set());
 
@@ -161,9 +161,9 @@ export default function AdminInventoryTransferPage() {
       await reloadRecent();
       // Refresh source list
       const refresh = await fetch(
-        `/api/admin/inventory/all?dealer_id=${encodeURIComponent(sourceDealerId)}&status=available&limit=500`,
+        `/api/admin/inventory/all?dealerId=${encodeURIComponent(sourceDealerId)}&status=available&limit=500`,
       ).then((r) => r.json());
-      if (refresh.success) setAvailable(refresh.data?.rows || []);
+      if (refresh.success) setAvailable(refresh.data?.items || []);
     } catch {
       setError("Failed to initiate transfer");
     } finally {
@@ -297,7 +297,7 @@ export default function AdminInventoryTransferPage() {
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {available.map((r) => {
-                        const sn = r.serial_number ?? "";
+                        const sn = r.serialNumber ?? "";
                         const checked = selected.has(sn);
                         return (
                           <tr
@@ -313,9 +313,9 @@ export default function AdminInventoryTransferPage() {
                               />
                             </td>
                             <td className="px-3 py-2 font-mono">{sn || "—"}</td>
-                            <td className="px-3 py-2">{r.asset_category ?? "—"}</td>
-                            <td className="px-3 py-2">{r.asset_type ?? "—"}</td>
-                            <td className="px-3 py-2">{r.model_type ?? "—"}</td>
+                            <td className="px-3 py-2">{r.category ?? "—"}</td>
+                            <td className="px-3 py-2">{r.subCategory ?? "—"}</td>
+                            <td className="px-3 py-2">{r.modelNumber ?? "—"}</td>
                           </tr>
                         );
                       })}

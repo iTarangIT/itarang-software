@@ -8,17 +8,23 @@ import { useParams } from "next/navigation";
 
 interface UploadReport {
   id: string;
-  dealer_id: string;
-  dealer_name: string | null;
-  asset_type: string;
-  uploaded_by: string;
-  uploaded_by_name: string | null;
-  uploaded_at: string;
-  total_rows: number;
-  inserted_rows: number;
-  skipped_rows: number;
-  errors_json: { row: number; error: string }[] | null;
-  inserted_inventory_ids: string[] | null;
+  dealerId: string;
+  dealerName: string | null;
+  inventoryType: string | null;
+  assetType: string;
+  uploadMethod: string | null;
+  uploadedBy: string;
+  uploadedByName: string | null;
+  uploadedAt: string;
+  totalRows: number;
+  rowsImported: number;
+  rowsSkipped: number;
+  errors:
+    | { row?: number; field?: string; code?: string; message?: string; error?: string }[]
+    | null;
+  insertedInventoryIds: string[] | null;
+  reportUrl: string | null;
+  fileUrl: string | null;
   source: string;
 }
 
@@ -37,7 +43,7 @@ export default function UploadReportPage() {
         const json = await res.json();
         if (json.success) setReport(json.data);
         else setError(json.error?.message || "Failed to load");
-      } catch (e) {
+      } catch {
         setError("Failed to load");
       } finally {
         setLoading(false);
@@ -49,8 +55,8 @@ export default function UploadReportPage() {
   if (!report)
     return <div className="p-8 text-red-600">{error || "Not found"}</div>;
 
-  const errors = report.errors_json ?? [];
-  const insertedIds = report.inserted_inventory_ids ?? [];
+  const errors = report.errors ?? [];
+  const insertedIds = report.insertedInventoryIds ?? [];
 
   return (
     <div className="p-8 max-w-4xl mx-auto space-y-6">
@@ -69,21 +75,21 @@ export default function UploadReportPage() {
 
       <section className="bg-white border border-gray-200 rounded-lg p-6 space-y-4">
         <div className="grid grid-cols-2 gap-4 text-sm">
-          <Field label="Dealer" value={report.dealer_name || report.dealer_id} />
-          <Field label="Asset type" value={report.asset_type} />
-          <Field label="Source" value={report.source} />
-          <Field label="Uploaded by" value={report.uploaded_by_name || report.uploaded_by} />
-          <Field label="Uploaded at" value={new Date(report.uploaded_at).toLocaleString()} />
-          <Field label="Total rows" value={String(report.total_rows)} />
+          <Field label="Dealer" value={report.dealerName || report.dealerId} />
+          <Field label="Inventory type" value={report.inventoryType || report.assetType} />
+          <Field label="Upload method" value={report.uploadMethod || report.source} />
+          <Field label="Uploaded by" value={report.uploadedByName || report.uploadedBy} />
+          <Field label="Uploaded at" value={new Date(report.uploadedAt).toLocaleString()} />
+          <Field label="Total rows" value={String(report.totalRows)} />
           <Field
-            label="Inserted"
-            value={String(report.inserted_rows)}
+            label="Imported"
+            value={String(report.rowsImported)}
             tone="green"
           />
           <Field
             label="Skipped"
-            value={String(report.skipped_rows)}
-            tone={report.skipped_rows > 0 ? "red" : "gray"}
+            value={String(report.rowsSkipped)}
+            tone={report.rowsSkipped > 0 ? "red" : "gray"}
           />
         </div>
       </section>
@@ -101,8 +107,10 @@ export default function UploadReportPage() {
             <tbody>
               {errors.map((e, idx) => (
                 <tr key={idx} className="border-t border-red-100">
-                  <td className="px-3 py-2 font-mono">{e.row}</td>
-                  <td className="px-3 py-2 text-red-700">{e.error}</td>
+                  <td className="px-3 py-2 font-mono">{e.row ?? "—"}</td>
+                  <td className="px-3 py-2 text-red-700">
+                    {e.message || e.error || `${e.field || "row"}: ${e.code || "ERROR"}`}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -1,22 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import {
-  accounts,
-  inventory,
-  inventoryTransfers,
-} from "@/lib/db/schema";
+import { accounts, inventory, inventoryTransfers } from "@/lib/db/schema";
 import { requireInventoryAdmin } from "@/lib/auth-utils";
 import { generateId } from "@/lib/api-utils";
 import { notifyInventoryTransferIncoming } from "@/lib/notifications";
-
-// BRD V2 §5.4 — admin initiates an inter-dealer transfer.
-// Source dealer's selected serials are flipped to status='transferred_out'
-// (still tied to source via dealer_id until target acknowledges). The target
-// dealer is notified and must call /api/dealer/inventory/acknowledge-transfer
-// to claim the stock.
+import { logInventoryEvent } from "@/lib/inventory/events";
 
 const BodySchema = z.object({
   sourceDealerId: z.string().min(1),
@@ -28,24 +19,17 @@ const BodySchema = z.object({
 export async function POST(req: NextRequest) {
   try {
     const admin = await requireInventoryAdmin();
-
     const body = BodySchema.parse(await req.json());
+
     if (body.sourceDealerId === body.targetDealerId) {
       return NextResponse.json(
-        {
-          success: false,
-          error: { message: "Source and target dealer must differ." },
-        },
+        { success: false, error: { message: "Source and target dealer must differ." } },
         { status: 400 },
       );
     }
 
-    // Validate both dealers exist
     const dealerRows = await db
-      .select({
-        id: accounts.id,
-        business_entity_name: accounts.business_entity_name,
-      })
+      .select({ id: accounts.id, name: accounts.business_entity_name })
       .from(accounts)
       .where(inArray(accounts.id, [body.sourceDealerId, body.targetDealerId]));
     const dealerById = new Map(dealerRows.map((d) => [d.id, d]));
@@ -56,7 +40,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Source items must (a) belong to source dealer, (b) be 'available'.
     const sourceItems = await db
       .select({
         id: inventory.id,
@@ -72,9 +55,7 @@ export async function POST(req: NextRequest) {
         ),
       );
 
-    const foundBySerial = new Map(
-      sourceItems.map((r) => [r.serial_number ?? "", r]),
-    );
+    const foundBySerial = new Map(sourceItems.map((r) => [r.serial_number ?? "", r]));
     const errors: { serial: string; reason: string }[] = [];
     for (const serial of body.serials) {
       const row = foundBySerial.get(serial);
@@ -83,21 +64,12 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (row.status !== "available") {
-        errors.push({
-          serial,
-          reason: `Cannot transfer — current status is ${row.status}`,
-        });
+        errors.push({ serial, reason: `Cannot transfer - current status is ${row.status}` });
       }
     }
     if (errors.length > 0) {
       return NextResponse.json(
-        {
-          success: false,
-          error: {
-            message: "Some serials cannot be transferred.",
-            errors,
-          },
-        },
+        { success: false, error: { message: "Some serials cannot be transferred.", errors } },
         { status: 400 },
       );
     }
@@ -120,9 +92,7 @@ export async function POST(req: NextRequest) {
         updated_at: now,
       });
 
-      // Lock the source serials. dealer_id stays on the source dealer until
-      // the target acknowledges — that way an unacknowledged transfer is
-      // trivial to cancel (just flip status back to 'available').
+      // Mark source inventory as transferred_out. Dealer ownership moves on ack.
       await tx
         .update(inventory)
         .set({
@@ -130,15 +100,33 @@ export async function POST(req: NextRequest) {
           updated_at: now,
         })
         .where(inArray(inventory.id, eligibleIds));
+
+      for (const row of sourceItems) {
+        if (!row.serial_number) continue;
+        await logInventoryEvent({
+          tx,
+          serialNumber: row.serial_number,
+          inventoryId: row.id,
+          eventType: "transfer_initiated",
+          fromStatus: row.status,
+          toStatus: "transferred_out",
+          performedBy: admin.id,
+          notes: body.reason,
+          metadata: {
+            transferId,
+            sourceDealerId: body.sourceDealerId,
+            targetDealerId: body.targetDealerId,
+          },
+          performedAt: now,
+        });
+      }
     });
 
-    // Post-commit: notify the target dealer.
     notifyInventoryTransferIncoming({
       targetDealerId: body.targetDealerId,
       transferId,
       serialCount: body.serials.length,
-      sourceDealerName:
-        dealerById.get(body.sourceDealerId)?.business_entity_name ?? null,
+      sourceDealerName: dealerById.get(body.sourceDealerId)?.name ?? null,
     }).catch(() => {});
 
     return NextResponse.json({
@@ -151,18 +139,11 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error("[Inventory Transfer] Error:", error);
-    const message =
-      error instanceof Error ? error.message : "Failed to initiate transfer";
-    return NextResponse.json(
-      { success: false, error: { message } },
-      { status: 400 },
-    );
+    const message = error instanceof Error ? error.message : "Failed to initiate transfer";
+    return NextResponse.json({ success: false, error: { message } }, { status: 400 });
   }
 }
 
-// GET — list transfers for the admin dashboard.
-// ?status=pending_acknowledgement|completed|cancelled
-//   ?source=&target=
 export async function GET(req: NextRequest) {
   try {
     await requireInventoryAdmin();
@@ -180,15 +161,12 @@ export async function GET(req: NextRequest) {
       .select()
       .from(inventoryTransfers)
       .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy(inventoryTransfers.initiated_at);
+      .orderBy(asc(inventoryTransfers.initiated_at));
 
     return NextResponse.json({ success: true, data: { rows } });
   } catch (error) {
     console.error("[Inventory Transfer List] Error:", error);
     const message = error instanceof Error ? error.message : "Failed to list transfers";
-    return NextResponse.json(
-      { success: false, error: { message } },
-      { status: 500 },
-    );
+    return NextResponse.json({ success: false, error: { message } }, { status: 500 });
   }
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { inventory, products, productCategories } from "@/lib/db/schema";
@@ -53,7 +53,7 @@ export async function GET(
 
     const filters = [
       eq(inventory.dealer_id, dealerId),
-      eq(inventory.asset_type, "Charger"),
+      or(eq(inventory.asset_type, "Charger"), eq(inventory.asset_type, "charger"))!,
       inArray(inventory.status, ["available", "reserved"]),
     ];
     if (category) {

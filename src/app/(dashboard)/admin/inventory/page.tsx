@@ -31,64 +31,79 @@ interface DealerOption {
 
 interface InventoryRow {
   id: string;
-  serial_number: string | null;
-  asset_category: string;
-  asset_type: string;
-  model_type: string;
+  serialNumber: string | null;
+  inventoryType: string | null;
+  category: string | null;
+  subCategory: string | null;
+  modelNumber: string | null;
   status: string;
-  warehouse_location: string | null;
-  hsn_code: string | null;
-  oem_name: string | null;
-  dealer_id: string | null;
-  dealer_name: string | null;
-  inventory_amount: string | null;
-  final_amount: string | null;
-  iot_imei_no: string | null;
-  oem_invoice_number: string | null;
-  oem_invoice_date: string | null;
-  created_at: string;
+  warehouseLocation: string | null;
+  materialCode: string | null;
+  supplierName: string | null;
+  dealerId: string | null;
+  dealerName: string | null;
+  invoiceValue: string | null;
+  invoiceNumber: string | null;
+  invoiceDate: string | null;
+  createdAt: string;
 }
 
 interface KPIs {
-  total: number;
-  available: number;
-  reserved: number;
-  sold: number;
-  write_off: number;
-  total_value: number;
+  totalUnits: number;
+  availableUnits: number;
+  reservedUnits: number;
+  soldUnits: number;
+  writtenOffUnits: number;
+  totalInvoiceValue: number;
+}
+
+interface InventoryFilters {
+  dealerId: string;
+  status: string;
+  subCategory: string;
+  q: string;
 }
 
 const ASSET_TYPE_OPTIONS = [
-  { value: "", label: "All asset types" },
-  { value: "Battery", label: "Battery" },
-  { value: "Charger", label: "Charger" },
-  { value: "Cable", label: "Cable" },
-  { value: "Helmet", label: "Helmet" },
+  { value: "", label: "All sub-categories" },
+  { value: "battery", label: "Battery" },
+  { value: "charger", label: "Charger" },
+  { value: "DigitalSOC", label: "Digital SOC" },
+  { value: "VoltSOC", label: "Volt SOC" },
+  { value: "Harness", label: "Harness" },
 ];
 
 const STATUS_OPTIONS = [
   { value: "", label: "All statuses" },
   { value: "available", label: "Available" },
   { value: "reserved", label: "Reserved" },
-  { value: "dispatched", label: "Dispatched" },
   { value: "sold", label: "Sold" },
-  { value: "write_off", label: "Written off" },
+  { value: "written_off", label: "Written off" },
+  { value: "transferred_in", label: "Transferred in" },
   { value: "transferred_out", label: "Transferred out" },
 ];
 
 export default function AdminInventoryDashboard() {
   const [dealers, setDealers] = useState<DealerOption[]>([]);
-  const [filters, setFilters] = useState({
-    dealer_id: "",
+  const [filters, setFilters] = useState<InventoryFilters>({
+    dealerId: "",
     status: "",
-    asset_type: "",
+    subCategory: "",
     q: "",
   });
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(25);
+  const [total, setTotal] = useState(0);
   const [rows, setRows] = useState<InventoryRow[]>([]);
   const [kpis, setKpis] = useState<KPIs | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeSerial, setActiveSerial] = useState<string | null>(null);
+
+  const updateFilters = (patch: Partial<InventoryFilters>) => {
+    setPage(1);
+    setFilters((f) => ({ ...f, ...patch }));
+  };
 
   useEffect(() => {
     (async () => {
@@ -112,17 +127,26 @@ export default function AdminInventoryDashboard() {
         Object.entries(filters).forEach(([k, v]) => {
           if (v) params.set(k, v);
         });
+        params.set("page", String(page));
+        params.set("limit", String(limit));
         const res = await fetch(`/api/admin/inventory/all?${params.toString()}`);
         const json = await res.json();
         if (cancelled) return;
         if (json.success) {
-          setRows(json.data.rows);
+          setRows(json.data.items || []);
           setKpis(json.data.kpis);
+          setTotal(Number(json.data.total || 0));
         } else {
+          setRows([]);
+          setTotal(0);
           setError(json.error?.message || "Failed to load");
         }
       } catch {
-        if (!cancelled) setError("Failed to load inventory");
+        if (!cancelled) {
+          setRows([]);
+          setTotal(0);
+          setError("Failed to load inventory");
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -130,12 +154,20 @@ export default function AdminInventoryDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [filters]);
+  }, [filters, page, limit]);
+
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit]);
+  const pageStart = total === 0 ? 0 : (page - 1) * limit + 1;
+  const pageEnd = total === 0 ? 0 : Math.min(total, page * limit);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const totalValueFmt = useMemo(
     () =>
       kpis
-        ? `₹${Math.round(kpis.total_value).toLocaleString("en-IN")}`
+        ? `₹${Math.round(kpis.totalInvoiceValue).toLocaleString("en-IN")}`
         : "—",
     [kpis],
   );
@@ -147,9 +179,9 @@ export default function AdminInventoryDashboard() {
     let over90 = 0;
     let over180 = 0;
     for (const r of rows) {
-      if (!r.oem_invoice_date) continue;
-      if (r.status === "sold" || r.status === "write_off") continue;
-      const age = (now - new Date(r.oem_invoice_date).getTime()) / day;
+      if (!r.invoiceDate) continue;
+      if (r.status === "sold" || r.status === "written_off") continue;
+      const age = (now - new Date(r.invoiceDate).getTime()) / day;
       if (age > 180) over180++;
       else if (age > 90) over90++;
     }
@@ -204,25 +236,25 @@ export default function AdminInventoryDashboard() {
           <KpiCard
             icon={<Package className="w-5 h-5" />}
             label="Total units"
-            value={kpis?.total ?? 0}
+            value={kpis?.totalUnits ?? 0}
             tone="slate"
           />
           <KpiCard
             icon={<CheckCircle2 className="w-5 h-5" />}
             label="Available"
-            value={kpis?.available ?? 0}
+            value={kpis?.availableUnits ?? 0}
             tone="emerald"
           />
           <KpiCard
             icon={<Clock className="w-5 h-5" />}
             label="Reserved"
-            value={kpis?.reserved ?? 0}
+            value={kpis?.reservedUnits ?? 0}
             tone="amber"
           />
           <KpiCard
             icon={<ShoppingCart className="w-5 h-5" />}
             label="Sold"
-            value={kpis?.sold ?? 0}
+            value={kpis?.soldUnits ?? 0}
             tone="blue"
           />
           <KpiCard
@@ -292,10 +324,8 @@ export default function AdminInventoryDashboard() {
                 Dealer
               </label>
               <select
-                value={filters.dealer_id}
-                onChange={(e) =>
-                  setFilters((f) => ({ ...f, dealer_id: e.target.value }))
-                }
+                value={filters.dealerId}
+                onChange={(e) => updateFilters({ dealerId: e.target.value })}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
               >
                 <option value="">All dealers</option>
@@ -312,9 +342,7 @@ export default function AdminInventoryDashboard() {
               </label>
               <select
                 value={filters.status}
-                onChange={(e) =>
-                  setFilters((f) => ({ ...f, status: e.target.value }))
-                }
+                onChange={(e) => updateFilters({ status: e.target.value })}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
               >
                 {STATUS_OPTIONS.map((s) => (
@@ -326,13 +354,11 @@ export default function AdminInventoryDashboard() {
             </div>
             <div>
               <label className="block text-[10px] uppercase tracking-wider font-bold text-gray-500 mb-1">
-                Asset type
+                Sub-category
               </label>
               <select
-                value={filters.asset_type}
-                onChange={(e) =>
-                  setFilters((f) => ({ ...f, asset_type: e.target.value }))
-                }
+                value={filters.subCategory}
+                onChange={(e) => updateFilters({ subCategory: e.target.value })}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
               >
                 {ASSET_TYPE_OPTIONS.map((s) => (
@@ -350,14 +376,30 @@ export default function AdminInventoryDashboard() {
                 <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   value={filters.q}
-                  onChange={(e) =>
-                    setFilters((f) => ({ ...f, q: e.target.value }))
-                  }
-                  placeholder="Serial / HSN / model"
+                  onChange={(e) => updateFilters({ q: e.target.value })}
+                  placeholder="Serial / material / model"
                   className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm"
                 />
               </div>
             </div>
+          </div>
+          <div className="mt-4 flex justify-end">
+            <label className="inline-flex items-center gap-2 text-xs text-gray-500 font-medium">
+              Rows per page
+              <select
+                value={limit}
+                onChange={(e) => {
+                  setPage(1);
+                  setLimit(Number(e.target.value));
+                }}
+                className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white text-gray-700"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </label>
           </div>
         </section>
 
@@ -392,38 +434,66 @@ export default function AdminInventoryDashboard() {
                       key={r.id}
                       className="hover:bg-blue-50/30 cursor-pointer transition-colors"
                       onClick={() =>
-                        r.serial_number && setActiveSerial(r.serial_number)
+                        r.serialNumber && setActiveSerial(r.serialNumber)
                       }
                     >
                       <td className="px-3 py-2.5 font-mono text-[#0047AB] font-bold">
-                        {r.serial_number || "—"}
+                        {r.serialNumber || "—"}
                       </td>
-                      <td className="px-3 py-2.5">{r.model_type}</td>
+                      <td className="px-3 py-2.5">{r.modelNumber}</td>
                       <td className="px-3 py-2.5 text-gray-600">
-                        {r.asset_category} / {r.asset_type}
+                        {r.category} / {r.subCategory}
                       </td>
                       <td className="px-3 py-2.5">
-                        {r.dealer_name || dealerById.get(r.dealer_id ?? "") || "—"}
+                        {r.dealerName || dealerById.get(r.dealerId ?? "") || "—"}
                       </td>
                       <td className="px-3 py-2.5 text-gray-500">
-                        {r.warehouse_location || "—"}
+                        {r.warehouseLocation || "—"}
                       </td>
                       <td className="px-3 py-2.5">
                         <StatusBadge status={r.status} />
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums">
                         ₹
-                        {Number(r.final_amount ?? 0).toLocaleString("en-IN", {
+                        {Number(r.invoiceValue ?? 0).toLocaleString("en-IN", {
                           maximumFractionDigits: 0,
                         })}
                       </td>
                       <td className="px-3 py-2.5 text-right text-gray-500">
-                        {ageDaysLabel(r.oem_invoice_date)}
+                        {ageDaysLabel(r.invoiceDate)}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+          {!loading && total > 0 && (
+            <div className="border-t border-gray-100 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <p className="text-xs text-gray-500">
+                Showing {pageStart} to {pageEnd} of {total} items
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-200 text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50"
+                >
+                  Previous
+                </button>
+                <span className="text-xs text-gray-600 min-w-[90px] text-center">
+                  Page {page} / {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-200 text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           )}
         </section>
@@ -515,10 +585,9 @@ function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
     available: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
     reserved: "bg-amber-50 text-amber-700 ring-amber-600/20",
-    dispatched: "bg-blue-50 text-blue-700 ring-blue-600/20",
     sold: "bg-indigo-50 text-indigo-700 ring-indigo-600/20",
-    write_off: "bg-gray-100 text-gray-600 ring-gray-600/20",
-    in_stock: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+    written_off: "bg-gray-100 text-gray-600 ring-gray-600/20",
+    transferred_in: "bg-cyan-50 text-cyan-700 ring-cyan-600/20",
     transferred_out: "bg-purple-50 text-purple-700 ring-purple-600/20",
   };
   return (

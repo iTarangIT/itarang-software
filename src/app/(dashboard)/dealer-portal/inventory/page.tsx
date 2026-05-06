@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import {
     Package, Search, Filter, Plus, AlertTriangle,
-    CheckCircle2, Loader2, BarChart3, Truck, Bell,
+    BarChart3, Truck, Bell,
     QrCode, Download,
 } from 'lucide-react';
 
@@ -19,6 +19,16 @@ type InventoryItem = {
     warehouse_location: string;
     last_restocked: string;
     status: 'in_stock' | 'low_stock' | 'out_of_stock';
+};
+
+type IncomingTransfer = {
+    id: string;
+    source_dealer_id: string;
+    target_dealer_id: string;
+    serials: string[];
+    reason: string | null;
+    status: string;
+    initiated_at: string;
 };
 
 const MOCK_INVENTORY: InventoryItem[] = [
@@ -59,7 +69,55 @@ const CATEGORY_FILTERS = ['all', 'Battery', 'Charger', 'Controller'] as const;
 export default function InventoryPage() {
     const [search, setSearch] = useState('');
     const [categoryFilter, setCategoryFilter] = useState('all');
-    const [statusFilter, setStatusFilter] = useState('all');
+    const [statusFilter] = useState('all');
+    const [incoming, setIncoming] = useState<IncomingTransfer[]>([]);
+    const [loadingIncoming, setLoadingIncoming] = useState(true);
+    const [acking, setAcking] = useState<string | null>(null);
+    const [incomingError, setIncomingError] = useState<string | null>(null);
+
+    const loadIncomingTransfers = async () => {
+        setLoadingIncoming(true);
+        setIncomingError(null);
+        try {
+            const res = await fetch('/api/dealer/inventory/acknowledge-transfer?status=pending_acknowledgement');
+            const json = await res.json();
+            if (json.success) {
+                setIncoming(json.data?.rows || []);
+            } else {
+                setIncomingError(json.error?.message || 'Failed to load incoming transfers');
+            }
+        } catch {
+            setIncomingError('Failed to load incoming transfers');
+        } finally {
+            setLoadingIncoming(false);
+        }
+    };
+
+    useEffect(() => {
+        loadIncomingTransfers();
+    }, []);
+
+    const acknowledgeTransfer = async (transferId: string) => {
+        setAcking(transferId);
+        setIncomingError(null);
+        try {
+            const res = await fetch('/api/dealer/inventory/acknowledge-transfer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ transferId }),
+            });
+            const json = await res.json();
+            if (!json.success) {
+                setIncomingError(json.error?.message || 'Failed to acknowledge transfer');
+                return;
+            }
+            await loadIncomingTransfers();
+        } catch {
+            setIncomingError('Failed to acknowledge transfer');
+        } finally {
+            setAcking(null);
+        }
+    };
 
     const items = MOCK_INVENTORY.filter(item => {
         if (categoryFilter !== 'all' && item.category !== categoryFilter) return false;
@@ -75,6 +133,50 @@ export default function InventoryPage() {
 
     return (
         <div className="space-y-6">
+            <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
+                <div className="flex items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-sm font-bold text-blue-900">Incoming Transfers</h2>
+                        <p className="text-xs text-blue-700">Acknowledge incoming inventory so units move to available stock.</p>
+                    </div>
+                    <button
+                        onClick={loadIncomingTransfers}
+                        className="rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                    >
+                        Refresh
+                    </button>
+                </div>
+                {incomingError && (
+                    <p className="mt-2 text-xs text-red-600">{incomingError}</p>
+                )}
+                {loadingIncoming ? (
+                    <div className="mt-3 text-xs text-blue-700">Loading incoming transfers…</div>
+                ) : incoming.length === 0 ? (
+                    <div className="mt-3 text-xs text-blue-700">No incoming transfers pending acknowledgement.</div>
+                ) : (
+                    <div className="mt-3 space-y-2">
+                        {incoming.map((t) => (
+                            <div key={t.id} className="flex items-center justify-between gap-3 rounded-xl border border-blue-100 bg-white p-3">
+                                <div>
+                                    <div className="text-xs font-bold text-gray-900">{t.id}</div>
+                                    <div className="text-xs text-gray-600">
+                                        {Array.isArray(t.serials) ? t.serials.length : 0} serial(s) · {new Date(t.initiated_at).toLocaleDateString()}
+                                    </div>
+                                    {t.reason && <div className="text-xs text-gray-500 mt-0.5">{t.reason}</div>}
+                                </div>
+                                <button
+                                    disabled={acking === t.id}
+                                    onClick={() => acknowledgeTransfer(t.id)}
+                                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+                                >
+                                    {acking === t.id ? 'Acknowledging…' : 'Acknowledge'}
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
             <div className="flex items-start justify-between gap-4">
                 <div>
                     <h1 className="text-2xl font-bold text-gray-900">Inventory</h1>
