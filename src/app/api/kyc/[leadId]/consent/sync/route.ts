@@ -4,7 +4,7 @@ import { coBorrowers, consentRecords, kycVerifications, leads } from '@/lib/db/s
 import { and, desc, eq } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 import { fetchAndStoreSignedConsent } from '@/lib/digio/fetch-signed-consent';
-import { createWorkflowId } from '@/lib/kyc/admin-workflow';
+import { createWorkflowId, ensureAdminKycQueueEntry } from '@/lib/kyc/admin-workflow';
 
 type RouteContext = { params: Promise<{ leadId: string }> };
 
@@ -210,6 +210,13 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
                     await db.update(leads)
                         .set({ consent_status: newStatus, updated_at: now })
                         .where(eq(leads.id, leadId));
+                }
+
+                // Customer-signed digital consent (or admin-review-pending after
+                // dealer upload) needs admin attention — surface the lead on the
+                // /admin/kyc-review queue. Idempotent: re-syncing won't dup-insert.
+                if (newStatus === 'esign_completed' || newStatus === 'admin_review_pending') {
+                    await ensureAdminKycQueueEntry(leadId);
                 }
             }
         }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import {
@@ -13,6 +13,7 @@ import {
     OutlineButton, FullPageLoader, OCRModal,
 } from '@/components/dealer-portal/lead-wizard/shared';
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
+import OtherDocumentsSection, { type RequestedDoc as OtherRequestedDoc } from '@/components/dealer-portal/lead-wizard/OtherDocumentsSection';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -402,6 +403,7 @@ export default function BorrowerConsentPage() {
                         current_address: pd.local_address || '',
                         dob: pd.dob ? new Date(pd.dob).toISOString().split('T')[0] : '',
                         relationship: pd.relationship || '',
+                        is_current_same: pd.is_current_same ?? false,
                     }));
                 }
             }
@@ -465,18 +467,53 @@ export default function BorrowerConsentPage() {
         return () => clearInterval(interval);
     }, [consentStatus, leadId]);
 
-    // Auto-poll Step 3 verification status every 5s once the dealer has
-    // submitted for re-verification — the admin's accept/reject and final
-    // approval should appear without a manual refresh, and the
-    // "Next: Product Selection" button should light up as soon as kyc_status
-    // flips to step_3_cleared / kyc_approved.
+    // Auto-poll Step 3 verification status every 5s while the lead is in any
+    // pending-admin state — the admin's accept/reject and final approval
+    // should appear without a manual refresh, and the "Next: Product
+    // Selection" button should light up as soon as kyc_status flips to
+    // step_3_cleared / kyc_approved. Polling also runs once the dealer has
+    // submitted a co-borrower so the supporting-docs-only path is covered too.
     useEffect(() => {
-        const submitted = !!step3Ctx?.co_borrower_submitted_at;
-        const cleared = ['step_3_cleared', 'kyc_approved'].includes(lead?.kyc_status || '');
-        if (!submitted || cleared) return;
+        const PENDING_ADMIN = new Set([
+            'pending_itarang_verification',
+            'pending_itarang_reverification',
+            'awaiting_additional_docs',
+            'awaiting_co_borrower_kyc',
+            'awaiting_co_borrower_replacement',
+            'awaiting_doc_reupload',
+            'awaiting_both',
+        ]);
+        const status = lead?.kyc_status || '';
+        const cleared = ['step_3_cleared', 'kyc_approved'].includes(status);
+        const submittedCo = !!step3Ctx?.co_borrower_submitted_at;
+        if (cleared) return;
+        if (!submittedCo && !PENDING_ADMIN.has(status)) return;
         const interval = setInterval(() => loadPageData(true), 5000);
         return () => clearInterval(interval);
     }, [step3Ctx?.co_borrower_submitted_at, lead?.kyc_status, leadId]);
+
+    // Browsers throttle setInterval in inactive tabs to ~60s, so the 5s poll
+    // above can stall while the dealer's tab is backgrounded. Refresh on
+    // visibility / focus return so the Next button surfaces immediately when
+    // the dealer comes back to the tab after admin has approved.
+    useEffect(() => {
+        const onVisible = () => {
+            if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+                loadPageData(true);
+            }
+        };
+        const onFocus = () => loadPageData(true);
+        if (typeof document !== 'undefined') {
+            document.addEventListener('visibilitychange', onVisible);
+        }
+        window.addEventListener('focus', onFocus);
+        return () => {
+            if (typeof document !== 'undefined') {
+                document.removeEventListener('visibilitychange', onVisible);
+            }
+            window.removeEventListener('focus', onFocus);
+        };
+    }, [leadId]);
 
     // Detect consent path
     useEffect(() => {
@@ -498,6 +535,25 @@ export default function BorrowerConsentPage() {
         }, 120000);
         return () => clearInterval(interval);
     }, [loading, accessDenied, borrowerForm, consentStatus]);
+
+    // Debounced save on borrower form edits. The 2-minute interval above
+    // protects long sessions, but a dealer who fills a few fields and then
+    // refreshes within seconds would otherwise lose everything (the form is
+    // hydrated only from leads.kyc_draft_data.borrowerForm). Save 800ms after
+    // the dealer stops typing so the draft survives an immediate reload.
+    // Skipped during initial load and when the lead is locked / access denied.
+    const isInitialBorrowerLoad = useRef(true);
+    useEffect(() => {
+        if (loading || accessDenied) return;
+        if (isInitialBorrowerLoad.current) {
+            isInitialBorrowerLoad.current = false;
+            return;
+        }
+        const t = setTimeout(() => {
+            handleSaveDraft(true);
+        }, 800);
+        return () => clearTimeout(t);
+    }, [borrowerForm, loading, accessDenied]);
 
     // ─── Borrower Form Helpers ─────────────────────────────────────────────
 
@@ -1018,7 +1074,12 @@ export default function BorrowerConsentPage() {
 
     // Admin has finished verifying Step 3. Lead is unlocked for Step 4
     // (Product Selection). Show the Next button so the dealer can advance.
-    const step3Cleared = ['step_3_cleared', 'kyc_approved'].includes(lead?.kyc_status || '');
+    // Also unlock when the admin's metadata.final_decision is 'approved' —
+    // the admin "Already APPROVED" badge reads that field, so honouring it
+    // keeps the dealer in sync even if leads.kyc_status hasn't propagated yet.
+    const step3Cleared =
+        ['step_3_cleared', 'kyc_approved'].includes(lead?.kyc_status || '') ||
+        (lead as any)?.final_decision === 'approved';
     const stepRoutes: Record<number, string> = {
         1: '/dealer-portal/leads/new',
         2: `/dealer-portal/leads/${leadId}/kyc`,
@@ -1651,47 +1712,30 @@ export default function BorrowerConsentPage() {
                     </SectionCard>
                     </>)}
 
-                    {/* ─── Section A — Other Documentation (Admin-Requested) ──
-                        Visible only when admin requested supporting documents. */}
-                    {step3Ctx?.requires_supporting_docs && requestedDocs.length > 0 && (
-                        <div id="other-documentation" className="scroll-mt-24">
-                            <SectionCard
-                                title="Other Documentation"
-                                action={
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-xs font-bold text-gray-500">Uploaded:</span>
-                                        <span className={`text-sm font-black ${requestedDocsUploadedCount === requestedDocsAllCount ? 'text-emerald-600' : 'text-[#0047AB]'}`}>
-                                            {requestedDocsUploadedCount}/{requestedDocsAllCount}
-                                        </span>
-                                        {requestedDocsRejectedCount > 0 && (
-                                            <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-[11px] font-bold">
-                                                <AlertCircle className="w-3 h-3" /> {requestedDocsRejectedCount} rejected
-                                            </span>
-                                        )}
-                                    </div>
-                                }
-                            >
-                                <p className="text-xs text-gray-500 mb-4">
-                                    Admin has requested these additional documents. Upload each — they will be sent back to admin for review.
-                                </p>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {requestedDocs.map(doc => (
-                                        <RequestedDocCard
-                                            key={doc.id}
-                                            doc={doc}
-                                            uploading={!!requestedUploading[doc.id]}
-                                            onUpload={(file) => handleRequestedDocUpload(doc.id, file)}
-                                        />
-                                    ))}
-                                </div>
-                                {pendingRequiredRequestedCount > 0 && (
-                                    <p className="mt-4 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                                        Pending: {requiredRequestedDocs.filter(d => !d.file_url || d.upload_status === 'rejected').map(d => d.doc_label).join(', ')}
-                                    </p>
-                                )}
-                            </SectionCard>
-                        </div>
-                    )}
+                    {/* ─── Section A — Other Documentation (BRD §2.9.3) ──
+                        Renders any admin-requested supporting docs, plus lets
+                        the dealer add their own extras. The shared component
+                        owns its UI state; we keep the parent `requestedDocs`
+                        state in sync via onChanged so the existing submit-gate
+                        (requiredRequestedDocs / pendingRequiredRequestedCount)
+                        continues to work. */}
+                    <div id="other-documentation" className="scroll-mt-24 space-y-6">
+                        <OtherDocumentsSection
+                            leadId={leadId}
+                            docFor="primary"
+                            scopeLabel="Primary Borrower (Customer)"
+                            onChanged={(next: OtherRequestedDoc[]) =>
+                                setRequestedDocs(next as unknown as RequestedDoc[])
+                            }
+                        />
+                        {step3Ctx?.requires_co_borrower && (
+                            <OtherDocumentsSection
+                                leadId={leadId}
+                                docFor="co_borrower"
+                                scopeLabel="Co-Borrower"
+                            />
+                        )}
+                    </div>
 
                 </main>
 

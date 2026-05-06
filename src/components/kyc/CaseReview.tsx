@@ -491,12 +491,34 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 gap-4">
-        <div className="relative w-16 h-16">
-          <div className="absolute inset-0 rounded-full border-4 border-teal-100" />
-          <div className="absolute inset-0 rounded-full border-4 border-teal-600 border-t-transparent animate-spin" />
+      <div className="space-y-4 animate-pulse">
+        <div className="rounded-2xl border border-gray-200 bg-white p-6">
+          <div className="flex items-center gap-4">
+            <div className="h-12 w-12 rounded-full bg-gray-100" />
+            <div className="flex-1 space-y-2">
+              <div className="h-3 w-24 rounded bg-gray-100" />
+              <div className="h-5 w-64 rounded bg-gray-200" />
+              <div className="h-3 w-40 rounded bg-gray-100" />
+            </div>
+            <div className="flex gap-2">
+              <div className="h-7 w-20 rounded-full bg-gray-100" />
+              <div className="h-7 w-24 rounded-full bg-gray-100" />
+              <div className="h-7 w-20 rounded-full bg-gray-100" />
+            </div>
+          </div>
+          <div className="mt-6 h-2 w-full rounded-full bg-gray-100" />
         </div>
-        <span className="text-sm font-medium text-gray-600">Loading case review…</span>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2 space-y-4">
+            <div className="rounded-2xl border border-gray-200 bg-white p-6 h-56" />
+            <div className="rounded-2xl border border-gray-200 bg-white p-6 h-72" />
+          </div>
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-gray-200 bg-white p-6 h-40" />
+            <div className="rounded-2xl border border-gray-200 bg-white p-6 h-40" />
+          </div>
+        </div>
       </div>
     );
   }
@@ -593,6 +615,9 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   }
   if (Array.isArray(data.supportingDocs)) {
     for (const d of data.supportingDocs) {
+      // Optional supporting docs (isRequired=false) never block approval —
+      // an admin can reject an optional doc and still approve the lead.
+      if (d.isRequired === false) continue;
       if ((d as { uploadStatus?: string }).uploadStatus !== "verified") {
         approveBlockers.push(`Supporting doc "${(d as { docLabel?: string }).docLabel ?? "(unnamed)"}" must be verified`);
       }
@@ -1035,6 +1060,27 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
         </div>
       </div>
 
+      {/* Verifications + Documents only appear once the dealer has clicked
+          "Submit for Verification" on their KYC page. That action consumes
+          the reserved coupon and flips metadata.couponStatus from 'reserved'
+          to 'used'. Until then (no coupon, or coupon merely 'reserved' after
+          validate-coupon), the admin sees a placeholder — early review of
+          documents the dealer might still be replacing is not allowed. */}
+      {metadata?.couponStatus !== "used" ? (
+        <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-sm">
+          <div className="w-12 h-12 rounded-full bg-amber-50 ring-1 ring-amber-200 mx-auto mb-3 flex items-center justify-center">
+            <svg className="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <p className="text-sm font-bold text-gray-900">Awaiting Dealer Submission</p>
+          <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
+            {metadata?.couponStatus === "reserved"
+              ? "Dealer has validated the coupon but has not yet clicked Submit for Verification. Documents will appear here once the dealer formally submits."
+              : "Documents and verification cards will appear here once the dealer uploads documents, validates the coupon, and clicks Submit for Verification."}
+          </p>
+        </div>
+      ) : (<>
       {/* Tab Navigation */}
       <div className="inline-flex gap-1 bg-gray-100 p-1.5 rounded-2xl border border-gray-200 shadow-sm">
         <button onClick={() => setActiveTab("verifications")}
@@ -1336,6 +1382,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           </div>
         );
       })()}
+      </>)}
 
       {/* Document Lightbox */}
       {lightboxUrl && (

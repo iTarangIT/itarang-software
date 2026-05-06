@@ -34,6 +34,47 @@ const normalizePhone = (phone?: string | null) => {
     return phone.startsWith('+') ? phone : `+91${clean}`;
 };
 
+// GET /api/dealer/leads/[id]
+// Returns the lead in the shape the Step 1 wizard expects so a dealer can
+// jump back into an already-created lead and edit fields like address.
+export const GET = withErrorHandler(async (_req: Request, { params }: { params: Promise<{ id: string }> }) => {
+    const user = await requireRole(['dealer']);
+    const { id } = await params;
+
+    const [lead] = await db.select().from(leads).where(eq(leads.id, id)).limit(1);
+    if (!lead) return errorResponse('Lead not found', 404);
+
+    const isOwner = lead.uploader_id === user.id;
+    const isSameDealer = user.dealer_id && lead.dealer_id === user.dealer_id;
+    if (!isOwner && !isSameDealer) {
+        return errorResponse('Forbidden: You do not have permission to view this lead', 403);
+    }
+
+    return successResponse({
+        leadId: lead.id,
+        referenceId: lead.reference_id,
+        formData: {
+            full_name: lead.full_name || '',
+            phone: lead.phone || '',
+            father_or_husband_name: lead.father_or_husband_name || '',
+            dob: lead.dob ? new Date(lead.dob).toISOString().split('T')[0] : '',
+            current_address: lead.current_address || '',
+            permanent_address: lead.permanent_address || '',
+            is_current_same: !!lead.is_current_same,
+            product_category_id: lead.product_category_id || '',
+            product_type_id: lead.product_type_id || '',
+            primary_product_id: (lead as any).primary_product_id || '',
+            interested_in: lead.interested_in || [],
+            vehicle_rc: lead.vehicle_rc || '',
+            vehicle_ownership: lead.vehicle_ownership || '',
+            vehicle_owner_name: lead.vehicle_owner_name || '',
+            vehicle_owner_phone: lead.vehicle_owner_phone || '',
+            interest_level: lead.interest_level || 'cold',
+            payment_method: lead.payment_method || '',
+        },
+    });
+});
+
 export const PATCH = withErrorHandler(async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     const user = await requireRole(['dealer']);
     const { id } = await params;

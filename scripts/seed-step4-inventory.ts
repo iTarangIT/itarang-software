@@ -283,6 +283,14 @@ async function main() {
   console.log(`  category         : ${categoryName}`);
   console.log(`  lead primary id  : ${leadPrimaryProductId ?? "(none — full matrix)"}`);
 
+  // Dealer-scoped tag for serial numbers and inventory IDs. The DB has a
+  // global UNIQUE constraint on inventory.serial_number, so two dealers
+  // running this seed with the same SEED_INVOICE_PREFIX would otherwise
+  // collide. We use the trailing segment of the dealer id (e.g. 'eb2295')
+  // which is unique per dealer and short enough to fit length limits.
+  const dealerTag =
+    (dealerId.split("-").pop() ?? dealerId).slice(0, 8).toUpperCase();
+
   const category = await ensureCategory(categoryName);
   const creatorId = await getCreatorUser();
   const oem = await ensureOem(creatorId);
@@ -323,9 +331,9 @@ async function main() {
     for (const bucket of ageBuckets) {
       const invoiceDate = todayMinusDays(bucket.days);
       const dateStr = invoiceDate.toISOString().slice(0, 10).replace(/-/g, "");
-      const serial = `${SEED_INVOICE_PREFIX}-BAT-${spec.voltage_v}V-${spec.capacity_ah}AH-${bucket.label}`;
+      const serial = `${SEED_INVOICE_PREFIX}-${dealerTag}-BAT-${spec.voltage_v}V-${spec.capacity_ah}AH-${bucket.label}`;
       await db.insert(inventory).values({
-        id: makeInvId(`BAT-${spec.voltage_v}-${spec.capacity_ah}-${bucket.label}`, dateStr),
+        id: makeInvId(`${dealerTag}-BAT-${spec.voltage_v}-${spec.capacity_ah}-${bucket.label}`, dateStr),
         product_id: productId,
         oem_id: oem.id,
         oem_name: oem.business_entity_name,
@@ -337,7 +345,7 @@ async function main() {
         manufacturing_date: todayMinusDays(bucket.days + 30),
         expiry_date: todayMinusDays(bucket.days - 365 * 10),
         oem_invoice_date: invoiceDate,
-        oem_invoice_number: `${SEED_INVOICE_PREFIX}-BAT-${dateStr}-${spec.voltage_v}-${spec.capacity_ah}-${bucket.label}`,
+        oem_invoice_number: `${SEED_INVOICE_PREFIX}-${dealerTag}-BAT-${dateStr}-${spec.voltage_v}-${spec.capacity_ah}-${bucket.label}`,
         ...snap,
         status: "available",
         dealer_id: dealerId,
@@ -380,7 +388,7 @@ async function main() {
         const invoiceDate = todayMinusDays(bucket.days);
         const dateStr = invoiceDate.toISOString().slice(0, 10).replace(/-/g, "");
         await db.insert(inventory).values({
-          id: makeInvId(`BAT-LEAD-${bucket.label}`, dateStr),
+          id: makeInvId(`${dealerTag}-BAT-LEAD-${bucket.label}`, dateStr),
           product_id: legacy.id,
           oem_id: oem.id,
           oem_name: oem.business_entity_name,
@@ -388,11 +396,11 @@ async function main() {
           asset_type: "Battery",
           model_type: modelType,
           is_serialized: true,
-          serial_number: `${SEED_INVOICE_PREFIX}-BAT-LEAD-${legacy.id.slice(0, 8)}-${bucket.label}`,
+          serial_number: `${SEED_INVOICE_PREFIX}-${dealerTag}-BAT-LEAD-${legacy.id.slice(0, 8)}-${bucket.label}`,
           manufacturing_date: todayMinusDays(bucket.days + 30),
           expiry_date: todayMinusDays(bucket.days - 365 * 10),
           oem_invoice_date: invoiceDate,
-          oem_invoice_number: `${SEED_INVOICE_PREFIX}-BAT-LEAD-${dateStr}-${bucket.label}`,
+          oem_invoice_number: `${SEED_INVOICE_PREFIX}-${dealerTag}-BAT-LEAD-${dateStr}-${bucket.label}`,
           ...snap,
           status: "available",
           dealer_id: dealerId,
@@ -431,9 +439,9 @@ async function main() {
         const invoiceDate = todayMinusDays(bucket.days);
         const dateStr = invoiceDate.toISOString().slice(0, 10).replace(/-/g, "");
         const modelType = VOLTAGE_TO_MODEL_TYPE(v);
-        const serial = `${SEED_INVOICE_PREFIX}-${c.sku}-${v}V-${bucket.label}`;
+        const serial = `${SEED_INVOICE_PREFIX}-${dealerTag}-${c.sku}-${v}V-${bucket.label}`;
         await db.insert(inventory).values({
-          id: makeInvId(`CHG-${c.sku.slice(-6)}-${v}-${bucket.label}`, dateStr),
+          id: makeInvId(`${dealerTag}-CHG-${c.sku.slice(-6)}-${v}-${bucket.label}`, dateStr),
           product_id: productId,
           oem_id: oem.id,
           oem_name: oem.business_entity_name,
@@ -445,7 +453,7 @@ async function main() {
           manufacturing_date: todayMinusDays(bucket.days + 30),
           expiry_date: todayMinusDays(bucket.days - 365 * 5),
           oem_invoice_date: invoiceDate,
-          oem_invoice_number: `${SEED_INVOICE_PREFIX}-${c.sku}-${dateStr}-${v}-${bucket.label}`,
+          oem_invoice_number: `${SEED_INVOICE_PREFIX}-${dealerTag}-${c.sku}-${dateStr}-${v}-${bucket.label}`,
           ...snap,
           status: "available",
           dealer_id: dealerId,
@@ -475,7 +483,7 @@ async function main() {
     const invoiceDate = todayMinusDays(15);
     const dateStr = invoiceDate.toISOString().slice(0, 10).replace(/-/g, "");
     await db.insert(inventory).values({
-      id: makeInvId(`PARA-${p.sku.slice(-8)}`, dateStr),
+      id: makeInvId(`${dealerTag}-PARA-${p.sku.slice(-8)}`, dateStr),
       product_id: productId,
       oem_id: oem.id,
       oem_name: oem.business_entity_name,
@@ -488,7 +496,7 @@ async function main() {
       manufacturing_date: todayMinusDays(45),
       expiry_date: todayMinusDays(-365 * 5),
       oem_invoice_date: invoiceDate,
-      oem_invoice_number: `${SEED_INVOICE_PREFIX}-${p.sku}-${dateStr}`,
+      oem_invoice_number: `${SEED_INVOICE_PREFIX}-${dealerTag}-${p.sku}-${dateStr}`,
       ...snap,
       status: "available",
       dealer_id: dealerId,

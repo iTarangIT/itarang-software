@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { kycVerifications, kycDocuments, leads, couponCodes, adminVerificationQueue } from '@/lib/db/schema';
+import { kycVerifications, kycDocuments, leads, couponCodes, adminVerificationQueue, consentRecords, kycVerificationMetadata } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { validateDocument, verifyBankAccount } from '@/lib/decentro';
-import { createWorkflowId, getOpenQueueEntryForLead } from '@/lib/kyc/admin-workflow';
+import { createWorkflowId, determineCaseType, getOpenQueueEntryForLead } from '@/lib/kyc/admin-workflow';
 
 const VERIFICATION_LABELS: Record<string, string> = {
     aadhaar: 'Aadhaar Verification',
@@ -61,27 +61,118 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             return NextResponse.json({ success: false, error: { message: 'Lead not found' } }, { status: 404 });
         }
 
+        // Server-side precondition gate: admin must have verified the customer
+        // consent AND every required document must be uploaded AND a coupon
+        // reserved. The client mirrors this; we recheck so a forged request
+        // can't bypass it. Optional docs (cheques, bank statement, RC for
+        // non-vehicle leads) are never required.
+        const consentRows = await db
+            .select({ status: consentRecords.consent_status })
+            .from(consentRecords)
+            .where(eq(consentRecords.lead_id, leadId))
+            .limit(1);
+        const consentStatusVal = (consentRows[0]?.status || lead[0].consent_status || '').toLowerCase();
+        const consentAdminVerified =
+            ['admin_verified', 'manual_verified', 'verified'].includes(consentStatusVal);
+
+        const docRows = await db
+            .select({ doc_type: kycDocuments.doc_type, file_url: kycDocuments.file_url })
+            .from(kycDocuments)
+            .where(eq(kycDocuments.lead_id, leadId));
+        const uploadedTypes = new Set(
+            docRows.filter((d) => d.file_url).map((d) => d.doc_type),
+        );
+
+        // Required doc keys must match the keys persisted by /upload-document
+        // (which mirror FINANCE_DOCUMENTS in the dealer-portal constants).
+        // RC Copy, Bank Statement, and the 4 undated cheques are optional —
+        // only the 5 core identity documents block submission.
+        const requiredDocTypes = [
+            'aadhaar_front',
+            'aadhaar_back',
+            'pan_card',
+            'passport_photo',
+            'address_proof',
+        ];
+        const docsAllUploaded = requiredDocTypes.every((t) => uploadedTypes.has(t));
+
+        const couponReserved = (lead[0].coupon_status || '').toLowerCase() === 'reserved';
+
+        if (!consentAdminVerified || !docsAllUploaded || !couponReserved) {
+            const missing: string[] = [];
+            if (!consentAdminVerified) missing.push('consent must be admin-verified before submission');
+            if (!docsAllUploaded) missing.push('all required documents must be uploaded');
+            if (!couponReserved) missing.push('coupon must be validated');
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: { message: `Cannot submit yet — ${missing.join('; ')}` },
+                },
+                { status: 409 },
+            );
+        }
+
+        const now = new Date();
+
         // Resolve the coupon attached to this lead (either passed in the body or already reserved on the lead)
         const activeCouponCode = (couponCode || lead[0].coupon_code || '').toString().toUpperCase().trim();
 
         // Mark coupon as used in the coupons table (skip for the hardcoded free coupon)
         if (activeCouponCode && activeCouponCode !== 'ITARANG-FREE') {
             await db.update(couponCodes)
-                .set({ status: 'used', used_by_lead_id: leadId, used_at: new Date() })
+                .set({ status: 'used', used_by_lead_id: leadId, used_at: now })
                 .where(and(eq(couponCodes.code, activeCouponCode), eq(couponCodes.status, 'reserved')));
         }
 
         // Persist coupon_status = 'used' on the lead so the UI stays on the "submitted" view across reloads
         if (activeCouponCode) {
             await db.update(leads)
-                .set({ coupon_status: 'used', updated_at: new Date() })
+                .set({ coupon_status: 'used', updated_at: now })
                 .where(eq(leads.id, leadId));
+        }
+
+        // Mirror coupon/submission state into kyc_verification_metadata. The
+        // admin queue and case-review pages read coupon_status from this table
+        // (not from leads) to decide whether to surface documents and
+        // verification cards. Without this upsert the admin sees "Awaiting
+        // Dealer Submission" even though the dealer has clicked Submit.
+        {
+            const docCount = docRows.filter((d) => d.file_url).length;
+            const caseType = determineCaseType({
+                paymentMethod: lead[0].payment_method ?? null,
+                documentsCount: docCount,
+            });
+            const metadataPayload = {
+                submission_timestamp: now,
+                case_type: caseType,
+                coupon_code: activeCouponCode || null,
+                coupon_status: 'used',
+                documents_count: docCount,
+                consent_verified: true,
+                dealer_edits_locked: true,
+                updated_at: now,
+            };
+            const existingMetadata = await db
+                .select({ lead_id: kycVerificationMetadata.lead_id })
+                .from(kycVerificationMetadata)
+                .where(eq(kycVerificationMetadata.lead_id, leadId))
+                .limit(1);
+            if (existingMetadata.length > 0) {
+                await db.update(kycVerificationMetadata)
+                    .set(metadataPayload)
+                    .where(eq(kycVerificationMetadata.lead_id, leadId));
+            } else {
+                await db.insert(kycVerificationMetadata).values({
+                    lead_id: leadId,
+                    ...metadataPayload,
+                    created_at: now,
+                });
+            }
         }
 
         const vehicleSlugs = ['2w', '3w', '4w', 'commercial'];
         const assetModel = (lead[0].asset_model || '').toLowerCase();
         const isVehicle = vehicleSlugs.some(s => assetModel.startsWith(s));
-        const now = new Date();
 
         // ── 1. PAN Verification (auto if pan_number provided) ──────────────
         if (pan_number) {
