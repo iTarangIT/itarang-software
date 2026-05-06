@@ -67,3 +67,16 @@ node_modules
 prod.txt
 env.txt
 /eval-reports
+
+# DB migration scratch files (sandbox → prod sync). Contain real data /
+# connection strings — never commit. Root-anchored so drizzle/*.sql is unaffected.
+/sandbox-*.sql
+/prod-*.sql
+/drop-prod-*.sql
+/apply-preserve-wrapper.sql
+/apply-output.log
+/preserve-apply.log
+/prod-rowcount.txt
+
+final-prod.txt
+azure-architecture.md
