@@ -13,6 +13,7 @@ import {
     OutlineButton, FullPageLoader,
 } from '@/components/dealer-portal/lead-wizard/shared';
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
+import OtherDocumentsSection, { type RequestedDoc } from '@/components/dealer-portal/lead-wizard/OtherDocumentsSection';
 
 type UploadedDoc = {
     id?: string;
@@ -98,6 +99,7 @@ export default function KYCPage() {
 
     const [uploadedDocs, setUploadedDocs] = useState<Record<string, UploadedDoc>>({});
     const [verifications, setVerifications] = useState<VerificationRow[]>(DEFAULT_CUSTOMER_VERIFICATIONS);
+    const [additionalDocs, setAdditionalDocs] = useState<RequestedDoc[]>([]);
     const [consentStatus, setConsentStatus] = useState<string>('awaiting_signature');
 
     const [savingDraft, setSavingDraft] = useState(false);
@@ -239,13 +241,9 @@ export default function KYCPage() {
 
     // ─── Document Stats ─────────────────────────────────────────────────────
 
-    const requiredDocs = useMemo(() => {
-        const assetModel = String(lead?.asset_model || lead?.asset_category || '').toUpperCase();
-        const isVehicle = ['2W', '3W', '4W'].includes(assetModel);
-        return FINANCE_DOCUMENTS.map(doc =>
-            doc.key === 'rc_copy' ? { ...doc, required: isVehicle } : doc
-        );
-    }, [lead]);
+    // RC Copy and Bank Statement are always optional; every other document
+    // in FINANCE_DOCUMENTS is required regardless of asset type.
+    const requiredDocs = useMemo(() => FINANCE_DOCUMENTS.map(doc => ({ ...doc })), []);
 
     const docStats = useMemo(() => {
         const required = requiredDocs.filter(d => d.required);
@@ -253,6 +251,45 @@ export default function KYCPage() {
         const pending = required.filter(d => !uploadedDocs[d.key]?.file_url);
         return { total: required.length, uploadedCount: uploaded.length, pending };
     }, [requiredDocs, uploadedDocs]);
+
+    // Submit-for-Verification gate: dealer can only submit when admin has
+    // verified the customer consent AND every required document has a file
+    // AND coupon is reserved. Optional documents (cheques, bank statement,
+    // RC for non-vehicle leads) never gate this button.
+    const consentAdminVerified = useMemo(
+        () => isFinalConsentStatus((consentStatus || '').toLowerCase()),
+        [consentStatus],
+    );
+
+    const allRequiredDocsUploaded = useMemo(
+        () => docStats.total > 0 && docStats.pending.length === 0,
+        [docStats],
+    );
+
+    const submitGate = useMemo(() => {
+        const missing: string[] = [];
+        if (!consentAdminVerified) missing.push('Wait for admin to verify customer consent');
+        if (!allRequiredDocsUploaded) missing.push(`Upload ${docStats.pending.length || 'all'} required document${docStats.pending.length === 1 ? '' : 's'}`);
+        if (lead?.coupon_status !== 'reserved') missing.push('Validate coupon');
+        return { ok: missing.length === 0, missing };
+    }, [consentAdminVerified, allRequiredDocsUploaded, docStats.pending.length, lead?.coupon_status]);
+
+    // Surface dealer-uploaded additional documents inside the customer
+    // verification table so admins/dealers see them alongside the standard
+    // KYC checks. Each row is labelled "<doc name> (Additional Doc)" so it's
+    // visually distinct from the fixed Aadhaar/PAN/Bank/etc. rows. Re-uploads
+    // for these docs happen via the Additional Documents section above; the
+    // Action column intentionally stays "—" here.
+    const customerVerificationRows = useMemo<VerificationRow[]>(() => {
+        const additionalRows: VerificationRow[] = additionalDocs.map((d) => ({
+            type: `additional:${d.id}`,
+            label: `${d.doc_label} (Additional Doc)`,
+            status: d.upload_status || 'not_uploaded',
+            last_update: d.uploaded_at || d.created_at || null,
+            failed_reason: d.rejection_reason || null,
+        }));
+        return [...verifications, ...additionalRows];
+    }, [verifications, additionalDocs]);
 
     // ─── Document Upload ────────────────────────────────────────────────────
 
@@ -569,7 +606,9 @@ export default function KYCPage() {
             // Match the gate: if admin approved → Step 4, else if admin
             // requested Step 3 → Step 3. Approval wins over step3 request
             // so step_3_cleared still goes straight to product selection.
-            const approved = ['kyc_approved', 'step_3_cleared'].includes(lead?.kyc_status || '');
+            const approved =
+                ['kyc_approved', 'step_3_cleared'].includes(lead?.kyc_status || '') ||
+                (lead as any)?.final_decision === 'approved';
             const route = approved
                 ? `/dealer-portal/leads/${leadId}/product-selection`
                 : `/dealer-portal/leads/${leadId}/borrower-consent`;
@@ -607,7 +646,9 @@ export default function KYCPage() {
     //   • Request Docs              → has_additional_docs_required=true               → route to Step 3
     // Until the admin clicks one of those, Next stays disabled regardless of
     // dealer-side state (consent / docs / coupon are tracked elsewhere).
-    const adminApprovedFinal = ['kyc_approved', 'step_3_cleared'].includes(lead?.kyc_status || '');
+    const adminApprovedFinal =
+        ['kyc_approved', 'step_3_cleared'].includes(lead?.kyc_status || '') ||
+        (lead as any)?.final_decision === 'approved';
     const adminRequestedStep3 = !!(lead?.has_co_borrower || lead?.has_additional_docs_required);
 
     const pendingRequirements: string[] = [];
@@ -1027,6 +1068,13 @@ export default function KYCPage() {
                         </div>
                     </SectionCard>
 
+                    {/* ─── Additional Documents (BRD §2.9.3) ──────────── */}
+                    {/* Dealer-extensible extras: any admin-requested supporting
+                        docs surface here, and the dealer can add custom items
+                        proactively. These never gate Submit-for-Verification —
+                        only the standard 9 required docs do. */}
+                    <OtherDocumentsSection leadId={leadId} docFor="primary" scopeLabel="Primary Borrower (Customer)" onChanged={setAdditionalDocs} />
+
                     {/* ─── Verification Action ────────────────────────── */}
                     <SectionCard title="Verification Action" action={
                         lead?.coupon_status === 'used'
@@ -1067,10 +1115,21 @@ export default function KYCPage() {
                                         Change Coupon
                                     </button>
                                 </div>
+                                {!submitGate.ok && (
+                                    <div className="px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                                        <p className="font-bold mb-1">Complete these steps before submitting:</p>
+                                        <ul className="list-disc list-inside space-y-0.5">
+                                            {submitGate.missing.map((m) => (
+                                                <li key={m}>{m}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
                                 <button
                                     onClick={handleSubmitForVerification}
-                                    disabled={submitting}
-                                    className="w-full px-6 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                                    disabled={submitting || !submitGate.ok}
+                                    title={submitGate.ok ? 'Submit for admin verification' : 'Complete all steps above first'}
+                                    className="w-full px-6 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                                 >
                                     {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
                                     Submit for Verification
@@ -1141,8 +1200,8 @@ export default function KYCPage() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {verifications.map((v, i) => (
-                                            <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50">
+                                        {customerVerificationRows.map((v, i) => (
+                                            <tr key={`${v.type}-${i}`} className="border-b border-gray-50 hover:bg-gray-50/50">
                                                 <td className="py-3 px-3 font-medium text-gray-900">{v.label}</td>
                                                 <td className="py-3 px-3"><StatusBadge status={v.status} /></td>
                                                 <td className="py-3 px-3 text-gray-500 text-xs">

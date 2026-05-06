@@ -17,6 +17,34 @@ interface NotifyDealerParams {
 }
 
 /**
+ * Notify a dealer that admin assigned new inventory to them.
+ * Used after a successful bulk-upload or single-item add.
+ */
+export async function notifyInventoryAssigned(params: {
+  dealerId: string;
+  assetType: "battery" | "charger" | "paraphernalia";
+  count: number;
+  reportId?: string | null;
+}) {
+  try {
+    await db.insert(notifications).values({
+      id: genId(),
+      dealer_id: params.dealerId,
+      type: "inventory_assigned",
+      title: "New stock available",
+      message: `${params.count} ${params.assetType} item${params.count === 1 ? "" : "s"} assigned to your inventory.`,
+      data: {
+        asset_type: params.assetType,
+        count: params.count,
+        report_id: params.reportId ?? null,
+      },
+    });
+  } catch (error) {
+    console.error("[Notification] notifyInventoryAssigned failed:", error);
+  }
+}
+
+/**
  * Creates a notification for the dealer who owns the lead.
  * Looks up dealer_id from the lead record.
  */
@@ -270,10 +298,36 @@ export async function notifyDispatchConfirmed(params: {
     leadId: params.leadId,
     type: "dispatch_confirmed",
     title: "Dispatch Confirmed",
-    message: `Battery ${params.batterySerial} dispatched. Warranty ${params.warrantyId} activated.`,
+    message: `Battery ${params.batterySerial} dispatched. Warranty ${params.warrantyId} activated. Awaiting delivery confirmation.`,
     data: {
       warranty_id: params.warrantyId,
       battery_serial: params.batterySerial,
+    },
+  });
+}
+
+/**
+ * Notify dealer when a previously-dispatched lead has been marked delivered
+ * (either by the dealer's manual click or the daily cron).
+ */
+export async function notifyDelivered(params: {
+  leadId: string;
+  warrantyId: string;
+  batterySerial: string;
+  source: "manual" | "cron";
+}) {
+  await notifyDealerForLead({
+    leadId: params.leadId,
+    type: "delivery_confirmed",
+    title: "Delivery Confirmed",
+    message:
+      params.source === "manual"
+        ? `Battery ${params.batterySerial} marked delivered. Sale finalized.`
+        : `Battery ${params.batterySerial} auto-finalized after dispatch window. Sale closed.`,
+    data: {
+      warranty_id: params.warrantyId,
+      battery_serial: params.batterySerial,
+      source: params.source,
     },
   });
 }

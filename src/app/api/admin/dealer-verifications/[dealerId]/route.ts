@@ -6,7 +6,7 @@ import {
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import {
@@ -108,12 +108,35 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    const uploadedDocuments = await db
+    // Hide superseded documents (replaced via correction round) and
+    // pending_correction documents (those belong to the in-flight correction
+    // card, not the main verification list). Then keep only the most recent
+    // upload per document_type so the admin sees a single fresh row per item
+    // — no stale duplicates after re-upload.
+    const allDocuments = await db
       .select()
       .from(dealerOnboardingDocuments)
-      .where(eq(dealerOnboardingDocuments.application_id, row.id));
+      .where(
+        and(
+          eq(dealerOnboardingDocuments.application_id, row.id),
+          ne(dealerOnboardingDocuments.doc_status, "superseded"),
+          ne(dealerOnboardingDocuments.doc_status, "pending_correction"),
+        ),
+      );
 
-    const documents = uploadedDocuments.map((doc) => ({
+    const latestPerType = new Map<string, (typeof allDocuments)[number]>();
+    for (const doc of allDocuments) {
+      const prior = latestPerType.get(doc.document_type);
+      if (
+        !prior ||
+        new Date(doc.uploaded_at).getTime() >
+          new Date(prior.uploaded_at).getTime()
+      ) {
+        latestPerType.set(doc.document_type, doc);
+      }
+    }
+
+    const documents = Array.from(latestPerType.values()).map((doc) => ({
       id: doc.id,
       name: doc.file_name || doc.document_type,
       documentType: doc.document_type,

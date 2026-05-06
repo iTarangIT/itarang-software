@@ -86,6 +86,12 @@ const roleNavigation: Record<string, any[]> = {
           icon: Shield,
           href: "/admin/kyc-review",
         },
+        {
+          id: "product-review",
+          label: "Product Review",
+          icon: Package,
+          href: "/admin/product-review",
+        },
       ],
     },
   ],
@@ -124,6 +130,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "KYC Review",
           icon: Shield,
           href: "/admin/kyc-review",
+        },
+        {
+          id: "product-review",
+          label: "Product Review",
+          icon: Package,
+          href: "/admin/product-review",
         },
         {
           id: "dealer-validation",
@@ -185,16 +197,70 @@ const roleNavigation: Record<string, any[]> = {
           href: "/product-catalog",
         },
         {
-          id: "inventory-reports",
+          id: "admin-inventory",
           label: "Inventory",
           icon: PieChart,
-          href: "/inventory",
+          href: "/admin/inventory",
         },
         {
-          id: "bulk-upload",
+          id: "admin-inventory-upload",
           label: "Bulk Upload",
           icon: ShoppingCart,
-          href: "/inventory/bulk-upload",
+          href: "/admin/inventory/upload",
+        },
+      ],
+    },
+  ],
+
+  admin: [
+    {
+      section: "OVERVIEW",
+      items: [
+        {
+          id: "dashboard",
+          label: "Dashboard",
+          icon: LayoutDashboard,
+          href: "/admin",
+        },
+      ],
+    },
+    {
+      section: "REVIEW",
+      items: [
+        {
+          id: "kyc-review",
+          label: "KYC Review",
+          icon: Shield,
+          href: "/admin/kyc-review",
+        },
+        {
+          id: "product-review",
+          label: "Product Review",
+          icon: Package,
+          href: "/admin/product-review",
+        },
+      ],
+    },
+    {
+      section: "INVENTORY",
+      items: [
+        {
+          id: "admin-inventory",
+          label: "Inventory",
+          icon: PieChart,
+          href: "/admin/inventory",
+        },
+        {
+          id: "admin-inventory-upload",
+          label: "Bulk Upload",
+          icon: ShoppingCart,
+          href: "/admin/inventory/upload",
+        },
+        {
+          id: "admin-inventory-add",
+          label: "Add Item",
+          icon: Package,
+          href: "/admin/inventory/add",
         },
       ],
     },
@@ -262,6 +328,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "KYC Review",
           icon: Shield,
           href: "/admin/kyc-review",
+        },
+        {
+          id: "product-review",
+          label: "Product Review",
+          icon: Package,
+          href: "/admin/product-review",
         },
       ],
     },

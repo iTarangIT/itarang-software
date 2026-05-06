@@ -1,4 +1,5 @@
 import CaseReview from "@/components/kyc/CaseReview";
+import ProductReviewLinkBanner from "@/components/kyc/ProductReviewLinkBanner";
 
 export default async function CaseReviewPage({
   params,
@@ -9,6 +10,7 @@ export default async function CaseReviewPage({
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
+      <ProductReviewLinkBanner leadId={leadId} />
       <CaseReview leadId={leadId} />
     </div>
   );
