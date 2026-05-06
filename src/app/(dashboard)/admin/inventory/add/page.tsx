@@ -13,17 +13,26 @@ interface DealerOption {
   business_entity_name: string;
 }
 
-const COMMON_FIELDS = [
-  { name: "hsn_code", label: "HSN code (8 digits)", type: "text" },
-  { name: "oem_name", label: "OEM name", type: "text" },
-  { name: "inventory_amount", label: "Inventory amount (₹)", type: "number" },
-  { name: "gst_percent", label: "GST %", type: "number" },
-  { name: "warranty_months", label: "Warranty (months)", type: "number" },
-  { name: "manufacturing_date", label: "Manufacturing date", type: "date" },
-  { name: "expiry_date", label: "Expiry date", type: "date" },
-  { name: "oem_invoice_number", label: "OEM invoice number", type: "text" },
-  { name: "oem_invoice_date", label: "OEM invoice date", type: "date" },
-  { name: "warehouse_location", label: "Warehouse location", type: "text" },
+const BATTERY_FIELDS = [
+  { name: "battery_id", label: "Battery ID / Serial Number", type: "text" },
+  { name: "material_code", label: "Material Code", type: "text" },
+  { name: "category", label: "Category", type: "text" },
+  { name: "sub_category", label: "Sub Category", type: "text" },
+  { name: "model_number", label: "Model Number", type: "text" },
+  { name: "voltage_v", label: "Voltage", type: "number" },
+  { name: "capacity_ah", label: "Capacity AH", type: "number" },
+  { name: "star_rating", label: "Star Rating", type: "number" },
+  { name: "invoice_number", label: "Invoice Number", type: "text" },
+  { name: "sold_date", label: "Sold / Invoice Date", type: "date" },
+  { name: "invoice_value", label: "Invoice Value", type: "number" },
+  { name: "supplier_name", label: "Supplier / OEM Name", type: "text" },
+  { name: "oem_warranty_date", label: "OEM Warranty Start Date", type: "date" },
+  { name: "oem_warranty_months", label: "OEM Warranty Months", type: "number" },
+  { name: "physical_condition", label: "Physical Condition", type: "text" },
+  { name: "warehouse_location", label: "Warehouse Location", type: "text" },
+  { name: "iot_enabled", label: "IoT Enabled true/false", type: "text" },
+  { name: "imei_id", label: "IMEI ID optional", type: "text" },
+  { name: "batch_reference", label: "Batch Reference optional", type: "text" },
 ];
 
 const SERIALIZED_FIELDS = [
@@ -60,10 +69,11 @@ export default function AddInventoryItemPage() {
   }, []);
 
   const fields =
-    assetType === "paraphernalia"
-      ? [...COMMON_FIELDS, ...PARAPHERNALIA_FIELDS]
-      : [...COMMON_FIELDS, ...SERIALIZED_FIELDS];
-
+    assetType === "battery"
+      ? BATTERY_FIELDS
+      : assetType === "charger"
+        ? CHARGER_FIELDS
+        : PARAPHERNALIA_FIELDS;
   const handleSubmit = async () => {
     if (!dealerId) {
       setError("Select a dealer");

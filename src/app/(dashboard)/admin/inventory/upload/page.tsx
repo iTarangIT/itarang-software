@@ -144,7 +144,7 @@ export default function BulkUploadWizard() {
       });
       const json = await res.json();
       if (json.success) {
-        router.push(`/admin/inventory/upload-report/${json.data.uploadEventId}`);
+        router.push(`/admin/inventory/upload-report/${json.data?.uploadEventId || json.uploadEventId}`);
       } else {
         setError(json.error?.message || "Commit failed");
       }
