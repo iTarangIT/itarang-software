@@ -59,7 +59,10 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const page = Math.max(1, parseInt(searchParams.get("page") ?? "1"));
-    const limit = Math.min(50, parseInt(searchParams.get("limit") ?? "10"));
+    // Cap raised to 500 so the AI Dialer can fetch the full lead pool in
+    // one request (typical workspace has <500 dialable leads). Paginated
+    // table views still pass limit=10 explicitly.
+    const limit = Math.min(500, parseInt(searchParams.get("limit") ?? "10"));
     const search = searchParams.get("search")?.trim() ?? "";
     const offset = (page - 1) * limit;
 
