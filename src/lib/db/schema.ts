@@ -2521,6 +2521,7 @@ export const dealerLeads = pgTable("dealer_leads", {
   approved_by: text("approved_by"),
   rejected_by: text("rejected_by"),
   dealer_id: text("dealer_id"),
+  provider: text("provider").default("bolna"),
 });
 
 export const scraperLeadsDuplicates = pgTable("scraper_leads_duplicates", {

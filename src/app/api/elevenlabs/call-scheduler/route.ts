@@ -1,9 +1,9 @@
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
-import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
+import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
 import { quotaCircuit } from "@/lib/queue/connection";
 import { log } from "@/lib/log";
-import { not, inArray, eq, isNotNull, isNull, and, or, ne } from "drizzle-orm";
+import { not, inArray, eq, isNotNull, and } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 export const maxDuration = 60;
@@ -28,12 +28,7 @@ export async function GET(req: Request) {
           isNotNull(dealerLeads.current_status),
           not(inArray(dealerLeads.current_status, SKIP_STATUSES)),
           isNotNull(dealerLeads.next_call_at),
-          // Skip leads explicitly tagged for ElevenLabs — they have their
-          // own scheduler. NULL provider = legacy/Bolna, also picked up here.
-          or(
-            isNull(dealerLeads.provider),
-            ne(dealerLeads.provider, "elevenlabs"),
-          ),
+          eq(dealerLeads.provider, "elevenlabs"),
         ),
       );
 
@@ -54,20 +49,17 @@ export async function GET(req: Request) {
     let bailedOn: string | null = null;
 
     for (const lead of leadsToCall) {
-      // Circuit-breaker: bail when Upstash quota is exhausted, so we stop
-      // feeding QStash dispatches that will fail on their Redis-backed
-      // webhook dedup callback.
       if (quotaCircuit.tick()) {
         bailedOn = "upstash-quota";
         break;
       }
       if (consecutive5xx >= MAX_CONSECUTIVE_5XX) {
-        bailedOn = "bolna-5xx";
+        bailedOn = "elevenlabs-5xx";
         break;
       }
 
       try {
-        const result = await triggerBolnaCall({
+        const result = await triggerElevenLabsCall({
           phone: lead.phone!,
           leadId: lead.id,
         });
@@ -110,7 +102,7 @@ export async function GET(req: Request) {
     }
 
     if (bailedOn) {
-      log.warn(`[call-scheduler] bailed: ${bailedOn}`, {
+      log.warn(`[elevenlabs:call-scheduler] bailed: ${bailedOn}`, {
         processed: results.length,
         totalCandidates: leadsToCall.length,
       });
