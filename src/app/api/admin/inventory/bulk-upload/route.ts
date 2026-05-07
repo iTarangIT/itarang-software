@@ -312,6 +312,10 @@ export const POST = withErrorHandler(async (req: Request) => {
           } catch (error) {
             if (!hasPgCode(error, "42703")) throw error;
 
+            // The 42703 leaves the transaction in aborted state; clear it
+            // by rolling back to the per-row savepoint before retrying.
+            await tx.execute(sql.raw(`ROLLBACK TO SAVEPOINT ${savepointName}`));
+
             await tx.execute(sql`
               insert into inventory
                 (id, oem_name, material_code, asset_category, asset_type, model_type, serial_number,
@@ -377,6 +381,10 @@ export const POST = withErrorHandler(async (req: Request) => {
           } catch (error) {
             if (!hasPgCode(error, "42703")) throw error;
 
+            // The 42703 leaves the transaction in aborted state; clear it
+            // by rolling back to the per-row savepoint before retrying.
+            await tx.execute(sql.raw(`ROLLBACK TO SAVEPOINT ${savepointName}`));
+
             await tx.execute(sql`
               insert into inventory
                 (id, oem_name, asset_category, asset_type, model_type, serial_number,
@@ -436,6 +444,10 @@ export const POST = withErrorHandler(async (req: Request) => {
             });
           } catch (error) {
             if (!hasPgCode(error, "42703")) throw error;
+
+            // The 42703 leaves the transaction in aborted state; clear it
+            // by rolling back to the per-row savepoint before retrying.
+            await tx.execute(sql.raw(`ROLLBACK TO SAVEPOINT ${savepointName}`));
 
             await tx.execute(sql`
               insert into inventory
@@ -540,6 +552,12 @@ export const POST = withErrorHandler(async (req: Request) => {
     const reportUrl = `/api/admin/inventory/upload-report/${reportId}`;
     const skippedRowCount = new Set(errors.map((e) => e.row)).size;
 
+    // Same 42703-fallback pattern as the row inserts above. Wrap in our own
+    // savepoint so a missing column on the primary insert can be recovered
+    // from before retrying with the legacy column set.
+    const reportSavepoint = `sp_report_${reportId.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+    await tx.execute(sql.raw(`SAVEPOINT ${reportSavepoint}`));
+
     try {
       await tx.insert(inventoryUploadReports).values({
         id: reportId,
@@ -559,8 +577,12 @@ export const POST = withErrorHandler(async (req: Request) => {
         source: "bulk",
         report_url: reportUrl,
       });
+      await tx.execute(sql.raw(`RELEASE SAVEPOINT ${reportSavepoint}`));
     } catch (error) {
+      await tx.execute(sql.raw(`ROLLBACK TO SAVEPOINT ${reportSavepoint}`));
+
       if (!hasPgCode(error, "42P01") && !hasPgCode(error, "42703")) {
+        await tx.execute(sql.raw(`RELEASE SAVEPOINT ${reportSavepoint}`));
         throw error;
       }
 
@@ -574,7 +596,10 @@ export const POST = withErrorHandler(async (req: Request) => {
              ${insertedIds.length}, ${skippedRowCount}, ${JSON.stringify(errors)}::jsonb,
              ${JSON.stringify(insertedIds)}::jsonb, ${"bulk"})
         `);
+        await tx.execute(sql.raw(`RELEASE SAVEPOINT ${reportSavepoint}`));
       } catch (fallbackError) {
+        await tx.execute(sql.raw(`ROLLBACK TO SAVEPOINT ${reportSavepoint}`));
+        await tx.execute(sql.raw(`RELEASE SAVEPOINT ${reportSavepoint}`));
         if (!hasPgCode(fallbackError, "42P01") && !hasPgCode(fallbackError, "42703")) {
           throw fallbackError;
         }
