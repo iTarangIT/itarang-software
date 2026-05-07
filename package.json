@@ -32,6 +32,7 @@
     "test:e2e:prod-eval:headless": "cross-env E2E_ALLOW_PROD=1 E2E_BASE_URL=https://crm.itarang.com EXCEL_REPORT=1 playwright test --project=chromium-prod --workers=1"
   },
   "dependencies": {
+    "@elevenlabs/elevenlabs-js": "^2.45.0",
     "@emailjs/browser": "^4.4.1",
     "@google-cloud/vision": "^5.3.4",
     "@google/generative-ai": "^0.24.1",
