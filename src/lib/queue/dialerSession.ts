@@ -4,11 +4,15 @@
 import { connection as redis } from "./connection";
 import { safeRedis } from "./safeRedis";
 
+export type DialerProvider = "bolna" | "elevenlabs";
+
 type DialerSession = {
   queue: string[];
   position: number;
   callsMade: number;
   lastCallAt: number;
+  provider?: DialerProvider;
+  category?: string;
 };
 
 const SESSION_KEY = "dialer:session";
@@ -63,17 +67,29 @@ function emptyStatus() {
     total: 0,
     remaining: 0,
     timedOut: false,
+    provider: null as DialerProvider | null,
+    category: null as string | null,
   };
 }
 
 export const dialerSession = {
-  async start(queue: string[]) {
+  async start(
+    queue: string[],
+    opts?: { provider?: DialerProvider; category?: string },
+  ) {
     await writeSession({
       queue,
       position: 0,
       callsMade: 1,
       lastCallAt: Date.now(),
+      provider: opts?.provider ?? "bolna",
+      category: opts?.category,
     });
+  },
+
+  async getProvider(): Promise<DialerProvider> {
+    const session = await readSession();
+    return session?.provider ?? "bolna";
   },
 
   async getNext(): Promise<string | null> {
@@ -125,6 +141,8 @@ export const dialerSession = {
       total: session.queue.length,
       remaining: session.queue.length - session.position - 1,
       timedOut: Date.now() - session.lastCallAt > CALL_TIMEOUT_MS,
+      provider: session.provider ?? "bolna",
+      category: session.category ?? null,
     };
   },
 

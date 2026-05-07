@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Brain, Check, Loader2 } from 'lucide-react';
+import { Brain, Check, Loader2, Sparkles, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface Lead {
@@ -16,10 +16,13 @@ interface AIDialerControlsProps {
     userRole: string;
 }
 
+type Provider = 'bolna' | 'elevenlabs';
+
 export function AIDialerControls({ leads, userRole }: AIDialerControlsProps) {
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [assigning, setAssigning] = useState(false);
     const [result, setResult] = useState<string | null>(null);
+    const [pickerOpen, setPickerOpen] = useState(false);
 
     if (userRole !== 'ceo') return null;
 
@@ -38,19 +41,24 @@ export function AIDialerControls({ leads, userRole }: AIDialerControlsProps) {
         }
     };
 
-    const assignToAI = async () => {
-        if (selected.size === 0) return;
-        setAssigning(true);
+    const openPicker = () => {
+        if (selected.size === 0 || assigning) return;
         setResult(null);
+        setPickerOpen(true);
+    };
+
+    const assignToAI = async (provider: Provider) => {
+        setPickerOpen(false);
+        setAssigning(true);
         try {
             const res = await fetch('/api/ceo/ai-dialer/assign', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ leadIds: Array.from(selected) }),
+                body: JSON.stringify({ leadIds: Array.from(selected), provider }),
             });
             const data = await res.json();
             if (data.success) {
-                setResult(`Assigned ${data.assigned} leads to AI Dialer. ${data.scored} scored.`);
+                setResult(`Assigned ${data.assigned} leads to ${provider === 'elevenlabs' ? 'ElevenLabs' : 'Bolna'}. ${data.scored} scored.`);
                 setSelected(new Set());
             } else {
                 setResult(`Error: ${data.error?.message || 'Unknown'}`);
@@ -64,7 +72,6 @@ export function AIDialerControls({ leads, userRole }: AIDialerControlsProps) {
 
     return (
         <div className="mb-4 space-y-3">
-            {/* AI Assign bar */}
             <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-xl border border-blue-100">
                 <button
                     onClick={toggleAll}
@@ -75,7 +82,7 @@ export function AIDialerControls({ leads, userRole }: AIDialerControlsProps) {
                 </button>
                 <span className="text-xs text-blue-600">{selected.size} selected</span>
                 <button
-                    onClick={assignToAI}
+                    onClick={openPicker}
                     disabled={selected.size === 0 || assigning}
                     className="inline-flex items-center gap-1 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
                 >
@@ -85,11 +92,73 @@ export function AIDialerControls({ leads, userRole }: AIDialerControlsProps) {
                 {result && <span className="text-xs text-blue-700">{result}</span>}
             </div>
 
-            {/* Checkbox column injector - renders hidden inputs for the table */}
             <div className="hidden">
                 {leads.map(l => (
                     <input key={l.id} type="checkbox" checked={selected.has(l.id)} onChange={() => toggleSelect(l.id)} />
                 ))}
+            </div>
+
+            <ProviderPickerModal
+                isOpen={pickerOpen}
+                onClose={() => setPickerOpen(false)}
+                onPick={assignToAI}
+                count={selected.size}
+            />
+        </div>
+    );
+}
+
+function ProviderPickerModal({
+    isOpen,
+    onClose,
+    onPick,
+    count,
+}: {
+    isOpen: boolean;
+    onClose: () => void;
+    onPick: (p: Provider) => void;
+    count: number;
+}) {
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col">
+                <div className="flex items-center justify-between px-6 py-4 border-b">
+                    <h3 className="text-lg font-semibold text-gray-900">Choose AI Voice Agent</h3>
+                    <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors text-gray-500">
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+                <div className="p-6 space-y-3">
+                    <p className="text-sm text-gray-600">
+                        Calling <span className="font-semibold">{count}</span> selected lead{count === 1 ? '' : 's'}. Pick a voice agent to handle the dialer session.
+                    </p>
+                    <button
+                        onClick={() => onPick('bolna')}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-left rounded-xl border border-gray-200 hover:border-blue-400 hover:bg-blue-50 transition-all"
+                    >
+                        <div className="w-10 h-10 flex items-center justify-center rounded-lg bg-blue-100 text-blue-600">
+                            <Brain className="w-5 h-5" />
+                        </div>
+                        <div>
+                            <div className="font-semibold text-gray-900">Bolna</div>
+                            <div className="text-xs text-gray-500">Existing voice agent — production-tested</div>
+                        </div>
+                    </button>
+                    <button
+                        onClick={() => onPick('elevenlabs')}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-left rounded-xl border border-gray-200 hover:border-violet-400 hover:bg-violet-50 transition-all"
+                    >
+                        <div className="w-10 h-10 flex items-center justify-center rounded-lg bg-violet-100 text-violet-600">
+                            <Sparkles className="w-5 h-5" />
+                        </div>
+                        <div>
+                            <div className="font-semibold text-gray-900">ElevenLabs</div>
+                            <div className="text-xs text-gray-500">New voice agent — A/B test alongside Bolna</div>
+                        </div>
+                    </button>
+                </div>
             </div>
         </div>
     );

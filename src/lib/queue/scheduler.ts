@@ -108,3 +108,40 @@ export async function scheduleCall(params: {
     return null;
   }
 }
+
+export async function scheduleElevenLabsCall(params: {
+  phone: string;
+  leadId: string;
+  runAt: Date;
+}): Promise<string | null> {
+  if (quotaCircuit.tick()) {
+    log.warn(
+      "[QSTASH] scheduleElevenLabsCall skipped: upstash quota circuit open",
+      { leadId: params.leadId },
+    );
+    return null;
+  }
+
+  const delayMs = params.runAt.getTime() - Date.now();
+  const delaySeconds = Math.max(0, Math.round(delayMs / 1000));
+
+  try {
+    const messageId = await publishToPath({
+      path: "/api/elevenlabs/dispatch-call",
+      body: { phone: params.phone, leadId: params.leadId },
+      delaySeconds,
+    });
+    log.info("[QSTASH] scheduled elevenlabs call", {
+      leadId: params.leadId,
+      delaySeconds,
+      messageId,
+    });
+    return messageId;
+  } catch (err) {
+    log.error("[QSTASH] scheduleElevenLabsCall failed", {
+      leadId: params.leadId,
+      message: (err as Error).message,
+    });
+    return null;
+  }
+}
