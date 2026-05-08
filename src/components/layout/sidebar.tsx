@@ -155,6 +155,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/inventory",
         },
         {
+          id: "admin-product-master",
+          label: "Product Master",
+          icon: Package,
+          href: "/admin/product-master",
+        },
+        {
           id: "admin-inventory-upload",
           label: "Bulk Upload",
           icon: ShoppingCart,
@@ -238,6 +244,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/inventory",
         },
         {
+          id: "admin-product-master",
+          label: "Product Master",
+          icon: Package,
+          href: "/admin/product-master",
+        },
+        {
           id: "admin-inventory-upload",
           label: "Bulk Upload",
           icon: ShoppingCart,
@@ -296,6 +308,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "Inventory",
           icon: PieChart,
           href: "/admin/inventory",
+        },
+        {
+          id: "admin-product-master",
+          label: "Product Master",
+          icon: Package,
+          href: "/admin/product-master",
         },
         {
           id: "admin-inventory-upload",

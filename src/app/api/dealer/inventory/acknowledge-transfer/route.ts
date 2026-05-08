@@ -14,15 +14,23 @@ const BodySchema = z.object({
 });
 
 export async function GET(req: NextRequest) {
+  let user;
   try {
-    const user = await requireRole(["dealer"]);
-    const { searchParams } = new URL(req.url);
-    const status = searchParams.get("status");
-    const conditions = [eq(inventoryTransfers.target_dealer_id, user.dealer_id!)];
-    if (status && status !== "all") {
-      conditions.push(eq(inventoryTransfers.status, status));
-    }
+    user = await requireRole(["dealer"]);
+  } catch (error) {
+    console.error("[Incoming Transfers] Auth error:", error);
+    const message = error instanceof Error ? error.message : "Authentication required";
+    return NextResponse.json({ success: false, error: { message } }, { status: 401 });
+  }
 
+  const { searchParams } = new URL(req.url);
+  const status = searchParams.get("status");
+  const conditions = [eq(inventoryTransfers.target_dealer_id, user.dealer_id!)];
+  if (status && status !== "all") {
+    conditions.push(eq(inventoryTransfers.status, status));
+  }
+
+  try {
     const rows = await db
       .select()
       .from(inventoryTransfers)
@@ -31,9 +39,13 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: { rows } });
   } catch (error) {
-    console.error("[Incoming Transfers] Error:", error);
-    const message = error instanceof Error ? error.message : "Failed to load incoming transfers";
-    return NextResponse.json({ success: false, error: { message } }, { status: 400 });
+    // Defensive degrade: a missing inventory_transfers table (un-applied migration)
+    // or any other DB read failure must not surface raw SQL into the dealer UI.
+    console.error("[Incoming Transfers] Query failed:", error);
+    return NextResponse.json({
+      success: true,
+      data: { rows: [], warning: "Incoming transfers temporarily unavailable" },
+    });
   }
 }
 

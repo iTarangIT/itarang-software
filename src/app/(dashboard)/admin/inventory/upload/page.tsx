@@ -6,6 +6,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+  XCircle,
+  Download,
+  UploadCloud,
+  FileText,
+  AlertTriangle,
+  Building2,
+  PackageCheck,
+  ListChecks,
+  X as XIcon,
+} from "lucide-react";
 
 type AssetType = "battery" | "charger" | "paraphernalia";
 
@@ -79,6 +93,20 @@ export default function BulkUploadWizard() {
   const [validation, setValidation] = useState<ValidationResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [successData, setSuccessData] = useState<{
+    uploadEventId: string;
+    imported: number;
+    skipped: number;
+    total: number;
+    dealerName: string;
+    assetType: AssetType;
+  } | null>(null);
+
+  const selectedDealer = useMemo(
+    () => dealers.find((d) => d.id === dealerId) ?? null,
+    [dealers, dealerId],
+  );
 
   useEffect(() => {
     (async () => {
@@ -144,7 +172,18 @@ export default function BulkUploadWizard() {
       });
       const json = await res.json();
       if (json.success) {
-        router.push(`/admin/inventory/upload-report/${json.data?.uploadEventId || json.uploadEventId}`);
+        const uploadEventId = json.data?.uploadEventId || json.uploadEventId;
+        const dealerName =
+          dealers.find((d) => d.id === dealerId)?.business_entity_name ||
+          "the dealer";
+        setSuccessData({
+          uploadEventId,
+          imported: validation.summary.valid,
+          skipped: validation.summary.errors,
+          total: validation.summary.total,
+          dealerName,
+          assetType: assetType as AssetType,
+        });
       } else {
         setError(json.error?.message || "Commit failed");
       }
@@ -155,30 +194,64 @@ export default function BulkUploadWizard() {
     }
   };
 
+  const resetWizard = () => {
+    setSuccessData(null);
+    setValidation(null);
+    setFile(null);
+    setAssetType("");
+    setStep(1);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
   return (
-    <div className="p-8 max-w-5xl mx-auto space-y-6">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Bulk inventory upload</h1>
-          <p className="text-sm text-gray-500">
-            Step {step} of 4 — preview validates before committing.
-          </p>
-        </div>
-        <Link
-          href="/admin/inventory"
-          className="text-sm text-blue-600 hover:underline"
-        >
-          ← Back to inventory
-        </Link>
-      </header>
+    <div className="min-h-screen bg-gradient-to-b from-gray-50 via-white to-gray-50">
+      <div className="px-4 sm:px-6 lg:px-8 py-6 sm:py-8 max-w-6xl mx-auto space-y-6">
+        <header className="space-y-3">
+          <Link
+            href="/admin/inventory"
+            className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-gray-500 hover:text-[#0047AB] transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            Inventory
+          </Link>
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
+                Bulk inventory upload
+              </h1>
+              <p className="text-sm text-gray-500 mt-1">
+                Validate before commit. Per-row save-points keep partial uploads safe.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {selectedDealer && (
+                <ContextChip
+                  icon={<Building2 className="w-3 h-3" />}
+                  label={selectedDealer.business_entity_name}
+                  tone="blue"
+                />
+              )}
+              {assetType && (
+                <ContextChip
+                  icon={<PackageCheck className="w-3 h-3" />}
+                  label={
+                    assetType.charAt(0).toUpperCase() + assetType.slice(1)
+                  }
+                  tone="emerald"
+                />
+              )}
+            </div>
+          </div>
+        </header>
 
-      <Stepper step={step} />
+        <Stepper step={step} />
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded p-3 text-sm">
-          {error}
-        </div>
-      )}
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3.5 text-sm flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
 
       {step === 1 && (
         <DealerStep
@@ -255,132 +328,276 @@ export default function BulkUploadWizard() {
             })}
           </div>
 
-          <div className="flex justify-between pt-2">
+          <div className="flex items-center justify-between gap-3 pt-2">
             <button
               onClick={() => setStep(1)}
-              className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold hover:bg-gray-50"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-colors"
             >
-              ← Back
+              <ArrowLeft className="w-4 h-4" />
+              Back
             </button>
             <button
               disabled={!assetType}
               onClick={() => setStep(3)}
-              className="px-6 py-2.5 bg-[#0047AB] hover:bg-[#003580] text-white rounded-xl text-sm font-bold transition-colors disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-6 py-2.5 bg-gradient-to-r from-[#0047AB] to-blue-600 hover:from-[#003580] hover:to-blue-700 text-white rounded-xl text-sm font-bold transition-all shadow-md shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
             >
-              Continue →
+              Continue
+              <ArrowRight className="w-4 h-4" />
             </button>
           </div>
         </section>
       )}
 
       {step === 3 && assetType && (
-        <section className="bg-white border border-gray-200 rounded-lg p-6 space-y-4">
-          <h2 className="font-bold">3. Download template & upload</h2>
+        <section className="bg-white border border-gray-100 rounded-2xl p-5 sm:p-6 shadow-sm space-y-5">
+          <div>
+            <h2 className="font-black text-gray-900">
+              3. Template &amp; file
+            </h2>
+            <p className="text-xs text-gray-500 mt-1">
+              Download the {assetType} template, fill it row by row, then drop the
+              file below. We accept .csv and .xlsx up to 5 MB.
+            </p>
+          </div>
+
+          <div className="flex items-start gap-3 p-3.5 rounded-xl border border-amber-200 bg-amber-50">
+            <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="text-[11px] text-amber-900 leading-relaxed">
+              <span className="font-bold">
+                {assetType === "paraphernalia" ? "Item Type Code" : "Model ID"} drives
+                everything else.
+              </span>{" "}
+              Each row must reference an active entry in Admin → Product Master.
+              Voltage, capacity, sub-category, customer warranty, chemistry, and
+              compatible categories are auto-filled from the master. For batteries,
+              IoT Enabled / IMEI is only allowed when the model is marked
+              IoT-compatible.
+            </div>
+          </div>
+
+          {/* Template download — promoted to a featured row */}
           <a
             href={`/api/admin/inventory/csv-template?type=${assetType}`}
-            className="inline-flex items-center gap-2 text-sm text-blue-600 hover:underline"
+            className="group flex items-center gap-3 p-3.5 rounded-xl border border-blue-100 bg-gradient-to-r from-blue-50 to-white hover:border-[#0047AB] hover:shadow-sm transition-all"
           >
-            ↓ Download {assetType} CSV template
-          </a>
-          <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv,.xlsx"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="hidden"
-            />
-            {file ? (
-              <div>
-                <div className="font-medium">{file.name}</div>
-                <div className="text-xs text-gray-500">
-                  {(file.size / 1024).toFixed(1)} KB
-                </div>
-                <button
-                  onClick={() => setFile(null)}
-                  className="mt-2 text-sm text-red-600 hover:underline"
-                >
-                  Remove
-                </button>
+            <div className="w-9 h-9 rounded-lg bg-[#0047AB] text-white flex items-center justify-center flex-shrink-0">
+              <Download className="w-4 h-4" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-bold text-gray-900">
+                Download {assetType} CSV template
               </div>
-            ) : (
+              <div className="text-[11px] text-gray-500">
+                Headers + example row · safe to share with the warehouse team
+              </div>
+            </div>
+            <ArrowRight className="w-4 h-4 text-gray-400 group-hover:text-[#0047AB] group-hover:translate-x-0.5 transition-all" />
+          </a>
+
+          {/* Drop zone */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,.xlsx"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            className="hidden"
+          />
+          {file ? (
+            <div className="flex items-center gap-3 p-4 rounded-2xl border border-emerald-200 bg-gradient-to-r from-emerald-50 to-white">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500 text-white flex items-center justify-center flex-shrink-0">
+                <FileText className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-bold text-gray-900 truncate">
+                  {file.name}
+                </div>
+                <div className="text-[11px] text-gray-500 mt-0.5">
+                  {formatBytes(file.size)} ·{" "}
+                  <span className="text-emerald-700 font-bold">
+                    Ready to validate
+                  </span>
+                </div>
+              </div>
               <button
-                onClick={() => fileInputRef.current?.click()}
-                className="text-sm text-blue-600 hover:underline"
+                onClick={() => {
+                  setFile(null);
+                  if (fileInputRef.current) fileInputRef.current.value = "";
+                }}
+                aria-label="Remove file"
+                className="w-8 h-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors"
               >
-                Choose CSV or XLSX file
+                <XIcon className="w-4 h-4" />
               </button>
-            )}
-          </div>
-          <div className="flex justify-between pt-2">
-            <button onClick={() => setStep(2)} className="px-4 py-2 bg-gray-200 rounded">
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                const f = e.dataTransfer.files?.[0];
+                if (f) setFile(f);
+              }}
+              className={`w-full rounded-2xl border-2 border-dashed p-8 sm:p-10 text-center transition-all ${
+                dragOver
+                  ? "border-[#0047AB] bg-blue-50"
+                  : "border-gray-200 bg-gray-50 hover:border-[#0047AB] hover:bg-blue-50/40"
+              }`}
+            >
+              <div
+                className={`w-12 h-12 rounded-2xl mx-auto flex items-center justify-center transition-colors ${
+                  dragOver
+                    ? "bg-[#0047AB] text-white"
+                    : "bg-white border border-gray-200 text-[#0047AB]"
+                }`}
+              >
+                <UploadCloud className="w-6 h-6" />
+              </div>
+              <div className="mt-3 text-sm font-bold text-gray-900">
+                {dragOver ? "Drop to upload" : "Drag & drop your file here"}
+              </div>
+              <div className="text-[11px] text-gray-500 mt-1">
+                or <span className="text-[#0047AB] font-bold">browse</span> from
+                your computer · CSV / XLSX
+              </div>
+            </button>
+          )}
+
+          <div className="flex items-center justify-between gap-3 pt-2">
+            <button
+              onClick={() => setStep(2)}
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
               Back
             </button>
             <button
               disabled={!file || submitting}
               onClick={handleValidate}
-              className="px-5 py-2 bg-blue-600 text-white rounded font-bold hover:bg-blue-700 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-6 py-2.5 bg-gradient-to-r from-[#0047AB] to-blue-600 hover:from-[#003580] hover:to-blue-700 text-white rounded-xl text-sm font-bold transition-all shadow-md shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
             >
               {submitting ? "Validating…" : "Validate file"}
+              {!submitting && <ArrowRight className="w-4 h-4" />}
             </button>
           </div>
         </section>
       )}
 
       {step === 4 && validation && (
-        <section className="bg-white border border-gray-200 rounded-lg p-6 space-y-4">
-          <h2 className="font-bold">4. Preview & commit</h2>
-          <div className="grid grid-cols-3 gap-3">
-            <SummaryCard label="Total rows" value={validation.summary.total} />
+        <section className="bg-white border border-gray-100 rounded-2xl p-5 sm:p-6 shadow-sm space-y-5">
+          <div>
+            <h2 className="font-black text-gray-900">4. Preview &amp; commit</h2>
+            <p className="text-xs text-gray-500 mt-1">
+              Only valid rows are committed. Errored rows stay reported below — fix
+              the source CSV and re-upload to retry them.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <SummaryCard
+              label="Total rows"
+              value={validation.summary.total}
+              icon={<ListChecks className="w-3.5 h-3.5" />}
+            />
             <SummaryCard
               label="Valid"
               value={validation.summary.valid}
+              total={validation.summary.total}
               tone="green"
+              icon={<CheckCircle2 className="w-3.5 h-3.5" />}
             />
             <SummaryCard
               label="Errors"
               value={validation.summary.errors}
+              total={validation.summary.total}
               tone="red"
+              icon={<XCircle className="w-3.5 h-3.5" />}
             />
           </div>
 
-          <div className="overflow-x-auto max-h-[480px] overflow-y-auto border border-gray-200 rounded">
+          <div className="overflow-x-auto overflow-y-auto max-h-[480px] border border-gray-100 rounded-2xl">
             <table className="w-full text-xs">
-              <thead className="bg-gray-50 sticky top-0">
+              <thead className="bg-gray-50 sticky top-0 z-10">
                 <tr className="text-left">
-                  <th className="px-3 py-2">Row</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Serial / Item</th>
-                  <th className="px-3 py-2">HSN / OEM</th>
-                  <th className="px-3 py-2">Errors</th>
+                  <th className="px-3 py-2.5 font-black text-[10px] uppercase tracking-wider text-gray-500">
+                    Row
+                  </th>
+                  <th className="px-3 py-2.5 font-black text-[10px] uppercase tracking-wider text-gray-500">
+                    Status
+                  </th>
+                  <th className="px-3 py-2.5 font-black text-[10px] uppercase tracking-wider text-gray-500">
+                    Serial / Item
+                  </th>
+                  <th className="px-3 py-2.5 font-black text-[10px] uppercase tracking-wider text-gray-500">
+                    HSN / OEM
+                  </th>
+                  <th className="px-3 py-2.5 font-black text-[10px] uppercase tracking-wider text-gray-500">
+                    Errors
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {validation.rows.map((r) => {
                   const d = (r.data ?? {}) as Record<string, unknown>;
+                  const isError = r.status === "error";
                   return (
                     <tr
                       key={r.rowIndex}
-                      className={`border-t border-gray-100 ${
-                        r.status === "error" ? "bg-red-50" : ""
+                      className={`border-t border-gray-50 transition-colors ${
+                        isError
+                          ? "bg-red-50/60 hover:bg-red-50"
+                          : "hover:bg-blue-50/30"
                       }`}
                     >
-                      <td className="px-3 py-2 font-mono">{r.rowIndex}</td>
-                      <td className="px-3 py-2">
-                        {r.status === "valid" ? (
-                          <span className="text-emerald-700 font-bold">✓</span>
+                      <td className="px-3 py-2.5 font-mono text-gray-500">
+                        {r.rowIndex}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {isError ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-bold">
+                            <XCircle className="w-3 h-3" /> Error
+                          </span>
                         ) : (
-                          <span className="text-red-700 font-bold">✗</span>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold">
+                            <CheckCircle2 className="w-3 h-3" /> Valid
+                          </span>
                         )}
                       </td>
-                      <td className="px-3 py-2 font-mono">
-                        {String(d.battery_id || d.serial_number || d.item_type || d.model_number || "—")}
+                      <td className="px-3 py-2.5 font-mono text-gray-900">
+                        {String(
+                          d.battery_id ||
+                            d.serial_number ||
+                            d.item_type ||
+                            d.model_number ||
+                            "—",
+                        )}
                       </td>
-                      <td className="px-3 py-2">
-                        {String(d.material_code || "—")} / {String(d.supplier_name || d.supplier || "—")}
+                      <td className="px-3 py-2.5 text-gray-700">
+                        {String(d.material_code || "—")}{" "}
+                        <span className="text-gray-300">/</span>{" "}
+                        {String(d.supplier_name || d.supplier || "—")}
                       </td>
-                      <td className="px-3 py-2 text-red-700">
-                        {r.errors.length > 0 ? r.errors.join("; ") : ""}
+                      <td className="px-3 py-2.5">
+                        {r.errors.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {r.errors.map((err, i) => (
+                              <span
+                                key={i}
+                                className="inline-flex items-center px-2 py-0.5 rounded-md bg-red-100 text-red-700 text-[10px] font-medium"
+                              >
+                                {err}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -389,28 +606,187 @@ export default function BulkUploadWizard() {
             </table>
           </div>
 
-          <div className="flex justify-between pt-2">
+          <div className="flex items-center justify-between gap-3 pt-2">
             <button
               onClick={() => {
                 setStep(3);
                 setValidation(null);
               }}
-              className="px-4 py-2 bg-gray-200 rounded"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-colors"
             >
+              <ArrowLeft className="w-4 h-4" />
               Back / re-upload
             </button>
             <button
               disabled={validation.summary.valid === 0 || submitting}
               onClick={handleCommit}
-              className="px-5 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white rounded-xl text-sm font-bold transition-all shadow-md shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
             >
+              <CheckCircle2 className="w-4 h-4" />
               {submitting
                 ? "Committing…"
-                : `Commit ${validation.summary.valid} valid rows`}
+                : `Commit ${validation.summary.valid} valid row${validation.summary.valid === 1 ? "" : "s"}`}
             </button>
           </div>
         </section>
       )}
+      </div>
+
+      {successData && (
+        <UploadSuccessModal
+          data={successData}
+          onViewReport={() =>
+            router.push(`/admin/inventory/upload-report/${successData.uploadEventId}`)
+          }
+          onUploadMore={resetWizard}
+          onClose={() => setSuccessData(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function UploadSuccessModal({
+  data,
+  onViewReport,
+  onUploadMore,
+  onClose,
+}: {
+  data: {
+    uploadEventId: string;
+    imported: number;
+    skipped: number;
+    total: number;
+    dealerName: string;
+    assetType: AssetType;
+  };
+  onViewReport: () => void;
+  onUploadMore: () => void;
+  onClose: () => void;
+}) {
+  const hasErrors = data.skipped > 0;
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-3xl max-w-md w-full shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Hero with gradient */}
+        <div
+          className={`relative px-6 py-7 text-white text-center overflow-hidden ${
+            hasErrors
+              ? "bg-gradient-to-br from-amber-500 via-orange-500 to-amber-600"
+              : "bg-gradient-to-br from-emerald-500 via-green-500 to-emerald-600"
+          }`}
+        >
+          <div className="absolute inset-0 opacity-20 pointer-events-none">
+            <div className="absolute -top-8 -right-8 w-40 h-40 rounded-full bg-white" />
+            <div className="absolute -bottom-12 -left-12 w-44 h-44 rounded-full bg-white" />
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="absolute top-3 right-3 w-8 h-8 rounded-lg bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors"
+          >
+            <XIcon className="w-4 h-4" />
+          </button>
+          <div className="relative">
+            <div className="w-16 h-16 mx-auto rounded-full bg-white/25 backdrop-blur flex items-center justify-center ring-4 ring-white/20">
+              {hasErrors ? (
+                <AlertTriangle className="w-9 h-9" />
+              ) : (
+                <CheckCircle2 className="w-9 h-9" />
+              )}
+            </div>
+            <h2 className="mt-4 text-2xl font-black tracking-tight">
+              {hasErrors ? "Upload partially complete" : "Upload successful!"}
+            </h2>
+            <p className="mt-1 text-sm font-medium opacity-90">
+              {data.imported} {data.assetType}
+              {data.imported === 1 ? "" : "s"} added to{" "}
+              <span className="font-black">{data.dealerName}</span>
+            </p>
+          </div>
+        </div>
+
+        {/* Stats grid */}
+        <div className="px-6 pt-5 grid grid-cols-3 gap-2">
+          <ModalStat label="Total" value={data.total} tone="gray" />
+          <ModalStat label="Imported" value={data.imported} tone="emerald" />
+          <ModalStat
+            label="Skipped"
+            value={data.skipped}
+            tone={hasErrors ? "red" : "gray"}
+          />
+        </div>
+
+        {/* Meta row */}
+        <div className="px-6 mt-4 space-y-1.5 text-[11px]">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-gray-500 uppercase tracking-wider font-bold">
+              Report ID
+            </span>
+            <span className="font-mono text-gray-900 truncate">
+              {data.uploadEventId}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-gray-500 uppercase tracking-wider font-bold">
+              Type
+            </span>
+            <span className="font-bold text-gray-900 capitalize">
+              {data.assetType}
+            </span>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="px-6 py-5 mt-4 bg-gray-50 border-t border-gray-100 flex flex-col sm:flex-row gap-2">
+          <button
+            onClick={onUploadMore}
+            className="flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 border border-gray-200 bg-white rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            <UploadCloud className="w-4 h-4" />
+            Upload more
+          </button>
+          <button
+            onClick={onViewReport}
+            className="flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-gradient-to-r from-[#0047AB] to-blue-600 hover:from-[#003580] hover:to-blue-700 text-white rounded-xl text-sm font-bold transition-all shadow-md shadow-blue-500/20"
+          >
+            View detailed report
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ModalStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "gray" | "emerald" | "red";
+}) {
+  const map = {
+    gray: "from-white to-gray-50 border-gray-200 text-gray-900",
+    emerald: "from-emerald-50 to-white border-emerald-200 text-emerald-700",
+    red: "from-red-50 to-white border-red-200 text-red-700",
+  }[tone];
+  return (
+    <div
+      className={`bg-gradient-to-br border rounded-xl px-2.5 py-2.5 text-center ${map}`}
+    >
+      <div className="text-2xl font-black leading-none">{value}</div>
+      <div className="text-[9px] uppercase tracking-wider font-bold text-gray-500 mt-1">
+        {label}
+      </div>
     </div>
   );
 }
@@ -593,9 +969,10 @@ function DealerStep({
         <button
           disabled={!dealerId}
           onClick={onContinue}
-          className="px-6 py-2.5 bg-[#0047AB] hover:bg-[#003580] text-white rounded-xl text-sm font-bold transition-colors disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 px-6 py-2.5 bg-gradient-to-r from-[#0047AB] to-blue-600 hover:from-[#003580] hover:to-blue-700 text-white rounded-xl text-sm font-bold transition-all shadow-md shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
         >
-          Continue →
+          Continue
+          <ArrowRight className="w-4 h-4" />
         </button>
       </div>
     </section>
@@ -660,6 +1037,12 @@ function BoxIcon() {
   );
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 function StockCount({ label, value }: { label: string; value: number }) {
   return (
     <div className="bg-white border border-blue-100 rounded-xl px-3 py-2 text-center">
@@ -673,58 +1056,172 @@ function StockCount({ label, value }: { label: string; value: number }) {
 
 function Stepper({ step }: { step: number }) {
   const labels = ["Dealer", "Asset type", "Template & file", "Preview & commit"];
+  const totalSteps = labels.length;
+  // Progress fill: 0% on step 1, 33% step 2, 66% step 3, 100% step 4.
+  const progressPct = totalSteps > 1 ? ((step - 1) / (totalSteps - 1)) * 100 : 0;
+
   return (
-    <ol className="flex items-center gap-2 text-xs">
-      {labels.map((l, i) => {
-        const idx = i + 1;
-        const active = step === idx;
-        const done = step > idx;
-        return (
-          <li key={l} className="flex items-center gap-2">
-            <span
-              className={`inline-flex w-6 h-6 items-center justify-center rounded-full font-bold text-xs ${
-                done
-                  ? "bg-emerald-600 text-white"
-                  : active
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-200 text-gray-600"
-              }`}
+    <div className="bg-white border border-gray-100 rounded-2xl p-4 sm:p-5 shadow-sm">
+      {/* Mobile: compact inline step indicator. */}
+      <div className="sm:hidden">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-[#0047AB]">
+            Step {step} of {totalSteps}
+          </span>
+          <span className="text-[11px] font-bold text-gray-700">
+            {labels[step - 1]}
+          </span>
+        </div>
+        <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+          <div
+            className="h-full bg-gradient-to-r from-[#0047AB] to-blue-400 transition-[width] duration-500 ease-out"
+            style={{ width: `${progressPct}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Tablet+ : full stepper with connecting bar and gradient fill. */}
+      <ol className="hidden sm:flex items-center relative">
+        {/* Background track */}
+        <div
+          className="absolute top-4 left-4 right-4 h-0.5 bg-gray-100 rounded-full"
+          aria-hidden
+        />
+        {/* Filled progress */}
+        <div
+          className="absolute top-4 left-4 h-0.5 bg-gradient-to-r from-[#0047AB] to-blue-400 rounded-full transition-[width] duration-500 ease-out"
+          style={{
+            width: `calc((100% - 2rem) * ${progressPct / 100})`,
+          }}
+          aria-hidden
+        />
+        {labels.map((l, i) => {
+          const idx = i + 1;
+          const active = step === idx;
+          const done = step > idx;
+          return (
+            <li
+              key={l}
+              className="relative flex-1 flex flex-col items-center gap-2 z-10"
             >
-              {idx}
-            </span>
-            <span
-              className={`uppercase tracking-wide ${
-                active ? "text-blue-600 font-bold" : "text-gray-500"
-              }`}
-            >
-              {l}
-            </span>
-            {idx < labels.length && <span className="text-gray-300">›</span>}
-          </li>
-        );
-      })}
-    </ol>
+              <span
+                className={`inline-flex w-8 h-8 items-center justify-center rounded-full font-black text-[11px] border-2 transition-all duration-300 ${
+                  done
+                    ? "bg-gradient-to-br from-emerald-500 to-emerald-600 border-emerald-600 text-white shadow-md shadow-emerald-500/30"
+                    : active
+                      ? "bg-gradient-to-br from-[#0047AB] to-blue-500 border-[#0047AB] text-white shadow-md shadow-blue-500/30 ring-4 ring-blue-100"
+                      : "bg-white border-gray-200 text-gray-400"
+                }`}
+              >
+                {done ? <CheckCircle2 className="w-4 h-4" /> : idx}
+              </span>
+              <span
+                className={`text-[10px] uppercase tracking-wider font-bold text-center px-1 ${
+                  active
+                    ? "text-[#0047AB]"
+                    : done
+                      ? "text-emerald-700"
+                      : "text-gray-400"
+                }`}
+              >
+                {l}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+function ContextChip({
+  icon,
+  label,
+  tone,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  tone: "blue" | "emerald";
+}) {
+  const styles = {
+    blue: "bg-blue-50 border-blue-200 text-[#0047AB]",
+    emerald: "bg-emerald-50 border-emerald-200 text-emerald-700",
+  }[tone];
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold max-w-[200px] ${styles}`}
+    >
+      {icon}
+      <span className="truncate">{label}</span>
+    </span>
   );
 }
 
 function SummaryCard({
   label,
   value,
+  total,
   tone = "gray",
+  icon,
 }: {
   label: string;
   value: number;
+  total?: number;
   tone?: "gray" | "green" | "red";
+  icon?: React.ReactNode;
 }) {
   const map = {
-    gray: "bg-white border-gray-200",
-    green: "bg-emerald-50 border-emerald-200 text-emerald-800",
-    red: "bg-red-50 border-red-200 text-red-800",
-  };
+    gray: {
+      wrap: "bg-gradient-to-br from-white to-gray-50 border-gray-200",
+      number: "text-gray-900",
+      iconBg: "bg-gray-100 text-gray-500",
+      bar: "bg-gray-300",
+    },
+    green: {
+      wrap: "bg-gradient-to-br from-emerald-50 to-white border-emerald-200",
+      number: "text-emerald-700",
+      iconBg: "bg-emerald-100 text-emerald-700",
+      bar: "bg-emerald-500",
+    },
+    red: {
+      wrap: "bg-gradient-to-br from-red-50 to-white border-red-200",
+      number: "text-red-700",
+      iconBg: "bg-red-100 text-red-700",
+      bar: "bg-red-500",
+    },
+  }[tone];
+  const pct =
+    typeof total === "number" && total > 0
+      ? Math.min(100, Math.round((value / total) * 100))
+      : null;
   return (
-    <div className={`border rounded p-3 ${map[tone]}`}>
-      <div className="text-xs uppercase tracking-wider text-gray-500">{label}</div>
-      <div className="text-2xl font-bold mt-1">{value}</div>
+    <div className={`border rounded-2xl p-4 ${map.wrap}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-[10px] uppercase tracking-wider font-bold text-gray-500">
+          {label}
+        </div>
+        {icon && (
+          <div
+            className={`w-7 h-7 rounded-lg flex items-center justify-center ${map.iconBg}`}
+          >
+            {icon}
+          </div>
+        )}
+      </div>
+      <div className={`text-3xl font-black mt-2 ${map.number}`}>{value}</div>
+      {pct !== null && (
+        <div className="mt-3 space-y-1">
+          <div className="h-1 rounded-full bg-gray-100 overflow-hidden">
+            <div
+              className={`h-full transition-[width] duration-500 ${map.bar}`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <div className="text-[10px] font-bold text-gray-500">
+            {pct}% of total
+          </div>
+        </div>
+      )}
     </div>
   );
 }
