@@ -5,7 +5,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
+import { CheckCircle2 } from "lucide-react";
 
 interface InventoryItem {
   id: string;
@@ -36,6 +37,9 @@ interface InventoryItem {
 
 export default function InventoryDetailPage() {
   const { itemId } = useParams() as { itemId: string };
+  const search = useSearchParams();
+  const justAdded = search?.get("just_added") === "1";
+  const dealerJustUploaded = search?.get("dealer") ?? "";
   const [item, setItem] = useState<InventoryItem | null>(null);
   const [dealerName, setDealerName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -43,6 +47,13 @@ export default function InventoryDetailPage() {
   const [writeOffOpen, setWriteOffOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [showUploadedToast, setShowUploadedToast] = useState(justAdded);
+
+  useEffect(() => {
+    if (!justAdded) return;
+    const t = setTimeout(() => setShowUploadedToast(false), 5000);
+    return () => clearTimeout(t);
+  }, [justAdded]);
 
   const load = async () => {
     setLoading(true);
@@ -117,6 +128,16 @@ export default function InventoryDetailPage() {
           </Link>
         </div>
       </header>
+
+      {showUploadedToast && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded p-3 text-sm flex items-center gap-2 transition-opacity">
+          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+          <span>
+            Inventory uploaded to{" "}
+            <span className="font-bold">{dealerJustUploaded || "the dealer"}</span>.
+          </span>
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 rounded p-3 text-sm">

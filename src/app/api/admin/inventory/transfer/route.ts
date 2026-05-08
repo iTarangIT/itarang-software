@@ -157,13 +157,23 @@ export async function GET(req: NextRequest) {
     if (source) conditions.push(eq(inventoryTransfers.source_dealer_id, source));
     if (target) conditions.push(eq(inventoryTransfers.target_dealer_id, target));
 
-    const rows = await db
-      .select()
-      .from(inventoryTransfers)
-      .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy(asc(inventoryTransfers.initiated_at));
+    try {
+      const rows = await db
+        .select()
+        .from(inventoryTransfers)
+        .where(conditions.length ? and(...conditions) : undefined)
+        .orderBy(asc(inventoryTransfers.initiated_at));
 
-    return NextResponse.json({ success: true, data: { rows } });
+      return NextResponse.json({ success: true, data: { rows } });
+    } catch (queryError) {
+      // Defensive degrade: a missing column / un-applied migration must not blank
+      // the admin transfer page. Mirror the dealer ack handler's pattern.
+      console.error("[Inventory Transfer List] Query failed:", queryError);
+      return NextResponse.json({
+        success: true,
+        data: { rows: [], warning: "Recent transfers temporarily unavailable" },
+      });
+    }
   } catch (error) {
     console.error("[Inventory Transfer List] Error:", error);
     const message = error instanceof Error ? error.message : "Failed to list transfers";

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
     Package, Search, Filter, Plus, AlertTriangle,
     BarChart3, Truck, Bell,
@@ -16,8 +16,9 @@ type InventoryItem = {
     quantity_reserved: number;
     quantity_sold: number;
     unit_price: number;
-    warehouse_location: string;
-    last_restocked: string;
+    warehouse_location: string | null;
+    received_at: string | null;
+    is_new: boolean;
     status: 'in_stock' | 'low_stock' | 'out_of_stock';
 };
 
@@ -31,49 +32,29 @@ type IncomingTransfer = {
     initiated_at: string;
 };
 
-const MOCK_INVENTORY: InventoryItem[] = [
-    {
-        id: 'INV-001', product_name: 'iTarang EV Battery 48V 30Ah', sku: 'BAT-48-30',
-        category: 'Battery', quantity_available: 24, quantity_reserved: 3, quantity_sold: 48,
-        unit_price: 28000, warehouse_location: 'Warehouse A', last_restocked: '2026-04-01',
-        status: 'in_stock',
-    },
-    {
-        id: 'INV-002', product_name: 'iTarang EV Battery 60V 24Ah', sku: 'BAT-60-24',
-        category: 'Battery', quantity_available: 8, quantity_reserved: 2, quantity_sold: 15,
-        unit_price: 35000, warehouse_location: 'Warehouse A', last_restocked: '2026-03-20',
-        status: 'in_stock',
-    },
-    {
-        id: 'INV-003', product_name: 'iTarang Charger Unit 48V', sku: 'CHR-48',
-        category: 'Charger', quantity_available: 3, quantity_reserved: 1, quantity_sold: 30,
-        unit_price: 3500, warehouse_location: 'Warehouse B', last_restocked: '2026-03-10',
-        status: 'low_stock',
-    },
-    {
-        id: 'INV-004', product_name: 'iTarang Controller Unit V2', sku: 'CTR-V2',
-        category: 'Controller', quantity_available: 0, quantity_reserved: 0, quantity_sold: 12,
-        unit_price: 8500, warehouse_location: 'Warehouse A', last_restocked: '2026-02-15',
-        status: 'out_of_stock',
-    },
-    {
-        id: 'INV-005', product_name: 'iTarang EV Battery 72V 40Ah', sku: 'BAT-72-40',
-        category: 'Battery', quantity_available: 12, quantity_reserved: 0, quantity_sold: 6,
-        unit_price: 45000, warehouse_location: 'Warehouse A', last_restocked: '2026-04-03',
-        status: 'in_stock',
-    },
-];
+const CATEGORY_FILTERS = ['all', 'Battery', 'Charger', 'Controller', 'Paraphernalia'] as const;
 
-const CATEGORY_FILTERS = ['all', 'Battery', 'Charger', 'Controller'] as const;
+function fmtDate(iso: string | null) {
+    if (!iso) return '—';
+    try {
+        return new Date(iso).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+    } catch {
+        return iso;
+    }
+}
 
 export default function InventoryPage() {
     const [search, setSearch] = useState('');
-    const [categoryFilter, setCategoryFilter] = useState('all');
+    const [categoryFilter, setCategoryFilter] = useState<string>('all');
     const [statusFilter] = useState('all');
     const [incoming, setIncoming] = useState<IncomingTransfer[]>([]);
     const [loadingIncoming, setLoadingIncoming] = useState(true);
     const [acking, setAcking] = useState<string | null>(null);
     const [incomingError, setIncomingError] = useState<string | null>(null);
+
+    const [inventory, setInventory] = useState<InventoryItem[]>([]);
+    const [loadingInventory, setLoadingInventory] = useState(true);
+    const [inventoryError, setInventoryError] = useState<string | null>(null);
 
     const loadIncomingTransfers = async () => {
         setLoadingIncoming(true);
@@ -93,8 +74,27 @@ export default function InventoryPage() {
         }
     };
 
+    const loadInventory = async () => {
+        setLoadingInventory(true);
+        setInventoryError(null);
+        try {
+            const res = await fetch('/api/dealer/inventory');
+            const json = await res.json();
+            if (json.success) {
+                setInventory(json.data?.rows || []);
+            } else {
+                setInventoryError(json.error?.message || 'Failed to load inventory');
+            }
+        } catch {
+            setInventoryError('Failed to load inventory');
+        } finally {
+            setLoadingInventory(false);
+        }
+    };
+
     useEffect(() => {
         loadIncomingTransfers();
+        loadInventory();
     }, []);
 
     const acknowledgeTransfer = async (transferId: string) => {
@@ -111,7 +111,7 @@ export default function InventoryPage() {
                 setIncomingError(json.error?.message || 'Failed to acknowledge transfer');
                 return;
             }
-            await loadIncomingTransfers();
+            await Promise.all([loadIncomingTransfers(), loadInventory()]);
         } catch {
             setIncomingError('Failed to acknowledge transfer');
         } finally {
@@ -119,17 +119,20 @@ export default function InventoryPage() {
         }
     };
 
-    const items = MOCK_INVENTORY.filter(item => {
+    const items = useMemo(() => inventory.filter(item => {
         if (categoryFilter !== 'all' && item.category !== categoryFilter) return false;
         if (statusFilter !== 'all' && item.status !== statusFilter) return false;
-        if (search && !item.product_name.toLowerCase().includes(search.toLowerCase()) && !item.sku.toLowerCase().includes(search.toLowerCase())) return false;
+        if (search) {
+            const q = search.toLowerCase();
+            if (!item.product_name.toLowerCase().includes(q) && !item.sku.toLowerCase().includes(q)) return false;
+        }
         return true;
-    });
+    }), [inventory, categoryFilter, statusFilter, search]);
 
-    const totalItems = MOCK_INVENTORY.reduce((s, i) => s + i.quantity_available, 0);
-    const totalValue = MOCK_INVENTORY.reduce((s, i) => s + i.quantity_available * i.unit_price, 0);
-    const lowStockCount = MOCK_INVENTORY.filter(i => i.status === 'low_stock').length;
-    const outOfStockCount = MOCK_INVENTORY.filter(i => i.status === 'out_of_stock').length;
+    const totalItems = inventory.reduce((s, i) => s + i.quantity_available, 0);
+    const totalValue = inventory.reduce((s, i) => s + i.quantity_available * i.unit_price, 0);
+    const lowStockCount = inventory.filter(i => i.status === 'low_stock').length;
+    const outOfStockCount = inventory.filter(i => i.status === 'out_of_stock').length;
 
     return (
         <div className="space-y-6">
@@ -195,7 +198,7 @@ export default function InventoryPage() {
             {/* KPI Cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <KpiCard icon={<Package className="h-5 w-5" />} title="Total Units" value={totalItems.toString()} tone="blue" />
-                <KpiCard icon={<BarChart3 className="h-5 w-5" />} title="Stock Value" value={`₹${(totalValue / 100000).toFixed(1)}L`} tone="green" />
+                <KpiCard icon={<BarChart3 className="h-5 w-5" />} title="Stock Value" value={totalValue > 0 ? `₹${(totalValue / 100000).toFixed(1)}L` : '₹0'} tone="green" />
                 <KpiCard icon={<AlertTriangle className="h-5 w-5" />} title="Low Stock" value={lowStockCount.toString()} tone="yellow" />
                 <KpiCard icon={<AlertTriangle className="h-5 w-5" />} title="Out of Stock" value={outOfStockCount.toString()} tone="red" />
             </div>
@@ -226,6 +229,12 @@ export default function InventoryPage() {
                 </div>
             </div>
 
+            {inventoryError && (
+                <div className="rounded-xl border border-red-100 bg-red-50 p-3 text-xs text-red-700">
+                    {inventoryError}
+                </div>
+            )}
+
             {/* Inventory Table */}
             <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
@@ -237,6 +246,7 @@ export default function InventoryPage() {
                                 <th className="px-5 py-3 text-center font-semibold text-gray-600">Available</th>
                                 <th className="px-5 py-3 text-center font-semibold text-gray-600">Reserved</th>
                                 <th className="px-5 py-3 text-center font-semibold text-gray-600">Sold</th>
+                                <th className="px-5 py-3 text-left font-semibold text-gray-600">Received</th>
                                 <th className="px-5 py-3 text-right font-semibold text-gray-600">Unit Price</th>
                                 <th className="px-5 py-3 text-center font-semibold text-gray-600">Status</th>
                             </tr>
@@ -246,12 +256,18 @@ export default function InventoryPage() {
                                 <tr key={item.id} className="hover:bg-gray-50 transition-colors cursor-pointer">
                                     <td className="px-5 py-4">
                                         <div className="font-semibold text-gray-900">{item.product_name}</div>
-                                        <div className="text-xs text-gray-400">{item.warehouse_location}</div>
+                                        <div className="text-xs text-gray-400">{item.warehouse_location || item.category}</div>
                                     </td>
-                                    <td className="px-5 py-4 text-gray-600 font-mono text-xs">{item.sku}</td>
+                                    <td className="px-5 py-4 text-gray-600 font-mono text-xs">{item.sku || '—'}</td>
                                     <td className="px-5 py-4 text-center font-bold text-gray-900">{item.quantity_available}</td>
                                     <td className="px-5 py-4 text-center text-gray-500">{item.quantity_reserved}</td>
                                     <td className="px-5 py-4 text-center text-gray-500">{item.quantity_sold}</td>
+                                    <td className="px-5 py-4">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs text-gray-600">{fmtDate(item.received_at)}</span>
+                                            {item.is_new && <NewBadge />}
+                                        </div>
+                                    </td>
                                     <td className="px-5 py-4 text-right font-semibold text-gray-900">₹{item.unit_price.toLocaleString()}</td>
                                     <td className="px-5 py-4 text-center">
                                         <StockBadge status={item.status} />
@@ -261,9 +277,15 @@ export default function InventoryPage() {
                         </tbody>
                     </table>
                 </div>
-                {items.length === 0 && (
-                    <div className="p-8 text-center text-sm text-gray-500">No items found.</div>
-                )}
+                {loadingInventory ? (
+                    <div className="p-8 text-center text-sm text-gray-500">Loading inventory…</div>
+                ) : items.length === 0 ? (
+                    <div className="p-8 text-center text-sm text-gray-500">
+                        {inventory.length === 0
+                            ? 'No inventory yet. Admin uploads will appear here once allocated to your account.'
+                            : 'No items match your search or filter.'}
+                    </div>
+                ) : null}
             </div>
 
             {/* Future Roadmap */}
@@ -305,6 +327,15 @@ function StockBadge({ status }: { status: string }) {
     return (
         <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${map[status] || 'bg-gray-100 text-gray-600'}`}>
             {labels[status] || status}
+        </span>
+    );
+}
+
+function NewBadge() {
+    return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-200">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            NEW
         </span>
     );
 }

@@ -1,5 +1,10 @@
 // BRD strict per-type CSV templates for admin inventory upload.
 // Column order intentionally mirrors BRD contract.
+//
+// Model ID is the handshake into Product Master. Voltage, capacity,
+// sub_category, warranty (customer), and chemistry are no longer asked for in
+// the CSV — they are hydrated server-side from the matching active product
+// master row.
 
 export type AssetType = "battery" | "charger" | "paraphernalia";
 
@@ -13,19 +18,18 @@ export interface CsvTemplate {
 }
 
 const BATTERY_HEADERS = [
+  "model_id",
   "battery_id",
-  "imei_id",
-  "iot_enabled",
-  "material_code",
   "category",
-  "sub_category",
-  "model_number",
-  "voltage_v",
-  "capacity_ah",
+  "iot_enabled",
+  "imei_id",
+  "material_code",
   "star_rating",
   "invoice_number",
   "sold_date",
   "invoice_value",
+  "hsn_code",
+  "gst_percent",
   "supplier_name",
   "oem_warranty_date",
   "oem_warranty_months",
@@ -36,22 +40,22 @@ const BATTERY_HEADERS = [
 ];
 
 const CHARGER_HEADERS = [
+  "model_id",
   "serial_number",
-  "charger_model",
-  "compatible_battery_models",
-  "output_voltage_v",
-  "output_current_a",
+  "category",
   "invoice_number",
   "invoice_date",
   "invoice_value",
+  "hsn_code",
+  "gst_percent",
   "supplier_name",
   "physical_condition",
   "warehouse_location",
 ];
 
 const PARAPHERNALIA_HEADERS = [
-  "item_type",
-  "compatible_category",
+  "item_type_code",
+  "category",
   "quantity",
   "unit_cost",
   "invoice_number",
@@ -63,47 +67,26 @@ const PARAPHERNALIA_HEADERS = [
 export const CSV_TEMPLATES: Record<AssetType, CsvTemplate> = {
   battery: {
     type: "battery",
-    description: "Serialized battery upload template (BRD strict).",
+    description:
+      "Serialized battery upload template. model_id must exist in Product Master (active). voltage, capacity, sub_category, chemistry, customer warranty are auto-filled from the master.",
     headers: BATTERY_HEADERS,
-    samples: [
-      [
-        "BAT-3W-0001",
-        "352099001428301",
-        "Yes",
-        "OEM-MAT-5V105-003",
-        "3W",
-        "51.2 V-105AH",
-        "BAT-51V-105AH-3W",
-        "51.2",
-        "105",
-        "4",
-        "INV-2026-0045",
-        "2026-01-15",
-        "62000",
-        "XYZ Battery Co.",
-        "2026-01-15",
-        "24",
-        "Warranty void if water damage detected.",
-        "PO-2026-XYZ-011",
-        "new",
-        "Main Godown",
-      ],
-    ],
+    samples: [],
   },
   charger: {
     type: "charger",
-    description: "Serialized charger upload template (BRD strict).",
+    description:
+      "Serialized charger upload template. model_id must exist in Product Master (active). output voltage/current and compatible battery models are auto-filled from the master.",
     headers: CHARGER_HEADERS,
     samples: [
       [
-        "CHR-3W-0001",
         "CHG-51V-20A-FAST",
-        "BAT-51V-105AH-3W|BAT-51V-140AH-3W",
-        "51.2",
-        "20",
+        "CHR-3W-0001",
+        "3W",
         "INV-2026-0045",
         "2026-01-15",
         "6500",
+        "85044090",
+        "18",
         "XYZ Battery Co.",
         "new",
         "Main Godown",
@@ -112,12 +95,13 @@ export const CSV_TEMPLATES: Record<AssetType, CsvTemplate> = {
   },
   paraphernalia: {
     type: "paraphernalia",
-    description: "Quantity-tracked paraphernalia template (BRD strict).",
+    description:
+      "Quantity-tracked paraphernalia template. item_type_code must exist in Product Master (active). compatible categories are auto-filled from the master.",
     headers: PARAPHERNALIA_HEADERS,
     samples: [
       [
         "digital_soc",
-        "3W|2W",
+        "3W",
         "20",
         "450",
         "INV-2026-PARA-1001",
