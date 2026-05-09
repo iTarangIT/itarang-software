@@ -11,8 +11,14 @@ export async function GET() {
   const now = new Date();
 
   const leads = await db.query.dealerLeads.findMany({
-    where: (l, { lte, isNotNull }) =>
-      and(lte(l.next_call_at, now), isNotNull(l.next_call_at)),
+    where: (l, { lte, isNotNull, isNull, ne, or }) =>
+      and(
+        lte(l.next_call_at, now),
+        isNotNull(l.next_call_at),
+        // Skip leads explicitly tagged for ElevenLabs — handled by
+        // /api/elevenlabs/call-scheduler. NULL provider = legacy/Bolna.
+        or(isNull(l.provider), ne(l.provider, "elevenlabs")),
+      ),
   });
 
   let processed = 0;

@@ -127,6 +127,18 @@ export async function POST(
         throw new Error(`Charger ${body.chargerSerial} is not available`);
       }
 
+      // Clear any existing draft row for this lead so it disappears from
+      // /My Drafts. The submitted row below replaces it as the canonical
+      // selection. Done inside the transaction so partial state is impossible.
+      await tx
+        .delete(productSelections)
+        .where(
+          and(
+            eq(productSelections.lead_id, leadId),
+            eq(productSelections.admin_decision, "draft"),
+          ),
+        );
+
       // Insert product selection
       await tx.insert(productSelections).values({
         id: productSelectionId,

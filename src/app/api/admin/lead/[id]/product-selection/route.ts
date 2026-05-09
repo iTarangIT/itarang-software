@@ -6,7 +6,9 @@ import {
   inventory,
   leads,
   loanSanctions,
+  productCategories,
   productSelections,
+  products,
 } from "@/lib/db/schema";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
 
@@ -73,12 +75,50 @@ export async function GET(
       .orderBy(desc(loanSanctions.created_at))
       .limit(1);
 
+    // selection.category is productCategories.id and selection.sub_category
+    // is products.id — resolve them to human-readable names so the panel
+    // doesn't render raw UUIDs. Mirrors the lookup in
+    // src/app/api/lead/[id]/step-4-access/route.ts (~lines 88-124).
+    let categoryName: string | null = null;
+    if (selection.category) {
+      const [cat] = await db
+        .select({ name: productCategories.name })
+        .from(productCategories)
+        .where(eq(productCategories.id, selection.category))
+        .limit(1);
+      if (cat) categoryName = cat.name;
+    }
+
+    let subCategoryName: string | null = null;
+    if (selection.sub_category) {
+      const [prod] = await db
+        .select({
+          name: products.name,
+          voltage_v: products.voltage_v,
+          capacity_ah: products.capacity_ah,
+        })
+        .from(products)
+        .where(eq(products.id, selection.sub_category))
+        .limit(1);
+      if (prod) {
+        const specs = [
+          prod.voltage_v ? `${prod.voltage_v}V` : null,
+          prod.capacity_ah ? `${prod.capacity_ah}Ah` : null,
+        ]
+          .filter(Boolean)
+          .join(" / ");
+        subCategoryName = specs ? `${prod.name} — ${specs}` : prod.name;
+      }
+    }
+
     return NextResponse.json({
       success: true,
       data: {
         leadStatus: lead.kyc_status,
         paymentMethod: lead.payment_method,
         selection,
+        categoryName,
+        subCategoryName,
         battery: batteryRow,
         charger: chargerRow,
         loanSanction: loanRow ?? null,

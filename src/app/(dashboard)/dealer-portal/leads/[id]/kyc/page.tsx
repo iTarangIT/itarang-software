@@ -606,7 +606,9 @@ export default function KYCPage() {
             // Match the gate: if admin approved → Step 4, else if admin
             // requested Step 3 → Step 3. Approval wins over step3 request
             // so step_3_cleared still goes straight to product selection.
-            const approved = ['kyc_approved', 'step_3_cleared'].includes(lead?.kyc_status || '');
+            const approved =
+                ['kyc_approved', 'step_3_cleared'].includes(lead?.kyc_status || '') ||
+                (lead as any)?.final_decision === 'approved';
             const route = approved
                 ? `/dealer-portal/leads/${leadId}/product-selection`
                 : `/dealer-portal/leads/${leadId}/borrower-consent`;
@@ -644,7 +646,9 @@ export default function KYCPage() {
     //   • Request Docs              → has_additional_docs_required=true               → route to Step 3
     // Until the admin clicks one of those, Next stays disabled regardless of
     // dealer-side state (consent / docs / coupon are tracked elsewhere).
-    const adminApprovedFinal = ['kyc_approved', 'step_3_cleared'].includes(lead?.kyc_status || '');
+    const adminApprovedFinal =
+        ['kyc_approved', 'step_3_cleared'].includes(lead?.kyc_status || '') ||
+        (lead as any)?.final_decision === 'approved';
     const adminRequestedStep3 = !!(lead?.has_co_borrower || lead?.has_additional_docs_required);
 
     const pendingRequirements: string[] = [];

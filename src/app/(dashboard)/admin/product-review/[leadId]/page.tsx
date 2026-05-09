@@ -67,6 +67,8 @@ interface PanelData {
   leadStatus: string | null;
   paymentMethod: string | null;
   selection: ProductSelection | null;
+  categoryName?: string | null;
+  subCategoryName?: string | null;
   battery: Record<string, unknown> | null;
   charger: Record<string, unknown> | null;
   loanSanction: LoanSanction | null;
@@ -100,11 +102,31 @@ export default function AdminProductReviewPage() {
   const [lenderName, setLenderName] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Reusable fetcher so post-action refresh hits the same endpoint as the
+  // initial load. router.refresh() only re-runs server components — this
+  // page is a client component, so we must repopulate `data` ourselves
+  // after sanction/reject, otherwise the form panel stays open with stale
+  // leadStatus and the user perceives the buttons as "not working".
+  const reloadPanel = async () => {
+    try {
+      const res = await fetch(`/api/admin/lead/${leadId}/product-selection`, {
+        cache: "no-store",
+      });
+      const json = await res.json();
+      if (json.success) setData(json.data);
+      else setError(json.error?.message || "Failed to refresh");
+    } catch {
+      setError("Failed to refresh product selection");
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/admin/lead/${leadId}/product-selection`);
+        const res = await fetch(`/api/admin/lead/${leadId}/product-selection`, {
+          cache: "no-store",
+        });
         const json = await res.json();
         if (!cancelled) {
           if (json.success) setData(json.data);
@@ -122,6 +144,14 @@ export default function AdminProductReviewPage() {
   }, [leadId]);
 
   const handleSanction = async () => {
+    if (!loanForm.loanApprovedBy.trim()) {
+      setError("Lender name (Loan Approved By) is required.");
+      return;
+    }
+    if (!loanForm.loanFileNumber.trim()) {
+      setError("Loan File Number is required.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -143,8 +173,14 @@ export default function AdminProductReviewPage() {
         body: JSON.stringify(body),
       });
       const json = await res.json();
-      if (json.success) router.refresh();
-      else setError(json.error?.message || "Failed to sanction loan");
+      if (json.success) {
+        setMode("idle");
+        setLoanForm(emptyLoanForm);
+        await reloadPanel();
+        router.refresh();
+      } else {
+        setError(json.error?.message || "Failed to sanction loan");
+      }
     } catch (e) {
       setError("Failed to sanction loan");
     } finally {
@@ -166,8 +202,15 @@ export default function AdminProductReviewPage() {
         body: JSON.stringify({ rejectionReason, lenderName: lenderName || undefined }),
       });
       const json = await res.json();
-      if (json.success) router.refresh();
-      else setError(json.error?.message || "Failed to reject loan");
+      if (json.success) {
+        setMode("idle");
+        setRejectionReason("");
+        setLenderName("");
+        await reloadPanel();
+        router.refresh();
+      } else {
+        setError(json.error?.message || "Failed to reject loan");
+      }
     } catch (e) {
       setError("Failed to reject loan");
     } finally {
@@ -178,7 +221,15 @@ export default function AdminProductReviewPage() {
   if (loading) return <div className="p-8">Loading…</div>;
   if (!data) return <div className="p-8 text-red-600">{error || "No data"}</div>;
 
-  const { selection, battery, charger, loanSanction, leadStatus } = data;
+  const {
+    selection,
+    battery,
+    charger,
+    loanSanction,
+    leadStatus,
+    categoryName,
+    subCategoryName,
+  } = data;
 
   return (
     <div className="max-w-4xl mx-auto p-8 space-y-6">
@@ -218,8 +269,9 @@ export default function AdminProductReviewPage() {
           <div className="grid grid-cols-2 gap-4 text-sm">
             <Field label="Payment Mode" value={selection.payment_mode} />
             <Field label="Admin Decision" value={selection.admin_decision} />
-            <Field label="Category" value={selection.category} />
-            <Field label="Model Number" value={selection.model_number} />
+
+            <Field label="Category" value={categoryName ?? selection.category} />
+            <Field label="Model Number" value={subCategoryName ?? selection.model_number} />
             <Field label="Battery Serial" value={selection.battery_serial} />
             <Field label="Battery Model" value={battery?.model_type as string} />
             <Field label="Charger Serial" value={selection.charger_serial} />
@@ -308,7 +360,8 @@ export default function AdminProductReviewPage() {
           <div className="grid grid-cols-2 gap-4 text-sm">
             <Field label="Status" value={loanSanction.status} />
             <Field label="Lender" value={loanSanction.loan_approved_by} />
-            {loanSanction.status === "sanctioned" && (
+            {(loanSanction.status === "sanctioned" ||
+              loanSanction.status === "dealer_approved") && (
               <>
                 <Field label="Loan Amount" value={`₹${loanSanction.loan_amount}`} />
                 <Field label="EMI" value={`₹${loanSanction.emi}`} />
@@ -323,20 +376,34 @@ export default function AdminProductReviewPage() {
         </section>
       )}
 
-      {selection && leadStatus === "pending_final_approval" && mode === "idle" && (
-        <div className="flex gap-3">
-          <button
-            onClick={() => setMode("sanction")}
-            className="px-5 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700"
+      {/* BRD V2 §2.6 — admin actions on Product Panel.
+          Download Profile is always available once Step 4 is submitted and never
+          changes lead status. Sanction/Reject only appear while the lead is
+          awaiting the loan decision. */}
+      {selection && mode === "idle" && (
+        <div className="flex flex-wrap gap-3">
+          {leadStatus === "pending_final_approval" && (
+            <>
+              <button
+                onClick={() => setMode("sanction")}
+                className="px-5 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700"
+              >
+                Loan Sanctioned
+              </button>
+              <button
+                onClick={() => setMode("reject")}
+                className="px-5 py-2 bg-red-600 text-white rounded font-bold hover:bg-red-700"
+              >
+                Loan Rejected
+              </button>
+            </>
+          )}
+          <a
+            href={`/api/admin/lead/${leadId}/download-profile`}
+            className="px-5 py-2 bg-white border-2 border-blue-600 text-blue-600 rounded font-bold hover:bg-blue-50 inline-flex items-center"
           >
-            Loan Sanctioned
-          </button>
-          <button
-            onClick={() => setMode("reject")}
-            className="px-5 py-2 bg-red-600 text-white rounded font-bold hover:bg-red-700"
-          >
-            Loan Rejected
-          </button>
+            Download Profile (.zip)
+          </a>
         </div>
       )}
 
@@ -405,14 +472,6 @@ export default function AdminProductReviewPage() {
         </section>
       )}
 
-      <div className="pt-4">
-        <a
-          href={`/api/admin/lead/${leadId}/download-profile`}
-          className="text-sm text-blue-600 hover:underline"
-        >
-          Download Customer Profile (summary JSON)
-        </a>
-      </div>
     </div>
   );
 }

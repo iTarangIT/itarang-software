@@ -21,6 +21,7 @@ type Row = {
   lead_id: string;
   owner_name: string;
   dealer_name: string;
+  dealer_phone: string | null;
   kyc_status: string;
   payment_mode: string;
   admin_decision: string;
@@ -180,7 +181,14 @@ export default function AdminProductReviewQueuePage() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-gray-700">{r.dealer_name}</td>
+                      <td className="px-4 py-3">
+                        <div className="font-bold text-gray-900">{r.dealer_name}</div>
+                        {r.dealer_phone && (
+                          <div className="text-[11px] text-gray-400 font-mono">
+                            {r.dealer_phone}
+                          </div>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <PaymentBadge mode={r.payment_mode} />
                       </td>

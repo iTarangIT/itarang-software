@@ -18,10 +18,10 @@ const FINANCE_DOCUMENTS = [
     { key: "address_proof", label: "Address Proof", required: true },
     { key: "rc_copy", label: "RC Copy", required: false, conditional: true },
     { key: "bank_statement", label: "Bank Statement", required: true },
-    { key: "cheque_1", label: "Undated Cheque 1", required: true },
-    { key: "cheque_2", label: "Undated Cheque 2", required: true },
-    { key: "cheque_3", label: "Undated Cheque 3", required: true },
-    { key: "cheque_4", label: "Undated Cheque 4", required: true },
+    { key: "cheque_1", label: "Undated Cheque 1", required: false },
+    { key: "cheque_2", label: "Undated Cheque 2", required: false },
+    { key: "cheque_3", label: "Undated Cheque 3", required: false },
+    { key: "cheque_4", label: "Undated Cheque 4", required: false },
 ] as const;
 
 const UPFRONT_DOCUMENTS = [

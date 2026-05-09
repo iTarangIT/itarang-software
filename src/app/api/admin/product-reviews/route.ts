@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { desc, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { leads, loanSanctions, productSelections } from "@/lib/db/schema";
+import { leads, loanSanctions, productSelections, users } from "@/lib/db/schema";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
 
 // BRD V2 Part E — admin Step 4 product-review queue.
@@ -72,6 +72,7 @@ export async function GET(req: NextRequest) {
           business_name: leads.business_name,
           kyc_status: leads.kyc_status,
           payment_method: leads.payment_method,
+          dealer_id: leads.dealer_id,
         })
         .from(leads)
         .where(inArray(leads.id, leadIds)),
@@ -88,6 +89,43 @@ export async function GET(req: NextRequest) {
       if (!latestSanctionByLead.has(row.lead_id)) latestSanctionByLead.set(row.lead_id, row);
     }
 
+    // The dealer record is the user with role='dealer' whose dealer_id matches
+    // the lead.dealer_id. leads.business_name is the customer's business, not
+    // the dealer's, so we must join with users to surface the dealer's own
+    // name + mobile in the queue.
+    const dealerIds = [
+      ...new Set(
+        leadRows
+          .map((l) => l.dealer_id)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    const dealerRows = dealerIds.length
+      ? await db
+          .select({
+            dealer_id: users.dealer_id,
+            name: users.name,
+            phone: users.phone,
+            is_active: users.is_active,
+          })
+          .from(users)
+          .where(
+            and(
+              inArray(users.dealer_id, dealerIds),
+              eq(users.role, "dealer"),
+            ),
+          )
+      : [];
+    const dealerByDealerId = new Map<string, { name: string | null; phone: string | null }>();
+    for (const d of dealerRows) {
+      if (!d.dealer_id) continue;
+      const existing = dealerByDealerId.get(d.dealer_id);
+      // Prefer the active user when more than one row exists per dealer_id.
+      if (!existing || d.is_active) {
+        dealerByDealerId.set(d.dealer_id, { name: d.name, phone: d.phone });
+      }
+    }
+
     // Build the unified row set first (pre-filter), then derive KPIs from it
     // so counts always reflect the same dataset the page can browse.
     const allRows = leadIds
@@ -102,10 +140,18 @@ export async function GET(req: NextRequest) {
         else if (loanStatus === "rejected") derivedStatus = "rejected";
         else derivedStatus = "pending";
 
+        const dealerInfo = lead?.dealer_id
+          ? dealerByDealerId.get(lead.dealer_id) ?? null
+          : null;
+
         return {
           lead_id: leadId,
           owner_name: lead?.owner_name?.trim() || "Unknown",
-          dealer_name: lead?.business_name?.trim() || "—",
+          dealer_name:
+            dealerInfo?.name?.trim() ||
+            lead?.business_name?.trim() ||
+            "—",
+          dealer_phone: dealerInfo?.phone ?? null,
           kyc_status: lead?.kyc_status || "pending",
           payment_mode: sel.payment_mode || lead?.payment_method || "—",
           admin_decision: sel.admin_decision || "pending",
@@ -135,6 +181,7 @@ export async function GET(req: NextRequest) {
         return (
           r.owner_name.toLowerCase().includes(search) ||
           r.dealer_name.toLowerCase().includes(search) ||
+          (r.dealer_phone?.toLowerCase() ?? "").includes(search) ||
           r.lead_id.toLowerCase().includes(search)
         );
       })
