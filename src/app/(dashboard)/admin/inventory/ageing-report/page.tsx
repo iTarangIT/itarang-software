@@ -59,7 +59,7 @@ export default function AgeingReportPage() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/admin/dealers?status=active&limit=500");
+        const res = await fetch("/api/admin/dealers?limit=500");
         const json = await res.json();
         if (json.success) setDealers(json.data || []);
       } catch (e) {

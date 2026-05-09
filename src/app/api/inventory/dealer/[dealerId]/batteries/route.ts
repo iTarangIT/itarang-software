@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq, or } from "drizzle-orm";
+import { and, asc, eq, ilike, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { inventory, products, productCategories } from "@/lib/db/schema";
@@ -51,7 +51,9 @@ export async function GET(
     ];
     if (category) {
       const categoryName = await resolveCategoryName(category);
-      filters.push(eq(inventory.asset_category, categoryName));
+      // Use prefix match so canonical names like "3W" also pick up inventory
+      // rows tagged "3W Batteries", "3W Vehicles", etc.
+      filters.push(ilike(inventory.asset_category, `${categoryName}%`));
     }
     // When the lead has a primary_product_id (Step 1 "Product Type"),
     // restrict inventory to that exact product. Falls back to free

@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, X as XIcon } from "lucide-react";
 
 interface InventoryItem {
   id: string;
@@ -49,11 +49,8 @@ export default function InventoryDetailPage() {
   const [submitting, setSubmitting] = useState(false);
   const [showUploadedToast, setShowUploadedToast] = useState(justAdded);
 
-  useEffect(() => {
-    if (!justAdded) return;
-    const t = setTimeout(() => setShowUploadedToast(false), 5000);
-    return () => clearTimeout(t);
-  }, [justAdded]);
+  // Persistent until the admin dismisses — auto-fade was too short to be
+  // useful as confirmation across slower flows like charger / paraphernalia.
 
   const load = async () => {
     setLoading(true);
@@ -130,12 +127,33 @@ export default function InventoryDetailPage() {
       </header>
 
       {showUploadedToast && (
-        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded p-3 text-sm flex items-center gap-2 transition-opacity">
-          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-          <span>
-            Inventory uploaded to{" "}
-            <span className="font-bold">{dealerJustUploaded || "the dealer"}</span>.
-          </span>
+        <div className="rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50 via-emerald-50 to-white p-4 flex items-start gap-3 shadow-sm">
+          <div className="w-8 h-8 rounded-lg bg-emerald-500 text-white flex items-center justify-center flex-shrink-0">
+            <CheckCircle2 className="w-4 h-4" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-bold text-emerald-900">
+              {item?.asset_type
+                ? `${item.asset_type.charAt(0).toUpperCase()}${item.asset_type.slice(1)} added to inventory`
+                : "Inventory item added"}
+            </div>
+            <div className="text-xs text-emerald-800 mt-0.5">
+              Allocated to{" "}
+              <span className="font-bold">{dealerJustUploaded || "the dealer"}</span>
+              {item?.serial_number ? (
+                <>
+                  {" · "}Serial <span className="font-mono">{item.serial_number}</span>
+                </>
+              ) : null}
+            </div>
+          </div>
+          <button
+            onClick={() => setShowUploadedToast(false)}
+            aria-label="Dismiss"
+            className="w-7 h-7 rounded-lg text-emerald-700 hover:bg-emerald-100 flex items-center justify-center flex-shrink-0"
+          >
+            <XIcon className="w-4 h-4" />
+          </button>
         </div>
       )}
 

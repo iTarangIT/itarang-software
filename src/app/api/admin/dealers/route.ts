@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { accounts, inventory } from "@/lib/db/schema";
-import { and, eq, ilike, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, ilike, ne, or, sql, type SQL } from "drizzle-orm";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireInventoryAdmin } from "@/lib/auth-utils";
 
@@ -10,25 +10,34 @@ import { requireInventoryAdmin } from "@/lib/auth-utils";
 //
 //   GET /api/admin/dealers
 //     ?search=query    case-insensitive match on name / dealer_code / city
-//     ?status=active   defaults to active
+//     ?status=…        explicit accounts.status filter (active|inactive|all);
+//                      omitted = "all onboarded dealers except rejected ones",
+//                      which is what every inventory dropdown actually wants
 //     ?limit=500       caller-controlled cap, default 200, max 1000
 //     ?includeStock=1  attach { batteries, chargers, paraphernalia }
 //                      counts to each dealer (one extra grouped query)
+//
+// Visibility line is onboarding_status, not status. A dealer mid-KYC-correction
+// has accounts.status='inactive' but is still operational on the dealer portal
+// and must appear in admin inventory tooling. Only onboarding_status='rejected'
+// is a true exclusion.
 
 export const GET = withErrorHandler(async (req: Request) => {
   await requireInventoryAdmin();
 
   const { searchParams } = new URL(req.url);
   const search = searchParams.get("search")?.trim() ?? "";
-  const status = searchParams.get("status")?.trim() || "active";
+  const statusParam = searchParams.get("status")?.trim() ?? "";
   const limit = Math.min(Math.max(Number(searchParams.get("limit") ?? 200), 1), 1000);
   const includeStock =
     searchParams.get("includeStock") === "1" ||
     searchParams.get("include_stock") === "1";
 
   const conditions: SQL[] = [];
-  if (status && status !== "all") {
-    conditions.push(eq(accounts.status, status));
+  if (statusParam && statusParam !== "all") {
+    conditions.push(eq(accounts.status, statusParam));
+  } else {
+    conditions.push(ne(accounts.onboarding_status, "rejected"));
   }
   if (search) {
     const like = `%${search}%`;

@@ -6,6 +6,7 @@ import {
     BarChart3, Truck, Bell,
     QrCode, Download,
 } from 'lucide-react';
+import DealerInventoryDetailModal from '@/components/dealer-dashboard/DealerInventoryDetailModal';
 
 type InventoryItem = {
     id: string;
@@ -32,7 +33,16 @@ type IncomingTransfer = {
     initiated_at: string;
 };
 
-const CATEGORY_FILTERS = ['all', 'Battery', 'Charger', 'Controller', 'Paraphernalia'] as const;
+const CATEGORY_FILTERS = ['all', 'Battery', 'Charger', 'Paraphernalia'] as const;
+
+function categoryLabel(raw: string | null | undefined): string {
+    if (!raw) return '—';
+    const t = String(raw).trim().toLowerCase();
+    if (t === 'battery') return 'Battery';
+    if (t === 'charger') return 'Charger';
+    if (t === 'paraphernalia') return 'Paraphernalia';
+    return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
 
 function fmtDate(iso: string | null) {
     if (!iso) return '—';
@@ -41,6 +51,53 @@ function fmtDate(iso: string | null) {
     } catch {
         return iso;
     }
+}
+
+function csvEscape(value: unknown): string {
+    if (value === null || value === undefined) return '';
+    const s = String(value);
+    if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+}
+
+function buildInventoryCsv(rows: InventoryItem[]): string {
+    const headers = [
+        'Product',
+        'Inventory Detail',
+        'Warehouse',
+        'Available',
+        'Reserved',
+        'Sold',
+        'Unit Price (INR)',
+        'Stock Value (INR)',
+        'Received',
+        'Status',
+    ];
+    const body = rows.map(r => [
+        r.product_name,
+        categoryLabel(r.category),
+        r.warehouse_location ?? '',
+        r.quantity_available,
+        r.quantity_reserved,
+        r.quantity_sold,
+        r.unit_price,
+        r.unit_price * r.quantity_available,
+        r.received_at ? new Date(r.received_at).toISOString().slice(0, 10) : '',
+        r.status,
+    ].map(csvEscape).join(','));
+    return [headers.join(','), ...body].join('\r\n');
+}
+
+function downloadCsv(filename: string, csv: string) {
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
 export default function InventoryPage() {
@@ -55,6 +112,7 @@ export default function InventoryPage() {
     const [inventory, setInventory] = useState<InventoryItem[]>([]);
     const [loadingInventory, setLoadingInventory] = useState(true);
     const [inventoryError, setInventoryError] = useState<string | null>(null);
+    const [activeItem, setActiveItem] = useState<InventoryItem | null>(null);
 
     const loadIncomingTransfers = async () => {
         setLoadingIncoming(true);
@@ -120,11 +178,22 @@ export default function InventoryPage() {
     };
 
     const items = useMemo(() => inventory.filter(item => {
-        if (categoryFilter !== 'all' && item.category !== categoryFilter) return false;
+        if (
+            categoryFilter !== 'all' &&
+            (item.category ?? '').toLowerCase() !== categoryFilter.toLowerCase()
+        ) {
+            return false;
+        }
         if (statusFilter !== 'all' && item.status !== statusFilter) return false;
         if (search) {
             const q = search.toLowerCase();
-            if (!item.product_name.toLowerCase().includes(q) && !item.sku.toLowerCase().includes(q)) return false;
+            if (
+                !item.product_name.toLowerCase().includes(q) &&
+                !item.sku.toLowerCase().includes(q) &&
+                !categoryLabel(item.category).toLowerCase().includes(q)
+            ) {
+                return false;
+            }
         }
         return true;
     }), [inventory, categoryFilter, statusFilter, search]);
@@ -186,7 +255,17 @@ export default function InventoryPage() {
                     <p className="mt-1 text-gray-500">Manage stock levels, track products, and monitor warehouse operations.</p>
                 </div>
                 <div className="flex gap-2">
-                    <button className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors">
+                    <button
+                        type="button"
+                        disabled={items.length === 0}
+                        onClick={() => {
+                            const csv = buildInventoryCsv(items);
+                            const stamp = new Date().toISOString().slice(0, 10);
+                            const scope = categoryFilter === 'all' ? 'all' : categoryFilter.toLowerCase();
+                            downloadCsv(`inventory-${scope}-${stamp}.csv`, csv);
+                        }}
+                        className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors"
+                    >
                         <Download className="h-4 w-4" /> Export
                     </button>
                     <button className="inline-flex items-center gap-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white px-4 py-2.5 text-sm font-semibold transition-colors">
@@ -209,7 +288,7 @@ export default function InventoryPage() {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                     <input
                         type="text"
-                        placeholder="Search by product name or SKU..."
+                        placeholder="Search by product or inventory detail..."
                         value={search}
                         onChange={e => setSearch(e.target.value)}
                         className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm focus:border-brand-500 focus:ring-1 focus:ring-brand-500 focus:outline-none"
@@ -242,7 +321,7 @@ export default function InventoryPage() {
                         <thead>
                             <tr className="border-b border-gray-100 bg-gray-50">
                                 <th className="px-5 py-3 text-left font-semibold text-gray-600">Product</th>
-                                <th className="px-5 py-3 text-left font-semibold text-gray-600">SKU</th>
+                                <th className="px-5 py-3 text-left font-semibold text-gray-600">Inventory Detail</th>
                                 <th className="px-5 py-3 text-center font-semibold text-gray-600">Available</th>
                                 <th className="px-5 py-3 text-center font-semibold text-gray-600">Reserved</th>
                                 <th className="px-5 py-3 text-center font-semibold text-gray-600">Sold</th>
@@ -253,12 +332,18 @@ export default function InventoryPage() {
                         </thead>
                         <tbody className="divide-y divide-gray-100">
                             {items.map(item => (
-                                <tr key={item.id} className="hover:bg-gray-50 transition-colors cursor-pointer">
+                                <tr
+                                    key={item.id}
+                                    onClick={() => setActiveItem(item)}
+                                    className="hover:bg-gray-50 transition-colors cursor-pointer"
+                                >
                                     <td className="px-5 py-4">
                                         <div className="font-semibold text-gray-900">{item.product_name}</div>
                                         <div className="text-xs text-gray-400">{item.warehouse_location || item.category}</div>
                                     </td>
-                                    <td className="px-5 py-4 text-gray-600 font-mono text-xs">{item.sku || '—'}</td>
+                                    <td className="px-5 py-4">
+                                        <CategoryBadge category={item.category} />
+                                    </td>
                                     <td className="px-5 py-4 text-center font-bold text-gray-900">{item.quantity_available}</td>
                                     <td className="px-5 py-4 text-center text-gray-500">{item.quantity_reserved}</td>
                                     <td className="px-5 py-4 text-center text-gray-500">{item.quantity_sold}</td>
@@ -298,6 +383,11 @@ export default function InventoryPage() {
                     <FutureItem icon={<BarChart3 className="h-4 w-4" />} text="Inventory analytics with demand forecasting" />
                 </div>
             </div>
+
+            <DealerInventoryDetailModal
+                item={activeItem}
+                onClose={() => setActiveItem(null)}
+            />
         </div>
     );
 }
@@ -327,6 +417,21 @@ function StockBadge({ status }: { status: string }) {
     return (
         <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${map[status] || 'bg-gray-100 text-gray-600'}`}>
             {labels[status] || status}
+        </span>
+    );
+}
+
+function CategoryBadge({ category }: { category: string | null | undefined }) {
+    const label = categoryLabel(category);
+    const map: Record<string, string> = {
+        Battery: 'bg-blue-50 text-blue-700 ring-blue-200',
+        Charger: 'bg-amber-50 text-amber-700 ring-amber-200',
+        Paraphernalia: 'bg-purple-50 text-purple-700 ring-purple-200',
+    };
+    const cls = map[label] || 'bg-gray-50 text-gray-700 ring-gray-200';
+    return (
+        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ring-1 ${cls}`}>
+            {label}
         </span>
     );
 }
