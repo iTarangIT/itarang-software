@@ -19,6 +19,14 @@
     {
       "path": "/api/cron/iot/scan-offline-batteries",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/elevenlabs/call-scheduler",
+      "schedule": "5 3 * * *"
+    },
+    {
+      "path": "/api/cron/dispatch-to-sold",
+      "schedule": "0 4 * * *"
     }
   ],
   "functions": {

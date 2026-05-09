@@ -298,10 +298,36 @@ export async function notifyDispatchConfirmed(params: {
     leadId: params.leadId,
     type: "dispatch_confirmed",
     title: "Dispatch Confirmed",
-    message: `Battery ${params.batterySerial} dispatched. Warranty ${params.warrantyId} activated.`,
+    message: `Battery ${params.batterySerial} dispatched. Warranty ${params.warrantyId} activated. Awaiting delivery confirmation.`,
     data: {
       warranty_id: params.warrantyId,
       battery_serial: params.batterySerial,
+    },
+  });
+}
+
+/**
+ * Notify dealer when a previously-dispatched lead has been marked delivered
+ * (either by the dealer's manual click or the daily cron).
+ */
+export async function notifyDelivered(params: {
+  leadId: string;
+  warrantyId: string;
+  batterySerial: string;
+  source: "manual" | "cron";
+}) {
+  await notifyDealerForLead({
+    leadId: params.leadId,
+    type: "delivery_confirmed",
+    title: "Delivery Confirmed",
+    message:
+      params.source === "manual"
+        ? `Battery ${params.batterySerial} marked delivered. Sale finalized.`
+        : `Battery ${params.batterySerial} auto-finalized after dispatch window. Sale closed.`,
+    data: {
+      warranty_id: params.warrantyId,
+      battery_serial: params.batterySerial,
+      source: params.source,
     },
   });
 }
