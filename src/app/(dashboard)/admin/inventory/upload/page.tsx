@@ -112,7 +112,7 @@ export default function BulkUploadWizard() {
     (async () => {
       try {
         const res = await fetch(
-          "/api/admin/dealers?status=active&limit=500&includeStock=1",
+          "/api/admin/dealers?limit=500&includeStock=1",
         );
         const json = await res.json();
         if (json.success) setDealers(json.data || []);
@@ -267,7 +267,7 @@ export default function BulkUploadWizard() {
           <div>
             <h2 className="font-black text-gray-900">2. Select inventory type</h2>
             <p className="text-xs text-gray-500 mt-1">
-              Each type has its own field set and CSV template. Batteries and
+              Each type has its own field set and Excel template. Batteries and
               chargers are tracked by individual serial number. Paraphernalia
               is tracked by quantity per item type.
             </p>
@@ -385,10 +385,10 @@ export default function BulkUploadWizard() {
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-bold text-gray-900">
-                Download {assetType} CSV template
+                Download {assetType} Excel template
               </div>
               <div className="text-[11px] text-gray-500">
-                Headers + example row · safe to share with the warehouse team
+                Excel template · Dates accepted in YYYY-MM-DD or DD-MM-YYYY — Excel locale formatting is fine
               </div>
             </div>
             <ArrowRight className="w-4 h-4 text-gray-400 group-hover:text-[#0047AB] group-hover:translate-x-0.5 transition-all" />

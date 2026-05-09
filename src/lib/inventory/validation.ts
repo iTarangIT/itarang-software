@@ -23,7 +23,10 @@ const yesNoBool = z
 const dateString = z
   .string()
   .min(1)
-  .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid date format");
+  .refine(
+    (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(new Date(s).getTime()),
+    "Date must be in YYYY-MM-DD or DD-MM-YYYY format (e.g. 2026-01-15 or 15-01-2026)",
+  );
 
 const soldDateString = dateString.refine(
   (s) => new Date(s).getTime() <= Date.now(),

@@ -108,7 +108,7 @@ export default function AdminInventoryDashboard() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/admin/dealers?status=active&limit=500");
+        const res = await fetch("/api/admin/dealers?limit=500");
         const json = await res.json();
         if (json.success) setDealers(json.data || []);
       } catch (e) {
@@ -172,16 +172,16 @@ export default function AdminInventoryDashboard() {
     [kpis],
   );
 
-  // BRD §5.0.7 — Ageing Alert. Count rows with invoice date older than 90/180 days.
+  // Ageing Alert — count rows in inventory longer than 90/180 days (since created_at).
   const ageing = useMemo(() => {
     const now = Date.now();
     const day = 24 * 60 * 60 * 1000;
     let over90 = 0;
     let over180 = 0;
     for (const r of rows) {
-      if (!r.invoiceDate) continue;
+      if (!r.createdAt) continue;
       if (r.status === "sold" || r.status === "written_off") continue;
-      const age = (now - new Date(r.invoiceDate).getTime()) / day;
+      const age = (now - new Date(r.createdAt).getTime()) / day;
       if (age > 180) over180++;
       else if (age > 90) over90++;
     }
@@ -460,7 +460,7 @@ export default function AdminInventoryDashboard() {
                         })}
                       </td>
                       <td className="px-3 py-2.5 text-right text-gray-500">
-                        {ageDaysLabel(r.invoiceDate)}
+                        {ageDaysLabel(r.createdAt)}
                       </td>
                     </tr>
                   ))}
@@ -601,10 +601,10 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function ageDaysLabel(invoiceDate: string | null): string {
-  if (!invoiceDate) return "—";
+function ageDaysLabel(createdAt: string | null): string {
+  if (!createdAt) return "—";
   const days = Math.floor(
-    (Date.now() - new Date(invoiceDate).getTime()) / (24 * 60 * 60 * 1000),
+    (Date.now() - new Date(createdAt).getTime()) / (24 * 60 * 60 * 1000),
   );
   if (days < 0) return "—";
   return `${days}d`;

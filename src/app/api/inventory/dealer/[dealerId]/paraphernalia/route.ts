@@ -43,7 +43,11 @@ export async function GET(
       const cats = Array.isArray(r.compatible_categories)
         ? (r.compatible_categories as string[])
         : [];
-      return cats.includes(categoryName);
+      // Prefix match so canonical "3W" matches "3W", "3W Batteries", etc.
+      const needle = categoryName.toLowerCase();
+      return cats.some((c) =>
+        typeof c === "string" && c.toLowerCase().startsWith(needle),
+      );
     });
 
     const data = filtered.map((r) => {

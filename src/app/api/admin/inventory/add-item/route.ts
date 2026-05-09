@@ -120,7 +120,11 @@ export const POST = withErrorHandler(async (req: Request) => {
       .from(inventory)
       .where(eq(inventory.serial_number, serial))
       .limit(1);
-    if (dup) return errorResponse(`Serial ${serial} already exists`, 409);
+    if (dup)
+      return errorResponse(
+        `Serial number / Battery ID must be unique — '${serial}' already exists.`,
+        409,
+      );
   }
 
   const imei = assetType === "battery" ? String(row.imei_id || "").trim() : "";

@@ -79,7 +79,9 @@ export async function GET() {
 
     for (const r of serialRows) {
       const sku = r.model_type ?? "";
-      const category = r.asset_category ?? r.asset_type ?? "Other";
+      // Dealer UI filters on item type (Battery/Charger/Paraphernalia), which lives
+      // in asset_type. asset_category holds vehicle class ("3W"/"2W") and is the wrong axis here.
+      const category = r.asset_type ?? r.asset_category ?? "Other";
       const key = `${category}__${sku}`;
       const existing = groups.get(key) ?? {
         category,

@@ -5,7 +5,7 @@
 // voltage, capacity, sub_category, warranty (customer), and chemistry, and
 // drives the IoT / IMEI gating.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -85,18 +85,13 @@ export default function AddInventoryItemPage() {
     modelLabel: string;
   } | null>(null);
 
-  // Tracks the most recent suggested serial we wrote into the form. When the
-  // model changes we only overwrite the field if it still holds the prior
-  // suggestion (i.e. the user hasn't typed a custom value over it).
-  const lastSuggestedRef = useRef<{ battery_id: string; serial_number: string }>({
-    battery_id: "",
-    serial_number: "",
-  });
+  // Inline error for live duplicate-serial check on blur.
+  const [serialError, setSerialError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/admin/dealers?status=active&limit=500");
+        const res = await fetch("/api/admin/dealers?limit=500");
         const json = await res.json();
         if (json.success) setDealers(json.data || []);
       } catch (e) {
@@ -180,101 +175,112 @@ export default function AddInventoryItemPage() {
     return [];
   }, [selectedBattery, selectedCharger, selectedPara]);
 
+  // Resolve the category implied by a model_id by matching its trailing
+  // segment (after the last `-`) against the model's compatible categories.
+  // Lets `BAT-51V-176AH-3W` lock to "3W" even when compatible is ["3W","2W"].
+  const resolveCategoryFromModelId = (
+    modelId: string,
+    compatible: string[],
+  ): string => {
+    const trimmed = (modelId || "").trim();
+    if (!trimmed || compatible.length === 0) return "";
+    const dashIdx = trimmed.lastIndexOf("-");
+    const suffix = (dashIdx >= 0 ? trimmed.slice(dashIdx + 1) : trimmed).toLowerCase();
+    if (!suffix) return "";
+    const match = compatible.find((c) => c.toLowerCase() === suffix);
+    if (match) return match;
+    if (compatible.length === 1) return compatible[0];
+    return "";
+  };
+
   // When the model changes, default the IoT toggle and category. For non-IoT
   // batteries, force the toggle off and clear IMEI.
   useEffect(() => {
     if (selectedBattery) {
       setIotEnabled(selectedBattery.iot_compatible);
+      const resolved = resolveCategoryFromModelId(
+        selectedBattery.model_id,
+        selectedBattery.compatible_categories,
+      );
       setForm((s) => ({
         ...s,
-        category:
-          selectedBattery.compatible_categories.length === 1
-            ? selectedBattery.compatible_categories[0]
-            : s.category && selectedBattery.compatible_categories.includes(s.category)
-              ? s.category
-              : "",
+        category: resolved
+          ? resolved
+          : s.category && selectedBattery.compatible_categories.includes(s.category)
+            ? s.category
+            : "",
         imei_id: selectedBattery.iot_compatible ? s.imei_id || "" : "",
       }));
     } else if (selectedCharger) {
       setIotEnabled(false);
-      setForm((s) => ({ ...s, category: s.category || "" }));
-    } else if (selectedPara) {
-      setIotEnabled(false);
+      // Charger compatibleCategories is the static fallback list. Parse the
+      // model_id suffix (e.g. "CHR-53V-178-3W" → "3W") so the dropdown locks
+      // to the right vehicle class without the admin clicking again.
+      const chargerCategories = ["3W", "2W", "4W", "Inverter", "Solar", "Other"];
+      const resolved = resolveCategoryFromModelId(
+        selectedCharger.model_id,
+        chargerCategories,
+      );
       setForm((s) => ({
         ...s,
-        category:
-          selectedPara.compatible_categories.length === 1
-            ? selectedPara.compatible_categories[0]
-            : s.category && selectedPara.compatible_categories.includes(s.category)
-              ? s.category
-              : "",
+        category: resolved
+          ? resolved
+          : s.category && chargerCategories.includes(s.category)
+            ? s.category
+            : "",
+      }));
+    } else if (selectedPara) {
+      setIotEnabled(false);
+      const resolved = resolveCategoryFromModelId(
+        selectedPara.item_type_code,
+        selectedPara.compatible_categories,
+      );
+      setForm((s) => ({
+        ...s,
+        category: resolved
+          ? resolved
+          : s.category && selectedPara.compatible_categories.includes(s.category)
+            ? s.category
+            : "",
       }));
     }
   }, [selectedBattery, selectedCharger, selectedPara]);
 
-  // Auto-fill battery_id / serial_number from Product Master model_id. Each
-  // physical unit needs a unique serial (DB-level unique constraint), so we
-  // ask the API for the next "<model_id>-NNNN" sequence. The user can still
-  // type over the suggestion — we only overwrite when the field is empty or
-  // still holds the prior suggestion.
-  useEffect(() => {
-    let assetTypeParam: "battery" | "charger" | null = null;
-    let modelIdParam = "";
-    let fieldName: "battery_id" | "serial_number" = "battery_id";
-
-    if (selectedBattery) {
-      assetTypeParam = "battery";
-      modelIdParam = selectedBattery.model_id;
-      fieldName = "battery_id";
-    } else if (selectedCharger) {
-      assetTypeParam = "charger";
-      modelIdParam = selectedCharger.model_id;
-      fieldName = "serial_number";
-    } else {
-      return;
-    }
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const url = `/api/admin/inventory/next-serial?assetType=${assetTypeParam}&modelId=${encodeURIComponent(modelIdParam)}`;
-        const res = await fetch(url);
-        const json = await res.json();
-        if (cancelled) return;
-        const suggested: unknown = json?.data?.suggestedSerial;
-        if (typeof suggested !== "string" || !suggested) return;
-        const field = fieldName;
-        setForm((s) => {
-          const current = (s[field] || "").trim();
-          const prev = lastSuggestedRef.current[field];
-          if (current === "" || current === prev) {
-            lastSuggestedRef.current[field] = suggested;
-            return { ...s, [field]: suggested };
-          }
-          // User typed something custom — preserve it but remember the new
-          // suggestion so the next model switch can replace it cleanly.
-          lastSuggestedRef.current[field] = suggested;
-          return s;
-        });
-      } catch (e) {
-        console.error(e);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedBattery, selectedCharger]);
-
   const setField = (name: string, value: string) =>
     setForm((s) => ({ ...s, [name]: value }));
+
+  // Live duplicate check fired on blur of Battery ID / Serial Number. Server
+  // also enforces this on submit (409), so this is just for instant feedback.
+  const checkSerialDuplicate = async (raw: string) => {
+    const serial = (raw || "").trim();
+    if (!serial) {
+      setSerialError(null);
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/admin/inventory/check-serial?serial=${encodeURIComponent(serial)}`,
+      );
+      const json = await res.json();
+      if (json?.success && json.data?.exists) {
+        setSerialError(
+          `Serial number / Battery ID must be unique — '${serial}' already exists.`,
+        );
+      } else {
+        setSerialError(null);
+      }
+    } catch (e) {
+      console.error(e);
+      setSerialError(null);
+    }
+  };
 
   const resetForAnother = () => {
     setSuccessData(null);
     setForm({});
     setSelectedKey("");
     setIotEnabled(false);
-    lastSuggestedRef.current = { battery_id: "", serial_number: "" };
+    setSerialError(null);
   };
 
   const handleSubmit = async () => {
@@ -292,6 +298,10 @@ export default function AddInventoryItemPage() {
     }
     if (!form.category) {
       setError("Select a category");
+      return;
+    }
+    if (serialError) {
+      setError(serialError);
       return;
     }
 
@@ -498,6 +508,13 @@ export default function AddInventoryItemPage() {
                   disabled
                   className={INPUT_DISABLED}
                 />
+              ) : form.category && compatibleCategories.includes(form.category) ? (
+                <input
+                  type="text"
+                  value={form.category}
+                  disabled
+                  className={INPUT_DISABLED}
+                />
               ) : (
                 <select
                   value={form.category || ""}
@@ -535,7 +552,22 @@ export default function AddInventoryItemPage() {
         {selectedBattery && (
           <>
             <div className="grid grid-cols-2 gap-4 pt-2">
-              <TextField label="Battery ID / Serial Number" name="battery_id" form={form} setField={setField} />
+              <div>
+                <label className={FIELD_LABEL}>Battery ID / Serial Number</label>
+                <input
+                  type="text"
+                  value={form.battery_id || ""}
+                  onChange={(e) => {
+                    setField("battery_id", e.target.value);
+                    if (serialError) setSerialError(null);
+                  }}
+                  onBlur={(e) => checkSerialDuplicate(e.target.value)}
+                  className={INPUT}
+                />
+                {serialError && (
+                  <p className="text-xs text-red-600 mt-1">{serialError}</p>
+                )}
+              </div>
               <TextField label="Material Code" name="material_code" form={form} setField={setField} />
               <TextField label="Star Rating (1–5)" name="star_rating" type="number" form={form} setField={setField} />
               <TextField label="Invoice Number" name="invoice_number" form={form} setField={setField} />
@@ -602,7 +634,22 @@ export default function AddInventoryItemPage() {
         {/* Charger-specific fields */}
         {selectedCharger && (
           <div className="grid grid-cols-2 gap-4 pt-2">
-            <TextField label="Serial Number" name="serial_number" form={form} setField={setField} />
+            <div>
+              <label className={FIELD_LABEL}>Serial Number</label>
+              <input
+                type="text"
+                value={form.serial_number || ""}
+                onChange={(e) => {
+                  setField("serial_number", e.target.value);
+                  if (serialError) setSerialError(null);
+                }}
+                onBlur={(e) => checkSerialDuplicate(e.target.value)}
+                className={INPUT}
+              />
+              {serialError && (
+                <p className="text-xs text-red-600 mt-1">{serialError}</p>
+              )}
+            </div>
             <TextField label="Invoice Number" name="invoice_number" form={form} setField={setField} />
             <TextField label="Invoice Date" name="invoice_date" type="date" form={form} setField={setField} />
             <TextField label="Invoice Value (₹, pre-GST)" name="invoice_value" type="number" form={form} setField={setField} />

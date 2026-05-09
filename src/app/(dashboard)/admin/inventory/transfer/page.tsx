@@ -53,7 +53,7 @@ export default function AdminInventoryTransferPage() {
     (async () => {
       try {
         const [dr, tr] = await Promise.all([
-          fetch("/api/admin/dealers?status=active&limit=500").then((r) => r.json()),
+          fetch("/api/admin/dealers?limit=500").then((r) => r.json()),
           fetch("/api/admin/inventory/transfer").then((r) => r.json()),
         ]);
         if (dr.success) setDealers(dr.data || []);

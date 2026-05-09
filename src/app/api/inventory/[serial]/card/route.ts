@@ -168,9 +168,9 @@ export async function GET(
         )
       : null;
 
-    const ageDays = inv.oem_invoice_date
+    const ageDays = inv.created_at
       ? Math.floor(
-          (Date.now() - new Date(inv.oem_invoice_date).getTime()) /
+          (Date.now() - new Date(inv.created_at).getTime()) /
             (1000 * 60 * 60 * 24),
         )
       : null;

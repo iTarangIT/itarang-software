@@ -50,10 +50,15 @@ export const GET = withErrorHandler(async (req: Request) => {
     legacyConditions.push(eq(inventory.asset_category, category));
   }
   if (subCategory) {
-    conditions.push(eq(inventory.sub_category, subCategory));
+    const subExpr = or(
+      ilike(inventory.asset_type, subCategory),
+      ilike(inventory.sub_category, subCategory),
+      ilike(inventory.inventory_type, subCategory),
+    );
+    if (subExpr) conditions.push(subExpr);
     const legacySubExpr = or(
-      eq(inventory.asset_type, subCategory),
-      eq(inventory.model_type, subCategory),
+      ilike(inventory.asset_type, subCategory),
+      ilike(inventory.model_type, subCategory),
     );
     if (legacySubExpr) legacyConditions.push(legacySubExpr);
   }
@@ -158,7 +163,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         oemWarrantyExpiry: inventory.oem_warranty_expiry,
         createdAt: inventory.created_at,
         updatedAt: inventory.updated_at,
-        inventoryAgeDays: sql<number>`EXTRACT(DAY FROM (NOW() - ${inventory.oem_invoice_date}))::int`,
+        inventoryAgeDays: sql<number>`EXTRACT(DAY FROM (NOW() - ${inventory.created_at}))::int`,
       })
       .from(inventory)
       .leftJoin(accounts, eq(accounts.id, inventory.dealer_id))
@@ -200,7 +205,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         oemWarrantyExpiry: sql<string | null>`NULL::text`,
         createdAt: inventory.created_at,
         updatedAt: inventory.updated_at,
-        inventoryAgeDays: sql<number>`EXTRACT(DAY FROM (NOW() - ${inventory.oem_invoice_date}))::int`,
+        inventoryAgeDays: sql<number>`EXTRACT(DAY FROM (NOW() - ${inventory.created_at}))::int`,
       })
       .from(inventory)
       .leftJoin(accounts, eq(accounts.id, inventory.dealer_id))

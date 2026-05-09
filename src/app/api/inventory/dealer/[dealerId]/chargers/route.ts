@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq, or } from "drizzle-orm";
+import { and, asc, eq, ilike, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { inventory, products, productCategories } from "@/lib/db/schema";
@@ -56,7 +56,8 @@ export async function GET(
     ];
     if (category) {
       const categoryName = await resolveCategoryName(category);
-      filters.push(eq(inventory.asset_category, categoryName));
+      // Prefix match so canonical "3W" picks up "3W Batteries" / "3W Vehicles".
+      filters.push(ilike(inventory.asset_category, `${categoryName}%`));
     }
 
     const rows = await db

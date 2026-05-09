@@ -201,7 +201,7 @@ export default function ProductSelectionPage() {
 
   // Section A — editable Category / Product Type. Lists feed the dropdowns.
   // Edits PATCH the lead row, so the change propagates back to Step 1.
-  type CatOption = { id: string; name: string; slug: string };
+  type CatOption = { id: string; name: string; slug: string; available_count?: number };
   type ProdOption = {
     id: string;
     name: string;
@@ -260,11 +260,12 @@ export default function ProductSelectionPage() {
   }, [leadId, router]);
 
   // ── Load Category list once for the editable dropdown ───────────────
+  // Uses the dealer-scoped, canonicalized list so Step 4 mirrors Step 1.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/inventory/categories");
+        const res = await fetch("/api/dealer/leads/categories");
         const json = await res.json();
         if (cancelled) return;
         if (json.success) setCategories(json.data || []);
@@ -284,12 +285,17 @@ export default function ProductSelectionPage() {
       setProductsList([]);
       return;
     }
-    const cat = categories.find((c) => c.id === access.category);
+    // Prefer matching by canonical UUID (new leads). Fall back to slug match
+    // for leads created during the brief window when slug was stored in
+    // product_category_id by mistake.
+    const cat =
+      categories.find((c) => c.id === access.category) ??
+      categories.find((c) => c.slug === access.category);
     if (!cat) return; // wait for categories to arrive
     (async () => {
       try {
         const res = await fetch(
-          `/api/inventory/products?category=${encodeURIComponent(cat.slug)}`,
+          `/api/dealer/leads/products?category=${encodeURIComponent(cat.slug)}`,
         );
         const json = await res.json();
         if (cancelled) return;
@@ -1007,8 +1013,21 @@ export default function ProductSelectionPage() {
                 ) : (
                   <EditableSelectField
                     label="Product Category"
-                    value={access.category ?? ""}
-                    options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                    value={(() => {
+                      // Map slug-stored legacy values back to the canonical UUID
+                      // so the dropdown's value matches one of the options.
+                      const cat =
+                        categories.find((c) => c.id === access.category) ??
+                        categories.find((c) => c.slug === access.category);
+                      return cat?.id ?? access.category ?? "";
+                    })()}
+                    options={categories.map((c) => ({
+                      value: c.id,
+                      label:
+                        typeof c.available_count === "number"
+                          ? `${c.name} (${c.available_count} in stock)`
+                          : c.name,
+                    }))}
                     onChange={handleCategoryChange}
                     saving={savingCategory}
                     disabled={!categories.length}

@@ -5,7 +5,13 @@ import { requireInventoryAdmin } from "@/lib/auth-utils";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
-import { ASSET_TYPES, AssetType } from "@/lib/inventory/csv-templates";
+import {
+  ASSET_TYPES,
+  AssetType,
+  DATE_FIELDS_BY_TYPE,
+  unwrapCsvCell,
+} from "@/lib/inventory/csv-templates";
+import { normalizeDateCell } from "@/lib/inventory/date-normalize";
 import { formatZodErrors, getRowSchema, ValidatedRow } from "@/lib/inventory/validation";
 import { loadProductMasterBatch } from "@/lib/inventory/product-master";
 
@@ -41,10 +47,37 @@ export const POST = withErrorHandler(async (req: Request) => {
     });
     rawRows = parsed.data;
   } else {
-    const wb = XLSX.read(buffer);
+    // cellDates + dateNF + raw=false makes the xlsx lib emit YYYY-MM-DD strings
+    // for any cell Excel still treats as a date type, so the normalization pass
+    // below only has to clean up text cells.
+    const wb = XLSX.read(buffer, { cellDates: true });
     rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(
       wb.Sheets[wb.SheetNames[0]],
+      { raw: false, dateNF: "yyyy-mm-dd", defval: "" },
     );
+  }
+
+  // Strip Excel-friendly text-formula wrappers (="2026-01-15" → 2026-01-15)
+  // that the CSV template emits for date columns. Applied to every cell so
+  // any column the user accidentally text-wrapped also normalizes cleanly.
+  rawRows = rawRows.map((row) => {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(row)) out[k] = unwrapCsvCell(v);
+    return out;
+  });
+
+  // Normalize date columns to YYYY-MM-DD. Excel rewrites dates to the system
+  // locale on Save-As-CSV (en-IN: DD-MM-YYYY), and the strict regex in
+  // validation.ts would otherwise reject perfectly valid input.
+  const dateFields = DATE_FIELDS_BY_TYPE[assetType] ?? [];
+  if (dateFields.length) {
+    rawRows = rawRows.map((row) => {
+      const out: Record<string, unknown> = { ...row };
+      for (const f of dateFields) {
+        if (f in out) out[f] = normalizeDateCell(out[f]);
+      }
+      return out;
+    });
   }
 
   if (rawRows.length === 0) return errorResponse("File contains no data rows", 400);
