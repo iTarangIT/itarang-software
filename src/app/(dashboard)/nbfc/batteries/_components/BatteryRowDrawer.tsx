@@ -37,13 +37,23 @@ interface RowProps {
 }
 
 export default async function BatteryRowDrawer({ row }: RowProps) {
-  const [health, geofence, immobilizer, charges, faults] = await Promise.all([
-    getBatteryHealth(row.vehicleno),
-    getGeofenceEvents(row.vehicleno, 30),
-    getImmobilizerState(row.vehicleno),
-    getChargeEvents(row.vehicleno, 30),
-    getOpenFaultCodes(row.vehicleno),
-  ]);
+  let health: Awaited<ReturnType<typeof getBatteryHealth>> = null;
+  let geofence: Awaited<ReturnType<typeof getGeofenceEvents>> = [];
+  let immobilizer: Awaited<ReturnType<typeof getImmobilizerState>> = null;
+  let charges: Awaited<ReturnType<typeof getChargeEvents>> = [];
+  let faults: Awaited<ReturnType<typeof getOpenFaultCodes>> = [];
+  let vpsError: string | null = null;
+  try {
+    [health, geofence, immobilizer, charges, faults] = await Promise.all([
+      getBatteryHealth(row.vehicleno),
+      getGeofenceEvents(row.vehicleno, 30),
+      getImmobilizerState(row.vehicleno),
+      getChargeEvents(row.vehicleno, 30),
+      getOpenFaultCodes(row.vehicleno),
+    ]);
+  } catch (e) {
+    vpsError = e instanceof Error ? e.message : String(e);
+  }
 
   return (
     <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-5">
@@ -64,6 +74,12 @@ export default async function BatteryRowDrawer({ row }: RowProps) {
           ) : null}
         </div>
       </header>
+
+      {vpsError ? (
+        <div className="border border-amber-200 bg-amber-50 text-amber-900 text-xs rounded p-2">
+          IoT VPS unreachable — telemetry detail unavailable. ({vpsError})
+        </div>
+      ) : null}
 
       {/* Live gauges */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

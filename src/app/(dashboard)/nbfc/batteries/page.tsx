@@ -164,6 +164,26 @@ export default async function BatteriesPage({
         </div>
       ) : null}
 
+      {drawerRow ? (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="section-label-muted">Selected battery</p>
+            <Link
+              href={`?${new URLSearchParams({
+                ...(params.status ? { status: params.status } : {}),
+                ...(params.severity ? { severity: params.severity } : {}),
+                ...(params.q ? { q: params.q } : {}),
+              }).toString()}`}
+              scroll={false}
+              className="text-xs font-bold uppercase tracking-widest text-slate-500 hover:text-slate-900"
+            >
+              ✕ Close
+            </Link>
+          </div>
+          <BatteryRowDrawer row={drawerRow} />
+        </div>
+      ) : null}
+
       {/* KPI strip */}
       <section className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <Kpi label="Total" value={summary?.total ?? portfolioRows.length} />
@@ -303,7 +323,6 @@ export default async function BatteriesPage({
         </table>
       </div>
 
-      {drawerRow ? <BatteryRowDrawer row={drawerRow} /> : null}
     </div>
   );
 }
