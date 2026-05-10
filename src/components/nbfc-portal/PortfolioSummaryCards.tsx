@@ -66,7 +66,16 @@ export default function PortfolioSummaryCards() {
     let cancelled = false;
     fetch("/api/nbfc/portfolio/summary", { cache: "no-store" })
       .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+          let detail = `HTTP ${r.status}`;
+          try {
+            const body = await r.json();
+            if (body?.error) detail = `${detail} — ${body.error}`;
+          } catch {
+            // non-JSON body (e.g. Next.js 404 HTML) — keep status only
+          }
+          throw new Error(detail);
+        }
         return r.json();
       })
       .then((json) => {
