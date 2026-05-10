@@ -161,12 +161,16 @@ export async function POST(
         .set({ admin_decision: "dealer_confirmed", updated_at: now })
         .where(eq(productSelections.id, selection.id));
 
-      // Loan sanction → dealer_approved
+      // Loan sanction → disbursed (dispatch confirmation = funds released).
+      // Keeps the legacy dealer_approved_* audit fields populated; collapses
+      // status straight to 'disbursed' so the NBFC Portfolio Overview cards
+      // (which filter on status='disbursed') reflect the live book.
       if (loan) {
         await tx
           .update(loanSanctions)
           .set({
-            status: "dealer_approved",
+            status: "disbursed",
+            disbursed_at: now,
             dealer_approved: true,
             dealer_approved_at: now,
             dealer_approved_by: user.id,
