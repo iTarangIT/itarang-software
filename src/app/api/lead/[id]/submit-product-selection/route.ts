@@ -50,7 +50,9 @@ const BodySchema = z.object({
   gstSubtotal: z.number().min(0).optional(),
   netSubtotal: z.number().min(0).optional(),
   category: z.string().optional(),
-  subCategory: z.string().optional(),
+  // E-103: was subCategory; renamed to modelNumber to mirror the
+  // product_selections.model_number column (Sync Audit G-05).
+  modelNumber: z.string().optional(),
 });
 
 const FINANCE_UNLOCKED = new Set(["step_3_cleared", "kyc_approved"]);
@@ -146,7 +148,7 @@ export async function POST(
         paraphernalia: body.paraphernalia ?? {},
         paraphernalia_lines: body.paraphernaliaLines ?? [],
         category: body.category || lead.product_category_id,
-        sub_category: body.subCategory || lead.product_type_id,
+        model_number: body.modelNumber || lead.product_type_id,
         battery_price: body.batteryPrice?.toString(),
         charger_price: body.chargerPrice?.toString(),
         paraphernalia_cost: body.paraphernaliaCost?.toString(),

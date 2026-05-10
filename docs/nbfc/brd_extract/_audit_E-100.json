@@ -1,0 +1,14 @@
+{
+  "unit_id": "E-100",
+  "audited_at": "2026-05-01T06:10:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [],
+  "new_findings": [],
+  "verdict": "audited",
+  "migration_required": false,
+  "notes": [
+    "Sync Audit G-01 / G-05 / G-09 — purely a read-only canonical endpoint; returns hard-coded category/model matrix without touching any DB table.",
+    "tables_columns.reuse[] and tables_columns.new[] are both empty, which matches the logic block (no DB access)."
+  ],
+  "checkpoint_html": null
+}

@@ -20,6 +20,10 @@ export function Header() {
 
     const displayName = user?.name || user?.email?.split('@')[0] || 'User';
     const displayEmail = user?.email || '';
+    // NOTE: displayRole is sourced from `users.role` via /api/user/profile.
+    // If the persona row in DB carries the wrong role (e.g. "dealer" for a
+    // sales_head Supabase login), this is a data issue — see
+    // docs/nbfc/NOTES.md for the seed-personas fix path.
     const displayRole = user?.role || 'user';
     const initials = displayName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
 
@@ -52,7 +56,14 @@ export function Header() {
     }, []);
 
     return (
-        <header className="sticky top-0 z-20 bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shadow-sm">
+        <header
+            className="sticky top-0 z-20 px-6 py-3 flex items-center justify-between"
+            style={{
+                background: "var(--color-surface)",
+                borderBottom: "1px solid var(--color-border)",
+                boxShadow: "var(--shadow-card)",
+            }}
+        >
             <GlobalSearchOverlay isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
             {/* Search Bar */}
             <div className="flex items-center gap-4 flex-1 max-w-2xl">
@@ -88,12 +99,23 @@ export function Header() {
                         onClick={() => setIsProfileOpen(!isProfileOpen)}
                         className="flex items-center gap-2 hover:bg-gray-50 p-1.5 rounded-lg transition-colors focus:outline-none"
                     >
-                        <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold border border-brand-200">
+                        <div
+                            className="w-9 h-9 rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm"
+                            style={{ background: "var(--gradient-primary)" }}
+                        >
                             {initials}
                         </div>
                         <div className="hidden md:block text-left">
-                            <p className="text-sm font-medium text-gray-700 leading-none">{displayName}</p>
-                            <p className="text-xs text-gray-500 capitalize">{displayRole}</p>
+                            <p className="text-sm font-semibold text-gray-900 leading-none">{displayName}</p>
+                            <span
+                                className="inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold tracking-[0.14em] uppercase"
+                                style={{
+                                    background: "var(--brand-sky-soft)",
+                                    color: "var(--color-brand-sky)",
+                                }}
+                            >
+                                {displayRole}
+                            </span>
                         </div>
                         <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${isProfileOpen ? 'rotate-180' : ''}`} />
                     </button>

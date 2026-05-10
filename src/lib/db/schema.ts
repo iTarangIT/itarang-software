@@ -11,9 +11,11 @@ import {
   json,
   uuid,
   index,
+  uniqueIndex,
   bigint,
   date,
   serial,
+  bigserial,
   primaryKey,
   unique,
   customType,
@@ -1214,6 +1216,11 @@ export const kycDocuments = pgTable(
     uploaded_by: uuid("uploaded_by"),
     verified_by: uuid("verified_by"),
     doc_for: varchar("doc_for", { length: 20 }).default('customer').notNull(),
+    // E-091 — DPDPA retention: when a KYC document is purged after the 7y
+    // RBI/IT-Act retention window, we keep the row (so foreign keys to lead
+    // remain intact) but null all PII columns and flip `purged` to true.
+    purged: boolean("purged").default(false).notNull(),
+    purged_at: timestamp("purged_at", { withTimezone: true }),
   },
   (table) => {
     return {
@@ -2090,6 +2097,46 @@ export const batteryAlerts = pgTable("battery_alerts", {
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
+// --- IOT DEVICE REGISTRY (E-045) ---
+//
+// Canonical IoT device-state table. Owned by E-045 (device registration on
+// inventory upload) and consumed by E-046/E-047/E-048/E-049/E-050/E-051
+// (telemetry ingestion, query APIs, immobilisation gating, etc.).
+//
+// Reuse-vs-new rationale (per E-045 audit):
+//   - inventory.soc_percent / inventory.soc_last_sync_at hold per-asset SOC
+//     snapshots; this table holds the live device-side cache (last_seen,
+//     soc/soh/voltage/temperature/cycles, GPS, BMS) keyed off the IoT device
+//     itself (serial_number/imei_id), not the inventory unit.
+//   - device_battery_map links a device to a deployed battery once it ships;
+//     iot_devices is created earlier (at inventory upload) so the registry
+//     exists before deployment.
+//   - dealer_id is intentionally a logical FK (varchar) matching the dealer-id
+//     pattern used across after_sales_records / coupon_batches / dealer_leads.
+export const iotDevices = pgTable("iot_devices", {
+  id: serial().primaryKey(),
+  device_id: varchar("device_id", { length: 50 }).notNull().unique(),
+  serial_number: varchar("serial_number", { length: 50 }).notNull().unique(),
+  imei_id: varchar("imei_id", { length: 20 }).notNull().unique(),
+  dealer_id: varchar("dealer_id", { length: 50 }).notNull(),
+  model: varchar({ length: 100 }).notNull(),
+  category: varchar({ length: 50 }).notNull(),
+  device_status: varchar("device_status", { length: 20 }).notNull().default('registered'),
+  last_seen: timestamp("last_seen", { withTimezone: true }),
+  soc_percent: integer("soc_percent"),
+  soh_percent: integer("soh_percent"),
+  voltage_v: numeric("voltage_v", { precision: 6, scale: 2 }),
+  temperature_c: numeric("temperature_c", { precision: 5, scale: 2 }),
+  charge_cycles: integer("charge_cycles"),
+  gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
+  gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
+  gps_updated_at: timestamp("gps_updated_at", { withTimezone: true }),
+  bms_status: varchar("bms_status", { length: 50 }),
+  first_usage_at: timestamp("first_usage_at", { withTimezone: true }),
+  registered_at: timestamp("registered_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // --- APP SETTINGS ---
 
 export const appSettings = pgTable("app_settings", {
@@ -2583,7 +2630,10 @@ export const productSelections = pgTable("product_selections", {
 
   // Classification (may differ from Step 1 if dealer changed category)
   category: varchar("category", { length: 100 }),
-  sub_category: varchar("sub_category", { length: 100 }),
+  // model_number — battery model identifier (e.g. '51.2V-105AH'). Renamed from
+  // sub_category per Sync Audit G-05 (E-103); width widened to 100 to allow
+  // INV models like 'Power Cube 1.4+'.
+  model_number: varchar("model_number", { length: 100 }),
 
   // Pricing (snapshot at submission time)
   battery_price: decimal("battery_price", { precision: 12, scale: 2 }),
@@ -2643,6 +2693,14 @@ export const loanSanctions = pgTable("loan_sanctions", {
   dealer_approved: boolean("dealer_approved").default(false),
   dealer_approved_at: timestamp("dealer_approved_at", { withTimezone: true }),
   dealer_approved_by: uuid("dealer_approved_by"),
+  // E-026 prereq (G-03): tenant scoping + lifecycle markers required by BRD §6.1.3.
+  nbfc_id: uuid("nbfc_id"),
+  disbursed_at: timestamp("disbursed_at", { withTimezone: true }),
+  closed_at: timestamp("closed_at", { withTimezone: true }),
+  // E-035 (BRD §6.1.6): permanent recovery-flag markers — once set the row
+  // records a non-reversible recovery decision by the Risk Head.
+  recovery_flagged_at: timestamp("recovery_flagged_at", { withTimezone: true }),
+  recovery_reason: text("recovery_reason"),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -2697,6 +2755,12 @@ export const afterSalesRecords = pgTable("after_sales_records", {
 // =============================================================================
 
 // One row per NBFC partner.
+//
+// E-080 (BRD §6.4.2) — Mandatory compliance metadata renderer for borrower-impacting
+// screens. RBI Digital Lending Directions 2025 require the formal registered NBFC
+// legal name, RBI registration number, and grievance channel (URL + helpline) on
+// every borrower-facing communication. `display_name` is a brand label; the four
+// columns below carry the regulatory-grade identity that compliance screens render.
 export const nbfcTenants = pgTable("nbfc_tenants", {
   id: uuid().defaultRandom().primaryKey().notNull(),
   slug: text().notNull(),
@@ -2705,9 +2769,40 @@ export const nbfcTenants = pgTable("nbfc_tenants", {
   aum_inr: numeric("aum_inr", { precision: 16, scale:  2 }),
   active_loans: integer("active_loans").default(0).notNull(),
   is_active: boolean("is_active").default(true).notNull(),
+  // E-080 — RBI DLD 2025 mandatory compliance identity columns.
+  nbfc_legal_name: varchar("nbfc_legal_name", { length: 255 }),
+  rbi_registration_no: varchar("rbi_registration_no", { length: 64 }),
+  grievance_url: text("grievance_url"),
+  grievance_helpline: varchar("grievance_helpline", { length: 32 }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// E-080 (BRD §6.4.2) — Versioned compliance copy, keyed by screen.
+// One row per (tenant, screen_key, version). The latest active row by
+// effective_from supplies the body_text rendered on every borrower-facing
+// screen so that authoritative wording stays consistent and changes are
+// audit-trailed. `screen_key` matches the API enum:
+//   immobilisation_confirm | collection_sms | telemetry_view |
+//   portal_footer | recovery_call | sms_template
+export const nbfcComplianceText = pgTable(
+  "nbfc_compliance_text",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    screen_key: varchar("screen_key", { length: 64 }).notNull(),
+    body_text: text("body_text").notNull(),
+    version: integer("version").default(1).notNull(),
+    effective_from: timestamp("effective_from", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantScreenIdx: index("nbfc_compliance_text_tenant_screen_idx").on(
+      table.tenant_id,
+      table.screen_key,
+    ),
+    effectiveIdx: index("nbfc_compliance_text_effective_idx").on(table.effective_from),
+  }),
+);
 
 // Many-to-many between users and tenants. Most NBFC partner users belong to
 // exactly one tenant; some Itarang internal operators may belong to many.
@@ -2717,6 +2812,7 @@ export const nbfcUsers = pgTable(
     user_id: uuid("user_id").notNull(),
     tenant_id: uuid("tenant_id").notNull(),
     role: varchar({ length: 32 }).default('viewer').notNull(),
+    notification_prefs: jsonb("notification_prefs").default({}).notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -2789,6 +2885,316 @@ export const riskCardRuns = pgTable(
   }),
 );
 
+// -----------------------------------------------------------------------------
+// E-026 — Portfolio Overview summary cards (Section 6.1.3)
+// -----------------------------------------------------------------------------
+// Two new tables to support the portfolio summary endpoint:
+//   • borrower_risk_scores      — nightly-computed CDS / PCI per borrower
+//   • nbfc_recovery_pipeline    — recovered batteries moving through the
+//                                  recovery & auction stage flow
+// Tenant scoping enforced in application code (drizzle where-clauses).
+// -----------------------------------------------------------------------------
+
+export const borrowerRiskScores = pgTable(
+  "borrower_risk_scores",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    borrower_id: uuid("borrower_id").notNull(),
+    loan_sanction_id: uuid("loan_sanction_id").notNull(),
+    cds_score: numeric("cds_score", { precision: 5, scale: 2 }),
+    pci_score: numeric("pci_score", { precision: 4, scale: 3 }),
+    confidence: varchar({ length: 16 }),
+    computed_at: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("borrower_risk_scores_tenant_idx").on(table.tenant_id),
+    borrowerIdx: index("borrower_risk_scores_borrower_idx").on(table.borrower_id),
+    loanSanctionIdx: index("borrower_risk_scores_loan_sanction_idx").on(table.loan_sanction_id),
+  }),
+);
+
+export const nbfcRecoveryPipeline = pgTable(
+  "nbfc_recovery_pipeline",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    battery_serial: varchar("battery_serial", { length: 64 }).notNull(),
+    stage: varchar({ length: 32 }).notNull(),
+    estimated_recovery_value: numeric("estimated_recovery_value", { precision: 12, scale: 2 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_recovery_pipeline_tenant_idx").on(table.tenant_id),
+    stageIdx: index("nbfc_recovery_pipeline_stage_idx").on(table.stage),
+    tenantStageIdx: index("nbfc_recovery_pipeline_tenant_stage_idx").on(table.tenant_id, table.stage),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-037 — Battery Evaluation 3-step form (Section 6.1.7)
+// -----------------------------------------------------------------------------
+// nbfc_battery_evaluations stores the 3-step evaluation form a Recovery
+// operator fills in for a recovered battery before it is auctioned or
+// scrapped. step1/step2/step3 are kept as JSONB blobs because BRD §6.1.7
+// doesn't pin a flat shape and the UI wizard mirrors these step boundaries.
+// `base_auction_price` is computed deterministically from SOH and the
+// step3 original_value (see logic in
+// src/app/api/nbfc/recovery/[id]/evaluation/route.ts).
+// -----------------------------------------------------------------------------
+
+export const nbfcBatteryEvaluations = pgTable(
+  "nbfc_battery_evaluations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    recovery_pipeline_id: uuid("recovery_pipeline_id").notNull(),
+    step1: jsonb("step1").notNull(),
+    step2: jsonb("step2").notNull(),
+    step3: jsonb("step3").notNull(),
+    base_auction_price: numeric("base_auction_price", { precision: 12, scale: 2 }),
+    rejected: boolean("rejected").notNull().default(false),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_battery_evaluations_tenant_idx").on(table.tenant_id),
+    pipelineIdx: index("nbfc_battery_evaluations_pipeline_idx").on(table.recovery_pipeline_id),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-035 — Flag for Recovery action (Section 6.1.6)
+// -----------------------------------------------------------------------------
+// nbfc_borrower_actions records a Risk Head's executed actions against a
+// borrower / loan_sanction (single-approval, per BRD §6.1.6 row "Flag for
+// Recovery"). Used here for the irreversible flag and reused by future units
+// (e.g. E-031 send-payment-reminder) which carry the same shape.
+// -----------------------------------------------------------------------------
+
+export const nbfcBorrowerActions = pgTable(
+  "nbfc_borrower_actions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
+    action_type: varchar("action_type", { length: 64 }).notNull(),
+    status: varchar({ length: 32 }).notNull(),
+    requested_by: uuid("requested_by"),
+    payload: jsonb("payload"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_borrower_actions_tenant_idx").on(table.tenant_id),
+    loanIdx: index("nbfc_borrower_actions_loan_idx").on(table.loan_sanction_id),
+    actionTypeIdx: index("nbfc_borrower_actions_action_type_idx").on(table.action_type),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-031 — Send Payment Reminder action (Section 6.1.6 — Risk Action Framework)
+// -----------------------------------------------------------------------------
+// nbfc_audit_log is the immutable, append-only audit trail mandated by BRD
+// §6.1.2 + RBI Digital Lending Directions 2025: every NBFC-initiated action
+// MUST emit a row here with before/after JSON state. It is intentionally
+// separate from the mutable `nbfc_borrower_actions` table (which records the
+// current status of an action) and from the shared `audit_logs` table (which
+// covers generic CRM mutations) — keeping the NBFC tier evidentiary log
+// isolated lets us export it cleanly for regulator inspection.
+//
+// `user_id` is the canonical column name (renamed from earlier draft
+// `actor_user_id`) to align with `nbfc_users.user_id` and `lead_documents.user_id`,
+// avoiding silent-rename divergence.
+// -----------------------------------------------------------------------------
+
+export const nbfcAuditLog = pgTable(
+  "nbfc_audit_log",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    user_id: uuid("user_id").notNull(),
+    action_type: varchar("action_type", { length: 32 }).notNull(),
+    action_id: uuid("action_id"),
+    before_state: jsonb("before_state"),
+    after_state: jsonb("after_state"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_audit_log_tenant_idx").on(table.tenant_id),
+    actionIdIdx: index("nbfc_audit_log_action_id_idx").on(table.action_id),
+    actionTypeIdx: index("nbfc_audit_log_action_type_idx").on(table.action_type),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-027 — Portfolio Data Freshness Badge (Section 6.1.3)
+// -----------------------------------------------------------------------------
+// telemetry_ingestion_log records each per-battery IoT ingestion event so the
+// freshness endpoint can compute the most recent telemetry timestamp for a
+// tenant's portfolio. The freshness badge in the NBFC portal turns amber when
+// the most recent ingestion (or the most recent CDS computed_at) is older than
+// 24 hours — surfacing IoT sync issues to the partner.
+// -----------------------------------------------------------------------------
+
+export const telemetryIngestionLog = pgTable(
+  "telemetry_ingestion_log",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    battery_serial: varchar("battery_serial", { length: 64 }).notNull(),
+    ingested_at: timestamp("ingested_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("telemetry_ingestion_log_tenant_idx").on(table.tenant_id),
+    tenantIngestedIdx: index("telemetry_ingestion_log_tenant_ingested_idx").on(
+      table.tenant_id,
+      table.ingested_at,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-029 — EMI schedules (Section 6.1.5)
+// -----------------------------------------------------------------------------
+// Per-loan EMI ledger feeding the nightly CDS computation (E-029) and the
+// PCI computation (E-030). One row per scheduled EMI with `status` in
+// {paid, paid_late, missed, overdue, scheduled}; `paid_at` is set when an
+// EMI is settled and `days_overdue` tracks how many days late (0 if paid
+// on or before due_date).
+//
+// This table is also referenced by E-028 (Lead Intelligence "EMI Status"
+// column) — read-only there.
+//
+// Naming: `days_overdue` mirrors the BRD field name; an audit fuzzy-match
+// flagged loan_files.overdue_days as a token-level twin (different table,
+// different concept — loan_files predates the nbfc dashboard era), so we
+// keep the BRD-canonical name on this new table.
+// -----------------------------------------------------------------------------
+export const emiSchedules = pgTable(
+  "emi_schedules",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
+    due_date: date("due_date").notNull(),
+    paid_at: timestamp("paid_at", { withTimezone: true }),
+    status: varchar({ length: 16 }).notNull(),
+    days_overdue: integer("days_overdue"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    loanIdx: index("emi_schedules_loan_idx").on(table.loan_sanction_id),
+    loanDueIdx: index("emi_schedules_loan_due_idx").on(
+      table.loan_sanction_id,
+      table.due_date,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-067 — Risk Rule Engine threshold configuration (Section 6.3.3)
+// -----------------------------------------------------------------------------
+// Single canonical platform-wide table that holds the eight tunable risk
+// thresholds (CDS bands, alert triggers, action gates). E-067 owns this table
+// (read + impact-preview); E-085's dual-approval gate writes back into
+// `current_value` here after the second approver signs off, and separately
+// records the change history in its own audit table
+// (`nbfc_risk_rule_thresholds`). See drizzle/E-067_nbfc_risk_rules.sql for
+// the seed of the eight platform rules.
+// -----------------------------------------------------------------------------
+export const nbfcRiskRules = pgTable(
+  "nbfc_risk_rules",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    rule_key: varchar("rule_key", { length: 64 }).notNull().unique(),
+    rule_label: varchar("rule_label", { length: 160 }).notNull(),
+    current_value: numeric("current_value", { precision: 12, scale: 4 }).notNull(),
+    unit: varchar("unit", { length: 16 }),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_by: uuid("updated_by"),
+  },
+);
+
+// -----------------------------------------------------------------------------
+// E-091 — DPDPA retention tombstones.
+//
+// Every DPDPA-driven deletion (KYC docs purged after 7y, telemetry raw events
+// purged after 2y, future categories) is recorded here as an immutable
+// attestation. The original PII is gone but the *fact* of the deletion is
+// auditable: which table, which id (or row count for batch deletes), why,
+// and where it was stored — DPDPA 2023 + RBI accountability.
+//
+// storage_region defaults to 'ap-south-1' (Mumbai) per the data-localisation
+// requirement: deletion never crosses borders.
+// -----------------------------------------------------------------------------
+
+export const nbfcRetentionTombstones = pgTable(
+  "nbfc_retention_tombstones",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    table_name: varchar("table_name", { length: 64 }).notNull(),
+    original_id: varchar("original_id", { length: 255 }),
+    row_count: integer("row_count").default(1).notNull(),
+    reason: varchar("reason", { length: 64 }).notNull(),
+    deleted_at: timestamp("deleted_at", { withTimezone: true }).defaultNow().notNull(),
+    storage_region: varchar("storage_region", { length: 24 })
+      .default('ap-south-1')
+      .notNull(),
+  },
+  (table) => ({
+    tableNameIdx: index("nbfc_retention_tombstones_table_name_idx").on(
+      table.table_name,
+    ),
+    deletedAtIdx: index("nbfc_retention_tombstones_deleted_at_idx").on(
+      table.deleted_at,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-068 — Risk Rule Engine dual-approval commit workflow (BRD §6.3.3)
+// -----------------------------------------------------------------------------
+// One row per pending/executed/rejected threshold-change request.
+//
+// Lifecycle:
+//   pending_second_approval — requester submitted with MFA; awaits Risk Head.
+//   executed                — Risk Head approved; nbfc_risk_rules.current_value
+//                             now equals new_value; applied_at is set.
+//   rejected                — Risk Head rejected; current_value untouched.
+//
+// Distinct from `dual_approval_requests` (E-082): that primitive gates per-NBFC
+// *operational* actions on a per-tenant basis. The eight platform thresholds
+// in `nbfc_risk_rules` have no tenant_id, so their change history lives here
+// in a global table instead.
+// -----------------------------------------------------------------------------
+export const nbfcRiskRuleChangeRequests = pgTable(
+  "nbfc_risk_rule_change_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    rule_key: varchar("rule_key", { length: 64 }).notNull(),
+    previous_value: numeric("previous_value", { precision: 12, scale: 4 })
+      .notNull(),
+    new_value: numeric("new_value", { precision: 12, scale: 4 }).notNull(),
+    requested_by: uuid("requested_by").notNull(),
+    approved_by: uuid("approved_by"),
+    status: varchar("status", { length: 32 }).notNull(),
+    requested_at: timestamp("requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    applied_at: timestamp("applied_at", { withTimezone: true }),
+  },
+  (table) => ({
+    statusIdx: index("nbfc_risk_rule_change_requests_status_idx").on(
+      table.status,
+    ),
+    ruleKeyIdx: index("nbfc_risk_rule_change_requests_rule_key_idx").on(
+      table.rule_key,
+    ),
+    requestedByIdx: index("nbfc_risk_rule_change_requests_requested_by_idx").on(
+      table.requested_by,
+    ),
+  }),
+);
+
 // =============================================================================
 // END NBFC additions
 // =============================================================================
@@ -2858,6 +3264,1454 @@ export const dealerCorrectionItems = pgTable(
   },
   (table) => ({
     roundIdx: index("dealer_correction_items_round_id_idx").on(table.round_id),
+  }),
+);
+
+// =============================================================================
+// E-082 — Dual Approval Gate primitive
+// Two-person rule for high-impact NBFC actions (battery immobilisation, loan
+// restructuring, risk-rule threshold change, bulk immobilisation, auction lot
+// cancellation, audit-log export, PII access). Initiator creates a pending
+// row; an Approver 2 (distinct user, role-matched) approves or rejects within
+// 24h. Status transitions are append-only and mirrored in `audit_logs`.
+// =============================================================================
+
+export const dualApprovalRequests = pgTable(
+  "dual_approval_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    action_type: varchar("action_type", { length: 64 }).notNull(),
+    entity_id: varchar("entity_id", { length: 255 }).notNull(),
+    initiator_user_id: uuid("initiator_user_id").notNull(),
+    approver_user_id: uuid("approver_user_id"),
+    required_approver_role: varchar("required_approver_role", { length: 64 }).notNull(),
+    status: varchar("status", { length: 24 }).default('pending_approval').notNull(),
+    reason_code: varchar("reason_code", { length: 64 }).notNull(),
+    evidence_snapshot: jsonb("evidence_snapshot").notNull(),
+    borrower_notice_id: varchar("borrower_notice_id", { length: 255 }),
+    rejection_reason: text("rejection_reason"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    approved_at: timestamp("approved_at", { withTimezone: true }),
+    rejected_at: timestamp("rejected_at", { withTimezone: true }),
+    expired_at: timestamp("expired_at", { withTimezone: true }),
+  },
+  (table) => ({
+    tenantStatusIdx: index("dual_approval_requests_tenant_status_idx").on(
+      table.tenant_id,
+      table.status,
+    ),
+    initiatorIdx: index("dual_approval_requests_initiator_idx").on(table.initiator_user_id),
+    expiresIdx: index("dual_approval_requests_expires_idx").on(table.expires_at),
+  }),
+);
+
+// Catalogue of which action_type requires which Approver-2 role. Tenant-scoped
+// so each NBFC may map roles differently. Seeded once per tenant at deploy.
+export const dualApprovalActionConfig = pgTable(
+  "dual_approval_action_config",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    action_type: varchar("action_type", { length: 64 }).notNull(),
+    initiator_role: varchar("initiator_role", { length: 64 }).notNull(),
+    approver_role: varchar("approver_role", { length: 64 }).notNull(),
+  },
+  (table) => ({
+    actionTypeIdx: index("dual_approval_action_config_action_type_idx").on(
+      table.action_type,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-085 — Risk Rule Threshold Change (BRD §6.4.3)
+// Append-only history of risk-rule threshold mutations. Every approved change
+// is appended (never edited in place); the previously active row for the same
+// rule_key is flipped is_active=false at apply time. Tied to a
+// dual_approval_requests row via approval_request_id so RBI auditors can trace
+// any threshold mutation back to its two-person approval.
+// =============================================================================
+export const nbfcRiskRuleThresholds = pgTable(
+  "nbfc_risk_rule_thresholds",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    rule_key: varchar("rule_key", { length: 128 }).notNull(),
+    prior_threshold_json: jsonb("prior_threshold_json"),
+    new_threshold_json: jsonb("new_threshold_json").notNull(),
+    approval_request_id: uuid("approval_request_id").notNull(),
+    applied_at: timestamp("applied_at", { withTimezone: true }),
+    applied_by: uuid("applied_by"),
+    is_active: boolean("is_active").default(true).notNull(),
+  },
+  (table) => ({
+    ruleKeyActiveIdx: index("nbfc_risk_rule_thresholds_rule_key_active_idx").on(
+      table.rule_key,
+      table.is_active,
+    ),
+    approvalRequestIdx: index("nbfc_risk_rule_thresholds_approval_request_idx").on(
+      table.approval_request_id,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-083 — Battery Immobilisation Action (Section 6.4.3)
+// One row per executed immobilisation outcome. Created ONLY after the upstream
+// dual_approval_requests row (action_type='battery_immobilisation') flips to
+// 'approved' by an nbfc_risk_head user. iot_command_id and executed_at stamp
+// the IoT dispatch; borrower_notified_at is set if a Fair-Practices notice was
+// sent. Separate from the approval row because one approval can spawn multiple
+// side-effects (notice, IoT command, audit log).
+// =============================================================================
+export const nbfcImmobilisationActions = pgTable(
+  "nbfc_immobilisation_actions",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id")
+      .notNull()
+      .references(() => nbfcTenants.id),
+    loan_application_id: varchar("loan_application_id", {
+      length: 255,
+    }).notNull(),
+    imei: varchar("imei", { length: 64 }).notNull(),
+    approval_request_id: uuid("approval_request_id").notNull(),
+    iot_command_id: varchar("iot_command_id", { length: 128 }),
+    executed_at: timestamp("executed_at", { withTimezone: true }),
+    borrower_notified_at: timestamp("borrower_notified_at", {
+      withTimezone: true,
+    }),
+  },
+  (table) => ({
+    approvalRequestIdx: index(
+      "nbfc_immobilisation_actions_approval_request_idx",
+    ).on(table.approval_request_id),
+    tenantLoanIdx: index("nbfc_immobilisation_actions_tenant_loan_idx").on(
+      table.tenant_id,
+      table.loan_application_id,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-084 — Loan Restructuring Restructure History (Section 6.4.3)
+// Records every loan-restructuring event executed via the dual-approval gate
+// (Risk Manager initiates → Credit Manager approves). Captures prior vs new
+// EMI terms and the link back to the dual_approval_requests row that
+// authorised the change. Distinct from nbfc_loans (mutable current state) so
+// the history of restructures is preserved across multiple events.
+// =============================================================================
+export const nbfcLoanRestructures = pgTable(
+  "nbfc_loan_restructures",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id")
+      .notNull()
+      .references(() => nbfcTenants.id),
+    loan_application_id: varchar("loan_application_id", { length: 255 }).notNull(),
+    approval_request_id: uuid("approval_request_id").notNull(),
+    prior_emi_amount: numeric("prior_emi_amount", { precision: 12, scale: 2 }),
+    new_emi_amount: numeric("new_emi_amount", { precision: 12, scale: 2 }).notNull(),
+    prior_tenure_months: integer("prior_tenure_months"),
+    new_tenure_months: integer("new_tenure_months").notNull(),
+    new_emi_due_dom: integer("new_emi_due_dom").notNull(),
+    executed_at: timestamp("executed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    tenantLoanIdx: index("nbfc_loan_restructures_tenant_loan_idx").on(
+      table.tenant_id,
+      table.loan_application_id,
+    ),
+    approvalIdx: index("nbfc_loan_restructures_approval_idx").on(
+      table.approval_request_id,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-089 — PII Access Gated (BRD §6.4.3 — "PII Data Access")
+// Adds the requestor-MFA leg + time-boxed grant ledger on top of E-082's
+// dual-approval primitive. Action_type 'pii_data_access' flows through
+// dualApprovalRequests; once Compliance Officer approves, this table mints a
+// short-lived (30 min) access token for a single unmask call by the
+// requestor for one specific lead. Each unmask is logged in audit_logs.
+// =============================================================================
+export const nbfcPiiAccessGrants = pgTable(
+  "nbfc_pii_access_grants",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    requested_by: uuid("requested_by").notNull(),
+    approval_request_id: uuid("approval_request_id").notNull(),
+    access_token: varchar("access_token", { length: 128 }).notNull(),
+    fields: jsonb("fields").notNull(),
+    granted_at: timestamp("granted_at", { withTimezone: true }),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    used_count: integer("used_count").default(0).notNull(),
+  },
+  (table) => ({
+    accessTokenIdx: uniqueIndex("nbfc_pii_access_grants_access_token_idx").on(
+      table.access_token,
+    ),
+    approvalIdx: index("nbfc_pii_access_grants_approval_idx").on(
+      table.approval_request_id,
+    ),
+    leadIdx: index("nbfc_pii_access_grants_lead_idx").on(table.lead_id),
+  }),
+);
+
+// =============================================================================
+// E-003 — NBFC Master Details (Section 6.0.3)
+// Master NBFC partner table per BRD 6.0.7 — captures NBFC partner identities,
+// RBI registration data, statutory IDs (CIN, GST, PAN), grievance officer
+// fields (mandatory per RBI DL Directions 2025), and partnership metadata.
+// Distinct from `nbfc_tenants` which models the multi-tenant dashboard scope.
+//
+// E-001 augmentation: `approved_by` / `approved_at` capture the final approval
+// gate release (null until the gate passes; 409 idempotency on re-approval).
+// =============================================================================
+export const nbfc = pgTable("nbfc", {
+  id: serial("id").primaryKey(),
+  nbfc_id: varchar("nbfc_id", { length: 50 }).notNull().unique(),
+  legal_name: varchar("legal_name", { length: 200 }).notNull(),
+  short_name: varchar("short_name", { length: 100 }).notNull(),
+  rbi_registration_no: varchar("rbi_registration_no", { length: 100 }).notNull().unique(),
+  cin: varchar("cin", { length: 25 }).notNull(),
+  gst_number: varchar("gst_number", { length: 20 }).notNull(),
+  pan_number: varchar("pan_number", { length: 20 }).notNull(),
+  nbfc_type: varchar("nbfc_type", { length: 32 }).notNull(),
+  registered_address: jsonb("registered_address").notNull(),
+  active_geographies: jsonb("active_geographies").notNull(),
+  primary_contact_name: varchar("primary_contact_name", { length: 200 }).notNull(),
+  primary_contact_email: varchar("primary_contact_email", { length: 200 }).notNull(),
+  primary_contact_phone: varchar("primary_contact_phone", { length: 20 }).notNull(),
+  grievance_officer_name: varchar("grievance_officer_name", { length: 200 }).notNull(),
+  grievance_helpline: varchar("grievance_helpline", { length: 200 }).notNull(),
+  grievance_url: text("grievance_url").notNull(),
+  nodal_officer: varchar("nodal_officer", { length: 200 }),
+  partnership_date: date("partnership_date").notNull(),
+  fldg_terms: text("fldg_terms"),
+  cor_expiry_date: date("cor_expiry_date"),
+  lsp_agreement_id: integer("lsp_agreement_id"),
+  status: varchar("status", { length: 32 }).default("draft").notNull(),
+  // E-001 — final approval gate audit columns. approved_by stores the admin
+  // user uuid that released the gate; approved_at stamps when the gate fell.
+  // Both stay null until the gate passes; a 409 idempotency check rejects
+  // re-approving an already-approved NBFC.
+  approved_by: uuid("approved_by"),
+  approved_at: timestamp("approved_at", { withTimezone: true }),
+  // E-002 — activation timestamp. Distinct from approved_at: approved_at fires
+  // when the final-approval gate releases (status='approved'); activated_at
+  // fires when portal credentials are dispatched (status='active').
+  activated_at: timestamp("activated_at", { withTimezone: true }),
+  // E-026B — bridge to the portal tenant scope. Nullable because legacy NBFC
+  // rows may not have a corresponding nbfc_tenants entry yet; backfilled by
+  // legal_name match in the E-026B migration.
+  tenant_id: uuid("tenant_id").references(() => nbfcTenants.id),
+  created_by: integer("created_by").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// =============================================================================
+// E-002 — NBFC portal credential issuance audit (Section 6.0.2 Step 6)
+// One row per credential dispatch attempt for an NBFC partner. Records the
+// supabase auth user that backs the portal login, the dispatch lifecycle
+// (pending → dispatched | failed), and the timestamp the credential email was
+// sent. Password itself is never persisted — only Supabase holds the hashed
+// credential. Resend operations append additional rows so every attempt is
+// auditable.
+// =============================================================================
+export const nbfcPortalCredentials = pgTable(
+  "nbfc_portal_credentials",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    supabase_user_id: uuid("supabase_user_id").notNull(),
+    email_dispatched_at: timestamp("email_dispatched_at", {
+      withTimezone: true,
+    }),
+    dispatch_status: varchar("dispatch_status", { length: 32 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_portal_credentials_nbfc_id_idx").on(table.nbfc_id),
+    statusIdx: index("nbfc_portal_credentials_dispatch_status_idx").on(
+      table.dispatch_status,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-005 — NBFC compliance document upload/verify/reject workflow
+// (Section 6.0.4)
+// Per-NBFC compliance document tracking with verify/reject lifecycle, distinct
+// from dealer documents. Each row is one document upload by an admin, then
+// transitions through pending_review → verified | rejected.
+// =============================================================================
+export const nbfcComplianceDocuments = pgTable(
+  "nbfc_compliance_documents",
+  {
+    id: serial("id").primaryKey(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    document_type: varchar("document_type", { length: 64 }).notNull(),
+    file_url: text("file_url").notNull(),
+    expiry_date: date("expiry_date"),
+    status: varchar("status", { length: 32 })
+      .default("pending_review")
+      .notNull(),
+    uploaded_by: integer("uploaded_by").notNull(),
+    verified_by: integer("verified_by"),
+    verified_at: timestamp("verified_at", { withTimezone: true }),
+    rejected_by: integer("rejected_by"),
+    rejected_at: timestamp("rejected_at", { withTimezone: true }),
+    rejection_reason: text("rejection_reason"),
+    verifier_notes: text("verifier_notes"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_compliance_documents_nbfc_id_idx").on(table.nbfc_id),
+    statusIdx: index("nbfc_compliance_documents_status_idx").on(table.status),
+  }),
+);
+
+// =============================================================================
+// E-006 — RBI CoR expiry alert ledger (Section 6.0.4)
+// Tracks which (nbfc_id, cor_expiry_date) pair has already received a 60-day
+// expiry-warning alert. Idempotency guard for the daily cron — without this
+// table the same alert would fan out daily for the entire 60-day window.
+// =============================================================================
+export const nbfcCorExpiryAlerts = pgTable(
+  "nbfc_cor_expiry_alerts",
+  {
+    id: serial("id").primaryKey(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    cor_expiry_date: date("cor_expiry_date").notNull(),
+    alerted_at: timestamp("alerted_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_cor_expiry_alerts_nbfc_id_idx").on(table.nbfc_id),
+    pairIdx: uniqueIndex("nbfc_cor_expiry_alerts_pair_idx").on(
+      table.nbfc_id,
+      table.cor_expiry_date,
+    ),
+  }),
+);
+
+// E-007/E-008 — Digio-driven LSP agreement record. agreement_status mirrors the
+// shared dealer agreement_status ENUM domain (DRAFT, INITIATED, IN_PROGRESS,
+// COMPLETED, FAILED, EXPIRED, SENT_TO_EXTERNAL_PARTY, SIGN_PENDING,
+// PARTIALLY_SIGNED, SIGNED) per Sync Audit G-01. Stored as varchar so the
+// final-approval gate can re-validate it via a simple equality check.
+//
+// E-007 augmentation: signatory fields, agreement_id (AGR-NBFC-YYYYMMDD-SEQ
+// pattern), expires_at, audit_trail_url, signing_date, created_by per
+// Section 6.0.4a's Digio multi_templates create_sign_request integration.
+export const nbfcLspAgreements = pgTable(
+  "nbfc_lsp_agreements",
+  {
+    id: serial("id").primaryKey().notNull(),
+    agreement_id: varchar("agreement_id", { length: 50 }).unique(),
+    nbfc_id: integer("nbfc_id").notNull().references(() => nbfc.id),
+    digio_request_id: varchar("digio_request_id", { length: 128 }),
+    digio_document_id: varchar("digio_document_id", { length: 128 }),
+    agreement_status: varchar("agreement_status", { length: 32 }).default("DRAFT").notNull(),
+    signing_date: date("signing_date"),
+    nbfc_signatory_name: varchar("nbfc_signatory_name", { length: 200 }),
+    nbfc_signatory_email: varchar("nbfc_signatory_email", { length: 200 }),
+    itarang_signatory_1_name: varchar("itarang_signatory_1_name", { length: 200 }),
+    itarang_signatory_1_email: varchar("itarang_signatory_1_email", { length: 200 }),
+    itarang_signatory_2_name: varchar("itarang_signatory_2_name", { length: 200 }),
+    itarang_signatory_2_email: varchar("itarang_signatory_2_email", { length: 200 }),
+    signed_pdf_url: text("signed_pdf_url"),
+    audit_trail_url: text("audit_trail_url"),
+    expires_at: timestamp("expires_at", { withTimezone: true }),
+    created_by: integer("created_by"),
+    initiated_by: integer("initiated_by"),
+    initiated_at: timestamp("initiated_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    last_webhook_payload: jsonb("last_webhook_payload"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_lsp_agreements_nbfc_id_idx").on(table.nbfc_id),
+    statusIdx: index("nbfc_lsp_agreements_status_idx").on(table.agreement_status),
+    agreementIdIdx: index("nbfc_lsp_agreements_agreement_id_idx").on(table.agreement_id),
+  }),
+);
+
+// =============================================================================
+// E-009 — NBFC loan-product catalogue (BRD 6.0.5)
+// Per-NBFC product definitions: amount/tenure ranges, ROI bounds, down-payment,
+// subvention, file charges, and disbursement method. Status gates which products
+// are offerable. References the canonical `nbfc` master from E-003.
+// =============================================================================
+export const nbfcLoanProducts = pgTable("nbfc_loan_products", {
+  id: serial("id").primaryKey(),
+  nbfc_id: integer("nbfc_id")
+    .notNull()
+    .references(() => nbfc.id),
+  product_name: varchar("product_name", { length: 120 }).notNull(),
+  eligible_battery_categories: jsonb("eligible_battery_categories")
+    .$type<string[]>()
+    .notNull(),
+  loan_amount_min: integer("loan_amount_min").notNull(),
+  loan_amount_max: integer("loan_amount_max").notNull(),
+  tenure_months_min: integer("tenure_months_min").notNull(),
+  tenure_months_max: integer("tenure_months_max").notNull(),
+  min_roi_pct: numeric("min_roi_pct", { precision: 5, scale: 2 }).notNull(),
+  max_roi_pct: numeric("max_roi_pct", { precision: 5, scale: 2 }).notNull(),
+  down_payment_pct: numeric("down_payment_pct", {
+    precision: 5,
+    scale: 2,
+  }).notNull(),
+  subvention_available: boolean("subvention_available")
+    .default(false)
+    .notNull(),
+  file_charge_fixed: numeric("file_charge_fixed", { precision: 12, scale: 2 }),
+  file_charge_pct: numeric("file_charge_pct", { precision: 5, scale: 2 }),
+  disbursement_method: varchar("disbursement_method", {
+    length: 32,
+  }).notNull(),
+  status: varchar("status", { length: 16 }).default("active").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+// =============================================================================
+// E-065 — NBFC Ecosystem Overview metrics cache (BRD §6.3.2)
+// Stores 15-minute IoT connectivity rollup and nightly Avg CDS network value
+// to satisfy BRD refresh cadence without recomputing on every request.
+// Keyed by metric_key so the route can fetch by well-known constants
+// (e.g. 'iot_connectivity_pct', 'avg_cds_network', 'platform_uptime_pct').
+// =============================================================================
+export const nbfcEcosystemMetricsCache = pgTable("nbfc_ecosystem_metrics_cache", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  metric_key: varchar("metric_key", { length: 64 }).notNull().unique(),
+  metric_value: numeric("metric_value", { precision: 18, scale: 4 }),
+  refreshed_at: timestamp("refreshed_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+// =============================================================================
+// E-011 — NBFC status lifecycle audit table (BRD 6.0.6)
+// Records every NBFC status transition with actor and reason for the RBI audit
+// trail. Append-only: rows are immutable. The 8-state transition graph itself
+// is enforced by `src/lib/nbfc/admin/status-transitions.ts`; this table is the
+// durable journal those transitions write to. actor_id is uuid to match the
+// rest of the codebase's user-id convention (audit_logs.performed_by is uuid).
+// =============================================================================
+export const nbfcStatusHistory = pgTable(
+  "nbfc_status_history",
+  {
+    id: serial("id").primaryKey(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    from_status: varchar("from_status", { length: 32 }),
+    to_status: varchar("to_status", { length: 32 }).notNull(),
+    actor_id: uuid("actor_id").notNull(),
+    reason: text("reason"),
+    occurred_at: timestamp("occurred_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_status_history_nbfc_id_idx").on(table.nbfc_id),
+    occurredAtIdx: index("nbfc_status_history_occurred_at_idx").on(
+      table.occurred_at,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-086 — Bulk Immobilisation (>5 batteries) gated by dual approval
+// (BRD §6.4.3 row "Bulk Immobilisation"; Approver 1: NBFC Risk Head,
+// Approver 2: iTarang Admin). RBI Digital Lending Directions 2025 elevate
+// bulk recovery actions (>5 batteries in a single batch) to a two-person
+// rule beyond the standard per-loan dual approval (E-033 / E-082). This
+// table captures the batch identity and aggregate counts so audit reviewers
+// can see a single approval covered N loans, not N separate approvals.
+// =============================================================================
+export const nbfcBulkImmobilisationBatches = pgTable(
+  "nbfc_bulk_immobilisation_batches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenant_id: uuid("tenant_id")
+      .notNull()
+      .references(() => nbfcTenants.id),
+    approval_request_id: uuid("approval_request_id").notNull(),
+    batch_size: integer("batch_size").notNull(),
+    loan_application_ids: jsonb("loan_application_ids").notNull(),
+    executed_at: timestamp("executed_at", { withTimezone: true }),
+    executed_count: integer("executed_count").default(0).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_bulk_immob_batches_tenant_idx").on(table.tenant_id),
+    approvalIdx: index("nbfc_bulk_immob_batches_approval_idx").on(
+      table.approval_request_id,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-088 — Audit log data export gated by dual approval (BRD §6.4.3)
+// Records the lifecycle of bulk audit-log export requests: requestor identity,
+// MFA confirmation timestamp, time range, expected/actual row count, and the
+// signed-URL artefact + checksum produced after the iTarang Compliance Officer
+// approves via the E-082 dual-approval gate. Required for DPDPA accountability
+// when audit data leaves the system; the row is created with status implicit
+// in the FK to dual_approval_requests, and download_url/checksum_sha256 stay
+// NULL until the second approver flips the request to 'approved' and the
+// async export job completes.
+// =============================================================================
+export const nbfcAuditLogExports = pgTable(
+  "nbfc_audit_log_exports",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    requested_by: uuid("requested_by").notNull(),
+    approval_request_id: uuid("approval_request_id").notNull(),
+    mfa_verified_at: timestamp("mfa_verified_at", { withTimezone: true })
+      .notNull(),
+    from_ts: timestamp("from_ts", { withTimezone: true }).notNull(),
+    to_ts: timestamp("to_ts", { withTimezone: true }).notNull(),
+    entity_type: varchar("entity_type", { length: 50 }),
+    row_count: integer("row_count"),
+    download_url: text("download_url"),
+    checksum_sha256: varchar("checksum_sha256", { length: 64 }),
+    expires_at: timestamp("expires_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    approvalIdx: index("nbfc_audit_log_exports_approval_idx").on(
+      table.approval_request_id,
+    ),
+    requestedByIdx: index("nbfc_audit_log_exports_requested_by_idx").on(
+      table.requested_by,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-092 — CDS/PCI Score Explainability Drawer (BRD §6.4.5)
+// =============================================================================
+// Persists each CDS/PCI score computation along with the exact EMI inputs that
+// produced it, so the explainability drawer can render formula + inputs +
+// confidence with no recomputation drift.
+//
+//   • nbfc_score_runs            — one row per (loan, score_type) computation;
+//                                  carries score_value, computed_at, confidence
+//   • nbfc_score_input_snapshots — last-N EMI rows tied to a score run, with
+//                                  per-row contribution to the final score
+//
+// `borrower_risk_scores` (E-026) is the network-wide nightly cache; this pair
+// is the audit trail behind the *explainability* surface. They co-exist by
+// design — borrower_risk_scores is read-optimised; the snapshots are write-
+// once, append-only.
+// =============================================================================
+export const nbfcScoreRuns = pgTable(
+  "nbfc_score_runs",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    loan_application_id: varchar("loan_application_id", { length: 255 }).notNull(),
+    score_type: varchar("score_type", { length: 8 }).notNull(),
+    score_value: numeric("score_value", { precision: 6, scale: 2 }).notNull(),
+    computed_at: timestamp("computed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    confidence_level: varchar("confidence_level", { length: 8 }).notNull(),
+    confidence_reasons: jsonb("confidence_reasons"),
+  },
+  (table) => ({
+    loanIdx: index("nbfc_score_runs_loan_idx").on(table.loan_application_id),
+    loanTypeIdx: index("nbfc_score_runs_loan_type_idx").on(
+      table.loan_application_id,
+      table.score_type,
+    ),
+    computedAtIdx: index("nbfc_score_runs_computed_at_idx").on(table.computed_at),
+  }),
+);
+
+export const nbfcScoreInputSnapshots = pgTable(
+  "nbfc_score_input_snapshots",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    score_run_id: uuid("score_run_id").notNull(),
+    row_index: integer("row_index").notNull(),
+    due_date: timestamp("due_date", { withTimezone: true }),
+    amount: numeric("amount", { precision: 12, scale: 2 }),
+    status: varchar({ length: 24 }),
+    days_late: integer("days_late"),
+    contribution: numeric("contribution", { precision: 6, scale: 2 }),
+  },
+  (table) => ({
+    runIdx: index("nbfc_score_input_snapshots_run_idx").on(table.score_run_id),
+    runRowIdx: index("nbfc_score_input_snapshots_run_row_idx").on(
+      table.score_run_id,
+      table.row_index,
+    ),
+  }),
+);
+
+// E-090 — DPDPA 2023 consent record persistence + withdrawal.
+// `consent_records` (line 1326) lacks DPDPA scope-level state, so we add:
+//   * nbfc_consent_scopes — toggleable per-purpose scope flags
+//     (loan_processing / risk_assessment / warranty_management) keyed by
+//     consent_id, with a deactivated_at timestamp for partial withdrawal.
+//   * nbfc_consent_withdrawals — append-only record of every withdrawal,
+//     including the channel it came in through (grievance_portal / helpline /
+//     email) and an optional free-text reason. The original consent_records
+//     row is never deleted: DPDPA forbids retroactive erasure of past data
+//     and existing loan obligations remain in force.
+export const nbfcConsentScopes = pgTable(
+  "nbfc_consent_scopes",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    consent_id: varchar("consent_id", { length: 255 }).notNull(),
+    scope_key: varchar("scope_key", { length: 64 }).notNull(),
+    is_active: boolean("is_active").default(true).notNull(),
+    deactivated_at: timestamp("deactivated_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    consentIdx: index("nbfc_consent_scopes_consent_idx").on(table.consent_id),
+    consentScopeUniq: uniqueIndex("nbfc_consent_scopes_consent_scope_uniq").on(
+      table.consent_id,
+      table.scope_key,
+    ),
+  }),
+);
+
+export const nbfcConsentWithdrawals = pgTable(
+  "nbfc_consent_withdrawals",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    consent_id: varchar("consent_id", { length: 255 }).notNull(),
+    withdrawal_channel: varchar("withdrawal_channel", { length: 32 }).notNull(),
+    reason: text("reason"),
+    withdrawn_at: timestamp("withdrawn_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    leadIdx: index("nbfc_consent_withdrawals_lead_idx").on(table.lead_id),
+    consentIdx: index("nbfc_consent_withdrawals_consent_idx").on(
+      table.consent_id,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-093 — NBFC score override (BRD 6.4.5)
+// NBFC Risk Manager may override a borrower's computed credit score with a
+// documented reason. The override is logged to audit_logs but does NOT mutate
+// the computed value in nbfc_score_runs / borrower_risk_scores. Append-only:
+// when a new override is created for the same (loan_application_id, score_type)
+// pair, the prior active row is flipped to is_active=false (superseded) and
+// the new row becomes is_active=true. RBI Digital Lending Directions 2025
+// require that human overrides of credit scores are documented with a reason
+// and visible in the audit log.
+// =============================================================================
+export const nbfcScoreOverrides = pgTable(
+  "nbfc_score_overrides",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    loan_application_id: varchar("loan_application_id", {
+      length: 255,
+    }).notNull(),
+    score_type: varchar("score_type", { length: 8 }).notNull(),
+    computed_score_value: numeric("computed_score_value", {
+      precision: 6,
+      scale: 2,
+    }).notNull(),
+    override_value: numeric("override_value", {
+      precision: 6,
+      scale: 2,
+    }).notNull(),
+    reason: text("reason").notNull(),
+    created_by: uuid("created_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    is_active: boolean("is_active").default(true).notNull(),
+  },
+  (table) => ({
+    loanScoreIdx: index("nbfc_score_overrides_loan_score_idx").on(
+      table.loan_application_id,
+      table.score_type,
+    ),
+    activeIdx: index("nbfc_score_overrides_active_idx").on(
+      table.loan_application_id,
+      table.score_type,
+      table.is_active,
+    ),
+    createdAtIdx: index("nbfc_score_overrides_created_at_idx").on(
+      table.created_at,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-066 — Auto Anomaly Flag on NBFC record (BRD §6.3.2)
+// Persists which NBFC tenants have had auto-anomaly flags raised by the
+// evaluator (delinquency_pct > 15, recovery_rate_pct < 70, avg_dpd > 30 — 2/3
+// breaches => red, 1/3 => amber). Rows are upserted by (nbfc_id) so the
+// open-flag state lives across metric refreshes; `cleared_at` is stamped when
+// the NBFC's metrics return to within thresholds. Reasons array is jsonb so
+// the Ops dashboard can render the breach checklist verbatim.
+// =============================================================================
+export const nbfcAnomalyFlags = pgTable(
+  "nbfc_anomaly_flags",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    nbfc_id: uuid("nbfc_id")
+      .notNull()
+      .references(() => nbfcTenants.id),
+    severity: varchar("severity", { length: 10 }).notNull(),
+    reasons: jsonb("reasons").notNull(),
+    flagged_at: timestamp("flagged_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    cleared_at: timestamp("cleared_at", { withTimezone: true }),
+  },
+  (table) => ({
+    // One open flag row per NBFC: queries always read the latest by flagged_at,
+    // and the evaluator upserts based on (nbfc_id, cleared_at IS NULL) — but
+    // since SQL unique can't easily express that, we keep a simple nbfc_id
+    // index and let the evaluator manage open-row uniqueness in code.
+    nbfcIdx: index("nbfc_anomaly_flags_nbfc_idx").on(table.nbfc_id),
+    severityIdx: index("nbfc_anomaly_flags_severity_idx").on(table.severity),
+    flaggedAtIdx: index("nbfc_anomaly_flags_flagged_at_idx").on(
+      table.flagged_at,
+    ),
+    clearedAtIdx: index("nbfc_anomaly_flags_cleared_at_idx").on(
+      table.cleared_at,
+    ),
+  }),
+);
+
+// =============================================================================
+// [E-102] Canonical dealers table — first-time definition (closes Sync Audit
+// G-04 + G-08). The integer `id` is the FK target for inventory.dealer_id,
+// leads.dealer_id, coupons.dealer_id, coupon_batches.dealer_id, etc.
+// (those FK migrations are out of scope for this unit). The human-readable
+// VARCHAR(50) `dealer_id` (DLR-NNN) is generated only when onboarding_status
+// transitions to 'active' and is what surfaces in APIs / UI / S3 paths.
+// dealer_onboarding_applications stays the in-flight application record;
+// dealers is the post-activation canonical entity. The 16 fuzzy column
+// collisions reported by the auditor (company_name, gst_number, owner_*,
+// bank_*, etc. against dealer_onboarding_applications and personal_details)
+// are intentional per BRD Resolution D and approved in audit_E-102.
+// =============================================================================
+export const dealers = pgTable(
+  "dealers",
+  {
+    id: serial("id").primaryKey(),
+    // Human-readable dealer code (DLR-001). NULL pre-activation, populated
+    // and uniqued at activation. Never used as a FK target in other tables.
+    dealer_id: varchar("dealer_id", { length: 50 }).unique(),
+    company_name: varchar("company_name", { length: 200 }).notNull(),
+    company_type: varchar("company_type", { length: 32 }).notNull(),
+    gst_number: varchar("gst_number", { length: 20 }),
+    pan_number: varchar("pan_number", { length: 20 }),
+    registered_address: jsonb("registered_address"),
+    bank_name: varchar("bank_name", { length: 200 }),
+    // DPDPA — financial PII; column-level encryption applied at the service
+    // layer before insert (see lib/dealers/encryption.ts when added).
+    bank_account_number: varchar("bank_account_number", { length: 200 }),
+    bank_ifsc: varchar("bank_ifsc", { length: 20 }),
+    bank_beneficiary: varchar("bank_beneficiary", { length: 200 }),
+    bank_branch: varchar("bank_branch", { length: 200 }),
+    bank_account_type: varchar("bank_account_type", { length: 16 }),
+    owner_name: varchar("owner_name", { length: 200 }),
+    owner_phone: varchar("owner_phone", { length: 20 }),
+    // Used as dealer login user id on activation.
+    owner_email: varchar("owner_email", { length: 200 }),
+    finance_enabled: boolean("finance_enabled").default(false).notNull(),
+    onboarding_status: varchar("onboarding_status", { length: 32 })
+      .default("draft")
+      .notNull(),
+    // Links to dealer_onboarding_applications.id (the in-flight application
+    // record from the V2-Feb-2 onboarding flow). Stored as varchar to mirror
+    // BRD Section D.1 and to avoid a hard FK while consumer-table FK
+    // migrations are still pending.
+    application_id: varchar("application_id", { length: 50 }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // Set when onboarding_status transitions to 'active'.
+    activated_at: timestamp("activated_at", { withTimezone: true }),
+  },
+  (table) => ({
+    onboardingStatusIdx: index("dealers_onboarding_status_idx").on(
+      table.onboarding_status,
+    ),
+    applicationIdIdx: index("dealers_application_id_idx").on(
+      table.application_id,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-012 — dealer_nbfc_assignments (Sync Audit G-05)
+// Junction table that links finance-enabled dealers to their approved NBFCs.
+// Only NBFCs present here appear in a given dealer's loan-sanction dropdown
+// (consumed by E-013). UNIQUE (dealer_id, nbfc_id) prevents duplicate
+// assignments; the API surfaces 409 on duplicate insert. Status transitions:
+// active <-> suspended; either state may move to terminated (terminal).
+// =============================================================================
+export const dealerNbfcAssignments = pgTable(
+  "dealer_nbfc_assignments",
+  {
+    id: serial("id").primaryKey(),
+    // FK target is dealers.id (INT). Hard FK to dealers omitted to mirror the
+    // rest of the dealer-consumer fanout migration which is staged separately
+    // (G-04 follow-up); enforced at the application layer instead.
+    dealer_id: integer("dealer_id").notNull(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    enabled_at: timestamp("enabled_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // Admin user surrogate id that created the assignment. BRD spec defines
+    // this column as INTEGER FK admin_user_id; we keep it INTEGER and resolve
+    // from users.numeric_id at the route layer (set to 0 in test bypass).
+    enabled_by: integer("enabled_by").notNull(),
+    // active | suspended | terminated
+    status: varchar("status", { length: 16 }).default("active").notNull(),
+    notes: text("notes"),
+  },
+  (table) => ({
+    uniqDealerNbfc: uniqueIndex("dealer_nbfc_assignments_dealer_nbfc_uq").on(
+      table.dealer_id,
+      table.nbfc_id,
+    ),
+    dealerIdx: index("dealer_nbfc_assignments_dealer_idx").on(table.dealer_id),
+    nbfcIdx: index("dealer_nbfc_assignments_nbfc_idx").on(table.nbfc_id),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-038 — Auction Marketplace Lots and Bidding (BRD §6.1.7)
+// -----------------------------------------------------------------------------
+// `auction_lots` is the catalogue of recovered-battery lots offered to NBFC
+// tenants (bidders) on the auction marketplace. Each lot exposes the public
+// pricing parameters (base_price, bid_increment), a binding deadline
+// (ends_at), and a coarse status flag ("live" | "ended").
+//
+// `auction_bids` is the per-bid log for every binding bid placed against a
+// lot. It is append-only — bids are immutable and form the audit-grade record
+// for binding bid acceptance. Note: `tenant_id` here is the bidder's NBFC
+// tenant (one tenant places many bids); the column is intentionally named
+// `tenant_id` (not `bidder_tenant_id`) to align with the rest of the NBFC
+// schema's tenant_id naming convention. The bidder vs. seller distinction is
+// implicit: auction_lots has no tenant column (lots are platform-owned in this
+// release; seller_tenant_id is deferred to E-039), so the only tenant_id on
+// auction_bids is the bidder.
+// -----------------------------------------------------------------------------
+
+export const auctionLots = pgTable(
+  "auction_lots",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_code: varchar("lot_code", { length: 32 }).notNull().unique(),
+    capacity: varchar("capacity", { length: 32 }),
+    avg_soh: numeric("avg_soh", { precision: 5, scale: 2 }),
+    age_months: integer("age_months"),
+    quantity: integer("quantity").notNull(),
+    base_price: numeric("base_price", { precision: 12, scale: 2 }).notNull(),
+    bid_increment: numeric("bid_increment", {
+      precision: 12,
+      scale: 2,
+    }).notNull(),
+    ends_at: timestamp("ends_at", { withTimezone: true }).notNull(),
+    status: varchar("status", { length: 16 }).notNull().default("live"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    statusIdx: index("auction_lots_status_idx").on(table.status),
+    endsAtIdx: index("auction_lots_ends_at_idx").on(table.ends_at),
+  }),
+);
+
+export const auctionBids = pgTable(
+  "auction_bids",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    placed_at: timestamp("placed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    lotIdx: index("auction_bids_lot_idx").on(table.lot_id),
+    tenantIdx: index("auction_bids_tenant_idx").on(table.tenant_id),
+    placedAtIdx: index("auction_bids_placed_at_idx").on(table.placed_at),
+  }),
+);
+
+// =============================================================================
+// [E-047] Telemetry storage — Section 6.2.4
+// =============================================================================
+// Two new tables that own the canonical telemetry storage layer:
+//
+//   telemetry_events           — Raw per-packet time-series store. High-volume,
+//                                insert-only. Intended for monthly partitioning
+//                                in production; the BRD explicitly omits the
+//                                FK on serial_number for write throughput.
+//   telemetry_daily_summary    — One row per (battery, day) aggregated for risk
+//                                scoring. Upsert key is (serial_number,
+//                                summary_date) — enforced as a unique
+//                                constraint so concurrent ingest jobs cannot
+//                                duplicate a day's roll-up.
+//
+// Schema-only unit; no API surface. Ingestion (E-046), summary upsert
+// (E-048), and risk-scoring reads (E-050/E-051) are downstream units that
+// depend on this table existing. Auto-approved via /nbfc loop --auto-approve-schema.
+//
+// Fuzzy-collision dispositions from _audit_E-047.json:
+//   - serial_number on both tables is an intentional logical FK to
+//     inventory.serial_number; left un-FK'd at DB level (BRD 6.2.4 — write
+//     throughput) and same-named on purpose.
+//   - telemetry_events.soc_percent and telemetry_events.voltage_v reuse the
+//     names of inventory.soc_percent (last-known SOC) and products.voltage_v
+//     (nominal voltage) — distinct semantics (per-packet readings vs.
+//     last-known / nominal), kept identical for column-name clarity.
+// =============================================================================
+export const telemetryEvents = pgTable(
+  "telemetry_events",
+  {
+    id: bigserial("id", { mode: "bigint" }).primaryKey(),
+    serial_number: varchar("serial_number", { length: 50 }).notNull(),
+    imei_id: varchar("imei_id", { length: 20 }).notNull(),
+    // Device-reported UTC.
+    device_time: timestamp("device_time", { withTimezone: true }).notNull(),
+    // Server receipt time.
+    server_time: timestamp("server_time", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    soc_percent: integer("soc_percent"),
+    soh_percent: integer("soh_percent"),
+    voltage_v: numeric("voltage_v", { precision: 6, scale: 2 }),
+    // Positive = charging.
+    current_a: numeric("current_a", { precision: 7, scale: 2 }),
+    temperature_c: numeric("temperature_c", { precision: 5, scale: 2 }),
+    charge_cycles: integer("charge_cycles"),
+    gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
+    gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
+    daily_km: numeric("daily_km", { precision: 8, scale: 2 }),
+    idle_hours: numeric("idle_hours", { precision: 6, scale: 2 }),
+    bms_status: varchar("bms_status", { length: 50 }),
+    charger_connected: boolean("charger_connected"),
+  },
+  (table) => ({
+    // Primary read pattern — most-recent packets for a given battery.
+    serialDeviceTimeIdx: index("telemetry_events_serial_device_time_idx").on(
+      table.serial_number,
+      table.device_time,
+    ),
+    // Used by the daily-summary upsert job (E-048) to scan a day's packets
+    // for one battery.
+    serialServerTimeIdx: index("telemetry_events_serial_server_time_idx").on(
+      table.serial_number,
+      table.server_time,
+    ),
+  }),
+);
+
+export const telemetryDailySummary = pgTable(
+  "telemetry_daily_summary",
+  {
+    id: serial("id").primaryKey(),
+    serial_number: varchar("serial_number", { length: 50 }).notNull(),
+    // One row per battery per day.
+    summary_date: date("summary_date").notNull(),
+    avg_soc: numeric("avg_soc", { precision: 5, scale: 2 }),
+    min_soc: numeric("min_soc", { precision: 5, scale: 2 }),
+    max_soh: numeric("max_soh", { precision: 5, scale: 2 }),
+    total_km: numeric("total_km", { precision: 8, scale: 2 }),
+    total_idle_hours: numeric("total_idle_hours", { precision: 6, scale: 2 }),
+    // Number of charge events.
+    charge_sessions: integer("charge_sessions").default(0),
+    // Count of fault/warning bms_status events.
+    bms_faults: integer("bms_faults").default(0).notNull(),
+    // Data quality metric.
+    packets_received: integer("packets_received").default(0).notNull(),
+    // Most common GPS cluster for this day.
+    gps_home_lat: numeric("gps_home_lat", { precision: 10, scale: 7 }),
+    gps_home_lng: numeric("gps_home_lng", { precision: 10, scale: 7 }),
+  },
+  (table) => ({
+    // BRD AC2 — exactly one row per battery per day. Concurrent ingest
+    // jobs MUST collide on this constraint and fall back to upsert.
+    serialDateUnique: uniqueIndex("telemetry_daily_summary_serial_date_uniq").on(
+      table.serial_number,
+      table.summary_date,
+    ),
+    // Range-by-day reads for the risk dashboard (E-050).
+    dateIdx: index("telemetry_daily_summary_date_idx").on(table.summary_date),
+  }),
+);
+
+// =============================================================================
+// [E-049] Telemetry alert rules — Section 6.2.6
+// =============================================================================
+// Persistent ledger for the eight rule-based alerts triggered by the
+// per-packet evaluator (BMS Fault, High Temperature, Low SOC, Usage Drop,
+// Geo-Shift, SOH Decline) and the offline-scan cron (Battery Offline,
+// Battery Offline Extended).
+//
+// Reuse-vs-new rationale (per _audit_E-049.json — auto-approved):
+//   - battery_alerts already exists (line 2086) with shape (id, device_id,
+//     alert_type, severity, message, value, threshold, acknowledged*) — that
+//     table is owned by an earlier ad-hoc battery-monitor flow and uses a
+//     varchar(255) primary key plus an `alert_type`+`message` pair. The BRD
+//     6.2.6 model is rule-based with a fixed enum of `rule` names, an
+//     open/resolved lifecycle (`resolved_at`), a JSON `payload` and a JSON
+//     `notified_to` fan-out audit, plus a `cds_flagged` flag for the >48h
+//     escalation. Reusing battery_alerts would require renaming columns and
+//     widening the PK shape, which would break existing battery_alerts
+//     readers. Therefore telemetry_alerts is kept as a separate table; the
+//     `severity` and `resolved_at` name collisions are intentional —
+//     conventional resolution-timestamp / severity columns shared across
+//     alert tables.
+//   - serial_number is a logical FK to inventory.serial_number, mirroring
+//     the convention used in iot_devices, telemetry_events and
+//     telemetry_daily_summary. Not enforced at the DB level for write
+//     throughput (BRD 6.2.4).
+//
+// Dedup contract (BRD logic step 6): a single open alert per
+// (serial_number, rule). Once resolved_at is non-null the row is closed and
+// a new alert for the same rule may be opened. Enforced by a partial unique
+// index on (serial_number, rule) WHERE resolved_at IS NULL.
+// =============================================================================
+export const telemetryAlerts = pgTable(
+  "telemetry_alerts",
+  {
+    id: serial().primaryKey(),
+    serial_number: varchar("serial_number", { length: 50 }).notNull(),
+    // One of: 'BMS Fault' | 'High Temperature' | 'Low SOC' | 'Usage Drop' |
+    // 'Geo-Shift' | 'SOH Decline' | 'Battery Offline' | 'Battery Offline Extended'.
+    rule: varchar({ length: 50 }).notNull(),
+    // 'critical' | 'warning' | 'info'.
+    severity: varchar({ length: 20 }).notNull(),
+    triggered_at: timestamp("triggered_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    // Snapshot of evaluator inputs (e.g. {soc_percent: 8, charger_connected:
+    // false, threshold: 10}). Lets the dashboard render the firing context
+    // without round-tripping to telemetry_events.
+    payload: jsonb(),
+    // Array of audience ids notified, e.g.
+    // [{audience: 'nbfc-dashboard', at: '...'}, {audience: 'admin-email', at: '...'}].
+    notified_to: jsonb("notified_to"),
+    // Set true on Battery Offline Extended (>48h). Read by E-050/CDS scoring.
+    cds_flagged: boolean("cds_flagged").notNull().default(false),
+  },
+  (table) => ({
+    // Dedup: only one open alert per (serial_number, rule).
+    serialRuleOpenUnique: uniqueIndex("telemetry_alerts_serial_rule_open_uniq")
+      .on(table.serial_number, table.rule)
+      .where(sql`resolved_at IS NULL`),
+    // Dashboard read pattern — list open alerts for a serial, newest first.
+    serialTriggeredIdx: index("telemetry_alerts_serial_triggered_idx").on(
+      table.serial_number,
+      table.triggered_at,
+    ),
+    // Severity filter for the NBFC dashboard "Critical alerts" widget.
+    severityIdx: index("telemetry_alerts_severity_idx").on(table.severity),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-030 — PCI nightly computation (Section 6.1.5)
+// -----------------------------------------------------------------------------
+// emi_schedules is already defined above (line ~3071) and reused here. This
+// section adds nbfc_risk_alerts — the alert rows surfaced on the NBFC Risk
+// Alerts UI. The PCI job inserts type='pci_low' rows when a borrower dips
+// below 0.40; other E-units may insert their own types (cds_high, etc.).
+// Tenant scoping enforced in application code (drizzle where-clauses).
+// -----------------------------------------------------------------------------
+
+export const nbfcRiskAlerts = pgTable(
+  "nbfc_risk_alerts",
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    tenant_id: uuid("tenant_id").notNull(),
+    borrower_id: uuid("borrower_id").notNull(),
+    loan_sanction_id: uuid("loan_sanction_id").notNull(),
+    type: varchar({ length: 32 }).notNull(), // 'pci_low' | 'cds_high' | ...
+    severity: varchar({ length: 16 }).notNull(), // 'low' | 'medium' | 'high' | 'critical'
+    payload: jsonb("payload"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_risk_alerts_tenant_idx").on(table.tenant_id),
+    borrowerIdx: index("nbfc_risk_alerts_borrower_idx").on(table.borrower_id),
+    loanSanctionIdx: index("nbfc_risk_alerts_loan_sanction_idx").on(
+      table.loan_sanction_id,
+    ),
+    typeIdx: index("nbfc_risk_alerts_type_idx").on(table.type),
+    createdAtIdx: index("nbfc_risk_alerts_created_at_idx").on(table.created_at),
+  }),
+);
+
+// =============================================================================
+// E-070 — Cancel Lot with MFA, dual approval, battery return-to-inventory
+// (BRD §6.3.4)
+// =============================================================================
+// `nbfc_auction_cancel_requests` is the dual-approval ledger for the
+// "Cancel Lot" admin action in the Auction Control Centre. Cancellation is
+// the ONLY auction action that requires dual approval per BRD §6.3.4 — it
+// removes a lot from the auction and returns the underlying battery to
+// inventory.
+//
+// Lifecycle:
+//   1. First admin POSTs /cancel/request with mfa_token + lot_id + reason.
+//      We validate MFA, insert a row with status='pending_second_approval',
+//      requested_by = first admin's uuid.
+//   2. A *different* admin POSTs /cancel/approve with decision.
+//      - decision='reject' → status='rejected'.
+//      - decision='approve' → atomically:
+//          a. lot.status='cancelled'
+//          b. inventory rows whose serial_number == lot.lot_code (the
+//             convention shared with E-039 recovery_pipeline.battery_serial)
+//             flip to status='in_stock' (the canonical 'returned to
+//             inventory' state in this codebase — `inventory.status` defaults
+//             to 'in_stock', see line ~143).
+//          c. request row → status='executed', approved_by, applied_at.
+//          d. audit_logs row with action='AUCTION_LOT_CANCELLED' carrying
+//             both approver IDs, lot_id, and the mandatory reason.
+//
+// Self-approval is rejected at the service layer (FORBIDDEN) — the second
+// approver's uuid must differ from requested_by.
+// -----------------------------------------------------------------------------
+
+export const nbfcAuctionCancelRequests = pgTable(
+  "nbfc_auction_cancel_requests",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull(),
+    reason: text("reason").notNull(),
+    requested_by: uuid("requested_by").notNull(),
+    approved_by: uuid("approved_by"),
+    status: varchar({ length: 32 }).notNull(),
+    requested_at: timestamp("requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    applied_at: timestamp("applied_at", { withTimezone: true }),
+  },
+  (table) => ({
+    // Approval-queue read pattern — list pending requests, newest first.
+    statusIdx: index("nbfc_auction_cancel_requests_status_idx").on(
+      table.status,
+    ),
+    lotIdx: index("nbfc_auction_cancel_requests_lot_idx").on(table.lot_id),
+    requestedByIdx: index("nbfc_auction_cancel_requests_requested_by_idx").on(
+      table.requested_by,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-069 — Auction Control Centre admin actions audit trail (BRD §6.3.4)
+// -----------------------------------------------------------------------------
+// `nbfc_auction_lot_actions` is the per-lot audit log for every admin control
+// action issued from the Auction Control Centre. The five action codes
+// supported by the BRD are:
+//   - extend_time            (Extend Time +15m / +30m / +1h)
+//   - reduce_time            (Reduce Time -15m / End Now)
+//   - pause                  (Pause Auction; freeze countdown)
+//   - reserve_price_set      (Set Reserve Price; pre-bid only)
+//   - approve_winning_bid    (Post-auction; trigger payment flow)
+//
+// Per-action parameters and pre/post snapshots live in jsonb columns so we do
+// not need a column per action variant. `previous_value` and `new_value`
+// capture the field that changed (e.g. ends_at for extend_time, status for
+// pause, reserve_price for reserve_price_set). `reason` is a free-text field
+// surfaced by the UI; some actions (extend_time) require it, others
+// (approve_winning_bid) do not.
+//
+// This table is platform-global — auction lots themselves have no tenant_id
+// (lots are platform-owned in this release; same convention as
+// nbfc_auction_cancel_requests / E-070). The acting admin is recorded in
+// `acted_by` (uuid). Distinct from `audit_logs` (which spans the whole CRM):
+// this table is the queryable, lot-scoped index the Auction Control Centre
+// reads to render the per-lot history strip without scanning audit_logs.
+// -----------------------------------------------------------------------------
+
+export const nbfcAuctionLotActions = pgTable(
+  "nbfc_auction_lot_actions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull(),
+    action_code: varchar("action_code", { length: 48 }).notNull(),
+    previous_value: jsonb("previous_value"),
+    new_value: jsonb("new_value"),
+    reason: text("reason"),
+    acted_by: uuid("acted_by").notNull(),
+    acted_at: timestamp("acted_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    // Per-lot history-strip read pattern — list actions on a lot, newest first.
+    lotActedAtIdx: index("nbfc_auction_lot_actions_lot_acted_at_idx").on(
+      table.lot_id,
+      table.acted_at,
+    ),
+    actionCodeIdx: index("nbfc_auction_lot_actions_action_code_idx").on(
+      table.action_code,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-039 — Post-auction Settlement Table (BRD §6.1.7)
+// -----------------------------------------------------------------------------
+// `auction_settlements` is the per-lot settlement record created when an
+// auction lot ends. It captures the winner tenant, the seller tenant (the
+// platform tenant that owned the underlying recovery batch), the binding
+// final price, and the fulfilment status moving through:
+//   payment_pending → in_transit → delivered.
+//
+// Naming: `seller_tenant_id` and `winner_tenant_id` are intentionally
+// role-prefixed because a single settlement row references TWO different
+// nbfc_tenants in DIFFERENT roles (seller vs. winning bidder) — the unprefixed
+// `tenant_id` convention used elsewhere in the schema cannot disambiguate two
+// such columns on the same row. This is the same pattern this codebase will
+// reach for whenever a row genuinely has multiple tenant references.
+//
+// Restored after merge regression (one-time recovery patch); originally added
+// by E-039.
+// -----------------------------------------------------------------------------
+
+export const auctionSettlements = pgTable(
+  "auction_settlements",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull().unique(),
+    seller_tenant_id: uuid("seller_tenant_id").notNull(),
+    winner_tenant_id: uuid("winner_tenant_id").notNull(),
+    final_price: numeric("final_price", { precision: 12, scale: 2 }).notNull(),
+    status: varchar("status", { length: 24 })
+      .notNull()
+      .default("payment_pending"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    lotIdx: index("auction_settlements_lot_idx").on(table.lot_id),
+    sellerTenantIdx: index("auction_settlements_seller_tenant_idx").on(
+      table.seller_tenant_id,
+    ),
+    winnerTenantIdx: index("auction_settlements_winner_tenant_idx").on(
+      table.winner_tenant_id,
+    ),
+    statusIdx: index("auction_settlements_status_idx").on(table.status),
+  }),
+);
+
+// =============================================================================
+// E-104 — Inventory Transfers — bundled base table + rejection extension
+// (Sync Audit G-06; BRD §6.S.5 reject-transfer workflow)
+// =============================================================================
+// `inventory_transfers` was referenced by Section 6.S.5's reject-transfer API
+// but never created in the iTarang baseline schema. This unit creates the
+// full table from scratch in one migration:
+//   1. base columns Aditya's V2-Feb spec listed (id, transfer_id, source/
+//      target dealer, serials JSON, reason, status, initiated_by, initiated_at,
+//      acknowledged_by, acknowledged_at);
+//   2. the three NEW rejection columns (rejected_by, rejected_at,
+//      rejection_reason);
+//   3. status implemented as varchar(32) (NOT a Postgres ENUM type) with a
+//      CHECK constraint that admits all four states from the BRD —
+//      'pending_acknowledgement' | 'completed' | 'rejected_by_target' |
+//      'cancelled_by_admin'. Using varchar avoids ALTER TYPE migrations when
+//      future states are added.
+//
+// CHECK constraint `inventory_transfers_rejection_triplet_check` enforces the
+// all-or-nothing invariant on (rejected_by, rejected_at, rejection_reason):
+// when status='rejected_by_target' the dealer-side reject API must populate
+// all three; otherwise all three remain NULL. This guarantees that any row
+// with a rejection cause carries who-rejected-it, when, and why — and
+// prevents partial-rejection states that the audit workflow can't reason
+// about.
+//
+// Transfer_id is the human-readable code (TRF-YYYYMMDD-SEQ) and carries a
+// UNIQUE constraint so the dealer-portal UI can dedupe on it.
+//
+// The reject API itself ships in a separate Sec6.S.5 unit; this unit only
+// delivers the storage layer.
+// =============================================================================
+export const inventoryTransfers = pgTable(
+  "inventory_transfers",
+  {
+    id: serial("id").primaryKey().notNull(),
+    transfer_id: varchar("transfer_id", { length: 50 }).notNull().unique(),
+    source_dealer_id: integer("source_dealer_id").notNull(),
+    target_dealer_id: integer("target_dealer_id").notNull(),
+    serials: jsonb("serials").notNull(),
+    reason: text("reason"),
+    // pending_acknowledgement | completed | rejected_by_target | cancelled_by_admin
+    status: varchar("status", { length: 32 }).notNull(),
+    initiated_by: integer("initiated_by").notNull(),
+    initiated_at: timestamp("initiated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    acknowledged_by: integer("acknowledged_by"),
+    acknowledged_at: timestamp("acknowledged_at", { withTimezone: true }),
+    // NEW (G-06): the three rejection-cause columns. Populated together by
+    // the Sec6.S.5 reject-transfer API; enforced as a triplet by the CHECK
+    // constraint emitted in the migration SQL.
+    rejected_by: integer("rejected_by"),
+    rejected_at: timestamp("rejected_at", { withTimezone: true }),
+    rejection_reason: text("rejection_reason"),
+  },
+  (table) => ({
+    sourceDealerIdx: index("inventory_transfers_source_dealer_idx").on(
+      table.source_dealer_id,
+    ),
+    targetDealerIdx: index("inventory_transfers_target_dealer_idx").on(
+      table.target_dealer_id,
+    ),
+    statusIdx: index("inventory_transfers_status_idx").on(table.status),
+  }),
+);
+
+// =============================================================================
+// NBFC entity KYC verifications (CIN, PAN, GSTIN)
+// Sanchit (CEO) runs these from /admin/nbfc/[id]/kyc-review before the final
+// approval gate releases. The gate (E-001) requires at least one row with
+// status='success' for each of (cin, pan, gstin). Provider raw payload is
+// retained verbatim for the RBI audit trail.
+// =============================================================================
+export const nbfcEntityKycVerifications = pgTable(
+  "nbfc_entity_kyc_verifications",
+  {
+    id: serial("id").primaryKey(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    verification_type: varchar("verification_type", { length: 16 }).notNull(),
+    id_number: varchar("id_number", { length: 32 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull(),
+    provider_reference_id: varchar("provider_reference_id", { length: 64 }),
+    raw_response: jsonb("raw_response"),
+    verified_by: uuid("verified_by"),
+    verified_at: timestamp("verified_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_entity_kyc_verifications_nbfc_id_idx").on(
+      table.nbfc_id,
+    ),
+    typeIdx: index("nbfc_entity_kyc_verifications_type_idx").on(
+      table.verification_type,
+    ),
+  }),
+);
+
+// =============================================================================
+// NBFC directors — one row per NBFC, seeded from primary_contact_* at create
+// time. Holds the subject of the director-side KYC (PAN / Aadhaar / RC). This
+// is intentionally a 1:1 with `nbfc` for now; the table key still indexes by
+// nbfc_id so multi-director support can land later without a migration.
+// =============================================================================
+export const nbfcDirectors = pgTable(
+  "nbfc_directors",
+  {
+    id: serial("id").primaryKey(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id),
+    full_name: varchar("full_name", { length: 200 }).notNull(),
+    email: varchar("email", { length: 200 }),
+    phone: varchar("phone", { length: 20 }),
+    pan_number: varchar("pan_number", { length: 20 }),
+    aadhaar_last4: varchar("aadhaar_last4", { length: 4 }),
+    rc_number: varchar("rc_number", { length: 30 }),
+    kyc_status: varchar("kyc_status", { length: 16 })
+      .default("pending")
+      .notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    nbfcIdx: index("nbfc_directors_nbfc_id_idx").on(table.nbfc_id),
+  }),
+);
+
+// =============================================================================
+// NBFC director KYC verifications (PAN, Aadhaar, RC). Mirrors the entity table
+// but keys off director_id. Verification type is one of: pan | aadhaar | rc.
+// =============================================================================
+export const nbfcDirectorKycVerifications = pgTable(
+  "nbfc_director_kyc_verifications",
+  {
+    id: serial("id").primaryKey(),
+    director_id: integer("director_id")
+      .notNull()
+      .references(() => nbfcDirectors.id),
+    verification_type: varchar("verification_type", { length: 16 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull(),
+    provider_reference_id: varchar("provider_reference_id", { length: 64 }),
+    raw_response: jsonb("raw_response"),
+    verified_by: uuid("verified_by"),
+    verified_at: timestamp("verified_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    directorIdx: index("nbfc_director_kyc_verifications_director_idx").on(
+      table.director_id,
+    ),
+    typeIdx: index("nbfc_director_kyc_verifications_type_idx").on(
+      table.verification_type,
+    ),
   }),
 );
 

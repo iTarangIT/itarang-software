@@ -1,0 +1,57 @@
+{
+  "unit_id": "E-035",
+  "audited_at": "2026-05-01T07:00:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "loan_sanctions",
+      "verified": false,
+      "ts_line": 2624,
+      "columns_verified": ["id"],
+      "columns_missing": ["nbfc_id"],
+      "note": "G-03: loan_sanctions.nbfc_id missing in baseline."
+    },
+    {
+      "table": "nbfc_borrower_actions",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["id", "tenant_id", "loan_sanction_id", "action_type", "status", "requested_by", "created_at"],
+      "note": "Forward reference to E-031."
+    },
+    {
+      "table": "nbfc_recovery_pipeline",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["tenant_id", "battery_serial", "stage"],
+      "note": "Forward reference to E-026."
+    },
+    {
+      "table": "nbfc_audit_log",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["tenant_id", "actor_user_id", "action_type", "action_id", "after_state", "created_at"],
+      "note": "Forward reference to E-031."
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "loan_sanctions_recovery_flag",
+      "justification_present": true,
+      "justification_chars": 137,
+      "columns": ["recovery_flagged_at", "recovery_reason"],
+      "fuzzy_collisions": [],
+      "type_lint": "ok",
+      "decision": "approved_pending_human",
+      "note": "This is described as additive columns on loan_sanctions, modelled here as a separate logical table to record the migration. Reviewer should confirm whether to ALTER loan_sanctions or use a side table."
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "Recovery flag is intended as additive columns on loan_sanctions per BRD; the unit YAML records them as a distinct 'loan_sanctions_recovery_flag' table for tracking. Treat as ALTER TABLE migration on loan_sanctions during code-loop."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-035/checkpoint_1.html"
+}

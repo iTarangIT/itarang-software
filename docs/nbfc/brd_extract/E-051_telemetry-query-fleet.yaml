@@ -1,0 +1,106 @@
+id: E-051
+slug: telemetry-query-fleet
+name: NBFC fleet telemetry query API
+source_section: "6.2.7"
+brd_excerpt: |
+  6.2.7 Telemetry Query APIs
+
+  // Fleet view (NBFC portfolio):
+  GET /api/iot/fleet
+       ?nbfcId=NBFC-001&status=offline|online|all
+  Response: { total, online, offline, alerts: [] }
+
+  Auth: NBFC JWT → only see own portfolio serials.
+        Admin JWT → see any serial.
+        Dealer JWT → only see own inventory serials.
+depends_on:
+  - E-045
+  - E-049
+non_functional:
+  - "NBFC JWT must match nbfcId query param; mismatch returns 403."
+  - "Admin JWT may query any nbfcId."
+  - "Dealer JWT scope is not meaningful for fleet view (NBFC-scoped); request from dealer role returns 403."
+  - "alerts[] surfaces open telemetry_alerts (resolved_at IS NULL) for the portfolio."
+
+surface:
+  api:
+    - method: GET
+      path: /api/iot/fleet
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({
+          nbfcId: z.string().min(1),
+          status: z.enum(["online", "offline", "all"]).default("all")
+        })
+      response_shape:
+        total: "number"
+        online: "number"
+        offline: "number"
+        alerts: "[ { serial_number, rule, severity, triggered_at } ]"
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Authenticate caller; resolve role and tenant.
+  2. Validate query params against query_zod.
+  3. If caller role is nbfc, require caller's tenant.nbfcId === query.nbfcId else return 403.
+  4. If caller role is dealer, return 403.
+  5. Resolve set of portfolio serial_numbers belonging to nbfcId (via NBFC↔dealer↔inventory linkage).
+  6. Compute total = count of serials, online = count where iot_devices.device_status='online' AND last_seen >= now()-15min, offline = total - online.
+  7. If status filter is 'online' or 'offline', filter serials accordingly before counting summary fields are still total/online/offline of the unfiltered set, but alerts[] is constrained to filtered set.
+  8. Load open telemetry_alerts (resolved_at IS NULL) for portfolio serials; map to { serial_number, rule, severity, triggered_at }.
+  9. Return { total, online, offline, alerts }.
+
+tables_columns:
+  reuse:
+    - table: iot_devices
+      schema_ts_line: 1
+      columns: [serial_number, dealer_id, device_status, last_seen]
+    - table: telemetry_alerts
+      schema_ts_line: 1
+      columns: [serial_number, rule, severity, triggered_at, resolved_at]
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/iot/fleet?nbfcId={own}&status=all with NBFC JWT returns 200 with total/online/offline counts matching the tenant's portfolio."
+    test_layer: api
+    test_name: "GET fleet returns correct counts for NBFC's own portfolio"
+  - id: AC2
+    statement: "GET /api/iot/fleet?nbfcId={other}&status=all with NBFC JWT for a different nbfcId returns HTTP 403."
+    test_layer: api
+    test_name: "GET fleet returns 403 when NBFC requests another tenant's portfolio"
+  - id: AC3
+    statement: "GET /api/iot/fleet?nbfcId={any}&status=all with Admin JWT returns 200 for any nbfcId."
+    test_layer: api
+    test_name: "GET fleet returns 200 for admin on any nbfcId"
+  - id: AC4
+    statement: "GET /api/iot/fleet response.alerts only includes telemetry_alerts rows where resolved_at IS NULL and serial belongs to the nbfcId portfolio."
+    test_layer: api
+    test_name: "GET fleet alerts excludes resolved and out-of-portfolio alerts"
+
+status: audited
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-051
+  audited_at: "2026-05-01T06:11:00Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  verdict: audited
+  migration_required: false
+  reuse_findings:
+    - table: iot_devices
+      verified: false
+      verified_via: "depends_on:E-045 new[]"
+      columns_pending_dep_approval: [serial_number, dealer_id, device_status, last_seen]
+    - table: telemetry_alerts
+      verified: false
+      verified_via: "depends_on:E-049 new[]"
+      columns_pending_dep_approval: [serial_number, rule, severity, triggered_at, resolved_at]
+  new_findings: []
+  notes:
+    - "All reuse[] entries provided by depended-on units (E-045, E-049)."
+    - "Fleet endpoint scope check should use dealer_nbfc_assignments linkage."
+  checkpoint_html: null

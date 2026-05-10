@@ -1,0 +1,161 @@
+id: E-046
+slug: telemetry-ingestion
+name: Telemetry ingestion API for IoT devices
+source_section: "6.2.3"
+brd_excerpt: |
+  6.2.3 Telemetry Ingestion API
+  The IoT device transmits a telemetry packet at configurable intervals (default: every 15 minutes when active, every 60 minutes when idle/charging). Packets are received by the iTarang IoT gateway and written to the telemetry store.
+
+  POST /api/iot/ingest
+  Content-Type: application/json
+  X-Device-IMEI: 354000123456789
+  X-Device-Token: [device-scoped JWT, rotated monthly]
+
+  Request Payload:
+  { "serialNumber": "BAT12345", "imeiId": "354000123456789",
+    "timestamp": "2026-07-28T10:30:00Z",
+    "soc_percent": 74, "soh_percent": 91,
+    "voltage_v": 51.8, "current_a": 12.4,
+    "temperature_c": 32.1, "charge_cycles": 143,
+    "gps": { "lat": 25.4358, "lng": 81.8463, "accuracy_m": 15 },
+    "daily_km": 28.4, "idle_hours": 6.2,
+    "bms_status": "normal", "charger_connected": false }
+
+  Processing:
+    1. Validate IMEI + token
+    2. Validate serialNumber exists in inventory AND iot_enabled = true
+    3. Validate timestamp within ±5 minutes of server time (reject stale packets)
+    4. INSERT telemetry_events record
+    5. UPDATE iot_devices: last_seen = timestamp, soc_percent, soh_percent,
+          gps_lat, gps_lng, device_status = 'online'
+    6. Evaluate alert rules (Section 6.2.6)
+    7. Update daily usage summary (telemetry_daily_summary upsert)
+
+  Response 200: { "accepted": true, "serverTime": "2026-07-28T10:30:02Z" }
+  Response 401 (invalid token): { "error": "DEVICE_AUTH_FAILED" }
+  Response 422 (validation failure): { "error": "INVALID_PAYLOAD", "field": "soc_percent", "message": "Must be 0–100" }
+depends_on:
+  - E-045
+non_functional:
+  - "Device authentication via X-Device-IMEI + X-Device-Token (device-scoped JWT, rotated monthly)."
+  - "Stale-packet rejection: device timestamp must be within ±5 minutes of server UTC."
+  - "High write throughput: telemetry_events FK to inventory.serial_number is logical, not enforced at DB level."
+  - "Alert evaluation (E-049) and daily summary upsert (E-047) triggered synchronously on each successful ingest."
+
+surface:
+  api:
+    - method: POST
+      path: /api/iot/ingest
+      auth: public
+      request_zod: |
+        z.object({
+          serialNumber: z.string().min(1).max(50),
+          imeiId: z.string().regex(/^\d{15,20}$/),
+          timestamp: z.string().datetime(),
+          soc_percent: z.number().int().min(0).max(100),
+          soh_percent: z.number().int().min(0).max(100),
+          voltage_v: z.number(),
+          current_a: z.number(),
+          temperature_c: z.number(),
+          charge_cycles: z.number().int().nonnegative(),
+          gps: z.object({
+            lat: z.number().min(-90).max(90),
+            lng: z.number().min(-180).max(180),
+            accuracy_m: z.number().nonnegative()
+          }),
+          daily_km: z.number().nonnegative(),
+          idle_hours: z.number().nonnegative(),
+          bms_status: z.enum(["normal", "fault", "warning"]),
+          charger_connected: z.boolean()
+        })
+      response_shape:
+        accepted: true
+        serverTime: "ISO8601 server UTC"
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Read X-Device-IMEI and X-Device-Token headers; verify token JWT signature and that iss matches imeiId.
+  2. Validate request body against request_zod; on failure return 422 with { error: 'INVALID_PAYLOAD', field, message }.
+  3. On auth failure return 401 { error: 'DEVICE_AUTH_FAILED' }.
+  4. Lookup inventory row by serialNumber; reject 422 if missing or iot_enabled = false.
+  5. If abs(serverTime - timestamp) > 5 minutes, return 422 with field='timestamp'.
+  6. INSERT telemetry_events row with device_time=timestamp, server_time=now().
+  7. UPDATE iot_devices SET last_seen=timestamp, soc_percent, soh_percent, voltage_v, temperature_c, gps_lat, gps_lng, gps_updated_at=now(), bms_status, device_status='online', updated_at=now() WHERE serial_number=serialNumber.
+  8. Evaluate alert rules (E-049) for this packet.
+  9. Upsert telemetry_daily_summary for (serial_number, summary_date=date(timestamp)).
+  10. Return 200 { accepted: true, serverTime }.
+
+tables_columns:
+  reuse: []
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/iot/ingest with valid headers and payload returns 200 { accepted: true } and inserts a telemetry_events row."
+    test_layer: api
+    test_name: "POST ingest with valid packet returns 200 and persists telemetry_events row"
+  - id: AC2
+    statement: "POST /api/iot/ingest with missing or invalid X-Device-Token returns HTTP 401 { error: 'DEVICE_AUTH_FAILED' }."
+    test_layer: api
+    test_name: "POST ingest rejects invalid device token with 401"
+  - id: AC3
+    statement: "POST /api/iot/ingest with timestamp more than 5 minutes from server time returns HTTP 422 with field='timestamp'."
+    test_layer: api
+    test_name: "POST ingest rejects stale packet (>5 min skew) with 422"
+  - id: AC4
+    statement: "POST /api/iot/ingest with soc_percent=120 returns HTTP 422 { error: 'INVALID_PAYLOAD', field: 'soc_percent' }."
+    test_layer: api
+    test_name: "POST ingest rejects out-of-range soc_percent with 422"
+  - id: AC5
+    statement: "After a successful POST /api/iot/ingest, iot_devices.last_seen and iot_devices.device_status='online' are updated for the serialNumber."
+    test_layer: api
+    test_name: "POST ingest updates iot_devices.last_seen and device_status='online'"
+  - id: AC6
+    statement: "POST /api/nbfc/telemetry/ingest must validate timestamp within a configurable freshness window (default 5 minutes) and reject stale packets: when Math.abs(now - ts) exceeds the bound, the endpoint returns HTTP 400 with { ok: false, code: 'STALE_PACKET', processed_count: 0 } (processed_count must be 0)."
+    test_layer: api
+    persona: nbfc_tenant_user
+    expected_response_shape:
+      ok: false
+      code: "STALE_PACKET"
+      processed_count: 0
+    test_name: "POST nbfc telemetry ingest rejects stale packet (ts outside freshness window) with 400 STALE_PACKET and processed_count=0"
+
+status: blocked
+loop_count: 0
+last_failure_signature: dependency_missing
+halt_reason: |
+  E-046 logic writes to telemetry_events (INSERT), iot_devices (UPDATE
+  last_seen, soc_percent, soh_percent, gps_lat, gps_lng, device_status,
+  bms_status, gps_updated_at), and telemetry_daily_summary (UPSERT). It also
+  reads inventory.iot_enabled.
+
+  None of these are present in src/lib/db/schema.ts:
+    - iot_devices table:              not defined (deferred to E-045)
+    - telemetry_events table:         not defined (deferred to E-047)
+    - telemetry_daily_summary table:  not defined (deferred to E-047)
+    - inventory.iot_enabled column:   not present (deferred to E-045)
+
+  Dependency status:
+    - E-045 device-registration:        status=needs_clarification, audit verdict=reject
+    - E-047 telemetry-storage-schema:   status=needs_clarification, audit verdict=reject
+
+  Per Wave-1 lesson #3 ("latent table dep → halt blocked, do not silently
+  degrade") and the loop runner's blocked-on-missing-dep contract, this unit
+  cannot be implemented end-to-end without first landing E-045 and E-047 (or
+  promoting their tables into a shared migration). Halting at step 0 with no
+  code changes; no commit produced.
+human_checkpoints: []
+audit:
+  unit_id: E-046
+  audited_at: "2026-05-01T06:11:00Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  verdict: audited
+  migration_required: false
+  reuse_findings: []
+  new_findings: []
+  notes:
+    - "No new tables or reuse declared; logic implicitly writes to telemetry_events / telemetry_daily_summary / iot_devices defined in deps E-045 and E-047."
+    - "BRD sync audit IN SYNC for IoT telemetry ingestion (Section 6.2 full spec)."
+  checkpoint_html: null

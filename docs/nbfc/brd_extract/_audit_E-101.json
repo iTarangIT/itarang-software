@@ -1,0 +1,44 @@
+{
+  "unit_id": "E-101",
+  "audited_at": "2026-05-01T06:10:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "leads",
+      "verified": true,
+      "ts_line": 176,
+      "claimed_ts_line": 1,
+      "ts_line_drift_warning": "claimed schema_ts_line=1 but actual is 176 (>±5 line tolerance) — YAML uses placeholder line numbers; recommend tightening before loop runs",
+      "columns_verified": ["id", "payment_method"],
+      "columns_missing": []
+    },
+    {
+      "table": "warranty",
+      "verified": false,
+      "ts_line": null,
+      "claimed_ts_line": 1,
+      "columns_verified": [],
+      "columns_missing": ["id", "lead_id", "payment_mode"],
+      "reason": "Table 'warranty' does not exist in baseline schema.ts. No similarly-named table found ('warranties' also absent). Unit references warranty.payment_mode in surface.api[] and logic[] but never declares it in tables_columns.new[]."
+    },
+    {
+      "table": "after_sales_records",
+      "verified": true,
+      "ts_line": 2672,
+      "claimed_ts_line": 1,
+      "ts_line_drift_warning": "claimed schema_ts_line=1 but actual is 2672 — placeholder line numbers in YAML",
+      "columns_verified": ["id", "lead_id", "payment_mode"],
+      "columns_missing": []
+    }
+  ],
+  "new_findings": [],
+  "verdict": "reject",
+  "migration_required": false,
+  "notes": [
+    "Sync Audit G-02 / G-07 — payment-method canonical mapping. Resolution requires a single toPaymentMode() utility used by warranty creation and after-sales creation.",
+    "Cross-doc gap: G-02 explicitly mentions a 'warranty' table that holds payment_mode — yet schema.ts has no such table. The unit must either (a) add the warranty table to tables_columns.new[] with full column definitions, or (b) declare a depends_on link to the unit that creates it.",
+    "after_sales_records already has payment_mode column — that side of the mapping is verifiable today."
+  ],
+  "fuzzy_collisions": [],
+  "checkpoint_html": "docs/nbfc/loop_report/E-101/checkpoint_1.html"
+}

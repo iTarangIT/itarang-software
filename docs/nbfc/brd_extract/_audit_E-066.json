@@ -1,0 +1,23 @@
+{
+  "unit_id": "E-066",
+  "audited_at": "2026-05-01T06:10:31Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [],
+  "new_findings": [
+    {
+      "table": "nbfc_anomaly_flags",
+      "justification_present": true,
+      "fuzzy_collisions": [],
+      "type_lint": "ok",
+      "decision": "blocked_by_clarification"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "Unit was already in needs_clarification status from extraction (BRD does not quantify red/amber thresholds); this audit only verifies its schema claims and does not change the unit status.",
+    "Foreign key references nbfcTenants.id which exists in baseline at ts_line 11502; FK consistency is sound.",
+    "No cross-doc gap (G-01..G-10) directly impacts nbfc_anomaly_flags."
+  ],
+  "checkpoint_html": null
+}

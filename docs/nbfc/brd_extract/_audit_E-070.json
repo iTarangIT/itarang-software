@@ -1,0 +1,23 @@
+{
+  "unit_id": "E-070",
+  "audited_at": "2026-05-01T06:10:31Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [],
+  "new_findings": [
+    {
+      "table": "nbfc_auction_cancel_requests",
+      "justification_present": true,
+      "fuzzy_collisions": [],
+      "type_lint": "ok",
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "Logic flips lot.status to 'cancelled' and inventory row back to status='in_inventory'; baseline has inventory at ts_line 7204 but no lots table — depends_on should be extended once an auction-lots unit exists.",
+    "Logic step 9 writes admin_audit_logs (introduced by E-071); depends_on should include E-071.",
+    "No cross-doc gap (G-01..G-10) directly impacts nbfc_auction_cancel_requests."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-070/checkpoint_1.html"
+}

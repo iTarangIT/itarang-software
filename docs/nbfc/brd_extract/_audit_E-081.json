@@ -1,0 +1,41 @@
+{
+  "unit_id": "E-081",
+  "audited_at": "2026-05-01T06:16:03Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "audit_logs",
+      "verified": true,
+      "ts_line": 671,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "id",
+        "entity_type",
+        "entity_id",
+        "action",
+        "performed_by",
+        "timestamp"
+      ],
+      "columns_missing": []
+    },
+    {
+      "table": "nbfc_users",
+      "verified": true,
+      "ts_line": 2713,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "user_id",
+        "tenant_id",
+        "role"
+      ],
+      "columns_missing": []
+    }
+  ],
+  "new_findings": [],
+  "verdict": "audited",
+  "migration_required": false,
+  "notes": [
+    "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+  ],
+  "checkpoint_html": null
+}

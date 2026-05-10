@@ -1,0 +1,140 @@
+{
+  "unit_id": "E-090",
+  "audited_at": "2026-05-01T06:16:03Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "consent_records",
+      "verified": true,
+      "ts_line": 1325,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "id",
+        "lead_id",
+        "consent_status",
+        "signed_at"
+      ],
+      "columns_missing": []
+    },
+    {
+      "table": "audit_logs",
+      "verified": true,
+      "ts_line": 671,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "id",
+        "entity_type",
+        "entity_id",
+        "action",
+        "performed_by",
+        "timestamp"
+      ],
+      "columns_missing": []
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "nbfc_consent_scopes",
+      "is_existing_table": false,
+      "justification_present": true,
+      "justification_length": 182,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid().primaryKey().defaultRandom()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "consent_id",
+          "type": "varchar({ length: 255 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "scope_key",
+          "type": "varchar({ length: 64 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "is_active",
+          "type": "boolean().default(true).notNull()",
+          "type_lint_ok": true,
+          "type_head": "boolean",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "deactivated_at",
+          "type": "timestamp({ withTimezone: true })",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        }
+      ],
+      "fuzzy_collisions": [],
+      "decision": "approved_pending_human"
+    },
+    {
+      "table": "nbfc_consent_withdrawals",
+      "is_existing_table": false,
+      "justification_present": true,
+      "justification_length": 172,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid().primaryKey().defaultRandom()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "lead_id",
+          "type": "varchar({ length: 255 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "consent_id",
+          "type": "varchar({ length: 255 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "withdrawal_channel",
+          "type": "varchar({ length: 32 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "reason",
+          "type": "text()",
+          "type_lint_ok": true,
+          "type_head": "text",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "withdrawn_at",
+          "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        }
+      ],
+      "fuzzy_collisions": [],
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-090/checkpoint_1.html"
+}

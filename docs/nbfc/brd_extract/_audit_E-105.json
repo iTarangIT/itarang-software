@@ -1,0 +1,44 @@
+{
+  "unit_id": "E-105",
+  "audited_at": "2026-05-01T06:10:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "dealers",
+      "verified": false,
+      "ts_line": null,
+      "claimed_ts_line": 1,
+      "columns_verified": [],
+      "columns_missing": ["id", "onboarding_status", "finance_enabled"],
+      "reason": "Table 'dealers' does not exist in baseline schema.ts. It is created by E-102, which is currently unapproved (verdict=reject). Unit YAML must declare depends_on: [E-102] so the loop won't run E-105 before the dealers table exists."
+    },
+    {
+      "table": "dealer_nbfc_assignments",
+      "verified": false,
+      "ts_line": null,
+      "claimed_ts_line": 1,
+      "columns_verified": [],
+      "columns_missing": ["id", "dealer_id", "status"],
+      "reason": "Table 'dealer_nbfc_assignments' does not exist in baseline schema.ts. No similarly-named table found in baseline. Unit must declare depends_on to the (currently-missing) unit that creates this table — likely E-012 in the existing unit set, but that unit is not in depends_on."
+    },
+    {
+      "table": "leads",
+      "verified": true,
+      "ts_line": 176,
+      "claimed_ts_line": 1,
+      "ts_line_drift_warning": "claimed schema_ts_line=1 but actual is 176 — placeholder line numbers in YAML",
+      "columns_verified": ["id", "dealer_id", "payment_method"],
+      "columns_missing": []
+    }
+  ],
+  "new_findings": [],
+  "verdict": "reject",
+  "migration_required": false,
+  "notes": [
+    "Sync Audit G-10 (MEDIUM) — V2-Feb POST /api/leads/create has no validation that dealer is Active. Resolution F adds three pre-insert guards (DEALER_NOT_ACTIVE, FINANCE_NOT_ENABLED, NO_ACTIVE_NBFC).",
+    "PRIMARY BLOCKER: depends_on is empty but the unit reads from two tables that do not yet exist (dealers via E-102, dealer_nbfc_assignments via E-012). The loop will fail-fast trying to compile against absent Drizzle exports.",
+    "Recommendation: amend depends_on to ['E-102', 'E-012'] (or whatever unit owns dealer_nbfc_assignments). Once E-102 ships and clears its own audit, this unit can be re-audited and should clear cleanly (no schema changes of its own).",
+    "leads.payment_method, leads.dealer_id, leads.id all verified in baseline at ts_line 176."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-105/checkpoint_1.html"
+}
