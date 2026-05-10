@@ -3504,6 +3504,10 @@ export const nbfc = pgTable("nbfc", {
   // when the final-approval gate releases (status='approved'); activated_at
   // fires when portal credentials are dispatched (status='active').
   activated_at: timestamp("activated_at", { withTimezone: true }),
+  // E-026B — bridge to the portal tenant scope. Nullable because legacy NBFC
+  // rows may not have a corresponding nbfc_tenants entry yet; backfilled by
+  // legal_name match in the E-026B migration.
+  tenant_id: uuid("tenant_id").references(() => nbfcTenants.id),
   created_by: integer("created_by").notNull(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
