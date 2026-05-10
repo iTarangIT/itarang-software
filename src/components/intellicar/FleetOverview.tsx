@@ -1,8 +1,11 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Battery, Activity, AlertTriangle, Wifi, WifiOff, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+const PAGE_SIZE = 50;
 
 interface KPI {
     label: string;
@@ -34,6 +37,8 @@ export function FleetOverview() {
         refetchInterval: 30000,
     });
 
+    const [page, setPage] = useState(1);
+
     if (isLoading) {
         return (
             <div className="flex items-center justify-center h-64">
@@ -61,6 +66,11 @@ export function FleetOverview() {
     ];
 
     const devices = Array.isArray(mapData) ? mapData : [];
+    const totalPages = Math.max(1, Math.ceil(devices.length / PAGE_SIZE));
+    const currentPage = Math.min(page, totalPages);
+    const pageDevices = devices.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+    const rangeStart = devices.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+    const rangeEnd = Math.min(currentPage * PAGE_SIZE, devices.length);
 
     return (
         <div className="space-y-6">
@@ -101,7 +111,7 @@ export function FleetOverview() {
                                     <td colSpan={6} className="px-4 py-8 text-center text-gray-400">No devices found</td>
                                 </tr>
                             ) : (
-                                devices.slice(0, 20).map((d: Record<string, unknown>, i: number) => (
+                                pageDevices.map((d: Record<string, unknown>, i: number) => (
                                     <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50">
                                         <td className="px-4 py-3 font-medium text-gray-900">{String(d.device_id || '-')}</td>
                                         <td className="px-4 py-3 text-gray-600">{String(d.vehicle_number || '-')}</td>
@@ -127,6 +137,34 @@ export function FleetOverview() {
                         </tbody>
                     </table>
                 </div>
+                {devices.length > PAGE_SIZE && (
+                    <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
+                        <span>
+                            Showing {rangeStart}&ndash;{rangeEnd} of {devices.length}
+                        </span>
+                        <div className="flex items-center gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                                disabled={currentPage === 1}
+                                className="px-3 py-1 rounded-md border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                Prev
+                            </button>
+                            <span className="text-gray-600">
+                                Page {currentPage} of {totalPages}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                                disabled={currentPage === totalPages}
+                                className="px-3 py-1 rounded-md border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                Next
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Dealer Performance */}
