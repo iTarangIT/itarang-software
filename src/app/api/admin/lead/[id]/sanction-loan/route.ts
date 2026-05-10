@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { leads, loanSanctions, productSelections } from "@/lib/db/schema";
+import { leads, loanSanctions, nbfc, productSelections } from "@/lib/db/schema";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
 import { generateId } from "@/lib/api-utils";
 import { notifyLoanSanctioned } from "@/lib/notifications";
@@ -71,10 +71,27 @@ export async function POST(
     const now = new Date();
 
     await db.transaction(async (tx) => {
+      // Resolve the NBFC portal tenant from the chosen lender name. Best-effort
+      // case-insensitive match against nbfc.legal_name; bridge column is
+      // nbfc.tenant_id (E-026B). Sanction must not fail if the lender isn't
+      // mapped yet — leave nbfc_id null and log so ops can backfill.
+      const [nbfcRow] = await tx
+        .select({ tenant_id: nbfc.tenant_id })
+        .from(nbfc)
+        .where(sql`LOWER(TRIM(${nbfc.legal_name})) = LOWER(TRIM(${body.loanApprovedBy}))`)
+        .limit(1);
+      const nbfcTenantId = nbfcRow?.tenant_id ?? null;
+      if (!nbfcTenantId) {
+        console.warn(
+          `[sanction-loan] No nbfc.tenant_id resolved for loanApprovedBy='${body.loanApprovedBy}' on lead ${leadId}. nbfc_id will remain null.`,
+        );
+      }
+
       await tx.insert(loanSanctions).values({
         id: loanSanctionId,
         lead_id: leadId,
         product_selection_id: selection?.id ?? null,
+        nbfc_id: nbfcTenantId,
         loan_amount: body.loanAmount.toString(),
         down_payment: body.downPayment.toString(),
         file_charge: body.fileCharge.toString(),

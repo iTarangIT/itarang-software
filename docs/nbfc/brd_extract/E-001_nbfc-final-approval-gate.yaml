@@ -1,0 +1,158 @@
+id: E-001
+slug: nbfc-final-approval-gate
+name: "NBFC final approval gate — block activation until all compliance docs verified and LSP Agreement COMPLETED"
+source_section: "6.0.2"
+brd_excerpt: |
+  Step 5 — Admin final review & approval
+  Admin can ONLY approve after: (a) all compliance docs uploaded, AND (b) lsp_agreement.agreement_status = COMPLETED.
+  Approve button disabled if agreement pending. Tooltip: 'Cannot activate until LSP Agreement is fully signed and downloaded from Digio.'
+
+  Step 6 — Activation
+  On approval: NBFC status = active. Portal credentials generated and sent to primary_contact_email.
+  NBFC appears in admin loan sanction dropdown for dealers in dealer_nbfc_assignments table (Section 6.0.8).
+
+depends_on: []
+
+non_functional:
+  - "Sync Audit G-01: NBFC onboarding reuses Digio LSP integration and shared agreement_status ENUM with dealer onboarding."
+  - "Approve action must be idempotent — repeated calls on an already-approved NBFC return 409."
+  - "Server MUST re-validate guard conditions; UI disable is advisory only."
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/nbfc/{nbfcId}/approve
+      auth: admin
+      request_zod: |
+        z.object({
+          notes: z.string().max(2000).optional(),
+        })
+      response_shape:
+        ok: true
+        nbfcId: "number"
+        status: "approved"
+        approvedAt: "iso-datetime"
+    - method: GET
+      path: /api/admin/nbfc/{nbfcId}/approval-readiness
+      auth: admin
+      query_zod: |
+        z.object({})
+      response_shape:
+        canApprove: "boolean"
+        missingDocs: "string[]"
+        lspAgreementStatus: "string"
+        reason: "string|null"
+  components:
+    - "src/components/admin/nbfc/NbfcFinalApprovalPanel.tsx"
+  jobs: []
+  pages:
+    - "/admin/nbfc/[nbfcId]/review"
+
+logic: |
+  1. Resolve NBFC by id; 404 if not found.
+  2. Load nbfc_compliance_documents for nbfc_id; require every Required=Yes document type from Section 6.0.4 to have status='verified'.
+  3. Load nbfc_lsp_agreements row linked to NBFC; require agreement_status='COMPLETED'.
+  4. If either check fails, return 422 with { reason, missingDocs[], lspAgreementStatus }.
+  5. Else update nbfc.status='approved', set approved_by=admin_user_id, approved_at=now(), and write audit_log row.
+  6. Enqueue activation job (covered by E-002) to provision portal credentials.
+
+tables_columns:
+  reuse:
+    - table: nbfc
+      schema_ts_line: 1
+      columns: [id, status, primary_contact_email]
+    - table: nbfc_lsp_agreements
+      schema_ts_line: 1
+      columns: [id, nbfc_id, agreement_status]
+    - table: nbfc_compliance_documents
+      schema_ts_line: 1
+      columns: [id, nbfc_id, document_type, status]
+  new:
+    - table: nbfc
+      justification: "Adds approval audit columns (approved_by, approved_at) needed to record who released the gate and when, for RBI audit trail."
+      columns:
+        - { name: approved_by, type: "integer().references(() => adminUsers.id)" }
+        - { name: approved_at, type: "timestamp({ withTimezone: true })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/admin/nbfc/{nbfcId}/approve returns 422 when any required compliance document is missing or unverified."
+    test_layer: api
+    test_name: "approve blocked when required docs unverified"
+  - id: AC2
+    statement: "POST /api/admin/nbfc/{nbfcId}/approve returns 422 when linked nbfc_lsp_agreements.agreement_status != 'COMPLETED'."
+    test_layer: api
+    test_name: "approve blocked when LSP agreement not COMPLETED"
+  - id: AC3
+    statement: "When all docs verified and LSP COMPLETED, POST returns 200 and nbfc.status is updated to 'approved' in DB."
+    test_layer: api
+    test_name: "approve succeeds and persists status=approved"
+  - id: AC4
+    statement: "Admin review page disables the Approve button and shows tooltip 'Cannot activate until LSP Agreement is fully signed and downloaded from Digio.' when readiness API returns canApprove=false."
+    test_layer: ui
+    test_name: "approve button disabled with correct tooltip when not ready"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-001
+  audited_at: "2026-05-01T06:30:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - status
+        - primary_contact_email
+      reason: table not present in baseline; introduced by sibling unit E-003
+      sibling_unit: E-003
+    - table: nbfc_lsp_agreements
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - nbfc_id
+        - agreement_status
+      reason: table not present in baseline; introduced by sibling unit E-007
+      sibling_unit: E-007
+    - table: nbfc_compliance_documents
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - nbfc_id
+        - document_type
+        - status
+      reason: table not present in baseline; introduced by sibling unit E-005
+      sibling_unit: E-005
+  new_findings:
+    - table: nbfc
+      justification_present: true
+      justification_chars: 124
+      fuzzy_collisions: []
+      columns_proposed:
+        - name: approved_by
+          type: integer().references(() => adminUsers.id)
+          drizzle_builder: integer
+        - name: approved_at
+          type: "timestamp({ withTimezone: true })"
+          drizzle_builder: timestamp
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM"
+    - "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs"
+    - "G-04: Sync Audit G-04: dealers table never defined — referenced as FK target by many tables"
+    - "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type"
+    - reuse table 'nbfc' not yet in baseline — introduced by sibling unit E-003 (depends_on must include E-003 before this unit codes)
+    - reuse table 'nbfc_lsp_agreements' not yet in baseline — introduced by sibling unit E-007 (depends_on must include E-007 before this unit codes)
+    - reuse table 'nbfc_compliance_documents' not yet in baseline — introduced by sibling unit E-005 (depends_on must include E-005 before this unit codes)
+  checkpoint_html: docs/nbfc/loop_report/E-001/checkpoint_1.html

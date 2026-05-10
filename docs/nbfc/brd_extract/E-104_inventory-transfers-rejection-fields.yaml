@@ -1,0 +1,123 @@
+id: E-104
+slug: inventory-transfers-rejection-fields
+name: "inventory_transfers — bundled spec: define base table AND rejection extension (G-06 resolution)"
+source_section: "sync-audit-G-06"
+brd_excerpt: |
+  Resolution E — inventory_transfers — Extended Schema (G-06)
+
+  E.1 CORRECTED inventory_transfers TABLE
+
+  The V2-Feb schema has a 2-state status ENUM with no rejection path. Section 6.S.5
+  specifies a reject-transfer workflow. The schema is updated to accommodate both.
+
+  Column            | Type              | Notes
+  id                | INT PK AUTO       |
+  transfer_id       | VARCHAR(50) UNIQUE| TRF-YYYYMMDD-SEQ
+  source_dealer_id  | INT FK            | references dealers.id
+  target_dealer_id  | INT FK            | references dealers.id
+  serials           | JSON              | Array of serial_numbers being transferred
+  reason            | TEXT              | Admin-entered reason for transfer
+  status            | ENUM              | 'pending_acknowledgement'|'completed'|'rejected_by_target'|'cancelled_by_admin'
+  initiated_by      | INT FK            | admin_user_id
+  initiated_at      | TIMESTAMP         |
+  acknowledged_by   | INT NULL FK       | dealer_user_id — set on completed or rejected
+  acknowledged_at   | TIMESTAMP NULL    |
+  rejected_by       | INT NULL FK       | NEW — dealer_user_id who rejected
+  rejected_at       | TIMESTAMP NULL    | NEW
+  rejection_reason  | TEXT NULL         | NEW — dealer's stated reason for rejection
+
+depends_on: []
+
+non_functional:
+  - "Sync Audit G-06: V2-Feb inventory_transfers has a 2-state status ENUM ('pending_acknowledgement'|'completed') with no rejection path. Sec6.S defines a reject-transfer API but the underlying table was never created in the iTarang baseline."
+  - "BUNDLED: this unit creates the base inventory_transfers table AND its rejection extension columns in a single migration, since the base table does not exist in baseline schema.ts as of 2026-05-01."
+  - "rejected_by, rejected_at, rejection_reason are mutually-set: when status='rejected_by_target' all three must be non-null; otherwise all three should remain null."
+  - "The reject API itself is owned by Sec6.S.5 (separate unit); this unit only delivers the schema."
+
+surface:
+  api: []
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Drizzle migration: create inventory_transfers table with all base columns plus the three rejection columns nullable.
+  2. status implemented as a varchar (not Postgres ENUM type) with a CHECK constraint allowing 'pending_acknowledgement' | 'completed' | 'rejected_by_target' | 'cancelled_by_admin' to keep additive evolution simple.
+  3. Add a CHECK constraint ensuring (rejected_by, rejected_at, rejection_reason) are all NULL or all non-NULL together.
+  4. Expose the table in src/lib/db/schema.ts with the correct types and nullability.
+
+tables_columns:
+  reuse: []
+  new:
+    - table: inventory_transfers
+      justification: "Sync Audit G-06 (MEDIUM): V2-Feb's inventory_transfers table is referenced by Sec6.S.5 reject-transfer API but never created in iTarang baseline schema.ts. This unit bundles the full base-table creation with the three rejection columns and the extended status set so that both the base reuse and the G-06 extension land in a single coherent migration. Without the base table the reject-transfer API has no storage; without the rejection columns the table cannot satisfy Sec6.S.5 — they must ship together."
+      columns:
+        - { name: id, type: "serial().primaryKey().notNull()" }
+        - { name: transfer_id, type: "varchar({ length: 50 }).notNull().unique()" }
+        - { name: source_dealer_id, type: "integer().notNull()" }
+        - { name: target_dealer_id, type: "integer().notNull()" }
+        - { name: serials, type: "jsonb().notNull()" }
+        - { name: reason, type: "text()" }
+        - { name: status, type: "varchar({ length: 32 }).notNull()" }
+        - { name: initiated_by, type: "integer().notNull()" }
+        - { name: initiated_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: acknowledged_by, type: "integer()" }
+        - { name: acknowledged_at, type: "timestamp({ withTimezone: true })" }
+        - { name: rejected_by, type: "integer()" }
+        - { name: rejected_at, type: "timestamp({ withTimezone: true })" }
+        - { name: rejection_reason, type: "text()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "After migration, inventory_transfers exists with columns id, transfer_id, source_dealer_id, target_dealer_id, serials, reason, status, initiated_by, initiated_at, acknowledged_by, acknowledged_at, rejected_by, rejected_at, rejection_reason."
+    test_layer: api
+    test_name: "inventory_transfers base + rejection columns created"
+  - id: AC2
+    statement: "After migration, inventory_transfers.status accepts the values 'pending_acknowledgement', 'completed', 'rejected_by_target', and 'cancelled_by_admin'; an INSERT with any of these values succeeds."
+    test_layer: api
+    test_name: "status accepts all four states"
+  - id: AC3
+    statement: "An INSERT with any partial subset of (rejected_by, rejected_at, rejection_reason) non-null fails the all-or-nothing CHECK constraint."
+    test_layer: api
+    test_name: "rejection columns enforced as a triplet"
+  - id: AC4
+    statement: "transfer_id has a UNIQUE constraint — inserting two rows with the same transfer_id fails."
+    test_layer: api
+    test_name: "transfer_id uniqueness enforced"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-104
+  audited_at: "2026-05-01T16:00:00Z"
+  baseline_sha: "2a11ecf494c4c9d0d1f35cc91b7e94b53e62fe3ccd46f1548476d610bedb66aa"
+  reuse_findings: []
+  new_findings:
+    - table: inventory_transfers
+      table_exists_in_baseline: false
+      justification_present: true
+      justification_length: 487
+      decision: approved_pending_human
+      type_lint: ok
+      fuzzy_collisions:
+        - proposed: rejected_by
+          candidates: [deals.rejected_by, dealer_onboarding_applications.rejected_by, dealer_leads.rejected_by, consent_records.rejected_by]
+          best_overlap: 1.0
+          reason: "Repo-wide rejection idiom — same semantics; intentional reuse of convention."
+        - proposed: rejected_at
+          candidates: [deals.rejected_at, dealer_onboarding_applications.rejected_at, consent_records.rejected_at]
+          best_overlap: 1.0
+          reason: "Repo-wide rejection-timestamp idiom."
+        - proposed: rejection_reason
+          candidates: [other_document_requests.rejection_reason, loan_sanctions.rejection_reason, loan_applications.rejection_reason, kyc_documents.rejection_reason, deals.rejection_reason]
+          best_overlap: 1.0
+          reason: "Established naming pattern across the schema."
+  verdict: needs_schema_approval
+  migration_required: true
+  notes:
+    - "Re-audit 2026-05-01: rebundled per option B — unit now declares the full inventory_transfers table (base + rejection cols + extended status set) under tables_columns.new[] in a single coherent block."
+    - "Status is implemented as varchar(32) (not a PG ENUM type) so future additive states do not require an ALTER TYPE migration."
+    - "Fuzzy collisions on rejected_by / rejected_at / rejection_reason are intentional — they match the established repo-wide rejection idiom."
+  checkpoint_html: docs/nbfc/loop_report/E-104/checkpoint_1.html

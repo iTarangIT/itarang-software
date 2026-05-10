@@ -1,0 +1,138 @@
+id: E-029
+slug: cds-nightly-computation
+name: CDS nightly computation job
+source_section: "6.1.5"
+brd_excerpt: |
+  Credit Default Score (CDS)
+  CDS is a computed risk metric ranging 0–100 that indicates the probability of EMI default for a given borrower. Higher score = higher risk.
+  // CDS Formula (computed nightly, stored in borrower_risk_scores)
+  CDS = Σ(EMI_weight × recency_multiplier) + consecutive_default_penalty
+        normalized to 0–100
+  // Inputs per borrower:
+  // - Last 6 EMI payment records (paid / overdue / skipped)
+  // - Days overdue on each
+  // - Consecutive default streak
+  // - Usage pattern trend (declining usage = +risk)
+  // - Battery offline duration trend
+  // Confidence levels:
+  // HIGH: ≥ 6 EMI records, IoT data fresh
+  // MEDIUM: 3–5 EMI records OR IoT data >12h stale
+  // LOW: < 3 EMI records OR recent restructuring OR force majeure flag
+  CDS Band | Risk Level | Default Action
+  0 – 39 — Low — No action required.
+  40 – 69 — Medium — System alert generated. NBFC notified. Review recommended.
+  70 – 84 — High — Alert escalated. Field visit recommended. Risk Officer review.
+  85 – 100 — Very High — Dual-approval gate for any action. Immobilisation may be requested.
+depends_on: []
+non_functional:
+  - "Job must run nightly via cron and persist results into borrower_risk_scores."
+  - "RBI Digital Lending Directions 2025: borrower risk decisions must be auditable — every CDS computation row is immutable history."
+
+surface:
+  api:
+    - method: POST
+      path: /api/cron/nbfc/compute-cds
+      auth: admin
+      request_zod: |
+        z.object({})
+      response_shape:
+        computed_count: number
+        skipped_count: number
+        run_at: string
+  components: []
+  jobs:
+    - "vercel-cron: nightly compute-cds"
+  pages: []
+
+logic: |
+  1. For each active loan_sanctions row (status='disbursed', closed_at IS NULL) collect last 6 emi_schedules entries.
+  2. Compute weighted sum: emi_weight is 0 for paid, 0.5 for paid late (<7d), 1.0 for missed/overdue; recency_multiplier is higher for more recent EMIs.
+  3. Add consecutive_default_penalty proportional to consecutive missed-EMI streak length.
+  4. Pull usage pattern trend (declining_usage delta) and battery offline duration trend from telemetry summaries; add to score.
+  5. Normalise to 0–100, round to 2 decimals.
+  6. Determine confidence: HIGH if ≥6 EMI records and IoT data <12h stale; MEDIUM if 3–5 EMI records OR IoT data >12h stale; LOW if <3 EMI records or restructuring/force-majeure flag set.
+  7. Insert a fresh borrower_risk_scores row per (tenant_id, borrower_id, loan_sanction_id) with cds_score, confidence, computed_at = now.
+  8. Return computed_count, skipped_count, run_at.
+
+tables_columns:
+  reuse:
+    - table: loan_sanctions
+      schema_ts_line: 1
+      columns: [id, nbfc_id, status, closed_at]
+    - table: borrower_risk_scores
+      schema_ts_line: 1
+      columns: [tenant_id, borrower_id, loan_sanction_id, cds_score, confidence, computed_at]
+  new:
+    - table: emi_schedules
+      justification: "BRD references EMI payment history per borrower for CDS/PCI; no existing schedule table is cited in this section."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: loan_sanction_id, type: "uuid().notNull()" }
+        - { name: due_date, type: "date().notNull()" }
+        - { name: paid_at, type: "timestamp({ withTimezone: true })" }
+        - { name: status, type: "varchar({ length: 16 }).notNull()" }
+        - { name: days_overdue, type: "integer()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/cron/nbfc/compute-cds returns 200 with computed_count, skipped_count, and run_at ISO timestamp."
+    test_layer: api
+    test_name: "CDS cron endpoint returns counters and run_at"
+  - id: AC2
+    statement: "After the job runs, borrower_risk_scores has a fresh row with computed_at = now for each active loan_sanction."
+    test_layer: api
+    test_name: "CDS job inserts a borrower_risk_scores row per active loan"
+  - id: AC3
+    statement: "A borrower with fewer than 3 EMI records is recorded with confidence='LOW'."
+    test_layer: api
+    test_name: "CDS confidence is LOW when fewer than 3 EMI records exist"
+  - id: AC4
+    statement: "A borrower with 6+ EMI records and telemetry ingestion within the last 12 hours is recorded with confidence='HIGH'."
+    test_layer: api
+    test_name: "CDS confidence is HIGH when EMI history and telemetry are both fresh"
+  - id: AC5
+    statement: "Computed cds_score is always in the closed range [0, 100]."
+    test_layer: api
+    test_name: "CDS score is bounded between 0 and 100 inclusive"
+
+status: pass
+loop_count: 1
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-029
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: loan_sanctions
+      verified: false
+      ts_line: 2624
+      columns_verified: [id, status]
+      columns_missing: [nbfc_id, closed_at]
+      note: "G-03: nbfc_id and closed_at missing in baseline."
+    - table: borrower_risk_scores
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [tenant_id, borrower_id, loan_sanction_id, cds_score, confidence, computed_at]
+      note: "Forward reference to E-026."
+  new_findings:
+    - table: emi_schedules
+      justification_present: true
+      columns: [id, loan_sanction_id, due_date, paid_at, status, days_overdue]
+      fuzzy_collisions:
+        - proposed: days_overdue
+          candidates: [loan_files.overdue_days]
+          overlap: 1.0
+          reason: "tokens 'days' + 'overdue' match perfectly with loan_files.overdue_days; same concept, different word order. Single candidate; informational only per ≥2-candidate rule."
+        - proposed: paid_at
+          candidates: [facilitation_payments.payment_paid_at]
+          overlap: 0.667
+          reason: "informational only (different table/concept)."
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "fuzzy hint: emi_schedules.days_overdue mirrors loan_files.overdue_days exactly in token-Jaccard. Reviewer should decide whether to align column naming before approving."
+  checkpoint_html: docs/nbfc/loop_report/E-029/checkpoint_1.html

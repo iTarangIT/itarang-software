@@ -1,0 +1,151 @@
+{
+  "unit_id": "E-092",
+  "audited_at": "2026-05-01T06:16:03Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "nbfc_loans",
+      "verified": true,
+      "ts_line": 2729,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "loan_application_id",
+        "tenant_id"
+      ],
+      "columns_missing": []
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "nbfc_score_runs",
+      "is_existing_table": false,
+      "justification_present": true,
+      "justification_length": 199,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid().primaryKey().defaultRandom()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "loan_application_id",
+          "type": "varchar({ length: 255 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "score_type",
+          "type": "varchar({ length: 8 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "score_value",
+          "type": "numeric({ precision: 6, scale: 2 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "numeric",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "computed_at",
+          "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "confidence_level",
+          "type": "varchar({ length: 8 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "confidence_reasons",
+          "type": "jsonb()",
+          "type_lint_ok": true,
+          "type_head": "jsonb",
+          "fuzzy_collisions": []
+        }
+      ],
+      "fuzzy_collisions": [],
+      "decision": "approved_pending_human"
+    },
+    {
+      "table": "nbfc_score_input_snapshots",
+      "is_existing_table": false,
+      "justification_present": true,
+      "justification_length": 141,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid().primaryKey().defaultRandom()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "score_run_id",
+          "type": "uuid().notNull()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "row_index",
+          "type": "integer().notNull()",
+          "type_lint_ok": true,
+          "type_head": "integer",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "due_date",
+          "type": "timestamp({ withTimezone: true })",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "amount",
+          "type": "numeric({ precision: 12, scale: 2 })",
+          "type_lint_ok": true,
+          "type_head": "numeric",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "status",
+          "type": "varchar({ length: 24 })",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "days_late",
+          "type": "integer()",
+          "type_lint_ok": true,
+          "type_head": "integer",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "contribution",
+          "type": "numeric({ precision: 6, scale: 2 })",
+          "type_lint_ok": true,
+          "type_head": "numeric",
+          "fuzzy_collisions": []
+        }
+      ],
+      "fuzzy_collisions": [],
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-092/checkpoint_1.html"
+}

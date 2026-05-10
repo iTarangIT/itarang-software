@@ -1,0 +1,135 @@
+id: E-013
+slug: dealer-assigned-nbfcs-dropdown
+name: "Loan-sanction dropdown — list active NBFCs assigned to a given dealer"
+source_section: "6.0.8"
+brd_excerpt: |
+  // Loan sanction dropdown — what admin sees when sanctioning a loan:
+  GET /api/admin/dealers/:dealerId/assigned-nbfcs?status=active
+
+  Response: [{ nbfcId, shortName, legalName, activeLoanProducts: [...] }]
+
+  // Only NBFCs in dealer_nbfc_assignments for this dealer appear.
+  // Prevents admin entering a lender with no agreement with this dealer.
+
+depends_on: []
+
+non_functional:
+  - "Sync Audit G-05 — endpoint is the sole source of truth for the loan sanction dropdown; admin UI must not bypass it."
+  - "Each NBFC entry includes only loan products with status='active' for that NBFC."
+  - "Response excludes assignments whose status != 'active' when ?status=active is passed (default)."
+
+surface:
+  api:
+    - method: GET
+      path: /api/admin/dealers/{dealerId}/assigned-nbfcs
+      auth: admin
+      query_zod: |
+        z.object({
+          status: z.enum(["active","suspended","terminated"]).default("active"),
+        })
+      response_shape:
+        items:
+          - nbfcId: "number"
+            shortName: "string"
+            legalName: "string"
+            activeLoanProducts:
+              - id: "number"
+                productName: "string"
+                loanAmountMin: "number"
+                loanAmountMax: "number"
+  components:
+    - "src/components/admin/loan-sanctions/LenderDropdown.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Resolve dealer; 404 if missing.
+  2. SELECT FROM dealer_nbfc_assignments a JOIN nbfc n ON a.nbfc_id=n.id WHERE a.dealer_id=:dealerId AND a.status=:status.
+  3. For each row, fetch nbfc_loan_products where nbfc_id=n.id AND status='active'.
+  4. Project to { nbfcId, shortName, legalName, activeLoanProducts: [...] }.
+  5. Return items array.
+
+tables_columns:
+  reuse:
+    - table: dealer_nbfc_assignments
+      schema_ts_line: 1
+      columns: [id, dealer_id, nbfc_id, status]
+    - table: nbfc
+      schema_ts_line: 1
+      columns: [id, short_name, legal_name]
+    - table: nbfc_loan_products
+      schema_ts_line: 1
+      columns: [id, nbfc_id, product_name, loan_amount_min, loan_amount_max, status]
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/admin/dealers/{dealerId}/assigned-nbfcs (default status=active) returns only NBFCs whose dealer_nbfc_assignments.status='active'."
+    test_layer: api
+    test_name: "dropdown lists only active assignments"
+  - id: AC2
+    statement: "GET /api/admin/dealers/{dealerId}/assigned-nbfcs returns each NBFC with activeLoanProducts containing only products with status='active'."
+    test_layer: api
+    test_name: "dropdown excludes inactive loan products"
+  - id: AC3
+    statement: "GET /api/admin/dealers/{dealerId}/assigned-nbfcs returns empty items array when the dealer has no rows in dealer_nbfc_assignments."
+    test_layer: api
+    test_name: "unassigned dealer yields empty dropdown"
+
+status: pass
+loop_count: 1
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-013
+  audited_at: "2026-05-01T06:30:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: dealer_nbfc_assignments
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - dealer_id
+        - nbfc_id
+        - status
+      reason: table not present in baseline; introduced by sibling unit E-012
+      sibling_unit: E-012
+    - table: nbfc
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - short_name
+        - legal_name
+      reason: table not present in baseline; introduced by sibling unit E-003
+      sibling_unit: E-003
+    - table: nbfc_loan_products
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - nbfc_id
+        - product_name
+        - loan_amount_min
+        - loan_amount_max
+        - status
+      reason: table not present in baseline; introduced by sibling unit E-009
+      sibling_unit: E-009
+  new_findings: []
+  verdict: needs_clarification
+  migration_required: false
+  notes:
+    - "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM"
+    - "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs"
+    - "G-04: Sync Audit G-04: dealers table never defined — referenced as FK target by many tables"
+    - "G-05: Sync Audit G-05: product_selections retains sub_category column (rename to model_number); junction table dealer_nbfc_assignments required"
+    - "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type"
+    - "G-10: Sync Audit G-10: Dealer onboarding status not linked to lead creation gate"
+    - reuse table 'dealer_nbfc_assignments' not yet in baseline — introduced by sibling unit E-012 (depends_on must include E-012 before this unit codes)
+    - reuse table 'nbfc' not yet in baseline — introduced by sibling unit E-003 (depends_on must include E-003 before this unit codes)
+    - reuse table 'nbfc_loan_products' not yet in baseline — introduced by sibling unit E-009 (depends_on must include E-009 before this unit codes)
+  checkpoint_html: docs/nbfc/loop_report/E-013/checkpoint_1.html

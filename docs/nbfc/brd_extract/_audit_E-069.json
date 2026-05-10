@@ -1,0 +1,23 @@
+{
+  "unit_id": "E-069",
+  "audited_at": "2026-05-01T06:10:31Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [],
+  "new_findings": [
+    {
+      "table": "nbfc_auction_lot_actions",
+      "justification_present": true,
+      "fuzzy_collisions": [],
+      "type_lint": "ok",
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "Logic references an auction lot table (lot.closing_at, lot.status) but baseline has no nbfc_auction_lots / auction_lots table. Implementer must add the lots table or document it as an upstream dependency before coding this unit.",
+    "Logic also writes to the admin audit log (action codes); depends_on should include E-071.",
+    "No cross-doc gap (G-01..G-10) directly impacts nbfc_auction_lot_actions."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-069/checkpoint_1.html"
+}

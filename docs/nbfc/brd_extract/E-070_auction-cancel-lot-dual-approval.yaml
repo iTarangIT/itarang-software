@@ -1,0 +1,142 @@
+id: E-070
+slug: auction-cancel-lot-dual-approval
+name: Cancel Lot with MFA, dual approval, and battery return-to-inventory
+source_section: "6.3.4"
+brd_excerpt: |
+  Cancel Lot | Removes lot from auction. Requires MFA + dual approval + mandatory reason. Battery returns to inventory.
+
+depends_on: []
+non_functional:
+  - "Cancel Lot is the only auction action that requires dual approval"
+  - "MFA re-confirmation required from requester"
+  - "Mandatory reason; cannot be empty"
+  - "On execution, the underlying battery (inventory) must move back to status='in_inventory'"
+  - "Audit log written with reason, requester, approver, lot_id"
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/nbfc/auction/lot/cancel/request
+      auth: admin
+      request_zod: |
+        z.object({
+          lot_id: z.string().uuid(),
+          reason: z.string().min(1),
+          mfa_token: z.string().min(6)
+        }).strict()
+      response_shape:
+        request_id: "uuid"
+        status: "pending_second_approval"
+    - method: POST
+      path: /api/admin/nbfc/auction/lot/cancel/approve
+      auth: admin
+      request_zod: |
+        z.object({
+          request_id: z.string().uuid(),
+          decision: z.enum(["approve", "reject"])
+        }).strict()
+      response_shape:
+        request_id: "uuid"
+        status: "executed|rejected"
+        battery_returned_to_inventory: "boolean"
+  components:
+    - "src/components/admin/nbfc/CancelLotApprovalQueue.tsx"
+  pages: []
+  jobs: []
+
+logic: |
+  1. POST /cancel/request validates lot_id, non-empty reason, and MFA token; rejects if MFA invalid.
+  2. Insert nbfc_auction_cancel_requests row with status='pending_second_approval', requested_by, lot_id, reason.
+  3. Return request_id and pending status.
+  4. POST /cancel/approve loads request; reject if status != pending_second_approval.
+  5. Reject if approver_id == requested_by (must be different admins).
+  6. If decision='reject', set status='rejected'; audit log; return.
+  7. If decision='approve': set lot.status='cancelled'; update inventory row for the battery to status='in_inventory'.
+  8. Set request status='executed', approved_by=current_user, applied_at=now.
+  9. Write admin audit log entry with action='AUCTION_LOT_CANCELLED', lot_id, reason, requester and approver IDs.
+  10. Return executed status with battery_returned_to_inventory=true.
+
+tables_columns:
+  reuse:
+    - table: auction_lots
+      schema_ts_line: 4131
+      columns: [id, lot_code, status]
+    - table: auction_bids
+      schema_ts_line: 4157
+      columns: [id, lot_id]
+  new:
+    - table: nbfc_auction_cancel_requests
+      justification: "Tracks pending dual-approval state for lot cancellations; required to hold the request between requester MFA submit and second-admin approval and to record both approver IDs for audit."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: lot_id, type: "uuid().notNull()" }
+        - { name: reason, type: "text().notNull()" }
+        - { name: requested_by, type: "uuid().notNull()" }
+        - { name: approved_by, type: "uuid()" }
+        - { name: status, type: "varchar({ length: 32 }).notNull()" }
+        - { name: requested_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: applied_at, type: "timestamp({ withTimezone: true })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/admin/nbfc/auction/lot/cancel/request with valid MFA and non-empty reason returns 200 with status='pending_second_approval'."
+    test_layer: api
+    test_name: "Cancel request creates pending row with valid MFA and reason"
+  - id: AC2
+    statement: "POST /api/admin/nbfc/auction/lot/cancel/request returns 400 when reason is empty."
+    test_layer: api
+    test_name: "Cancel request rejects empty reason with 400"
+  - id: AC3
+    statement: "POST /api/admin/nbfc/auction/lot/cancel/approve by a second admin with decision='approve' sets lot.status='cancelled' and the battery's inventory.status back to 'in_inventory'."
+    test_layer: api
+    test_name: "Approve cancellation cancels lot and returns battery to inventory"
+  - id: AC4
+    statement: "POST /api/admin/nbfc/auction/lot/cancel/approve returns 403 when approver_id equals requested_by."
+    test_layer: api
+    test_name: "Cancel approve rejects self-approval with 403"
+  - id: AC5
+    statement: "On successful cancellation, an admin_audit_logs row is written with action='AUCTION_LOT_CANCELLED', the reason, lot_id, and both requester and approver IDs."
+    test_layer: api
+    test_name: "Audit log row written with reason and approver IDs on cancellation"
+  - id: AC6
+    statement: "On successful cancellation of an auction lot (after dual approval), every asset in the cancelled lot returns to inventory: its `status` is updated to 'in_inventory' (or equivalent), `auction_lot_id` cleared, and an audit row written to `inventory_movements` with `reason='auction_cancelled'`. Returns 200 with `{ ok: true, lotId: ..., assetsReturned: <integer> }`."
+    test_layer: api
+    persona: nbfc_tenant_user
+    expected_response_shape:
+      ok: "boolean"
+      lotId: "uuid"
+      assetsReturned: "integer"
+    test_name: "Approved cancellation returns assets to inventory with movement audit"
+
+status: passed
+loop_count: 1
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-070
+  audited_at: "2026-05-01T16:00:00Z"
+  baseline_sha: "2a11ecf494c4c9d0d1f35cc91b7e94b53e62fe3ccd46f1548476d610bedb66aa"
+  reuse_findings:
+    - table: auction_lots
+      verified: true
+      ts_line: 4131
+      columns_verified: [id, lot_code, status]
+      columns_missing: []
+    - table: auction_bids
+      verified: true
+      ts_line: 4157
+      columns_verified: [id, lot_id]
+      columns_missing: []
+  new_findings:
+    - table: nbfc_auction_cancel_requests
+      justification_present: true
+      fuzzy_collisions: []
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "Re-audit 2026-05-01: auction_lots is now in baseline (E-038 merged). Reuse claims updated to actual table names."
+    - "Logic step 9 writes admin_audit_logs (introduced by E-071); depends_on should include E-071."
+    - "Inventory return-to-stock side still depends on inventory table (separate concern)."
+  checkpoint_html: "docs/nbfc/loop_report/E-070/checkpoint_1.html"

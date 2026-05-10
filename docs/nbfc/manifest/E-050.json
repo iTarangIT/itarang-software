@@ -1,0 +1,56 @@
+{
+  "id": "E-050",
+  "slug": "telemetry-query-battery",
+  "name": "Per-battery telemetry query APIs",
+  "status": "passed",
+  "loop_count": 1,
+  "schema_changes": {
+    "tables_added": [],
+    "tables_referenced": [
+      "iot_devices",
+      "telemetry_events",
+      "telemetry_daily_summary",
+      "nbfc_tenants",
+      "nbfc_loans",
+      "dealer_nbfc_assignments",
+      "nbfc"
+    ],
+    "auto_approved": false,
+    "applied_to_sandbox_at": null,
+    "migration_sql": "drizzle/E-050_telemetry_schema_apply.sql"
+  },
+  "files": {
+    "schema": "src/lib/db/schema.ts",
+    "lib": [
+      "src/lib/nbfc/battery-scope.ts"
+    ],
+    "api": [
+      "src/app/api/nbfc/iot/battery/[serialNumber]/soc/route.ts",
+      "src/app/api/nbfc/iot/battery/[serialNumber]/state/route.ts",
+      "src/app/api/nbfc/iot/battery/[serialNumber]/history/route.ts",
+      "src/app/api/nbfc/iot/battery/[serialNumber]/daily-summaries/route.ts"
+    ],
+    "components": [],
+    "pages": [],
+    "tests": [
+      "tests/e2e/nbfc/E-050_telemetry-query-battery.api.spec.ts"
+    ],
+    "config": []
+  },
+  "verification": {
+    "tests_run": "playwright nbfc-api 5/5 in 6.7s on apoorv-claude post-E-047 merge",
+    "type_check": "0 new errors"
+  },
+  "notes": [
+    "Authentication uses the same triple-guarded NBFC test bypass idiom established by E-027/E-080/E-082 (NODE_ENV != production AND NBFC_TEST_BYPASS_SECRET on server AND matching x-nbfc-test-bypass header). Three role values are accepted on the bypass: admin, nbfc, dealer.",
+    "Portfolio scoping is implemented as a disjunction: nbfc_loans.vehicleno match (financing-stage serials) OR dealer_nbfc_assignments + nbfc-by-slug match (pre-financing dealer-owned serials). The audit explicitly flagged this linkage as 'reviewer should confirm' since the BRD does not pin a single column; both paths are documented inline.",
+    "Freshness classifier is inlined in src/lib/nbfc/battery-scope.ts because the canonical owner E-048 has not landed yet on apoorv-claude. Same 5-bucket convention { fresh, idle, stale, offline, never } that E-048 will own; the 3-bucket /soc shape collapses idle+stale to 'stale' and never to 'offline' per BRD \u00a76.2.7."
+  ],
+  "passed_acs": [
+    "AC1",
+    "AC2",
+    "AC3",
+    "AC4",
+    "AC5"
+  ]
+}

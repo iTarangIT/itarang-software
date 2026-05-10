@@ -1,0 +1,44 @@
+{
+  "unit_id": "E-050",
+  "audited_at": "2026-05-01T06:11:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "iot_devices",
+      "verified": false,
+      "verified_via": "depends_on:E-045 new[]",
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_pending_dep_approval": ["serial_number", "soc_percent", "soh_percent", "last_seen", "device_status", "dealer_id", "gps_lat", "gps_lng"],
+      "notes": "iot_devices proposed by E-045 (in depends_on)."
+    },
+    {
+      "table": "telemetry_events",
+      "verified": false,
+      "verified_via": "depends_on:E-047 new[]",
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_pending_dep_approval": ["serial_number", "device_time", "soc_percent", "soh_percent", "daily_km", "gps_lat", "gps_lng"],
+      "notes": "telemetry_events proposed by E-047 (in depends_on)."
+    },
+    {
+      "table": "telemetry_daily_summary",
+      "verified": false,
+      "verified_via": "depends_on:E-047 new[]",
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_pending_dep_approval": ["serial_number", "summary_date", "avg_soc", "max_soh", "total_km", "total_idle_hours", "charge_sessions", "bms_faults", "packets_received"],
+      "notes": "telemetry_daily_summary proposed by E-047 (in depends_on)."
+    }
+  ],
+  "new_findings": [],
+  "verdict": "audited",
+  "migration_required": false,
+  "notes": [
+    "Unit declares no new tables/columns. All reuse[] entries reference tables introduced by depended-on units (E-045, E-047). FK-consistency rule permits this.",
+    "freshness classifier reused from E-048 (also in depends_on).",
+    "Authorization scoping (NBFC tenant portfolio, dealer inventory, admin) requires resolving 'tenant portfolio of serials' — the BRD references NBFC↔dealer↔inventory linkage but no explicit table is named here; reviewer should confirm linkage uses dealer_nbfc_assignments + inventory.dealer_id.",
+    "BRD sync audit shows no gap touching the query APIs; in sync per Section 6.2 full spec."
+  ],
+  "checkpoint_html": null
+}

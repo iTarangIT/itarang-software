@@ -1,0 +1,158 @@
+id: E-050
+slug: telemetry-query-battery
+name: Per-battery telemetry query APIs
+source_section: "6.2.7"
+brd_excerpt: |
+  6.2.7 Telemetry Query APIs
+  // Current state (used in Step 4 SOC display + dealer inventory view):
+  GET /api/iot/battery/:serialNumber/soc
+  Response: { serial, soc_percent, soh_percent, last_seen, device_status, freshness: "fresh"|"stale"|"offline" }
+
+  // Full current device state:
+  GET /api/iot/battery/:serialNumber/state
+  Response: full iot_devices row + computed data_freshness
+
+  // Historical telemetry (for NBFC battery monitoring chart):
+  GET /api/iot/battery/:serialNumber/history
+       ?from=2026-07-01&to=2026-07-28&metric=soc|soh|daily_km|gps
+  Response: { serial, metric, points: [{ date, value }] }
+
+  // Daily summaries (for CDS scoring input):
+  GET /api/iot/battery/:serialNumber/daily-summaries
+       ?days=30
+  Response: { serial, summaries: [ telemetry_daily_summary rows ] }
+
+  Auth: NBFC JWT → only see own portfolio serials.
+        Admin JWT → see any serial.
+        Dealer JWT → only see own inventory serials.
+depends_on:
+  - E-045
+  - E-047
+  - E-048
+non_functional:
+  - "Authorization scoping: NBFC tenants see only their portfolio serials; dealers see only their inventory; admin sees all."
+  - "Returns 403 if caller is out of scope; 404 if serial does not exist at all."
+  - "history endpoint metric values are derived from telemetry_events / telemetry_daily_summary depending on metric."
+  - "freshness/data_freshness fields reuse the classifier from E-048."
+
+surface:
+  api:
+    - method: GET
+      path: /api/iot/battery/[serialNumber]/soc
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({})
+      response_shape:
+        serial: "string"
+        soc_percent: "number | null"
+        soh_percent: "number | null"
+        last_seen: "ISO8601 | null"
+        device_status: "string"
+        freshness: "fresh | stale | offline"
+    - method: GET
+      path: /api/iot/battery/[serialNumber]/state
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({})
+      response_shape:
+        device: "full iot_devices row"
+        data_freshness: "fresh | idle | stale | offline | never"
+    - method: GET
+      path: /api/iot/battery/[serialNumber]/history
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({
+          from: z.string().date(),
+          to: z.string().date(),
+          metric: z.enum(["soc", "soh", "daily_km", "gps"])
+        })
+      response_shape:
+        serial: "string"
+        metric: "string"
+        points: "[{ date, value }]"
+    - method: GET
+      path: /api/iot/battery/[serialNumber]/daily-summaries
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({
+          days: z.coerce.number().int().min(1).max(365).default(30)
+        })
+      response_shape:
+        serial: "string"
+        summaries: "[ telemetry_daily_summary rows ]"
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Resolve caller role (admin | nbfc | dealer) and tenant/dealer scope.
+  2. Lookup iot_devices row by serialNumber; if missing return 404.
+  3. Authorize: admin always; nbfc only if serial is in tenant portfolio; dealer only if dealer_id matches inventory.dealer_id; else 403.
+  4. /soc → return { serial, soc_percent, soh_percent, last_seen, device_status, freshness } using E-048 classifier mapped to {fresh, stale, offline}.
+  5. /state → return full iot_devices row plus data_freshness from E-048.
+  6. /history → query telemetry_events (metric=soc|soh|gps) or telemetry_daily_summary (metric=daily_km) between from and to; return { serial, metric, points }.
+  7. /daily-summaries → query telemetry_daily_summary for last `days` rows ordered by summary_date desc.
+
+tables_columns:
+  reuse:
+    - table: iot_devices
+      schema_ts_line: 1
+      columns: [serial_number, soc_percent, soh_percent, last_seen, device_status, dealer_id, gps_lat, gps_lng]
+    - table: telemetry_events
+      schema_ts_line: 1
+      columns: [serial_number, device_time, soc_percent, soh_percent, daily_km, gps_lat, gps_lng]
+    - table: telemetry_daily_summary
+      schema_ts_line: 1
+      columns: [serial_number, summary_date, avg_soc, max_soh, total_km, total_idle_hours, charge_sessions, bms_faults, packets_received]
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/iot/battery/{serial}/soc with NBFC JWT for an in-portfolio serial returns 200 with serial, soc_percent, soh_percent, last_seen, device_status, freshness."
+    test_layer: api
+    test_name: "GET soc returns expected fields for in-portfolio serial"
+  - id: AC2
+    statement: "GET /api/iot/battery/{serial}/soc with Dealer JWT for a serial not in dealer inventory returns HTTP 403."
+    test_layer: api
+    test_name: "GET soc returns 403 for dealer outside scope"
+  - id: AC3
+    statement: "GET /api/iot/battery/{serial}/state with Admin JWT returns the full iot_devices row plus data_freshness."
+    test_layer: api
+    test_name: "GET state returns full iot_devices row with data_freshness"
+  - id: AC4
+    statement: "GET /api/iot/battery/{serial}/history?metric=soc&from=...&to=... returns 200 with points array sorted by date ascending."
+    test_layer: api
+    test_name: "GET history returns sorted soc points within range"
+  - id: AC5
+    statement: "GET /api/iot/battery/{serial}/daily-summaries?days=30 returns 200 with at most 30 summary rows ordered by summary_date desc."
+    test_layer: api
+    test_name: "GET daily-summaries returns last 30 rows desc"
+
+status: audited
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-050
+  audited_at: "2026-05-01T06:11:00Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  verdict: audited
+  migration_required: false
+  reuse_findings:
+    - table: iot_devices
+      verified: false
+      verified_via: "depends_on:E-045 new[]"
+      columns_pending_dep_approval: [serial_number, soc_percent, soh_percent, last_seen, device_status, dealer_id, gps_lat, gps_lng]
+    - table: telemetry_events
+      verified: false
+      verified_via: "depends_on:E-047 new[]"
+      columns_pending_dep_approval: [serial_number, device_time, soc_percent, soh_percent, daily_km, gps_lat, gps_lng]
+    - table: telemetry_daily_summary
+      verified: false
+      verified_via: "depends_on:E-047 new[]"
+      columns_pending_dep_approval: [serial_number, summary_date, avg_soc, max_soh, total_km, total_idle_hours, charge_sessions, bms_faults, packets_received]
+  new_findings: []
+  notes:
+    - "All reuse[] entries provided by depended-on units. FK-consistency permits this."
+    - "Reviewer should confirm NBFC↔dealer↔inventory linkage uses dealer_nbfc_assignments + inventory.dealer_id."
+  checkpoint_html: null

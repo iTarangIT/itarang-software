@@ -1,0 +1,38 @@
+{
+  "unit_id": "E-034",
+  "audited_at": "2026-05-01T07:00:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "loan_sanctions",
+      "verified": false,
+      "ts_line": 2624,
+      "columns_verified": ["id", "loan_amount"],
+      "columns_missing": ["nbfc_id"],
+      "note": "G-03: loan_sanctions.nbfc_id missing in baseline."
+    },
+    {
+      "table": "nbfc_borrower_actions",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["id", "tenant_id", "loan_sanction_id", "action_type", "status", "payload", "requested_by", "created_at"],
+      "note": "Forward reference to table proposed in E-031."
+    },
+    {
+      "table": "nbfc_audit_log",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["tenant_id", "actor_user_id", "action_type", "action_id", "before_state", "after_state", "created_at"],
+      "note": "Forward reference to table proposed in E-031."
+    }
+  ],
+  "new_findings": [],
+  "verdict": "audited",
+  "migration_required": false,
+  "notes": [
+    "Restructuring writes loan_sanctions terms (loan_amount, tenure_months, emi, roi) — those columns exist in baseline loan_sanctions but the schema must already include nbfc_id (G-03) before this is safe to ship."
+  ],
+  "checkpoint_html": null
+}

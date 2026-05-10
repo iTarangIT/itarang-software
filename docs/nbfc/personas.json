@@ -1,0 +1,132 @@
+[
+  {
+    "persona_id": "itarang_super_admin",
+    "role": "admin",
+    "email": "itarang_super_admin@e2e.itarang.local",
+    "storage_state_path": "tests/.auth/itarang_super_admin.json",
+    "can_act_on": [
+      "admin"
+    ],
+    "password_env_key": "E2E_ITARANG_SUPER_ADMIN_PASSWORD",
+    "password_source": "specific",
+    "rbac_ui_gated": true,
+    "source": "plan"
+  },
+  {
+    "persona_id": "sales_head",
+    "role": "sales_head",
+    "email": "e2e-sh@itarang.com",
+    "storage_state_path": "tests/.auth/sales_head.json",
+    "can_act_on": [
+      "admin"
+    ],
+    "password_env_key": "E2E_PROD_SH_PASSWORD",
+    "password_source": "prod_account",
+    "rbac_ui_gated": true,
+    "source": "plan"
+  },
+  {
+    "persona_id": "sales_order_manager",
+    "role": "sales_order_manager",
+    "email": "sales_order_manager@e2e.itarang.local",
+    "storage_state_path": "tests/.auth/sales_order_manager.json",
+    "can_act_on": [
+      "admin"
+    ],
+    "password_env_key": "E2E_SALES_ORDER_MANAGER_PASSWORD",
+    "password_source": "specific",
+    "rbac_ui_gated": true,
+    "source": "plan"
+  },
+  {
+    "persona_id": "sales_executive",
+    "role": "sales_executive",
+    "email": "sales_executive@e2e.itarang.local",
+    "storage_state_path": "tests/.auth/sales_executive.json",
+    "can_act_on": [
+      "admin"
+    ],
+    "password_env_key": "E2E_SALES_EXECUTIVE_PASSWORD",
+    "password_source": "specific",
+    "rbac_ui_gated": true,
+    "source": "plan"
+  },
+  {
+    "persona_id": "finance_controller",
+    "role": "finance_controller",
+    "email": "finance_controller@e2e.itarang.local",
+    "storage_state_path": "tests/.auth/finance_controller.json",
+    "can_act_on": [
+      "admin"
+    ],
+    "password_env_key": "E2E_FINANCE_CONTROLLER_PASSWORD",
+    "password_source": "specific",
+    "rbac_ui_gated": true,
+    "source": "plan"
+  },
+  {
+    "persona_id": "inventory_manager",
+    "role": "inventory_manager",
+    "email": "inventory_manager@e2e.itarang.local",
+    "storage_state_path": "tests/.auth/inventory_manager.json",
+    "can_act_on": [
+      "admin"
+    ],
+    "password_env_key": "E2E_INVENTORY_MANAGER_PASSWORD",
+    "password_source": "specific",
+    "rbac_ui_gated": true,
+    "source": "plan"
+  },
+  {
+    "persona_id": "service_engineer",
+    "role": "service_engineer",
+    "email": "service_engineer@e2e.itarang.local",
+    "storage_state_path": "tests/.auth/service_engineer.json",
+    "can_act_on": [
+      "admin"
+    ],
+    "password_env_key": "E2E_SERVICE_ENGINEER_PASSWORD",
+    "password_source": "specific",
+    "rbac_ui_gated": true,
+    "source": "plan"
+  },
+  {
+    "persona_id": "kyc_reviewer",
+    "role": "admin",
+    "email": "kyc_reviewer@e2e.itarang.local",
+    "storage_state_path": "tests/.auth/kyc_reviewer.json",
+    "can_act_on": [
+      "admin"
+    ],
+    "password_env_key": "E2E_KYC_REVIEWER_PASSWORD",
+    "password_source": "specific",
+    "rbac_ui_gated": true,
+    "source": "plan"
+  },
+  {
+    "persona_id": "nbfc_tenant_user",
+    "role": "nbfc_partner",
+    "email": "nbfc_tenant_user@e2e.itarang.local",
+    "storage_state_path": "tests/.auth/nbfc_tenant_user.json",
+    "can_act_on": [
+      "nbfc_tenant"
+    ],
+    "password_env_key": "E2E_NBFC_TENANT_USER_PASSWORD",
+    "password_source": "specific",
+    "rbac_ui_gated": true,
+    "source": "plan"
+  },
+  {
+    "persona_id": "dealer_user",
+    "role": "dealer",
+    "email": "e2e-dealer@itarang.com",
+    "storage_state_path": "tests/.auth/dealer_user.json",
+    "can_act_on": [
+      "dealer"
+    ],
+    "password_env_key": "E2E_PROD_DEALER_PASSWORD",
+    "password_source": "prod_account",
+    "rbac_ui_gated": true,
+    "source": "plan"
+  }
+]

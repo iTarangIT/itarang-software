@@ -1,0 +1,31 @@
+{
+  "unit_id": "E-010",
+  "audited_at": "2026-05-01T06:30:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "nbfc_loan_products",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": [
+        "id",
+        "status",
+        "loan_amount_min",
+        "loan_amount_max",
+        "tenure_months_min",
+        "tenure_months_max"
+      ],
+      "reason": "table not present in baseline; introduced by sibling unit E-009",
+      "sibling_unit": "E-009"
+    }
+  ],
+  "new_findings": [],
+  "verdict": "needs_clarification",
+  "status": "needs_clarification",
+  "migration_required": false,
+  "notes": [
+    "reuse table 'nbfc_loan_products' not yet in baseline \u2014 introduced by sibling unit E-009 (depends_on must include E-009 before this unit codes)"
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-010/checkpoint_1.html"
+}

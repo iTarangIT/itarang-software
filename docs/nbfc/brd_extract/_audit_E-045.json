@@ -1,0 +1,65 @@
+{
+  "unit_id": "E-045",
+  "audited_at": "2026-05-01T06:11:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [],
+  "new_findings": [
+    {
+      "table": "iot_devices",
+      "justification_present": true,
+      "justification_chars": 119,
+      "columns_proposed": [
+        "id", "device_id", "serial_number", "imei_id", "dealer_id", "model", "category",
+        "device_status", "last_seen", "soc_percent", "soh_percent", "voltage_v",
+        "temperature_c", "charge_cycles", "gps_lat", "gps_lng", "gps_updated_at",
+        "bms_status", "first_usage_at", "registered_at", "updated_at"
+      ],
+      "type_lint": {
+        "all_drizzle_builders": true,
+        "builders_used": ["serial", "varchar", "timestamp", "integer", "numeric"]
+      },
+      "fuzzy_collisions": [
+        {
+          "proposed": "device_id",
+          "candidates": ["battery_alerts.device_id", "device_battery_map.device_id"],
+          "best_score": 1.0,
+          "reason": "tokens 'device' + 'id' match existing IoT-domain columns; potential semantic overlap with device_battery_map and battery_alerts"
+        },
+        {
+          "proposed": "serial_number",
+          "candidates": ["deployed_assets.serial_number", "inventory.serial_number", "oem_inventory_for_pdi.serial_number"],
+          "best_score": 1.0,
+          "reason": "tokens 'serial' + 'number' identical to existing battery serial columns; intended as logical FK to inventory.serial_number per BRD 6.2.4"
+        },
+        {
+          "proposed": "dealer_id",
+          "candidates": ["after_sales_records.dealer_id", "campaign_segments.dealer_id", "coupon_batches.dealer_id", "coupon_codes.dealer_id", "dealer_leads.dealer_id"],
+          "best_score": 1.0,
+          "reason": "tokens 'dealer' + 'id' match standard dealer FK pattern across many tables"
+        },
+        {
+          "proposed": "soc_percent",
+          "candidates": ["inventory.soc_percent"],
+          "best_score": 1.0,
+          "reason": "inventory.soc_percent already holds last-known SOC for a battery — overlap with iot_devices.soc_percent indicates duplicated state"
+        },
+        {
+          "proposed": "voltage_v",
+          "candidates": ["products.voltage_v"],
+          "best_score": 1.0,
+          "reason": "tokens 'voltage' + 'v' match an existing column on products (nominal voltage); semantically distinct (instantaneous vs nominal) but reviewer should confirm"
+        }
+      ],
+      "decision": "rejected_pending_clarification"
+    }
+  ],
+  "verdict": "reject",
+  "migration_required": false,
+  "notes": [
+    "BRD sync audit (line 487-495 of /tmp/nbfc_extract/sync_audit.txt) lists 'IoT telemetry ingestion' and 'iot_devices dealer_id fix in 6.S.5' as IN SYNC items — confirming iot_devices is referenced across BRDs but not yet defined in schema.ts.",
+    "Existing schema already has device_battery_map (device_id, battery_serial, dealer_id, status, installed_at) and inventory.soc_percent + inventory.soc_last_sync_at + inventory.iot_imei_no. Reviewer must decide whether iot_devices is additive (current-state cache) vs absorbing fields into inventory/device_battery_map.",
+    "Fuzzy collisions on 'serial_number' and 'dealer_id' are intentional FK-style reuse (BRD 6.2.4 documents them as logical FKs). They are flagged because the strict ≥0.6 Jaccard rule treats every same-named column as a collision; reviewer should rule on whether to accept this pattern as 'FK reuse' rather than rename.",
+    "Boilerplate columns (id, created_at, updated_at) were excluded from the fuzzy-collision count since they are universal Drizzle conventions."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-045/checkpoint_1.html"
+}

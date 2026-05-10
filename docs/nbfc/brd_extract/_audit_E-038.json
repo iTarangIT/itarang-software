@@ -1,0 +1,48 @@
+{
+  "unit_id": "E-038",
+  "audited_at": "2026-05-01T07:00:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "nbfc_audit_log",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["tenant_id", "actor_user_id", "action_type", "action_id", "after_state", "created_at"],
+      "note": "Forward reference to table proposed in E-031."
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "auction_lots",
+      "justification_present": true,
+      "justification_chars": 116,
+      "columns": ["id", "lot_code", "capacity", "avg_soh", "age_months", "quantity", "base_price", "bid_increment", "ends_at", "status", "created_at"],
+      "fuzzy_collisions": [],
+      "type_lint": "ok",
+      "decision": "approved_pending_human"
+    },
+    {
+      "table": "auction_bids",
+      "justification_present": true,
+      "justification_chars": 121,
+      "columns": ["id", "lot_id", "bidder_tenant_id", "amount", "placed_at"],
+      "fuzzy_collisions": [
+        {
+          "proposed": "bidder_tenant_id",
+          "candidates": ["nbfc_loans.tenant_id", "nbfc_users.tenant_id", "risk_card_runs.tenant_id"],
+          "overlap": 0.667,
+          "reason": "bidder_tenant_id is a role-disambiguated tenant_id; ≥2 candidates flagged. Likely intentional disambiguation but should be confirmed."
+        }
+      ],
+      "type_lint": "ok",
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "reject",
+  "migration_required": false,
+  "notes": [
+    "Fuzzy collision: auction_bids.bidder_tenant_id has token-overlap 0.667 with multiple existing tenant_id columns. Reviewer must confirm whether 'bidder_tenant_id' is a deliberate role-prefixed FK to nbfc_tenants.id or whether the schema should reference tenant_id directly. Same review applies to E-039 (seller_tenant_id, winner_tenant_id)."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-038/checkpoint_1.html"
+}

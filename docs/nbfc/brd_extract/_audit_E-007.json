@@ -1,0 +1,134 @@
+{
+  "unit_id": "E-007",
+  "audited_at": "2026-05-01T06:30:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "nbfc",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": [
+        "id",
+        "status",
+        "legal_name",
+        "gst_number",
+        "pan_number"
+      ],
+      "reason": "table not present in baseline; introduced by sibling unit E-003",
+      "sibling_unit": "E-003"
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "nbfc_lsp_agreements",
+      "justification_present": true,
+      "justification_chars": 157,
+      "fuzzy_collisions": [],
+      "columns_proposed": [
+        {
+          "name": "id",
+          "type": "serial().primaryKey()",
+          "drizzle_builder": "serial"
+        },
+        {
+          "name": "agreement_id",
+          "type": "varchar({ length: 50 }).notNull().unique()",
+          "drizzle_builder": "varchar"
+        },
+        {
+          "name": "nbfc_id",
+          "type": "integer().notNull().references(() => nbfc.id)",
+          "drizzle_builder": "integer"
+        },
+        {
+          "name": "digio_document_id",
+          "type": "varchar({ length: 100 })",
+          "drizzle_builder": "varchar"
+        },
+        {
+          "name": "agreement_status",
+          "type": "varchar({ length: 32 }).notNull()",
+          "drizzle_builder": "varchar"
+        },
+        {
+          "name": "signing_date",
+          "type": "date()",
+          "drizzle_builder": "date"
+        },
+        {
+          "name": "itarang_signatory_1_name",
+          "type": "varchar({ length: 200 })",
+          "drizzle_builder": "varchar"
+        },
+        {
+          "name": "itarang_signatory_1_email",
+          "type": "varchar({ length: 200 })",
+          "drizzle_builder": "varchar"
+        },
+        {
+          "name": "itarang_signatory_2_name",
+          "type": "varchar({ length: 200 })",
+          "drizzle_builder": "varchar"
+        },
+        {
+          "name": "itarang_signatory_2_email",
+          "type": "varchar({ length: 200 })",
+          "drizzle_builder": "varchar"
+        },
+        {
+          "name": "nbfc_signatory_name",
+          "type": "varchar({ length: 200 })",
+          "drizzle_builder": "varchar"
+        },
+        {
+          "name": "nbfc_signatory_email",
+          "type": "varchar({ length: 200 })",
+          "drizzle_builder": "varchar"
+        },
+        {
+          "name": "signed_pdf_url",
+          "type": "text()",
+          "drizzle_builder": "text"
+        },
+        {
+          "name": "audit_trail_url",
+          "type": "text()",
+          "drizzle_builder": "text"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp({ withTimezone: true })",
+          "drizzle_builder": "timestamp"
+        },
+        {
+          "name": "created_by",
+          "type": "integer().notNull()",
+          "drizzle_builder": "integer"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+          "drizzle_builder": "timestamp"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+          "drizzle_builder": "timestamp"
+        }
+      ],
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "status": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM",
+    "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs",
+    "G-04: Sync Audit G-04: dealers table never defined \u2014 referenced as FK target by many tables",
+    "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type",
+    "reuse table 'nbfc' not yet in baseline \u2014 introduced by sibling unit E-003 (depends_on must include E-003 before this unit codes)"
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-007/checkpoint_1.html"
+}
