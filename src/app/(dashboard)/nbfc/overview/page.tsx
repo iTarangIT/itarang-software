@@ -16,7 +16,22 @@ export default async function NbfcOverview() {
   const vehiclenos = loans
     .map((l) => l.vehicleno)
     .filter((v): v is string => typeof v === "string" && v.length > 0);
-  const summary = await getFleetSummary(vehiclenos);
+
+  let summary: Awaited<ReturnType<typeof getFleetSummary>> = {
+    total: 0,
+    online: 0,
+    fresh_5m: 0,
+    with_lat: 0,
+    avg_soc: null,
+    avg_pack_voltage: null,
+    open_alerts: 0,
+  };
+  let vpsError: string | null = null;
+  try {
+    summary = await getFleetSummary(vehiclenos);
+  } catch (e) {
+    vpsError = e instanceof Error ? e.message : String(e);
+  }
 
   const tiles: Array<{
     label: string;
@@ -40,6 +55,12 @@ export default async function NbfcOverview() {
         <h1 className="text-2xl font-semibold">Overview</h1>
         <p className="text-sm text-slate-500 mt-1">Fleet health for {tenant.display_name}</p>
       </div>
+
+      {vpsError ? (
+        <div className="border border-amber-200 bg-amber-50 text-amber-900 text-sm rounded p-3">
+          IoT VPS unreachable — showing portfolio counts only. ({vpsError})
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {tiles.map((t) => {
