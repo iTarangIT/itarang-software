@@ -27,6 +27,9 @@ interface Progress {
   totalFound: number;
   newLeadsSaved: number;
   duplicatesSkipped: number;
+  // Null on runs from before this metric was tracked. New runs default to 0.
+  newLeadsPromoted: number | null;
+  newLeadsSkippedDuplicate: number | null;
   errorMessage: string | null;
   chunkErrorSample: string | null;
   chunkErrorCount: number;
@@ -262,11 +265,28 @@ export function ScraperRunProgress({ runId, onComplete, onDismiss }: Props) {
         <Stat label="Running" value={data.breakdown.running} tone="teal" />
         <Stat label="Done" value={data.breakdown.done} tone="green" />
         <Stat label="Failed" value={data.breakdown.failed} tone="red" />
-        <Stat
-          label={isTerminal ? "Leads saved" : "Leads found"}
-          value={isTerminal ? data.newLeadsSaved : data.rawLeadsFound}
-          tone="gray"
-        />
+        {isTerminal && data.newLeadsPromoted !== null ? (
+          // New runs (post-tracking-shipped) — show promoted count as the
+          // top-line stat. Promoted = leads that actually landed in
+          // dealer_leads and are dialable. saved = audit-table count, which
+          // mostly tracks promoted but can diverge when phones are duplicates
+          // of existing dealer_leads entries. The secondary line explains the
+          // gap so users don't have to ask "where did my leads go?".
+          <PromotedStat
+            promoted={data.newLeadsPromoted}
+            saved={data.newLeadsSaved}
+            skippedDuplicate={data.newLeadsSkippedDuplicate ?? 0}
+          />
+        ) : (
+          // Legacy runs (newLeadsPromoted=null) or live progress — fall back to
+          // the original "Leads saved/found" tile so old run history still
+          // renders sensibly.
+          <Stat
+            label={isTerminal ? "Leads saved" : "Leads found"}
+            value={isTerminal ? data.newLeadsSaved : data.rawLeadsFound}
+            tone="gray"
+          />
+        )}
       </div>
 
       {data.status === "failed" && data.errorMessage && (
@@ -315,6 +335,40 @@ function Stat({
     <div className="bg-white/70 rounded-lg p-2">
       <p className="text-gray-500">{label}</p>
       <p className={`text-base font-semibold ${color}`}>{value}</p>
+    </div>
+  );
+}
+
+// Replaces the simple "Leads saved" tile on completed runs. Shows the number
+// the user actually cares about (promoted = dialable) up top, with a small
+// breakdown beneath that explains the gap when promoted < saved (the common
+// "5 saved but 0 in my leads page" confusion case).
+function PromotedStat({
+  promoted,
+  saved,
+  skippedDuplicate,
+}: {
+  promoted: number;
+  saved: number;
+  skippedDuplicate: number;
+}) {
+  const allDropped = promoted === 0 && saved > 0;
+  return (
+    <div className="bg-white/70 rounded-lg p-2">
+      <p className="text-gray-500">Added to dialer queue</p>
+      <p
+        className={`text-base font-semibold ${
+          allDropped ? "text-red-700" : "text-green-700"
+        }`}
+      >
+        {promoted}
+      </p>
+      {saved > 0 && (
+        <p className="text-[10px] text-gray-400 leading-tight mt-0.5">
+          {saved} scraped
+          {skippedDuplicate > 0 ? `, ${skippedDuplicate} duplicates` : ""}
+        </p>
+      )}
     </div>
   );
 }

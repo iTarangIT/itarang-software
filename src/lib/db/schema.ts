@@ -2618,6 +2618,14 @@ export const scrapeRuns = pgTable("scraper_runs", {
   duration_ms: integer("duration_ms"),
   total_chunks: integer("total_chunks").default(0),
   completed_chunks: integer("completed_chunks").default(0),
+  // Counts of how many scraper_leads actually got promoted into dealer_leads
+  // (i.e., became dialable). new_leads_saved counts rows added to the
+  // scraper_leads audit table; new_leads_promoted is the subset that survived
+  // the toTenDigits phone validation AND the dealer_leads.phone UNIQUE
+  // constraint dedup. The gap between these two numbers is what surfaces in
+  // the run-progress UI as "X duplicates skipped".
+  new_leads_promoted: integer("new_leads_promoted").default(0),
+  new_leads_skipped_duplicate: integer("new_leads_skipped_duplicate").default(0),
 });
 
 export const scraperRunChunks = pgTable("scraper_run_chunks", {
