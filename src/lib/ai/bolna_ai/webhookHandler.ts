@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { updateLeadAfterCall } from "../storage/leadStore";
 import { dealerLeads } from "@/lib/db/schema";
-import { safeRedisLock } from "@/lib/queue/safeRedis";
+import { dedupClaim } from "@/lib/queue/safeRedis";
 import { dialerSession } from "@/lib/queue/dialerSession";
 import { scheduleCall } from "@/lib/queue/scheduler";
 import { appendSalesCallLog } from "@/lib/google/sheet";
@@ -12,17 +12,21 @@ import { triggerBolnaCall } from "./triggerCall";
 
 const PROCESSED_CALL_TTL_SECONDS = 10 * 60;
 
-// Cross-instance dedupe for Bolna webhooks (serverless instances don't share memory).
-// Returns true if this is the first time we've seen this callId.
-// When Redis is degraded (quota exhaustion) safeRedisLock returns claimed=true
-// with degraded=true — we bias toward processing rather than dropping a
-// terminal call event.
+// Cross-instance dedup for Bolna webhooks. Uses Redis first; if Upstash is
+// quota-exhausted, falls back to a process-local LRU set so duplicates within
+// the same Node process still get caught. Bolna sends "call-disconnected"
+// then "completed" for the same call — we only want to analyze once.
 async function claimCallForProcessing(callId: string): Promise<boolean> {
-  const { claimed } = await safeRedisLock(
+  const { claimed, degraded } = await dedupClaim(
     `bolna:processed-call:${callId}`,
     PROCESSED_CALL_TTL_SECONDS,
     "bolna:webhook-dedup",
   );
+  if (degraded) {
+    console.warn(
+      `[bolna:webhook] dedup falling back to process-local LRU (Redis degraded) for ${callId}`,
+    );
+  }
   return claimed;
 }
 
@@ -245,11 +249,21 @@ export async function handleBolnaWebhook(body: any) {
     // The daily call-scheduler cron remains as a safety net for any
     // next_call_at rows written outside this webhook flow.
     if (decision.action === "schedule_call" && nextCallAt) {
-      await scheduleCall({
+      const messageId = await scheduleCall({
         phone,
         leadId: lead.id,
         runAt: nextCallAt,
       });
+      if (!messageId) {
+        // QStash quota exhausted or scheduling failed. dealer_leads.next_call_at
+        // is already set by updateLeadAfterCall above, so the call-scheduler
+        // cron at /api/bolna/call-scheduler is the recovery path — it sweeps
+        // any next_call_at row whose time has elapsed. Log here so quota
+        // exhaustion is visible in pm2 logs, otherwise it's silent.
+        console.warn(
+          `[bolna:webhook] scheduleCall returned null for ${lead.id} — relying on call-scheduler cron to recover`,
+        );
+      }
     }
 
     if (decision.action === "push_to_crm") {
