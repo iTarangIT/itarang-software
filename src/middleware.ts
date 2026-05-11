@@ -191,6 +191,15 @@ export async function middleware(request: NextRequest) {
       "super_admin",
       "inventory_manager",
       "ceo",
+      "sales_head",
+    ],
+    "/admin/product-master": [
+      "admin",
+      "ops_manager",
+      "super_admin",
+      "inventory_manager",
+      "ceo",
+      "sales_head",
     ],
   };
 

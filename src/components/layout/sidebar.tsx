@@ -191,6 +191,47 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    {
+      section: "INVENTORY",
+      items: [
+        {
+          id: "admin-inventory",
+          label: "Inventory",
+          icon: PieChart,
+          href: "/admin/inventory",
+        },
+        {
+          id: "admin-product-master",
+          label: "Product Master",
+          icon: Package,
+          href: "/admin/product-master",
+        },
+        {
+          id: "admin-inventory-upload",
+          label: "Bulk Upload",
+          icon: ShoppingCart,
+          href: "/admin/inventory/upload",
+        },
+        {
+          id: "admin-inventory-add",
+          label: "Add Item",
+          icon: Package,
+          href: "/admin/inventory/add",
+        },
+        {
+          id: "admin-inventory-ageing",
+          label: "Ageing Report",
+          icon: Package,
+          href: "/admin/inventory/ageing-report",
+        },
+        {
+          id: "admin-inventory-transfer",
+          label: "Transfer",
+          icon: ShoppingCart,
+          href: "/admin/inventory/transfer",
+        },
+      ],
+    },
   ],
 
   sales_manager: [
@@ -249,10 +290,28 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/inventory",
         },
         {
+          id: "admin-product-master",
+          label: "Product Master",
+          icon: Package,
+          href: "/admin/product-master",
+        },
+        {
           id: "admin-inventory-upload",
           label: "Bulk Upload",
           icon: ShoppingCart,
           href: "/admin/inventory/upload",
+        },
+        {
+          id: "admin-inventory-ageing",
+          label: "Ageing Report",
+          icon: Package,
+          href: "/admin/inventory/ageing-report",
+        },
+        {
+          id: "admin-inventory-transfer",
+          label: "Transfer",
+          icon: ShoppingCart,
+          href: "/admin/inventory/transfer",
         },
       ],
     },
@@ -297,6 +356,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/inventory",
         },
         {
+          id: "admin-product-master",
+          label: "Product Master",
+          icon: Package,
+          href: "/admin/product-master",
+        },
+        {
           id: "admin-inventory-upload",
           label: "Bulk Upload",
           icon: ShoppingCart,
@@ -307,6 +372,18 @@ const roleNavigation: Record<string, any[]> = {
           label: "Add Item",
           icon: Package,
           href: "/admin/inventory/add",
+        },
+        {
+          id: "admin-inventory-ageing",
+          label: "Ageing Report",
+          icon: Package,
+          href: "/admin/inventory/ageing-report",
+        },
+        {
+          id: "admin-inventory-transfer",
+          label: "Transfer",
+          icon: ShoppingCart,
+          href: "/admin/inventory/transfer",
         },
       ],
     },
