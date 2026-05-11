@@ -1,0 +1,251 @@
+id: E-090
+slug: dpdpa-consent-record-withdraw
+name: DPDPA consent record persistence and withdrawal endpoint
+source_section: "6.4.4"
+brd_excerpt: |
+  Consent Before Collection: Digital/manual consent captured in KYC Step 2 (Section 2 BRD). Consent record stored with timestamp, scope ('loan processing, risk assessment, warranty management'), and withdrawal mechanism.
+  Right to Withdraw Consent: Customer can request consent withdrawal. Effect: no new telemetry used for risk scoring; existing loan obligations remain. Process: customer contacts NBFC grievance channel.
+  Purpose Limitation: Telemetry data is used only for: (1) loan risk assessment, (2) warranty activation, (3) after-sales service. Any new purpose requires fresh consent.
+
+depends_on: []
+
+non_functional:
+  - "DPDPA 2023: consent must be free, specific, informed, unconditional, unambiguous; record must include scope, timestamp, withdrawal mechanism."
+  - "DPDPA 2023 Right to Withdraw: withdrawal must be as easy as the original give-of-consent."
+  - "Withdrawal does not retroactively delete past data nor void existing loan obligations; only future telemetry is excluded from risk scoring."
+  - "Data Localisation: ap-south-1 (Mumbai); no cross-border transfer of consent records."
+
+surface:
+  api:
+    - method: GET
+      path: /api/nbfc/dpdpa/consent
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({ lead_id: z.string().min(1) })
+      response_shape:
+        lead_id: string
+        scopes: "string[]"
+        signed_at: string
+        status: "active | withdrawn"
+        withdrawn_at: "string | null"
+        withdrawal_channel: "string | null"
+    - method: POST
+      path: /api/nbfc/dpdpa/consent/withdraw
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ lead_id: z.string().min(1), withdrawal_channel: z.enum(['grievance_portal','helpline','email']), reason: z.string().max(500).optional() })
+      response_shape:
+        lead_id: string
+        status: withdrawn
+        withdrawn_at: string
+  components:
+    - "src/components/nbfc/dpdpa/ConsentWithdrawForm.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. GET /consent — validate query; resolve tenant; load latest consent_records row for lead_id; merge with nbfc_consent_scopes (active scopes per consent).
+  2. Return scopes (string list e.g. ['loan_processing','risk_assessment','warranty_management']), signed_at, status (active if not withdrawn), withdrawn_at.
+  3. POST /withdraw — validate body; resolve tenant.
+  4. Insert nbfc_consent_withdrawals row with withdrawal_channel + reason; update nbfc_consent_scopes.is_active=false for telemetry-related scopes; do NOT delete consent_records row.
+  5. Append audit_logs entry with action='dpdpa.consent_withdrawn'.
+  6. Future risk scoring jobs read the withdrawals table and exclude telemetry-derived signals for this lead.
+
+tables_columns:
+  reuse:
+    - table: consent_records
+      schema_ts_line: 1325
+      columns: [id, lead_id, consent_status, signed_at]
+    - table: audit_logs
+      schema_ts_line: 671
+      columns: [id, entity_type, entity_id, action, performed_by, timestamp]
+  new:
+    - table: nbfc_consent_scopes
+      justification: "consent_records does not enumerate scopes (loan_processing/risk_assessment/warranty_management) per DPDPA purpose limitation; scope-level toggling is required for partial withdrawal."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: consent_id, type: "varchar({ length: 255 }).notNull()" }
+        - { name: scope_key, type: "varchar({ length: 64 }).notNull()" }
+        - { name: is_active, type: "boolean().default(true).notNull()" }
+        - { name: deactivated_at, type: "timestamp({ withTimezone: true })" }
+    - table: nbfc_consent_withdrawals
+      justification: "Records withdrawal request with channel and reason; consent_records lacks a structured withdrawal channel field. DPDPA requires evidence of how the withdrawal was received."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: lead_id, type: "varchar({ length: 255 }).notNull()" }
+        - { name: consent_id, type: "varchar({ length: 255 }).notNull()" }
+        - { name: withdrawal_channel, type: "varchar({ length: 32 }).notNull()" }
+        - { name: reason, type: "text()" }
+        - { name: withdrawn_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/nbfc/dpdpa/consent?lead_id=L1 returns 200 with scopes including 'loan_processing','risk_assessment','warranty_management', signed_at, and status='active' for an unwithdrawn consent."
+    test_layer: api
+    test_name: "Consent GET returns scopes and active status"
+  - id: AC2
+    statement: "POST /api/nbfc/dpdpa/consent/withdraw with valid body returns 200 with status='withdrawn' and withdrawn_at set; subsequent GET returns status='withdrawn'."
+    test_layer: api
+    test_name: "Withdraw transitions consent to withdrawn"
+  - id: AC3
+    statement: "After withdrawal, the underlying consent_records row is NOT deleted (id remains queryable) — only nbfc_consent_withdrawals row is added and nbfc_consent_scopes for telemetry are deactivated."
+    test_layer: api
+    test_name: "Withdrawal preserves consent record (no retroactive delete)"
+  - id: AC4
+    statement: "POST withdraw with withdrawal_channel not in {'grievance_portal','helpline','email'} returns 400."
+    test_layer: api
+    test_name: "Withdraw rejects unknown channel"
+  - id: AC5
+    statement: "After POST /api/dpdpa/consent/withdraw with consent_id=X, any subsequent processing endpoint that depends on consent_id=X returns 451 with code='CONSENT_WITHDRAWN'. To resume, the data subject must record fresh consent (POST /consent with a timestamp greater than the withdraw timestamp); after that, processing endpoints succeed."
+    test_layer: api
+    persona: dealer_user
+    expected_response_shape:
+      ok: false
+      code: "CONSENT_WITHDRAWN"
+    test_name: "Withdrawn consent blocks downstream processing with 451 CONSENT_WITHDRAWN until fresh consent is recorded"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit: |
+  {
+    "unit_id": "E-090",
+    "audited_at": "2026-05-01T06:16:03Z",
+    "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+    "reuse_findings": [
+      {
+        "table": "consent_records",
+        "verified": true,
+        "ts_line": 1325,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "id",
+          "lead_id",
+          "consent_status",
+          "signed_at"
+        ],
+        "columns_missing": []
+      },
+      {
+        "table": "audit_logs",
+        "verified": true,
+        "ts_line": 671,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "id",
+          "entity_type",
+          "entity_id",
+          "action",
+          "performed_by",
+          "timestamp"
+        ],
+        "columns_missing": []
+      }
+    ],
+    "new_findings": [
+      {
+        "table": "nbfc_consent_scopes",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 182,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "consent_id",
+            "type": "varchar({ length: 255 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "scope_key",
+            "type": "varchar({ length: 64 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "is_active",
+            "type": "boolean().default(true).notNull()",
+            "type_lint_ok": true,
+            "type_head": "boolean",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "deactivated_at",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      },
+      {
+        "table": "nbfc_consent_withdrawals",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 172,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "lead_id",
+            "type": "varchar({ length: 255 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "consent_id",
+            "type": "varchar({ length: 255 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "withdrawal_channel",
+            "type": "varchar({ length: 32 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "reason",
+            "type": "text()",
+            "type_lint_ok": true,
+            "type_head": "text",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "withdrawn_at",
+            "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      }
+    ],
+    "verdict": "needs_schema_approval",
+    "migration_required": false,
+    "notes": [
+      "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+    ],
+    "checkpoint_html": "docs/nbfc/loop_report/E-090/checkpoint_1.html"
+  }

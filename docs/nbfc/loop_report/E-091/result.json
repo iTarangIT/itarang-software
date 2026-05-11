@@ -1,0 +1,33 @@
+{
+  "unit_id": "E-091",
+  "branch": "nbfc/E-091",
+  "started_from": "0948529",
+  "loop_count": 1,
+  "verdict": "green",
+  "schema_changes": {
+    "new_tables": ["nbfc_retention_tombstones"],
+    "altered_tables": ["kyc_documents (+purged, +purged_at)"],
+    "applied_to_sandbox": true,
+    "migration_required": false
+  },
+  "files_added": [
+    "src/lib/nbfc/dpdpa/retentionCron.ts",
+    "src/app/api/nbfc/dpdpa/retention/run/route.ts",
+    "src/app/api/nbfc/dpdpa/retention/cron/route.ts",
+    "tests/e2e/nbfc/E-091_dpdpa-retention.api.spec.ts"
+  ],
+  "files_modified": ["src/lib/db/schema.ts"],
+  "ac_results": [
+    { "id": "AC1", "name": "Retention dry-run reports counts without mutating data", "status": "pass" },
+    { "id": "AC2", "name": "Retention deletion writes tombstones for KYC 7y expiry", "status": "pass" },
+    { "id": "AC3", "name": "Retention preserves daily telemetry summaries indefinitely", "status": "pass" },
+    { "id": "AC4", "name": "Retention run requires admin role", "status": "pass" }
+  ],
+  "test_command": "E2E_BASE_URL=http://localhost:3091 NBFC_TEST_BYPASS_SECRET=e082-loop-bypass-secret npx playwright test tests/e2e/nbfc/E-091_dpdpa-retention.api.spec.ts",
+  "test_result": "6 passed (14.9s)",
+  "notes": [
+    "Daily-summary preservation modelled via borrower_risk_scores: it is the CDS daily rollup table that this codebase has, so AC3 seeds a 4y-old row there and asserts it survives the sweep while a 3y-old telemetry_ingestion_log row is purged.",
+    "Telemetry deletion writes ONE batch tombstone with row_count rather than one tombstone per event — DPDPA accountability is preserved without exploding the audit table for IoT volume.",
+    "Admin-role gate uses the same `resolveActor` idiom as E-082; allowed roles: admin, nbfc_admin, nbfc_compliance_officer."
+  ]
+}

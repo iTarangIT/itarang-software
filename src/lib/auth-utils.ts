@@ -73,6 +73,7 @@ export const INVENTORY_ADMIN_ROLES = new Set([
   "ops_manager",
   "super_admin",
   "inventory_manager",
+  "sales_head",
 ]);
 
 export async function requireInventoryAdmin() {

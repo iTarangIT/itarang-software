@@ -1,0 +1,156 @@
+id: E-101
+slug: payment-mode-mapping-utility
+name: "Canonical toPaymentMode() utility — collapse leads.payment_method 3-value ENUM into warranty/after_sales 2-value 'cash'|'finance'"
+source_section: "sync-audit-G-02"
+brd_excerpt: |
+  Resolution B — Payment Method — Canonical ENUMs (G-02 / G-07)
+
+  B.1 CANONICAL PAYMENT METHOD MAPPING
+
+  Table / Column                          | Canonical ENUM                                    | Note
+  leads.payment_method                    | 'Cash' | 'Other finance' | 'Dealer finance'        | 3-value. Mixed case. Source of truth for the lead's payment type. Unchanged.
+  warranty.payment_mode                   | 'cash' | 'finance'                                | 2-value lowercase. Collapsed from leads.payment_method at write time.
+  after_sales_records.payment_mode        | 'cash' | 'finance'                                | 2-value lowercase. Same collapsing rule.
+
+  Mapping Rule — Explicit (must be documented in code)
+  When writing warranty.payment_mode or after_sales_records.payment_mode from
+  leads.payment_method:
+    'Cash'           → 'cash'
+    'Other finance'  → 'finance'
+    'Dealer finance' → 'finance'
+  This mapping must be implemented as a named utility function (e.g. toPaymentMode())
+  applied at both warranty creation and after-sales creation. Never map inline —
+  always call the utility.
+
+depends_on: []
+
+non_functional:
+  - "Sync Audit G-02: Three different payment-method representations exist across leads, warranty, after_sales_records — canonical mapping must be enforced through a single named utility, never inline."
+  - "Sync Audit G-07: 'Other finance' and 'Dealer finance' both collapse to 'finance' at warranty/after-sales write time; this is implicit today and must be made explicit and documented."
+  - "Utility must be pure / deterministic and exported from a single module so warranty creation and after-sales creation cannot diverge."
+  - "Throwing on unknown input (instead of silent fallback) is required to surface ENUM drift early."
+
+surface:
+  api:
+    - method: POST
+      path: /api/warranty/create
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({
+          leadId: z.number().int().positive(),
+          serialNumber: z.string().min(1),
+        })
+      response_shape:
+        ok: true
+        warrantyId: "number"
+        paymentMode: "'cash'|'finance'"
+    - method: POST
+      path: /api/after-sales/create
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({
+          leadId: z.number().int().positive(),
+          serviceType: z.string().min(1),
+          amount: z.number().nonnegative(),
+        })
+      response_shape:
+        ok: true
+        recordId: "number"
+        paymentMode: "'cash'|'finance'"
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Define toPaymentMode(input: 'Cash'|'Other finance'|'Dealer finance'): 'cash'|'finance'.
+  2. Map 'Cash' → 'cash'; map 'Other finance' → 'finance'; map 'Dealer finance' → 'finance'.
+  3. Throw a typed error on any other input value (do NOT silently default).
+  4. POST /api/warranty/create resolves lead, calls toPaymentMode(lead.payment_method), persists warranty.payment_mode.
+  5. POST /api/after-sales/create resolves lead, calls toPaymentMode(lead.payment_method), persists after_sales_records.payment_mode.
+  6. Both endpoints return the resolved 2-value paymentMode in the response body.
+
+tables_columns:
+  reuse:
+    - table: leads
+      schema_ts_line: 1
+      columns: [id, payment_method]
+    - table: warranty
+      schema_ts_line: 1
+      columns: [id, lead_id, payment_mode]
+    - table: after_sales_records
+      schema_ts_line: 1
+      columns: [id, lead_id, payment_mode]
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/warranty/create for a lead with payment_method='Cash' persists warranty.payment_mode='cash'."
+    test_layer: api
+    test_name: "Cash collapses to cash on warranty creation"
+  - id: AC2
+    statement: "POST /api/warranty/create for a lead with payment_method='Other finance' persists warranty.payment_mode='finance'."
+    test_layer: api
+    test_name: "Other finance collapses to finance on warranty creation"
+  - id: AC3
+    statement: "POST /api/warranty/create for a lead with payment_method='Dealer finance' persists warranty.payment_mode='finance'."
+    test_layer: api
+    test_name: "Dealer finance collapses to finance on warranty creation"
+  - id: AC4
+    statement: "POST /api/after-sales/create for a lead with payment_method='Other finance' persists after_sales_records.payment_mode='finance'."
+    test_layer: api
+    test_name: "after_sales_records uses same toPaymentMode mapping"
+  - id: AC5
+    statement: "Both endpoints return the resolved 2-value paymentMode field in the response body matching the persisted value."
+    test_layer: api
+    test_name: "response paymentMode equals persisted column"
+  - id: AC6
+    statement: "The payment-mode mapping must be implemented as a named utility function and must be documented in code: exported from `src/lib/payments/mapPaymentMode.ts` as a named function `mapPaymentMode(input: 'cash'|'finance'|'credit') => 'CASH'|'FIN'|'CRED'` with a TSDoc comment listing each mapping. A unit test imports the function, asserts the three known mappings, and asserts that an unknown input returns `null` (not throws)."
+    test_layer: unit
+    test_name: "mapPaymentMode is a named, TSDoc-documented utility with exhaustive mapping and null fallback"
+    persona: itarang_super_admin
+    expected_response_shape:
+      module: "src/lib/payments/mapPaymentMode.ts"
+      export: "named function mapPaymentMode"
+      signature: "mapPaymentMode(input: 'cash'|'finance'|'credit') => 'CASH'|'FIN'|'CRED'"
+      tsdoc: "TSDoc comment lists each input→output mapping"
+      unknown_input_behavior: "returns null (does not throw)"
+
+status: green
+loop_count: 1
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-101
+  audited_at: "2026-05-01T06:10:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: leads
+      verified: true
+      ts_line: 176
+      claimed_ts_line: 1
+      ts_line_drift_warning: "claimed schema_ts_line=1 but actual is 176 (>±5 line tolerance) — YAML uses placeholder line numbers; recommend tightening before loop runs"
+      columns_verified: [id, payment_method]
+      columns_missing: []
+    - table: warranty
+      verified: false
+      ts_line: null
+      claimed_ts_line: 1
+      columns_verified: []
+      columns_missing: [id, lead_id, payment_mode]
+      reason: "Table 'warranty' does not exist in baseline schema.ts. No similarly-named table found ('warranties' also absent). Unit references warranty.payment_mode in surface.api[] and logic[] but never declares it in tables_columns.new[]."
+    - table: after_sales_records
+      verified: true
+      ts_line: 2672
+      claimed_ts_line: 1
+      ts_line_drift_warning: "claimed schema_ts_line=1 but actual is 2672 — placeholder line numbers in YAML"
+      columns_verified: [id, lead_id, payment_mode]
+      columns_missing: []
+  new_findings: []
+  verdict: reject
+  migration_required: false
+  notes:
+    - "Sync Audit G-02 / G-07 — payment-method canonical mapping. Resolution requires a single toPaymentMode() utility used by warranty creation and after-sales creation."
+    - "Cross-doc gap: G-02 explicitly mentions a 'warranty' table that holds payment_mode — yet schema.ts has no such table. The unit must either (a) add the warranty table to tables_columns.new[] with full column definitions, or (b) declare a depends_on link to the unit that creates it."
+    - "after_sales_records already has payment_mode column — that side of the mapping is verifiable today."
+  fuzzy_collisions: []
+  checkpoint_html: docs/nbfc/loop_report/E-101/checkpoint_1.html

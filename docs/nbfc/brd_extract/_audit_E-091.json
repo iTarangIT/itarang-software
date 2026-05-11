@@ -1,0 +1,109 @@
+{
+  "unit_id": "E-091",
+  "audited_at": "2026-05-01T06:16:03Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "kyc_verifications",
+      "verified": true,
+      "ts_line": 1226,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "id"
+      ],
+      "columns_missing": [],
+      "note": "YAML referenced JS const 'kycVerifications'; baseline records SQL table name 'kyc_verifications' (same row at line 1226)."
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "nbfc_retention_tombstones",
+      "is_existing_table": false,
+      "justification_present": true,
+      "justification_length": 187,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid().primaryKey().defaultRandom()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "table_name",
+          "type": "varchar({ length: 64 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "original_id",
+          "type": "varchar({ length: 255 })",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "row_count",
+          "type": "integer().default(1).notNull()",
+          "type_lint_ok": true,
+          "type_head": "integer",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "reason",
+          "type": "varchar({ length: 64 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "storage_region",
+          "type": "varchar({ length: 24 }).default('ap-south-1').notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        }
+      ],
+      "fuzzy_collisions": [],
+      "decision": "approved_pending_human"
+    },
+    {
+      "table": "kyc_documents",
+      "is_existing_table": true,
+      "justification_present": true,
+      "justification_length": 179,
+      "columns": [
+        {
+          "name": "purged",
+          "type": "boolean().default(false).notNull()",
+          "type_lint_ok": true,
+          "type_head": "boolean",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "purged_at",
+          "type": "timestamp({ withTimezone: true })",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        }
+      ],
+      "fuzzy_collisions": [],
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-091/checkpoint_1.html"
+}

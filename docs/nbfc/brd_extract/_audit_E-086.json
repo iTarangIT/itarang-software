@@ -1,0 +1,87 @@
+{
+  "unit_id": "E-086",
+  "audited_at": "2026-05-01T06:16:03Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "nbfc_loans",
+      "verified": true,
+      "ts_line": 2729,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "loan_application_id",
+        "tenant_id",
+        "current_dpd",
+        "outstanding_amount"
+      ],
+      "columns_missing": []
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "nbfc_bulk_immobilisation_batches",
+      "is_existing_table": false,
+      "justification_present": true,
+      "justification_length": 136,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid().primaryKey().defaultRandom()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "tenant_id",
+          "type": "uuid().notNull().references(() => nbfcTenants.id)",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "approval_request_id",
+          "type": "uuid().notNull()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "batch_size",
+          "type": "integer().notNull()",
+          "type_lint_ok": true,
+          "type_head": "integer",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "loan_application_ids",
+          "type": "jsonb().notNull()",
+          "type_lint_ok": true,
+          "type_head": "jsonb",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "executed_at",
+          "type": "timestamp({ withTimezone: true })",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "executed_count",
+          "type": "integer().default(0).notNull()",
+          "type_lint_ok": true,
+          "type_head": "integer",
+          "fuzzy_collisions": []
+        }
+      ],
+      "fuzzy_collisions": [],
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-086/checkpoint_1.html"
+}

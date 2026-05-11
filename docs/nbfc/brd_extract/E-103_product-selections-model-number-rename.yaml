@@ -1,0 +1,135 @@
+id: E-103
+slug: product-selections-model-number-rename
+name: "product_selections.sub_category → model_number rename — VARCHAR(50) becomes VARCHAR(100), all callers updated"
+source_section: "sync-audit-G-05"
+brd_excerpt: |
+  A.3 product_selections — sub_category Column Correction (G-05)
+
+  Migration
+  product_selections.sub_category VARCHAR(50) → renamed to model_number VARCHAR(100).
+  Contains the battery model name (e.g. '51.2V-105AH'). The FK semantics remain
+  identical — it just has the correct name. All queries using
+  product_selections.sub_category must be updated to product_selections.model_number.
+
+  (Context — G-05: HIGH)
+  If sub_category is being removed from the data model (per G-01 resolution),
+  product_selections.sub_category must also be removed or repurposed. Currently
+  inconsistent.
+
+depends_on: []
+
+non_functional:
+  - "Sync Audit G-05: product_selections.sub_category column was a vehicle-type label in V2-Feb but Sec6 removed sub-categories entirely. Resolution renames the column to model_number to reflect that its true semantics is the battery model name."
+  - "Sync Audit G-01 alignment: this rename must be applied alongside the canonical category/model matrix from Resolution A so callers consume model strings (e.g. '51.2V-105AH') rather than vehicle-type labels."
+  - "Width must increase from VARCHAR(50) to VARCHAR(100) — INV models like 'Power Cube 1.4+' need additional headroom over the old battery-spec width."
+  - "All existing queries and API responses referencing product_selections.sub_category must be updated to product_selections.model_number; no compatibility alias should be left behind."
+
+surface:
+  api:
+    - method: GET
+      path: /api/product-selections/{id}
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({})
+      response_shape:
+        id: "number"
+        leadId: "number"
+        modelNumber: "string"
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Drizzle migration: ALTER TABLE product_selections RENAME COLUMN sub_category TO model_number.
+  2. Same migration: ALTER COLUMN model_number TYPE VARCHAR(100).
+  3. Update Drizzle schema definition to expose product_selections.modelNumber: varchar({ length: 100 }).
+  4. Replace every read/write of product_selections.sub_category in API routes with product_selections.model_number.
+  5. GET /api/product-selections/{id} returns the renamed column under JSON key 'modelNumber'; never under 'subCategory'.
+  6. Verify no remaining reference to product_selections.sub_category exists in src/ via repo grep.
+
+tables_columns:
+  reuse:
+    - table: product_selections
+      schema_ts_line: 1
+      columns: [id, lead_id]
+  new:
+    - table: product_selections
+      justification: "Rename product_selections.sub_category VARCHAR(50) to model_number VARCHAR(100). Same FK semantics, but column name and width must change to reflect canonical battery-model meaning per Sync Audit Resolution A."
+      columns:
+        - { name: model_number, type: "varchar({ length: 100 })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "After migration, the product_selections table has a column named 'model_number' of type VARCHAR(100) and no column named 'sub_category'."
+    test_layer: api
+    test_name: "product_selections column renamed to model_number"
+  - id: AC2
+    statement: "Existing rows' values are preserved across the rename — querying model_number returns the same data that previously lived in sub_category."
+    test_layer: api
+    test_name: "rename preserves existing row data"
+  - id: AC3
+    statement: "GET /api/product-selections/{id} returns the value under JSON key 'modelNumber' and does not include any 'subCategory' field."
+    test_layer: api
+    test_name: "API returns modelNumber not subCategory"
+  - id: AC4
+    statement: "A 100-char string can be written and read back from product_selections.model_number without truncation."
+    test_layer: api
+    test_name: "VARCHAR width is 100 not 50"
+  - id: AC5
+    statement: "After running the migration that renames `product_selections.model_number` to `product_selections.product_selections`, no code in `src/` references `model_number` (verify via grep). Inserting a row with the new column name succeeds; inserting with the old name fails. Any orphan endpoints that referenced model_number have been deleted from `src/app/api/` (no 404 fallbacks). All queries using product_selections.sub_category must be updated to product_selections.model_number, and product_selections.sub_category must also be removed or repurposed so no compatibility alias remains."
+    test_layer: api
+    test_name: "model_number rename complete and old column removed"
+    persona: itarang_super_admin
+    expected_response_shape:
+      success_write:
+        status: 200
+        body:
+          id: "number"
+          leadId: "number"
+          modelNumber: "string"
+      failure_write:
+        status: 400
+        body:
+          error: "string"
+          code: "string"
+          details:
+            unknown_column: "string"
+
+status: schema_approved
+loop_count: 1
+last_failure_signature: null
+human_checkpoints:
+  - { ts: "2026-05-01T07:30:00Z", note: "auto-approved schema rename per --auto-approve-schema; rename product_selections.sub_category -> model_number, widen to VARCHAR(100); 3 callers updated; new GET /api/product-selections/{id} endpoint added" }
+audit:
+  unit_id: E-103
+  audited_at: "2026-05-01T06:10:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: product_selections
+      verified: true
+      ts_line: 2572
+      claimed_ts_line: 1
+      ts_line_drift_warning: "claimed schema_ts_line=1 but actual is 2572 — placeholder line numbers in YAML"
+      columns_verified: [id, lead_id]
+      columns_missing: []
+  new_findings:
+    - table: product_selections
+      table_exists_in_baseline: true
+      justification_present: true
+      justification_length: 192
+      operation: rename_and_widen
+      existing_column_to_replace: sub_category
+      existing_column_present: true
+      fuzzy_collisions: []
+      decision: approved_pending_human
+      columns:
+        - { name: model_number, type: "varchar({ length: 100 })", type_lint: ok }
+  verdict: needs_schema_approval
+  migration_required: true
+  notes:
+    - "Sync Audit G-05 (HIGH) — product_selections.sub_category is a vehicle-type label in V2-Feb but Sec6 removed sub-categories. Resolution renames it to model_number (VARCHAR 100) so it carries the canonical battery-model identifier (e.g. '51.2V-105AH')."
+    - "G-01 alignment: this rename must ship together with the canonical category/model matrix in E-100 to avoid leaving the BRD partially applied. Recommend ordering E-100 → E-103 in the loop sequence."
+    - "Drizzle migration will need both RENAME COLUMN and ALTER COLUMN TYPE (VARCHAR 50 → 100). drizzle-kit push must be run after schema edit."
+    - "No fuzzy collision: 'model_number' tokens {model, number} do not overlap any existing column at >=0.6."
+    - "Caller MUST repo-grep src/ for 'sub_category' usages before approving (the YAML's logic step 6 already requires this)."
+  checkpoint_html: docs/nbfc/loop_report/E-103/checkpoint_1.html

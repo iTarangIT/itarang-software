@@ -5,12 +5,8 @@ import { z } from "zod";
 import { requireInventoryAdmin } from "@/lib/auth-utils";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
 
-// GET — full read-only detail card.
-// PATCH — only non-critical fields are editable per BRD: warehouse_location,
-// iot_imei_no, physical_condition_notes (we use product_manual_url field as
-// a free-text notes proxy is NOT correct; we add notes via warehouse_location
-// extension — BRD allows physical_condition_notes which is not in schema, so
-// we limit to warehouse_location + iot_imei_no for now).
+// GET: full read-only detail card.
+// PATCH: non-critical BRD editable fields.
 
 export const GET = withErrorHandler(
   async (_req: Request, ctx: { params: Promise<{ itemId: string }> }) => {
@@ -35,6 +31,8 @@ export const GET = withErrorHandler(
 const patchSchema = z.object({
   warehouse_location: z.string().nullable().optional(),
   iot_imei_no: z.string().nullable().optional(),
+  physical_condition: z.enum(["new", "refurbished", "demo"]).nullable().optional(),
+  oem_warranty_clauses: z.string().nullable().optional(),
 });
 
 export const PATCH = withErrorHandler(
@@ -44,7 +42,7 @@ export const PATCH = withErrorHandler(
     const body = patchSchema.parse(await req.json());
 
     const existing = await db
-      .select({ id: inventory.id, status: inventory.status })
+      .select({ id: inventory.id })
       .from(inventory)
       .where(eq(inventory.id, itemId))
       .limit(1);
@@ -55,6 +53,12 @@ export const PATCH = withErrorHandler(
       .set({
         warehouse_location: body.warehouse_location ?? null,
         iot_imei_no: body.iot_imei_no ?? null,
+        iot_enabled:
+          body.iot_imei_no !== undefined
+            ? Boolean(body.iot_imei_no && body.iot_imei_no.trim() !== "")
+            : undefined,
+        physical_condition: body.physical_condition ?? undefined,
+        oem_warranty_clauses: body.oem_warranty_clauses ?? undefined,
         updated_at: new Date(),
       })
       .where(eq(inventory.id, itemId));

@@ -1,0 +1,43 @@
+{
+  "unit_id": "E-008",
+  "audited_at": "2026-05-01T15:39:58Z",
+  "baseline_sha": "e9eae8c3af97ccb2e211f62bf5c7d91ec4a47f4af5359d033d8a5e9f05350c64",
+  "reuse_findings": [
+    {
+      "table": "nbfc_lsp_agreements",
+      "verified": true,
+      "ts_line": 3535,
+      "columns_verified": [
+        "id",
+        "agreement_id",
+        "nbfc_id",
+        "agreement_status",
+        "signed_pdf_url",
+        "audit_trail_url",
+        "signing_date",
+        "updated_at"
+      ],
+      "columns_missing": []
+    },
+    {
+      "table": "nbfc",
+      "verified": true,
+      "ts_line": 3392,
+      "columns_verified": [
+        "id",
+        "lsp_agreement_id"
+      ],
+      "columns_missing": []
+    }
+  ],
+  "new_findings": [],
+  "verdict": "audited",
+  "status": "audited",
+  "migration_required": false,
+  "notes": [
+    "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM",
+    "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs",
+    "G-04: Sync Audit G-04: dealers table never defined \u2014 referenced as FK target by many tables"
+  ],
+  "checkpoint_html": null
+}

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { DM_Sans, DM_Mono } from "next/font/google";
 import "./globals.css";
 
 import Providers from "@/components/Providers";
@@ -7,7 +7,20 @@ import { AuthProvider } from "@/components/auth/AuthProvider";
 import ChunkReloadGuard from "@/components/ChunkReloadGuard";
 import { Toaster } from "sonner";
 
-const inter = Inter({ subsets: ["latin"] });
+// iTarang BRD §6.B — DM Sans for body, DM Mono for IDs / IMEI / hex codes.
+const dmSans = DM_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-dm-sans",
+  display: "swap",
+});
+
+const dmMono = DM_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-dm-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "iTarang CRM",
@@ -20,8 +33,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={inter.className}>
+    <html lang="en" className={`${dmSans.variable} ${dmMono.variable}`}>
+      <body className={dmSans.className}>
         <ChunkReloadGuard />
         <Providers>
           <AuthProvider>{children}</AuthProvider>
