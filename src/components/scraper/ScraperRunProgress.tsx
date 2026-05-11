@@ -28,6 +28,8 @@ interface Progress {
   newLeadsSaved: number;
   duplicatesSkipped: number;
   errorMessage: string | null;
+  chunkErrorSample: string | null;
+  chunkErrorCount: number;
   startedAt: string | null;
   completedAt: string | null;
 }
@@ -273,6 +275,20 @@ export function ScraperRunProgress({ runId, onComplete, onDismiss }: Props) {
             ? `${data.errorMessage.slice(0, 240)}…`
             : data.errorMessage}
         </p>
+      )}
+
+      {isTerminal && data.breakdown.failed > 0 && data.chunkErrorSample && (
+        <div className="text-xs text-red-700 bg-white/70 p-2 rounded-lg break-words">
+          <p className="font-medium mb-0.5">
+            {data.chunkErrorCount} of {data.breakdown.failed} failed chunks
+            reported:
+          </p>
+          <p className="font-mono text-[11px] leading-relaxed">
+            {data.chunkErrorSample.length > 300
+              ? `${data.chunkErrorSample.slice(0, 300)}…`
+              : data.chunkErrorSample}
+          </p>
+        </div>
       )}
     </div>
   );

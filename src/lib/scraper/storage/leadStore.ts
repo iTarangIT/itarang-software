@@ -2,20 +2,9 @@ import { db } from "@/lib/db";
 import { dealerLeads, scrapedDealerLeads } from "@/lib/db/schema";
 import { inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { toTenDigits } from "@/lib/ai/phone";
 
 const CHUNK_SIZE = 100;
-
-// Normalize phone to 10-digit form to match the dealer_leads uniqueness semantics.
-// Returns null for anything that doesn't look like a valid Indian mobile.
-function normalizePhone(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const digits = String(raw).replace(/\D/g, "");
-  if (!digits) return null;
-  const trimmed = digits.length > 10 ? digits.slice(-10) : digits;
-  if (trimmed.length !== 10) return null;
-  if (!/^[6-9]/.test(trimmed)) return null;
-  return trimmed;
-}
 
 // Promote scraped leads into dealer_leads so they appear on the Leads page and
 // in the AI dialer queue. Only leads with a valid phone are promoted; the
@@ -39,7 +28,11 @@ export async function promoteLeadsToDealerLeads(
   const seenPhones = new Set<string>();
 
   for (const lead of leads) {
-    const phone = normalizePhone(lead.phone);
+    // toTenDigits validates the lead's phone is a valid Indian mobile
+    // (6/7/8/9 prefix) and returns the dealer_leads-canonical 10-digit form.
+    // Non-Indian / malformed phones are dropped here so they never enter the
+    // AI dialer queue.
+    const phone = toTenDigits(lead.phone);
     if (!phone) continue;
     if (seenPhones.has(phone)) continue;
     seenPhones.add(phone);
@@ -117,15 +110,14 @@ export async function saveCleanLeads(leads: any[], runId: string): Promise<numbe
         .values(
           chunk.map((lead) => ({
             id: crypto.randomUUID(),
-            scraper_run_id: runId, // ✅ fix
+            scraper_run_id: runId,
             dealer_name: lead.name ?? null,
             phone: lead.phone ?? null,
             email: lead.email ?? null,
             website: lead.website ?? null,
             location_city: lead.city ?? null,
-            address: lead.address ?? null,
             source_url: lead.source ?? null,
-            exploration_status: "unexplored",
+            exploration_status: "unassigned",
             created_at: new Date(),
             updated_at: new Date(),
           })),
