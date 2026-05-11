@@ -239,6 +239,7 @@ export default function DealerInventoryDetailModal({
           </div>
         </div>
 
+
         {/* KPI strip */}
         <div className="px-6 pt-5">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
