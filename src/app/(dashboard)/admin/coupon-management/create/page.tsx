@@ -29,7 +29,7 @@ export default function CreateCouponBatchPage() {
     useEffect(() => {
         const fetchDealers = async () => {
             try {
-                const res = await fetch('/api/admin/dealers?status=active&limit=500');
+                const res = await fetch('/api/admin/dealers?limit=500');
                 const data = await res.json();
                 if (data.success) {
                     setDealers(data.data || []);

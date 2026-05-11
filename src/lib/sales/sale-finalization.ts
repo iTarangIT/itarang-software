@@ -9,6 +9,8 @@ import {
   products,
 } from "@/lib/db/schema";
 import { generateId } from "@/lib/api-utils";
+import { logInventoryEvent } from "@/lib/inventory/events";
+import { sellInventorySerial } from "@/lib/inventory/lifecycle";
 
 // BRD V2 §3.4 / §3.5 / §3.6 — finalize the sale lifecycle.
 // Two phases per BRD inventory state machine:
@@ -105,30 +107,70 @@ export async function finalizeSale(
   //      is left null so the cron / Mark Delivered click can set it later.
   //    - phase='sold' (cash, or post-dispatch finalization): inventory hits
   //      'sold' and sold_at is recorded.
-  const inventoryUpdate =
-    phase === "dispatched"
-      ? {
-          status: "dispatched",
-          dispatch_date: soldAt,
-          linked_lead_id: leadId,
-          updated_at: soldAt,
-        }
-      : {
-          status: "sold",
-          dispatch_date: soldAt,
-          sold_at: soldAt,
-          linked_lead_id: leadId,
-          updated_at: soldAt,
-        };
+  if (phase === "dispatched") {
+    await tx
+      .update(inventory)
+      .set({
+        status: "dispatched",
+        dispatch_date: soldAt,
+        linked_lead_id: leadId,
+        updated_at: soldAt,
+      })
+      .where(eq(inventory.id, battery.id));
+    await tx
+      .update(inventory)
+      .set({
+        status: "dispatched",
+        dispatch_date: soldAt,
+        linked_lead_id: leadId,
+        updated_at: soldAt,
+      })
+      .where(eq(inventory.id, charger.id));
 
-  await tx
-    .update(inventory)
-    .set(inventoryUpdate)
-    .where(eq(inventory.id, battery.id));
-  await tx
-    .update(inventory)
-    .set(inventoryUpdate)
-    .where(eq(inventory.id, charger.id));
+    await logInventoryEvent({
+      tx,
+      serialNumber: batterySerial,
+      inventoryId: battery.id,
+      eventType: "edited",
+      fromStatus: "reserved",
+      toStatus: "dispatched",
+      leadId,
+      performedBy,
+      notes: "Finance dispatch confirmed",
+      performedAt: soldAt,
+    });
+    await logInventoryEvent({
+      tx,
+      serialNumber: chargerSerial,
+      inventoryId: charger.id,
+      eventType: "edited",
+      fromStatus: "reserved",
+      toStatus: "dispatched",
+      leadId,
+      performedBy,
+      notes: "Finance dispatch confirmed",
+      performedAt: soldAt,
+    });
+  } else {
+    await sellInventorySerial({
+      tx,
+      serial: batterySerial,
+      leadId,
+      dealerId,
+      performedBy,
+      soldAt,
+      notes: `Finalized sale (${input.paymentMode})`,
+    });
+    await sellInventorySerial({
+      tx,
+      serial: chargerSerial,
+      leadId,
+      dealerId,
+      performedBy,
+      soldAt,
+      notes: `Finalized sale (${input.paymentMode})`,
+    });
+  }
 
   // 3. Warranty record — one row per deployment, anchored on the battery.
   const warrantyMonths = battery.warranty_months ?? 24;
@@ -233,14 +275,43 @@ export async function markDispatchedAsSold(
         ),
       )
       .returning({ id: inventory.id });
-    return result.length > 0;
+    return result[0]?.id ?? null;
   };
 
-  const [batteryFlipped, chargerFlipped] = await Promise.all([
+  const [batteryId, chargerId] = await Promise.all([
     flip(batterySerial),
     flip(chargerSerial),
   ]);
-  const changed = batteryFlipped || chargerFlipped;
+  const changed = Boolean(batteryId || chargerId);
+
+  if (batteryId) {
+    await logInventoryEvent({
+      tx,
+      serialNumber: batterySerial,
+      inventoryId: batteryId,
+      eventType: "sold",
+      fromStatus: "dispatched",
+      toStatus: "sold",
+      leadId,
+      performedBy,
+      notes: "Delivery confirmed",
+      performedAt: soldAt,
+    });
+  }
+  if (chargerId) {
+    await logInventoryEvent({
+      tx,
+      serialNumber: chargerSerial,
+      inventoryId: chargerId,
+      eventType: "sold",
+      fromStatus: "dispatched",
+      toStatus: "sold",
+      leadId,
+      performedBy,
+      notes: "Delivery confirmed",
+      performedAt: soldAt,
+    });
+  }
 
   if (changed) {
     // Find the matching deployedAsset to log the deployment-history entry

@@ -7,7 +7,7 @@
     "next": "next dev",
     "worker": "tsx src/lib/queue/callWorker.ts",
     "dev:with-worker": "concurrently \"next dev\" \"tsx src/lib/queue/callWorker.ts\"",
-    "dev:no-turbo": "next dev --no-turbo",
+    "dev:no-turbo": "next dev --webpack",
     "build": "next build",
     "start": "node server.js",
     "lint": "eslint",

@@ -166,7 +166,7 @@ function NewLeadWizardContent() {
     // ─── Categories & Products ──────────────────────────────────────────────
 
     useEffect(() => {
-        fetch('/api/inventory/categories')
+        fetch('/api/dealer/leads/categories')
             .then(r => r.json())
             .then(d => {
                 console.log('[LeadWizard] categories response:', d);
@@ -178,7 +178,7 @@ function NewLeadWizardContent() {
 
     useEffect(() => {
         if (formData.asset_model) {
-            fetch(`/api/inventory/products?category=${encodeURIComponent(formData.asset_model)}`)
+            fetch(`/api/dealer/leads/products?category=${encodeURIComponent(formData.asset_model)}`)
                 .then(r => r.json())
                 .then(d => {
                     if (d.success) {
@@ -626,8 +626,17 @@ function NewLeadWizardContent() {
                                                     errors.product_category_id ? 'border-red-400' : 'border-[#EBEBEB] focus:border-[#1D4ED8]'
                                                 } ${!formData.asset_model ? 'text-gray-400' : 'text-gray-900'}`}
                                             >
-                                                <option value="">Select from Current Inventory</option>
-                                                {categories.map((c: any) => <option key={c.id} value={c.slug}>{c.name}</option>)}
+                                                <option value="" disabled={categories.length === 0}>
+                                                    {categories.length === 0
+                                                        ? 'No inventory available — add stock to enable lead creation'
+                                                        : 'Select from Current Inventory'}
+                                                </option>
+                                                {categories.map((c: any) => (
+                                                    <option key={c.id} value={c.slug}>
+                                                        {c.name}
+                                                        {typeof c.available_count === 'number' ? ` (${c.available_count} in stock)` : ''}
+                                                    </option>
+                                                ))}
                                             </select>
                                             <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
                                         </div>
@@ -644,10 +653,16 @@ function NewLeadWizardContent() {
                                                     errors.primary_product_id ? 'border-red-400' : 'border-[#EBEBEB] focus:border-[#1D4ED8]'
                                                 } ${!formData.primary_product_id ? 'text-gray-400' : 'text-gray-900'}`}
                                             >
-                                                <option value="">Select Product type</option>
+                                                <option value="" disabled={products.length === 0}>
+                                                    {products.length === 0
+                                                        ? formData.asset_model
+                                                            ? 'No stock available in this category'
+                                                            : 'Select Product type'
+                                                        : 'Select Product type'}
+                                                </option>
                                                 {products.map((p: any) => (
                                                     <option key={p.id} value={p.id}>
-                                                        {p.name} — {p.voltage_v}V / {p.capacity_ah}Ah | SKU: {p.sku}{p.warranty_months ? ` | ${p.warranty_months}mo warranty` : ''}{outOfStockProducts.includes(p.id) ? ' (Out of Stock)' : ''}
+                                                        {p.name} — {p.voltage_v}V / {p.capacity_ah}Ah | SKU: {p.sku}{p.warranty_months ? ` | ${p.warranty_months}mo warranty` : ''}{typeof p.available_quantity === 'number' ? ` · ${p.available_quantity} avail.` : ''}{outOfStockProducts.includes(p.id) ? ' (Out of Stock)' : ''}
                                                     </option>
                                                 ))}
                                             </select>
@@ -662,6 +677,39 @@ function NewLeadWizardContent() {
                                                 <button onClick={() => router.push('/dealer-portal/oem-orders/new')} className="px-3 py-1 text-xs font-bold bg-amber-600 text-white rounded-lg hover:bg-amber-700">Order from OEM</button>
                                             </div>
                                         )}
+                                        {(() => {
+                                            const selected = products.find((p: any) => p.id === formData.primary_product_id);
+                                            const serials: any[] = selected?.serials ?? [];
+                                            if (!selected || serials.length === 0) return null;
+                                            const visible = serials.slice(0, 6);
+                                            const extra = serials.length - visible.length;
+                                            return (
+                                                <div className="mt-2 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
+                                                    <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 mb-2">
+                                                        Available serials ({selected.available_quantity})
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-1.5">
+                                                        {visible.map((s: any) => (
+                                                            <span
+                                                                key={s.id}
+                                                                title={s.warehouse_location ? `${s.serial_number || s.id} · ${s.warehouse_location}` : s.serial_number || s.id}
+                                                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border border-emerald-200 text-[11px] font-mono text-emerald-900"
+                                                            >
+                                                                {s.serial_number || s.id}
+                                                                {s.warehouse_location && (
+                                                                    <span className="text-[10px] text-emerald-600/80 font-sans">· {s.warehouse_location}</span>
+                                                                )}
+                                                            </span>
+                                                        ))}
+                                                        {extra > 0 && (
+                                                            <span className="inline-flex items-center px-2 py-1 rounded-lg bg-emerald-100 border border-emerald-200 text-[11px] font-bold text-emerald-800">
+                                                                +{extra} more
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
                                         {errors.primary_product_id && <p className="text-[10px] text-red-500 font-bold px-1">{errors.primary_product_id}</p>}
                                     </div>
 
