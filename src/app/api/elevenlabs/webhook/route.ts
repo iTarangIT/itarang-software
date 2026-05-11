@@ -1,5 +1,8 @@
 import { handleElevenLabsWebhook } from "@/lib/ai/elevenlabs";
-import { verifyWebhookEvent } from "@/lib/ai/elevenlabs/signature";
+import {
+  verifyWebhookEvent,
+  WebhookSecretMissingError,
+} from "@/lib/ai/elevenlabs/signature";
 import { after, NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 300;
@@ -22,6 +25,15 @@ export async function POST(req: NextRequest) {
   try {
     event = await verifyWebhookEvent(rawBody, signature);
   } catch (err) {
+    if (err instanceof WebhookSecretMissingError) {
+      console.error(
+        "[ELEVENLABS WEBHOOK] ELEVENLABS_WEBHOOK_SECRET is not configured — webhook rejected. Set this in Vercel env to enable verification.",
+      );
+      return NextResponse.json(
+        { success: false, error: "Webhook not configured" },
+        { status: 401 },
+      );
+    }
     console.warn("[ELEVENLABS WEBHOOK] Signature verification failed", err);
     return NextResponse.json(
       { success: false, error: "Invalid signature" },
@@ -40,7 +52,14 @@ export async function POST(req: NextRequest) {
     try {
       await handleElevenLabsWebhook(event);
     } catch (err) {
-      console.error("[ELEVENLABS WEBHOOK] background handler failed", err);
+      // Log the full event so manual recovery is possible. ElevenLabs
+      // won't retry on its own. Search pm2 logs by conversation_id.
+      const convId = (event as any)?.data?.conversation_id;
+      console.error(
+        `[ELEVENLABS WEBHOOK] background handler failed (conversation_id=${convId}) — event follows for manual recovery:`,
+        err,
+        JSON.stringify(event),
+      );
     }
   });
 
