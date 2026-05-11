@@ -35,12 +35,18 @@ function isDue(schedule: {
 }
 
 export const GET = async (req: Request) => {
-  // Verify cron secret (Vercel sets CRON_SECRET automatically)
+  // Strict cron auth: CRON_SECRET must be set AND the header must match.
+  // The earlier optional pattern (`if (process.env.CRON_SECRET && ...)`)
+  // exposed the route publicly whenever the env var was missing or empty.
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    console.error(
+      "[scraper:cron] CRON_SECRET is not set — rejecting all cron invocations",
+    );
+    return new Response("Cron secret not configured", { status: 500 });
+  }
   const authHeader = req.headers.get("authorization");
-  if (
-    process.env.CRON_SECRET &&
-    authHeader !== `Bearer ${process.env.CRON_SECRET}`
-  ) {
+  if (authHeader !== `Bearer ${secret}`) {
     return new Response("Unauthorized", { status: 401 });
   }
 
@@ -82,6 +88,15 @@ export const GET = async (req: Request) => {
   }
 
   const runId = await generateId("SCRAPE", scraperRuns);
+  if (!runId || !runId.startsWith("SCRAPE-")) {
+    console.error(
+      `[scraper:cron] generateId returned malformed id: ${JSON.stringify(runId)}`,
+    );
+    return successResponse({
+      message: "Internal error: could not generate runId",
+      triggered: false,
+    });
+  }
   await db.insert(scraperRuns).values({
     id: runId,
     triggered_by: schedule.created_by,

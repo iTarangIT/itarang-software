@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth-utils';
 import { db } from '@/lib/db';
 import { leads, dealerLeads } from '@/lib/db/schema';
-import { eq, inArray } from 'drizzle-orm';
+import { inArray } from 'drizzle-orm';
 import { runLeadQualification } from '@/lib/ai/langgraph/lead-qualification-graph';
 import { getAICallerEnabled } from '@/lib/ai/settings';
 
@@ -34,24 +34,27 @@ export async function POST(req: NextRequest) {
         const aiOwner = provider === 'elevenlabs' ? 'elevenlabs_agent' : 'bolna_agent';
         const now = new Date();
 
-        for (const leadId of leadIds) {
-            await db.update(leads).set({
+        // Use a single UPDATE ... WHERE id IN (...) RETURNING so the response
+        // reflects what actually changed. The previous loop silently skipped
+        // non-existent ids and reported the input count regardless.
+        const updatedLeads = await db
+            .update(leads)
+            .set({
                 ai_managed: true,
                 ai_owner: aiOwner,
                 manual_takeover: false,
                 last_ai_action_at: now,
                 updated_at: now,
-            }).where(eq(leads.id, leadId));
-        }
+            })
+            .where(inArray(leads.id, leadIds))
+            .returning({ id: leads.id, phone: leads.phone });
+
+        const updatedIds = new Set(updatedLeads.map((l) => l.id));
+        const missing = leadIds.filter((id: string) => !updatedIds.has(id));
 
         // Mirror provider choice onto matching dealer_leads rows so the
         // call-scheduler crons route to the correct provider.
-        const assignedLeads = await db
-            .select({ phone: leads.phone })
-            .from(leads)
-            .where(inArray(leads.id, leadIds));
-
-        const phones = assignedLeads
+        const phones = updatedLeads
             .map((l) => l.phone)
             .filter((p): p is string => !!p);
 
@@ -63,7 +66,7 @@ export async function POST(req: NextRequest) {
         }
 
         const results = [];
-        for (const leadId of leadIds.slice(0, 10)) {
+        for (const leadId of Array.from(updatedIds).slice(0, 10)) {
             try {
                 const result = await runLeadQualification(leadId);
                 results.push({ ...result, leadId });
@@ -74,7 +77,9 @@ export async function POST(req: NextRequest) {
 
         return NextResponse.json({
             success: true,
-            assigned: leadIds.length,
+            assigned: updatedLeads.length,
+            requested: leadIds.length,
+            missing,
             scored: results.length,
             provider,
             results,
