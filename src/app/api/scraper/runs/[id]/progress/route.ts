@@ -20,6 +20,8 @@ export const GET = withErrorHandler(
         totalFound: scrapeRuns.total_found,
         newLeadsSaved: scrapeRuns.new_leads_saved,
         duplicatesSkipped: scrapeRuns.duplicates_skipped,
+        newLeadsPromoted: scrapeRuns.new_leads_promoted,
+        newLeadsSkippedDuplicate: scrapeRuns.new_leads_skipped_duplicate,
         errorMessage: scrapeRuns.error_message,
         startedAt: scrapeRuns.started_at,
         completedAt: scrapeRuns.completed_at,
@@ -97,6 +99,11 @@ export const GET = withErrorHandler(
       totalFound: run.totalFound ?? 0,
       newLeadsSaved: run.newLeadsSaved ?? 0,
       duplicatesSkipped: run.duplicatesSkipped ?? 0,
+      // Pass through nullable so the UI can distinguish "0 promoted, this is
+      // the alarm-bell case" from "old run before tracking existed, fall back
+      // to legacy view". DB default is 0 for new runs, NULL for old runs.
+      newLeadsPromoted: run.newLeadsPromoted,
+      newLeadsSkippedDuplicate: run.newLeadsSkippedDuplicate,
       errorMessage: run.errorMessage,
       chunkErrorSample,
       chunkErrorCount,
