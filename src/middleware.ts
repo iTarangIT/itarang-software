@@ -23,6 +23,25 @@ export async function middleware(request: NextRequest) {
     );
   }
 
+  // NBFC self-coding loop UI test bypass. Triple-guarded:
+  //   1. NODE_ENV !== 'production'
+  //   2. NBFC_TEST_BYPASS_SECRET set on the server
+  //   3. Request carries header `x-nbfc-test-bypass` with that exact value
+  //      (Playwright's page.setExtraHTTPHeaders attaches it on every request)
+  // When all three match, skip auth and pass through. This lets E-001's AC4
+  // load /admin/nbfc/[id]/review without a Supabase session, mirroring the
+  // bypass already used by /api/admin/nbfc/** API tests.
+  if (
+    process.env.NODE_ENV !== "production" &&
+    process.env.NBFC_TEST_BYPASS_SECRET &&
+    request.headers.get("x-nbfc-test-bypass") ===
+      process.env.NBFC_TEST_BYPASS_SECRET
+  ) {
+    return addNoStoreHeaders(
+      NextResponse.next({ request: { headers: request.headers } }),
+    );
+  }
+
   let response = NextResponse.next({
     request: {
       headers: request.headers,
@@ -160,6 +179,11 @@ export async function middleware(request: NextRequest) {
   const sharedRouteAccess: Record<string, string[]> = {
     "/admin/dealer-verification": ["sales_head"],
     "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
+    // NBFC onboarding (BRD §6.0): sales_head submits, CEO approves. Admin and
+    // business_head also need read access for support and oversight. The
+    // /api/admin/nbfc/* routes still gate writes per role; this just allows
+    // the dashboard pages to render.
+    "/admin/nbfc": ["admin", "ceo", "business_head", "sales_head"],
     "/admin/product-review": ["admin", "sales_head", "business_head", "ceo"],
     "/admin/inventory": [
       "admin",
@@ -167,6 +191,15 @@ export async function middleware(request: NextRequest) {
       "super_admin",
       "inventory_manager",
       "ceo",
+      "sales_head",
+    ],
+    "/admin/product-master": [
+      "admin",
+      "ops_manager",
+      "super_admin",
+      "inventory_manager",
+      "ceo",
+      "sales_head",
     ],
   };
 

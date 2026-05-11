@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, ilike, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { inventory, products, productCategories } from "@/lib/db/schema";
@@ -17,12 +17,19 @@ async function resolveCategoryName(input: string): Promise<string> {
 }
 
 // BRD V2 §2.3 — dealer charger inventory list for Step 4.
-// The schema has no battery↔charger compatibility table yet, and chargers
-// have their own `model_type` (different from the battery's), so a strict
-// equality match on model_type returns zero rows in practice. Until a real
-// compatibility mapping exists, we filter by category and return every
-// available charger in the dealer's inventory. The frontend renders the
-// selected battery's model alongside the list so the dealer can pair them.
+//
+// Status filter: available only — Step 4 only offers selectable stock.
+//
+// Compatibility:
+//   A strict products.voltage_v = batteryVoltage filter was tried previously,
+//   but real inventories label battery and charger voltages on different
+//   conventions (e.g. a 51V LFP pack pairs with a 58.4V charger), so the
+//   strict match returned zero chargers in practice and stranded dealers at
+//   Step 4 with "No chargers available" even when stock existed. Until a
+//   real per-product compatibility table exists, we list every charger in
+//   the dealer's inventory for the lead's category and let the dealer pair
+//   them. The `?batteryVoltage=N` query param is accepted for forwards
+//   compatibility but currently ignored server-side.
 
 export async function GET(
   req: NextRequest,
@@ -44,12 +51,13 @@ export async function GET(
 
     const filters = [
       eq(inventory.dealer_id, dealerId),
-      eq(inventory.asset_type, "Charger"),
+      or(eq(inventory.asset_type, "Charger"), eq(inventory.asset_type, "charger"))!,
       eq(inventory.status, "available"),
     ];
     if (category) {
       const categoryName = await resolveCategoryName(category);
-      filters.push(eq(inventory.asset_category, categoryName));
+      // Prefix match so canonical "3W" picks up "3W Batteries" / "3W Vehicles".
+      filters.push(ilike(inventory.asset_category, `${categoryName}%`));
     }
 
     const rows = await db
@@ -74,7 +82,7 @@ export async function GET(
       .orderBy(asc(inventory.oem_invoice_date));
 
     const today = Date.now();
-    const enriched = rows.map((r, i) => {
+    const enriched = rows.map((r) => {
       const ageMs = r.invoice_date ? today - new Date(r.invoice_date).getTime() : 0;
       const ageDays = Math.max(0, Math.floor(ageMs / (1000 * 60 * 60 * 24)));
       let ageBadge: "fresh" | "ageing" | "old" = "fresh";
@@ -84,11 +92,13 @@ export async function GET(
         ...r,
         inventory_age_days: ageDays,
         age_badge: ageBadge,
-        recommended: i === 0,
       };
     });
 
-    return NextResponse.json({ success: true, data: enriched });
+    // Rows already filtered to available; oldest invoice date wins the badge.
+    const withRecommend = enriched.map((r, idx) => ({ ...r, recommended: idx === 0 }));
+
+    return NextResponse.json({ success: true, data: withRecommend });
   } catch (error) {
     console.error("[Dealer Chargers] Error:", error);
     const message = error instanceof Error ? error.message : "Failed to load chargers";

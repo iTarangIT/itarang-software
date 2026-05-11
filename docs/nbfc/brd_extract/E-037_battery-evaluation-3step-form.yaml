@@ -1,0 +1,132 @@
+id: E-037
+slug: battery-evaluation-3step-form
+name: Battery evaluation 3-step form with auto-pricing
+source_section: "6.1.7"
+brd_excerpt: |
+  Battery Evaluation (3-Step Form)
+  Step 1 — Technical: SOH %, physical condition (Good/Fair/Poor), manufacturing date, IoT status, BMS health, charger type
+  Step 2 — Refurbishment Analysis: Minor Repair | Cell Replacement | Scrap, estimated cost, checklist (terminal cleaning, software recalibration, warranty reset)
+  Step 3 — Pricing: Original value · Refurb cost · Auto-computed base auction price (>85% SOH = 65–70% of original; 70–85% = 50–65%; <70% = 30–50% or reject)
+depends_on: []
+non_functional:
+  - "Pricing thresholds in BRD provide ranges; the unit fixes deterministic pivot points: 85+ SOH→67.5%, 70-85 SOH→57.5%, <70 SOH→40%, with reject toggle for unsalvageable."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/recovery/[id]/evaluation
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({
+          step1: z.object({
+            soh_percent: z.number().min(0).max(100),
+            physical_condition: z.enum(["good","fair","poor"]),
+            manufacturing_date: z.string(),
+            iot_status: z.enum(["online","offline"]),
+            bms_health: z.enum(["healthy","degraded","failed"]),
+            charger_type: z.string(),
+          }),
+          step2: z.object({
+            decision: z.enum(["minor_repair","cell_replacement","scrap"]),
+            estimated_cost: z.number().nonnegative(),
+            checklist: z.object({
+              terminal_cleaning: z.boolean(),
+              software_recalibration: z.boolean(),
+              warranty_reset: z.boolean(),
+            }),
+          }),
+          step3: z.object({
+            original_value: z.number().nonnegative(),
+            reject: z.boolean().optional(),
+          }),
+        })
+      response_shape:
+        evaluation_id: string
+        base_auction_price: number
+        rejected: boolean
+  components:
+    - "src/components/nbfc-portal/BatteryEvaluationWizard.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Validate all three steps via request_zod.
+  2. Resolve nbfc_recovery_pipeline row; assert tenant ownership.
+  3. Compute base_auction_price:
+     - if step3.reject is true OR (soh < 70 AND step2.decision === 'scrap') → rejected=true, base_auction_price=0;
+     - else if soh > 85 → 0.675 * original_value;
+     - else if soh >= 70 → 0.575 * original_value;
+     - else (soh < 70 not scrap) → 0.40 * original_value.
+  4. Round base_auction_price to 2 decimals.
+  5. Insert nbfc_battery_evaluations row with all three steps as JSON plus the computed base_auction_price.
+  6. Update recovery_pipeline row stage: 'scrap' if step2.decision='scrap', else 'refurbishable'.
+  7. Return evaluation_id, base_auction_price, rejected.
+
+tables_columns:
+  reuse:
+    - table: nbfc_recovery_pipeline
+      schema_ts_line: 1
+      columns: [id, tenant_id, battery_serial, stage]
+  new:
+    - table: nbfc_battery_evaluations
+      justification: "Section 6.1.7 introduces a structured 3-step evaluation record with per-step JSON; no existing table holds this evaluation history."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: tenant_id, type: "uuid().notNull()" }
+        - { name: recovery_pipeline_id, type: "uuid().notNull()" }
+        - { name: step1, type: "jsonb().notNull()" }
+        - { name: step2, type: "jsonb().notNull()" }
+        - { name: step3, type: "jsonb().notNull()" }
+        - { name: base_auction_price, type: "numeric({ precision: 12, scale: 2 })" }
+        - { name: rejected, type: "boolean().notNull().default(false)" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).notNull().defaultNow()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/recovery/[id]/evaluation with all three steps valid returns 200 and persists an nbfc_battery_evaluations row."
+    test_layer: api
+    test_name: "Evaluation endpoint persists 3-step record"
+  - id: AC2
+    statement: "When step1.soh_percent is 90 and step3.original_value is 100000, base_auction_price equals 67500."
+    test_layer: api
+    test_name: "SOH > 85 yields 67.5% of original value"
+  - id: AC3
+    statement: "When step1.soh_percent is 75 and step3.original_value is 100000, base_auction_price equals 57500."
+    test_layer: api
+    test_name: "SOH 70-85 yields 57.5% of original value"
+  - id: AC4
+    statement: "When step3.reject is true, the response sets rejected=true and base_auction_price=0."
+    test_layer: api
+    test_name: "Reject flag forces base_auction_price=0"
+  - id: AC5
+    statement: "After a successful evaluation with step2.decision='scrap', the linked nbfc_recovery_pipeline row's stage is 'scrap'."
+    test_layer: api
+    test_name: "Scrap evaluation moves recovery row to scrap stage"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-037
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc_recovery_pipeline
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [id, tenant_id, battery_serial, stage]
+      note: "Forward reference to E-026."
+  new_findings:
+    - table: nbfc_battery_evaluations
+      justification_present: true
+      columns: [id, tenant_id, recovery_pipeline_id, step1, step2, step3, base_auction_price, rejected, created_at]
+      fuzzy_collisions: []
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "step1/step2/step3 jsonb columns store the per-step form payload; BRD §6.1.7 doesn't mandate a flatter shape."
+  checkpoint_html: docs/nbfc/loop_report/E-037/checkpoint_1.html

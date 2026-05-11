@@ -1,0 +1,115 @@
+id: E-008
+slug: nbfc-lsp-agreement-webhook
+name: Digio webhook handler — route NBFC_{nbfc_id} callbacks to NBFC LSP agreement update
+source_section: 6.0.4a
+brd_excerpt: "\"callback\":      \"NBFC_{nbfc_id}\",  // Routes webhook to NBFC flow\nagreement_status ENUM (shared with dealer agreements):\n  SENT_TO_EXTERNAL_PARTY → SIGN_PENDING → PARTIALLY_SIGNED →\
+  \ SIGNED → COMPLETED → FAILED | EXPIRED\nsigned_pdf_url — TEXT NULL — S3 path: s3://bucket/nbfc/{nbfcId}/lsp-agreements/{id}_signed.pdf\naudit_trail_url — TEXT NULL — Digio audit trail PDF. Fetched on\
+  \ COMPLETED.\n\n6.0.7 nbfc.lsp_agreement_id — ★ FK → nbfc_lsp_agreements.id. Set on LSP Agreement COMPLETED.\nEnables loan_sanctions → lsp_agreement audit link.\n"
+depends_on: []
+non_functional:
+- Sync Audit G-01 / G-08 — webhook handler MUST distinguish NBFC_<id> callbacks from dealer callbacks by callback prefix.
+- Webhook is idempotent — replays of the same Digio event must not create duplicate state transitions.
+- On COMPLETED, signed PDF and audit-trail PDF MUST be fetched from Digio and uploaded to S3 path s3://bucket/nbfc/{nbfcId}/lsp-agreements/{id}_signed.pdf before status persisted.
+surface:
+  api:
+  - method: POST
+    path: /api/digio/webhook/nbfc
+    auth: public
+    request_zod: "z.object({\n  payload: z.object({\n    agreement_id: z.string(),\n    agreement_status: z.enum([\"SENT_TO_EXTERNAL_PARTY\",\"SIGN_PENDING\",\"PARTIALLY_SIGNED\",\"SIGNED\",\"COMPLETED\"\
+      ,\"FAILED\",\"EXPIRED\"]),\n    callback: z.string().regex(/^NBFC_\\d+$/),\n    signed_document_url: z.string().url().optional(),\n    audit_trail_url: z.string().url().optional(),\n  }),\n})\n"
+    response_shape:
+      ok: true
+  components: []
+  jobs:
+  - src/lib/queue/jobs/fetchSignedLspPdfJob.ts
+  pages: []
+logic: '1. Verify Digio webhook signature (shared verifier with dealer flow).
+
+  2. Parse callback, extract nbfc_id; reject if format does not match NBFC_<digits>.
+
+  3. Look up nbfc_lsp_agreements by agreement_id; 404 if not found.
+
+  4. If existing agreement_status >= incoming status (per ENUM order), respond 200 ok (idempotent no-op).
+
+  5. Update agreement_status, updated_at.
+
+  6. If status=''COMPLETED'', enqueue job to fetch signed_pdf and audit_trail_url; on persist, update nbfc_lsp_agreements.signed_pdf_url, audit_trail_url, signing_date=today; set nbfc.lsp_agreement_id =
+  nbfc_lsp_agreements.id.
+
+  7. Return ok.
+
+  '
+tables_columns:
+  reuse:
+  - table: nbfc_lsp_agreements
+    schema_ts_line: 3535
+    columns:
+    - id
+    - agreement_id
+    - nbfc_id
+    - agreement_status
+    - signed_pdf_url
+    - audit_trail_url
+    - signing_date
+    - updated_at
+  - table: nbfc
+    schema_ts_line: 3392
+    columns:
+    - id
+    - lsp_agreement_id
+  new: []
+acceptance_criteria:
+- id: AC1
+  statement: POST /api/digio/webhook/nbfc with callback='NBFC_42' and agreement_status='SIGN_PENDING' updates the matching nbfc_lsp_agreements row's agreement_status to 'SIGN_PENDING'.
+  test_layer: api
+  test_name: webhook routes NBFC callback and updates status
+- id: AC2
+  statement: POST /api/digio/webhook/nbfc with callback not matching /^NBFC_\d+$/ returns 400.
+  test_layer: api
+  test_name: webhook rejects non-NBFC callback
+- id: AC3
+  statement: When agreement_status='COMPLETED' arrives, the corresponding nbfc.lsp_agreement_id is set to the nbfc_lsp_agreements.id.
+  test_layer: api
+  test_name: COMPLETED webhook backfills nbfc.lsp_agreement_id
+- id: AC4
+  statement: Replaying the same COMPLETED webhook twice does not change agreement_status to a regressed state and does not duplicate signed_pdf_url updates.
+  test_layer: api
+  test_name: webhook handler is idempotent
+status: audited
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-008
+  audited_at: '2026-05-01T15:39:58Z'
+  baseline_sha: e9eae8c3af97ccb2e211f62bf5c7d91ec4a47f4af5359d033d8a5e9f05350c64
+  reuse_findings:
+  - table: nbfc_lsp_agreements
+    verified: true
+    ts_line: 3535
+    columns_verified:
+    - id
+    - agreement_id
+    - nbfc_id
+    - agreement_status
+    - signed_pdf_url
+    - audit_trail_url
+    - signing_date
+    - updated_at
+    columns_missing: []
+  - table: nbfc
+    verified: true
+    ts_line: 3392
+    columns_verified:
+    - id
+    - lsp_agreement_id
+    columns_missing: []
+  new_findings: []
+  verdict: audited
+  status: audited
+  migration_required: false
+  notes:
+  - 'G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM'
+  - 'G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs'
+  - 'G-04: Sync Audit G-04: dealers table never defined — referenced as FK target by many tables'
+  checkpoint_html: null

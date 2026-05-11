@@ -1,0 +1,171 @@
+id: E-011
+slug: nbfc-status-lifecycle
+name: "NBFC status lifecycle — 8-state machine with transition guards"
+source_section: "6.0.6"
+brd_excerpt: |
+  6.0.6 NBFC Status Lifecycle (Revised — Sync Audit G-02)
+  States and triggers:
+    draft — Admin creates record. Not visible to NBFC.
+    pending_admin_review — Admin submits for review. All docs + LSP agreement under review.
+    request_correction — Reviewer flags issues. Email to NBFC primary contact. Form editable by admin.
+    approved — All docs verified + LSP COMPLETED. Portal credentials generated. NBFC activated.
+    active — First NBFC portal login done. Visible in loan sanction dropdown.
+    rejected — Admin rejects application. Non-reversible. iTarang Sales Manager notified.
+    suspended — iTarang admin action. NBFC hidden from new deals. Existing loans unaffected.
+    terminated — Partnership ended. Permanent. All active leads must be reassigned or closed.
+
+depends_on: []
+
+non_functional:
+  - "Sync Audit G-02 — original 8-state lifecycle was reduced from 8→8 by merging documents_pending and pending_review into pending_admin_review. The state machine here matches the V2-24th-Feb-2 dealer onboarding pattern."
+  - "rejected and terminated are TERMINAL — no transition out. Server returns 409 on attempts."
+  - "Every transition writes a row to nbfc_status_history with from_status, to_status, actor_id, reason, occurred_at."
+  - "Sales manager notification on 'rejected' — email enqueued to role=sales_manager."
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/nbfc/{nbfcId}/transition
+      auth: admin
+      request_zod: |
+        z.object({
+          to: z.enum(["draft","pending_admin_review","request_correction","approved","active","rejected","suspended","terminated"]),
+          reason: z.string().max(2000).optional(),
+        })
+      response_shape:
+        nbfcId: "number"
+        from: "string"
+        to: "string"
+        occurredAt: "iso-datetime"
+    - method: GET
+      path: /api/admin/nbfc/{nbfcId}/status-history
+      auth: admin
+      query_zod: |
+        z.object({})
+      response_shape:
+        items:
+          - fromStatus: "string"
+            toStatus: "string"
+            actorId: "number"
+            reason: "string|null"
+            occurredAt: "iso-datetime"
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Validate request body.
+  2. Load nbfc.status (current).
+  3. Look up allowed transitions from a static map; reject 409 if (current → to) is not allowed.
+  4. Special guards: 'approved' requires precondition checked by E-001 readiness; 'rejected' requires reason non-empty.
+  5. Update nbfc.status, updated_at.
+  6. Insert nbfc_status_history row.
+  7. If to='rejected', enqueue sales-manager notification email; if to='request_correction', enqueue email to primary_contact_email.
+
+tables_columns:
+  reuse:
+    - table: nbfc
+      schema_ts_line: 1
+      columns: [id, status, primary_contact_email]
+  new:
+    - table: nbfc_status_history
+      justification: "Audit table recording every NBFC status transition with actor and reason — required for RBI audit trail and Sync Audit G-02 reconciliation."
+      columns:
+        - { name: id, type: "serial().primaryKey()" }
+        - { name: nbfc_id, type: "integer().notNull().references(() => nbfc.id)" }
+        - { name: from_status, type: "varchar({ length: 32 })" }
+        - { name: to_status, type: "varchar({ length: 32 }).notNull()" }
+        - { name: actor_id, type: "integer().notNull()" }
+        - { name: reason, type: "text()" }
+        - { name: occurred_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/admin/nbfc/{nbfcId}/transition with to='pending_admin_review' from current status='draft' returns 200 and updates nbfc.status."
+    test_layer: api
+    test_name: "draft to pending_admin_review allowed"
+  - id: AC2
+    statement: "POST /api/admin/nbfc/{nbfcId}/transition from current status='rejected' to any other status returns 409."
+    test_layer: api
+    test_name: "rejected is terminal"
+  - id: AC3
+    statement: "POST with to='rejected' and empty reason returns 422; with non-empty reason returns 200."
+    test_layer: api
+    test_name: "rejection requires reason"
+  - id: AC4
+    statement: "Every successful transition inserts one row in nbfc_status_history with from_status, to_status, actor_id matching the request."
+    test_layer: api
+    test_name: "transitions are recorded in status history"
+  - id: AC5
+    statement: "When transitioning an NBFC to status='terminated', any leads attached to that NBFC with status='active' must be reassigned to a different active NBFC OR closed (status set to 'closed' with reason='nbfc_terminated'). Returns 422 if active leads exist and the request body doesn't supply a `reassign_to_nbfc_id` or `close_active_leads: true` directive; on success returns 200 with the transition payload plus an `affectedLeads` count."
+    test_layer: api
+    persona: itarang_super_admin
+    expected_response_shape:
+      error_422:
+        ok: "boolean (false)"
+        code: "string (UNRESOLVED_ACTIVE_LEADS)"
+        count: "integer"
+      success_200:
+        nbfcId: "number"
+        from: "string"
+        to: "string"
+        occurredAt: "iso-datetime"
+        affectedLeads: "integer"
+    test_name: "terminate transition guards active leads"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-011
+  audited_at: "2026-05-01T06:30:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing:
+        - id
+        - status
+        - primary_contact_email
+      reason: table not present in baseline; introduced by sibling unit E-003
+      sibling_unit: E-003
+  new_findings:
+    - table: nbfc_status_history
+      justification_present: true
+      justification_chars: 139
+      fuzzy_collisions: []
+      columns_proposed:
+        - name: id
+          type: serial().primaryKey()
+          drizzle_builder: serial
+        - name: nbfc_id
+          type: integer().notNull().references(() => nbfc.id)
+          drizzle_builder: integer
+        - name: from_status
+          type: "varchar({ length: 32 })"
+          drizzle_builder: varchar
+        - name: to_status
+          type: "varchar({ length: 32 }).notNull()"
+          drizzle_builder: varchar
+        - name: actor_id
+          type: integer().notNull()
+          drizzle_builder: integer
+        - name: reason
+          type: text()
+          drizzle_builder: text
+        - name: occurred_at
+          type: "timestamp({ withTimezone: true }).defaultNow().notNull()"
+          drizzle_builder: timestamp
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM"
+    - "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs"
+    - "G-04: Sync Audit G-04: dealers table never defined — referenced as FK target by many tables"
+    - "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type"
+    - reuse table 'nbfc' not yet in baseline — introduced by sibling unit E-003 (depends_on must include E-003 before this unit codes)
+  checkpoint_html: docs/nbfc/loop_report/E-011/checkpoint_1.html

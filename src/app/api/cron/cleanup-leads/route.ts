@@ -2,15 +2,13 @@ import { db } from '@/lib/db';
 import { leads, leadDocuments } from '@/lib/db/schema';
 import { eq, and, lt } from 'drizzle-orm';
 import { successResponse, withErrorHandler } from '@/lib/api-utils';
+import { checkCronAuth } from '@/lib/cron-auth';
 import { supabaseAdmin } from '@/lib/supabase/admin';
 
 export const GET = withErrorHandler(async (req: Request) => {
-    // Secret verification
-    const authHeader = req.headers.get('authorization');
-    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-        if (process.env.NODE_ENV === 'production') {
-            return new Response('Unauthorized', { status: 401 });
-        }
+    if (process.env.NODE_ENV === 'production') {
+        const unauth = checkCronAuth(req);
+        if (unauth) return unauth;
     }
 
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);

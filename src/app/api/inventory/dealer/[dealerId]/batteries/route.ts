@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, ilike, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { inventory, products, productCategories } from "@/lib/db/schema";
@@ -19,7 +19,8 @@ async function resolveCategoryName(input: string): Promise<string> {
 
 // BRD V2 §2.3 — dealer battery inventory list for Step 4.
 // Filters: dealer_id + asset_type=Battery + status=available.
-// Optional query params: category, subCategory.
+// Reserved/Dispatched/Sold are hidden — Step 4 only offers selectable stock.
+// Optional query params: category, subCategory, productId.
 // Sort: oem_invoice_date ASC (oldest first — BRD ageing priority rule).
 
 export async function GET(
@@ -45,12 +46,14 @@ export async function GET(
 
     const filters = [
       eq(inventory.dealer_id, dealerId),
-      eq(inventory.asset_type, "Battery"),
+      or(eq(inventory.asset_type, "Battery"), eq(inventory.asset_type, "battery"))!,
       eq(inventory.status, "available"),
     ];
     if (category) {
       const categoryName = await resolveCategoryName(category);
-      filters.push(eq(inventory.asset_category, categoryName));
+      // Use prefix match so canonical names like "3W" also pick up inventory
+      // rows tagged "3W Batteries", "3W Vehicles", etc.
+      filters.push(ilike(inventory.asset_category, `${categoryName}%`));
     }
     // When the lead has a primary_product_id (Step 1 "Product Type"),
     // restrict inventory to that exact product. Falls back to free
@@ -99,11 +102,8 @@ export async function GET(
       };
     });
 
-    // Recommendation flag = oldest available (first row in ASC sort).
-    const withRecommend = enriched.map((r, i) => ({
-      ...r,
-      recommended: i === 0,
-    }));
+    // Recommendation flag = oldest unit (rows already filtered to available).
+    const withRecommend = enriched.map((r, idx) => ({ ...r, recommended: idx === 0 }));
 
     return NextResponse.json({ success: true, data: withRecommend });
   } catch (error) {

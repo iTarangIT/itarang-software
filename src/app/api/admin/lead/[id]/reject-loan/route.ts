@@ -3,10 +3,11 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { inventory, leads, loanSanctions, productSelections } from "@/lib/db/schema";
+import { leads, loanSanctions, productSelections } from "@/lib/db/schema";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
 import { generateId } from "@/lib/api-utils";
 import { notifyLoanRejected } from "@/lib/notifications";
+import { InventoryLifecycleError, releaseInventorySerial } from "@/lib/inventory/lifecycle";
 
 // BRD V2 §2.8 — admin Step 4 "Loan Rejected" action.
 // Records the rejection, releases reserved inventory, advances lead to
@@ -81,28 +82,26 @@ export async function POST(
           .set({ admin_decision: "rejected", updated_at: now })
           .where(eq(productSelections.id, selection.id));
 
-        // Release reserved inventory — both battery + charger back to 'available'
+        // Release reserved inventory - both battery + charger back to available.
         if (selection.battery_serial) {
-          await tx
-            .update(inventory)
-            .set({ status: "available", linked_lead_id: null, updated_at: now })
-            .where(
-              and(
-                eq(inventory.serial_number, selection.battery_serial),
-                eq(inventory.status, "reserved"),
-              ),
-            );
+          await releaseInventorySerial({
+            tx,
+            serial: selection.battery_serial,
+            leadId,
+            performedBy: admin.id,
+            notes: "Step 4 loan rejected (battery release)",
+            when: now,
+          });
         }
         if (selection.charger_serial) {
-          await tx
-            .update(inventory)
-            .set({ status: "available", linked_lead_id: null, updated_at: now })
-            .where(
-              and(
-                eq(inventory.serial_number, selection.charger_serial),
-                eq(inventory.status, "reserved"),
-              ),
-            );
+          await releaseInventorySerial({
+            tx,
+            serial: selection.charger_serial,
+            leadId,
+            performedBy: admin.id,
+            notes: "Step 4 loan rejected (charger release)",
+            when: now,
+          });
         }
       }
 
@@ -129,6 +128,12 @@ export async function POST(
     });
   } catch (error) {
     console.error("[Reject Loan] Error:", error);
+    if (error instanceof InventoryLifecycleError) {
+      return NextResponse.json(
+        { success: false, error: { message: error.message } },
+        { status: error.statusCode },
+      );
+    }
     const message = error instanceof Error ? error.message : "Failed to reject loan";
     return NextResponse.json(
       { success: false, error: { message } },

@@ -1,0 +1,121 @@
+id: E-030
+slug: pci-nightly-computation
+name: PCI nightly computation job
+source_section: "6.1.5"
+brd_excerpt: |
+  Payment Consistency Index (PCI)
+  PCI ranges 0.0–1.0. Higher = more consistent EMI payer. Inverse of CDS risk signal.
+  // PCI Formula
+  PCI = Σ(EMI_score × weight) / Σ(weights)
+  // EMI_score: 1.0 = paid on time, 0.5 = paid late (<7d), 0.0 = missed
+  // weight: more recent EMIs weighted higher
+  // Output: 0.0 (worst) to 1.0 (perfect)
+  // PCI < 0.40: High concern — triggers alert
+  // PCI 0.40 – 0.75: Monitoring zone
+  // PCI > 0.75: Healthy payer
+depends_on: []
+non_functional:
+  - "PCI is persisted alongside CDS in borrower_risk_scores so freshness/audit logic stays unified."
+
+surface:
+  api:
+    - method: POST
+      path: /api/cron/nbfc/compute-pci
+      auth: admin
+      request_zod: |
+        z.object({})
+      response_shape:
+        computed_count: number
+        alert_triggered_count: number
+        run_at: string
+  components: []
+  jobs:
+    - "vercel-cron: nightly compute-pci"
+  pages: []
+
+logic: |
+  1. For each active loan_sanctions row collect emi_schedules history.
+  2. Map each EMI to score: 1.0 if paid on time, 0.5 if paid late (<7d), 0.0 if missed.
+  3. Apply recency weights — more recent EMIs weighted higher.
+  4. PCI = sum(emi_score * weight) / sum(weights); clamp to [0.0, 1.0]; round to 3 decimals.
+  5. Update the most recent borrower_risk_scores row for the loan with pci_score (or insert if absent).
+  6. If PCI < 0.40, insert an entry into nbfc_risk_alerts with type='pci_low' for that borrower.
+  7. Return computed_count, alert_triggered_count, run_at.
+
+tables_columns:
+  reuse:
+    - table: borrower_risk_scores
+      schema_ts_line: 1
+      columns: [tenant_id, borrower_id, loan_sanction_id, pci_score, computed_at]
+    - table: emi_schedules
+      schema_ts_line: 1
+      columns: [loan_sanction_id, due_date, paid_at, status, days_overdue]
+  new:
+    - table: nbfc_risk_alerts
+      justification: "BRD §6.1.2 calls out a Risk Alerts surface; PCI<0.4 must produce an alert row that the alert UI consumes."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: tenant_id, type: "uuid().notNull()" }
+        - { name: borrower_id, type: "uuid().notNull()" }
+        - { name: loan_sanction_id, type: "uuid().notNull()" }
+        - { name: type, type: "varchar({ length: 32 }).notNull()" }
+        - { name: severity, type: "varchar({ length: 16 }).notNull()" }
+        - { name: payload, type: "jsonb()" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).notNull().defaultNow()" }
+        - { name: resolved_at, type: "timestamp({ withTimezone: true })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/cron/nbfc/compute-pci returns 200 with computed_count, alert_triggered_count, and run_at."
+    test_layer: api
+    test_name: "PCI cron endpoint returns counts and run_at"
+  - id: AC2
+    statement: "Computed pci_score is always in the closed range [0.0, 1.0]."
+    test_layer: api
+    test_name: "PCI score is bounded between 0.0 and 1.0 inclusive"
+  - id: AC3
+    statement: "When a borrower's computed PCI is below 0.40 the job creates a row in nbfc_risk_alerts with type='pci_low'."
+    test_layer: api
+    test_name: "PCI<0.40 inserts a pci_low risk alert"
+  - id: AC4
+    statement: "After the job, the latest borrower_risk_scores row for the loan has the new pci_score populated."
+    test_layer: api
+    test_name: "PCI is persisted on borrower_risk_scores"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-030
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: borrower_risk_scores
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [tenant_id, borrower_id, loan_sanction_id, pci_score, computed_at]
+      note: "Forward reference to E-026."
+    - table: emi_schedules
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [loan_sanction_id, due_date, paid_at, status, days_overdue]
+      note: "Forward reference to E-029."
+  new_findings:
+    - table: nbfc_risk_alerts
+      justification_present: true
+      columns: [id, tenant_id, borrower_id, loan_sanction_id, type, severity, payload, created_at, resolved_at]
+      fuzzy_collisions:
+        - proposed: borrower_id
+          candidates: [co_borrower_documents.co_borrower_id]
+          overlap: 0.667
+          reason: "different concept; informational."
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "Depends on E-026 (borrower_risk_scores) and E-029 (emi_schedules)."
+  checkpoint_html: docs/nbfc/loop_report/E-030/checkpoint_1.html

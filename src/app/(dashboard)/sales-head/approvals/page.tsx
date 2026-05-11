@@ -32,9 +32,17 @@ export default async function SalesHeadApprovalsPage() {
 
     return (
         <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-            <div className="mb-8">
-                <h1 className="text-3xl font-black text-gray-900">Level 1 Approvals</h1>
-                <p className="text-sm text-gray-500 mt-1 uppercase tracking-widest font-bold">Sales Head - Deal & Order Approvals</p>
+            <div className="mb-8 flex items-start justify-between gap-4">
+                <div>
+                    <h1 className="text-3xl font-black text-gray-900">Level 1 Approvals</h1>
+                    <p className="text-sm text-gray-500 mt-1 uppercase tracking-widest font-bold">Sales Head - Deal & Order Approvals</p>
+                </div>
+                <Link
+                    href="/sales-head/approvals/nbfc"
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm font-bold hover:bg-amber-100"
+                >
+                    NBFC immobilisation requests <ArrowRight className="w-4 h-4" />
+                </Link>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">

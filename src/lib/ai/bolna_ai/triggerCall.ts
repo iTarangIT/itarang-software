@@ -1,8 +1,47 @@
 import { db } from "@/lib/db";
 import { dealerLeads, scraperLeads } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { normalizeIndianPhone, phoneLookupVariants } from "@/lib/ai/phone";
+import { dedupClaim } from "@/lib/queue/safeRedis";
 import { BolnaCallPayload, BolnaCallResponse } from "./types";
+
+// One Bolna call per (lead, phone, day). Stops QStash retries — which on a
+// 5xx response can re-fire the dispatch up to 3 times — from billing 3x
+// for one lead's daily outreach attempt. Cron and human triggers re-attempt
+// the next day naturally because the key embeds today's UTC date.
+const IDEMPOTENCY_TTL_SECONDS = 25 * 60 * 60;
+
+function idempotencyKey(leadId: string, e164Phone: string): string {
+  const dateKey = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  return `bolna:idem:${leadId}:${e164Phone}:${dateKey}`;
+}
+
+// Eager-validate the three Bolna env vars on first use. Previously these
+// were read inline at the fetch call, so a missing var would send a malformed
+// payload to Bolna and surface as a cryptic API error. This pattern matches
+// `getReceiver()` in src/app/api/bolna/dispatch-call/route.ts.
+interface BolnaConfig {
+  apiKey: string;
+  agentId: string;
+  fromNumber: string;
+}
+let cachedConfig: BolnaConfig | null = null;
+function getBolnaConfig(): BolnaConfig {
+  if (cachedConfig) return cachedConfig;
+  const apiKey = process.env.BOLNA_API_KEY;
+  const agentId = process.env.BOLNA_AGENT_ID;
+  const fromNumber = process.env.BOLNA_FROM_NUMBER;
+  const missing: string[] = [];
+  if (!apiKey) missing.push("BOLNA_API_KEY");
+  if (!agentId) missing.push("BOLNA_AGENT_ID");
+  if (!fromNumber) missing.push("BOLNA_FROM_NUMBER");
+  if (missing.length) {
+    throw new Error(`Bolna config missing env vars: ${missing.join(", ")}`);
+  }
+  cachedConfig = { apiKey: apiKey!, agentId: agentId!, fromNumber: fromNumber! };
+  return cachedConfig;
+}
 
 function deriveInterest(status: string | null): string {
   if (!status) return "cold";
@@ -49,11 +88,13 @@ function buildLastCallMemory(followUpHistory: any[]): string {
 
 // ─── Auto-promote scraper lead → dealer_leads ─────────────────
 async function promoteScraperLead(phone: string): Promise<any | null> {
-  // Look up in scraper_leads by phone
+  // dealer_leads stores 10-digit, scraper_leads stores +91 E.164 — look up
+  // by both variants so we match regardless of which the caller passed.
+  const variants = phoneLookupVariants(phone);
   const [scraperLead] = await db
     .select()
     .from(scraperLeads)
-    .where(eq(scraperLeads.phone, phone))
+    .where(inArray(scraperLeads.phone, variants))
     .limit(1);
 
   if (!scraperLead) return null;
@@ -101,9 +142,20 @@ export async function triggerBolnaCall(
   payload: BolnaCallPayload,
 ): Promise<BolnaCallResponse> {
   try {
-    // Step 1: Look up in dealer_leads first
+    // Validate Bolna config up front — fail loudly instead of mid-flight.
+    let bolnaConfig: BolnaConfig;
+    try {
+      bolnaConfig = getBolnaConfig();
+    } catch (err: any) {
+      console.error("[BOLNA]", err?.message);
+      return { success: false, error: err?.message ?? "Bolna disabled" };
+    }
+
+    // Step 1: Look up in dealer_leads — try every storage variant of the
+    // input phone so a +91 caller can find a 10-digit row and vice-versa.
+    const lookupVariants = phoneLookupVariants(payload.phone);
     let lead = await db.query.dealerLeads.findFirst({
-      where: (l, { eq }) => eq(l.phone, payload.phone),
+      where: (l, { inArray }) => inArray(l.phone, lookupVariants),
     });
 
     // Step 2: If not found, check scraper_leads and auto-promote
@@ -158,15 +210,50 @@ export async function triggerBolnaCall(
     console.log("[BOLNA] last_call_memory:", lastCallMemory);
 
     // Step 7: Build payload
+    const recipientPhone = normalizeIndianPhone(lead.phone ?? payload.phone);
+    if (!recipientPhone) {
+      console.error(
+        "[BOLNA] Invalid phone (cannot normalize to E.164):",
+        lead.phone ?? payload.phone,
+      );
+      return {
+        success: false,
+        error:
+          "Lead phone is invalid — expected 10 digits or +91XXXXXXXXXX format.",
+      };
+    }
+
+    // Step 7b: Idempotency claim. Catches QStash retries firing the same
+    // dispatch within 25 hours. Skip when scheduling for a future date —
+    // those legitimately fire later and shouldn't be deduped against now.
+    if (!payload.scheduledAt) {
+      const idemKey = idempotencyKey(lead.id, recipientPhone);
+      const { claimed } = await dedupClaim(
+        idemKey,
+        IDEMPOTENCY_TTL_SECONDS,
+        "bolna:outbound-idem",
+      );
+      if (!claimed) {
+        console.warn(
+          `[BOLNA] Skipping duplicate call within 25h for lead ${lead.id} (${recipientPhone}) — idempotency key matched`,
+        );
+        return {
+          success: true,
+          deduped: true,
+          error: "Duplicate call suppressed by idempotency key",
+        } as BolnaCallResponse;
+      }
+    }
+
     const bodyData = {
-      agent_id: process.env.BOLNA_AGENT_ID,
-      recipient_phone_number: payload.phone,
-      from_phone_number: process.env.BOLNA_FROM_NUMBER,
+      agent_id: bolnaConfig.agentId,
+      recipient_phone_number: recipientPhone,
+      from_phone_number: bolnaConfig.fromNumber,
       ...(payload.scheduledAt ? { scheduled_at: payload.scheduledAt } : {}),
 
       user_data: {
         lead_id: lead.id,
-        phone_number: payload.phone,
+        phone_number: recipientPhone,
         owner_name: ownerName,
         location: location,
         shop_name: shopName,
@@ -187,7 +274,7 @@ export async function triggerBolnaCall(
     const res = await fetch("https://api.bolna.ai/call", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.BOLNA_API_KEY}`,
+        Authorization: `Bearer ${bolnaConfig.apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(bodyData),

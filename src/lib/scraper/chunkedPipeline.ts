@@ -4,6 +4,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { generateQueries, generateCitiesForQuery } from "./query/generateQueries";
 import { getCachedQueries, setCachedQueries } from "./query/queryCache";
 import { fetchFromGooglePlaces } from "./query/sources/googlePlaces";
+import { fetchFromApifySingle } from "./query/sources/apify";
 import { processLeads } from "./processing";
 import { saveRawLeads } from "./storage/rawStore";
 import { saveCleanLeads, promoteLeadsToDealerLeads } from "./storage/leadStore";
@@ -20,6 +21,18 @@ import { publishToPath } from "@/lib/queue/scheduler";
 
 const MAX_PAGES_PER_QUERY = 3;
 const MAX_QUERY_VARIATIONS = 15;
+
+// Source toggles follow the [SERVICE]_ENABLED === "true" convention used
+// elsewhere in this codebase (gupshup, decentro, digio). We invert it here —
+// default-on, opt-out via "false" — because both sources are part of the
+// intended product behavior; the flag exists so we can flip a broken source
+// off in Vercel env without redeploying.
+function isGooglePlacesEnabled(): boolean {
+  return process.env.GOOGLE_PLACES_ENABLED !== "false";
+}
+function isApifyEnabled(): boolean {
+  return process.env.APIFY_ENABLED !== "false";
+}
 
 function normalizeQuery(q: string) {
   return q
@@ -174,7 +187,7 @@ export async function executeChunk(chunkId: string) {
   }
 
   // If the parent run was cancelled while this chunk was queued in QStash,
-  // skip the expensive Google Places fetch and mark the chunk cancelled.
+  // skip the expensive source fetches and mark the chunk cancelled.
   // The cancel handler will have already finalized; we just no-op.
   const [parentRun] = await db
     .select({ status: scrapeRuns.status })
@@ -211,17 +224,82 @@ export async function executeChunk(chunkId: string) {
   let errorMessage: string | null = null;
 
   try {
-    const leads = await fetchFromGooglePlaces(chunk.combination_query, {
-      maxPages: MAX_PAGES_PER_QUERY,
-    });
+    // Fan out to every available source in parallel. The chunk only fails
+    // when every enabled source fails — a single 403 from Google Places
+    // (billing / API-not-enabled) shouldn't take down the whole run if Apify
+    // works. Sources can be flipped off via *_ENABLED env flags.
+    const googleEnabled = isGooglePlacesEnabled();
+    const apifyEnabled = isApifyEnabled();
 
-    if (leads.length) {
-      const tagged = leads.map((lead) => ({
+    if (!googleEnabled && !apifyEnabled) {
+      throw new Error(
+        "no scraper sources enabled (GOOGLE_PLACES_ENABLED and APIFY_ENABLED both false)",
+      );
+    }
+
+    const tasks: Promise<any>[] = [];
+    if (googleEnabled) {
+      tasks.push(
+        fetchFromGooglePlaces(chunk.combination_query, {
+          maxPages: MAX_PAGES_PER_QUERY,
+        }),
+      );
+    }
+    if (apifyEnabled) {
+      tasks.push(fetchFromApifySingle(chunk.combination_query));
+    }
+
+    const results = await Promise.allSettled(tasks);
+
+    const leads: any[] = [];
+    const sourceErrors: string[] = [];
+    let googleCount = 0;
+    let apifyCount = 0;
+    let resultIdx = 0;
+
+    if (googleEnabled) {
+      const r = results[resultIdx++];
+      if (r.status === "fulfilled") {
+        googleCount = r.value.length;
+        leads.push(...r.value);
+      } else {
+        sourceErrors.push(`google_places: ${r.reason?.message ?? r.reason}`);
+      }
+    }
+    if (apifyEnabled) {
+      const r = results[resultIdx++];
+      if (r.status === "fulfilled") {
+        apifyCount = r.value.length;
+        leads.push(...r.value);
+      } else {
+        sourceErrors.push(`apify: ${r.reason?.message ?? r.reason}`);
+      }
+    }
+
+    const enabledCount = (googleEnabled ? 1 : 0) + (apifyEnabled ? 1 : 0);
+    if (sourceErrors.length === enabledCount) {
+      throw new Error(sourceErrors.join(" | "));
+    }
+
+    // Dedupe across sources before persisting. Prefer phone as the key;
+    // fall back to name+address when phone is missing.
+    const merged = Array.from(
+      new Map(
+        leads.map((l) => {
+          const phone = (l.phone || "").replace(/\D/g, "");
+          const key = phone || `${(l.name || "").trim().toLowerCase()}|${(l.address || "").trim().toLowerCase()}`;
+          return [key, l];
+        }),
+      ).values(),
+    );
+
+    if (merged.length) {
+      const tagged = merged.map((lead) => ({
         ...lead,
         source_query: chunk.combination_query,
       }));
       await saveRawLeads(chunk.run_id, tagged);
-      leadsCount = leads.length;
+      leadsCount = merged.length;
     }
 
     await db
@@ -229,12 +307,18 @@ export async function executeChunk(chunkId: string) {
       .set({
         status: "done",
         leads_count: leadsCount,
+        // Record partial-source failures even on success so the run-history
+        // UI surfaces "Apify worked, Google Places 403'd" rather than a silent
+        // half-coverage chunk.
+        error_message: sourceErrors.length ? sourceErrors.join(" | ") : null,
         completed_at: new Date(),
       })
       .where(eq(scraperRunChunks.id, chunkId));
 
     console.log(
-      `[SCRAPER][chunk] ${chunkId} done — ${leadsCount} leads for "${chunk.combination_query}"`,
+      `[SCRAPER][chunk] ${chunkId} done — ${leadsCount} leads for "${chunk.combination_query}" (google=${googleCount}, apify=${apifyCount})${
+        sourceErrors.length ? ` (partial: ${sourceErrors.join("; ")})` : ""
+      }`,
     );
   } catch (err: any) {
     errorMessage = sanitizeDbError(err) || "chunk failed";
@@ -307,6 +391,41 @@ export async function executeChunk(chunkId: string) {
   }
 }
 
+// When a run ends with zero leads saved, the UI shows "Completed, 0 leads"
+// with no reason. Read the first failed-or-partial chunk's error_message and
+// return a single-line summary so markRunCompleted can persist it as the
+// run-level reason. Picking the first message (not the most common one)
+// keeps grouping logic out of the hot path and avoids brittle string
+// clustering across variable suffixes like place-ids.
+async function summarizeChunkErrors(runId: string): Promise<string | null> {
+  const errored = await db
+    .select({
+      message: scraperRunChunks.error_message,
+      status: scraperRunChunks.status,
+    })
+    .from(scraperRunChunks)
+    .where(
+      and(
+        eq(scraperRunChunks.run_id, runId),
+        sql`${scraperRunChunks.error_message} IS NOT NULL`,
+      ),
+    );
+
+  if (!errored.length) return null;
+
+  const total = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(scraperRunChunks)
+    .where(eq(scraperRunChunks.run_id, runId))
+    .then((r) => Number(r[0]?.count ?? 0));
+
+  const first = errored[0].message ?? "unknown chunk error";
+  // Cap so we never blow past the error_message column or push the UI past
+  // its 240-char render budget.
+  const trimmed = first.length > 200 ? `${first.slice(0, 200)}…` : first;
+  return `[${errored.length} of ${total} chunks]: ${trimmed}`;
+}
+
 // Phase 3: read all raw leads for this run, dedupe + normalize + save clean.
 // Runs in its own QStash invocation. Even on Hobby (60s) this is fine because
 // it's all DB I/O — no network fetching.
@@ -330,13 +449,18 @@ export async function finalizeChunkedRun(runId: string) {
       .filter(Boolean);
 
     if (!allLeads.length) {
-      await markRunCompleted(runId, {
-        total: 0,
-        cleaned: 0,
-        saved: 0,
-        duplicates: 0,
-        duration_ms: Date.now() - startTime,
-      });
+      const errSummary = await summarizeChunkErrors(runId);
+      await markRunCompleted(
+        runId,
+        {
+          total: 0,
+          cleaned: 0,
+          saved: 0,
+          duplicates: 0,
+          duration_ms: Date.now() - startTime,
+        },
+        errSummary,
+      );
       return;
     }
 
@@ -352,13 +476,22 @@ export async function finalizeChunkedRun(runId: string) {
     // The dealer_leads.phone UNIQUE constraint de-dupes across past runs.
     const promotedCount = await promoteLeadsToDealerLeads(uniqueLeads);
 
-    await markRunCompleted(runId, {
-      total: allLeads.length,
-      cleaned: result.cleaned.length,
-      saved: savedCount,
-      duplicates: result.duplicates,
-      duration_ms: Date.now() - startTime,
-    });
+    // Even when leads were saved, if any chunks failed or partial-errored we
+    // surface that reason at the run level so the UI explains the gap.
+    const errSummary =
+      savedCount === 0 ? await summarizeChunkErrors(runId) : null;
+
+    await markRunCompleted(
+      runId,
+      {
+        total: allLeads.length,
+        cleaned: result.cleaned.length,
+        saved: savedCount,
+        duplicates: result.duplicates,
+        duration_ms: Date.now() - startTime,
+      },
+      errSummary,
+    );
 
     console.log(
       `[SCRAPER][${runId}] finalized — ${allLeads.length} raw → ${savedCount} saved → ${promotedCount} promoted to dealer_leads in ${

@@ -1,50 +1,306 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+ * iTarang Brand System — BRD §6.B
+ * Single source of truth for color, typography, and component primitives.
+ * Every logged-in surface (24 role dashboards) inherits from these tokens.
+ *
+ * Color strategy: Restrained. One accent (--brand-sky), tinted-neutral
+ * surfaces, navy reserved for chrome (sidebar, nav banners). Light theme.
+ * ========================================================================== */
+
 @theme {
-  --color-brand-50: #F0FDFA;
-  --color-brand-100: #CCFBF1;
-  --color-brand-500: #14B8A6;
-  --color-brand-600: #0D9488;
-  --color-brand-700: #0F766E;
+  /* iTarang core palette — never hard-code these hex values in components. */
+  --color-brand-navy:   #02314e;  /* Sidebar, dark banners, h1 */
+  --color-brand-teal:   #165e73;  /* Section dividers, h2, gradient mid-stop */
+  --color-brand-royal:  #2e68b2;  /* Charts, stat-card accent, gradient start */
+  --color-brand-sky:    #138fc6;  /* Primary CTA, focus rings, active accent */
+  --color-brand-silver: #cecccd;  /* Disabled, borders, placeholders */
 
-  --color-surface-peach: #FFF7ED;
+  /* Sky scale — keeps `bg-brand-*` / `text-brand-*` ergonomics from existing pages.
+   * Existing teal palette (#14B8A6) is fully replaced with the BRD sky family. */
+  --color-brand-50:  #e7f3fa;
+  --color-brand-100: #c4e3f1;
+  --color-brand-200: #91cae4;
+  --color-brand-300: #5fb1d6;
+  --color-brand-400: #3aa1cd;
+  --color-brand-500: #138fc6;  /* === --brand-sky */
+  --color-brand-600: #0f7aac;
+  --color-brand-700: #0c6592;
+  --color-brand-800: #094f73;
+  --color-brand-900: #02314e;  /* === --brand-navy */
+
+  /* Surfaces / structure */
+  --color-bg:        #f4f7fa;  /* Page background, alternating table rows */
+  --color-surface:   #ffffff;  /* Cards, modals, form panels */
+  --color-border:    #e3e8ef;  /* Card / input / table borders */
+  --color-ink:       #1a2733;  /* Body text */
+  --color-ink-muted: #5a6877;  /* Captions, placeholders, helper text */
+
+  /* Legacy surface tints (kept for older components that already use them) */
+  --color-surface-peach:  #FFF7ED;
   --color-surface-purple: #FAF5FF;
-  --color-surface-teal: #F0FDFA;
-  --color-surface-gray: #F9FAFB;
+  --color-surface-teal:   #e7f3fa;
+  --color-surface-gray:   #F9FAFB;
 
-  --shadow-soft: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
-  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1);
+  /* Semantic tokens — match BRD §6.B exactly */
+  --color-success:    #1e7e34;
+  --color-success-bg: #d4edda;
+  --color-warning:    #b45309;
+  --color-warning-bg: #fff3cd;
+  --color-danger:     #c0392b;
+  --color-danger-bg:  #fdecea;
+  --color-info:       #138fc6;
+  --color-info-bg:    #d6eaf8;
 
-  --radius-xl: 1rem;
+  /* Elevation */
+  --shadow-soft:  0 4px 20px -2px rgba(2, 49, 78, 0.06);
+  --shadow-card:  0 1px 3px rgba(2, 49, 78, 0.06), 0 1px 2px rgba(2, 49, 78, 0.08);
+  --shadow-pop:   0 12px 40px -12px rgba(2, 49, 78, 0.18);
+
+  /* Radii */
+  --radius-xl:  1rem;
   --radius-2xl: 1.25rem;
   --radius-3xl: 1.5rem;
 }
 
+/* Non-color custom properties Tailwind doesn't surface as utilities. */
+:root {
+  --gradient-primary: linear-gradient(135deg, #2e68b2 0%, #138fc6 50%, #165e73 100%);
+  --gradient-dark:    linear-gradient(145deg, #02314e 0%, #0a3d5c 100%);
+  --brand-sky-soft:   rgba(19, 143, 198, 0.10);
+  --brand-sky-glow:   rgba(19, 143, 198, 0.30);
+}
 
 @layer base {
   body {
-    @apply bg-[#F8F9FB] text-gray-800 antialiased;
+    background-color: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-dm-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* DM Mono for IDs, IMEI, hex codes, API paths — matches BRD spec. */
+  code, kbd, samp, pre, .font-mono {
+    font-family: var(--font-dm-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: var(--color-brand-navy);
+    letter-spacing: -0.01em;
   }
 }
 
 @layer components {
-  .card-parcel {
-    @apply bg-white rounded-2xl border border-gray-100 shadow-card p-6;
-  }
-
-  .input-parcel {
-    @apply w-full px-4 py-3 bg-gray-50 border-none rounded-xl text-sm text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-brand-100 focus:bg-white transition-all outline-none;
-  }
-
+  /* ---------- Buttons ---------- */
+  /* Primary — gradient CTA. Used for Approve, Submit, Confirm. */
   .btn-primary {
-    @apply px-4 py-2.5 bg-brand-600 text-white rounded-xl hover:bg-brand-700 font-medium shadow-lg shadow-brand-500/20 transition-all active:scale-95 flex items-center gap-2 justify-center;
+    @apply inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl
+           text-sm font-semibold text-white
+           transition-all duration-150 ease-out
+           shadow-[0_2px_12px_-2px_rgba(19,143,198,0.45)]
+           hover:shadow-[0_8px_24px_-4px_rgba(19,143,198,0.55)] hover:-translate-y-px
+           active:translate-y-0 active:shadow-[0_1px_4px_-1px_rgba(19,143,198,0.40)]
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-sky/60 focus-visible:ring-offset-2;
+    background: var(--gradient-primary);
   }
 
-  .table-row-parcel {
-    @apply border-b border-gray-50 hover:bg-gray-50/50 transition-colors last:border-none;
+  /* Dark — navy fill. Used for "Save Draft" + neutral confirms. */
+  .btn-dark {
+    @apply inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl
+           text-sm font-semibold text-white
+           transition-colors duration-150
+           hover:opacity-90
+           disabled:opacity-50 disabled:cursor-not-allowed
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-sky/60 focus-visible:ring-offset-2;
+    background: var(--color-brand-navy);
   }
 
+  /* Secondary — sky fill at 10% with sky text. Used for "Request Docs", "Send OTP". */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl
+           text-sm font-semibold
+           transition-colors duration-150
+           hover:bg-brand-100
+           disabled:opacity-50 disabled:cursor-not-allowed
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-sky/60 focus-visible:ring-offset-2;
+    background: var(--brand-sky-soft);
+    color: var(--color-brand-sky);
+  }
+
+  /* Ghost — transparent with neutral text. Used for "Back", "Cancel". */
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl
+           text-sm font-medium text-[color:var(--color-ink-muted)]
+           transition-colors duration-150
+           hover:bg-[color:var(--color-bg)] hover:text-[color:var(--color-ink)]
+           disabled:opacity-50 disabled:cursor-not-allowed
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-sky/60 focus-visible:ring-offset-2;
+  }
+
+  /* Danger — light red bg, deep red text. Used for "Reject", "Write-Off". */
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl
+           text-sm font-semibold
+           transition-colors duration-150
+           hover:opacity-90
+           disabled:opacity-50 disabled:cursor-not-allowed
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 focus-visible:ring-offset-2;
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+  }
+
+  /* ---------- Inputs ---------- */
+  .input-itarang {
+    @apply w-full h-11 px-3.5 rounded-lg
+           text-sm text-[color:var(--color-ink)] placeholder-[color:var(--color-ink-muted)]/60
+           bg-white border border-[color:var(--color-border)]
+           transition-shadow duration-150
+           focus:outline-none focus:border-brand-sky focus:ring-4 focus:ring-brand-sky/15
+           disabled:bg-[color:var(--color-bg)] disabled:cursor-not-allowed;
+  }
+
+  .input-itarang-textarea {
+    @apply w-full px-3.5 py-3 rounded-lg
+           text-sm text-[color:var(--color-ink)] placeholder-[color:var(--color-ink-muted)]/60
+           bg-white border border-[color:var(--color-border)]
+           transition-shadow duration-150
+           focus:outline-none focus:border-brand-sky focus:ring-4 focus:ring-brand-sky/15
+           disabled:bg-[color:var(--color-bg)] disabled:cursor-not-allowed;
+  }
+
+  /* Legacy alias — old .input-parcel calls remap to the new look. */
+  .input-parcel {
+    @apply w-full h-11 px-3.5 rounded-lg
+           text-sm bg-white border border-[color:var(--color-border)]
+           transition-shadow duration-150
+           focus:outline-none focus:border-brand-sky focus:ring-4 focus:ring-brand-sky/15
+           disabled:bg-[color:var(--color-bg)] disabled:cursor-not-allowed;
+    color: var(--color-ink);
+  }
+
+  /* ---------- Section labels (12/600 ALL CAPS 0.12em) ---------- */
+  .section-label {
+    @apply text-[11px] font-semibold uppercase tracking-[0.12em]
+           text-[color:var(--color-brand-teal)];
+  }
+
+  .section-label-muted {
+    @apply text-[11px] font-semibold uppercase tracking-[0.12em]
+           text-[color:var(--color-ink-muted)];
+  }
+
+  /* ---------- Cards / surfaces ---------- */
+  .card-iTarang {
+    @apply bg-white rounded-2xl border border-[color:var(--color-border)] shadow-card;
+  }
+
+  /* Legacy alias */
+  .card-parcel {
+    @apply bg-white rounded-2xl border border-[color:var(--color-border)] shadow-card p-6;
+  }
+
+  /* ---------- Status pills ---------- */
   .status-pill {
-    @apply px-3 py-1 rounded-full text-xs font-medium inline-block;
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold;
+  }
+
+  .status-pill-success {
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold;
+    background: var(--color-success-bg);
+    color: var(--color-success);
+  }
+
+  .status-pill-warning {
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold;
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+  }
+
+  .status-pill-danger {
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold;
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+  }
+
+  .status-pill-info {
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold;
+    background: var(--color-info-bg);
+    color: var(--color-info);
+  }
+
+  .status-pill-neutral {
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold
+           bg-[color:var(--color-bg)] text-[color:var(--color-ink-muted)];
+  }
+
+  /* ---------- Tables ---------- */
+  .table-row-parcel {
+    @apply border-b border-[color:var(--color-border)] hover:bg-[color:var(--color-bg)]/60 transition-colors last:border-none;
+  }
+
+  /* ---------- Page heading (H1 52/700 per BRD) ---------- */
+  .page-h1 {
+    @apply text-[2.5rem] md:text-[3rem] font-bold leading-[1.1] tracking-[-0.02em];
+    color: var(--color-brand-navy);
+  }
+
+  .page-eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.12em] mb-2
+           text-[color:var(--color-ink-muted)];
+  }
+
+  /* ---------- Step indicator ---------- */
+  .step-dot {
+    @apply flex items-center justify-center w-8 h-8 rounded-full
+           text-xs font-semibold border-2 transition-colors;
+  }
+  .step-dot-todo {
+    @apply flex items-center justify-center w-8 h-8 rounded-full
+           text-xs font-semibold border-2 transition-colors
+           bg-white text-[color:var(--color-ink-muted)] border-[color:var(--color-border)];
+  }
+  .step-dot-active {
+    @apply flex items-center justify-center w-8 h-8 rounded-full
+           text-xs font-semibold border-2 transition-colors text-white border-transparent;
+    background: var(--gradient-primary);
+    box-shadow: 0 0 0 4px var(--brand-sky-soft);
+  }
+  .step-dot-done {
+    @apply flex items-center justify-center w-8 h-8 rounded-full
+           text-xs font-semibold border-2 transition-colors text-white;
+    background: var(--color-brand-navy);
+    border-color: var(--color-brand-navy);
+  }
+
+  /* ---------- Sidebar primitives (consumed by sidebar.tsx) ---------- */
+  .sidebar-shell {
+    background: var(--color-brand-navy);
+  }
+  .sidebar-section-label {
+    @apply text-[9px] font-bold uppercase tracking-[0.14em];
+    color: rgba(255, 255, 255, 0.30);
+  }
+  .sidebar-nav-item {
+    @apply flex items-center gap-3 text-[13px] font-medium
+           transition-colors duration-150;
+    padding: 9px 20px 9px 17px; /* 20 - 3px border = 17 */
+    border-left: 3px solid transparent;
+    color: rgba(255, 255, 255, 0.60);
+  }
+  .sidebar-nav-item:hover {
+    color: rgba(255, 255, 255, 0.92);
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .sidebar-nav-item-active {
+    @apply flex items-center gap-3 text-[13px] font-medium
+           transition-colors duration-150;
+    padding: 9px 20px 9px 17px;
+    border-left: 3px solid var(--color-brand-sky);
+    background: rgba(19, 143, 198, 0.15);
+    color: #ffffff;
   }
 }

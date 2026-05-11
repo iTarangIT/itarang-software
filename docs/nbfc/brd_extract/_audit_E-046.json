@@ -1,0 +1,15 @@
+{
+  "unit_id": "E-046",
+  "audited_at": "2026-05-01T06:11:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [],
+  "new_findings": [],
+  "verdict": "audited",
+  "migration_required": false,
+  "notes": [
+    "Unit declares no tables_columns.reuse[] and no tables_columns.new[]. The logic implicitly writes to telemetry_events, telemetry_daily_summary, and iot_devices, all defined by depended-on units (E-045, E-047). Schema correctness for those tables is enforced by the audits of E-045 and E-047.",
+    "BRD sync audit (line 487 of /tmp/nbfc_extract/sync_audit.txt) lists 'IoT telemetry ingestion — Section 6.2 full spec — IN SYNC'. No cross-doc gap touches this unit.",
+    "Reviewer should verify that the implementation references inventory.serial_number / inventory.iot_imei_no / inventory.iot_enabled (latter not in baseline; see E-045 review)."
+  ],
+  "checkpoint_html": null
+}

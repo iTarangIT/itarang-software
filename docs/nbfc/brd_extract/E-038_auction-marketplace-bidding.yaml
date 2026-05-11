@@ -1,0 +1,154 @@
+id: E-038
+slug: auction-marketplace-bidding
+name: Auction marketplace lots and bidding
+source_section: "6.1.7"
+brd_excerpt: |
+  Auction Marketplace
+  Lot cards: Lot ID, capacity, avg SOH, age, quantity, base price, current bid, bidder count, live countdown timer
+  Bidding modal: current highest bid, your last bid status, live countdown (HH:MM:SS), min-next-bid validation, Place Bid / Auto-Bid / Exit
+  Every bid placement triggers confirmation modal: 'Confirm bid of ₹X? This is binding.' — logged to audit
+depends_on: []
+non_functional:
+  - "Each placed bid is binding and immutable in audit log."
+  - "min-next-bid: a placed bid must exceed current_highest_bid by at least the lot.bid_increment."
+
+surface:
+  api:
+    - method: GET
+      path: /api/nbfc/auction/lots
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({
+          status: z.enum(["live","ended"]).default("live"),
+          page: z.coerce.number().int().min(1).default(1),
+        })
+      response_shape:
+        items:
+          - lot_id: string
+            capacity: string
+            avg_soh: number
+            age_months: number
+            quantity: number
+            base_price: number
+            current_bid: number
+            bidder_count: number
+            ends_at: string
+        page: number
+        total: number
+    - method: POST
+      path: /api/nbfc/auction/lots/[id]/bid
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({
+          amount: z.number().positive(),
+          confirmed: z.literal(true),
+        })
+      response_shape:
+        bid_id: string
+        lot_id: string
+        amount: number
+        accepted: boolean
+        rejection_reason: string
+  components:
+    - "src/components/nbfc-portal/AuctionLotsGrid.tsx"
+    - "src/components/nbfc-portal/PlaceBidModal.tsx"
+  jobs: []
+  pages:
+    - "/nbfc/auction"
+
+logic: |
+  1. GET endpoint returns auction_lots filtered by status; computes current_bid as MAX(amount) over auction_bids and bidder_count as DISTINCT(bidder_tenant_id).
+  2. POST bid endpoint validates confirmed === true (binding confirmation), lot.status='live' and now < ends_at; else 400.
+  3. Reject if amount < (current_bid + lot.bid_increment) — return accepted=false with rejection_reason='below_min_next_bid'.
+  4. Insert auction_bids row with bidder_tenant_id, amount, placed_at.
+  5. Write nbfc_audit_log entry with action_type='auction_bid' and amount in after_state.
+  6. Return bid_id, lot_id, amount, accepted=true.
+
+tables_columns:
+  reuse:
+    - table: nbfc_audit_log
+      schema_ts_line: 1
+      columns: [tenant_id, actor_user_id, action_type, action_id, after_state, created_at]
+  new:
+    - table: auction_lots
+      justification: "BRD §6.1.7 introduces an auction marketplace; need a lots table to capture base price, increment, ends_at, and status."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: lot_code, type: "varchar({ length: 32 }).notNull().unique()" }
+        - { name: capacity, type: "varchar({ length: 32 })" }
+        - { name: avg_soh, type: "numeric({ precision: 5, scale: 2 })" }
+        - { name: age_months, type: "integer()" }
+        - { name: quantity, type: "integer().notNull()" }
+        - { name: base_price, type: "numeric({ precision: 12, scale: 2 }).notNull()" }
+        - { name: bid_increment, type: "numeric({ precision: 12, scale: 2 }).notNull()" }
+        - { name: ends_at, type: "timestamp({ withTimezone: true }).notNull()" }
+        - { name: status, type: "varchar({ length: 16 }).notNull().default('live')" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).notNull().defaultNow()" }
+    - table: auction_bids
+      justification: "Need a per-bid log capturing tenant, amount, and timestamp; also acts as the audit-grade record for binding bids."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: lot_id, type: "uuid().notNull()" }
+        - { name: bidder_tenant_id, type: "uuid().notNull()" }
+        - { name: amount, type: "numeric({ precision: 12, scale: 2 }).notNull()" }
+        - { name: placed_at, type: "timestamp({ withTimezone: true }).notNull().defaultNow()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/nbfc/auction/lots returns 200 with items array of lot objects including lot_id, capacity, avg_soh, age_months, quantity, base_price, current_bid, bidder_count, ends_at."
+    test_layer: api
+    test_name: "Auction lots list returns required fields"
+  - id: AC2
+    statement: "POST /api/nbfc/auction/lots/[id]/bid with confirmed=true and amount > current_bid + bid_increment returns 200 with accepted=true and persists an auction_bids row."
+    test_layer: api
+    test_name: "Valid binding bid is accepted and persisted"
+  - id: AC3
+    statement: "POST a bid with confirmed omitted or false returns 400."
+    test_layer: api
+    test_name: "Bid endpoint requires binding confirmation flag"
+  - id: AC4
+    statement: "POST a bid whose amount is less than current_bid + bid_increment returns accepted=false with rejection_reason='below_min_next_bid' and does not insert an auction_bids row."
+    test_layer: api
+    test_name: "Bid below min-next-bid is rejected"
+  - id: AC5
+    statement: "Each accepted bid writes an nbfc_audit_log row with action_type='auction_bid' and amount in after_state."
+    test_layer: api
+    test_name: "Accepted bid is audit-logged with amount"
+
+status: needs_clarification
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-038
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc_audit_log
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [tenant_id, actor_user_id, action_type, action_id, after_state, created_at]
+      note: "Forward reference to E-031."
+  new_findings:
+    - table: auction_lots
+      justification_present: true
+      columns: [id, lot_code, capacity, avg_soh, age_months, quantity, base_price, bid_increment, ends_at, status, created_at]
+      fuzzy_collisions: []
+      type_lint: ok
+      decision: approved_pending_human
+    - table: auction_bids
+      justification_present: true
+      columns: [id, lot_id, bidder_tenant_id, amount, placed_at]
+      fuzzy_collisions:
+        - proposed: bidder_tenant_id
+          candidates: [nbfc_loans.tenant_id, nbfc_users.tenant_id, risk_card_runs.tenant_id]
+          overlap: 0.667
+          reason: "≥2 candidates; role-prefixed tenant_id — confirm intent."
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: reject
+  migration_required: false
+  notes:
+    - "Reviewer must confirm whether bidder_tenant_id is a deliberate role-prefixed FK to nbfc_tenants.id. Same review applies to E-039."
+  checkpoint_html: docs/nbfc/loop_report/E-038/checkpoint_1.html

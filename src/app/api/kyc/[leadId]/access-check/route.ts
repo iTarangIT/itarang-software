@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { leads, personalDetails } from '@/lib/db/schema';
+import { kycVerificationMetadata, leads, personalDetails } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 
 const FINANCE_METHODS = ['finance', 'other_finance', 'dealer_finance'];
@@ -33,6 +33,17 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             .limit(1);
         const pd = personal[0];
 
+        // Admin's "Already APPROVED" badge in CaseReview reads
+        // kycVerificationMetadata.final_decision. Surface it here so the
+        // dealer-side gate can agree with the admin source of truth even if
+        // leads.kyc_status is briefly out of step.
+        const metaRow = await db
+            .select({ final_decision: kycVerificationMetadata.final_decision })
+            .from(kycVerificationMetadata)
+            .where(eq(kycVerificationMetadata.lead_id, l.id))
+            .limit(1);
+        const finalDecision = metaRow[0]?.final_decision ?? null;
+
         const leadData = {
             id: l.id,
             reference_id: l.reference_id,
@@ -60,6 +71,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             has_co_borrower: l.has_co_borrower,
             kyc_draft_data: l.kyc_draft_data,
             draft_updated_at: l.updated_at,
+            final_decision: finalDecision,
         };
 
         return NextResponse.json({
