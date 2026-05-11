@@ -176,8 +176,10 @@ jobs:
             cd "$APP_DIR"
             mkdir -p logs
 
-            # Load .env without leaking values to the trace
-            set -a; source .env; set +a
+            # .env is loaded by Next.js itself at build time — don't source it
+            # in the shell. Sourcing executes the file as bash, so any value
+            # containing shell metacharacters (or a stray bare word) breaks
+            # the build with "command not found".
 
             export GITHUB_SHA=$(git rev-parse HEAD)
             echo "Building with GITHUB_SHA=$GITHUB_SHA"
@@ -371,7 +373,6 @@ jobs:
             echo "Rolling back to $PREV_SHA"
             git reset --hard "$PREV_SHA"
             if [ -f .env ]; then sed -i 's/\r$//' .env; fi
-            set -a; source .env 2>/dev/null || true; set +a
             export GITHUB_SHA=$(git rev-parse HEAD)
             export CI=1
             export NEXT_TELEMETRY_DISABLED=1

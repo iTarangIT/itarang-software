@@ -7,6 +7,7 @@ import { inventory, leads, productSelections } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { generateId } from "@/lib/api-utils";
 import { finalizeSale } from "@/lib/sales/sale-finalization";
+import { toPaymentMode } from "@/lib/sales/payment-mode";
 import { notifyProductSelectionSubmitted } from "@/lib/notifications";
 
 // BRD V2 §2.5 — cash path confirmation for Step 4.
@@ -50,7 +51,9 @@ const BodySchema = z.object({
   gstSubtotal: z.number().min(0).optional(),
   netSubtotal: z.number().min(0).optional(),
   category: z.string().optional(),
-  subCategory: z.string().optional(),
+  // E-103: was subCategory; renamed to modelNumber to mirror the
+  // product_selections.model_number column (Sync Audit G-05).
+  modelNumber: z.string().optional(),
 });
 
 export async function POST(
@@ -75,7 +78,25 @@ export async function POST(
         { status: 403 },
       );
     }
-    const paymentMode = String(lead.payment_method || "").toLowerCase();
+    // E-101: collapse the 3-value leads.payment_method ENUM through the
+    // canonical utility — never inline. Cash route requires the collapsed
+    // value to be 'cash'; anything that resolves to 'finance' goes through
+    // submit-product-selection instead.
+    let paymentMode: "cash" | "finance";
+    try {
+      paymentMode = toPaymentMode(lead.payment_method);
+    } catch (e) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            message:
+              e instanceof Error ? e.message : "Unrecognised payment_method on lead",
+          },
+        },
+        { status: 400 },
+      );
+    }
     if (paymentMode !== "cash") {
       return NextResponse.json(
         { success: false, error: { message: "Not a cash lead — use submit-product-selection for finance" } },
@@ -115,6 +136,16 @@ export async function POST(
         throw new Error(`Charger ${body.chargerSerial} is not available`);
       }
 
+      // Clear any existing draft so this lead disappears from /My Drafts.
+      await tx
+        .delete(productSelections)
+        .where(
+          and(
+            eq(productSelections.lead_id, leadId),
+            eq(productSelections.admin_decision, "draft"),
+          ),
+        );
+
       // 2. Product selection — dealer_confirmed immediately (no admin step)
       await tx.insert(productSelections).values({
         id: productSelectionId,
@@ -124,7 +155,7 @@ export async function POST(
         paraphernalia: body.paraphernalia ?? {},
         paraphernalia_lines: body.paraphernaliaLines ?? [],
         category: body.category || lead.product_category_id,
-        sub_category: body.subCategory || lead.product_type_id,
+        model_number: body.modelNumber || lead.product_type_id,
         battery_price: body.batteryPrice?.toString(),
         charger_price: body.chargerPrice?.toString(),
         paraphernalia_cost: body.paraphernaliaCost?.toString(),
@@ -149,7 +180,12 @@ export async function POST(
         updated_at: now,
       });
 
-      // 3. Finalize sale: inventory sold + warranty + after-sales
+      // 3. Finalize sale: inventory sold + warranty + after-sales.
+      //    paymentMode comes from the E-101 canonical mapping above — not a
+      //    hard-coded literal — so warranty and after-sales rows always
+      //    reflect the lead's collapsed payment_method.
+      //    BRD §3.5: cash flow skips 'dispatched' entirely — inventory goes
+      //    straight to 'sold' on dealer confirmation.
       const sale = await finalizeSale({
         tx,
         leadId,
@@ -158,9 +194,10 @@ export async function POST(
         dealerId: user.dealer_id!,
         customerName: lead.full_name || lead.owner_name || null,
         customerPhone: lead.phone || lead.mobile || null,
-        paymentMode: "cash",
+        paymentMode,
         performedBy: user.id,
         soldAt: now,
+        phase: "sold",
       });
 
       // 4. Close lead
@@ -175,7 +212,7 @@ export async function POST(
     notifyProductSelectionSubmitted({
       leadId,
       productSelectionId,
-      paymentMode: "cash",
+      paymentMode,
       finalPrice: body.finalPrice,
     }).catch(() => {});
 
@@ -188,6 +225,7 @@ export async function POST(
         warrantyStart: result.warrantyStart.toISOString(),
         warrantyEnd: result.warrantyEnd.toISOString(),
         afterSalesId: result.afterSalesId,
+        paymentMode,
         message: "Sale confirmed. Inventory sold. Warranty activated.",
       },
     });

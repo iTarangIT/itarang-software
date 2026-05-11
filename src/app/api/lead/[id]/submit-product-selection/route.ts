@@ -7,6 +7,7 @@ import { inventory, leads, productSelections } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { generateId } from "@/lib/api-utils";
 import { notifyProductSelectionSubmitted } from "@/lib/notifications";
+import { InventoryLifecycleError, reserveInventorySerial } from "@/lib/inventory/lifecycle";
 
 // BRD V2 §2.4 — finance path submit for Step 4.
 // Reserves battery + charger inventory, stores product selection, advances
@@ -50,7 +51,9 @@ const BodySchema = z.object({
   gstSubtotal: z.number().min(0).optional(),
   netSubtotal: z.number().min(0).optional(),
   category: z.string().optional(),
-  subCategory: z.string().optional(),
+  // E-103: was subCategory; renamed to modelNumber to mirror the
+  // product_selections.model_number column (Sync Audit G-05).
+  modelNumber: z.string().optional(),
 });
 
 const FINANCE_UNLOCKED = new Set(["step_3_cleared", "kyc_approved"]);
@@ -96,34 +99,17 @@ export async function POST(
     const now = new Date();
 
     const result = await db.transaction(async (tx) => {
-      // Race-condition guard: battery must be available + belong to this dealer.
-      const [battery] = await tx
-        .select()
-        .from(inventory)
+      // Clear any existing draft row for this lead so it disappears from
+      // /My Drafts. The submitted row below replaces it as the canonical
+      // selection. Done inside the transaction so partial state is impossible.
+      await tx
+        .delete(productSelections)
         .where(
           and(
-            eq(inventory.serial_number, body.batterySerial),
-            eq(inventory.dealer_id, user.dealer_id!),
+            eq(productSelections.lead_id, leadId),
+            eq(productSelections.admin_decision, "draft"),
           ),
-        )
-        .limit(1);
-      if (!battery || battery.status !== "available") {
-        throw new Error(`Battery ${body.batterySerial} is not available`);
-      }
-
-      const [charger] = await tx
-        .select()
-        .from(inventory)
-        .where(
-          and(
-            eq(inventory.serial_number, body.chargerSerial),
-            eq(inventory.dealer_id, user.dealer_id!),
-          ),
-        )
-        .limit(1);
-      if (!charger || charger.status !== "available") {
-        throw new Error(`Charger ${body.chargerSerial} is not available`);
-      }
+        );
 
       // Insert product selection
       await tx.insert(productSelections).values({
@@ -134,7 +120,7 @@ export async function POST(
         paraphernalia: body.paraphernalia ?? {},
         paraphernalia_lines: body.paraphernaliaLines ?? [],
         category: body.category || lead.product_category_id,
-        sub_category: body.subCategory || lead.product_type_id,
+        model_number: body.modelNumber || lead.product_type_id,
         battery_price: body.batteryPrice?.toString(),
         charger_price: body.chargerPrice?.toString(),
         paraphernalia_cost: body.paraphernaliaCost?.toString(),
@@ -159,15 +145,25 @@ export async function POST(
         updated_at: now,
       });
 
-      // Reserve inventory
-      await tx
-        .update(inventory)
-        .set({ status: "reserved", linked_lead_id: leadId, updated_at: now })
-        .where(eq(inventory.id, battery.id));
-      await tx
-        .update(inventory)
-        .set({ status: "reserved", linked_lead_id: leadId, updated_at: now })
-        .where(eq(inventory.id, charger.id));
+      // Reserve inventory with status-conflict protection + event logging.
+      await reserveInventorySerial({
+        tx,
+        serial: body.batterySerial,
+        dealerId: user.dealer_id,
+        leadId,
+        performedBy: user.id,
+        notes: "Step 4 product-selection submit (battery)",
+        when: now,
+      });
+      await reserveInventorySerial({
+        tx,
+        serial: body.chargerSerial,
+        dealerId: user.dealer_id,
+        leadId,
+        performedBy: user.id,
+        notes: "Step 4 product-selection submit (charger)",
+        when: now,
+      });
 
       // Advance lead
       await tx
@@ -198,6 +194,12 @@ export async function POST(
     });
   } catch (error) {
     console.error("[Submit Product Selection] Error:", error);
+    if (error instanceof InventoryLifecycleError) {
+      return NextResponse.json(
+        { success: false, error: { message: error.message } },
+        { status: error.statusCode },
+      );
+    }
     const message = error instanceof Error ? error.message : "Failed to submit";
     return NextResponse.json(
       { success: false, error: { message } },

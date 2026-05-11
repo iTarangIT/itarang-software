@@ -1,0 +1,149 @@
+id: E-028
+slug: lead-intelligence-listing
+name: Lead Intelligence listing for NBFC
+source_section: "6.1.4"
+brd_excerpt: |
+  6.1.4 Lead Intelligence
+  Shows all leads associated with this NBFC. A lead appears here when admin selects this NBFC in the Loan Sanctioned form (Section 3.2.2). Read-only for NBFC — they cannot modify leads.
+  Column | Source | Notes
+  Lead Reference ID — leads.reference_id — Clickable — opens lead detail modal (read-only).
+  Customer Name — leads.full_name
+  Dealer — dealers.name
+  Battery Serial — inventory.serial_number — Links to battery monitoring card.
+  Loan Amount — loan_sanctions.loan_amount
+  Loan File No. — loan_sanctions.loan_file_number — NBFC's own reference number.
+  Status — loan_sanctions.status — Sanctioned | Dealer Approved | Disbursed | Active | Closed | Overdue
+  CDS Score — Computed nightly — Colour: green (<40) | amber (40–70) | red (>70)
+  EMI Status — Next due date + days overdue if any — Overdue shown in red
+depends_on: []
+non_functional:
+  - "Endpoint and UI are strictly read-only for NBFC users; no POST/PATCH/DELETE on leads from this surface."
+  - "Tenant scoping enforced — only leads whose loan_sanctions.nbfc_id = caller tenant are returned."
+
+surface:
+  api:
+    - method: GET
+      path: /api/nbfc/leads
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({
+          status: z.enum(["sanctioned","dealer_approved","disbursed","active","closed","overdue"]).optional(),
+          geography: z.string().optional(),
+          product: z.string().optional(),
+          date_from: z.string().optional(),
+          date_to: z.string().optional(),
+          page: z.coerce.number().int().min(1).default(1),
+          page_size: z.coerce.number().int().min(1).max(100).default(20),
+        })
+      response_shape:
+        items:
+          - lead_reference_id: string
+            customer_name: string
+            dealer_name: string
+            battery_serial: string
+            loan_amount: number
+            loan_file_number: string
+            status: string
+            cds_score: number
+            cds_band: string
+            next_due_date: string
+            days_overdue: number
+        page: number
+        page_size: number
+        total: number
+  components:
+    - "src/components/nbfc-portal/LeadIntelligenceTable.tsx"
+  jobs: []
+  pages:
+    - "/nbfc/leads"
+
+logic: |
+  1. Resolve tenant via getCurrentTenant().
+  2. Build base query joining loan_sanctions, leads, dealers, inventory, borrower_risk_scores filtered by loan_sanctions.nbfc_id = tenant.id.
+  3. Apply optional filters: status, geography (lead.state or city), product, date range on loan_sanctions.disbursed_at.
+  4. For each row compute cds_band from cds_score: 'green' if <40, 'amber' if 40-70, 'red' if >70.
+  5. Compute days_overdue from latest emi_schedules row for that loan; null if none overdue.
+  6. Paginate using page and page_size; return items, page, page_size, total count.
+
+tables_columns:
+  reuse:
+    - table: leads
+      schema_ts_line: 1
+      columns: [id, reference_id, full_name]
+    - table: dealers
+      schema_ts_line: 1
+      columns: [id, name]
+    - table: inventory
+      schema_ts_line: 1
+      columns: [id, serial_number]
+    - table: loan_sanctions
+      schema_ts_line: 1
+      columns: [id, nbfc_id, loan_amount, loan_file_number, status, disbursed_at]
+    - table: borrower_risk_scores
+      schema_ts_line: 1
+      columns: [borrower_id, loan_sanction_id, cds_score]
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/nbfc/leads returns 200 with paginated items array containing lead_reference_id, customer_name, dealer_name, battery_serial, loan_amount, loan_file_number, status, cds_score, cds_band, next_due_date, days_overdue."
+    test_layer: api
+    test_name: "Lead Intelligence endpoint returns paginated lead rows with all BRD columns"
+  - id: AC2
+    statement: "An NBFC tenant only receives leads whose loan_sanctions.nbfc_id matches the caller's tenant id; leads sanctioned by other NBFCs are not returned."
+    test_layer: api
+    test_name: "Lead Intelligence is tenant-scoped"
+  - id: AC3
+    statement: "Each row's cds_band equals 'green' when cds_score < 40, 'amber' when 40 <= cds_score <= 70, and 'red' when cds_score > 70."
+    test_layer: api
+    test_name: "cds_band derives from cds_score per BRD thresholds"
+  - id: AC4
+    statement: "Filtering by status=overdue returns only rows whose loan_sanctions.status is 'overdue'."
+    test_layer: api
+    test_name: "Status filter narrows results to overdue loans"
+  - id: AC5
+    statement: "POST, PATCH, and DELETE methods on /api/nbfc/leads return HTTP 405 (read-only surface for NBFC users)."
+    test_layer: api
+    test_name: "Lead Intelligence endpoint rejects mutating methods with 405"
+
+status: audited
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-028
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: leads
+      verified: true
+      ts_line: 176
+      columns_verified: [id, reference_id, full_name]
+    - table: dealers
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [id, name]
+      note: "G-04 (CRITICAL): dealers table not present in baseline."
+    - table: inventory
+      verified: true
+      ts_line: 129
+      columns_verified: [id, serial_number]
+    - table: loan_sanctions
+      verified: false
+      ts_line: 2624
+      columns_verified: [id, loan_amount, loan_file_number, status]
+      columns_missing: [nbfc_id, disbursed_at]
+      note: "G-03: missing nbfc_id and disbursed_at in baseline."
+    - table: borrower_risk_scores
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [borrower_id, loan_sanction_id, cds_score]
+      note: "Forward reference to table proposed in E-026."
+  new_findings: []
+  verdict: audited
+  migration_required: false
+  notes:
+    - "G-03 + G-04: this unit's reuse depends on schema additions tracked in other gaps. No new tables/columns proposed here."
+  checkpoint_html: null

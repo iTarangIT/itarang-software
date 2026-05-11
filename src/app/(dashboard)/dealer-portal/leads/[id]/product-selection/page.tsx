@@ -1,10 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  useCallback,
+  useRef,
+  useDeferredValue,
+} from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
+  Search,
   AlertCircle,
   Banknote,
   CalendarDays,
@@ -98,6 +107,34 @@ interface ParaRow {
   unit_net?: number | null;
 }
 
+interface PriorSelection {
+  id: string;
+  battery_serial: string | null;
+  charger_serial: string | null;
+  paraphernalia: Record<string, number | string> | null;
+  paraphernalia_lines: unknown;
+  category: string | null;
+  sub_category: string | null;
+  battery_price: string | null;
+  charger_price: string | null;
+  paraphernalia_cost: string | null;
+  dealer_margin: string | null;
+  final_price: string | null;
+  battery_gross: string | null;
+  battery_gst_percent: string | null;
+  battery_gst_amount: string | null;
+  battery_net: string | null;
+  charger_gross: string | null;
+  charger_gst_percent: string | null;
+  charger_gst_amount: string | null;
+  charger_net: string | null;
+  gross_subtotal: string | null;
+  gst_subtotal: string | null;
+  net_subtotal: string | null;
+  admin_decision: string | null;
+  submitted_at: string | null;
+}
+
 interface AccessData {
   allowed: boolean;
   paymentMode?: "cash" | "finance";
@@ -112,9 +149,14 @@ interface AccessData {
   redirectTo?: string;
   readOnly?: boolean;
   reason?: string;
+  priorSelection?: PriorSelection | null;
 }
 
 const DRAFT_KEY = (leadId: string) => `step4-draft-${leadId}`;
+
+// Cards per page for battery / charger lists. Above this count we paginate
+// (search + filter chips remain global). Tuned for the 2-column md grid.
+const PAGE_SIZE = 12;
 
 const inrFormatter = new Intl.NumberFormat("en-IN", {
   style: "currency",
@@ -147,12 +189,19 @@ export default function ProductSelectionPage() {
   const [marginPercentInput, setMarginPercentInput] = useState<string>("0");
 
   const [batteryFilter, setBatteryFilter] = useState<"all" | "recommended" | "ageing" | "old">("all");
+  const [chargerFilter, setChargerFilter] = useState<"all" | "recommended" | "ageing" | "old">("all");
+  const [batterySearch, setBatterySearch] = useState("");
+  const [chargerSearch, setChargerSearch] = useState("");
+  const deferredBatterySearch = useDeferredValue(batterySearch);
+  const deferredChargerSearch = useDeferredValue(chargerSearch);
+  const [batteryPage, setBatteryPage] = useState(1);
+  const [chargerPage, setChargerPage] = useState(1);
   const [batteriesLoading, setBatteriesLoading] = useState(false);
   const [chargersLoading, setChargersLoading] = useState(false);
 
   // Section A — editable Category / Product Type. Lists feed the dropdowns.
   // Edits PATCH the lead row, so the change propagates back to Step 1.
-  type CatOption = { id: string; name: string; slug: string };
+  type CatOption = { id: string; name: string; slug: string; available_count?: number };
   type ProdOption = {
     id: string;
     name: string;
@@ -211,11 +260,12 @@ export default function ProductSelectionPage() {
   }, [leadId, router]);
 
   // ── Load Category list once for the editable dropdown ───────────────
+  // Uses the dealer-scoped, canonicalized list so Step 4 mirrors Step 1.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/inventory/categories");
+        const res = await fetch("/api/dealer/leads/categories");
         const json = await res.json();
         if (cancelled) return;
         if (json.success) setCategories(json.data || []);
@@ -235,12 +285,17 @@ export default function ProductSelectionPage() {
       setProductsList([]);
       return;
     }
-    const cat = categories.find((c) => c.id === access.category);
+    // Prefer matching by canonical UUID (new leads). Fall back to slug match
+    // for leads created during the brief window when slug was stored in
+    // product_category_id by mistake.
+    const cat =
+      categories.find((c) => c.id === access.category) ??
+      categories.find((c) => c.slug === access.category);
     if (!cat) return; // wait for categories to arrive
     (async () => {
       try {
         const res = await fetch(
-          `/api/inventory/products?category=${encodeURIComponent(cat.slug)}`,
+          `/api/dealer/leads/products?category=${encodeURIComponent(cat.slug)}`,
         );
         const json = await res.json();
         if (cancelled) return;
@@ -360,11 +415,39 @@ export default function ProductSelectionPage() {
     void loadBatteriesAndPara();
   }, [loadBatteriesAndPara]);
 
-  // ── Restore draft from localStorage once batteries are loaded ───────
+  // ── Hydrate prior selection (server-side first, then localStorage) ───
+  // Server-side (productSelections) is the source of truth once the dealer
+  // has submitted Step 4 — those choices must persist across devices,
+  // browsers, incognito sessions and cache clears. localStorage is only a
+  // fallback for in-progress drafts that were never submitted.
   useEffect(() => {
     if (draftRestoredRef.current) return;
     if (!batteries.length || !access?.allowed) return;
     try {
+      const prior = access.priorSelection;
+      if (prior) {
+        const b = batteries.find((x) => x.serial_number === prior.battery_serial);
+        if (b) setSelectedBattery(b);
+        const para = prior.paraphernalia as Record<string, number | string> | null;
+        if (para && typeof para === "object") {
+          const normalised: Record<string, number> = {};
+          for (const [k, v] of Object.entries(para)) {
+            const n = Number(v);
+            if (Number.isFinite(n) && n > 0) normalised[k] = n;
+          }
+          if (Object.keys(normalised).length > 0) setParaQty(normalised);
+        }
+        if (prior.dealer_margin) {
+          setMarginMode("rupees");
+          setMarginInput(String(prior.dealer_margin));
+        }
+        if (prior.submitted_at) {
+          setLastSaved(formatLastSaved(new Date(prior.submitted_at)));
+        }
+        draftRestoredRef.current = true;
+        return;
+      }
+
       const raw = localStorage.getItem(DRAFT_KEY(leadId));
       if (!raw) {
         draftRestoredRef.current = true;
@@ -416,22 +499,34 @@ export default function ProductSelectionPage() {
       try {
         const qs = new URLSearchParams();
         if (access?.category) qs.set("category", access.category);
+        // Pragmatic compatibility filter: only chargers whose voltage matches
+        // the selected battery's voltage are considered safe to pair.
+        if (selectedBattery?.voltage_v) {
+          qs.set("batteryVoltage", String(selectedBattery.voltage_v));
+        }
         const res = await fetch(`/api/inventory/dealer/${dealerId}/chargers?${qs.toString()}`);
         const json = await res.json();
         if (cancelled) return;
         if (json.success) {
           setChargers(json.data || []);
-          // Restore selected charger from draft if applicable
+          // Restore selected charger — prefer the server-side priorSelection
+          // (the canonical record once the dealer has submitted) and fall back
+          // to localStorage drafts for unsubmitted in-progress sessions.
           try {
-            const raw = localStorage.getItem(DRAFT_KEY(leadId));
-            if (raw) {
-              const draft = JSON.parse(raw) as { chargerSerial?: string };
-              if (draft.chargerSerial) {
-                const c = (json.data || []).find(
-                  (x: ChargerRow) => x.serial_number === draft.chargerSerial,
-                );
-                if (c) setSelectedCharger(c);
+            const priorChargerSerial = access?.priorSelection?.charger_serial ?? null;
+            let serial: string | null = priorChargerSerial;
+            if (!serial) {
+              const raw = localStorage.getItem(DRAFT_KEY(leadId));
+              if (raw) {
+                const draft = JSON.parse(raw) as { chargerSerial?: string };
+                serial = draft.chargerSerial ?? null;
               }
+            }
+            if (serial) {
+              const c = (json.data || []).find(
+                (x: ChargerRow) => x.serial_number === serial,
+              );
+              if (c) setSelectedCharger(c);
             }
           } catch {
             // ignore
@@ -518,22 +613,94 @@ export default function ProductSelectionPage() {
   const finalPrice = netSubtotal + Number(dealerMargin || 0);
 
   // ── Filter battery list ─────────────────────────────────────────────
+  // Apply age-bucket filter first, then case-insensitive substring search
+  // against serial / model / model_type. Pagination slices the result.
   const filteredBatteries = useMemo(() => {
-    switch (batteryFilter) {
-      case "recommended":
-        return batteries.filter((b) => b.recommended);
-      case "ageing":
-        return batteries.filter((b) => b.age_badge === "ageing");
-      case "old":
-        return batteries.filter((b) => b.age_badge === "old");
-      default:
-        return batteries;
-    }
-  }, [batteries, batteryFilter]);
+    const byBucket = (() => {
+      switch (batteryFilter) {
+        case "recommended":
+          return batteries.filter((b) => b.recommended);
+        case "ageing":
+          return batteries.filter((b) => b.age_badge === "ageing");
+        case "old":
+          return batteries.filter((b) => b.age_badge === "old");
+        default:
+          return batteries;
+      }
+    })();
+    const q = deferredBatterySearch.trim().toLowerCase();
+    if (!q) return byBucket;
+    return byBucket.filter((b) => {
+      const hay = [b.serial_number, b.model_name, b.model_type]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [batteries, batteryFilter, deferredBatterySearch]);
 
   const ageingCount = batteries.filter((b) => b.age_badge === "ageing").length;
   const oldCount = batteries.filter((b) => b.age_badge === "old").length;
   const recommendedCount = batteries.filter((b) => b.recommended).length;
+
+  // ── Filter charger list (mirrors battery: chips + search) ────────────
+  const filteredChargers = useMemo(() => {
+    const byBucket = (() => {
+      switch (chargerFilter) {
+        case "recommended":
+          return chargers.filter((c) => c.recommended);
+        case "ageing":
+          return chargers.filter((c) => c.age_badge === "ageing");
+        case "old":
+          return chargers.filter((c) => c.age_badge === "old");
+        default:
+          return chargers;
+      }
+    })();
+    const q = deferredChargerSearch.trim().toLowerCase();
+    if (!q) return byBucket;
+    return byBucket.filter((c) => {
+      const hay = [c.serial_number, c.model_name, c.model_type]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [chargers, chargerFilter, deferredChargerSearch]);
+
+  const chargerAgeingCount = chargers.filter((c) => c.age_badge === "ageing").length;
+  const chargerOldCount = chargers.filter((c) => c.age_badge === "old").length;
+  const chargerRecommendedCount = chargers.filter((c) => c.recommended).length;
+
+  // ── Pagination slices ───────────────────────────────────────────────
+  const batteryPageCount = Math.max(1, Math.ceil(filteredBatteries.length / PAGE_SIZE));
+  const chargerPageCount = Math.max(1, Math.ceil(filteredChargers.length / PAGE_SIZE));
+  const safeBatteryPage = Math.min(batteryPage, batteryPageCount);
+  const safeChargerPage = Math.min(chargerPage, chargerPageCount);
+  const paginatedBatteries = useMemo(
+    () =>
+      filteredBatteries.slice(
+        (safeBatteryPage - 1) * PAGE_SIZE,
+        safeBatteryPage * PAGE_SIZE,
+      ),
+    [filteredBatteries, safeBatteryPage],
+  );
+  const paginatedChargers = useMemo(
+    () =>
+      filteredChargers.slice(
+        (safeChargerPage - 1) * PAGE_SIZE,
+        safeChargerPage * PAGE_SIZE,
+      ),
+    [filteredChargers, safeChargerPage],
+  );
+
+  // Reset to page 1 when filters/search change or the underlying list reloads.
+  useEffect(() => {
+    setBatteryPage(1);
+  }, [batteryFilter, deferredBatterySearch, batteries.length]);
+  useEffect(() => {
+    setChargerPage(1);
+  }, [chargerFilter, deferredChargerSearch, chargers.length]);
 
   // ── Submit gating ───────────────────────────────────────────────────
   const pendingRequirements = useMemo(() => {
@@ -625,9 +792,11 @@ export default function ProductSelectionPage() {
     }
   };
 
-  const handleSaveDraft = () => {
+  const handleSaveDraft = async () => {
+    // Local snapshot first — keeps the page hydrated on reload without a
+    // round-trip and survives offline.
     try {
-      const payload = {
+      const localPayload = {
         batterySerial: selectedBattery?.serial_number ?? null,
         chargerSerial: selectedCharger?.serial_number ?? null,
         paraQty,
@@ -637,10 +806,54 @@ export default function ProductSelectionPage() {
         marginPercentInput,
         savedAt: new Date().toISOString(),
       };
-      localStorage.setItem(DRAFT_KEY(leadId), JSON.stringify(payload));
+      localStorage.setItem(DRAFT_KEY(leadId), JSON.stringify(localPayload));
       setLastSaved(formatLastSaved(new Date()));
     } catch {
-      setError("Could not save draft locally");
+      // ignore storage quota / private-mode errors
+    }
+
+    // Server persist — this is what makes the lead show up in /My Drafts.
+    // Mirrors the submit body shape, but every field is optional on the API
+    // so partial drafts work.
+    try {
+      const body: Record<string, unknown> = {
+        batterySerial: selectedBattery?.serial_number ?? null,
+        chargerSerial: selectedCharger?.serial_number ?? null,
+        paraphernalia: paramList,
+        paraphernaliaLines: paraLines,
+        dealerMargin: Number(dealerMargin || 0),
+        finalPrice,
+        batteryPrice,
+        chargerPrice,
+        paraphernaliaCost: paraCost,
+        batteryGross: batteryPriceTriple.gross,
+        batteryGstPercent: batteryPriceTriple.gstPct,
+        batteryGstAmount: batteryPriceTriple.gst,
+        batteryNet: batteryPriceTriple.net,
+        chargerGross: chargerPriceTriple.gross,
+        chargerGstPercent: chargerPriceTriple.gstPct,
+        chargerGstAmount: chargerPriceTriple.gst,
+        chargerNet: chargerPriceTriple.net,
+        grossSubtotal,
+        gstSubtotal,
+        netSubtotal,
+        category: access?.category ?? undefined,
+        subCategory: access?.productId ?? undefined,
+      };
+      const res = await fetch(
+        `/api/lead/${leadId}/product-selection/draft`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      const json = await res.json();
+      if (!json.success) {
+        setError(json.error?.message || "Could not save draft on server");
+      }
+    } catch {
+      setError("Could not save draft on server");
     }
   };
 
@@ -800,8 +1013,21 @@ export default function ProductSelectionPage() {
                 ) : (
                   <EditableSelectField
                     label="Product Category"
-                    value={access.category ?? ""}
-                    options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                    value={(() => {
+                      // Map slug-stored legacy values back to the canonical UUID
+                      // so the dropdown's value matches one of the options.
+                      const cat =
+                        categories.find((c) => c.id === access.category) ??
+                        categories.find((c) => c.slug === access.category);
+                      return cat?.id ?? access.category ?? "";
+                    })()}
+                    options={categories.map((c) => ({
+                      value: c.id,
+                      label:
+                        typeof c.available_count === "number"
+                          ? `${c.name} (${c.available_count} in stock)`
+                          : c.name,
+                    }))}
                     onChange={handleCategoryChange}
                     saving={savingCategory}
                     disabled={!categories.length}
@@ -880,28 +1106,48 @@ export default function ProductSelectionPage() {
             >
               {batteriesLoading ? (
                 <SkeletonCardGrid />
-              ) : filteredBatteries.length === 0 ? (
+              ) : batteries.length === 0 ? (
                 <EmptyState
                   icon={<BatteryIcon className="w-10 h-10 text-gray-300" />}
-                  title={
-                    batteries.length === 0
-                      ? "No available batteries in this category"
-                      : "No batteries match this filter"
-                  }
+                  title="No available batteries in this category"
                   hint="Try refreshing or contact your inventory manager."
                 />
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {filteredBatteries.map((b) => (
-                    <BatteryCard
-                      key={b.id}
-                      battery={b}
-                      selected={selectedBattery?.id === b.id}
-                      onSelect={() => setSelectedBattery(b)}
-                      disabled={!!access.readOnly}
+                <>
+                  <CardSearchBar
+                    value={batterySearch}
+                    onChange={setBatterySearch}
+                    placeholder="Search by serial or model"
+                  />
+                  {filteredBatteries.length === 0 ? (
+                    <EmptyState
+                      icon={<BatteryIcon className="w-10 h-10 text-gray-300" />}
+                      title="No batteries match this filter"
+                      hint="Try clearing the search or selecting a different age filter."
                     />
-                  ))}
-                </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {paginatedBatteries.map((b) => (
+                          <BatteryCard
+                            key={b.id}
+                            battery={b}
+                            selected={selectedBattery?.id === b.id}
+                            onSelect={() => setSelectedBattery(b)}
+                            disabled={!!access.readOnly}
+                          />
+                        ))}
+                      </div>
+                      <CardPagination
+                        page={safeBatteryPage}
+                        pageCount={batteryPageCount}
+                        total={filteredBatteries.length}
+                        pageSize={PAGE_SIZE}
+                        onChange={setBatteryPage}
+                      />
+                    </>
+                  )}
+                </>
               )}
             </SectionCard>
 
@@ -914,7 +1160,44 @@ export default function ProductSelectionPage() {
             )}
 
             {/* Section C — Charger */}
-            <SectionCard title="Charger">
+            <SectionCard
+              title="Charger"
+              action={
+                selectedBattery && chargers.length > 0 ? (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <FilterChip
+                      label={`All ${chargers.length}`}
+                      active={chargerFilter === "all"}
+                      onClick={() => setChargerFilter("all")}
+                    />
+                    {chargerRecommendedCount > 0 && (
+                      <FilterChip
+                        label={`Recommended ${chargerRecommendedCount}`}
+                        active={chargerFilter === "recommended"}
+                        tone="emerald"
+                        onClick={() => setChargerFilter("recommended")}
+                      />
+                    )}
+                    {chargerAgeingCount > 0 && (
+                      <FilterChip
+                        label={`Ageing ${chargerAgeingCount}`}
+                        active={chargerFilter === "ageing"}
+                        tone="amber"
+                        onClick={() => setChargerFilter("ageing")}
+                      />
+                    )}
+                    {chargerOldCount > 0 && (
+                      <FilterChip
+                        label={`Old ${chargerOldCount}`}
+                        active={chargerFilter === "old"}
+                        tone="red"
+                        onClick={() => setChargerFilter("old")}
+                      />
+                    )}
+                  </div>
+                ) : null
+              }
+            >
               {!selectedBattery ? (
                 <EmptyState
                   icon={<Plug className="w-10 h-10 text-gray-300" />}
@@ -936,19 +1219,41 @@ export default function ProductSelectionPage() {
                     <strong className="text-gray-700">
                       {selectedBattery.model_name || selectedBattery.model_type || "the selected battery"}
                     </strong>
-                    . Showing all available chargers in your inventory.
+                    . Oldest stock surfaces first (FIFO).
                   </p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {chargers.map((c) => (
-                      <ChargerCard
-                        key={c.id}
-                        charger={c}
-                        selected={selectedCharger?.id === c.id}
-                        onSelect={() => setSelectedCharger(c)}
-                        disabled={!!access.readOnly}
+                  <CardSearchBar
+                    value={chargerSearch}
+                    onChange={setChargerSearch}
+                    placeholder="Search by serial or model"
+                  />
+                  {filteredChargers.length === 0 ? (
+                    <EmptyState
+                      icon={<Plug className="w-10 h-10 text-gray-300" />}
+                      title="No chargers match this filter"
+                      hint="Try clearing the search or selecting a different age filter."
+                    />
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {paginatedChargers.map((c) => (
+                          <ChargerCard
+                            key={c.id}
+                            charger={c}
+                            selected={selectedCharger?.id === c.id}
+                            onSelect={() => setSelectedCharger(c)}
+                            disabled={!!access.readOnly}
+                          />
+                        ))}
+                      </div>
+                      <CardPagination
+                        page={safeChargerPage}
+                        pageCount={chargerPageCount}
+                        total={filteredChargers.length}
+                        pageSize={PAGE_SIZE}
+                        onChange={setChargerPage}
                       />
-                    ))}
-                  </div>
+                    </>
+                  )}
                 </>
               )}
             </SectionCard>
@@ -1037,23 +1342,50 @@ export default function ProductSelectionPage() {
 
       <StickyBottomBar lastSaved={lastSaved}>
         <OutlineButton onClick={() => router.back()}>Back</OutlineButton>
-        <SecondaryButton onClick={handleSaveDraft} disabled={!!access.readOnly}>
-          Save Draft
-        </SecondaryButton>
-        {isCash ? (
-          <button
-            onClick={handleSubmit}
-            disabled={!canSubmit}
-            className="px-8 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {submitting ? "Confirming…" : "Confirm Sale"}
-            <ChevronRight className="w-4 h-4" />
-          </button>
+        {access.readOnly ? (
+          // Read-only follow-ups by lead state. Once admin has acted, the
+          // dealer's next move lives at Step 5 — surface a clear CTA so they
+          // are not stranded staring at a disabled Submit button.
+          access.kycStatus === "loan_sanctioned" ||
+          access.kycStatus === "loan_rejected" ? (
+            <PrimaryButton
+              onClick={() => router.push(`/dealer-portal/leads/${leadId}/step-5`)}
+            >
+              Go to Step 5
+              <ChevronRight className="w-4 h-4" />
+            </PrimaryButton>
+          ) : access.kycStatus === "pending_final_approval" ? (
+            <span className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm font-bold">
+              <Clock className="w-4 h-4" />
+              Awaiting admin approval
+            </span>
+          ) : access.kycStatus === "sold" ? (
+            <span className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-bold">
+              <CheckCircle2 className="w-4 h-4" />
+              Sale completed
+            </span>
+          ) : null
         ) : (
-          <PrimaryButton onClick={handleSubmit} disabled={!canSubmit} loading={submitting}>
-            Submit for Final Approval
-            <ChevronRight className="w-4 h-4" />
-          </PrimaryButton>
+          <>
+            <SecondaryButton onClick={handleSaveDraft}>
+              Save Draft
+            </SecondaryButton>
+            {isCash ? (
+              <button
+                onClick={handleSubmit}
+                disabled={!canSubmit}
+                className="px-8 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {submitting ? "Confirming…" : "Confirm Sale"}
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            ) : (
+              <PrimaryButton onClick={handleSubmit} disabled={!canSubmit} loading={submitting}>
+                Submit for Final Approval
+                <ChevronRight className="w-4 h-4" />
+              </PrimaryButton>
+            )}
+          </>
         )}
       </StickyBottomBar>
 
@@ -1216,6 +1548,124 @@ function FilterChip({
   );
 }
 
+function CardSearchBar({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="relative mb-3">
+      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full pl-9 pr-9 py-2 text-[12px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#0047AB]/20 focus:border-[#0047AB]"
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          aria-label="Clear search"
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Compact pager for the card grids. Renders nothing when there's only one
+// page; otherwise shows a "Showing X–Y of Z" line plus prev / page-numbers /
+// next controls. Page numbers collapse to first / last + neighbors when there
+// are many pages so the row stays a single line on mobile.
+function CardPagination({
+  page,
+  pageCount,
+  total,
+  pageSize,
+  onChange,
+}: {
+  page: number;
+  pageCount: number;
+  total: number;
+  pageSize: number;
+  onChange: (p: number) => void;
+}) {
+  if (pageCount <= 1) return null;
+
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+
+  // Build a windowed list of page numbers: always show 1, last, and a window
+  // around the current page. Insert a `null` as a "…" gap.
+  const pages: (number | null)[] = [];
+  const window = 1;
+  for (let p = 1; p <= pageCount; p++) {
+    if (p === 1 || p === pageCount || (p >= page - window && p <= page + window)) {
+      pages.push(p);
+    } else if (pages[pages.length - 1] !== null) {
+      pages.push(null);
+    }
+  }
+
+  return (
+    <div className="mt-4 flex items-center justify-between flex-wrap gap-2">
+      <span className="text-[11px] text-gray-500">
+        Showing <strong className="text-gray-700">{start}</strong>–
+        <strong className="text-gray-700">{end}</strong> of{" "}
+        <strong className="text-gray-700">{total}</strong>
+      </span>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+          aria-label="Previous page"
+          className="p-1.5 rounded-md border border-gray-200 text-gray-600 hover:border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        {pages.map((p, idx) =>
+          p === null ? (
+            <span key={`gap-${idx}`} className="px-1 text-[11px] text-gray-400">
+              …
+            </span>
+          ) : (
+            <button
+              key={p}
+              type="button"
+              onClick={() => onChange(p)}
+              className={`min-w-[28px] px-2 py-1 rounded-md text-[11px] font-bold border transition-colors ${
+                p === page
+                  ? "bg-[#0047AB] text-white border-[#0047AB]"
+                  : "bg-white text-gray-600 border-gray-200 hover:border-gray-300"
+              }`}
+            >
+              {p}
+            </button>
+          ),
+        )}
+        <button
+          type="button"
+          onClick={() => onChange(Math.min(pageCount, page + 1))}
+          disabled={page === pageCount}
+          aria-label="Next page"
+          className="p-1.5 rounded-md border border-gray-200 text-gray-600 hover:border-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AgeBadge({
   badge,
   days,
@@ -1367,7 +1817,8 @@ function BatteryCard({
     <button
       onClick={onSelect}
       disabled={disabled}
-      className={`relative text-left p-4 rounded-2xl border-2 transition-all bg-white shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed ${ageBorder}`}
+      aria-disabled={disabled}
+      className={`relative text-left p-4 rounded-2xl border-2 transition-all bg-white shadow-sm hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 ${ageBorder}`}
     >
       {battery.recommended && (
         <span className="absolute -top-2 -right-2 inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-500 text-white rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm">
@@ -1438,7 +1889,8 @@ function ChargerCard({
     <button
       onClick={onSelect}
       disabled={disabled}
-      className={`relative text-left p-4 rounded-2xl border-2 transition-all bg-white shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed ${border}`}
+      aria-disabled={disabled}
+      className={`relative text-left p-4 rounded-2xl border-2 transition-all bg-white shadow-sm hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 ${border}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">

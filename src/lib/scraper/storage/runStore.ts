@@ -22,11 +22,12 @@ export async function markRunCompleted(
   runId: string,
   stats: {
     total: number;
-    cleaned: number; 
+    cleaned: number;
     saved: number;
     duplicates: number;
     duration_ms: number;
   },
+  errorMessage?: string | null,
 ) {
   await db
     .update(scrapeRuns)
@@ -39,6 +40,10 @@ export async function markRunCompleted(
       duplicates_skipped: stats.duplicates,
       cleaned_leads: stats.cleaned,
       duration_ms: stats.duration_ms,
+      // Persist a representative chunk-error when finalize completed with zero
+      // leads — otherwise UI shows "Completed, 0 leads" with no reason. Pass
+      // null/undefined to skip.
+      ...(errorMessage ? { error_message: errorMessage } : {}),
     })
     .where(eq(scrapeRuns.id, runId));
 }

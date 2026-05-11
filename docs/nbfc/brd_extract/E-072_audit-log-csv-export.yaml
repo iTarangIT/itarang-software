@@ -1,0 +1,130 @@
+id: E-072
+slug: audit-log-csv-export
+name: Admin Audit Log CSV export with MFA re-confirmation and purpose declaration
+source_section: "6.3.5"
+brd_excerpt: |
+  Export: &format=csv  (requires MFA re-confirmation + purpose declaration)
+
+depends_on: []
+non_functional:
+  - "Export is itself a privileged action and must be audit-logged"
+  - "MFA re-confirmation required at export time (not session-level)"
+  - "Purpose declaration is mandatory non-empty text"
+  - "DPDPA: exports of personally identifiable audit data must record requester and purpose"
+
+surface:
+  api:
+    - method: POST
+      path: /api/audit-log/export
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({
+          from: z.string().datetime().optional(),
+          to: z.string().datetime().optional(),
+          action: z.string().optional(),
+          requestedBy: z.string().uuid().optional(),
+          status: z.enum(["executed", "pending", "rejected"]).optional(),
+          entityId: z.string().optional(),
+          format: z.literal("csv"),
+          mfa_token: z.string().min(6),
+          purpose: z.string().min(10)
+        }).strict()
+      response_shape:
+        export_id: "uuid"
+        download_url: "string"
+        row_count: "number"
+  components: []
+  pages: []
+  jobs: []
+
+logic: |
+  1. Validate request body against request_zod; reject if MFA missing/short or purpose <10 chars.
+  2. Verify MFA token via auth provider; reject with 401 if invalid.
+  3. Resolve caller scope: admin = all rows; NBFC = own rows only.
+  4. Apply same filters as GET /api/audit-log.
+  5. Stream matching rows into a CSV file in object storage; record export_id and row_count.
+  6. Insert admin_audit_logs row with action='AUDIT_LOG_EXPORTED', payload={purpose, filters, row_count}, requested_by=caller.
+  7. Return export_id, signed download_url, and row_count.
+
+tables_columns:
+  reuse:
+    - table: admin_audit_logs
+      schema_ts_line: 1
+      columns: [id, tenant_id, timestamp, action, requested_by, payload]
+  new:
+    - table: admin_audit_log_exports
+      justification: "Tracks each CSV export with requester, declared purpose, applied filters, row count, and download URL TTL; required so DPDPA-relevant exports are themselves auditable and downloads can be revoked."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: requested_by, type: "uuid().notNull()" }
+        - { name: purpose, type: "text().notNull()" }
+        - { name: filters, type: "jsonb()" }
+        - { name: row_count, type: "integer().notNull()" }
+        - { name: storage_key, type: "text().notNull()" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: expires_at, type: "timestamp({ withTimezone: true })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/audit-log/export with valid MFA, format='csv', and purpose >=10 chars returns 200 with export_id, download_url, and row_count."
+    test_layer: api
+    test_name: "Export returns 200 with download URL on valid MFA and purpose"
+  - id: AC2
+    statement: "POST /api/audit-log/export returns 400 when purpose is shorter than 10 characters."
+    test_layer: api
+    test_name: "Export rejects short purpose with 400"
+  - id: AC3
+    statement: "POST /api/audit-log/export returns 401 when mfa_token is invalid."
+    test_layer: api
+    test_name: "Export rejects invalid MFA with 401"
+  - id: AC4
+    statement: "On successful export, an admin_audit_logs row is written with action='AUDIT_LOG_EXPORTED' containing the requester id, purpose, and row_count in payload."
+    test_layer: api
+    test_name: "Export writes its own audit row with purpose and row_count"
+  - id: AC5
+    statement: "When called with NBFC JWT, the exported CSV row_count equals only that NBFC's matching audit rows (not all NBFCs')."
+    test_layer: api
+    test_name: "NBFC export scope is limited to caller's tenant_id"
+  - id: AC6
+    statement: "Export requires MFA re-confirmation: POST /api/admin/audit-log/export without an `mfa_token` query param returns 401 with code='MFA_REQUIRED'. With a valid mfa_token (verified server-side, max 5-min age), returns 200 with the CSV stream and writes an audit row referencing the export confirmation."
+    test_layer: api
+    persona: itarang_super_admin
+    expected_response_shape:
+      missing_mfa:
+        status: 401
+        body:
+          code: "MFA_REQUIRED"
+      valid_mfa:
+        status: 200
+        content_type: "text/csv"
+        audit_row_written: true
+    test_name: "Export requires fresh MFA re-confirmation (max 5-min token age)"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-072
+  audited_at: "2026-05-01T06:10:31Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  reuse_findings:
+    - table: admin_audit_logs
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: ["id", "tenant_id", "timestamp", "action", "requested_by", "payload"]
+      reason: "admin_audit_logs does not exist in baseline; it is introduced by E-071 (which itself is currently in 'reject' verdict due to a synonym collision with the existing audit_logs table). depends_on should include E-071, and the synonym question must be resolved upstream."
+  new_findings:
+    - table: admin_audit_log_exports
+      justification_present: true
+      fuzzy_collisions: []
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "Reuse target admin_audit_logs is a NEW table from E-071 that is itself in 'reject' (synonym with existing audit_logs). Resolve E-071 before this unit can ship."
+    - "depends_on should include E-071."
+    - "No cross-doc gap (G-01..G-10) directly impacts admin_audit_log_exports."
+  checkpoint_html: "docs/nbfc/loop_report/E-072/checkpoint_1.html"

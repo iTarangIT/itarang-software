@@ -1,0 +1,262 @@
+id: E-092
+slug: score-explainability-drawer
+name: CDS/PCI score explainability drawer (formula, inputs, confidence)
+source_section: "6.4.5"
+brd_excerpt: |
+  6.4.5 CDS / PCI Score Explainability
+  Every score badge in the NBFC portal is clickable and opens a side drawer with: the formula, the input table (last 6 EMIs with individual contribution), confidence level with explanation of when NOT to trust it, and an override path.
+  Formula display: Plain-language formula shown in drawer: 'CDS = sum of EMI weights × recency multipliers + streak penalty, scaled 0–100'.
+  Input table: Last 6 EMIs: Due Date | Amount | Status | Days Late | Contribution to Score. Newest first.
+  Confidence level: HIGH / MEDIUM / LOW badge with explanation. LOW shown when: <3 EMI records | recent restructuring | force majeure flag | IoT offline >48h.
+  When NOT to trust: 'Insufficient history (<3 EMIs) · Recent restructuring · Declared force majeure · Manual override active'
+
+depends_on: []
+
+non_functional:
+  - "RBI Digital Lending Directions 2025: credit decisions affecting borrowers must be explainable; the drawer is the surface that satisfies this."
+  - "Explainability data must reflect the same inputs that produced the score (no recomputation drift)."
+  - "Confidence level rules are deterministic: LOW iff (emi_count<3) OR (recent_restructure) OR (force_majeure) OR (iot_offline_hours>48); MEDIUM/HIGH banded above that."
+
+surface:
+  api:
+    - method: GET
+      path: /api/nbfc/scores/explainability
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({ loan_application_id: z.string().min(1), score_type: z.enum(['cds','pci']) })
+      response_shape:
+        score_type: "cds | pci"
+        score_value: number
+        formula_text: string
+        inputs:
+          last_6_emis:
+            - { due_date: string, amount: number, status: string, days_late: number, contribution: number }
+        confidence:
+          level: "HIGH | MEDIUM | LOW"
+          reasons: "string[]"
+        when_not_to_trust: "string[]"
+        override:
+          available: boolean
+          required_role: "string"
+        computed_at: string
+  components:
+    - "src/components/nbfc/scores/ScoreExplainabilityDrawer.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Validate query against query_zod; resolve tenant.
+  2. Load latest nbfc_score_runs row for (loan_application_id, score_type); 404 if none.
+  3. Load nbfc_score_input_snapshots tied to the run — last 6 EMI rows with per-row contribution.
+  4. Build formula_text as the literal plain-language formula for the score_type.
+  5. Compute confidence: LOW if emi_count<3 OR recent_restructure_flag OR force_majeure_flag OR iot_offline_hours>48; MEDIUM if any one soft signal; else HIGH.
+  6. Populate when_not_to_trust as fixed string list per BRD: ['Insufficient history (<3 EMIs)','Recent restructuring','Declared force majeure','Manual override active'].
+  7. override.available=true if no active override exists for the loan; required_role='nbfc_risk_manager'.
+  8. Return all fields.
+
+tables_columns:
+  reuse:
+    - table: nbfc_loans
+      schema_ts_line: 2729
+      columns: [loan_application_id, tenant_id]
+  new:
+    - table: nbfc_score_runs
+      justification: "Persists each CDS/PCI computation with score_value, computed_at, and the input pointer; no existing risk_card_runs row stores per-loan score outputs with the input snapshot needed for explainability."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: loan_application_id, type: "varchar({ length: 255 }).notNull()" }
+        - { name: score_type, type: "varchar({ length: 8 }).notNull()" }
+        - { name: score_value, type: "numeric({ precision: 6, scale: 2 }).notNull()" }
+        - { name: computed_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: confidence_level, type: "varchar({ length: 8 }).notNull()" }
+        - { name: confidence_reasons, type: "jsonb()" }
+    - table: nbfc_score_input_snapshots
+      justification: "Stores the exact EMI inputs (with per-row contribution) used by a given score_run so explainability never drifts from the actual computation."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: score_run_id, type: "uuid().notNull()" }
+        - { name: row_index, type: "integer().notNull()" }
+        - { name: due_date, type: "timestamp({ withTimezone: true })" }
+        - { name: amount, type: "numeric({ precision: 12, scale: 2 })" }
+        - { name: status, type: "varchar({ length: 24 })" }
+        - { name: days_late, type: "integer()" }
+        - { name: contribution, type: "numeric({ precision: 6, scale: 2 })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/nbfc/scores/explainability?loan_application_id=L1&score_type=cds returns 200 with formula_text containing 'CDS = sum of EMI weights × recency multipliers + streak penalty, scaled 0–100' and inputs.last_6_emis length ≤ 6, sorted newest-first by due_date."
+    test_layer: api
+    test_name: "Explainability returns formula and last 6 EMIs newest-first"
+  - id: AC2
+    statement: "When the loan has fewer than 3 EMI records, response confidence.level == 'LOW' and confidence.reasons contains 'Insufficient history (<3 EMIs)'."
+    test_layer: api
+    test_name: "Confidence is LOW when EMI history < 3"
+  - id: AC3
+    statement: "Response when_not_to_trust equals ['Insufficient history (<3 EMIs)','Recent restructuring','Declared force majeure','Manual override active'] verbatim."
+    test_layer: api
+    test_name: "When-not-to-trust list is the BRD-mandated four items"
+  - id: AC4
+    statement: "GET with score_type not in {'cds','pci'} returns 400."
+    test_layer: api
+    test_name: "Explainability rejects unsupported score type"
+  - id: AC5
+    statement: "GET for a loan with no score run returns 404."
+    test_layer: api
+    test_name: "Explainability returns 404 when no score has been computed"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit: |
+  {
+    "unit_id": "E-092",
+    "audited_at": "2026-05-01T06:16:03Z",
+    "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+    "reuse_findings": [
+      {
+        "table": "nbfc_loans",
+        "verified": true,
+        "ts_line": 2729,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "loan_application_id",
+          "tenant_id"
+        ],
+        "columns_missing": []
+      }
+    ],
+    "new_findings": [
+      {
+        "table": "nbfc_score_runs",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 199,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "loan_application_id",
+            "type": "varchar({ length: 255 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "score_type",
+            "type": "varchar({ length: 8 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "score_value",
+            "type": "numeric({ precision: 6, scale: 2 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "numeric",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "computed_at",
+            "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "confidence_level",
+            "type": "varchar({ length: 8 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "confidence_reasons",
+            "type": "jsonb()",
+            "type_lint_ok": true,
+            "type_head": "jsonb",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      },
+      {
+        "table": "nbfc_score_input_snapshots",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 141,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "score_run_id",
+            "type": "uuid().notNull()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "row_index",
+            "type": "integer().notNull()",
+            "type_lint_ok": true,
+            "type_head": "integer",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "due_date",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "amount",
+            "type": "numeric({ precision: 12, scale: 2 })",
+            "type_lint_ok": true,
+            "type_head": "numeric",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "status",
+            "type": "varchar({ length: 24 })",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "days_late",
+            "type": "integer()",
+            "type_lint_ok": true,
+            "type_head": "integer",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "contribution",
+            "type": "numeric({ precision: 6, scale: 2 })",
+            "type_lint_ok": true,
+            "type_head": "numeric",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      }
+    ],
+    "verdict": "needs_schema_approval",
+    "migration_required": false,
+    "notes": [
+      "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+    ],
+    "checkpoint_html": "docs/nbfc/loop_report/E-092/checkpoint_1.html"
+  }

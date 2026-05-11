@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>/nbfc skill — visual flow</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #f7f8fa;
+    color: #111;
+    margin: 0;
+    padding: 32px;
+    line-height: 1.5;
+  }
+  h1 { font-size: 28px; font-weight: 700; margin: 0 0 8px; }
+  h2 { font-size: 18px; font-weight: 600; margin: 32px 0 12px; color: #2d4a8a; }
+  .meta { color: #555; font-size: 14px; margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: 1fr 360px; gap: 32px; max-width: 1600px; }
+  .card { background: white; border: 1px solid #e1e5eb; border-radius: 6px; padding: 20px; margin-bottom: 16px; }
+  .legend { font-size: 13px; }
+  .legend-item { display: flex; align-items: center; margin: 6px 0; }
+  .legend-swatch { display: inline-block; width: 14px; height: 14px; margin-right: 8px; border-radius: 3px; }
+  .swatch-stage { background: #2d4a8a; }
+  .swatch-agent { background: #c0392b; }
+  .swatch-script { background: #1e7e34; }
+  .swatch-data { background: #b45309; }
+  .swatch-loop { background: #6b46c1; }
+  .swatch-checkpoint { background: #b91c1c; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e1e5eb; }
+  th { background: #f0f2f5; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  code { background: #eef0f3; padding: 1px 6px; border-radius: 3px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; }
+  .section { margin-bottom: 24px; }
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 12px 0; }
+  .stat { background: white; border: 1px solid #e1e5eb; border-radius: 4px; padding: 10px 14px; }
+  .stat-num { font-size: 22px; font-weight: 700; color: #2d4a8a; }
+  .stat-lbl { font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.05em; }
+  .mermaid { background: white; border: 1px solid #e1e5eb; border-radius: 6px; padding: 12px; }
+</style>
+</head>
+<body>
+  <h1>/nbfc skill — pipeline visualization</h1>
+  <p class="meta">Closed-loop BRD → tested code system. As of last run: <strong>61 / 63 units passed</strong>, on branch <code>apoorv-claude</code>.</p>
+
+  <div class="stat-grid">
+    <div class="stat"><div class="stat-num">63</div><div class="stat-lbl">Total units</div></div>
+    <div class="stat"><div class="stat-num">61</div><div class="stat-lbl">Passed</div></div>
+    <div class="stat"><div class="stat-num">2</div><div class="stat-lbl">Superseded (duplicates)</div></div>
+    <div class="stat"><div class="stat-num">~50</div><div class="stat-lbl">New tables in schema.ts</div></div>
+  </div>
+
+  <div class="grid">
+    <div>
+
+      <h2>Pipeline flow</h2>
+      <div class="mermaid">
+flowchart TD
+  classDef stage fill:#2d4a8a,stroke:#1a2f5a,color:#fff,stroke-width:1px
+  classDef agent fill:#c0392b,stroke:#7d2418,color:#fff
+  classDef script fill:#1e7e34,stroke:#155224,color:#fff
+  classDef data fill:#b45309,stroke:#7c3a08,color:#fff
+  classDef loop fill:#6b46c1,stroke:#4a2f8a,color:#fff
+  classDef checkpoint fill:#b91c1c,stroke:#7f1212,color:#fff,stroke-dasharray:3 3
+
+  BRD[/"BRD docx files<br/>(Section 6 + Sync Audit)"/]:::data
+
+  S1["Stage 1<br/>Preflight"]:::stage
+  S2["Stage 2<br/>Extract"]:::stage
+  S3["Stage 3<br/>Audit baseline"]:::stage
+  S4["Stage 4<br/>Per-unit audit"]:::stage
+  S5["Stage 5<br/>Loop --all<br/>(worktree fan-out)"]:::stage
+  S5b["Stage 5b<br/>Cumulative merge<br/>(repeated)"]:::stage
+  S5h["Stage 5h NEW<br/>Headed visual tests"]:::stage
+  S5i["Stage 5i NEW<br/>Gap detection"]:::stage
+  S6["Stage 6<br/>Report"]:::stage
+  S7["Stage 7<br/>Push / PRs<br/>(gated)"]:::stage
+
+  CB{{"Checkpoint A<br/>needs_clarification"}}:::checkpoint
+  CC{{"Checkpoint B<br/>needs_schema_approval"}}:::checkpoint
+  CD{{"Checkpoint C<br/>needs_spec_review"}}:::checkpoint
+  CE{{"Checkpoint D<br/>convergence_stalled"}}:::checkpoint
+
+  YAML[("docs/nbfc/brd_extract/<br/>E-NNN_*.yaml<br/>+ _audit_*.json")]:::data
+  CODE[("src/app/api/...<br/>+ src/lib/db/schema.ts")]:::data
+  TESTS[("tests/e2e/nbfc/<br/>*.api.spec.ts<br/>+ *.headed.spec.ts NEW")]:::data
+  SHOTS[("docs/nbfc/headed_tests/<br/>E-NNN/*.png NEW")]:::data
+  GAPS[("docs/nbfc/headed_tests/<br/>gaps.json NEW")]:::data
+  RPT[("docs/nbfc/loop_report/<br/>index.html<br/>+ _convergence_report.html NEW")]:::data
+
+  BRD --> S1 --> S2
+  S2 --> CB
+  S2 --> YAML
+  CB -.cleared.-> S3
+  S3 --> S4
+  S4 --> CC
+  S4 --> YAML
+  CC -.--auto-approve-schema.-> S5
+
+  S5 -.->|spawns worktree| L1[("Inner loop per unit<br/>step 0..6")]:::loop
+  L1 --> CODE
+  L1 --> TESTS
+  L1 --> CD
+  CD -.cleared.-> L1
+  L1 --> S5b
+  S5b --> S5h
+  S5h --> SHOTS
+  S5h --> S5i
+  S5i --> GAPS
+
+  S5i -.gaps detected.-> Revise[/"extractor --mode=revise<br/>patches YAML"/]:::agent
+  Revise --> YAML
+  Revise -.next iteration.-> S2
+
+  S5i -.no gaps + all green.-> S6
+  S5i -.cap hit / stall.-> CE
+  CE -.-> S6
+
+  S6 --> RPT
+  S6 --> S7
+      </div>
+
+      <h2>Agents (sub-LLMs invoked per unit)</h2>
+      <table>
+        <tr><th>Agent</th><th>Modes</th><th>What it does</th></tr>
+        <tr>
+          <td><code>agents/extractor.md</code></td>
+          <td><code>bulk</code> · <code>revalidate</code> · <code>revise</code> NEW</td>
+          <td>Parses BRD docx sections into per-unit YAMLs. Re-extracts on each loop iteration to detect drift. Patches YAMLs with gap-feedback in convergence mode.</td>
+        </tr>
+        <tr>
+          <td><code>agents/schema-auditor.md</code></td>
+          <td><code>--baseline</code> · per-unit</td>
+          <td>Indexes <code>src/lib/db/schema.ts</code> for fuzzy-name matching. Audits each unit's <code>tables_columns.reuse[]</code> + <code>new[]</code> for collisions. Flips status to <code>needs_schema_approval</code> if needed.</td>
+        </tr>
+        <tr>
+          <td><code>agents/code-writer.md</code></td>
+          <td>worktree</td>
+          <td>Generates Drizzle schema additions, NBFC routes (<code>getCurrentTenant()+requireNbfcAccess</code>), admin routes (mirror nearest sibling), components, pages, jobs.</td>
+        </tr>
+        <tr>
+          <td><code>agents/test-writer.md</code></td>
+          <td>worktree (api+ui+headed NEW)</td>
+          <td>Emits one <code>test()</code> per AC at the layer the YAML specifies. Now also writes <code>*.headed.spec.ts</code> from <code>playwright-test-headed.ts.tmpl</code>.</td>
+        </tr>
+        <tr>
+          <td><code>agents/failure-investigator.md</code></td>
+          <td>worktree</td>
+          <td>On red iteration: classifies the failure (env, dependency, logic, spec_incomplete) and returns a JSON patch (unified diffs) for code-writer to apply.</td>
+        </tr>
+      </table>
+
+      <h2>Scripts (deterministic plumbing)</h2>
+      <table>
+        <tr><th>Script</th><th>Stage</th><th>Output</th></tr>
+        <tr><td><code>preflight.sh</code></td><td>1</td><td><code>_preflight.json</code></td></tr>
+        <tr><td><code>extract_docx.py</code></td><td>2</td><td>plain-text dump of BRD</td></tr>
+        <tr><td><code>validate_unit.py</code></td><td>2</td><td>YAML conformance check</td></tr>
+        <tr><td><code>manifest_aggregate.py</code></td><td>any</td><td><code>manifest.json</code> with all unit fragments</td></tr>
+        <tr><td><code>spec_diff.py</code></td><td>5 step 0</td><td>blocking / non_blocking / none diff verdict</td></tr>
+        <tr><td><code>start_dev_server.sh</code> / <code>stop_dev_server.sh</code></td><td>5 step 3</td><td>ephemeral port + dev process</td></tr>
+        <tr><td><code>run_tests.sh</code></td><td>5 step 3</td><td>API + UI Playwright JSON results</td></tr>
+        <tr><td><code>run_headed_tests.sh</code> NEW</td><td>5h</td><td>Headed Playwright + screenshots</td></tr>
+        <tr><td><code>detect_gaps.py</code> NEW</td><td>5i</td><td><code>gaps.json</code> per unit</td></tr>
+        <tr><td><code>render_gap_feedback.py</code> NEW</td><td>5i</td><td><code>gap_feedback.html</code> + aggregate</td></tr>
+        <tr><td><code>render_report.py</code></td><td>6</td><td><code>loop_report/index.html</code></td></tr>
+        <tr><td><code>converge.sh</code> NEW</td><td>outer</td><td>Iterates 1–N, halts on convergence / cap / stall</td></tr>
+        <tr><td><code>git_push.sh</code> · <code>worktree_gc.sh</code></td><td>7 / cleanup</td><td>git operations + worktree FIFO eviction</td></tr>
+      </table>
+
+      <h2>Inner loop (per unit, inside Stage 5)</h2>
+      <div class="mermaid">
+flowchart LR
+  classDef step fill:#2d4a8a,stroke:#1a2f5a,color:#fff
+  classDef agent fill:#c0392b,stroke:#7d2418,color:#fff
+  classDef branch fill:#1e7e34,stroke:#155224,color:#fff
+  classDef cap fill:#b91c1c,stroke:#7f1212,color:#fff
+
+  WT[/"Worktree<br/>nbfc/E-NNN<br/>off apoorv-claude"/]:::branch
+
+  S0["Step 0<br/>Spec-revalidate"]:::step
+  S1["Step 1<br/>Re-audit<br/>(if schema changed)"]:::step
+  S2["Step 2<br/>Code-write"]:::step
+  S3["Step 3<br/>Test-write"]:::step
+  S4["Step 4<br/>run_tests.sh"]:::step
+  S5{{"Tests green?"}}
+  S6["Step 6<br/>Commit + render<br/>loop_NN.html"]:::step
+
+  Inv["agents/<br/>failure-investigator"]:::agent
+  Cap{{"loop_count == 5<br/>OR repeat-signature"}}:::cap
+
+  WT --> S0 --> S1 --> S2 --> S3 --> S4 --> S5
+  S5 -.green.-> S6
+  S5 -.red.-> Inv
+  Inv -.patch.-> S2
+  Inv -.spec_incomplete.-> S0
+  Inv -.no progress.-> Cap
+      </div>
+
+      <h2>Data flow (where every artifact lives)</h2>
+      <div class="mermaid">
+flowchart LR
+  classDef in fill:#b45309,stroke:#7c3a08,color:#fff
+  classDef gen fill:#1e7e34,stroke:#155224,color:#fff
+  classDef out fill:#2d4a8a,stroke:#1a2f5a,color:#fff
+
+  D1[/"docs/nbfc/Section_6_*.docx<br/>+ BRD_3Way_Sync_Audit.docx"/]:::in
+  D2[("docs/nbfc/brd_extract/<br/>E-NNN_*.yaml<br/>(committed)")]:::gen
+  D3[("docs/nbfc/brd_extract/<br/>_audit_*.json<br/>(committed)")]:::gen
+  D4[("docs/nbfc/manifest/<br/>E-NNN.json<br/>(gitignored fragment)")]:::gen
+  D5[("docs/nbfc/manifest.json<br/>(aggregated, gitignored)")]:::gen
+
+  S1[("src/lib/db/schema.ts<br/>(50+ new tables)")]:::out
+  S2[("src/app/api/...<br/>(API routes)")]:::out
+  S3[("src/components/...<br/>+ src/app/(dashboard)/...<br/>(UI)")]:::out
+  S4[("tests/e2e/nbfc/<br/>*.api / .ui / .headed.spec.ts")]:::out
+
+  R1[("docs/nbfc/loop_report/<br/>index.html<br/>(dashboard)")]:::out
+  R2[("docs/nbfc/loop_report/<br/>E-NNN/loop_NN.html")]:::out
+  R3[("docs/nbfc/headed_tests/<br/>E-NNN/*.png<br/>+ visual_test_report.html")]:::out
+  R4[("docs/nbfc/headed_tests/<br/>E-NNN/gaps.json<br/>+ gap_feedback.html")]:::out
+  R5[("docs/nbfc/headed_tests/<br/>_convergence_report.html")]:::out
+
+  D1 --> D2
+  D2 --> D3
+  D2 --> S1
+  D2 --> S2
+  D2 --> S3
+  D2 --> S4
+  D2 --> D4
+  D4 --> D5
+
+  S1 --> R1
+  S2 --> R1
+  S3 --> R1
+  S4 --> R3
+  S4 --> R4
+
+  D5 --> R1
+  D5 --> R5
+  R3 --> R5
+  R4 --> R5
+      </div>
+
+    </div>
+
+    <aside>
+      <div class="card">
+        <h2 style="margin-top:0">Legend</h2>
+        <div class="legend">
+          <div class="legend-item"><span class="legend-swatch swatch-stage"></span> Pipeline stage</div>
+          <div class="legend-item"><span class="legend-swatch swatch-agent"></span> LLM sub-agent</div>
+          <div class="legend-item"><span class="legend-swatch swatch-script"></span> Deterministic script</div>
+          <div class="legend-item"><span class="legend-swatch swatch-data"></span> Input file</div>
+          <div class="legend-item"><span class="legend-swatch swatch-loop"></span> Loop body</div>
+          <div class="legend-item"><span class="legend-swatch swatch-checkpoint"></span> Human checkpoint</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 style="margin-top:0">Four human checkpoints</h2>
+        <ol style="font-size:13px; padding-left:18px;">
+          <li><strong>needs_clarification</strong> — BRD ambiguity at extract time. Human edits the YAML.</li>
+          <li><strong>needs_schema_approval</strong> — unit proposes new tables/columns. Human reviews per-unit checkpoint HTML, approves with <code>--auto-approve-schema</code>.</li>
+          <li><strong>needs_spec_review</strong> — spec-revalidate detects blocking BRD drift mid-iteration. Human approves the proposed YAML diff.</li>
+          <li><strong>needs_pr_review</strong> — green unit is ready to merge. Human confirms before <code>git push</code>.</li>
+        </ol>
+      </div>
+
+      <div class="card">
+        <h2 style="margin-top:0">Convergence guardrails</h2>
+        <ul style="font-size:13px; padding-left:18px;">
+          <li>Inner loop: max <strong>5</strong> iterations / unit; halts on repeat-signature</li>
+          <li>Outer convergence: max <strong>5</strong> iterations; halts on stall</li>
+          <li>Spec amendments: max <strong>2</strong> per unit (3rd → <code>blocked: spec_chase</code>)</li>
+          <li>YAML revisions: max <strong>3</strong> per unit (4th → <code>blocked: revision_chase</code>)</li>
+          <li>Schema lock: at most <strong>1</strong> schema-modifying unit at a time</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2 style="margin-top:0">Headed scope (NEW)</h2>
+        <p style="font-size:13px;">Every passed unit is supposed to produce visual evidence:</p>
+        <ul style="font-size:13px; padding-left:18px;">
+          <li><strong>UI ACs</strong> — <code>page.goto()</code> + <code>page.screenshot()</code> per AC step</li>
+          <li><strong>API ACs</strong> — render JSON via <code>/headed-api-viewer/[E-NNN]/page.tsx</code> + screenshot</li>
+        </ul>
+        <p style="font-size:13px;">Output: <code>docs/nbfc/headed_tests/E-NNN/*.png</code></p>
+      </div>
+
+      <div class="card">
+        <h2 style="margin-top:0">Open the live reports</h2>
+        <ul style="font-size:13px; padding-left:18px;">
+          <li><a href="loop_report/index.html">loop_report/index.html</a> — main dashboard</li>
+          <li><a href="headed_tests/_convergence_report.html">headed_tests/_convergence_report.html</a> — convergence run state</li>
+          <li><code>git log apoorv-claude</code> — green-unit commit history</li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'default', securityLevel: 'loose', flowchart: { curve: 'basis' } });
+</script>
+</body>
+</html>

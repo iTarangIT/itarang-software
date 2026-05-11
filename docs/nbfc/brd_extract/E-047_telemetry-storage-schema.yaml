@@ -1,0 +1,138 @@
+id: E-047
+slug: telemetry-storage-schema
+name: Telemetry events and daily summary storage schema
+source_section: "6.2.4"
+brd_excerpt: |
+  6.2.4 Telemetry Data Storage
+
+  telemetry_events — Raw Time-Series Store
+  Columns: id BIGINT PK AUTO (high-volume table, partition by month);
+  serial_number VARCHAR(50) (FK to inventory, not enforced at DB level for write throughput);
+  imei_id VARCHAR(20); device_time TIMESTAMP (Device-reported UTC);
+  server_time TIMESTAMP (Server receipt time);
+  soc_percent TINYINT; soh_percent TINYINT;
+  voltage_v DECIMAL(6,2); current_a DECIMAL(7,2) (Positive = charging);
+  temperature_c DECIMAL(5,2); charge_cycles INT;
+  gps_lat DECIMAL(10,7); gps_lng DECIMAL(10,7);
+  daily_km DECIMAL(8,2); idle_hours DECIMAL(6,2);
+  bms_status VARCHAR(50); charger_connected BOOLEAN.
+
+  telemetry_daily_summary — Aggregated for Risk Scoring
+  Columns: id INT PK AUTO; serial_number VARCHAR(50);
+  summary_date DATE (one row per battery per day);
+  avg_soc DECIMAL(5,2); min_soc DECIMAL(5,2);
+  max_soh DECIMAL(5,2); total_km DECIMAL(8,2);
+  total_idle_hours DECIMAL(6,2);
+  charge_sessions INT (number of charge events);
+  bms_faults INT DEFAULT 0 (count of fault/warning bms_status events);
+  packets_received INT (data quality metric);
+  gps_home_lat DECIMAL(10,7); gps_home_lng DECIMAL(10,7) (most common GPS cluster for this day).
+depends_on:
+  - E-045
+non_functional:
+  - "telemetry_events is high-volume; intended monthly partitioning, no FK enforcement on serial_number for write throughput."
+  - "telemetry_daily_summary upserts on (serial_number, summary_date) — exactly one row per battery per day."
+  - "Schema-only unit; no API surface. The auditor approves schema before ingestion (E-046) writes to it."
+
+surface:
+  api: []
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Define telemetry_events table for raw per-packet rows (insert-only by E-046).
+  2. Define telemetry_daily_summary table with unique (serial_number, summary_date) upsert key.
+  3. Schema migration produces both tables; no application code in this unit.
+
+tables_columns:
+  reuse: []
+  new:
+    - table: telemetry_events
+      justification: "BRD 6.2.4 mandates raw time-series store; no existing iTarang table holds per-packet IoT readings."
+      columns:
+        - { name: id, type: "bigserial().primaryKey()" }
+        - { name: serial_number, type: "varchar({ length: 50 }).notNull()" }
+        - { name: imei_id, type: "varchar({ length: 20 }).notNull()" }
+        - { name: device_time, type: "timestamp({ withTimezone: true }).notNull()" }
+        - { name: server_time, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: soc_percent, type: "integer()" }
+        - { name: soh_percent, type: "integer()" }
+        - { name: voltage_v, type: "numeric({ precision: 6, scale: 2 })" }
+        - { name: current_a, type: "numeric({ precision: 7, scale: 2 })" }
+        - { name: temperature_c, type: "numeric({ precision: 5, scale: 2 })" }
+        - { name: charge_cycles, type: "integer()" }
+        - { name: gps_lat, type: "numeric({ precision: 10, scale: 7 })" }
+        - { name: gps_lng, type: "numeric({ precision: 10, scale: 7 })" }
+        - { name: daily_km, type: "numeric({ precision: 8, scale: 2 })" }
+        - { name: idle_hours, type: "numeric({ precision: 6, scale: 2 })" }
+        - { name: bms_status, type: "varchar({ length: 50 })" }
+        - { name: charger_connected, type: "boolean()" }
+    - table: telemetry_daily_summary
+      justification: "BRD 6.2.4 requires daily aggregates for CDS scoring input; not derivable from any existing table without expensive scans."
+      columns:
+        - { name: id, type: "serial().primaryKey()" }
+        - { name: serial_number, type: "varchar({ length: 50 }).notNull()" }
+        - { name: summary_date, type: "date().notNull()" }
+        - { name: avg_soc, type: "numeric({ precision: 5, scale: 2 })" }
+        - { name: min_soc, type: "numeric({ precision: 5, scale: 2 })" }
+        - { name: max_soh, type: "numeric({ precision: 5, scale: 2 })" }
+        - { name: total_km, type: "numeric({ precision: 8, scale: 2 })" }
+        - { name: total_idle_hours, type: "numeric({ precision: 6, scale: 2 })" }
+        - { name: charge_sessions, type: "integer().default(0)" }
+        - { name: bms_faults, type: "integer().notNull().default(0)" }
+        - { name: packets_received, type: "integer().notNull().default(0)" }
+        - { name: gps_home_lat, type: "numeric({ precision: 10, scale: 7 })" }
+        - { name: gps_home_lng, type: "numeric({ precision: 10, scale: 7 })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "Drizzle migration creates telemetry_events table with bigserial id and all 16 columns named in the BRD."
+    test_layer: api
+    test_name: "telemetry_events table exists with all BRD columns after migration"
+  - id: AC2
+    statement: "Drizzle migration creates telemetry_daily_summary table with a unique constraint on (serial_number, summary_date)."
+    test_layer: api
+    test_name: "telemetry_daily_summary has unique (serial_number, summary_date) constraint"
+  - id: AC3
+    statement: "Inserting two telemetry_daily_summary rows with the same (serial_number, summary_date) violates the unique constraint."
+    test_layer: api
+    test_name: "duplicate (serial_number, summary_date) insert is rejected"
+
+status: passed
+loop_count: 1
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-047
+  audited_at: "2026-05-01T06:11:00Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  verdict: reject
+  migration_required: false
+  reuse_findings: []
+  new_findings:
+    - table: telemetry_events
+      justification_present: true
+      decision: rejected_pending_clarification
+      fuzzy_collisions:
+        - proposed: serial_number
+          candidates: [deployed_assets.serial_number, inventory.serial_number, oem_inventory_for_pdi.serial_number]
+          best_score: 1.0
+        - proposed: soc_percent
+          candidates: [inventory.soc_percent]
+          best_score: 1.0
+        - proposed: voltage_v
+          candidates: [products.voltage_v]
+          best_score: 1.0
+    - table: telemetry_daily_summary
+      justification_present: true
+      decision: rejected_pending_clarification
+      fuzzy_collisions:
+        - proposed: serial_number
+          candidates: [deployed_assets.serial_number, inventory.serial_number, oem_inventory_for_pdi.serial_number]
+          best_score: 1.0
+  notes:
+    - "BRD 6.2.4 mandates these two new tables; no existing equivalent in baseline."
+    - "AC2 expects unique (serial_number, summary_date) constraint — ensure migration adds .unique() or composite uniqueIndex."
+    - "Fuzzy collisions are FK-style same-name reuse, not renames; reviewer must rule."
+  checkpoint_html: docs/nbfc/loop_report/E-047/checkpoint_1.html

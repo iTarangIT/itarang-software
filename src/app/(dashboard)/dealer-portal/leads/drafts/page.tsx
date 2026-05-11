@@ -206,7 +206,15 @@ export default function DraftsPage() {
                                         <td className="px-6 py-4 text-right">
                                             <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                                 <button
-                                                    onClick={() => router.push(`/dealer-portal/leads/${d.id}/kyc`)}
+                                                    onClick={() => {
+                                                        // Step 4 drafts resume on the product-selection
+                                                        // page; everything earlier resumes on the KYC
+                                                        // wizard which already routes between Steps 1-3.
+                                                        const target = d.workflow_step >= 4
+                                                            ? `/dealer-portal/leads/${d.id}/product-selection`
+                                                            : `/dealer-portal/leads/${d.id}/kyc`;
+                                                        router.push(target);
+                                                    }}
                                                     className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-brand-50 text-brand-700 hover:bg-brand-100 rounded-lg text-xs font-semibold transition-all"
                                                 >
                                                     Resume <ChevronRight className="w-3 h-3" />

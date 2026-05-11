@@ -6,7 +6,109 @@ import { successResponse, errorResponse, withErrorHandler, generateId } from '@/
 import { requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
 import { eq, and, sql, desc } from 'drizzle-orm';
-import { dealerOnboardingApplications } from '@/lib/db/schema';
+import {
+    dealerOnboardingApplications,
+    dealers,
+    dealerNbfcAssignments,
+} from '@/lib/db/schema';
+
+// [E-105] Lead-creation dealer-status gate (Sync Audit G-10).
+// Returns a structured 403 response with a stable string error code so the
+// dealer-portal UI can localise messages without parsing message text.
+function gateError(
+    code: 'DEALER_NOT_ACTIVE' | 'FINANCE_NOT_ENABLED' | 'NO_ACTIVE_NBFC',
+    message: string,
+    extra: Record<string, unknown> = {}
+) {
+    return NextResponse.json(
+        { success: false, error: code, message, ...extra },
+        { status: 403 }
+    );
+}
+
+/**
+ * [E-105] Validate that the calling dealer is permitted to create a lead.
+ *
+ * Three pre-insert guards (BRD §F.1):
+ *  1. dealer.onboarding_status === 'active' (always)
+ *  2. dealer.finance_enabled === true        (finance-path only)
+ *  3. ≥1 active dealer_nbfc_assignments row (finance-path only)
+ *
+ * paymentMethod is treated as finance-path when it is anything other than the
+ * cash-equivalent values ('cash' / legacy 'upfront'). When paymentMethod is
+ * undefined (e.g. initializeDraft mode where payment hasn't been chosen yet)
+ * only the onboarding_status guard runs — the finance guards apply at commit.
+ *
+ * Returns null on pass, or a NextResponse with the structured 403 body on
+ * fail.
+ */
+async function checkDealerStatusGate(
+    dealerCode: string,
+    paymentMethod: string | null | undefined
+): Promise<NextResponse | null> {
+    const [dealer] = await db
+        .select({
+            id: dealers.id,
+            onboarding_status: dealers.onboarding_status,
+            finance_enabled: dealers.finance_enabled,
+        })
+        .from(dealers)
+        .where(eq(dealers.dealer_id, dealerCode))
+        .limit(1);
+
+    if (!dealer) {
+        // No canonical dealers row yet — the account is in some pre-activation
+        // state (still in dealer_onboarding_applications). Treat as not active.
+        return gateError(
+            'DEALER_NOT_ACTIVE',
+            'Your dealer account is not yet active. Current status: not_onboarded.',
+            { currentStatus: 'not_onboarded' }
+        );
+    }
+
+    if (dealer.onboarding_status !== 'active') {
+        return gateError(
+            'DEALER_NOT_ACTIVE',
+            `Your dealer account is not yet active. Current status: ${dealer.onboarding_status}.`,
+            { currentStatus: dealer.onboarding_status }
+        );
+    }
+
+    // Finance-path detection. The form / Zod schema accepts both BRD-cased
+    // values ('Cash', 'Other finance', 'Dealer finance') and the lower-cased
+    // legacy values ('cash', 'upfront', 'other_finance', 'dealer_finance'),
+    // so we normalise here.
+    if (!paymentMethod) return null; // payment not yet chosen → skip finance guards
+    const pm = String(paymentMethod).toLowerCase().trim();
+    const isCashLike = pm === 'cash' || pm === 'upfront';
+    if (isCashLike) return null;
+
+    if (dealer.finance_enabled === false) {
+        return gateError(
+            'FINANCE_NOT_ENABLED',
+            'Finance-path leads require Finance Enablement to be active. Please contact iTarang to activate.'
+        );
+    }
+
+    const [{ count: activeAssignments } = { count: 0 }] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(dealerNbfcAssignments)
+        .where(
+            and(
+                eq(dealerNbfcAssignments.dealer_id, dealer.id),
+                eq(dealerNbfcAssignments.status, 'active')
+            )
+        );
+
+    if (!activeAssignments || activeAssignments === 0) {
+        return gateError(
+            'NO_ACTIVE_NBFC',
+            'No active lending partner is assigned to your account. Please contact iTarang admin.'
+        );
+    }
+
+    return null;
+}
 
 const step1Schema = z.object({
     full_name: z.string().optional().nullable(),
@@ -61,8 +163,38 @@ const normalizePhone = (phone?: string | null) => {
     return phone.startsWith('+') ? phone : `+91${clean}`;
 };
 
+// [E-105] Test-only auth bypass — mirrors src/app/api/admin/nbfc/route.ts
+// pattern (triple-guarded). Lets API tests stand up dealers + assignments and
+// exercise the dealer-status gate without spinning up a full Supabase session.
+function isTestBypassAllowed() {
+    return (
+        process.env.NODE_ENV !== 'production' &&
+        (process.env.NBFC_TEST_BYPASS === '1' ||
+            process.env.PLAYWRIGHT_TEST === '1' ||
+            process.env.NEXT_PUBLIC_NBFC_TEST_MODE === '1')
+    );
+}
+
+function tryTestBypass(req: Request): { id: string; name: string; email: string; role: string; dealer_id: string | null } | null {
+    if (!isTestBypassAllowed()) return null;
+    const secretHeader = req.headers.get('x-test-admin-secret');
+    const dealerCode = req.headers.get('x-test-dealer-code');
+    const userId = req.headers.get('x-test-user-id');
+    const expected = process.env.NBFC_TEST_BYPASS_SECRET || 'test-bypass';
+    if (!secretHeader || secretHeader !== expected) return null;
+    if (!dealerCode || !userId) return null;
+    return {
+        id: userId,
+        name: 'Test Dealer',
+        email: `${userId}@test.local`,
+        role: 'dealer',
+        dealer_id: dealerCode,
+    };
+}
+
 export const POST = withErrorHandler(async (req: Request) => {
-    const user = await requireRole(['dealer']);
+    const bypassed = tryTestBypass(req);
+    const user = bypassed ?? (await requireRole(['dealer']));
     let dealer_id = user.dealer_id;
 
     // Resolve dealer_id: first from user record, then from onboarding application
@@ -138,6 +270,12 @@ export const POST = withErrorHandler(async (req: Request) => {
         }, { status: 400 });
     }
     const data = result.data;
+
+    // [E-105] Dealer-status gate — must run BEFORE any leads row is inserted
+    // or updated. payment_method is unknown in initializeDraft mode, so only
+    // the DEALER_NOT_ACTIVE guard fires there; finance guards run on commit.
+    const gateBlock = await checkDealerStatusGate(dealer_id, data.payment_method);
+    if (gateBlock) return gateBlock;
 
     // MODE 1: INITIALIZE DRAFT
     if (data.initializeDraft) {

@@ -1,0 +1,192 @@
+id: E-083
+slug: battery-immobilisation-gated
+name: Battery immobilisation action gated by dual approval (Risk Manager → Risk Head)
+source_section: "6.4.3"
+brd_excerpt: |
+  Action: Battery Immobilisation — Approver 1: NBFC Risk Manager — Approver 2: NBFC Risk Head.
+  4a Approved — Action executes. Audit log entry created with both users, timestamps, reason, evidence snapshot. Borrower notified if applicable.
+
+depends_on:
+  - E-082
+
+non_functional:
+  - "RBI Digital Lending Directions 2025: borrower-impacting recovery action requires two-person rule."
+  - "Fair Practices Code: borrower must receive non-coercive notice on immobilisation; integrate with E-080 compliance metadata."
+  - "Action handler runs ONLY after dual_approval_requests.status='approved'; direct execution path is forbidden."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/actions/battery-immobilisation/initiate
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ loan_application_id: z.string().min(1), imei: z.string().min(1), reason_code: z.enum(['dpd_60','dpd_90','fraud_flag','manual']), borrower_notice_id: z.string().optional(), reviewed_evidence_ack: z.literal(true) })
+      response_shape:
+        approval_request_id: string
+        status: pending_approval
+        action_type: battery_immobilisation
+  jobs: []
+  components:
+    - "src/components/nbfc/actions/ImmobilisationInitiateForm.tsx"
+  pages: []
+
+logic: |
+  1. Validate body against request_zod.
+  2. Resolve tenant via getCurrentTenant() and requireNbfcAccess(tenant.id).
+  3. Verify initiator role is 'nbfc_risk_manager'; else 403.
+  4. Snapshot evidence — load nbfc_loans (current_dpd, outstanding_amount), last 6 EMIs, telemetry summary.
+  5. Call internal createDualApprovalRequest({ action_type: 'battery_immobilisation', entity_id: loan_application_id, evidence_snapshot, required_approver_role: 'nbfc_risk_head' }).
+  6. Return approval_request_id + status='pending_approval'.
+  7. When dual_approval_requests for this action transitions to 'approved', the gate dispatcher calls handler that flips IoT immobilisation flag and records borrower notice.
+
+tables_columns:
+  reuse:
+    - table: nbfc_loans
+      schema_ts_line: 2729
+      columns: [loan_application_id, tenant_id, vehicleno, current_dpd, outstanding_amount]
+    - table: nbfc_users
+      schema_ts_line: 2713
+      columns: [user_id, tenant_id, role]
+  new:
+    - table: nbfc_immobilisation_actions
+      justification: "Records the executed immobilisation outcome and IoT command id post-approval; separate from approval request because one approval may dispatch multiple side-effects."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: tenant_id, type: "uuid().notNull().references(() => nbfcTenants.id)" }
+        - { name: loan_application_id, type: "varchar({ length: 255 }).notNull()" }
+        - { name: imei, type: "varchar({ length: 64 }).notNull()" }
+        - { name: approval_request_id, type: "uuid().notNull()" }
+        - { name: iot_command_id, type: "varchar({ length: 128 })" }
+        - { name: executed_at, type: "timestamp({ withTimezone: true })" }
+        - { name: borrower_notified_at, type: "timestamp({ withTimezone: true })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/actions/battery-immobilisation/initiate with valid body and initiator role 'nbfc_risk_manager' returns 200 with approval_request_id and status='pending_approval'; no row in nbfc_immobilisation_actions yet."
+    test_layer: api
+    test_name: "Immobilisation initiate creates approval request without executing"
+  - id: AC2
+    statement: "POST initiate by user with role!='nbfc_risk_manager' returns 403."
+    test_layer: api
+    test_name: "Only Risk Manager can initiate immobilisation"
+  - id: AC3
+    statement: "After dual approval is approved by an nbfc_risk_head user, exactly one row in nbfc_immobilisation_actions exists with executed_at non-null and approval_request_id matching."
+    test_layer: api
+    test_name: "Immobilisation executes only after Risk Head approves"
+  - id: AC4
+    statement: "If the dual approval request expires or is rejected, no row in nbfc_immobilisation_actions exists for the loan_application_id."
+    test_layer: api
+    test_name: "Rejected/expired approval prevents immobilisation execution"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit: |
+  {
+    "unit_id": "E-083",
+    "audited_at": "2026-05-01T06:16:03Z",
+    "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+    "reuse_findings": [
+      {
+        "table": "nbfc_loans",
+        "verified": true,
+        "ts_line": 2729,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "loan_application_id",
+          "tenant_id",
+          "vehicleno",
+          "current_dpd",
+          "outstanding_amount"
+        ],
+        "columns_missing": []
+      },
+      {
+        "table": "nbfc_users",
+        "verified": true,
+        "ts_line": 2713,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "user_id",
+          "tenant_id",
+          "role"
+        ],
+        "columns_missing": []
+      }
+    ],
+    "new_findings": [
+      {
+        "table": "nbfc_immobilisation_actions",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 165,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "tenant_id",
+            "type": "uuid().notNull().references(() => nbfcTenants.id)",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "loan_application_id",
+            "type": "varchar({ length: 255 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "imei",
+            "type": "varchar({ length: 64 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "approval_request_id",
+            "type": "uuid().notNull()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "iot_command_id",
+            "type": "varchar({ length: 128 })",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "executed_at",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "borrower_notified_at",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      }
+    ],
+    "verdict": "needs_schema_approval",
+    "migration_required": false,
+    "notes": [
+      "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+    ],
+    "checkpoint_html": "docs/nbfc/loop_report/E-083/checkpoint_1.html"
+  }

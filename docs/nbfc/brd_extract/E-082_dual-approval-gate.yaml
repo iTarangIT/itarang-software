@@ -1,0 +1,391 @@
+id: E-082
+slug: dual-approval-gate
+name: Dual approval gate primitive — pending requests, second-approver execution, 24h timeout
+source_section: "6.4.3"
+brd_excerpt: |
+  6.4.3 Dual Approval Gate Specification
+  The following actions require dual approval — two separate admin/NBFC users must independently confirm before the action executes. First approval submits for review. Second approval executes. No action between the two states changes the outcome.
+  Dual Approval Flow — Step by Step
+  1 Initiator requests action — Fills action form. Reviews borrower notice preview. Selects reason code. Confirms 'I have reviewed all evidence'.
+  2 System creates pending approval — Action status = 'pending_approval'. Approver 2 notified via dashboard alert + email with action details and evidence summary.
+  3 Approver 2 reviews — Opens pending approval request. Sees full evidence panel (CDS, EMI history, telemetry, borrower notice). Cannot edit — can only Approve or Reject.
+  4a Approved — Action executes. Audit log entry created with both users, timestamps, reason, evidence snapshot. Borrower notified if applicable.
+  4b Rejected — Action cancelled. Initiator notified with rejection reason. Audit log records rejection.
+  5 Timeout — If Approver 2 does not act within 24 hours: action auto-expires. Initiator notified. Re-initiation required.
+
+depends_on: []
+
+non_functional:
+  - "RBI Digital Lending Directions 2025: high-impact lender actions require segregation of duties via two-person rule."
+  - "Audit-log immutability: each transition (created, approved, rejected, expired) is appended; nothing rewrites prior rows."
+  - "Initiator and Approver 2 must be distinct user_ids; same user cannot self-approve."
+  - "Auto-expiry SLA: 24 hours measured from created_at."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/dual-approval/requests
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ action_type: z.enum(['battery_immobilisation','loan_restructuring','risk_rule_threshold_change','bulk_immobilisation','auction_lot_cancellation','audit_log_export','pii_data_access']), entity_id: z.string().min(1), reason_code: z.string().min(1), evidence_snapshot: z.record(z.unknown()), borrower_notice_id: z.string().optional(), reviewed_evidence_ack: z.literal(true) })
+      response_shape:
+        id: string
+        status: pending_approval
+        action_type: string
+        initiator_user_id: string
+        required_approver_role: string
+        expires_at: string
+    - method: POST
+      path: /api/nbfc/dual-approval/requests/:id/approve
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ comment: z.string().max(500).optional() })
+      response_shape:
+        id: string
+        status: approved
+        approver_user_id: string
+        approved_at: string
+    - method: POST
+      path: /api/nbfc/dual-approval/requests/:id/reject
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ rejection_reason: z.string().min(1).max(500) })
+      response_shape:
+        id: string
+        status: rejected
+        approver_user_id: string
+        rejected_at: string
+    - method: GET
+      path: /api/nbfc/dual-approval/requests
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({ status: z.enum(['pending_approval','approved','rejected','expired']).optional(), action_type: z.string().optional() })
+      response_shape:
+        items: "DualApprovalRequest[]"
+  components:
+    - "src/components/nbfc/dual-approval/PendingApprovalsPanel.tsx"
+    - "src/components/nbfc/dual-approval/EvidencePanel.tsx"
+  jobs:
+    - "src/lib/nbfc/dual-approval/expireRequestsCron.ts"
+  pages: []
+
+logic: |
+  1. POST /requests — validate body, require reviewed_evidence_ack=true.
+  2. Resolve tenant; resolve initiator_user_id from session.
+  3. Look up dual_approval_action_config for action_type to get required_approver_role for Approver 2.
+  4. Insert dual_approval_requests row with status='pending_approval', expires_at=now()+24h, evidence_snapshot.
+  5. Notify users matching required_approver_role via dashboard alert + email.
+  6. POST /:id/approve — load request; reject if status!='pending_approval' or now()>expires_at or approver==initiator or approver role does not match required_approver_role.
+  7. Update status='approved', approver_user_id, approved_at; append audit_logs entry; dispatch action handler for action_type.
+  8. POST /:id/reject — same auth checks; update status='rejected'; append audit_logs entry; notify initiator.
+  9. Cron job runs hourly — finds rows with status='pending_approval' AND expires_at<now(); update status='expired'; append audit_logs; notify initiator.
+
+tables_columns:
+  reuse:
+    - table: nbfc_tenants
+      schema_ts_line: 2699
+      columns: [id, slug, is_active]
+    - table: nbfc_users
+      schema_ts_line: 2713
+      columns: [user_id, tenant_id, role]
+    - table: audit_logs
+      schema_ts_line: 671
+      columns: [id, entity_type, entity_id, action, performed_by, new_data, timestamp]
+  new:
+    - table: dual_approval_requests
+      justification: "No existing table supports two-person approval workflow with pending/approved/rejected/expired transitions and evidence snapshot; required by RBI two-person rule for high-impact actions."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: tenant_id, type: "uuid().notNull().references(() => nbfcTenants.id)" }
+        - { name: action_type, type: "varchar({ length: 64 }).notNull()" }
+        - { name: entity_id, type: "varchar({ length: 255 }).notNull()" }
+        - { name: initiator_user_id, type: "uuid().notNull()" }
+        - { name: approver_user_id, type: "uuid()" }
+        - { name: required_approver_role, type: "varchar({ length: 64 }).notNull()" }
+        - { name: status, type: "varchar({ length: 24 }).default('pending_approval').notNull()" }
+        - { name: reason_code, type: "varchar({ length: 64 }).notNull()" }
+        - { name: evidence_snapshot, type: "jsonb().notNull()" }
+        - { name: borrower_notice_id, type: "varchar({ length: 255 })" }
+        - { name: rejection_reason, type: "text()" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: expires_at, type: "timestamp({ withTimezone: true }).notNull()" }
+        - { name: approved_at, type: "timestamp({ withTimezone: true })" }
+        - { name: rejected_at, type: "timestamp({ withTimezone: true })" }
+        - { name: expired_at, type: "timestamp({ withTimezone: true })" }
+    - table: dual_approval_action_config
+      justification: "Catalogue of which action_type requires which Approver-2 role; static config but tenant-scoped so each NBFC may map roles differently."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: action_type, type: "varchar({ length: 64 }).notNull()" }
+        - { name: initiator_role, type: "varchar({ length: 64 }).notNull()" }
+        - { name: approver_role, type: "varchar({ length: 64 }).notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/dual-approval/requests with reviewed_evidence_ack=true returns 200 with status='pending_approval' and expires_at exactly 24 hours after created_at."
+    test_layer: api
+    test_name: "Create dual approval request returns pending with 24h expiry"
+  - id: AC2
+    statement: "POST /api/nbfc/dual-approval/requests/:id/approve by the initiator (same user_id) returns 403."
+    test_layer: api
+    test_name: "Initiator cannot self-approve"
+  - id: AC3
+    statement: "POST /api/nbfc/dual-approval/requests/:id/approve by a user whose role matches required_approver_role transitions status to 'approved' and writes a row in audit_logs with action='dual_approval.approved'."
+    test_layer: api
+    test_name: "Second approver approval updates status and writes audit log"
+  - id: AC4
+    statement: "POST /api/nbfc/dual-approval/requests/:id/reject with rejection_reason returns 200, status='rejected', and audit_logs row with action='dual_approval.rejected' is created."
+    test_layer: api
+    test_name: "Rejection captures reason and writes audit log"
+  - id: AC5
+    statement: "Cron sweep marks any row with status='pending_approval' and expires_at<now() as 'expired' and writes audit_logs entry with action='dual_approval.expired'."
+    test_layer: api
+    test_name: "Expiry cron transitions stale pending rows to expired"
+  - id: AC6
+    statement: "POST /requests with reviewed_evidence_ack omitted or false returns 400."
+    test_layer: api
+    test_name: "Initiator must acknowledge evidence review"
+  - id: AC7
+    statement: "Given a dual-approval gate item with status='pending_approval' and approver_a logged, calling `/api/dual-approval/{itemId}/execute` BEFORE approver_b confirms returns 409 with code='SECOND_APPROVAL_PENDING'. After approver_b confirms (POST /confirm with distinct user_id), the next /execute call performs the gated action and returns 200 with the action's effects. The second approver must independently confirm before the action executes."
+    test_layer: api
+    persona: nbfc_tenant_user
+    expected_response_shape:
+      pending:
+        status: 409
+        body:
+          code: SECOND_APPROVAL_PENDING
+      executed:
+        status: 200
+        body:
+          id: string
+          status: approved
+          executed: true
+    test_name: "Second approver must independently confirm before action executes"
+
+status: passed
+loop_count: 1
+last_failure_signature: null
+human_checkpoints: []
+audit: |
+  {
+    "unit_id": "E-082",
+    "audited_at": "2026-05-01T06:16:03Z",
+    "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+    "reuse_findings": [
+      {
+        "table": "nbfc_tenants",
+        "verified": true,
+        "ts_line": 2699,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "id",
+          "slug",
+          "is_active"
+        ],
+        "columns_missing": []
+      },
+      {
+        "table": "nbfc_users",
+        "verified": true,
+        "ts_line": 2713,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "user_id",
+          "tenant_id",
+          "role"
+        ],
+        "columns_missing": []
+      },
+      {
+        "table": "audit_logs",
+        "verified": true,
+        "ts_line": 671,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "id",
+          "entity_type",
+          "entity_id",
+          "action",
+          "performed_by",
+          "new_data",
+          "timestamp"
+        ],
+        "columns_missing": []
+      }
+    ],
+    "new_findings": [
+      {
+        "table": "dual_approval_requests",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 186,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "tenant_id",
+            "type": "uuid().notNull().references(() => nbfcTenants.id)",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "action_type",
+            "type": "varchar({ length: 64 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "entity_id",
+            "type": "varchar({ length: 255 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "initiator_user_id",
+            "type": "uuid().notNull()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "approver_user_id",
+            "type": "uuid()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "required_approver_role",
+            "type": "varchar({ length: 64 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "status",
+            "type": "varchar({ length: 24 }).default('pending_approval').notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "reason_code",
+            "type": "varchar({ length: 64 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "evidence_snapshot",
+            "type": "jsonb().notNull()",
+            "type_lint_ok": true,
+            "type_head": "jsonb",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "borrower_notice_id",
+            "type": "varchar({ length: 255 })",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "rejection_reason",
+            "type": "text()",
+            "type_lint_ok": true,
+            "type_head": "text",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "expires_at",
+            "type": "timestamp({ withTimezone: true }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "approved_at",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "rejected_at",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "expired_at",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      },
+      {
+        "table": "dual_approval_action_config",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 134,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "action_type",
+            "type": "varchar({ length: 64 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "initiator_role",
+            "type": "varchar({ length: 64 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "approver_role",
+            "type": "varchar({ length: 64 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      }
+    ],
+    "verdict": "needs_schema_approval",
+    "migration_required": false,
+    "notes": [
+      "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+    ],
+    "checkpoint_html": "docs/nbfc/loop_report/E-082/checkpoint_1.html"
+  }

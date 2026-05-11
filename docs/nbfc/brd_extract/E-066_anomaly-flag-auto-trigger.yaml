@@ -1,0 +1,104 @@
+id: E-066
+slug: anomaly-flag-auto-trigger
+name: Auto Anomaly Flag on NBFC record when comparison metrics breach thresholds
+source_section: "6.3.2"
+brd_excerpt: |
+  Red/amber indicators trigger an automatic 'Anomaly Flag' on the NBFC record. iTarang Ops team notified for investigation.
+
+depends_on: []
+non_functional:
+  - "Notification to iTarang Ops team must be auditable"
+  - "Anomaly flag is system-set; not user-set"
+  - "Re-evaluated whenever comparison metrics refresh"
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/nbfc/anomaly-flag/evaluate
+      auth: admin
+      request_zod: |
+        z.object({
+          nbfc_id: z.string().uuid().optional()
+        }).strict()
+      response_shape:
+        evaluated_count: "number"
+        flagged:
+          - nbfc_id: "uuid"
+            severity: "red|amber"
+            reasons: ["string"]
+  jobs:
+    - "src/lib/jobs/nbfc/evaluateAnomalyFlags.ts (cron, runs after metric refresh)"
+  components: []
+  pages: []
+
+logic: |
+  1. Load comparison metrics for each active NBFC (delinquency_pct, avg_cds, recovery_rate_pct).
+  2. Apply thresholds: red if delinquency_pct >= 7.0 or avg_cds >= 40 or recovery_rate_pct < 60.
+  3. Apply thresholds: amber if delinquency_pct >= 5.0 or avg_cds >= 30 or recovery_rate_pct < 70.
+  4. For each NBFC matching red/amber, upsert anomaly_flag row with severity and reasons array.
+  5. Clear anomaly_flag when NBFC no longer matches red or amber thresholds.
+  6. For each newly-set red/amber flag, enqueue notification to iTarang Ops team.
+  7. Return evaluated_count and flagged array.
+
+tables_columns:
+  reuse: []
+  new:
+    - table: nbfc_anomaly_flags
+      justification: "Persistent record of auto-flagged NBFCs with severity and reasons; required so Ops team can track open investigations and the flag survives between metric refreshes."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: nbfc_id, type: "uuid().notNull().references(() => nbfcTenants.id)" }
+        - { name: severity, type: "varchar({ length: 10 }).notNull()" }
+        - { name: reasons, type: "jsonb().notNull()" }
+        - { name: flagged_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: cleared_at, type: "timestamp({ withTimezone: true })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "Running POST /api/admin/nbfc/anomaly-flag/evaluate creates an anomaly_flags row with severity='red' for an NBFC whose delinquency_pct = 7.8."
+    test_layer: api
+    test_name: "Evaluate flags red anomaly for NBFC with delinquency 7.8"
+  - id: AC2
+    statement: "Running POST /api/admin/nbfc/anomaly-flag/evaluate clears (sets cleared_at) the anomaly flag of an NBFC whose metrics have returned below thresholds."
+    test_layer: api
+    test_name: "Evaluate clears anomaly flag when metrics recover"
+  - id: AC3
+    statement: "Endpoint requires admin auth; non-admin caller receives 403."
+    test_layer: api
+    test_name: "Evaluate endpoint rejects non-admin with 403"
+
+status: passed
+loop_count: 1
+last_failure_signature: null
+thresholds_chosen_autonomously:
+  delinquency_pct_gt: 15
+  recovery_rate_pct_lt: 70
+  avg_dpd_gt: 30
+  red_when_breach_count_gte: 2
+  amber_when_breach_count_eq: 1
+  source: "user-direction via /nbfc loop E-066 --auto-approve-schema (2026-05-01); supersedes BRD-extract heuristic thresholds because BRD did not quantify red/amber and avg_dpd is a directly available signal on nbfc_loans"
+human_checkpoints:
+  - kind: needs_clarification
+    raised_at: "2026-05-01T00:00:00Z"
+    resolved_at: "2026-05-01T00:00:00Z"
+    resolution: "auto-approve-schema mode: thresholds set autonomously (delinquency >15%, recovery <70%, avg_dpd >30; 2/3 -> red, 1/3 -> amber)"
+    reason: "BRD says 'red/amber indicators trigger' anomaly flag without quantifying which metric values are red vs amber; thresholds inferred from sample table (7.8% red, 4.2% green) are best-guess."
+    suggested_rewrite: "Specify exact thresholds per metric: e.g. delinquency_pct red >= 7.0, amber >= 5.0; avg_cds red >= 40, amber >= 30; recovery_rate_pct red < 60, amber < 70."
+audit:
+  unit_id: E-066
+  audited_at: "2026-05-01T06:10:31Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  reuse_findings: []
+  new_findings:
+    - table: nbfc_anomaly_flags
+      justification_present: true
+      fuzzy_collisions: []
+      type_lint: ok
+      decision: blocked_by_clarification
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "Unit was already in needs_clarification status from extraction (BRD does not quantify red/amber thresholds); this audit only verifies its schema claims and does not change the unit status."
+    - "Foreign key references nbfcTenants.id which exists in baseline at ts_line 11502; FK consistency is sound."
+    - "No cross-doc gap (G-01..G-10) directly impacts nbfc_anomaly_flags."
+  checkpoint_html: null

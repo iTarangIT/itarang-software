@@ -63,3 +63,59 @@ export async function safeRedisLock(
     throw err;
   }
 }
+
+// Process-local LRU dedup for the Redis-degraded path. Catches the common
+// case where a duplicate webhook (e.g., Bolna sends "call-disconnected" then
+// "completed" for the same call) hits the same Node process within a few
+// minutes. Doesn't help across PM2 cluster workers or a horizontal scale-out,
+// but the current Hostinger deployment is single-instance — good enough to
+// prevent double-billed analysis on the rare Upstash quota exhaustion.
+const LOCAL_DEDUP_TTL_MS = 10 * 60 * 1000;
+const LOCAL_DEDUP_MAX_ENTRIES = 2000;
+const localDedupExpiries = new Map<string, number>();
+
+function checkAndClaimLocalDedup(key: string): boolean {
+  const now = Date.now();
+
+  // Lazy sweep when we're getting big — cheaper than running on every claim.
+  if (localDedupExpiries.size > LOCAL_DEDUP_MAX_ENTRIES / 2) {
+    for (const [k, expiresAt] of localDedupExpiries) {
+      if (expiresAt <= now) localDedupExpiries.delete(k);
+    }
+  }
+
+  const existing = localDedupExpiries.get(key);
+  if (existing && existing > now) return false; // already claimed in this process
+
+  localDedupExpiries.set(key, now + LOCAL_DEDUP_TTL_MS);
+
+  // Hard cap on size — evict oldest insertions (JS Map preserves order).
+  while (localDedupExpiries.size > LOCAL_DEDUP_MAX_ENTRIES) {
+    const firstKey = localDedupExpiries.keys().next().value;
+    if (firstKey === undefined) break;
+    localDedupExpiries.delete(firstKey);
+  }
+
+  return true;
+}
+
+/**
+ * Like `safeRedisLock` but with a process-local fallback when Redis is
+ * degraded: instead of biasing toward "claimed=true" (which lets duplicates
+ * through), check an in-memory LRU first. Use this for non-terminal-only
+ * webhook dedup where duplicates carry a real cost (extra LLM analysis,
+ * extra dialer trigger).
+ *
+ * Returns { claimed, degraded } where `degraded=true` means we fell back to
+ * the local set — caller can decide whether to log it.
+ */
+export async function dedupClaim(
+  key: string,
+  ttlSec: number,
+  label: string,
+): Promise<{ claimed: boolean; degraded: boolean }> {
+  const result = await safeRedisLock(key, ttlSec, label);
+  if (!result.degraded) return result;
+  const claimed = checkAndClaimLocalDedup(key);
+  return { claimed, degraded: true };
+}

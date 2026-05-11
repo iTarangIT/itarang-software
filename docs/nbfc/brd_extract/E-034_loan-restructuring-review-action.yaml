@@ -1,0 +1,115 @@
+id: E-034
+slug: loan-restructuring-review-action
+name: Loan Restructuring Review action
+source_section: "6.1.6"
+brd_excerpt: |
+  Action | Approval Required | Reversible? | Audit Log
+  Review for Loan Restructuring — Dual — Risk Head + Credit Manager — Depends on terms — Yes — before/after terms logged
+depends_on: []
+non_functional:
+  - "Dual approval: Risk Head submits, Credit Manager approves."
+  - "Audit log MUST capture both before-terms and after-terms snapshots."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/actions/restructure/request
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({
+          loan_sanction_id: z.string().uuid(),
+          proposed_terms: z.object({
+            tenure_months: z.number().int().positive(),
+            emi_amount: z.number().nonnegative(),
+            interest_rate: z.number().nonnegative(),
+            moratorium_months: z.number().int().nonnegative().optional(),
+          }),
+          rationale: z.string().min(20),
+        })
+      response_shape:
+        action_id: string
+        status: string
+    - method: POST
+      path: /api/nbfc/actions/restructure/approve
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ action_id: z.string().uuid() })
+      response_shape:
+        action_id: string
+        status: string
+  components:
+    - "src/components/nbfc-portal/RestructureReviewDialog.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Request endpoint asserts caller role = 'risk_head'.
+  2. Snapshot current loan_sanctions terms as before_state in nbfc_audit_log.
+  3. Insert nbfc_borrower_actions row (action_type='restructure', status='pending_dual_approval', payload=proposed_terms+rationale).
+  4. Approve endpoint asserts caller role = 'credit_manager' and existing action is 'pending_dual_approval'.
+  5. On approve: write loan_sanctions terms with proposed_terms, mark action status='approved', audit-log captures before_state and after_state.
+
+tables_columns:
+  reuse:
+    - table: loan_sanctions
+      schema_ts_line: 1
+      columns: [id, nbfc_id, loan_amount]
+    - table: nbfc_borrower_actions
+      schema_ts_line: 1
+      columns: [id, tenant_id, loan_sanction_id, action_type, status, payload, requested_by, created_at]
+    - table: nbfc_audit_log
+      schema_ts_line: 1
+      columns: [tenant_id, actor_user_id, action_type, action_id, before_state, after_state, created_at]
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/actions/restructure/request by a Risk Head returns 200 and creates an action with status='pending_dual_approval'."
+    test_layer: api
+    test_name: "Restructure request creates pending dual approval action"
+  - id: AC2
+    statement: "A non-Risk-Head caller receives 403 from the request endpoint."
+    test_layer: api
+    test_name: "Restructure request rejects non-Risk-Head callers"
+  - id: AC3
+    statement: "POST /api/nbfc/actions/restructure/approve by a Credit Manager transitions status to 'approved' and writes an audit_log row containing both before_state and after_state JSON."
+    test_layer: api
+    test_name: "Credit Manager approval logs before/after terms"
+  - id: AC4
+    statement: "Approve endpoint returns 409 when called on an action whose status is not 'pending_dual_approval'."
+    test_layer: api
+    test_name: "Restructure approve rejects already-resolved actions with 409"
+
+status: audited
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-034
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: loan_sanctions
+      verified: false
+      ts_line: 2624
+      columns_verified: [id, loan_amount]
+      columns_missing: [nbfc_id]
+      note: "G-03."
+    - table: nbfc_borrower_actions
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [id, tenant_id, loan_sanction_id, action_type, status, payload, requested_by, created_at]
+      note: "Forward reference to E-031."
+    - table: nbfc_audit_log
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [tenant_id, actor_user_id, action_type, action_id, before_state, after_state, created_at]
+      note: "Forward reference to E-031."
+  new_findings: []
+  verdict: audited
+  migration_required: false
+  notes:
+    - "Restructuring writes loan_sanctions terms; the schema must already include nbfc_id (G-03) before this is safe to ship."
+  checkpoint_html: null
