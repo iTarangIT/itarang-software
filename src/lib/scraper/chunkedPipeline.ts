@@ -474,7 +474,7 @@ export async function finalizeChunkedRun(runId: string) {
     // Promote every unique lead with a valid phone into dealer_leads so it
     // shows up on the Leads page and becomes eligible for the AI dialer.
     // The dealer_leads.phone UNIQUE constraint de-dupes across past runs.
-    const promotedCount = await promoteLeadsToDealerLeads(uniqueLeads);
+    const promotion = await promoteLeadsToDealerLeads(uniqueLeads);
 
     // Even when leads were saved, if any chunks failed or partial-errored we
     // surface that reason at the run level so the UI explains the gap.
@@ -489,12 +489,14 @@ export async function finalizeChunkedRun(runId: string) {
         saved: savedCount,
         duplicates: result.duplicates,
         duration_ms: Date.now() - startTime,
+        promoted: promotion.promoted,
+        skippedDuplicate: promotion.skippedDuplicate,
       },
       errSummary,
     );
 
     console.log(
-      `[SCRAPER][${runId}] finalized — ${allLeads.length} raw → ${savedCount} saved → ${promotedCount} promoted to dealer_leads in ${
+      `[SCRAPER][${runId}] finalized — ${allLeads.length} raw → ${savedCount} saved → ${promotion.promoted} promoted to dealer_leads (skipped: ${promotion.skippedDuplicate} dup, ${promotion.skippedInvalidPhone} invalid phone) in ${
         Date.now() - startTime
       }ms`,
     );
@@ -582,7 +584,8 @@ export async function cancelChunkedRun(runId: string) {
 
       savedCount = await saveCleanLeads(uniqueLeads, runId);
       await saveDuplicateLeads(duplicateLeads);
-      promotedCount = await promoteLeadsToDealerLeads(uniqueLeads);
+      const promotion = await promoteLeadsToDealerLeads(uniqueLeads);
+      promotedCount = promotion.promoted;
 
       cleanedCount = result.cleaned.length;
       duplicates = result.duplicates;
