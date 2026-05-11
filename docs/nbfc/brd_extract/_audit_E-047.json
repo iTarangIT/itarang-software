@@ -1,0 +1,75 @@
+{
+  "unit_id": "E-047",
+  "audited_at": "2026-05-01T06:11:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [],
+  "new_findings": [
+    {
+      "table": "telemetry_events",
+      "justification_present": true,
+      "justification_chars": 113,
+      "columns_proposed": [
+        "id", "serial_number", "imei_id", "device_time", "server_time", "soc_percent", "soh_percent",
+        "voltage_v", "current_a", "temperature_c", "charge_cycles", "gps_lat", "gps_lng",
+        "daily_km", "idle_hours", "bms_status", "charger_connected"
+      ],
+      "type_lint": {
+        "all_drizzle_builders": true,
+        "builders_used": ["bigserial", "varchar", "timestamp", "integer", "numeric", "boolean"]
+      },
+      "fuzzy_collisions": [
+        {
+          "proposed": "serial_number",
+          "candidates": ["deployed_assets.serial_number", "inventory.serial_number", "oem_inventory_for_pdi.serial_number"],
+          "best_score": 1.0,
+          "reason": "logical FK to inventory.serial_number; intentional same-name reuse"
+        },
+        {
+          "proposed": "soc_percent",
+          "candidates": ["inventory.soc_percent"],
+          "best_score": 1.0,
+          "reason": "inventory.soc_percent stores last-known SOC; telemetry_events.soc_percent stores per-packet SOC. Reviewer must confirm both are needed."
+        },
+        {
+          "proposed": "voltage_v",
+          "candidates": ["products.voltage_v"],
+          "best_score": 1.0,
+          "reason": "products.voltage_v is nominal product voltage; telemetry_events.voltage_v is instantaneous reading. Distinct semantics but identical token set."
+        }
+      ],
+      "decision": "rejected_pending_clarification"
+    },
+    {
+      "table": "telemetry_daily_summary",
+      "justification_present": true,
+      "justification_chars": 110,
+      "columns_proposed": [
+        "id", "serial_number", "summary_date", "avg_soc", "min_soc", "max_soh", "total_km",
+        "total_idle_hours", "charge_sessions", "bms_faults", "packets_received",
+        "gps_home_lat", "gps_home_lng"
+      ],
+      "type_lint": {
+        "all_drizzle_builders": true,
+        "builders_used": ["serial", "varchar", "date", "numeric", "integer"]
+      },
+      "fuzzy_collisions": [
+        {
+          "proposed": "serial_number",
+          "candidates": ["deployed_assets.serial_number", "inventory.serial_number", "oem_inventory_for_pdi.serial_number"],
+          "best_score": 1.0,
+          "reason": "logical FK to inventory.serial_number; intentional same-name reuse"
+        }
+      ],
+      "decision": "rejected_pending_clarification"
+    }
+  ],
+  "verdict": "reject",
+  "migration_required": false,
+  "notes": [
+    "BRD 6.2.4 mandates two new tables (telemetry_events, telemetry_daily_summary). No existing table holds per-packet IoT readings, so additive schema is justified.",
+    "BRD sync audit (line 487 of /tmp/nbfc_extract/sync_audit.txt) confirms 'IoT telemetry ingestion — Section 6.2 full spec — IN SYNC'.",
+    "AC2 specifies a unique constraint on (serial_number, summary_date) but telemetry_daily_summary.columns[] does not include the constraint; reviewer should ensure the migration adds .unique() or a composite uniqueIndex.",
+    "Fuzzy collisions are FK-style same-name reuse, not renames. Reviewer needs to either (a) accept the FK reuse pattern and approve schema, or (b) require renames to remove ambiguity. Strict ≥0.6 Jaccard rule produced these flags; boilerplate columns (id, created_at, updated_at) were excluded."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-047/checkpoint_1.html"
+}

@@ -1,0 +1,113 @@
+id: E-081
+slug: audit-log-preview
+name: Audit log entry preview shown before borrower-impacting confirm
+source_section: "6.4.2"
+brd_excerpt: |
+  Audit Log Entry Preview: Every borrower-impacting action shows what will be logged before admin confirms: 'Will log: timestamp · IMEI · action · reason · requested by · approver · borrower notice record'
+
+depends_on: []
+
+non_functional:
+  - "RBI Digital Lending Directions 2025: borrower-impacting actions must be auditable; preview discloses what is logged before commit."
+  - "Audit-log immutability: preview must reflect the exact fields that will be persisted, not a paraphrase."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/audit-log/preview
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ entity_type: z.string().min(1), entity_id: z.string().min(1), action: z.string().min(1), reason_code: z.string().min(1), imei: z.string().optional(), borrower_notice_id: z.string().optional(), approver_user_id: z.string().uuid().optional() })
+      response_shape:
+        will_log:
+          timestamp: "ISO string (preview now)"
+          imei: "string | null"
+          action: string
+          reason: string
+          requested_by: { user_id: string, display_name: string }
+          approver: { user_id: "string | null", display_name: "string | null" }
+          borrower_notice_record: { id: "string | null", channel: "string | null" }
+  components:
+    - "src/components/nbfc/compliance/AuditLogPreview.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Validate request body against request_zod.
+  2. Resolve tenant via getCurrentTenant() and requireNbfcAccess(tenant.id).
+  3. Resolve current user from session as requested_by.
+  4. If approver_user_id provided, look up nbfc_users for display_name.
+  5. If borrower_notice_id provided, look up nbfc_borrower_notices for channel.
+  6. Compose will_log payload mirroring the exact field set the audit_logs writer uses.
+  7. Return 200 with will_log; do not write to audit_logs.
+
+tables_columns:
+  reuse:
+    - table: audit_logs
+      schema_ts_line: 671
+      columns: [id, entity_type, entity_id, action, performed_by, timestamp]
+    - table: nbfc_users
+      schema_ts_line: 2713
+      columns: [user_id, tenant_id, role]
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/audit-log/preview with valid body returns 200 with will_log object containing timestamp, imei, action, reason, requested_by.user_id, approver, borrower_notice_record."
+    test_layer: api
+    test_name: "Audit log preview returns all 7 disclosed fields"
+  - id: AC2
+    statement: "POST /api/nbfc/audit-log/preview does not insert any row into audit_logs (preview is non-persistent)."
+    test_layer: api
+    test_name: "Preview endpoint does not write to audit_logs"
+  - id: AC3
+    statement: "POST without action or reason_code returns 400."
+    test_layer: api
+    test_name: "Preview rejects missing action/reason"
+
+status: audited
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit: |
+  {
+    "unit_id": "E-081",
+    "audited_at": "2026-05-01T06:16:03Z",
+    "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+    "reuse_findings": [
+      {
+        "table": "audit_logs",
+        "verified": true,
+        "ts_line": 671,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "id",
+          "entity_type",
+          "entity_id",
+          "action",
+          "performed_by",
+          "timestamp"
+        ],
+        "columns_missing": []
+      },
+      {
+        "table": "nbfc_users",
+        "verified": true,
+        "ts_line": 2713,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "user_id",
+          "tenant_id",
+          "role"
+        ],
+        "columns_missing": []
+      }
+    ],
+    "new_findings": [],
+    "verdict": "audited",
+    "migration_required": false,
+    "notes": [
+      "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+    ],
+    "checkpoint_html": null
+  }

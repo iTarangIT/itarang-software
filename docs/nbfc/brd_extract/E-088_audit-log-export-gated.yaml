@@ -1,0 +1,203 @@
+id: E-088
+slug: audit-log-export-gated
+name: Audit log data export gated by dual approval (Requestor MFA → Compliance Officer)
+source_section: "6.4.3"
+brd_excerpt: |
+  Action: Audit Log Data Export — Approver 1: Requestor (MFA) — Approver 2: iTarang Compliance Officer.
+
+depends_on:
+  - E-082
+
+non_functional:
+  - "RBI Digital Lending Directions 2025: bulk audit log export is sensitive; requires two-person rule."
+  - "DPDPA 2023: audit logs may contain PII; export must be authorised and logged."
+  - "Initiator must complete MFA challenge in the same session before initiating; non-MFA initiation returns 401."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/actions/audit-log-export/initiate
+      auth: admin
+      request_zod: |
+        z.object({ from_ts: z.string().datetime(), to_ts: z.string().datetime(), entity_type: z.string().optional(), mfa_token: z.string().min(1), reason_code: z.string().min(1), reviewed_evidence_ack: z.literal(true) })
+      response_shape:
+        approval_request_id: string
+        status: pending_approval
+        action_type: audit_log_export
+  components:
+    - "src/components/admin/audit/AuditExportInitiateForm.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Validate body against request_zod.
+  2. Verify mfa_token via MFA verifier; if invalid return 401.
+  3. Snapshot evidence: from_ts, to_ts, expected row count.
+  4. createDualApprovalRequest({ action_type: 'audit_log_export', entity_id: <export_request_id>, evidence_snapshot, required_approver_role: 'itarang_compliance_officer' }).
+  5. On 'approved', enqueue export job that produces signed download URL with 24h expiry; record nbfc_audit_log_exports row with download_url + checksum.
+
+tables_columns:
+  reuse:
+    - table: audit_logs
+      schema_ts_line: 671
+      columns: [id, entity_type, entity_id, action, performed_by, timestamp]
+  new:
+    - table: nbfc_audit_log_exports
+      justification: "Records export request lifecycle, requestor identity, MFA confirmation, time range, signed-URL artefact and checksum; required for DPDPA accountability when audit data leaves the system."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: requested_by, type: "uuid().notNull()" }
+        - { name: approval_request_id, type: "uuid().notNull()" }
+        - { name: mfa_verified_at, type: "timestamp({ withTimezone: true }).notNull()" }
+        - { name: from_ts, type: "timestamp({ withTimezone: true }).notNull()" }
+        - { name: to_ts, type: "timestamp({ withTimezone: true }).notNull()" }
+        - { name: entity_type, type: "varchar({ length: 50 })" }
+        - { name: row_count, type: "integer()" }
+        - { name: download_url, type: "text()" }
+        - { name: checksum_sha256, type: "varchar({ length: 64 })" }
+        - { name: expires_at, type: "timestamp({ withTimezone: true })" }
+        - { name: completed_at, type: "timestamp({ withTimezone: true })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/actions/audit-log-export/initiate without mfa_token (or with invalid token) returns 401."
+    test_layer: api
+    test_name: "Audit export initiate requires valid MFA"
+  - id: AC2
+    statement: "POST initiate with valid MFA returns 200 with approval_request_id and status='pending_approval'; no nbfc_audit_log_exports row has download_url yet."
+    test_layer: api
+    test_name: "Audit export initiate creates approval without producing file"
+  - id: AC3
+    statement: "After approval by an iTarang Compliance Officer user, nbfc_audit_log_exports row has completed_at and a non-empty download_url and checksum_sha256."
+    test_layer: api
+    test_name: "Audit export produces signed URL only after Compliance Officer approves"
+
+status: passed
+loop_count: 1
+last_failure_signature: null
+human_checkpoints: []
+audit: |
+  {
+    "unit_id": "E-088",
+    "audited_at": "2026-05-01T06:16:03Z",
+    "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+    "reuse_findings": [
+      {
+        "table": "audit_logs",
+        "verified": true,
+        "ts_line": 671,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "id",
+          "entity_type",
+          "entity_id",
+          "action",
+          "performed_by",
+          "timestamp"
+        ],
+        "columns_missing": []
+      }
+    ],
+    "new_findings": [
+      {
+        "table": "nbfc_audit_log_exports",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 186,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "requested_by",
+            "type": "uuid().notNull()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "approval_request_id",
+            "type": "uuid().notNull()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "mfa_verified_at",
+            "type": "timestamp({ withTimezone: true }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "from_ts",
+            "type": "timestamp({ withTimezone: true }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "to_ts",
+            "type": "timestamp({ withTimezone: true }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "entity_type",
+            "type": "varchar({ length: 50 })",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "row_count",
+            "type": "integer()",
+            "type_lint_ok": true,
+            "type_head": "integer",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "download_url",
+            "type": "text()",
+            "type_lint_ok": true,
+            "type_head": "text",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "checksum_sha256",
+            "type": "varchar({ length: 64 })",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "expires_at",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "completed_at",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      }
+    ],
+    "verdict": "needs_schema_approval",
+    "migration_required": false,
+    "notes": [
+      "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+    ],
+    "checkpoint_html": "docs/nbfc/loop_report/E-088/checkpoint_1.html"
+  }

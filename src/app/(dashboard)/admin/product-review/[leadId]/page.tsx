@@ -29,7 +29,7 @@ interface ProductSelection {
   paraphernalia: Record<string, unknown> | null;
   paraphernalia_lines: ParaLine[] | null;
   category: string | null;
-  sub_category: string | null;
+  model_number: string | null;
   battery_price: string | null;
   charger_price: string | null;
   paraphernalia_cost: string | null;
@@ -269,8 +269,9 @@ export default function AdminProductReviewPage() {
           <div className="grid grid-cols-2 gap-4 text-sm">
             <Field label="Payment Mode" value={selection.payment_mode} />
             <Field label="Admin Decision" value={selection.admin_decision} />
+
             <Field label="Category" value={categoryName ?? selection.category} />
-            <Field label="Sub-Category" value={subCategoryName ?? selection.sub_category} />
+            <Field label="Model Number" value={subCategoryName ?? selection.model_number} />
             <Field label="Battery Serial" value={selection.battery_serial} />
             <Field label="Battery Model" value={battery?.model_type as string} />
             <Field label="Charger Serial" value={selection.charger_serial} />

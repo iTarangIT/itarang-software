@@ -1,0 +1,116 @@
+id: E-036
+slug: recovery-pipeline-stages
+name: Recovery pipeline stage management
+source_section: "6.1.7"
+brd_excerpt: |
+  6.1.7 Recovery & Auction
+  Recovery Pipeline
+  Stage | Description
+  Needs Inspection — Battery physically recovered from borrower. Condition not yet assessed.
+  Refurbishable — Inspection complete. SOH > 70%. Worth refurbishing for resale.
+  Scrap — SOH < 55% or physical damage beyond repair. Scrap value only.
+  Ready for Auction — Refurb complete. Listed in auction marketplace.
+  Resold — Auction won and settled. Revenue logged.
+depends_on: []
+non_functional:
+  - "Stage transitions must be tenant-scoped and audit-logged."
+
+surface:
+  api:
+    - method: GET
+      path: /api/nbfc/recovery
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({
+          stage: z.enum(["needs_inspection","refurbishable","scrap","ready_for_auction","resold"]).optional(),
+          page: z.coerce.number().int().min(1).default(1),
+          page_size: z.coerce.number().int().min(1).max(100).default(20),
+        })
+      response_shape:
+        items:
+          - id: string
+            battery_serial: string
+            stage: string
+            estimated_recovery_value: number
+            updated_at: string
+        page: number
+        total: number
+    - method: PATCH
+      path: /api/nbfc/recovery/[id]/stage
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({
+          stage: z.enum(["needs_inspection","refurbishable","scrap","ready_for_auction","resold"]),
+          note: z.string().min(5).optional(),
+        })
+      response_shape:
+        id: string
+        stage: string
+        updated_at: string
+  components:
+    - "src/components/nbfc-portal/RecoveryPipelineBoard.tsx"
+  jobs: []
+  pages:
+    - "/nbfc/recovery"
+
+logic: |
+  1. GET endpoint returns nbfc_recovery_pipeline rows for the caller tenant, optionally filtered by stage, paginated.
+  2. PATCH endpoint validates target stage is in the allowed enum and the row belongs to caller tenant.
+  3. Allowed transitions: needs_inspection → refurbishable | scrap; refurbishable → ready_for_auction; ready_for_auction → resold. Reject invalid transitions with 400.
+  4. Update row's stage and updated_at; write nbfc_audit_log entry capturing before_state and after_state.
+
+tables_columns:
+  reuse:
+    - table: nbfc_recovery_pipeline
+      schema_ts_line: 1
+      columns: [id, tenant_id, battery_serial, stage, estimated_recovery_value, updated_at]
+    - table: nbfc_audit_log
+      schema_ts_line: 1
+      columns: [tenant_id, actor_user_id, action_type, action_id, before_state, after_state, created_at]
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/nbfc/recovery returns 200 with paginated items array containing id, battery_serial, stage, estimated_recovery_value, updated_at."
+    test_layer: api
+    test_name: "Recovery list endpoint returns paginated rows"
+  - id: AC2
+    statement: "GET with ?stage=refurbishable returns only rows whose stage equals 'refurbishable'."
+    test_layer: api
+    test_name: "Recovery list filters by stage"
+  - id: AC3
+    statement: "PATCH /api/nbfc/recovery/[id]/stage with a valid target stage updates the row and writes an audit_log row."
+    test_layer: api
+    test_name: "Recovery stage PATCH updates row and audits"
+  - id: AC4
+    statement: "PATCH attempting to transition from 'needs_inspection' directly to 'resold' returns 400."
+    test_layer: api
+    test_name: "Invalid stage transitions are rejected with 400"
+
+status: audited
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-036
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc_recovery_pipeline
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [id, tenant_id, battery_serial, stage, estimated_recovery_value, updated_at]
+      note: "Forward reference to E-026."
+    - table: nbfc_audit_log
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [tenant_id, actor_user_id, action_type, action_id, before_state, after_state, created_at]
+      note: "Forward reference to E-031."
+  new_findings: []
+  verdict: audited
+  migration_required: false
+  notes:
+    - "Pure stage-management; no new schema. Loop must execute E-026 and E-031 first."
+  checkpoint_html: null

@@ -1,0 +1,41 @@
+{
+  "id": "E-092",
+  "slug": "score-explainability-drawer",
+  "name": "CDS/PCI score explainability drawer (formula, inputs, confidence)",
+  "status": "passed",
+  "loop_count": 1,
+  "ac_results": {
+    "AC1": "passed",
+    "AC2": "passed",
+    "AC3": "passed",
+    "AC4": "passed",
+    "AC5": "passed"
+  },
+  "schema_changes": {
+    "tables_added": ["nbfc_score_runs", "nbfc_score_input_snapshots"],
+    "tables_referenced": ["nbfc_loans", "nbfc_borrower_actions", "loan_applications"],
+    "auto_approved": true,
+    "applied_to_sandbox_at": "2026-05-01"
+  },
+  "files": {
+    "schema": "src/lib/db/schema.ts",
+    "migration": "drizzle/E-092_score_explainability.sql",
+    "schema_apply_script": "scripts/apply-e092-schema.mjs",
+    "lib": [],
+    "api": [
+      "src/app/api/nbfc/scores/explainability/route.ts"
+    ],
+    "components": [
+      "src/components/nbfc/scores/ScoreExplainabilityDrawer.tsx"
+    ],
+    "pages": [],
+    "tests": [
+      "tests/e2e/nbfc/E-092_score-explainability.api.spec.ts"
+    ]
+  },
+  "verification": {
+    "schema_applied_via": "node scripts/apply-e092-schema.mjs (CREATE TABLE IF NOT EXISTS + indexes against sandbox DB)",
+    "tests_run": "npx playwright test --config=tests/e2e/nbfc-loop.config.ts --project=nbfc-api tests/e2e/nbfc/E-092_score-explainability.api.spec.ts",
+    "tests_passed": "5/5"
+  }
+}

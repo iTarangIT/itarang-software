@@ -72,6 +72,23 @@ prod.txt
 env.txt
 /eval-reports
 
+# /nbfc skill — runtime artifacts (committed: brd_extract/*.yaml, _audit_*.json)
+docs/nbfc/_preflight.json
+docs/nbfc/manifest.json
+docs/nbfc/manifest/
+docs/nbfc/loop_report/
+docs/nbfc/_convergence/
+docs/nbfc/_simple/
+.nbfc-loop/
+
+# Playwright per-host storage state (contains live session cookies — never push)
+/tests/.auth.localhost-state/
+/tests/.auth.*/
+
+# ad-hoc inspection screenshots at repo root
+/*.png
+!/public/*.png
+
 # DB migration scratch files (sandbox → prod sync). Contain real data /
 # connection strings — never commit. Root-anchored so drizzle/*.sql is unaffected.
 /sandbox-*.sql

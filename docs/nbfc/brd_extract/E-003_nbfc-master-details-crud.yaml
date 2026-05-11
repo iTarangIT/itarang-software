@@ -1,0 +1,243 @@
+id: E-003
+slug: nbfc-master-details-crud
+name: "NBFC master details — create / read / update endpoints and admin form"
+source_section: "6.0.3"
+brd_excerpt: |
+  6.0.3 NBFC Master Details Form
+  18 fields including: NBFC Legal Name (required), NBFC Short Name / Brand (required, dealer dropdown display),
+  RBI Registration Number (required, unique), CIN (required), GST Number (required), PAN Number (required),
+  Registered Address (line1, line2, city, district, state, pin), NBFC Type (NBFC-ICC | NBFC-MFI | NBFC-Factor | HFC | Scheduled Commercial Bank | Cooperative Bank | Other),
+  Primary Contact Name/Email/Phone (all required), Grievance Officer Name (required),
+  Grievance Helpline (required), Grievance Redressal URL (required), Nodal Officer (RBI) (optional),
+  Partnership Agreement Date (required), FLDG / Guarantee Terms (optional), Active Geographies (multi-select state, required).
+
+depends_on: []
+
+non_functional:
+  - "Grievance Officer Name, Helpline, and URL are mandatory per RBI DL Directions 2025 — server MUST reject creates that omit them."
+  - "RBI Registration Number is unique across the nbfc table — DB-level unique constraint required."
+  - "All field validations run server-side regardless of client validation."
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/nbfc
+      auth: admin
+      request_zod: |
+        z.object({
+          legalName: z.string().min(1).max(200),
+          shortName: z.string().min(1).max(100),
+          rbiRegistrationNo: z.string().regex(/^N-\d{2}\.\d{5}\.\d{2}\.\d{2}\.\d{4}\.\d{5}\.\d{2}$/),
+          cin: z.string().min(1).max(25),
+          gstNumber: z.string().regex(/^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1}$/),
+          panNumber: z.string().regex(/^[A-Z]{5}\d{4}[A-Z]$/),
+          nbfcType: z.enum(["nbfc_icc","nbfc_mfi","nbfc_factor","hfc","scheduled_bank","cooperative_bank","other"]),
+          registeredAddress: z.object({
+            line1: z.string().min(1),
+            line2: z.string().optional(),
+            city: z.string().min(1),
+            district: z.string().min(1),
+            state: z.string().min(1),
+            pin: z.string().regex(/^\d{6}$/),
+          }),
+          primaryContactName: z.string().min(1).max(200),
+          primaryContactEmail: z.string().email(),
+          primaryContactPhone: z.string().regex(/^\d{10}$/),
+          grievanceOfficerName: z.string().min(1).max(200),
+          grievanceHelpline: z.string().min(1).max(200),
+          grievanceUrl: z.string().url(),
+          nodalOfficer: z.string().max(200).optional(),
+          partnershipDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          fldgTerms: z.string().optional(),
+          activeGeographies: z.array(z.string()).min(1),
+        })
+      response_shape:
+        id: "number"
+        nbfcId: "string"
+        status: "draft"
+    - method: GET
+      path: /api/admin/nbfc/{id}
+      auth: admin
+      query_zod: |
+        z.object({})
+      response_shape:
+        id: "number"
+        nbfcId: "string"
+        legalName: "string"
+        status: "string"
+    - method: PATCH
+      path: /api/admin/nbfc/{id}
+      auth: admin
+      request_zod: |
+        z.object({}).partial()
+      response_shape:
+        id: "number"
+        updatedAt: "iso-datetime"
+  components:
+    - "src/components/admin/nbfc/NbfcMasterDetailsForm.tsx"
+  jobs: []
+  pages:
+    - "/admin/nbfc/new"
+    - "/admin/nbfc/[nbfcId]/edit"
+
+logic: |
+  1. Validate body against request_zod.
+  2. On create: generate nbfc_id of pattern 'NBFC-' + 8-char uppercase random.
+  3. Insert row with status='draft', created_by=admin_user_id, registered_address as JSON, active_geographies as JSON array.
+  4. On unique-violation for rbi_registration_no, return 409 'rbi_registration_no_already_exists'.
+  5. On PATCH: forbid edits when status in {approved, active, terminated} unless field is in safelist (primary contact, grievance fields).
+  6. Return inserted/updated row.
+
+tables_columns:
+  reuse: []
+  new:
+    - table: nbfc
+      justification: "Master NBFC partner table per BRD 6.0.7 — no existing table holds NBFC partner identities, RBI registration, or grievance officer fields."
+      columns:
+        - { name: id, type: "serial().primaryKey()" }
+        - { name: nbfc_id, type: "varchar({ length: 50 }).notNull().unique()" }
+        - { name: legal_name, type: "varchar({ length: 200 }).notNull()" }
+        - { name: short_name, type: "varchar({ length: 100 }).notNull()" }
+        - { name: rbi_registration_no, type: "varchar({ length: 100 }).notNull().unique()" }
+        - { name: cin, type: "varchar({ length: 25 }).notNull()" }
+        - { name: gst_number, type: "varchar({ length: 20 }).notNull()" }
+        - { name: pan_number, type: "varchar({ length: 20 }).notNull()" }
+        - { name: nbfc_type, type: "varchar({ length: 32 }).notNull()" }
+        - { name: registered_address, type: "jsonb().notNull()" }
+        - { name: active_geographies, type: "jsonb().notNull()" }
+        - { name: primary_contact_name, type: "varchar({ length: 200 }).notNull()" }
+        - { name: primary_contact_email, type: "varchar({ length: 200 }).notNull()" }
+        - { name: primary_contact_phone, type: "varchar({ length: 20 }).notNull()" }
+        - { name: grievance_officer_name, type: "varchar({ length: 200 }).notNull()" }
+        - { name: grievance_helpline, type: "varchar({ length: 200 }).notNull()" }
+        - { name: grievance_url, type: "text().notNull()" }
+        - { name: nodal_officer, type: "varchar({ length: 200 })" }
+        - { name: partnership_date, type: "date().notNull()" }
+        - { name: fldg_terms, type: "text()" }
+        - { name: cor_expiry_date, type: "date()" }
+        - { name: lsp_agreement_id, type: "integer()" }
+        - { name: status, type: "varchar({ length: 32 }).notNull().default('draft')" }
+        - { name: created_by, type: "integer().notNull()" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: updated_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/admin/nbfc with all required fields returns 200 and persists a row with auto-generated nbfc_id of format 'NBFC-XXXXXXXX'."
+    test_layer: api
+    test_name: "create persists row with system-generated nbfc_id"
+  - id: AC2
+    statement: "POST /api/admin/nbfc returns 422 when grievance_officer_name, grievance_helpline, or grievance_url is missing."
+    test_layer: api
+    test_name: "create rejects missing RBI-mandatory grievance fields"
+  - id: AC3
+    statement: "POST /api/admin/nbfc with a duplicate rbi_registration_no returns 409 and does not create a row."
+    test_layer: api
+    test_name: "create rejects duplicate rbi_registration_no"
+  - id: AC4
+    statement: "GET /api/admin/nbfc/{id} returns the master record with the same nbfc_id and legalName that was created."
+    test_layer: api
+    test_name: "read returns previously created master record"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-003
+  audited_at: "2026-05-01T06:30:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings: []
+  new_findings:
+    - table: nbfc
+      justification_present: true
+      justification_chars: 137
+      fuzzy_collisions: []
+      columns_proposed:
+        - name: id
+          type: serial().primaryKey()
+          drizzle_builder: serial
+        - name: nbfc_id
+          type: "varchar({ length: 50 }).notNull().unique()"
+          drizzle_builder: varchar
+        - name: legal_name
+          type: "varchar({ length: 200 }).notNull()"
+          drizzle_builder: varchar
+        - name: short_name
+          type: "varchar({ length: 100 }).notNull()"
+          drizzle_builder: varchar
+        - name: rbi_registration_no
+          type: "varchar({ length: 100 }).notNull().unique()"
+          drizzle_builder: varchar
+        - name: cin
+          type: "varchar({ length: 25 }).notNull()"
+          drizzle_builder: varchar
+        - name: gst_number
+          type: "varchar({ length: 20 }).notNull()"
+          drizzle_builder: varchar
+        - name: pan_number
+          type: "varchar({ length: 20 }).notNull()"
+          drizzle_builder: varchar
+        - name: nbfc_type
+          type: "varchar({ length: 32 }).notNull()"
+          drizzle_builder: varchar
+        - name: registered_address
+          type: jsonb().notNull()
+          drizzle_builder: jsonb
+        - name: active_geographies
+          type: jsonb().notNull()
+          drizzle_builder: jsonb
+        - name: primary_contact_name
+          type: "varchar({ length: 200 }).notNull()"
+          drizzle_builder: varchar
+        - name: primary_contact_email
+          type: "varchar({ length: 200 }).notNull()"
+          drizzle_builder: varchar
+        - name: primary_contact_phone
+          type: "varchar({ length: 20 }).notNull()"
+          drizzle_builder: varchar
+        - name: grievance_officer_name
+          type: "varchar({ length: 200 }).notNull()"
+          drizzle_builder: varchar
+        - name: grievance_helpline
+          type: "varchar({ length: 200 }).notNull()"
+          drizzle_builder: varchar
+        - name: grievance_url
+          type: text().notNull()
+          drizzle_builder: text
+        - name: nodal_officer
+          type: "varchar({ length: 200 })"
+          drizzle_builder: varchar
+        - name: partnership_date
+          type: date().notNull()
+          drizzle_builder: date
+        - name: fldg_terms
+          type: text()
+          drizzle_builder: text
+        - name: cor_expiry_date
+          type: date()
+          drizzle_builder: date
+        - name: lsp_agreement_id
+          type: integer()
+          drizzle_builder: integer
+        - name: status
+          type: "varchar({ length: 32 }).notNull().default('draft')"
+          drizzle_builder: varchar
+        - name: created_by
+          type: integer().notNull()
+          drizzle_builder: integer
+        - name: created_at
+          type: "timestamp({ withTimezone: true }).defaultNow().notNull()"
+          drizzle_builder: timestamp
+        - name: updated_at
+          type: "timestamp({ withTimezone: true }).defaultNow().notNull()"
+          drizzle_builder: timestamp
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM"
+    - "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs"
+    - "G-04: Sync Audit G-04: dealers table never defined — referenced as FK target by many tables"
+    - "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type"
+  checkpoint_html: docs/nbfc/loop_report/E-003/checkpoint_1.html

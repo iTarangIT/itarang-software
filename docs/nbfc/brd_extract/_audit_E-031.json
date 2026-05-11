@@ -1,0 +1,48 @@
+{
+  "unit_id": "E-031",
+  "audited_at": "2026-05-01T07:00:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "loan_sanctions",
+      "verified": false,
+      "ts_line": 2624,
+      "columns_verified": ["id"],
+      "columns_missing": ["nbfc_id"],
+      "note": "G-03: loan_sanctions.nbfc_id missing in baseline."
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "nbfc_borrower_actions",
+      "justification_present": true,
+      "justification_chars": 168,
+      "columns": ["id", "tenant_id", "loan_sanction_id", "action_type", "requested_by", "status", "payload", "created_at"],
+      "fuzzy_collisions": [],
+      "type_lint": "ok",
+      "decision": "approved_pending_human"
+    },
+    {
+      "table": "nbfc_audit_log",
+      "justification_present": true,
+      "justification_chars": 134,
+      "columns": ["id", "tenant_id", "actor_user_id", "action_type", "action_id", "before_state", "after_state", "created_at"],
+      "fuzzy_collisions": [
+        {
+          "proposed": "actor_user_id",
+          "candidates": ["lead_documents.user_id", "nbfc_users.user_id", "notifications.user_id"],
+          "overlap": 0.667,
+          "reason": "actor_user_id shares tokens with user_id columns. ≥2 candidates with overlap >0.6 — flagged as potential silent-rename per format-doc rule 2."
+        }
+      ],
+      "type_lint": "ok",
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "reject",
+  "migration_required": false,
+  "notes": [
+    "Fuzzy collision on nbfc_audit_log.actor_user_id: ≥2 existing user_id columns. Reviewer must confirm whether 'actor_user_id' is a deliberate role-disambiguator (different from 'user_id' as a generic FK) or whether the column should be renamed to user_id for consistency. Both nbfc_borrower_actions and nbfc_audit_log are foundational; resolve before approving downstream units E-032..E-035."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-031/checkpoint_1.html"
+}

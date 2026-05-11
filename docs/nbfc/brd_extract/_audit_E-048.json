@@ -1,0 +1,25 @@
+{
+  "unit_id": "E-048",
+  "audited_at": "2026-05-01T06:11:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "iot_devices",
+      "verified": false,
+      "verified_via": "depends_on:E-045 new[]",
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_pending_dep_approval": ["serial_number", "last_seen", "device_status"],
+      "notes": "iot_devices is not in baseline; it is proposed by E-045 (which is in this unit's depends_on). Reuse is verified pending E-045 schema approval."
+    }
+  ],
+  "new_findings": [],
+  "verdict": "audited",
+  "migration_required": false,
+  "notes": [
+    "Unit is a pure classifier with one GET endpoint and no DB writes. Only depends on iot_devices.last_seen / device_status — both proposed in E-045.",
+    "schema_ts_line in YAML is set to 1 as a placeholder (correct, since iot_devices does not yet exist in schema.ts). The ±5-line reuse rule does not apply for tables introduced by depended-on units.",
+    "BRD sync audit shows no gap touching this classifier; freshness/last_seen semantics are documented in 6.2.5 and consumed by 6.2.7 (E-050)."
+  ],
+  "checkpoint_html": null
+}

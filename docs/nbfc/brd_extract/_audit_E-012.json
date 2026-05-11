@@ -1,0 +1,83 @@
+{
+  "unit_id": "E-012",
+  "audited_at": "2026-05-01T08:00:00Z",
+  "baseline_sha": "01fdda8c341fc4f25d92f38a94cd875d81b27c47d7d9a817973a83dfe1aec3b5",
+  "re_audit": true,
+  "re_audit_reason": "Re-audited after merge of nbfc/E-008, E-071, E-031, E-066, E-102 into apoorv-claude. `nbfc` table now present in baseline (line 3427). `dealers` table now present (line 3978) which closes G-04 dependency.",
+  "reuse_findings": [
+    {
+      "table": "nbfc",
+      "verified": true,
+      "ts_line": 3427,
+      "columns_verified": [
+        "id",
+        "short_name",
+        "status"
+      ],
+      "columns_missing": [],
+      "reason": "table present in baseline as of merge of nbfc/E-008..nbfc/E-102 chain",
+      "sibling_unit": "E-003"
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "dealer_nbfc_assignments",
+      "justification_present": true,
+      "justification_chars": 142,
+      "fuzzy_collisions": [],
+      "columns_proposed": [
+        {
+          "name": "id",
+          "type": "serial().primaryKey()",
+          "drizzle_builder": "serial"
+        },
+        {
+          "name": "dealer_id",
+          "type": "integer().notNull()",
+          "drizzle_builder": "integer"
+        },
+        {
+          "name": "nbfc_id",
+          "type": "integer().notNull().references(() => nbfc.id)",
+          "drizzle_builder": "integer"
+        },
+        {
+          "name": "enabled_at",
+          "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+          "drizzle_builder": "timestamp"
+        },
+        {
+          "name": "enabled_by",
+          "type": "integer().notNull()",
+          "drizzle_builder": "integer"
+        },
+        {
+          "name": "status",
+          "type": "varchar({ length: 16 }).notNull().default('active')",
+          "drizzle_builder": "varchar"
+        },
+        {
+          "name": "notes",
+          "type": "text()",
+          "drizzle_builder": "text"
+        }
+      ],
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "status": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "G-01: Sync Audit G-01: Sub-category definition conflict / Digio LSP integration & shared agreement_status ENUM",
+    "G-03: Sync Audit G-03: loan_sanctions missing nbfc_id and lsp_agreement_id FKs",
+    "G-04: Sync Audit G-04: dealers table never defined \u2014 referenced as FK target by many tables",
+    "G-05: Sync Audit G-05: product_selections retains sub_category column (rename to model_number); junction table dealer_nbfc_assignments required",
+    "G-08: Sync Audit G-08: No dealers table means no canonical dealer_id type",
+    "G-10: Sync Audit G-10: Dealer onboarding status not linked to lead creation gate",
+    "RE-AUDIT 2026-05-01T08:00Z: dependency `nbfc` cleared (now in baseline at line 3427).",
+    "RE-AUDIT 2026-05-01T08:00Z: G-04 dependency `dealers` cleared (now in baseline at line 3978 from E-102). dealer_id FK target is `dealers.id` (serial integer).",
+    "Verdict unchanged: needs_schema_approval \u2014 proposed `dealer_nbfc_assignments` table (7 columns) still requires human sign-off."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-012/checkpoint_1.html"
+}

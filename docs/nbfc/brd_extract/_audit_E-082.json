@@ -1,0 +1,222 @@
+{
+  "unit_id": "E-082",
+  "audited_at": "2026-05-01T06:16:03Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "nbfc_tenants",
+      "verified": true,
+      "ts_line": 2699,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "id",
+        "slug",
+        "is_active"
+      ],
+      "columns_missing": []
+    },
+    {
+      "table": "nbfc_users",
+      "verified": true,
+      "ts_line": 2713,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "user_id",
+        "tenant_id",
+        "role"
+      ],
+      "columns_missing": []
+    },
+    {
+      "table": "audit_logs",
+      "verified": true,
+      "ts_line": 671,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "id",
+        "entity_type",
+        "entity_id",
+        "action",
+        "performed_by",
+        "new_data",
+        "timestamp"
+      ],
+      "columns_missing": []
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "dual_approval_requests",
+      "is_existing_table": false,
+      "justification_present": true,
+      "justification_length": 186,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid().primaryKey().defaultRandom()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "tenant_id",
+          "type": "uuid().notNull().references(() => nbfcTenants.id)",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "action_type",
+          "type": "varchar({ length: 64 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "entity_id",
+          "type": "varchar({ length: 255 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "initiator_user_id",
+          "type": "uuid().notNull()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "approver_user_id",
+          "type": "uuid()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "required_approver_role",
+          "type": "varchar({ length: 64 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "status",
+          "type": "varchar({ length: 24 }).default('pending_approval').notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "reason_code",
+          "type": "varchar({ length: 64 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "evidence_snapshot",
+          "type": "jsonb().notNull()",
+          "type_lint_ok": true,
+          "type_head": "jsonb",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "borrower_notice_id",
+          "type": "varchar({ length: 255 })",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "rejection_reason",
+          "type": "text()",
+          "type_lint_ok": true,
+          "type_head": "text",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp({ withTimezone: true }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "approved_at",
+          "type": "timestamp({ withTimezone: true })",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "rejected_at",
+          "type": "timestamp({ withTimezone: true })",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "expired_at",
+          "type": "timestamp({ withTimezone: true })",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        }
+      ],
+      "fuzzy_collisions": [],
+      "decision": "approved_pending_human"
+    },
+    {
+      "table": "dual_approval_action_config",
+      "is_existing_table": false,
+      "justification_present": true,
+      "justification_length": 134,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid().primaryKey().defaultRandom()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "action_type",
+          "type": "varchar({ length: 64 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "initiator_role",
+          "type": "varchar({ length: 64 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "approver_role",
+          "type": "varchar({ length: 64 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        }
+      ],
+      "fuzzy_collisions": [],
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-082/checkpoint_1.html"
+}
