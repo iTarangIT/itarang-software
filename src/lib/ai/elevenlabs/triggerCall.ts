@@ -1,8 +1,19 @@
 import { db } from "@/lib/db";
 import { dealerLeads, scraperLeads } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { normalizeIndianPhone, phoneLookupVariants } from "@/lib/ai/phone";
+import { dedupClaim } from "@/lib/queue/safeRedis";
 import { ElevenLabsCallPayload, ElevenLabsCallResponse } from "./types";
+
+// One ElevenLabs call per (lead, phone, day). Same rationale as Bolna —
+// stops QStash retries from billing 3x for the same daily outreach attempt.
+const IDEMPOTENCY_TTL_SECONDS = 25 * 60 * 60;
+
+function idempotencyKey(leadId: string, e164Phone: string): string {
+  const dateKey = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  return `elevenlabs:idem:${leadId}:${e164Phone}:${dateKey}`;
+}
 
 // ElevenLabs has separate outbound endpoints depending on how the phone
 // number is provisioned. Default to Twilio for backward compatibility;
@@ -62,10 +73,13 @@ function buildLastCallMemory(followUpHistory: any[]): string {
 }
 
 async function promoteScraperLead(phone: string): Promise<any | null> {
+  // dealer_leads stores 10-digit, scraper_leads stores +91 E.164 — look up
+  // by both variants so we match regardless of which the caller passed.
+  const variants = phoneLookupVariants(phone);
   const [scraperLead] = await db
     .select()
     .from(scraperLeads)
-    .where(eq(scraperLeads.phone, phone))
+    .where(inArray(scraperLeads.phone, variants))
     .limit(1);
 
   if (!scraperLead) return null;
@@ -128,8 +142,11 @@ export async function triggerElevenLabsCall(
       };
     }
 
+    // Look up by every storage variant of the input phone so a +91 caller
+    // can find a 10-digit row and vice-versa during the format transition.
+    const lookupVariants = phoneLookupVariants(payload.phone);
     let lead = await db.query.dealerLeads.findFirst({
-      where: (l, { eq }) => eq(l.phone, payload.phone),
+      where: (l, { inArray }) => inArray(l.phone, lookupVariants),
     });
 
     if (!lead) {
@@ -179,9 +196,44 @@ export async function triggerElevenLabsCall(
     const isFollowup = followUpHistory.length > 0;
     const persistentMemory = lead.memory ? JSON.stringify(lead.memory) : "";
 
+    const recipientPhone = normalizeIndianPhone(lead.phone ?? payload.phone);
+    if (!recipientPhone) {
+      console.error(
+        "[ELEVENLABS] Invalid phone (cannot normalize to E.164):",
+        lead.phone ?? payload.phone,
+      );
+      return {
+        success: false,
+        error:
+          "Lead phone is invalid — expected 10 digits or +91XXXXXXXXXX format.",
+      };
+    }
+
+    // Idempotency: skip duplicate dispatches within 25 hours for the same
+    // (lead, phone) pair. Bypassed when scheduling for a future date —
+    // those legitimately fire later and shouldn't be deduped against now.
+    if (!payload.scheduledAt) {
+      const idemKey = idempotencyKey(lead.id, recipientPhone);
+      const { claimed } = await dedupClaim(
+        idemKey,
+        IDEMPOTENCY_TTL_SECONDS,
+        "elevenlabs:outbound-idem",
+      );
+      if (!claimed) {
+        console.warn(
+          `[ELEVENLABS] Skipping duplicate call within 25h for lead ${lead.id} (${recipientPhone}) — idempotency key matched`,
+        );
+        return {
+          success: true,
+          deduped: true,
+          error: "Duplicate call suppressed by idempotency key",
+        };
+      }
+    }
+
     const dynamicVariables = {
       lead_id: lead.id,
-      phone_number: payload.phone,
+      phone_number: recipientPhone,
       owner_name: ownerName,
       location,
       shop_name: shopName,
@@ -198,7 +250,7 @@ export async function triggerElevenLabsCall(
     const bodyData = {
       agent_id: process.env.ELEVENLABS_AGENT_ID,
       agent_phone_number_id: process.env.ELEVENLABS_AGENT_PHONE_NUMBER_ID,
-      to_number: payload.phone,
+      to_number: recipientPhone,
       conversation_initiation_client_data: {
         dynamic_variables: dynamicVariables,
       },

@@ -5,7 +5,7 @@ import {
   successResponse,
   errorResponse,
 } from "@/lib/api-utils";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 
 export const GET = withErrorHandler(
   async (_req: Request, { params }: { params: Promise<{ id: string }> }) => {
@@ -58,6 +58,34 @@ export const GET = withErrorHandler(
     const completed = run.completedChunks ?? 0;
     const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
 
+    // When chunks fail, the actual reason lives on the chunk row, not the run.
+    // Surface a representative chunk error so the UI can show *why* the run
+    // produced no leads instead of just "Failed: N".
+    let chunkErrorSample: string | null = null;
+    let chunkErrorCount = 0;
+    if (breakdown.failed > 0) {
+      const errorRows = await db
+        .select({
+          message: scraperRunChunks.error_message,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(scraperRunChunks)
+        .where(
+          and(
+            eq(scraperRunChunks.run_id, id),
+            eq(scraperRunChunks.status, "failed"),
+            isNotNull(scraperRunChunks.error_message),
+          ),
+        )
+        .groupBy(scraperRunChunks.error_message)
+        .orderBy(sql`count(*) desc`)
+        .limit(1);
+      if (errorRows[0]) {
+        chunkErrorSample = errorRows[0].message;
+        chunkErrorCount = Number(errorRows[0].count);
+      }
+    }
+
     return successResponse({
       id: run.id,
       status: run.status,
@@ -70,6 +98,8 @@ export const GET = withErrorHandler(
       newLeadsSaved: run.newLeadsSaved ?? 0,
       duplicatesSkipped: run.duplicatesSkipped ?? 0,
       errorMessage: run.errorMessage,
+      chunkErrorSample,
+      chunkErrorCount,
       startedAt: run.startedAt,
       completedAt: run.completedAt,
     });
