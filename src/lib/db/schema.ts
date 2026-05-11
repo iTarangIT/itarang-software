@@ -2505,7 +2505,10 @@ export const scraperRaw = pgTable("scraper_raw", {
 export const dealerLeads = pgTable("dealer_leads", {
   id: text().primaryKey().notNull(),
   dealer_name: text("dealer_name"),
-  phone: text(),
+  // UNIQUE so promoteLeadsToDealerLeads' onConflictDoNothing has something
+  // to conflict on. The constraint already exists in the DB (migration
+  // 0002_cute_devos.sql); mirror it here so future `db:push` runs preserve it.
+  phone: text().unique("dealer_leads_phone_unique"),
   language: text(),
   follow_up_history: jsonb("follow_up_history").default([]),
   current_status: text("current_status"),
