@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>E-026 — loop_01 — GREEN</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 2rem; color: #111827; max-width: 980px; }
+  h1 { margin-bottom: 0.25rem; }
+  .meta { color: #6b7280; font-size: 0.9rem; margin-bottom: 1.5rem; }
+  .pill { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; }
+  .pill-green { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+  table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+  th, td { border: 1px solid #e5e7eb; padding: 0.5rem 0.75rem; text-align: left; vertical-align: top; }
+  th { background: #f9fafb; }
+  .ok { color: #047857; font-weight: 600; }
+  pre { background: #f3f4f6; padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
+  code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 3px; }
+</style>
+</head>
+<body>
+  <h1>E-026 &mdash; Portfolio Overview summary cards <span class="pill pill-green">GREEN</span></h1>
+  <div class="meta">
+    Branch: <code>nbfc/E-026</code> &middot; Iteration 01 &middot; 2026-05-01 &middot; ACs: 4/4 passed
+  </div>
+
+  <h2>Acceptance criteria</h2>
+  <table>
+    <thead><tr><th>AC</th><th>Statement</th><th>Result</th><th>Note</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>AC1</td>
+        <td>200 with six numeric fields + ISO computed_at for the calling tenant.</td>
+        <td class="ok">PASS</td>
+        <td>All six keys present, computed_at = 2026-05-01T07:45:27.198Z (valid ISO).</td>
+      </tr>
+      <tr>
+        <td>AC2</td>
+        <td>total_active_loans = COUNT(loan_sanctions WHERE nbfc_id = tenant AND status='disbursed' AND closed_at IS NULL).</td>
+        <td class="ok">PASS</td>
+        <td>Seeded 3 active disbursed-open + 1 closed; got total=3, portfolio_value=300000.</td>
+      </tr>
+      <tr>
+        <td>AC3</td>
+        <td>delinquency_rate is 0 (not NaN/null) when total_active_loans = 0.</td>
+        <td class="ok">PASS</td>
+        <td>Empty tenant returned total=0, delinquency_rate=0 (Number.isFinite OK).</td>
+      </tr>
+      <tr>
+        <td>AC4</td>
+        <td>No cross-tenant aggregate leak.</td>
+        <td class="ok">PASS</td>
+        <td>Tenant A &ne; Tenant B aggregates: A total=3 portfolio=300k recovery=50k cds=670; B total=5 portfolio=1M recovery=60k cds=510.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Schema changes (applied via direct SQL)</h2>
+  <ul>
+    <li>NEW <code>borrower_risk_scores</code> &mdash; tenant_id, borrower_id, loan_sanction_id, cds_score, pci_score, confidence, computed_at + indexes.</li>
+    <li>NEW <code>nbfc_recovery_pipeline</code> &mdash; tenant_id, battery_serial, stage, estimated_recovery_value, created_at, updated_at + indexes.</li>
+    <li>ALTER <code>loan_sanctions</code> + nbfc_id, disbursed_at, closed_at + indexes (G-03 prereq inlined into this unit).</li>
+  </ul>
+
+  <h2>Surfaces shipped</h2>
+  <ul>
+    <li>API: <code>GET /api/nbfc/portfolio/summary</code> &mdash; getCurrentTenant() + requireNbfcAccess() + computePortfolioSummary().</li>
+    <li>Page: <code>/nbfc/portfolio</code></li>
+    <li>Component: <code>src/components/nbfc-portal/PortfolioSummaryCards.tsx</code></li>
+    <li>Lib: <code>src/lib/nbfc/portfolio-summary.ts</code> (pure compute, unit-tested directly).</li>
+  </ul>
+
+  <h2>Test runner output</h2>
+  <pre>PASS AC1: keys=total_active_loans,portfolio_value,disbursement_this_month,delinquency_rate,avg_portfolio_cds,recovery_value_locked,computed_at computed_at=2026-05-01T07:45:27.198Z
+PASS AC2: total_active_loans=3 (want 3); portfolio_value=300000 (want 300000)
+PASS AC3: total_active_loans=0 delinquency_rate=0
+PASS AC4: A: total=3 portfolio=300000 recovery=50000 cds=670 | B: total=5 portfolio=1000000 recovery=60000 cds=510
+
+=== E-026 ACs: 4/4 passed ===</pre>
+</body>
+</html>

@@ -1,0 +1,89 @@
+id: E-027
+slug: portfolio-data-freshness-badge
+name: Portfolio data freshness badge
+source_section: "6.1.3"
+brd_excerpt: |
+  Data Freshness Badge
+  Every computed metric card shows a data freshness badge: 'Last updated: Today, 06:00 AM IST'. CDS and PCI are computed nightly. SOC and telemetry data is near-real-time (15-minute ingestion lag). If data is stale >24h, badge turns amber: 'Data may be outdated — IoT sync issue'.
+depends_on: []
+non_functional:
+  - "Timestamps must render in IST (Asia/Kolkata) regardless of viewer locale."
+
+surface:
+  api:
+    - method: GET
+      path: /api/nbfc/portfolio/freshness
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({})
+      response_shape:
+        cds_last_computed_at: string
+        telemetry_last_ingested_at: string
+        is_stale: boolean
+  components:
+    - "src/components/nbfc-portal/DataFreshnessBadge.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Read the most recent computed_at across borrower_risk_scores for the tenant — this is cds_last_computed_at.
+  2. Read the most recent ingestion timestamp from telemetry_ingestion_log for any battery in the tenant portfolio — this is telemetry_last_ingested_at.
+  3. is_stale = true if (now - cds_last_computed_at) > 24h OR (now - telemetry_last_ingested_at) > 24h; otherwise false.
+  4. Return all three fields as ISO timestamps and the boolean.
+  5. The badge component formats both timestamps in Asia/Kolkata and shows the amber 'Data may be outdated — IoT sync issue' state when is_stale is true.
+
+tables_columns:
+  reuse:
+    - table: borrower_risk_scores
+      schema_ts_line: 1
+      columns: [tenant_id, computed_at]
+  new:
+    - table: telemetry_ingestion_log
+      justification: "Need a per-battery ingestion-timestamp log so the freshness badge can determine the most recent IoT update for a tenant's portfolio."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: tenant_id, type: "uuid().notNull()" }
+        - { name: battery_serial, type: "varchar({ length: 64 }).notNull()" }
+        - { name: ingested_at, type: "timestamp({ withTimezone: true }).notNull().defaultNow()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "GET /api/nbfc/portfolio/freshness returns 200 with cds_last_computed_at, telemetry_last_ingested_at, and is_stale boolean."
+    test_layer: api
+    test_name: "Freshness endpoint returns timestamps and is_stale flag"
+  - id: AC2
+    statement: "When the most recent CDS computed_at for the tenant is older than 24 hours, is_stale is true."
+    test_layer: api
+    test_name: "is_stale becomes true when CDS data is older than 24h"
+  - id: AC3
+    statement: "When is_stale is true the freshness badge component renders the amber text 'Data may be outdated — IoT sync issue'."
+    test_layer: ui
+    test_name: "Stale freshness shows amber sync-issue badge"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-027
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: borrower_risk_scores
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [tenant_id, computed_at]
+      note: "Forward reference to table proposed in E-026."
+  new_findings:
+    - table: telemetry_ingestion_log
+      justification_present: true
+      columns: [id, tenant_id, battery_serial, ingested_at]
+      fuzzy_collisions: []
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "borrower_risk_scores does not exist in baseline (proposed by E-026). Loop ordering must add E-026's tables first."
+  checkpoint_html: docs/nbfc/loop_report/E-027/checkpoint_1.html

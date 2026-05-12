@@ -10,6 +10,9 @@ export interface BolnaCallResponse {
   success: boolean;
   call_id?: string;
   error?: string;
+  // True when the call was suppressed by the idempotency guard (already
+  // dispatched for this lead+phone+day). Caller can treat as no-op success.
+  deduped?: boolean;
 }
 
 export interface BolnaWebhookPayload {

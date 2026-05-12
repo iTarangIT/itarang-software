@@ -30,6 +30,19 @@ import { CallButton } from "@/components/leads/call-button";
 import { ScraperDashboard } from "@/components/scraper/ScraperDashboard";
 import { RunDetailView } from "@/components/scraper/RunDetailView";
 import { DownloadConvertedLeadsButton } from "@/components/leads/DownloadButton";
+import {
+  DialerStartModal,
+  categoryMatcher,
+  type DialerProvider,
+  type DialerCategory,
+} from "@/components/leads/dialer-start-modal";
+import {
+  LeadCallStatus,
+  type CallRowStatus,
+} from "@/components/leads/lead-call-status";
+
+const ENDED_VISIBLE_MS = 8000;
+const MANUAL_CALL_MAX_MS = 3 * 60 * 1000;
 
 type Tab = "leads" | "scraper" | "converted";
 type DialerPhase = "idle" | "calling" | "countdown";
@@ -623,6 +636,7 @@ function AiDialerBanner({
   totalEligible,
   onStop,
   onSkipCountdown,
+  provider,
 }: {
   phase: DialerPhase;
   currentLead: any | null;
@@ -632,7 +646,13 @@ function AiDialerBanner({
   totalEligible: number;
   onStop: () => void;
   onSkipCountdown: () => void;
+  provider: DialerProvider;
 }) {
+  const providerLabel = provider === "elevenlabs" ? "ElevenLabs" : "Bolna";
+  const providerChip =
+    provider === "elevenlabs"
+      ? "bg-violet-500/20 text-violet-300 border-violet-500/40"
+      : "bg-blue-500/20 text-blue-300 border-blue-500/40";
   return (
     <div className="bg-gray-900 border border-gray-700 rounded-xl px-5 py-4 mb-4 flex items-center justify-between gap-4">
       <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -648,9 +668,14 @@ function AiDialerBanner({
         <div className="min-w-0">
           {phase === "calling" && currentLead && (
             <>
-              <p className="text-sm font-semibold text-white truncate">
+              <p className="text-sm font-semibold text-white truncate flex items-center gap-2">
                 Calling —{" "}
                 {currentLead.shop_name || currentLead.dealer_name || "Lead"}
+                <span
+                  className={`px-2 py-0.5 text-[10px] font-semibold rounded border ${providerChip}`}
+                >
+                  {providerLabel}
+                </span>
               </p>
               <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
                 <span className="flex items-center gap-1">
@@ -907,6 +932,73 @@ export default function LeadsUnifiedPage() {
   const [dialerPhase, setDialerPhase] = useState<DialerPhase>("idle");
   const [dialerQueue, setDialerQueue] = useState<any[]>([]);
   const [dialerIndex, setDialerIndex] = useState(0);
+  const [dialerModalOpen, setDialerModalOpen] = useState(false);
+  const [dialerEligible, setDialerEligible] = useState<any[]>([]);
+  const [dialerProvider, setDialerProvider] = useState<DialerProvider>("bolna");
+
+  // Per-row call status (live indicator on each lead)
+  const [callingLeadId, setCallingLeadId] = useState<string | null>(null);
+  const [callingLeadStartedAt, setCallingLeadStartedAt] = useState<number>(0);
+  const [endedLeadIds, setEndedLeadIds] = useState<Map<string, number>>(
+    new Map(),
+  );
+
+  const markEnded = useCallback((leadId: string) => {
+    setEndedLeadIds((prev) => {
+      const next = new Map(prev);
+      next.set(leadId, Date.now() + ENDED_VISIBLE_MS);
+      return next;
+    });
+  }, []);
+
+  const startCallingLead = useCallback(
+    (leadId: string) => {
+      setCallingLeadId((prev) => {
+        if (prev && prev !== leadId) markEnded(prev);
+        return leadId;
+      });
+      setCallingLeadStartedAt(Date.now());
+    },
+    [markEnded],
+  );
+
+  // Prune expired entries: remove "ended" pills after their TTL, and clear
+  // any optimistic "calling" state that's been stuck too long (e.g. manual
+  // call where the user navigated away or the call was never picked up).
+  useEffect(() => {
+    const tick = setInterval(() => {
+      const now = Date.now();
+      setEndedLeadIds((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+        for (const [id, expiresAt] of next) {
+          if (expiresAt <= now) {
+            next.delete(id);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+      if (
+        callingLeadId &&
+        callingLeadStartedAt > 0 &&
+        now - callingLeadStartedAt > MANUAL_CALL_MAX_MS
+      ) {
+        setCallingLeadId(null);
+        setCallingLeadStartedAt(0);
+      }
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [callingLeadId, callingLeadStartedAt]);
+
+  const getRowStatus = useCallback(
+    (leadId: string): CallRowStatus => {
+      if (callingLeadId === leadId) return "calling";
+      if (endedLeadIds.has(leadId)) return "ended";
+      return "idle";
+    },
+    [callingLeadId, endedLeadIds],
+  );
   const [dialerCallsMade, setDialerCallsMade] = useState(0);
   const [countdown, setCountdown] = useState(COUNTDOWN_SECS);
 
@@ -961,18 +1053,25 @@ export default function LeadsUnifiedPage() {
     setConvertedPage(1);
   };
 
-  const triggerCall = useCallback(async (lead: any) => {
-    setDialerPhase("calling");
-    try {
-      await fetch("/api/bolna/call", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: lead.phone, leadId: lead.id }),
-      });
-    } catch (e) {
-      console.error("Dialer call error", e);
-    }
-  }, []);
+  const triggerCall = useCallback(
+    async (lead: any) => {
+      setDialerPhase("calling");
+      const endpoint =
+        dialerProvider === "elevenlabs"
+          ? "/api/elevenlabs/call"
+          : "/api/bolna/call";
+      try {
+        await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: lead.phone, leadId: lead.id }),
+        });
+      } catch (e) {
+        console.error("Dialer call error", e);
+      }
+    },
+    [dialerProvider],
+  );
 
   const startCountdownTo = useCallback(
     (nextIdx: number) => {
@@ -1018,7 +1117,15 @@ export default function LeadsUnifiedPage() {
           setDialerPhase("idle");
           return;
         }
+        if (status.provider && status.provider !== dialerProvider) {
+          setDialerProvider(status.provider as DialerProvider);
+        }
         setDialerCallsMade(status.callsMade);
+        // Track per-row calling status: if currentLeadId changed, transition
+        // the previous one into "ended" and mark the new one as calling.
+        if (status.currentLeadId && status.currentLeadId !== callingLeadId) {
+          startCallingLead(status.currentLeadId);
+        }
         // Find the index of the current lead in our local queue
         const idx = queueRef.current.findIndex(
           (l: any) => l.id === status.currentLeadId,
@@ -1031,35 +1138,76 @@ export default function LeadsUnifiedPage() {
       } catch {
         // ignore poll errors
       }
-    }, 5000);
-  }, []);
+    }, 2000);
+  }, [dialerProvider, callingLeadId, startCallingLead]);
 
+  // Click on the toggle (when off): fetch the full lead list and open the
+  // provider/category picker modal. We don't dial until the user confirms.
+  // The modal sees ALL leads (so totals match the dashboard); at confirm
+  // time we apply the hard filter (must have phone, not DNC) — but NOT the
+  // "called today" filter, since the user explicitly chose to dial them.
   const handleDialerOn = useCallback(async () => {
     const res = await fetch(`/api/dealer-leads?page=1&limit=500&search=`);
     const data = await res.json();
     if (!data.success) return;
-    const queue = buildDialerQueue(data.leads);
-    if (queue.length === 0) return;
-    stopRef.current = false;
-    queueRef.current = queue;
-    setDialerQueue(queue);
-    setDialerIndex(0);
-    setDialerCallsMade(0);
-    setDialerOn(true);
-    setDialerPhase("calling");
-    await fetch("/api/ai-dialer/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ queueIds: queue.map((l) => l.id) }),
-    });
-    await fetch("/api/bolna/call", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone: queue[0].phone, leadId: queue[0].id }),
-    });
-    setDialerCallsMade(1);
-    startDialerPoller();
-  }, [startDialerPoller]);
+    setDialerEligible(data.leads);
+    setDialerModalOpen(true);
+  }, []);
+
+  // Modal confirmed → narrow the pool by category, persist the chosen
+  // provider in the dialer session, tag dealer_leads, and fire the first
+  // call via the chosen provider's endpoint. Subsequent calls advance via
+  // each provider's webhook (advanceDialerToNextLead).
+  const confirmDialerStart = useCallback(
+    async (provider: DialerProvider, category: DialerCategory) => {
+      const matches = categoryMatcher(category);
+      const queue = dialerEligible
+        .filter((l) => l.phone && l.phone.trim() !== "")
+        .filter(
+          (l) => !NO_CALL_STATUSES.includes(l.current_status ?? ""),
+        )
+        .filter((l) => matches(l.current_status ?? null))
+        .sort(
+          (a, b) =>
+            (b.final_intent_score ?? 0) - (a.final_intent_score ?? 0),
+        );
+      if (queue.length === 0) return;
+
+      stopRef.current = false;
+      queueRef.current = queue;
+      setDialerQueue(queue);
+      setDialerIndex(0);
+      setDialerCallsMade(0);
+      setDialerProvider(provider);
+      setDialerOn(true);
+      setDialerPhase("calling");
+
+      await fetch("/api/ai-dialer/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          queueIds: queue.map((l) => l.id),
+          provider,
+          category,
+        }),
+      });
+
+      const callEndpoint =
+        provider === "elevenlabs" ? "/api/elevenlabs/call" : "/api/bolna/call";
+      // Optimistically light up the row before the network round-trip so
+      // the user sees instant feedback on the lead card.
+      startCallingLead(queue[0].id);
+      await fetch(callEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: queue[0].phone, leadId: queue[0].id }),
+      });
+
+      setDialerCallsMade(1);
+      startDialerPoller();
+    },
+    [dialerEligible, startDialerPoller, startCallingLead],
+  );
 
   const handleDialerOff = useCallback(() => {
     stopRef.current = true;
@@ -1070,8 +1218,11 @@ export default function LeadsUnifiedPage() {
     setDialerQueue([]);
     setDialerIndex(0);
     setDialerCallsMade(0);
+    if (callingLeadId) markEnded(callingLeadId);
+    setCallingLeadId(null);
+    setCallingLeadStartedAt(0);
     fetch("/api/ai-dialer/stop", { method: "POST" });
-  }, []);
+  }, [callingLeadId, markEnded]);
 
   const handleSkipCountdown = useCallback(() => {
     if (countdownRef.current) clearInterval(countdownRef.current);
@@ -1112,6 +1263,13 @@ export default function LeadsUnifiedPage() {
         />
       )}
 
+      <DialerStartModal
+        isOpen={dialerModalOpen}
+        onClose={() => setDialerModalOpen(false)}
+        onConfirm={confirmDialerStart}
+        eligibleLeads={dialerEligible}
+      />
+
       {/* HEADER */}
       <div className="flex justify-between items-start mb-6">
         <div>
@@ -1126,7 +1284,7 @@ export default function LeadsUnifiedPage() {
           {tab === "leads" && (
             <button
               onClick={dialerOn ? handleDialerOff : handleDialerOn}
-              className="flex items-center gap-3 px-4 py-2.5 bg-white border border-gray-200 rounded-xl hover:border-gray-300 transition-all shadow-sm"
+              className="flex items-center gap-3 px-4 py-2.5 bg-white border border-gray-200 rounded-xl hover:border-gray-300 transition-all shadow-sm cursor-pointer"
             >
               <div
                 className={`relative w-9 h-5 rounded-full transition-colors duration-300 ${dialerOn ? "bg-emerald-500" : "bg-gray-200"}`}
@@ -1258,6 +1416,7 @@ export default function LeadsUnifiedPage() {
               totalEligible={dialerQueue.length}
               onStop={handleDialerOff}
               onSkipCountdown={handleSkipCountdown}
+              provider={dialerProvider}
             />
           )}
           {leadsLoading ? (
@@ -1278,10 +1437,13 @@ export default function LeadsUnifiedPage() {
                     lead.current_status ?? "",
                   );
                   const intentScore = lead.final_intent_score;
+                  const rowStatus = getRowStatus(lead.id);
                   const isBeingCalled =
-                    dialerOn &&
-                    dialerPhase === "calling" &&
-                    currentDialerLead?.id === lead.id;
+                    rowStatus === "calling" ||
+                    (dialerOn &&
+                      dialerPhase === "calling" &&
+                      currentDialerLead?.id === lead.id);
+                  const isCallEnded = rowStatus === "ended";
                   const isUpNext =
                     dialerOn &&
                     dialerPhase === "countdown" &&
@@ -1315,10 +1477,10 @@ export default function LeadsUnifiedPage() {
                                 {lead.shop_name || "Unnamed Shop"}
                               </p>
                               {isBeingCalled && (
-                                <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-600 animate-pulse shrink-0">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />{" "}
-                                  Calling…
-                                </span>
+                                <LeadCallStatus status="calling" />
+                              )}
+                              {isCallEnded && (
+                                <LeadCallStatus status="ended" />
                               )}
                               {isUpNext && (
                                 <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-600 shrink-0">
@@ -1394,6 +1556,15 @@ export default function LeadsUnifiedPage() {
                             leadId={lead.id}
                             phone={lead.phone ?? ""}
                             disabled={isDisabled || !lead.phone}
+                            provider="bolna"
+                            onCallStart={startCallingLead}
+                          />
+                          <CallButton
+                            leadId={lead.id}
+                            phone={lead.phone ?? ""}
+                            disabled={isDisabled || !lead.phone}
+                            provider="elevenlabs"
+                            onCallStart={startCallingLead}
                           />
                           <Link href={`/leads/${lead.id}`}>
                             <button className="px-3 py-1.5 text-xs font-medium border border-gray-200 rounded-lg hover:bg-gray-50 transition-all">

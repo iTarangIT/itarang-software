@@ -1,0 +1,224 @@
+id: E-093
+slug: score-override
+name: Score override with documented reason (logged, does not change computed score)
+source_section: "6.4.5"
+brd_excerpt: |
+  Override path: 'NBFC Risk Manager can override with documented reason. Override logged but does not change computed score.' Override visible in audit log.
+  Overrides require a documented reason, are logged, but do not change the computed score.
+
+depends_on:
+  - E-092
+
+non_functional:
+  - "RBI Digital Lending Directions 2025: human override of credit scores must be documented with reason and visible in audit log."
+  - "Override does NOT mutate nbfc_score_runs.score_value; it sits alongside as an effective_score for downstream decisions while preserving the computed value."
+  - "Only role 'nbfc_risk_manager' may create override; enforced at API layer."
+  - "Override is visible in audit_logs with action='score.override.created'."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/scores/override
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ loan_application_id: z.string().min(1), score_type: z.enum(['cds','pci']), override_value: z.number().min(0).max(100), reason: z.string().min(20).max(1000) })
+      response_shape:
+        id: string
+        loan_application_id: string
+        score_type: string
+        computed_score_value: number
+        override_value: number
+        is_active: boolean
+        created_by: string
+        created_at: string
+    - method: GET
+      path: /api/nbfc/scores/override
+      auth: nbfc-tenant
+      query_zod: |
+        z.object({ loan_application_id: z.string().min(1), score_type: z.enum(['cds','pci']) })
+      response_shape:
+        active_override: "ScoreOverride | null"
+        history: "ScoreOverride[]"
+  components:
+    - "src/components/nbfc/scores/ScoreOverrideForm.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. POST /override — validate body; require reason length ≥ 20.
+  2. Resolve tenant; verify caller role is 'nbfc_risk_manager'; else 403.
+  3. Load latest nbfc_score_runs for (loan_application_id, score_type); 404 if none.
+  4. Mark any existing active nbfc_score_overrides for the pair as is_active=false (superseded).
+  5. Insert new nbfc_score_overrides row with override_value, reason, created_by=user_id, computed_score_value snapshot, is_active=true.
+  6. DO NOT update nbfc_score_runs.score_value.
+  7. Append audit_logs row with action='score.override.created', new_data including reason and override_value.
+  8. GET /override — return active_override (is_active=true) and full history newest-first.
+
+tables_columns:
+  reuse:
+    - table: audit_logs
+      schema_ts_line: 671
+      columns: [id, entity_type, entity_id, action, performed_by, new_data, timestamp]
+  new:
+    - table: nbfc_score_overrides
+      justification: "Override records must be append-only and distinct from the computed score table; the BRD explicitly says override 'does not change the computed score' so a sibling table is required."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: loan_application_id, type: "varchar({ length: 255 }).notNull()" }
+        - { name: score_type, type: "varchar({ length: 8 }).notNull()" }
+        - { name: computed_score_value, type: "numeric({ precision: 6, scale: 2 }).notNull()" }
+        - { name: override_value, type: "numeric({ precision: 6, scale: 2 }).notNull()" }
+        - { name: reason, type: "text().notNull()" }
+        - { name: created_by, type: "uuid().notNull()" }
+        - { name: created_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: is_active, type: "boolean().default(true).notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/scores/override by an 'nbfc_risk_manager' user with reason length ≥ 20 returns 200 and creates a row with is_active=true; nbfc_score_runs.score_value is unchanged."
+    test_layer: api
+    test_name: "Override creates row and does not mutate computed score"
+  - id: AC2
+    statement: "POST /override by a user without role 'nbfc_risk_manager' returns 403."
+    test_layer: api
+    test_name: "Only Risk Manager can override score"
+  - id: AC3
+    statement: "POST /override with reason shorter than 20 chars returns 400."
+    test_layer: api
+    test_name: "Override requires documented reason ≥ 20 chars"
+  - id: AC4
+    statement: "Creating a second override for the same (loan_application_id, score_type) flips the prior row's is_active to false; audit_logs has two rows with action='score.override.created'."
+    test_layer: api
+    test_name: "New override supersedes prior; both are audit-logged"
+  - id: AC5
+    statement: "GET /api/nbfc/scores/override?loan_application_id=L1&score_type=cds returns active_override populated and history sorted newest-first."
+    test_layer: api
+    test_name: "Override GET returns active and full history"
+  - id: AC6
+    statement: "Score override requires a documented reason: POST /api/nbfc/scores/override with `reason` field empty or shorter than 20 characters returns 422 with code='REASON_REQUIRED'. With a valid documented reason (≥20 chars), returns 200 and writes a row to `score_override_audit` with `original_score`, `override_score`, `reason`, `actor_id`, `occurred_at`."
+    test_layer: api
+    persona: nbfc_tenant_user
+    expected_response_shape:
+      invalid:
+        code: "REASON_REQUIRED"
+        message: string
+      valid:
+        id: string
+        loan_application_id: string
+        score_type: string
+        original_score: number
+        override_score: number
+        reason: string
+        actor_id: string
+        occurred_at: string
+    test_name: "Override requires documented reason and writes audit row"
+
+status: passed
+loop_count: 1
+last_failure_signature: null
+human_checkpoints: []
+audit: |
+  {
+    "unit_id": "E-093",
+    "audited_at": "2026-05-01T06:16:03Z",
+    "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+    "reuse_findings": [
+      {
+        "table": "audit_logs",
+        "verified": true,
+        "ts_line": 671,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "id",
+          "entity_type",
+          "entity_id",
+          "action",
+          "performed_by",
+          "new_data",
+          "timestamp"
+        ],
+        "columns_missing": []
+      }
+    ],
+    "new_findings": [
+      {
+        "table": "nbfc_score_overrides",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 182,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "loan_application_id",
+            "type": "varchar({ length: 255 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "score_type",
+            "type": "varchar({ length: 8 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "computed_score_value",
+            "type": "numeric({ precision: 6, scale: 2 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "numeric",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "override_value",
+            "type": "numeric({ precision: 6, scale: 2 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "numeric",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "reason",
+            "type": "text().notNull()",
+            "type_lint_ok": true,
+            "type_head": "text",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "created_by",
+            "type": "uuid().notNull()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "is_active",
+            "type": "boolean().default(true).notNull()",
+            "type_lint_ok": true,
+            "type_head": "boolean",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      }
+    ],
+    "verdict": "needs_schema_approval",
+    "migration_required": false,
+    "notes": [
+      "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+    ],
+    "checkpoint_html": "docs/nbfc/loop_report/E-093/checkpoint_1.html"
+  }

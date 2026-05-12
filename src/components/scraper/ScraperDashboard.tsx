@@ -6,6 +6,7 @@ import { Search, AlertCircle, CheckCircle } from "lucide-react";
 import { ScraperRunsTable } from "./ScraperRunsTable";
 import { QueryManager } from "./QueryManager";
 import { ScraperRunProgress } from "./ScraperRunProgress";
+import { DownloadScrapedLeadsButton } from "./DownloadScrapedLeadsButton";
 
 const ACTIVE_RUN_KEY = "scraper:active-run-id";
 
@@ -81,7 +82,7 @@ export function ScraperDashboard({ onSelectRun }: ScraperDashboardProps) {
           <div className="w-10 h-10 bg-teal-50 rounded-xl flex items-center justify-center shadow-sm">
             <Search className="w-5 h-5 text-teal-600" />
           </div>
-          <div>
+          <div className="flex-1">
             <h1 className="text-xl font-bold text-gray-900">
               Dealer Lead Scraper
             </h1>
@@ -89,6 +90,7 @@ export function ScraperDashboard({ onSelectRun }: ScraperDashboardProps) {
               Discover 3-wheeler battery dealers from the web automatically
             </p>
           </div>
+          <DownloadScrapedLeadsButton />
         </div>
 
         <QueryManager

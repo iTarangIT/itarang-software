@@ -1,0 +1,35 @@
+{
+  "id": "E-011",
+  "slug": "nbfc-status-lifecycle",
+  "name": "NBFC status lifecycle — 8-state machine with transition guards",
+  "status": "passed",
+  "loop_count": 1,
+  "ac_results": {
+    "AC1": "passed",
+    "AC2": "passed",
+    "AC3": "passed",
+    "AC4": "passed"
+  },
+  "schema_changes": {
+    "tables_added": ["nbfc_status_history"],
+    "tables_referenced": ["nbfc"],
+    "auto_approved": true,
+    "applied_to_sandbox_at": "2026-05-01"
+  },
+  "files": {
+    "schema": "src/lib/db/schema.ts",
+    "lib": ["src/lib/nbfc/admin/status-transitions.ts"],
+    "api": [
+      "src/app/api/admin/nbfc/[nbfcId]/transition/route.ts",
+      "src/app/api/admin/nbfc/[nbfcId]/status-history/route.ts"
+    ],
+    "components": [],
+    "pages": [],
+    "tests": ["tests/e2e/nbfc/E-011_nbfc-status-lifecycle.api.spec.ts"]
+  },
+  "verification": {
+    "schema_applied_via": "scripts/apply-e011-schema.mjs (CREATE TABLE IF NOT EXISTS + indexes)",
+    "tests_run": "npx playwright test --config=tests/e2e/nbfc-loop.config.ts --project=nbfc-api tests/e2e/nbfc/E-011_nbfc-status-lifecycle.api.spec.ts",
+    "tests_passed": "4/4"
+  }
+}

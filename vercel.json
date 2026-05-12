@@ -5,6 +5,26 @@
       "schedule": "0 3 * * *"
     },
     {
+      "path": "/api/cron/nbfc-cor-expiry",
+      "schedule": "30 0 * * *"
+    },
+    {
+      "path": "/api/cron/nbfc/compute-cds",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/nbfc/evaluate-anomaly-flags",
+      "schedule": "10 0 * * *"
+    },
+    {
+      "path": "/api/cron/iot/scan-offline-batteries",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/elevenlabs/call-scheduler",
+      "schedule": "5 3 * * *"
+    },
+    {
       "path": "/api/cron/dispatch-to-sold",
       "schedule": "0 4 * * *"
     }

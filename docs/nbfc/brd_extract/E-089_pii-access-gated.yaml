@@ -1,0 +1,189 @@
+id: E-089
+slug: pii-access-gated
+name: Full PII view (Aadhaar/PAN) gated by dual approval (Requestor MFA → Compliance Officer)
+source_section: "6.4.3"
+brd_excerpt: |
+  Action: PII Data Access (full Aadhaar/PAN view) — Approver 1: Requestor (MFA) — Approver 2: iTarang Compliance Officer.
+
+depends_on:
+  - E-082
+
+non_functional:
+  - "DPDPA 2023: full PII access (unmasked Aadhaar/PAN) requires explicit authorisation and access logging."
+  - "RBI Digital Lending Directions 2025: KYC PII handling must follow least-privilege."
+  - "Initiator MUST complete MFA in the same session before initiate; non-MFA returns 401."
+  - "Approved access yields a time-boxed token (default 30 minutes) that the unmask endpoint requires; no permanent unmasking."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/actions/pii-access/initiate
+      auth: admin
+      request_zod: |
+        z.object({ lead_id: z.string().min(1), fields: z.array(z.enum(['aadhaar','pan'])).min(1), mfa_token: z.string().min(1), reason_code: z.string().min(1), reviewed_evidence_ack: z.literal(true) })
+      response_shape:
+        approval_request_id: string
+        status: pending_approval
+        action_type: pii_data_access
+    - method: GET
+      path: /api/nbfc/pii/unmask
+      auth: admin
+      query_zod: |
+        z.object({ lead_id: z.string().min(1), access_token: z.string().min(1) })
+      response_shape:
+        aadhaar: "string | null"
+        pan: "string | null"
+        expires_at: string
+  components:
+    - "src/components/admin/pii/PiiAccessInitiateForm.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. POST /initiate — validate body; verify mfa_token; else 401.
+  2. Snapshot evidence: lead_id, requested fields.
+  3. createDualApprovalRequest({ action_type: 'pii_data_access', entity_id: lead_id, evidence_snapshot, required_approver_role: 'itarang_compliance_officer' }).
+  4. On 'approved', mint nbfc_pii_access_grants row with access_token (uuid), expires_at = now()+30min.
+  5. GET /unmask — validate access_token against grants; reject if expired or used by other user; record access in audit_logs and grants.access_log entries; return decrypted PII fields.
+
+tables_columns:
+  reuse:
+    - table: kycVerifications
+      schema_ts_line: 1226
+      columns: [id]
+  new:
+    - table: nbfc_pii_access_grants
+      justification: "Time-boxed PII access token tied to dual-approval; required so unmask is authorised once and access is auditable per DPDPA accountability."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: lead_id, type: "varchar({ length: 255 }).notNull()" }
+        - { name: requested_by, type: "uuid().notNull()" }
+        - { name: approval_request_id, type: "uuid().notNull()" }
+        - { name: access_token, type: "varchar({ length: 128 }).notNull()" }
+        - { name: fields, type: "jsonb().notNull()" }
+        - { name: granted_at, type: "timestamp({ withTimezone: true })" }
+        - { name: expires_at, type: "timestamp({ withTimezone: true }).notNull()" }
+        - { name: used_count, type: "integer().default(0).notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/actions/pii-access/initiate without valid mfa_token returns 401."
+    test_layer: api
+    test_name: "PII access initiate requires valid MFA"
+  - id: AC2
+    statement: "POST initiate with valid MFA returns 200 with approval_request_id and status='pending_approval'; no nbfc_pii_access_grants row exists yet."
+    test_layer: api
+    test_name: "PII initiate creates approval without granting access"
+  - id: AC3
+    statement: "After approval by an iTarang Compliance Officer user, nbfc_pii_access_grants row exists with expires_at exactly 30 minutes after granted_at."
+    test_layer: api
+    test_name: "PII grant minted post-approval with 30 minute TTL"
+  - id: AC4
+    statement: "GET /api/nbfc/pii/unmask with the valid access_token returns 200 and the unmasked aadhaar/pan; with an expired or unknown token returns 403."
+    test_layer: api
+    test_name: "PII unmask gated by valid time-boxed token"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit: |
+  {
+    "unit_id": "E-089",
+    "audited_at": "2026-05-01T06:16:03Z",
+    "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+    "reuse_findings": [
+      {
+        "table": "kyc_verifications",
+        "verified": true,
+        "ts_line": 1226,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "id"
+        ],
+        "columns_missing": [],
+        "note": "YAML referenced JS const 'kycVerifications'; baseline records SQL table name 'kyc_verifications' (same row at line 1226)."
+      }
+    ],
+    "new_findings": [
+      {
+        "table": "nbfc_pii_access_grants",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 138,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "lead_id",
+            "type": "varchar({ length: 255 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "requested_by",
+            "type": "uuid().notNull()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "approval_request_id",
+            "type": "uuid().notNull()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "access_token",
+            "type": "varchar({ length: 128 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "fields",
+            "type": "jsonb().notNull()",
+            "type_lint_ok": true,
+            "type_head": "jsonb",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "granted_at",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "expires_at",
+            "type": "timestamp({ withTimezone: true }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "used_count",
+            "type": "integer().default(0).notNull()",
+            "type_lint_ok": true,
+            "type_head": "integer",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      }
+    ],
+    "verdict": "needs_schema_approval",
+    "migration_required": false,
+    "notes": [
+      "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+    ],
+    "checkpoint_html": "docs/nbfc/loop_report/E-089/checkpoint_1.html"
+  }

@@ -2,17 +2,14 @@ import { db } from '@/lib/db';
 import { slas, auditLogs, users } from '@/lib/db/schema';
 import { eq, lt, and, sql } from 'drizzle-orm';
 import { withErrorHandler, successResponse, generateId } from '@/lib/api-utils';
+import { checkCronAuth } from '@/lib/cron-auth';
 import { triggerN8nWebhook } from '@/lib/n8n';
 
-// This route should be triggered by an external cron (e.g., Vercel Cron, GitHub Actions)
-// it can be protected by an API_SECRET key in headers
+// Triggered by an external cron (system crontab + curl, GitHub Actions, etc.).
 export const GET = withErrorHandler(async (req: Request) => {
-    const authHeader = req.headers.get('authorization');
-    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-        // Only return unauthorized in production for security
-        if (process.env.NODE_ENV === 'production') {
-            return new Response('Unauthorized', { status: 401 });
-        }
+    if (process.env.NODE_ENV === 'production') {
+        const unauth = checkCronAuth(req);
+        if (unauth) return unauth;
     }
 
     const now = new Date();

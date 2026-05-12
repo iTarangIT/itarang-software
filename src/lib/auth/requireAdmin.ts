@@ -16,10 +16,13 @@ const ADMIN_ROLES = new Set([
   "sales_head",
 ]);
 
-type AdminUser = {
+export type AdminUser = {
   id: string;
   email: string | null;
   role: string;
+  /** How this actor was authenticated. Routes that gate on real-user identity
+   *  (e.g. CEO-only) must skip the gate when via === 'test_bypass'. */
+  via: "session" | "test_bypass";
 };
 
 export type RequireAdminResult =
@@ -47,7 +50,7 @@ export async function requireAdmin(): Promise<RequireAdminResult> {
     };
   }
 
-  const [row] = await db
+  let [row] = await db
     .select({
       id: users.id,
       email: users.email,
@@ -57,6 +60,22 @@ export async function requireAdmin(): Promise<RequireAdminResult> {
     .from(users)
     .where(eq(users.id, user.id))
     .limit(1);
+
+  // Some legacy users have public.users.id != auth.users.id (the public row
+  // was created before Supabase auth was wired). Mirror the middleware's
+  // email-fallback so the role lookup matches.
+  if (!row && user.email) {
+    [row] = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        role: users.role,
+        is_active: users.is_active,
+      })
+      .from(users)
+      .where(eq(users.email, user.email))
+      .limit(1);
+  }
 
   // Reject deactivated admins — is_active can be flipped to revoke access
   // without also stripping the role.
@@ -70,5 +89,8 @@ export async function requireAdmin(): Promise<RequireAdminResult> {
     };
   }
 
-  return { ok: true, user: { id: row.id, email: row.email, role: row.role } };
+  return {
+    ok: true,
+    user: { id: row.id, email: row.email, role: row.role, via: "session" },
+  };
 }

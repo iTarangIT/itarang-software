@@ -1,0 +1,149 @@
+id: E-045
+slug: device-registration
+name: IoT device registration on inventory upload
+source_section: "6.2.2"
+brd_excerpt: |
+  6.2.2 Device Registration
+  A battery's IoT device is registered when the battery is uploaded to dealer inventory (Section 5.0.3) with iot_enabled = true and a valid IMEI ID. Registration is automatic — no separate device provisioning step.
+
+  // Triggered internally by POST /api/admin/inventory/add-item
+  // or POST /api/admin/inventory/bulk-upload when iot_enabled = true
+
+  POST /api/iot/register-device  (internal call)
+
+  Request:
+  {  "serialNumber":  "BAT12345",
+     "imeiId":        "354000123456789",
+     "dealerId":      "DLR-001",
+     "model":         "51.2V-105AH",
+     "category":      "3W"
+  }
+
+  Processing:
+    1. INSERT iot_devices record (if not exists)
+    2. Set device_status = 'registered'
+    3. SIM activation trigger (if SIM managed by iTarang)
+    4. Device appears in admin IoT dashboard as: Registered — Awaiting First Ping
+
+  Response:
+  { "deviceId": "IOT-354000123456789", "status": "registered" }
+depends_on: []
+non_functional:
+  - "Idempotent: re-calls for the same serialNumber/IMEI must not create duplicate iot_devices rows."
+  - "Triggered internally only by inventory add-item / bulk-upload flows; not exposed to dealer or NBFC tokens."
+  - "Audit log entry recommended for SIM activation trigger to satisfy operational traceability."
+
+surface:
+  api:
+    - method: POST
+      path: /api/iot/register-device
+      auth: admin
+      request_zod: |
+        z.object({
+          serialNumber: z.string().min(1).max(50),
+          imeiId: z.string().regex(/^\d{15,20}$/),
+          dealerId: z.string().min(1).max(50),
+          model: z.string().min(1).max(100),
+          category: z.string().min(1).max(50)
+        })
+      response_shape:
+        deviceId: "IOT-{imei}"
+        status: "registered"
+  components: []
+  jobs: []
+  pages: []
+
+logic: |
+  1. Validate request body against request_zod.
+  2. Lookup inventory row by serialNumber; reject if not found or iot_enabled is false.
+  3. If iot_devices row exists for serialNumber or imeiId, return existing deviceId with status 'registered' (idempotent).
+  4. INSERT iot_devices with device_id = `IOT-${imeiId}`, device_status = 'registered', registered_at = now().
+  5. Trigger SIM activation hook when SIM is iTarang-managed (no-op stub if not).
+  6. Return { deviceId, status: 'registered' }.
+
+tables_columns:
+  reuse: []
+  new:
+    - table: iot_devices
+      justification: "No existing table holds per-battery IoT device current state; required by 6.2.4 schema and shared by ingestion/query APIs."
+      columns:
+        - { name: id, type: "serial().primaryKey()" }
+        - { name: device_id, type: "varchar({ length: 50 }).notNull().unique()" }
+        - { name: serial_number, type: "varchar({ length: 50 }).notNull().unique()" }
+        - { name: imei_id, type: "varchar({ length: 20 }).notNull().unique()" }
+        - { name: dealer_id, type: "varchar({ length: 50 }).notNull()" }
+        - { name: model, type: "varchar({ length: 100 }).notNull()" }
+        - { name: category, type: "varchar({ length: 50 }).notNull()" }
+        - { name: device_status, type: "varchar({ length: 20 }).notNull().default('registered')" }
+        - { name: last_seen, type: "timestamp({ withTimezone: true })" }
+        - { name: soc_percent, type: "integer()" }
+        - { name: soh_percent, type: "integer()" }
+        - { name: voltage_v, type: "numeric({ precision: 6, scale: 2 })" }
+        - { name: temperature_c, type: "numeric({ precision: 5, scale: 2 })" }
+        - { name: charge_cycles, type: "integer()" }
+        - { name: gps_lat, type: "numeric({ precision: 10, scale: 7 })" }
+        - { name: gps_lng, type: "numeric({ precision: 10, scale: 7 })" }
+        - { name: gps_updated_at, type: "timestamp({ withTimezone: true })" }
+        - { name: bms_status, type: "varchar({ length: 50 })" }
+        - { name: first_usage_at, type: "timestamp({ withTimezone: true })" }
+        - { name: registered_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+        - { name: updated_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/iot/register-device with valid body inserts a new iot_devices row with device_status='registered' and returns deviceId 'IOT-{imeiId}'."
+    test_layer: api
+    test_name: "POST register-device creates iot_devices row and returns deviceId"
+  - id: AC2
+    statement: "Repeated POST /api/iot/register-device with the same serialNumber and imeiId does not create a duplicate row and returns the existing deviceId."
+    test_layer: api
+    test_name: "POST register-device is idempotent for repeat serial/imei"
+  - id: AC3
+    statement: "POST /api/iot/register-device with imeiId that is not 15–20 digits returns HTTP 422."
+    test_layer: api
+    test_name: "POST register-device rejects malformed imeiId with 422"
+
+status: passed
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+loop_results:
+  iteration: 0
+  verdict: pass
+  passed_ac_ids: [AC1, AC2, AC3]
+  failed_ac_ids: []
+  report_html: docs/nbfc/loop_report/E-045/loop_00.html
+  schema_approved_via: --auto-approve-schema
+  schema_pushed_to_db: true
+audit:
+  unit_id: E-045
+  audited_at: "2026-05-01T06:11:00Z"
+  baseline_sha: "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b"
+  verdict: reject
+  migration_required: false
+  reuse_findings: []
+  new_findings:
+    - table: iot_devices
+      justification_present: true
+      decision: rejected_pending_clarification
+      fuzzy_collisions:
+        - proposed: device_id
+          candidates: [battery_alerts.device_id, device_battery_map.device_id]
+          best_score: 1.0
+        - proposed: serial_number
+          candidates: [deployed_assets.serial_number, inventory.serial_number, oem_inventory_for_pdi.serial_number]
+          best_score: 1.0
+        - proposed: dealer_id
+          candidates: [after_sales_records.dealer_id, campaign_segments.dealer_id, coupon_batches.dealer_id]
+          best_score: 1.0
+        - proposed: soc_percent
+          candidates: [inventory.soc_percent]
+          best_score: 1.0
+        - proposed: voltage_v
+          candidates: [products.voltage_v]
+          best_score: 1.0
+  notes:
+    - "Existing schema has device_battery_map and inventory.soc_percent/iot_imei_no. Reviewer must rule on additive iot_devices vs absorbing fields."
+    - "BRD sync audit confirms iot_devices is referenced (line 495 of /tmp/nbfc_extract/sync_audit.txt)."
+    - "Boilerplate id/created_at/updated_at excluded from collision count."
+  checkpoint_html: docs/nbfc/loop_report/E-045/checkpoint_1.html
