@@ -1,0 +1,54 @@
+{
+  "unit_id": "E-029",
+  "audited_at": "2026-05-01T07:00:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "loan_sanctions",
+      "verified": false,
+      "ts_line": 2624,
+      "columns_verified": ["id", "status"],
+      "columns_missing": ["nbfc_id", "closed_at"],
+      "note": "G-03: nbfc_id and closed_at missing in baseline loan_sanctions."
+    },
+    {
+      "table": "borrower_risk_scores",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["tenant_id", "borrower_id", "loan_sanction_id", "cds_score", "confidence", "computed_at"],
+      "note": "Forward reference to E-026's proposed borrower_risk_scores table."
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "emi_schedules",
+      "justification_present": true,
+      "justification_chars": 122,
+      "columns": ["id", "loan_sanction_id", "due_date", "paid_at", "status", "days_overdue"],
+      "fuzzy_collisions": [
+        {
+          "proposed": "days_overdue",
+          "candidates": ["loan_files.overdue_days"],
+          "overlap": 1.0,
+          "reason": "tokens 'days' + 'overdue' overlap perfectly with loan_files.overdue_days; same concept, different word order. Single candidate, not flagged as silent rename per the ≥2-candidate rule but should be reviewed."
+        },
+        {
+          "proposed": "paid_at",
+          "candidates": ["facilitation_payments.payment_paid_at"],
+          "overlap": 0.667,
+          "reason": "tokens 'paid' + 'at' overlap with payment_paid_at; informational only (different tables and concepts)."
+        }
+      ],
+      "type_lint": "ok",
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "fuzzy hint: emi_schedules.days_overdue mirrors loan_files.overdue_days exactly in token-Jaccard. Reviewer should decide whether to align column naming (e.g. rename to overdue_days) before approving the new table.",
+    "emi_schedules is also referenced by E-030 (PCI) and E-028 (Lead Intelligence)."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-029/checkpoint_1.html"
+}

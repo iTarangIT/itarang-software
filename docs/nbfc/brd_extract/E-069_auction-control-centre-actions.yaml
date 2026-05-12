@@ -1,0 +1,181 @@
+id: E-069
+slug: auction-control-centre-actions
+name: Auction Control Centre admin actions on live auction lots
+source_section: "6.3.4"
+brd_excerpt: |
+  6.3.4 Auction Control Centre
+  The Auction Control Centre gives iTarang admin real-time control over all live auction lots. It is the power screen for managing recovered battery resale.
+
+  Admin Action | Specification
+  Extend Time | [+15m / +30m / +1h] — extends lot closing countdown. Reason required. Logged.
+  Reduce Time | [-15m / End Now] — accelerates closing. Requires MFA + confirmation modal.
+  Pause Auction | Temporarily suspends bidding. Countdown frozen. Bidders notified.
+  Set Reserve Price | Sets or changes the minimum winning bid. Pre-bid only. Logged with before/after.
+  Approve Winning Bid | Post-auction: confirms winning bidder. Triggers payment collection flow.
+
+depends_on: []
+non_functional:
+  - "Admin-only access; iTarang Ops"
+  - "Every action is audit logged with before/after where applicable"
+  - "Reduce Time and End Now require MFA re-confirmation"
+  - "Set Reserve Price only allowed when no bids have been placed"
+  - "Pause Auction sends bidder notification"
+
+surface:
+  api:
+    - method: POST
+      path: /api/admin/nbfc/auction/lot/extend-time
+      auth: admin
+      request_zod: |
+        z.object({
+          lot_id: z.string().uuid(),
+          extend_by_minutes: z.union([z.literal(15), z.literal(30), z.literal(60)]),
+          reason: z.string().min(1)
+        }).strict()
+      response_shape:
+        lot_id: "uuid"
+        new_closing_at: "iso8601"
+    - method: POST
+      path: /api/admin/nbfc/auction/lot/reduce-time
+      auth: admin
+      request_zod: |
+        z.object({
+          lot_id: z.string().uuid(),
+          reduce_by_minutes: z.union([z.literal(15), z.literal(0)]),
+          end_now: z.boolean(),
+          mfa_token: z.string().min(6)
+        }).strict()
+      response_shape:
+        lot_id: "uuid"
+        new_closing_at: "iso8601"
+    - method: POST
+      path: /api/admin/nbfc/auction/lot/pause
+      auth: admin
+      request_zod: |
+        z.object({
+          lot_id: z.string().uuid(),
+          reason: z.string().min(1)
+        }).strict()
+      response_shape:
+        lot_id: "uuid"
+        status: "paused"
+        notified_bidders: "number"
+    - method: POST
+      path: /api/admin/nbfc/auction/lot/reserve-price
+      auth: admin
+      request_zod: |
+        z.object({
+          lot_id: z.string().uuid(),
+          reserve_price_inr: z.number().positive()
+        }).strict()
+      response_shape:
+        lot_id: "uuid"
+        previous_reserve_price_inr: "number|null"
+        new_reserve_price_inr: "number"
+    - method: POST
+      path: /api/admin/nbfc/auction/lot/approve-winning-bid
+      auth: admin
+      request_zod: |
+        z.object({
+          lot_id: z.string().uuid(),
+          winning_bid_id: z.string().uuid()
+        }).strict()
+      response_shape:
+        lot_id: "uuid"
+        winning_bid_id: "uuid"
+        payment_collection_started: "boolean"
+  components:
+    - "src/components/admin/nbfc/AuctionControlCentre.tsx"
+    - "src/components/admin/nbfc/LotActionModal.tsx"
+  pages:
+    - "/admin/nbfc/auction/control-centre"
+  jobs: []
+
+logic: |
+  1. extend-time: validate lot is live; add extend_by_minutes to closing_at; insert audit log row with reason.
+  2. reduce-time: validate MFA token; if end_now=true, set closing_at=now; else subtract reduce_by_minutes; show confirmation context in audit row.
+  3. pause: set lot.status='paused' and freeze countdown; enqueue bidder notifications; record notified_bidders count; audit log.
+  4. reserve-price: reject if any bids exist on lot; capture previous_reserve_price; set new value; audit log with before/after.
+  5. approve-winning-bid: validate lot is closed and winning_bid_id matches lot's top bid; mark winning_bid as approved; trigger payment_collection workflow; audit log.
+  6. All actions return 403 when caller is not admin.
+  7. All actions write to admin audit log with action code, lot_id, and acting admin user_id.
+
+tables_columns:
+  reuse:
+    - table: auction_lots
+      schema_ts_line: 4131
+      columns: [id, lot_code, status, ends_at, base_price, bid_increment]
+    - table: auction_bids
+      schema_ts_line: 4157
+      columns: [id, lot_id, tenant_id, amount, placed_at]
+  new:
+    - table: nbfc_auction_lot_actions
+      justification: "Per-lot record of every admin control action (extend, reduce, pause, reserve-price set, winning-bid approval) with before/after where applicable; required for the Auction Control Centre's full audit trail."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: lot_id, type: "uuid().notNull()" }
+        - { name: action_code, type: "varchar({ length: 48 }).notNull()" }
+        - { name: previous_value, type: "jsonb()" }
+        - { name: new_value, type: "jsonb()" }
+        - { name: reason, type: "text()" }
+        - { name: acted_by, type: "uuid().notNull()" }
+        - { name: acted_at, type: "timestamp({ withTimezone: true }).defaultNow().notNull()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/admin/nbfc/auction/lot/extend-time with extend_by_minutes=30 and a non-empty reason returns 200 and updates lot.closing_at to original + 30 minutes."
+    test_layer: api
+    test_name: "Extend time pushes closing_at by selected minutes"
+  - id: AC2
+    statement: "POST /api/admin/nbfc/auction/lot/reduce-time returns 400 when mfa_token is missing or shorter than 6 chars."
+    test_layer: api
+    test_name: "Reduce time rejects request without valid MFA"
+  - id: AC3
+    statement: "POST /api/admin/nbfc/auction/lot/pause sets lot.status='paused' and returns notified_bidders count > 0 when there is at least one bidder."
+    test_layer: api
+    test_name: "Pause sets status paused and notifies bidders"
+  - id: AC4
+    statement: "POST /api/admin/nbfc/auction/lot/reserve-price returns 409 when at least one bid already exists on the lot."
+    test_layer: api
+    test_name: "Reserve price rejects post-bid change with 409"
+  - id: AC5
+    statement: "POST /api/admin/nbfc/auction/lot/approve-winning-bid returns 200 with payment_collection_started=true when the lot is closed and the winning_bid_id is the highest valid bid."
+    test_layer: api
+    test_name: "Approve winning bid triggers payment collection"
+  - id: AC6
+    statement: "All five auction-control endpoints return 403 when called by a non-admin caller."
+    test_layer: api
+    test_name: "Auction-control endpoints reject non-admin caller with 403"
+
+status: complete
+loop_count: 1
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-069
+  audited_at: "2026-05-01T16:00:00Z"
+  baseline_sha: "2a11ecf494c4c9d0d1f35cc91b7e94b53e62fe3ccd46f1548476d610bedb66aa"
+  reuse_findings:
+    - table: auction_lots
+      verified: true
+      ts_line: 4131
+      columns_verified: [id, lot_code, status, ends_at, base_price, bid_increment]
+      columns_missing: []
+    - table: auction_bids
+      verified: true
+      ts_line: 4157
+      columns_verified: [id, lot_id, tenant_id, amount, placed_at]
+      columns_missing: []
+  new_findings:
+    - table: nbfc_auction_lot_actions
+      justification_present: true
+      fuzzy_collisions: []
+      type_lint: ok
+      decision: approved_pending_human
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "Re-audit 2026-05-01: auction_lots and auction_bids are now in baseline (E-038 merged). Reuse claims point at the actual table names (auction_lots / auction_bids — NOT nbfc_-prefixed)."
+    - "Logic still references admin audit log; depends_on should include E-071 once that unit lands."
+    - "Unit still introduces nbfc_auction_lot_actions as new table — verdict remains needs_schema_approval pending human OK on the new table."
+  checkpoint_html: "docs/nbfc/loop_report/E-069/checkpoint_1.html"

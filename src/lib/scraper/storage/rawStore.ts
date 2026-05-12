@@ -8,9 +8,9 @@ export async function saveRawLeads(runId: string, leads: any[]) {
 
   const data = leads.map((lead) => ({
     id: crypto.randomUUID(),
-    runId,
-    rawData: JSON.stringify(lead),
-    createdAt: new Date(),
+    run_id: runId,
+    raw_data: JSON.stringify(lead),
+    created_at: new Date(),
   }));
 
   let saved = 0;

@@ -1,0 +1,47 @@
+{
+  "unit_id": "E-030",
+  "audited_at": "2026-05-01T07:00:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "borrower_risk_scores",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["tenant_id", "borrower_id", "loan_sanction_id", "pci_score", "computed_at"],
+      "note": "Forward reference to table proposed in E-026."
+    },
+    {
+      "table": "emi_schedules",
+      "verified": false,
+      "ts_line": null,
+      "columns_verified": [],
+      "columns_missing": ["loan_sanction_id", "due_date", "paid_at", "status", "days_overdue"],
+      "note": "Forward reference to table proposed in E-029."
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "nbfc_risk_alerts",
+      "justification_present": true,
+      "justification_chars": 117,
+      "columns": ["id", "tenant_id", "borrower_id", "loan_sanction_id", "type", "severity", "payload", "created_at", "resolved_at"],
+      "fuzzy_collisions": [
+        {
+          "proposed": "borrower_id",
+          "candidates": ["co_borrower_documents.co_borrower_id"],
+          "overlap": 0.667,
+          "reason": "tokens 'borrower' + 'id' overlap with co_borrower_id; different concept."
+        }
+      ],
+      "type_lint": "ok",
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "needs_schema_approval",
+  "migration_required": false,
+  "notes": [
+    "Depends on E-026 (borrower_risk_scores) and E-029 (emi_schedules). Loop ordering must execute those first."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-030/checkpoint_1.html"
+}

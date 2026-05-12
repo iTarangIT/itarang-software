@@ -17,7 +17,7 @@ npm run build            # Production build
 npm run start            # Production server on port 3000
 npm run lint             # ESLint
 npm run type-check       # TypeScript type checking (tsc --noEmit)
-npm run db:push          # Push Drizzle schema to database
+npm run db:push          # ⚠ DESTRUCTIVE: diff-pushes schema.ts to live DB. Never run against the shared sandbox or prod — write a drizzle/E-XXX_*.sql migration instead. See "Migrations" below.
 ```
 
 ## Tech Stack
@@ -79,6 +79,18 @@ ceo, business_head, sales_head, sales_manager, sales_executive, finance_controll
 - Drizzle ORM with schema in `src/lib/db/schema.ts`
 - Migrations in `drizzle/` directory
 - Config in `drizzle.config.ts` (uses `DATABASE_URL` env var)
+
+### Migrations
+
+The team uses **hand-written, named, idempotent SQL migration files** in `drizzle/` (see `E-002_nbfc_portal_credentials.sql`, `E-027_telemetry_ingestion_log.sql` for the pattern). Conventions:
+
+- File name: `E-<number>_<short_snake_case_description>.sql`. Pick the next free `E-` number.
+- Every DDL statement must be idempotent: `ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`. Wrap blocks in `DO $do$ BEGIN … EXCEPTION WHEN undefined_table THEN RAISE NOTICE 'skip' END; $do$;` when the migration may run against a DB that doesn't yet have the table.
+- Strictly **additive** — never `DROP COLUMN`, never narrow a type, never retroactively `SET NOT NULL` on a column with existing rows. If a destructive change is genuinely needed, escalate to the team and stage it across two migrations (additive write → deploy → backfill → second migration removes old).
+- Update `src/lib/db/schema.ts` to mirror the migration so type-checking matches the DB. Source of truth is the migration file.
+- **Do not run `npm run db:push` against the shared sandbox or production.** It is a diff-based tool that may DROP columns or `ALTER TYPE` data. The current `loan_sanctions` table already shows drift from past `db:push` use — the canonical record of what's actually in the DB has been lost. Don't compound it.
+- `db:push` against a personal local DB you own is fine.
+- To apply a new migration: open Supabase SQL editor (or the team's migration runner) and paste the file content. Re-running the same file should be a no-op.
 
 ## Deployment
 

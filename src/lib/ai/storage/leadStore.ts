@@ -36,6 +36,7 @@ export function updateLeadAfterCall(existingLead: any, payload: any) {
       engagement_depth: 0,
       intent_score: 0,
     },
+    provider: payload?.provider || "bolna",
   };
 
   const updatedHistory = [...history, newEntry];

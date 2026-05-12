@@ -1,0 +1,145 @@
+{
+  "unit_id": "E-080",
+  "audited_at": "2026-05-01T06:16:03Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "nbfc_tenants",
+      "verified": true,
+      "ts_line": 2699,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "id",
+        "slug",
+        "display_name",
+        "is_active"
+      ],
+      "columns_missing": []
+    },
+    {
+      "table": "nbfc_loans",
+      "verified": true,
+      "ts_line": 2729,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "loan_application_id",
+        "tenant_id",
+        "outstanding_amount"
+      ],
+      "columns_missing": []
+    },
+    {
+      "table": "consent_records",
+      "verified": true,
+      "ts_line": 1325,
+      "ts_line_drift": 0,
+      "columns_verified": [
+        "id",
+        "lead_id",
+        "consent_type",
+        "signed_at"
+      ],
+      "columns_missing": []
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "nbfc_tenants",
+      "is_existing_table": true,
+      "justification_present": true,
+      "justification_length": 211,
+      "columns": [
+        {
+          "name": "nbfc_legal_name",
+          "type": "varchar({ length: 255 })",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "rbi_registration_no",
+          "type": "varchar({ length: 64 })",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "grievance_url",
+          "type": "text()",
+          "type_lint_ok": true,
+          "type_head": "text",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "grievance_helpline",
+          "type": "varchar({ length: 32 })",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        }
+      ],
+      "fuzzy_collisions": [],
+      "decision": "approved_pending_human"
+    },
+    {
+      "table": "nbfc_compliance_text",
+      "is_existing_table": false,
+      "justification_present": true,
+      "justification_length": 173,
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid().primaryKey().defaultRandom()",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "tenant_id",
+          "type": "uuid().notNull().references(() => nbfcTenants.id)",
+          "type_lint_ok": true,
+          "type_head": "uuid",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "screen_key",
+          "type": "varchar({ length: 64 }).notNull()",
+          "type_lint_ok": true,
+          "type_head": "varchar",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "body_text",
+          "type": "text().notNull()",
+          "type_lint_ok": true,
+          "type_head": "text",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "version",
+          "type": "integer().default(1).notNull()",
+          "type_lint_ok": true,
+          "type_head": "integer",
+          "fuzzy_collisions": []
+        },
+        {
+          "name": "effective_from",
+          "type": "timestamp({ withTimezone: true }).defaultNow().notNull()",
+          "type_lint_ok": true,
+          "type_head": "timestamp",
+          "fuzzy_collisions": []
+        }
+      ],
+      "fuzzy_collisions": [],
+      "decision": "approved_pending_human"
+    }
+  ],
+  "verdict": "schema_auto_approved",
+  "migration_required": true,
+  "migration_file": "drizzle/E-080_compliance_screen.sql",
+  "notes": [
+    "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit.",
+    "Auto-approved under loop --auto-approve-schema. Human review still recommended before prod migration."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-080/checkpoint_1.html"
+}

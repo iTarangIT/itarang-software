@@ -1,0 +1,191 @@
+id: E-084
+slug: loan-restructuring-gated
+name: Loan restructuring action gated by dual approval (Risk Manager → Credit Manager)
+source_section: "6.4.3"
+brd_excerpt: |
+  Action: Loan Restructuring — Approver 1: NBFC Risk Manager — Approver 2: NBFC Credit Manager.
+
+depends_on:
+  - E-082
+
+non_functional:
+  - "RBI Digital Lending Directions 2025: loan restructuring is a material lender action requiring two-person rule."
+  - "Fair Practices Code: restructuring terms must be disclosed to borrower in plain language."
+  - "Restructuring handler runs ONLY after dual_approval_requests.status='approved'."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/actions/loan-restructuring/initiate
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ loan_application_id: z.string().min(1), new_emi_amount: z.number().positive(), new_tenure_months: z.number().int().positive(), new_emi_due_dom: z.number().int().min(1).max(28), reason_code: z.string().min(1), reviewed_evidence_ack: z.literal(true) })
+      response_shape:
+        approval_request_id: string
+        status: pending_approval
+        action_type: loan_restructuring
+  components:
+    - "src/components/nbfc/actions/RestructureInitiateForm.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Validate body against request_zod.
+  2. Resolve tenant; verify initiator role is 'nbfc_risk_manager'; else 403.
+  3. Snapshot evidence: current EMI, outstanding, DPD, restructure history count.
+  4. createDualApprovalRequest({ action_type: 'loan_restructuring', entity_id: loan_application_id, evidence_snapshot, required_approver_role: 'nbfc_credit_manager' }).
+  5. Return approval_request_id + status='pending_approval'.
+  6. On dual approval 'approved', handler updates nbfc_loans EMI fields and inserts row in nbfc_loan_restructures.
+
+tables_columns:
+  reuse:
+    - table: nbfc_loans
+      schema_ts_line: 2729
+      columns: [loan_application_id, tenant_id, emi_amount, emi_due_date_dom, outstanding_amount]
+  new:
+    - table: nbfc_loan_restructures
+      justification: "Records restructure history with prior/new EMI terms and link to dual-approval evidence; not covered by existing loan tables."
+      columns:
+        - { name: id, type: "uuid().primaryKey().defaultRandom()" }
+        - { name: tenant_id, type: "uuid().notNull().references(() => nbfcTenants.id)" }
+        - { name: loan_application_id, type: "varchar({ length: 255 }).notNull()" }
+        - { name: approval_request_id, type: "uuid().notNull()" }
+        - { name: prior_emi_amount, type: "numeric({ precision: 12, scale: 2 })" }
+        - { name: new_emi_amount, type: "numeric({ precision: 12, scale: 2 }).notNull()" }
+        - { name: prior_tenure_months, type: "integer()" }
+        - { name: new_tenure_months, type: "integer().notNull()" }
+        - { name: new_emi_due_dom, type: "integer().notNull()" }
+        - { name: executed_at, type: "timestamp({ withTimezone: true })" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/actions/loan-restructuring/initiate by 'nbfc_risk_manager' returns 200 with approval_request_id and status='pending_approval'; nbfc_loans is unchanged."
+    test_layer: api
+    test_name: "Restructure initiate creates approval without applying"
+  - id: AC2
+    statement: "POST initiate by a user without role 'nbfc_risk_manager' returns 403."
+    test_layer: api
+    test_name: "Only Risk Manager can initiate restructure"
+  - id: AC3
+    statement: "After approval by an 'nbfc_credit_manager' user, exactly one row in nbfc_loan_restructures exists and nbfc_loans.emi_amount equals new_emi_amount."
+    test_layer: api
+    test_name: "Restructure applies only after Credit Manager approves"
+  - id: AC4
+    statement: "If approval is rejected, nbfc_loans EMI fields remain unchanged and no nbfc_loan_restructures row is created."
+    test_layer: api
+    test_name: "Rejected restructure does not mutate loan"
+
+status: needs_schema_approval
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit: |
+  {
+    "unit_id": "E-084",
+    "audited_at": "2026-05-01T06:16:03Z",
+    "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+    "reuse_findings": [
+      {
+        "table": "nbfc_loans",
+        "verified": true,
+        "ts_line": 2729,
+        "ts_line_drift": 0,
+        "columns_verified": [
+          "loan_application_id",
+          "tenant_id",
+          "emi_amount",
+          "emi_due_date_dom",
+          "outstanding_amount"
+        ],
+        "columns_missing": []
+      }
+    ],
+    "new_findings": [
+      {
+        "table": "nbfc_loan_restructures",
+        "is_existing_table": false,
+        "justification_present": true,
+        "justification_length": 125,
+        "columns": [
+          {
+            "name": "id",
+            "type": "uuid().primaryKey().defaultRandom()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "tenant_id",
+            "type": "uuid().notNull().references(() => nbfcTenants.id)",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "loan_application_id",
+            "type": "varchar({ length: 255 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "varchar",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "approval_request_id",
+            "type": "uuid().notNull()",
+            "type_lint_ok": true,
+            "type_head": "uuid",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "prior_emi_amount",
+            "type": "numeric({ precision: 12, scale: 2 })",
+            "type_lint_ok": true,
+            "type_head": "numeric",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "new_emi_amount",
+            "type": "numeric({ precision: 12, scale: 2 }).notNull()",
+            "type_lint_ok": true,
+            "type_head": "numeric",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "prior_tenure_months",
+            "type": "integer()",
+            "type_lint_ok": true,
+            "type_head": "integer",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "new_tenure_months",
+            "type": "integer().notNull()",
+            "type_lint_ok": true,
+            "type_head": "integer",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "new_emi_due_dom",
+            "type": "integer().notNull()",
+            "type_lint_ok": true,
+            "type_head": "integer",
+            "fuzzy_collisions": []
+          },
+          {
+            "name": "executed_at",
+            "type": "timestamp({ withTimezone: true })",
+            "type_lint_ok": true,
+            "type_head": "timestamp",
+            "fuzzy_collisions": []
+          }
+        ],
+        "fuzzy_collisions": [],
+        "decision": "approved_pending_human"
+      }
+    ],
+    "verdict": "needs_schema_approval",
+    "migration_required": false,
+    "notes": [
+      "Cross-doc 3-way sync gaps (G-01..G-10) do not cite tables touched by this unit."
+    ],
+    "checkpoint_html": "docs/nbfc/loop_report/E-084/checkpoint_1.html"
+  }

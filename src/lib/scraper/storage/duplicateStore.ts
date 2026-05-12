@@ -9,7 +9,7 @@ export async function saveDuplicateLeads(leads: any[]) {
   const data = leads.map((lead) => ({
     id: crypto.randomUUID(),
 
-    originalLeadId: lead.duplicate_of || null,
+    original_lead_id: lead.duplicate_of || null,
 
     name: lead.name,
     phone: lead.phone,
@@ -22,7 +22,7 @@ export async function saveDuplicateLeads(leads: any[]) {
     source: lead.source || "scraper",
     status: "duplicate",
 
-    createdAt: new Date(),
+    created_at: new Date(),
   }));
 
   // Chunk inserts: a single bulk insert with thousands of rows × ~10 cols

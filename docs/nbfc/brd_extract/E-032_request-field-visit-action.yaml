@@ -1,0 +1,100 @@
+id: E-032
+slug: request-field-visit-action
+name: Request Field Visit action
+source_section: "6.1.6"
+brd_excerpt: |
+  Action | Approval Required | Reversible? | Audit Log
+  Request Field Visit — Single — NBFC Manager — Yes — Yes — manual reason required
+depends_on: []
+non_functional:
+  - "Caller role must be NBFC Manager or higher; lower roles must be rejected."
+  - "Manual reason is mandatory and stored on the audit log."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/actions/field-visit
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({
+          loan_sanction_id: z.string().uuid(),
+          reason: z.string().min(10),
+        })
+      response_shape:
+        action_id: string
+        status: string
+        created_at: string
+    - method: POST
+      path: /api/nbfc/actions/field-visit/cancel
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({ action_id: z.string().uuid(), reason: z.string().min(5) })
+      response_shape:
+        action_id: string
+        status: string
+  components:
+    - "src/components/nbfc-portal/RequestFieldVisitDialog.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Validate request and assert caller has nbfc_manager role or above.
+  2. Insert nbfc_borrower_actions row (action_type='field_visit', status='approved', payload.reason=reason).
+  3. Write nbfc_audit_log entry with the reason in after_state.
+  4. The cancel endpoint flips status to 'reversed', writes another audit_log row capturing the cancellation reason.
+
+tables_columns:
+  reuse:
+    - table: nbfc_borrower_actions
+      schema_ts_line: 1
+      columns: [id, tenant_id, loan_sanction_id, action_type, status, payload, requested_by, created_at]
+    - table: nbfc_audit_log
+      schema_ts_line: 1
+      columns: [tenant_id, actor_user_id, action_type, action_id, before_state, after_state, created_at]
+  new: []
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/actions/field-visit with reason length >= 10 returns 200 and creates an action row with action_type='field_visit' and status='approved'."
+    test_layer: api
+    test_name: "Field visit request with valid reason creates approved action"
+  - id: AC2
+    statement: "POST without a reason field, or with reason shorter than 10 characters, returns 400."
+    test_layer: api
+    test_name: "Field visit endpoint rejects missing or too-short reasons"
+  - id: AC3
+    statement: "A user without the NBFC Manager role calling the endpoint receives 403."
+    test_layer: api
+    test_name: "Field visit requires NBFC Manager role"
+  - id: AC4
+    statement: "POST /api/nbfc/actions/field-visit/cancel transitions the action's status to 'reversed' and writes an audit_log row."
+    test_layer: api
+    test_name: "Field visit cancellation reverses action and audits"
+
+status: audited
+loop_count: 0
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-032
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: nbfc_borrower_actions
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [id, tenant_id, loan_sanction_id, action_type, status, payload, requested_by, created_at]
+      note: "Forward reference to table proposed in E-031."
+    - table: nbfc_audit_log
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [tenant_id, actor_user_id, action_type, action_id, before_state, after_state, created_at]
+      note: "Forward reference to table proposed in E-031."
+  new_findings: []
+  verdict: audited
+  migration_required: false
+  notes:
+    - "All reuse points to tables proposed in E-031. Loop must execute E-031 first."
+  checkpoint_html: null

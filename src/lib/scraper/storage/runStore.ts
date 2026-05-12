@@ -22,11 +22,17 @@ export async function markRunCompleted(
   runId: string,
   stats: {
     total: number;
-    cleaned: number; 
+    cleaned: number;
     saved: number;
     duplicates: number;
     duration_ms: number;
+    // Optional dealer_leads promotion counts. Pre-existing callers (cancel
+    // path, older code) can omit these; we default to nothing-changed.
+    promoted?: number;
+    skippedDuplicate?: number;
+    skippedInvalidPhone?: number;
   },
+  errorMessage?: string | null,
 ) {
   await db
     .update(scrapeRuns)
@@ -39,6 +45,21 @@ export async function markRunCompleted(
       duplicates_skipped: stats.duplicates,
       cleaned_leads: stats.cleaned,
       duration_ms: stats.duration_ms,
+      // Only set promotion columns when caller provided them — leaves the
+      // default 0 in place for runs that didn't track this.
+      ...(stats.promoted !== undefined
+        ? { new_leads_promoted: stats.promoted }
+        : {}),
+      ...(stats.skippedDuplicate !== undefined
+        ? { new_leads_skipped_duplicate: stats.skippedDuplicate }
+        : {}),
+      ...(stats.skippedInvalidPhone !== undefined
+        ? { new_leads_skipped_invalid_phone: stats.skippedInvalidPhone }
+        : {}),
+      // Persist a representative chunk-error when finalize completed with zero
+      // leads — otherwise UI shows "Completed, 0 leads" with no reason. Pass
+      // null/undefined to skip.
+      ...(errorMessage ? { error_message: errorMessage } : {}),
     })
     .where(eq(scrapeRuns.id, runId));
 }

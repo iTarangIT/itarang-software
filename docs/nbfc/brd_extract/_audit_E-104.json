@@ -1,0 +1,60 @@
+{
+  "unit_id": "E-104",
+  "audited_at": "2026-05-01T06:10:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [
+    {
+      "table": "inventory_transfers",
+      "verified": false,
+      "ts_line": null,
+      "claimed_ts_line": 1,
+      "columns_verified": [],
+      "columns_missing": ["id", "transfer_id", "source_dealer_id", "target_dealer_id", "serials", "reason", "status", "initiated_by", "initiated_at", "acknowledged_by", "acknowledged_at"],
+      "reason": "Table 'inventory_transfers' does not exist in baseline schema.ts. No similarly-named table found. Unit YAML cites it under reuse[] but the table has never been created. The unit must (a) declare the entire inventory_transfers table under tables_columns.new[] OR (b) declare a depends_on link to the (currently-missing) unit that creates the base table."
+    }
+  ],
+  "new_findings": [
+    {
+      "table": "inventory_transfers",
+      "table_exists_in_baseline": false,
+      "justification_present": true,
+      "justification_length": 197,
+      "columns": [
+        {"name": "rejected_by", "type": "integer()", "type_lint": "ok"},
+        {"name": "rejected_at", "type": "timestamp({ withTimezone: true })", "type_lint": "ok"},
+        {"name": "rejection_reason", "type": "text()", "type_lint": "ok"}
+      ],
+      "fuzzy_collisions": [
+        {
+          "proposed": "rejected_by",
+          "candidates": ["deals.rejected_by", "dealer_onboarding_applications.rejected_by", "dealer_leads.rejected_by", "consent_records.rejected_by"],
+          "best_overlap": 1.0,
+          "reason": "Exact name 'rejected_by' already on four other tables. Acceptable reuse pattern (same semantics — FK to user/dealer who rejected) but auditor logs the parallel for review."
+        },
+        {
+          "proposed": "rejected_at",
+          "candidates": ["deals.rejected_at", "dealer_onboarding_applications.rejected_at", "consent_records.rejected_at"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on three other tables — consistent rejection-timestamp idiom."
+        },
+        {
+          "proposed": "rejection_reason",
+          "candidates": ["other_document_requests.rejection_reason", "loan_sanctions.rejection_reason", "loan_applications.rejection_reason", "kyc_documents.rejection_reason", "deals.rejection_reason"],
+          "best_overlap": 1.0,
+          "reason": "Exact name on five other tables — established naming pattern."
+        }
+      ],
+      "decision": "fuzzy_collision_block"
+    }
+  ],
+  "verdict": "reject",
+  "migration_required": false,
+  "notes": [
+    "Sync Audit G-06 (MEDIUM) — V2-Feb inventory_transfers has 2-state status ENUM with no rejection path; Sec6.S.5 specifies a reject-transfer flow. Resolution E adds three nullable rejection columns and extends the status ENUM with two values.",
+    "PRIMARY BLOCKER: the inventory_transfers table itself does not exist in the current schema.ts baseline. The YAML must add the full table to tables_columns.new[] (or add depends_on to a unit that creates it) before the rejection-column extension can be applied.",
+    "SECONDARY: the three new column names exactly match existing columns on 4-5 other tables. While this matches the repo-wide rejection idiom (likely intentional reuse of the convention), the auditor records the fuzzy collisions per rule 3 of the format spec — the loop reviewer should confirm same semantics.",
+    "All three column types parse as valid Drizzle column builders (integer / timestamp / text).",
+    "Status ENUM extension ('rejected_by_target', 'cancelled_by_admin') is not declared as a tables_columns change; if status is implemented as a Postgres ENUM type, the migration also needs an ALTER TYPE ... ADD VALUE statement that the YAML does not currently capture."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-104/checkpoint_1.html"
+}

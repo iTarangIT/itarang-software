@@ -1,0 +1,13 @@
+{
+  "unit_id": "E-025",
+  "audited_at": "2026-05-01T07:00:00Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [],
+  "new_findings": [],
+  "verdict": "audited",
+  "migration_required": false,
+  "notes": [
+    "Pure UI shell; no tables_columns.reuse or new entries. Sidebar links to routes that other units (E-026..E-039) implement."
+  ],
+  "checkpoint_html": null
+}

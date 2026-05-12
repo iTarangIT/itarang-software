@@ -83,8 +83,26 @@ export const GET = withErrorHandler(async (req: Request) => {
   const limit = 10;
   const offset = (page - 1) * limit;
 
+  // Alias snake_case columns to camelCase for the UI — matches the convention
+  // already used by /api/scraper/history. A bare select() returns the raw
+  // Drizzle field names (snake_case post-schema migration), which the runs
+  // table reads as undefined.
   const runs = await db
-    .select()
+    .select({
+      id: scrapeRuns.id,
+      status: scrapeRuns.status,
+      startedAt: scrapeRuns.started_at,
+      completedAt: scrapeRuns.completed_at,
+      totalFound: scrapeRuns.total_found,
+      newLeadsSaved: scrapeRuns.new_leads_saved,
+      duplicatesSkipped: scrapeRuns.duplicates_skipped,
+      errorMessage: scrapeRuns.error_message,
+      searchQueries: scrapeRuns.search_queries,
+      triggeredBy: scrapeRuns.triggered_by,
+      durationMs: scrapeRuns.duration_ms,
+      totalChunks: scrapeRuns.total_chunks,
+      completedChunks: scrapeRuns.completed_chunks,
+    })
     .from(scrapeRuns)
     .orderBy(desc(scrapeRuns.started_at))
     .limit(limit)

@@ -1,0 +1,36 @@
+{
+  "unit_id": "E-071",
+  "audited_at": "2026-05-01T06:10:31Z",
+  "baseline_sha": "b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b",
+  "reuse_findings": [],
+  "new_findings": [
+    {
+      "table": "admin_audit_logs",
+      "justification_present": true,
+      "fuzzy_collisions": [
+        {
+          "proposed": "admin_audit_logs.entity_id",
+          "candidates": ["audit_logs.entity_id"],
+          "overlap": 1.0,
+          "reason": "tokens 'entity' + 'id' match an existing column on the existing audit_logs table (ts_line 671). The proposed admin_audit_logs table appears to be a near-duplicate of audit_logs with extra dual-approval/tenant fields; reviewer must decide whether to (a) extend audit_logs with tenant_id/reason_code/requested_by/approved_by/exec_status/payload columns, or (b) keep admin_audit_logs as a separate canonical privileged-action log distinct from the existing generic audit_logs."
+        },
+        {
+          "proposed": "admin_audit_logs.action",
+          "candidates": ["audit_logs.action", "coupon_audit_log.action", "deployment_history.action"],
+          "overlap": 1.0,
+          "reason": "Single-token 'action' column already exists on the closely-named audit_logs table (ts_line 671); reinforces the table-level synonym concern above."
+        }
+      ],
+      "type_lint": "ok",
+      "decision": "rejected_synonym"
+    }
+  ],
+  "verdict": "reject",
+  "migration_required": false,
+  "notes": [
+    "Existing audit_logs table at ts_line 671 already records id, entity_type, entity_id, action, performed_by, old_data, new_data, created_at, changes, timestamp. The proposed admin_audit_logs duplicates the entity_id+action+timestamp shape but adds tenant_id, reason_code, requested_by, approved_by, exec_status, payload. The BRD's RBI Digital Lending Directions 2025 compliance need is real — but the spec needs a human to choose between extending the existing audit_logs table or keeping a parallel admin_audit_logs.",
+    "If the team chooses to extend audit_logs, several downstream units (E-068, E-070, E-072) that write/reuse 'admin_audit_logs' must be re-targeted.",
+    "No cross-doc gap (G-01..G-10) directly impacts admin_audit_logs."
+  ],
+  "checkpoint_html": "docs/nbfc/loop_report/E-071/checkpoint_1.html"
+}

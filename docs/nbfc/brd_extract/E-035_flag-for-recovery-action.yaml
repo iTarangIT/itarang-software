@@ -1,0 +1,126 @@
+id: E-035
+slug: flag-for-recovery-action
+name: Flag for Recovery action
+source_section: "6.1.6"
+brd_excerpt: |
+  Action | Approval Required | Reversible? | Audit Log
+  Flag for Recovery — Single — Risk Head — No — permanent flag — Yes
+depends_on: []
+non_functional:
+  - "Permanent flag — once set, the loan_sanctions row records a non-reversible recovery_flag."
+  - "Caller must hold the Risk Head role."
+
+surface:
+  api:
+    - method: POST
+      path: /api/nbfc/actions/flag-for-recovery
+      auth: nbfc-tenant
+      request_zod: |
+        z.object({
+          loan_sanction_id: z.string().uuid(),
+          reason: z.string().min(20),
+        })
+      response_shape:
+        action_id: string
+        loan_sanction_id: string
+        status: string
+        flagged_at: string
+  components:
+    - "src/components/nbfc-portal/FlagForRecoveryDialog.tsx"
+  jobs: []
+  pages: []
+
+logic: |
+  1. Validate body and assert caller role = 'risk_head'; else 403.
+  2. Reject if loan_sanctions.recovery_flagged_at is already set (return 409).
+  3. Update loan_sanctions: set recovery_flagged_at = now, recovery_reason = reason.
+  4. Insert nbfc_borrower_actions row with action_type='flag_for_recovery', status='approved'.
+  5. Insert nbfc_recovery_pipeline row at stage='needs_inspection' for the linked battery_serial.
+  6. Audit-log the flag.
+  7. Return action_id, loan_sanction_id, status, flagged_at.
+
+tables_columns:
+  reuse:
+    - table: loan_sanctions
+      schema_ts_line: 1
+      columns: [id, nbfc_id]
+    - table: nbfc_borrower_actions
+      schema_ts_line: 1
+      columns: [id, tenant_id, loan_sanction_id, action_type, status, requested_by, created_at]
+    - table: nbfc_recovery_pipeline
+      schema_ts_line: 1
+      columns: [tenant_id, battery_serial, stage]
+    - table: nbfc_audit_log
+      schema_ts_line: 1
+      columns: [tenant_id, actor_user_id, action_type, action_id, after_state, created_at]
+  new:
+    - table: loan_sanctions_recovery_flag
+      justification: "Need permanent recovery_flagged_at + recovery_reason columns on loan_sanctions; tracked here as additive columns to flag the loan irreversibly per BRD."
+      columns:
+        - { name: recovery_flagged_at, type: "timestamp({ withTimezone: true })" }
+        - { name: recovery_reason, type: "text()" }
+
+acceptance_criteria:
+  - id: AC1
+    statement: "POST /api/nbfc/actions/flag-for-recovery by a Risk Head with a reason >= 20 chars returns 200, sets loan_sanctions.recovery_flagged_at, and inserts an nbfc_recovery_pipeline row at stage='needs_inspection'."
+    test_layer: api
+    test_name: "Flag for recovery sets permanent flag and creates recovery pipeline row"
+  - id: AC2
+    statement: "A non-Risk-Head caller receives 403."
+    test_layer: api
+    test_name: "Flag for recovery requires Risk Head role"
+  - id: AC3
+    statement: "Calling the endpoint a second time on an already-flagged loan returns 409."
+    test_layer: api
+    test_name: "Flag for recovery rejects duplicate flagging with 409"
+  - id: AC4
+    statement: "After the call an nbfc_audit_log row exists with action_type='flag_for_recovery' referencing the new action_id."
+    test_layer: api
+    test_name: "Flag for recovery writes audit log entry"
+
+status: green
+loop_count: 1
+last_failure_signature: null
+human_checkpoints: []
+audit:
+  unit_id: E-035
+  audited_at: "2026-05-01T07:00:00Z"
+  baseline_sha: b5d936d58411247f796fcb9a05131523e6bd2e1709532dd212acd4524737372b
+  reuse_findings:
+    - table: loan_sanctions
+      verified: false
+      ts_line: 2624
+      columns_verified: [id]
+      columns_missing: [nbfc_id]
+      note: "G-03."
+    - table: nbfc_borrower_actions
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [id, tenant_id, loan_sanction_id, action_type, status, requested_by, created_at]
+      note: "Forward reference to E-031."
+    - table: nbfc_recovery_pipeline
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [tenant_id, battery_serial, stage]
+      note: "Forward reference to E-026."
+    - table: nbfc_audit_log
+      verified: false
+      ts_line: null
+      columns_verified: []
+      columns_missing: [tenant_id, actor_user_id, action_type, action_id, after_state, created_at]
+      note: "Forward reference to E-031."
+  new_findings:
+    - table: loan_sanctions_recovery_flag
+      justification_present: true
+      columns: [recovery_flagged_at, recovery_reason]
+      fuzzy_collisions: []
+      type_lint: ok
+      decision: approved_pending_human
+      note: "Modelled as additive columns on loan_sanctions during code-loop."
+  verdict: needs_schema_approval
+  migration_required: false
+  notes:
+    - "Recovery flag is intended as additive columns on loan_sanctions per BRD; treat as ALTER TABLE migration."
+  checkpoint_html: docs/nbfc/loop_report/E-035/checkpoint_1.html
