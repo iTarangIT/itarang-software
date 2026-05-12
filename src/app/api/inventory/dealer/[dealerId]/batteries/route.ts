@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, ilike, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { inventory, products, productCategories } from "@/lib/db/schema";
@@ -18,10 +18,8 @@ async function resolveCategoryName(input: string): Promise<string> {
 }
 
 // BRD V2 §2.3 — dealer battery inventory list for Step 4.
-// Filters: dealer_id + asset_type=Battery + status in (available, reserved).
-// Per BRD: Available are selectable, Reserved are visible-but-greyed-out
-// (so the dealer knows the unit exists but is locked to another lead),
-// Dispatched/Sold are hidden entirely.
+// Filters: dealer_id + asset_type=Battery + status=available.
+// Reserved/Dispatched/Sold are hidden — Step 4 only offers selectable stock.
 // Optional query params: category, subCategory, productId.
 // Sort: oem_invoice_date ASC (oldest first — BRD ageing priority rule).
 
@@ -48,12 +46,14 @@ export async function GET(
 
     const filters = [
       eq(inventory.dealer_id, dealerId),
-      eq(inventory.asset_type, "Battery"),
-      inArray(inventory.status, ["available", "reserved"]),
+      or(eq(inventory.asset_type, "Battery"), eq(inventory.asset_type, "battery"))!,
+      eq(inventory.status, "available"),
     ];
     if (category) {
       const categoryName = await resolveCategoryName(category);
-      filters.push(eq(inventory.asset_category, categoryName));
+      // Use prefix match so canonical names like "3W" also pick up inventory
+      // rows tagged "3W Batteries", "3W Vehicles", etc.
+      filters.push(ilike(inventory.asset_category, `${categoryName}%`));
     }
     // When the lead has a primary_product_id (Step 1 "Product Type"),
     // restrict inventory to that exact product. Falls back to free
@@ -102,16 +102,8 @@ export async function GET(
       };
     });
 
-    // Recommendation flag = oldest *available* unit. Reserved units are
-    // visible-but-not-selectable, so they should never carry the recommended
-    // badge even if they happen to be the oldest invoice date in the list.
-    let recommendedAssigned = false;
-    const withRecommend = enriched.map((r) => {
-      const isAvailable = r.status === "available";
-      const recommended = !recommendedAssigned && isAvailable;
-      if (recommended) recommendedAssigned = true;
-      return { ...r, recommended };
-    });
+    // Recommendation flag = oldest unit (rows already filtered to available).
+    const withRecommend = enriched.map((r, idx) => ({ ...r, recommended: idx === 0 }));
 
     return NextResponse.json({ success: true, data: withRecommend });
   } catch (error) {

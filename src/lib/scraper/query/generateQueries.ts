@@ -2,6 +2,17 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
+// Gemini reports quota exhaustion via HTTP 429 with status string
+// "RESOURCE_EXHAUSTED". We want to fail the scrape loudly in that case
+// (so the run shows a clear error) rather than silently fall back to the
+// 4-query stub — that's the path that hides empty-result scrapes today.
+function isQuotaError(err: unknown): boolean {
+  const e = err as { status?: number; message?: string };
+  if (e?.status === 429) return true;
+  const msg = e?.message ?? "";
+  return /RESOURCE_EXHAUSTED|quota|rate.?limit/i.test(msg);
+}
+
 export async function generateQueries(baseQuery: string): Promise<string[]> {
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
@@ -24,7 +35,20 @@ Query: "${baseQuery}"
     const clean = text.replace(/```json|```/g, "").trim();
     const queries = JSON.parse(clean);
     return [...new Set<string>(queries)].slice(0, 15);
-  } catch {
+  } catch (err) {
+    if (isQuotaError(err)) {
+      console.error(
+        "[GENERATE_QUERIES] Gemini quota exhausted — re-throwing so run fails clearly",
+        err,
+      );
+      throw new Error(
+        "Gemini API quota exhausted. Cannot generate query variations.",
+      );
+    }
+    console.warn(
+      "[GENERATE_QUERIES] Gemini failed, falling back to default queries:",
+      (err as Error)?.message,
+    );
     return [
       baseQuery,
       `${baseQuery} dealer`,
@@ -60,7 +84,20 @@ Query: "${baseQuery}"
     const clean = text.replace(/```json|```/g, "").trim();
     const cities = JSON.parse(clean);
     return [...new Set<string>(cities)];
-  } catch {
+  } catch (err) {
+    if (isQuotaError(err)) {
+      console.error(
+        "[GENERATE_CITIES] Gemini quota exhausted — re-throwing so run fails clearly",
+        err,
+      );
+      throw new Error(
+        "Gemini API quota exhausted. Cannot generate city variations.",
+      );
+    }
+    console.warn(
+      "[GENERATE_CITIES] Gemini failed, falling back to static city list:",
+      (err as Error)?.message,
+    );
     return extractCitiesFallback(baseQuery);
   }
 }

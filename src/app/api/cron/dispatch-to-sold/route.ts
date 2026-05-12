@@ -8,6 +8,7 @@ import {
   productSelections,
 } from "@/lib/db/schema";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { checkCronAuth } from "@/lib/cron-auth";
 import { markDispatchedAsSold } from "@/lib/sales/sale-finalization";
 import { notifyDelivered } from "@/lib/notifications";
 import { sendKycSms } from "@/lib/sms";
@@ -22,14 +23,12 @@ import { sendKycSms } from "@/lib/sms";
 // Schedule: registered in vercel.json. Run at 04:00 UTC daily.
 
 export const GET = withErrorHandler(async (req: Request) => {
-  const authHeader = req.headers.get("authorization");
-  if (
-    process.env.CRON_SECRET &&
-    authHeader !== `Bearer ${process.env.CRON_SECRET}`
-  ) {
-    if (process.env.NODE_ENV === "production") {
-      return new Response("Unauthorized", { status: 401 });
-    }
+  // Dev still allows unauthenticated localhost calls for testing — only the
+  // env-var-missing case is hardened relative to before. In production an
+  // unset CRON_SECRET now returns 500, not 200.
+  if (process.env.NODE_ENV === "production") {
+    const unauth = checkCronAuth(req);
+    if (unauth) return unauth;
   }
 
   const days = Number(process.env.DISPATCH_TO_SOLD_DAYS ?? "1");
