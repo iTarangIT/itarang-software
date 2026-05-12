@@ -1,159 +1,227 @@
-import { z } from 'zod';
-import { db } from '@/lib/db';
-import { inventory, products, productCategories, oems } from '@/lib/db/schema';
-import { eq, and } from 'drizzle-orm';
-import { requireAuth } from '@/lib/auth-utils';
-import { successResponse, withErrorHandler, generateId } from '@/lib/api-utils';
-import Papa from 'papaparse';
-import * as XLSX from 'xlsx';
+import { z } from "zod";
+import { db } from "@/lib/db";
+import { inventory } from "@/lib/db/schema";
+import { requireAuth } from "@/lib/auth-utils";
+import { successResponse, withErrorHandler, generateId } from "@/lib/api-utils";
 
-// Zod Schema for validation
-const inventoryRowSchema = z.object({
-    hsn_code: z.string().regex(/^[0-9]{8}$/),
-    oem_name: z.string().min(1, 'OEM Name is required'),
-    inventory_amount: z.coerce.number().positive(),
-    gst_percent: z.coerce.number().refine(v => [5, 18].includes(v)),
-
-    // Identifiers
-    serial_number: z.string().optional(),
-    batch_number: z.string().optional(), // Added SOP 7.4
-    is_serialized: z.string().transform(v => v.toLowerCase() === 'true' || v === '1'),
-    iot_imei_no: z.string().optional(), // Added
-
-    // Purchase details
-    warranty_months: z.coerce.number().int().nonnegative(),
-    quantity: z.coerce.number().int().positive().default(1),
-    manufacturing_date: z.string().min(1, 'Manufacturing date is required'),
-    expiry_date: z.string().min(1, 'Expiry date is required'),
-
-    // Invoice / Challan
-    oem_invoice_number: z.string().min(1, 'OEM invoice number is required'),
-    oem_invoice_date: z.string().min(1, 'OEM invoice date is required'),
-    oem_invoice_url: z.string().optional(), // Added SOP 7.4
-    challan_number: z.string().optional(),
-    challan_date: z.string().optional(),
-
-    // Location / Docs
-    warehouse_location: z.string().optional(), // Added SOP 7.4
-    product_manual_url: z.string().optional(), // Added SOP 7.4
-    warranty_document_url: z.string().optional(), // Added SOP 7.4
+const bodySchema = z.object({
+  dealerId: z.string().min(1, "dealerId is required"),
+  assetType: z.enum(["battery", "charger", "paraphernalia"]),
+  rows: z.array(z.record(z.string(), z.any())).min(1, "rows are required"),
 });
 
+function toDate(value: unknown): Date | null {
+  if (!value) return null;
+  const d = new Date(String(value));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function toNumberString(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toString() : null;
+}
+
+function clean(value: unknown): string | null {
+  const v = String(value ?? "").trim();
+  return v.length ? v : null;
+}
+
+function getPgCode(error: unknown): string | null {
+  let current: unknown = error;
+
+  while (current && typeof current === "object") {
+    const record = current as { code?: string; cause?: unknown };
+    if (record.code) return record.code;
+    current = record.cause;
+  }
+
+  return null;
+}
+
 export const POST = withErrorHandler(async (req: Request) => {
-    const user = await requireAuth();
-    const formData = await req.formData();
-    const file = formData.get('file') as File;
+  const user = await requireAuth();
 
-    if (!file) {
-        throw new Error('No file uploaded');
+  const body = bodySchema.parse(await req.json());
+  const { dealerId, assetType, rows } = body;
+
+  const results = {
+    uploadEventId: await generateId("UPL"),
+    totalRows: rows.length,
+    imported: 0,
+    skipped: 0,
+    errors: [] as Array<{
+      row: number;
+      field: string;
+      code: string;
+      message: string;
+    }>,
+    insertedIds: [] as string[],
+  };
+
+  for (let i = 0; i < rows.length; i++) {
+    const rowNumber = i + 2;
+    const r = rows[i];
+
+    try {
+      const inventoryId = await generateId("INV");
+
+      const serial =
+        assetType === "battery"
+          ? clean(r.battery_id ?? r.serial_number)
+          : assetType === "charger"
+            ? clean(r.serial_number)
+            : null;
+
+      if ((assetType === "battery" || assetType === "charger") && !serial) {
+        results.skipped++;
+        results.errors.push({
+          row: rowNumber,
+          field: assetType === "battery" ? "battery_id" : "serial_number",
+          code: "SERIAL_REQUIRED",
+          message: "Serial number is required.",
+        });
+        continue;
+      }
+
+      const invoiceValue =
+        assetType === "paraphernalia"
+          ? toNumberString(r.unit_cost ?? r.inventory_amount)
+          : toNumberString(r.invoice_value ?? r.inventory_amount);
+
+      const invoiceDate =
+        assetType === "battery"
+          ? toDate(r.sold_date ?? r.invoice_date ?? r.oem_invoice_date)
+          : toDate(r.invoice_date ?? r.oem_invoice_date);
+
+      const quantity =
+        assetType === "paraphernalia"
+          ? Number(r.quantity || 1)
+          : 1;
+
+      const modelType =
+        assetType === "battery"
+          ? clean(r.model_number) || "Battery"
+          : assetType === "charger"
+            ? clean(r.charger_model) || "Charger"
+            : clean(r.item_type) || "Paraphernalia";
+
+      const assetCategory =
+        assetType === "battery"
+          ? clean(r.category) || "Battery"
+          : assetType === "charger"
+            ? clean(r.compatible_battery_models) || "Charger"
+            : clean(r.compatible_category) || "Accessory";
+
+      const subCategory =
+        assetType === "battery"
+          ? clean(r.sub_category)
+          : assetType === "charger"
+            ? clean(r.charger_model)
+            : clean(r.item_type);
+
+      const warrantyDate = toDate(r.oem_warranty_date);
+      const warrantyMonths = Number(r.oem_warranty_months || r.warranty_months || 0);
+
+      let warrantyExpiry: Date | null = null;
+      if (warrantyDate && warrantyMonths > 0) {
+        warrantyExpiry = new Date(warrantyDate);
+        warrantyExpiry.setMonth(warrantyExpiry.getMonth() + warrantyMonths);
+      }
+
+      const [created] = await db
+        .insert(inventory)
+        .values({
+          id: inventoryId,
+
+          inventory_type:
+            assetType === "paraphernalia" ? "paraphernalia_lot" : assetType,
+
+          asset_category: assetCategory,
+          asset_type: assetType,
+          sub_category: subCategory,
+          model_type: modelType,
+
+          serial_number: serial,
+          material_code: clean(r.material_code ?? r.hsn_code),
+          batch_number: clean(r.batch_reference ?? r.batch_number),
+
+          is_serialized: assetType !== "paraphernalia",
+          quantity,
+
+          iot_enabled:
+            String(r.iot_enabled ?? "").toLowerCase() === "true" ||
+            String(r.iot_enabled ?? "") === "1",
+          iot_imei_no: clean(r.imei_id ?? r.iot_imei_no),
+
+          voltage_v: toNumberString(r.voltage_v),
+          capacity_ah: toNumberString(r.capacity_ah),
+          output_current_a: toNumberString(r.output_current_a),
+          star_rating: r.star_rating ? Number(r.star_rating) : null,
+
+          oem_name: clean(r.supplier_name ?? r.supplier ?? r.oem_name),
+          oem_invoice_number: clean(r.invoice_number ?? r.oem_invoice_number),
+          oem_invoice_date: invoiceDate,
+
+          inventory_amount: invoiceValue,
+          final_amount: invoiceValue,
+
+          warehouse_location: clean(r.warehouse_location),
+          physical_condition: clean(r.physical_condition)?.toLowerCase(),
+
+          oem_warranty_date: warrantyDate
+            ? warrantyDate.toISOString().slice(0, 10)
+            : null,
+          oem_warranty_months: warrantyMonths || null,
+          oem_warranty_expiry: warrantyExpiry
+            ? warrantyExpiry.toISOString().slice(0, 10)
+            : null,
+          oem_warranty_clauses: clean(r.oem_warranty_clauses),
+
+          status: "available",
+          dealer_id: dealerId,
+          allocated_to_dealer_at: new Date(),
+
+          created_by: user.id,
+          upload_event_id: results.uploadEventId,
+          created_at: new Date(),
+          updated_at: new Date(),
+        })
+        .returning({ id: inventory.id });
+
+      results.imported++;
+      results.insertedIds.push(created.id);
+    } catch (error: any) {
+      const code = getPgCode(error);
+
+      results.skipped++;
+
+      if (code === "23505") {
+        results.errors.push({
+          row: rowNumber,
+          field: "serial_number",
+          code: "DUPLICATE_SERIAL_OR_IMEI",
+          message:
+            "This serial number or IMEI already exists. Please use a unique value.",
+        });
+      } else {
+        results.errors.push({
+          row: rowNumber,
+          field: "row",
+          code: code || "INSERT_FAILED",
+          message: error?.message || "Failed to insert this row.",
+        });
+      }
     }
+  }
 
-    const buffer = await file.arrayBuffer();
-    let rows: any[] = [];
-
-    if (file.name.endsWith('.csv')) {
-        const text = new TextDecoder().decode(buffer);
-        rows = Papa.parse(text, { header: true, skipEmptyLines: true }).data;
-    } else {
-        const workbook = XLSX.read(buffer);
-        rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
-    }
-
-    const results = { success: [] as any[], errors: [] as any[] };
-
-    for (let i = 0; i < rows.length; i++) {
-        try {
-            const row = rows[i];
-            const validated = inventoryRowSchema.parse(row);
-
-            // 1. Find OEM
-            let oem = await db.query.oems.findFirst({
-                where: eq(oems.business_entity_name, validated.oem_name)
-            });
-            if (!oem) {
-                // Try fuzzy match or just fail? Fail for now as per strict guidelines
-                throw new Error(`OEM '${validated.oem_name}' not found. Please register OEM first.`);
-            }
-
-            // 2. Find Product by HSN code (join with category for asset_category)
-            const productRow = await db
-                .select({
-                    id: products.id,
-                    name: products.name,
-                    sku: products.sku,
-                    hsn_code: products.hsn_code,
-                    asset_type: products.asset_type,
-                    is_serialized: products.is_serialized,
-                    warranty_months: products.warranty_months,
-                    asset_category: productCategories.name,
-                })
-                .from(products)
-                .innerJoin(productCategories, eq(products.category_id, productCategories.id))
-                .where(eq(products.hsn_code, validated.hsn_code))
-                .limit(1);
-
-            const product = productRow[0];
-            if (!product) throw new Error(`Product with HSN ${validated.hsn_code} not found in catalog`);
-
-            // 3. Conditional Validations
-
-            // Serialized items must have serial number
-            if (validated.is_serialized && !validated.serial_number) {
-                throw new Error('Serial number required for serialized items');
-            }
-
-            // IoT items must have IMEI
-            if (product.name.includes('With IOT') && !validated.iot_imei_no) {
-                throw new Error('IMEI number required for IoT enabled products');
-            }
-
-            // Calculate amounts
-            const gst_amount = validated.inventory_amount * (validated.gst_percent / 100);
-            const final_amount = validated.inventory_amount + gst_amount;
-
-            // 4. Insert
-            const [created] = await db.insert(inventory).values({
-                id: await generateId('INV', inventory),
-                product_id: product.id,
-                oem_id: oem.id,
-
-                // Denormalized Fields (SOP 7.4)
-                oem_name: oem.business_entity_name,
-                asset_category: product.asset_category,
-                asset_type: product.asset_type ?? '',
-                model_type: product.name,
-
-                serial_number: validated.serial_number,
-                batch_number: validated.batch_number,
-                is_serialized: validated.is_serialized,
-                iot_imei_no: validated.iot_imei_no,
-
-                quantity: validated.quantity,
-                manufacturing_date: new Date(validated.manufacturing_date),
-                expiry_date: new Date(validated.expiry_date),
-
-                oem_invoice_number: validated.oem_invoice_number,
-                oem_invoice_date: new Date(validated.oem_invoice_date),
-                oem_invoice_url: validated.oem_invoice_url,
-
-                warehouse_location: validated.warehouse_location,
-                product_manual_url: validated.product_manual_url,
-                warranty_document_url: validated.warranty_document_url,
-
-                inventory_amount: validated.inventory_amount.toString(),
-                gst_percent: validated.gst_percent.toString(),
-                gst_amount: gst_amount.toString(),
-                final_amount: final_amount.toString(),
-
-                status: 'available',
-                created_by: user.id,
-            }).returning();
-
-            results.success.push({ row: i + 2, id: created.id });
-        } catch (error: any) {
-            results.errors.push({ row: i + 2, error: error.message });
-        }
-    }
-
-    return successResponse(results);
+  return successResponse({
+    success: true,
+    uploadEventId: results.uploadEventId,
+    totalRows: results.totalRows,
+    imported: results.imported,
+    skipped: results.skipped,
+    errors: results.errors,
+    insertedInventoryIds: results.insertedIds,
+  });
 });

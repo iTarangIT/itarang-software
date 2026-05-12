@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, ilike, or } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { inventory, products, productCategories } from "@/lib/db/schema";
@@ -18,9 +18,7 @@ async function resolveCategoryName(input: string): Promise<string> {
 
 // BRD V2 §2.3 — dealer charger inventory list for Step 4.
 //
-// Status filter:
-//   available, reserved → returned (Reserved cards are visible-but-greyed-out)
-//   dispatched, sold    → hidden
+// Status filter: available only — Step 4 only offers selectable stock.
 //
 // Compatibility:
 //   A strict products.voltage_v = batteryVoltage filter was tried previously,
@@ -53,12 +51,13 @@ export async function GET(
 
     const filters = [
       eq(inventory.dealer_id, dealerId),
-      eq(inventory.asset_type, "Charger"),
-      inArray(inventory.status, ["available", "reserved"]),
+      or(eq(inventory.asset_type, "Charger"), eq(inventory.asset_type, "charger"))!,
+      eq(inventory.status, "available"),
     ];
     if (category) {
       const categoryName = await resolveCategoryName(category);
-      filters.push(eq(inventory.asset_category, categoryName));
+      // Prefix match so canonical "3W" picks up "3W Batteries" / "3W Vehicles".
+      filters.push(ilike(inventory.asset_category, `${categoryName}%`));
     }
 
     const rows = await db
@@ -96,14 +95,8 @@ export async function GET(
       };
     });
 
-    // Recommended badge attaches to the oldest *available* (selectable) row.
-    let recommendedAssigned = false;
-    const withRecommend = enriched.map((r) => {
-      const isAvailable = r.status === "available";
-      const recommended = !recommendedAssigned && isAvailable;
-      if (recommended) recommendedAssigned = true;
-      return { ...r, recommended };
-    });
+    // Rows already filtered to available; oldest invoice date wins the badge.
+    const withRecommend = enriched.map((r, idx) => ({ ...r, recommended: idx === 0 }));
 
     return NextResponse.json({ success: true, data: withRecommend });
   } catch (error) {

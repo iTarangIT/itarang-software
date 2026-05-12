@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { updateLeadAfterCall } from "../storage/leadStore";
 import { dealerLeads } from "@/lib/db/schema";
-import { safeRedisLock } from "@/lib/queue/safeRedis";
+import { dedupClaim } from "@/lib/queue/safeRedis";
 import { dialerSession } from "@/lib/queue/dialerSession";
 import { scheduleElevenLabsCall } from "@/lib/queue/scheduler";
 import { appendSalesCallLog } from "@/lib/google/sheet";
@@ -14,11 +14,16 @@ import type { ElevenLabsWebhookEvent, ElevenLabsTranscriptTurn } from "./types";
 const PROCESSED_CALL_TTL_SECONDS = 10 * 60;
 
 async function claimCallForProcessing(callId: string): Promise<boolean> {
-  const { claimed } = await safeRedisLock(
+  const { claimed, degraded } = await dedupClaim(
     `elevenlabs:processed-call:${callId}`,
     PROCESSED_CALL_TTL_SECONDS,
     "elevenlabs:webhook-dedup",
   );
+  if (degraded) {
+    console.warn(
+      `[elevenlabs:webhook] dedup falling back to process-local LRU (Redis degraded) for ${callId}`,
+    );
+  }
   return claimed;
 }
 
@@ -284,11 +289,19 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
       .where(eq(dealerLeads.id, lead.id));
 
     if (decision.action === "schedule_call" && nextCallAt) {
-      await scheduleElevenLabsCall({
+      const messageId = await scheduleElevenLabsCall({
         phone,
         leadId: lead.id,
         runAt: nextCallAt,
       });
+      if (!messageId) {
+        // QStash quota exhausted or scheduling failed. dealer_leads.next_call_at
+        // is already set above, so the elevenlabs/call-scheduler cron is the
+        // recovery path. Log so quota exhaustion is visible in pm2 logs.
+        console.warn(
+          `[elevenlabs:webhook] scheduleElevenLabsCall returned null for ${lead.id} — relying on call-scheduler cron to recover`,
+        );
+      }
     }
 
     if (decision.action === "push_to_crm") {

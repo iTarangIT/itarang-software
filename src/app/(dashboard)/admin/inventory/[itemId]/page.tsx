@@ -5,7 +5,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
+import { CheckCircle2, X as XIcon } from "lucide-react";
 
 interface InventoryItem {
   id: string;
@@ -36,6 +37,9 @@ interface InventoryItem {
 
 export default function InventoryDetailPage() {
   const { itemId } = useParams() as { itemId: string };
+  const search = useSearchParams();
+  const justAdded = search?.get("just_added") === "1";
+  const dealerJustUploaded = search?.get("dealer") ?? "";
   const [item, setItem] = useState<InventoryItem | null>(null);
   const [dealerName, setDealerName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -43,6 +47,10 @@ export default function InventoryDetailPage() {
   const [writeOffOpen, setWriteOffOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [showUploadedToast, setShowUploadedToast] = useState(justAdded);
+
+  // Persistent until the admin dismisses — auto-fade was too short to be
+  // useful as confirmation across slower flows like charger / paraphernalia.
 
   const load = async () => {
     setLoading(true);
@@ -55,7 +63,7 @@ export default function InventoryDetailPage() {
       } else {
         setError(json.error?.message || "Failed to load");
       }
-    } catch (e) {
+    } catch {
       setError("Failed to load");
     } finally {
       setLoading(false);
@@ -88,7 +96,7 @@ export default function InventoryDetailPage() {
       } else {
         setError(json.error?.message || "Write-off failed");
       }
-    } catch (e) {
+    } catch {
       setError("Request failed");
     } finally {
       setSubmitting(false);
@@ -117,6 +125,37 @@ export default function InventoryDetailPage() {
           </Link>
         </div>
       </header>
+
+      {showUploadedToast && (
+        <div className="rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50 via-emerald-50 to-white p-4 flex items-start gap-3 shadow-sm">
+          <div className="w-8 h-8 rounded-lg bg-emerald-500 text-white flex items-center justify-center flex-shrink-0">
+            <CheckCircle2 className="w-4 h-4" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-bold text-emerald-900">
+              {item?.asset_type
+                ? `${item.asset_type.charAt(0).toUpperCase()}${item.asset_type.slice(1)} added to inventory`
+                : "Inventory item added"}
+            </div>
+            <div className="text-xs text-emerald-800 mt-0.5">
+              Allocated to{" "}
+              <span className="font-bold">{dealerJustUploaded || "the dealer"}</span>
+              {item?.serial_number ? (
+                <>
+                  {" · "}Serial <span className="font-mono">{item.serial_number}</span>
+                </>
+              ) : null}
+            </div>
+          </div>
+          <button
+            onClick={() => setShowUploadedToast(false)}
+            aria-label="Dismiss"
+            className="w-7 h-7 rounded-lg text-emerald-700 hover:bg-emerald-100 flex items-center justify-center flex-shrink-0"
+          >
+            <XIcon className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 rounded p-3 text-sm">
@@ -178,7 +217,7 @@ export default function InventoryDetailPage() {
               Edit
             </Link>
           )}
-          {item.status !== "write_off" && item.status !== "sold" && (
+          {item.status !== "written_off" && item.status !== "sold" && (
             <button
               onClick={() => setWriteOffOpen(true)}
               className="px-4 py-2 bg-red-600 text-white rounded text-sm font-bold hover:bg-red-700"
@@ -244,8 +283,9 @@ function StatusBadge({ status }: { status: string }) {
     available: "bg-emerald-100 text-emerald-800",
     reserved: "bg-amber-100 text-amber-800",
     sold: "bg-blue-100 text-blue-800",
-    write_off: "bg-gray-100 text-gray-600",
-    in_stock: "bg-emerald-100 text-emerald-800",
+    written_off: "bg-gray-100 text-gray-600",
+    transferred_in: "bg-cyan-100 text-cyan-800",
+    transferred_out: "bg-purple-100 text-purple-800",
   };
   return (
     <span
