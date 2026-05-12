@@ -2626,6 +2626,9 @@ export const scrapeRuns = pgTable("scraper_runs", {
   // the run-progress UI as "X duplicates skipped".
   new_leads_promoted: integer("new_leads_promoted").default(0),
   new_leads_skipped_duplicate: integer("new_leads_skipped_duplicate").default(0),
+  new_leads_skipped_invalid_phone: integer(
+    "new_leads_skipped_invalid_phone",
+  ).default(0),
 });
 
 export const scraperRunChunks = pgTable("scraper_run_chunks", {
