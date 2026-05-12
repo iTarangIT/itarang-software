@@ -30,6 +30,7 @@ export async function markRunCompleted(
     // path, older code) can omit these; we default to nothing-changed.
     promoted?: number;
     skippedDuplicate?: number;
+    skippedInvalidPhone?: number;
   },
   errorMessage?: string | null,
 ) {
@@ -51,6 +52,9 @@ export async function markRunCompleted(
         : {}),
       ...(stats.skippedDuplicate !== undefined
         ? { new_leads_skipped_duplicate: stats.skippedDuplicate }
+        : {}),
+      ...(stats.skippedInvalidPhone !== undefined
+        ? { new_leads_skipped_invalid_phone: stats.skippedInvalidPhone }
         : {}),
       // Persist a representative chunk-error when finalize completed with zero
       // leads — otherwise UI shows "Completed, 0 leads" with no reason. Pass

@@ -30,6 +30,7 @@ interface Progress {
   // Null on runs from before this metric was tracked. New runs default to 0.
   newLeadsPromoted: number | null;
   newLeadsSkippedDuplicate: number | null;
+  newLeadsSkippedInvalidPhone: number | null;
   errorMessage: string | null;
   chunkErrorSample: string | null;
   chunkErrorCount: number;
@@ -276,6 +277,7 @@ export function ScraperRunProgress({ runId, onComplete, onDismiss }: Props) {
             promoted={data.newLeadsPromoted}
             saved={data.newLeadsSaved}
             skippedDuplicate={data.newLeadsSkippedDuplicate ?? 0}
+            skippedInvalidPhone={data.newLeadsSkippedInvalidPhone ?? 0}
           />
         ) : (
           // Legacy runs (newLeadsPromoted=null) or live progress — fall back to
@@ -347,12 +349,21 @@ function PromotedStat({
   promoted,
   saved,
   skippedDuplicate,
+  skippedInvalidPhone,
 }: {
   promoted: number;
   saved: number;
   skippedDuplicate: number;
+  skippedInvalidPhone: number;
 }) {
   const allDropped = promoted === 0 && saved > 0;
+  const breakdown = [
+    `${saved} scraped`,
+    skippedDuplicate > 0 ? `${skippedDuplicate} duplicates` : null,
+    skippedInvalidPhone > 0 ? `${skippedInvalidPhone} invalid phones` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
   return (
     <div className="bg-white/70 rounded-lg p-2">
       <p className="text-gray-500">Added to dialer queue</p>
@@ -365,8 +376,7 @@ function PromotedStat({
       </p>
       {saved > 0 && (
         <p className="text-[10px] text-gray-400 leading-tight mt-0.5">
-          {saved} scraped
-          {skippedDuplicate > 0 ? `, ${skippedDuplicate} duplicates` : ""}
+          {breakdown}
         </p>
       )}
     </div>
