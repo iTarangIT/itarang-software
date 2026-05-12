@@ -491,6 +491,7 @@ export async function finalizeChunkedRun(runId: string) {
         duration_ms: Date.now() - startTime,
         promoted: promotion.promoted,
         skippedDuplicate: promotion.skippedDuplicate,
+        skippedInvalidPhone: promotion.skippedInvalidPhone,
       },
       errSummary,
     );
