@@ -22,6 +22,7 @@ export const GET = withErrorHandler(
         duplicatesSkipped: scrapeRuns.duplicates_skipped,
         newLeadsPromoted: scrapeRuns.new_leads_promoted,
         newLeadsSkippedDuplicate: scrapeRuns.new_leads_skipped_duplicate,
+        newLeadsSkippedInvalidPhone: scrapeRuns.new_leads_skipped_invalid_phone,
         errorMessage: scrapeRuns.error_message,
         startedAt: scrapeRuns.started_at,
         completedAt: scrapeRuns.completed_at,
@@ -104,6 +105,7 @@ export const GET = withErrorHandler(
       // to legacy view". DB default is 0 for new runs, NULL for old runs.
       newLeadsPromoted: run.newLeadsPromoted,
       newLeadsSkippedDuplicate: run.newLeadsSkippedDuplicate,
+      newLeadsSkippedInvalidPhone: run.newLeadsSkippedInvalidPhone,
       errorMessage: run.errorMessage,
       chunkErrorSample,
       chunkErrorCount,
