@@ -10,6 +10,7 @@ module.exports = {
         NODE_ENV: "production",
         PORT: "3002",
         HOSTNAME: "127.0.0.1",
+        PUPPETEER_EXECUTABLE_PATH: "/usr/bin/google-chrome-stable",
       },
       max_memory_restart: "900M",
       // Give Next 8s to close its listener gracefully before SIGKILL. The
