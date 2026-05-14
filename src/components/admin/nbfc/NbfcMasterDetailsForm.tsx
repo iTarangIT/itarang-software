@@ -12,9 +12,39 @@
  * so the headed spec's `getByRole("button", { name: /Create NBFC/i })` still
  * resolves.
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+
+// localStorage key for in-progress create-mode form data. Mode-scoped so an
+// abandoned create draft can't bleed into an edit screen.
+const DRAFT_STORAGE_KEY = "itarang:nbfc:new:draft-v1";
+
+const PERSISTED_FIELDS = [
+  "legalName",
+  "shortName",
+  "nbfcType",
+  "rbiRegistrationNo",
+  "cin",
+  "gstNumber",
+  "panNumber",
+  "addr_line1",
+  "addr_line2",
+  "addr_city",
+  "addr_district",
+  "addr_state",
+  "addr_pin",
+  "primaryContactName",
+  "primaryContactEmail",
+  "primaryContactPhone",
+  "grievanceOfficerName",
+  "grievanceHelpline",
+  "grievanceUrl",
+  "nodalOfficer",
+  "partnershipDate",
+  "activeGeographies",
+  "fldgTerms",
+] as const;
 
 type Mode = "create" | "edit";
 
@@ -31,6 +61,16 @@ interface CreatedState {
   nbfcId: string;
   status: string;
   intent: SubmitIntent;
+}
+
+// Mirrors src/app/api/admin/nbfc/route.ts createSchema.rbiRegistrationNo
+const RBI_REG_REGEX = /^N-\d{2}\.\d{5}\.\d{2}\.\d{2}\.\d{4}\.\d{5}\.\d{2}$/;
+const RBI_REG_HINT = "N-DD.DDDDD.DD.DD.DDDD.DDDDD.DD";
+const RBI_REG_ERROR = `Must match RBI format ${RBI_REG_HINT} (e.g. N-13.00243.00.00.0000.00000.00)`;
+
+function validateRbi(value: string): string | null {
+  if (!value) return null;
+  return RBI_REG_REGEX.test(value) ? null : RBI_REG_ERROR;
 }
 
 const NBFC_TYPES: ReadonlyArray<{ value: string; label: string }> = [
@@ -53,6 +93,72 @@ export default function NbfcMasterDetailsForm({
   const [submitting, setSubmitting] = useState<SubmitIntent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<CreatedState | null>(null);
+  const [rbiError, setRbiError] = useState<string | null>(null);
+  const [rbiTouched, setRbiTouched] = useState(false);
+  const [restored, setRestored] = useState(false);
+
+  // Rehydrate in-progress create-mode draft from localStorage on mount.
+  // Edit mode is skipped because its initial values are DB-backed.
+  useEffect(() => {
+    if (mode !== "create") return;
+    if (typeof window === "undefined") return;
+    const form = formRef.current;
+    if (!form) return;
+
+    try {
+      const raw = window.localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (!raw) return;
+      const cached = JSON.parse(raw) as Record<string, string>;
+      let anyFilled = false;
+      for (const name of PERSISTED_FIELDS) {
+        const val = cached[name];
+        if (typeof val !== "string" || val === "") continue;
+        const el = form.elements.namedItem(name) as
+          | HTMLInputElement
+          | HTMLTextAreaElement
+          | HTMLSelectElement
+          | null;
+        if (!el) continue;
+        el.value = val;
+        anyFilled = true;
+      }
+      if (anyFilled) setRestored(true);
+    } catch {
+      // Corrupted cache — drop it silently and start fresh.
+      window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+    }
+  }, [mode]);
+
+  // Snapshot the form into localStorage on every change. Uncontrolled inputs
+  // bubble onChange to the form root, so a single handler covers all fields.
+  function persistDraft() {
+    if (mode !== "create") return;
+    if (typeof window === "undefined") return;
+    const form = formRef.current;
+    if (!form) return;
+    try {
+      const fd = new FormData(form);
+      const snapshot: Record<string, string> = {};
+      for (const name of PERSISTED_FIELDS) {
+        snapshot[name] = String(fd.get(name) ?? "");
+      }
+      window.localStorage.setItem(
+        DRAFT_STORAGE_KEY,
+        JSON.stringify(snapshot),
+      );
+    } catch {
+      // Quota / private-mode failures are not fatal — user just loses autosave.
+    }
+  }
+
+  function clearPersistedDraft() {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
 
   async function runSubmit(form: HTMLFormElement, intent: SubmitIntent) {
     setSubmitting(intent);
@@ -61,6 +167,15 @@ export default function NbfcMasterDetailsForm({
     // Browser-native required-field check; cheaper than re-implementing.
     if (!form.checkValidity()) {
       form.reportValidity();
+      setSubmitting(null);
+      return;
+    }
+
+    const rbiValue = String(new FormData(form).get("rbiRegistrationNo") || "");
+    const rbiCheck = validateRbi(rbiValue);
+    if (rbiCheck) {
+      setRbiTouched(true);
+      setRbiError(rbiCheck);
       setSubmitting(null);
       return;
     }
@@ -109,7 +224,18 @@ export default function NbfcMasterDetailsForm({
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.success) {
-        setError(j.error || `Request failed (${res.status})`);
+        const fieldErrors = j?.details?.fieldErrors as
+          | Record<string, string[]>
+          | undefined;
+        if (fieldErrors?.rbiRegistrationNo?.length) {
+          setRbiTouched(true);
+          setRbiError(RBI_REG_ERROR);
+        }
+        setError(
+          j.error === "validation_failed"
+            ? "Some fields don't match the required format — see highlighted fields below."
+            : j.error || `Request failed (${res.status})`,
+        );
         setSubmitting(null);
         return;
       }
@@ -143,6 +269,7 @@ export default function NbfcMasterDetailsForm({
           }
         }
 
+        clearPersistedDraft();
         setDone({ id: createdId, nbfcId: createdNbfcId, status, intent });
         setSubmitting(null);
         return;
@@ -256,7 +383,43 @@ export default function NbfcMasterDetailsForm({
   const initialMap = (initial ?? {}) as Record<string, string | undefined>;
 
   return (
-    <form ref={formRef} onSubmit={onFormSubmit} className="space-y-8">
+    <form
+      ref={formRef}
+      onSubmit={onFormSubmit}
+      onChange={persistDraft}
+      className="space-y-8"
+    >
+      {restored && (
+        <div
+          role="status"
+          className="flex items-start gap-3 rounded-xl px-4 py-3 border"
+          style={{
+            background: "var(--brand-sky-soft)",
+            borderColor: "rgba(15, 118, 178, 0.25)",
+            color: "var(--color-brand-navy)",
+          }}
+        >
+          <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-semibold">Restored your in-progress draft</p>
+            <p className="opacity-80">
+              We brought back the values you'd typed before refreshing. Submit
+              or Save Draft when you're ready.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              clearPersistedDraft();
+              formRef.current?.reset();
+              setRestored(false);
+            }}
+            className="ml-auto text-xs font-semibold underline"
+          >
+            Clear
+          </button>
+        </div>
+      )}
       <Section
         eyebrow="Identity"
         title="RBI registration & legal entity"
@@ -294,13 +457,30 @@ export default function NbfcMasterDetailsForm({
             ))}
           </select>
         </Field>
-        <Field label="RBI registration no." hint="N-DD.DDDDD.DD.DD.DDDD.DDDDD.DD" mono>
+        <Field
+          label="RBI registration no."
+          hint={RBI_REG_HINT}
+          mono
+          error={rbiTouched ? rbiError : null}
+        >
           <input
             name="rbiRegistrationNo"
             placeholder="N-13.00243.00.00.0000.00000.00"
             defaultValue={initialMap.rbiRegistrationNo ?? ""}
             required
-            className="input-itarang font-mono text-[13px]"
+            aria-invalid={rbiTouched && rbiError ? true : undefined}
+            onBlur={(e) => {
+              setRbiTouched(true);
+              setRbiError(validateRbi(e.currentTarget.value));
+            }}
+            onChange={(e) => {
+              if (rbiTouched) setRbiError(validateRbi(e.currentTarget.value));
+            }}
+            className={`input-itarang font-mono text-[13px] ${
+              rbiTouched && rbiError
+                ? "border-[color:var(--color-danger)]"
+                : ""
+            }`}
           />
         </Field>
         <Field label="CIN" hint="21 chars" mono>
@@ -592,12 +772,14 @@ function Field({
   hint,
   full,
   mono: _mono,
+  error,
   children,
 }: {
   label: string;
   hint?: string;
   full?: boolean;
   mono?: boolean;
+  error?: string | null;
   children: React.ReactNode;
 }) {
   return (
@@ -606,10 +788,20 @@ function Field({
         {label}
       </span>
       {children}
-      {hint && (
-        <span className="text-[11px] text-[color:var(--color-ink-muted)]">
-          {hint}
+      {error ? (
+        <span
+          role="alert"
+          className="text-[11px] font-medium"
+          style={{ color: "var(--color-danger)" }}
+        >
+          {error}
         </span>
+      ) : (
+        hint && (
+          <span className="text-[11px] text-[color:var(--color-ink-muted)]">
+            {hint}
+          </span>
+        )
       )}
     </label>
   );

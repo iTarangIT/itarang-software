@@ -34,7 +34,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${dmSans.variable} ${dmMono.variable}`}>
-      <body className={dmSans.className}>
+      <body className={dmSans.className} suppressHydrationWarning>
         <ChunkReloadGuard />
         <Providers>
           <AuthProvider>{children}</AuthProvider>
