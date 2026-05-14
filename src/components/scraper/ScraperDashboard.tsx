@@ -11,10 +11,19 @@ import { DownloadScrapedLeadsButton } from "./DownloadScrapedLeadsButton";
 const ACTIVE_RUN_KEY = "scraper:active-run-id";
 
 interface ScraperDashboardProps {
+  // Where the Run History rows link to. Defaults to /leads/scrape-runs so
+  // the user stays in the leads workflow. Pages outside /leads (e.g.,
+  // /sales-head/scraper) can pass their own base path.
+  detailBasePath?: string;
+  // Deprecated: kept only so legacy callers that want inline view-swap can
+  // still opt in. New code should rely on the default navigation behavior.
   onSelectRun?: (runId: string) => void;
 }
 
-export function ScraperDashboard({ onSelectRun }: ScraperDashboardProps) {
+export function ScraperDashboard({
+  detailBasePath,
+  onSelectRun,
+}: ScraperDashboardProps) {
   const queryClient = useQueryClient();
 
   const [toast, setToast] = useState<{
@@ -190,7 +199,10 @@ export function ScraperDashboard({ onSelectRun }: ScraperDashboardProps) {
           <h2 className="text-sm font-semibold text-gray-700 mb-3">
             Run History
           </h2>
-          <ScraperRunsTable onSelectRun={onSelectRun} />
+          <ScraperRunsTable
+            detailBasePath={detailBasePath}
+            onSelectRun={onSelectRun}
+          />
         </div>
       )}
     </div>

@@ -4,6 +4,11 @@ import { db } from "@/lib/db";
 import { dealerLeads, scraperLeads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import {
+  normalizeCity,
+  normalizeState,
+  inferStateFromCity,
+} from "@/lib/scraper-enrichment";
 
 export async function POST(req: NextRequest, { params }: any) {
   try {
@@ -30,13 +35,20 @@ export async function POST(req: NextRequest, { params }: any) {
 
     // 3. Promote — insert into dealer_leads
     const newId = `L-${nanoid(8)}`;
+    const canonicalCity = normalizeCity(scraperLead.city ?? undefined) ?? null;
+    const canonicalState =
+      normalizeState(undefined) ??
+      inferStateFromCity(canonicalCity) ??
+      null;
 
     await db.insert(dealerLeads).values({
       id: newId,
       dealer_name: scraperLead.name ?? null,
       shop_name:   scraperLead.name ?? null,
       phone:       scraperLead.phone ?? null,
-      location:    scraperLead.city ?? null,
+      location:    canonicalCity,
+      state:       canonicalState,
+      city:        canonicalCity,
       language:    "hindi",
       current_status: "new",
       total_attempts: 0,

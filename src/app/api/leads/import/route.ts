@@ -3,6 +3,11 @@ import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import crypto from "crypto";
+import {
+  normalizeCity,
+  normalizeState,
+  inferStateFromCity,
+} from "@/lib/scraper-enrichment";
 
 function normalizePhone(phone: string): string {
   let clean = phone.replace(/[^0-9]/g, "");
@@ -45,12 +50,26 @@ export async function POST(req: Request) {
         continue;
       }
 
+      // Structured region: prefer explicit state/city columns from the CSV,
+      // fall back to splitting `location` so legacy single-cell imports
+      // still populate the new fields.
+      const canonicalCity =
+        normalizeCity(lead.city ?? lead.location ?? undefined) ?? null;
+      const canonicalState =
+        normalizeState(lead.state ?? undefined) ??
+        inferStateFromCity(canonicalCity) ??
+        null;
+
       await db.insert(dealerLeads).values({
         id: `DL-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
         dealer_name: lead.dealer_name || null,
         phone,
         shop_name: lead.shop_name || null,
-        location: lead.location || null,
+        location: lead.location || canonicalCity,
+        state: canonicalState,
+        city: canonicalCity,
+        area: lead.area || null,
+        pincode: lead.pincode || null,
         language: lead.language || "hindi",
         current_status: lead.current_status || "new",
         total_attempts: 0,
