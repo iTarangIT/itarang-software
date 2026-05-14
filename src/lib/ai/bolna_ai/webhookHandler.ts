@@ -6,6 +6,11 @@ import { updateLeadAfterCall } from "../storage/leadStore";
 import { dealerLeads } from "@/lib/db/schema";
 import { dedupClaim } from "@/lib/queue/safeRedis";
 import { dialerSession } from "@/lib/queue/dialerSession";
+import {
+  completeCampaignLead,
+  finalizeCampaign,
+  markCampaignLeadCalling,
+} from "@/lib/queue/campaignTracker";
 import { scheduleCall } from "@/lib/queue/scheduler";
 import { appendSalesCallLog } from "@/lib/google/sheet";
 import { triggerBolnaCall } from "./triggerCall";
@@ -141,11 +146,16 @@ function resolveNextCallAt(
 async function advanceDialerToNextLead() {
   if (!(await dialerSession.isActive())) return;
 
+  // Capture before any getNext() calls — once the queue exhausts the session
+  // is cleared and we lose the id needed to finalize the campaign row.
+  const campaignId = await dialerSession.getCampaignId();
+
   let nextLead = null;
   while (await dialerSession.isActive()) {
     const nextLeadId = await dialerSession.getNext();
     if (!nextLeadId) {
       console.log("AI DIALER: queue complete, all leads called");
+      await finalizeCampaign(campaignId, "completed");
       break;
     }
 
@@ -169,6 +179,11 @@ async function advanceDialerToNextLead() {
     });
 
     await new Promise((r) => setTimeout(r, 5000));
+
+    await markCampaignLeadCalling({
+      leadId: nextLead.id,
+      campaignId,
+    });
 
     await triggerBolnaCall({
       phone: nextLead.phone!,
@@ -204,6 +219,23 @@ export async function handleBolnaWebhook(body: any) {
     // If no transcript (busy, failed, no-answer), skip to next lead
     if (!transcript) {
       console.log("[WEBHOOK] Call ended without conversation, status:", status);
+      // Mark this lead as failed in the active campaign before we move on.
+      // We only know the phone here; the helper resolves to the in-flight
+      // campaign-lead row via the partial index.
+      if (phone) {
+        const leadForPhone = await db.query.dealerLeads.findFirst({
+          where: (l, { eq }) => eq(l.phone, phone),
+        });
+        if (leadForPhone) {
+          await completeCampaignLead({
+            leadId: leadForPhone.id,
+            success: false,
+            bolnaCallId: callId || null,
+            outcome: status || "no_answer",
+            intentScore: null,
+          });
+        }
+      }
       await advanceDialerToNextLead();
       return;
     }
@@ -244,6 +276,17 @@ export async function handleBolnaWebhook(body: any) {
         next_call_at: nextCallAt,
       })
       .where(eq(dealerLeads.id, lead.id));
+
+    // Mark the active campaign-lead row as completed with this call's
+    // outcome + intent score. Success = we got a real transcript; the
+    // "failed" branch lives above for the no-transcript case.
+    await completeCampaignLead({
+      leadId: lead.id,
+      success: true,
+      bolnaCallId: callId || null,
+      outcome: analysis.outcome,
+      intentScore: analysis.intent_score,
+    });
 
     // Delay-based dispatch via QStash (works on Vercel serverless).
     // The daily call-scheduler cron remains as a safety net for any
