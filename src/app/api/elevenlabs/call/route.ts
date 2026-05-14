@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
 import { requireRole } from "@/lib/auth-utils";
+import { markCampaignLeadCalling } from "@/lib/queue/campaignTracker";
 
 // ElevenLabs calls are billed per-minute. Without auth, any anonymous POST
 // could burn provider credit and harass leads. Restrict to sales staff and
@@ -43,6 +44,12 @@ export async function POST(req: NextRequest) {
     });
 
     console.log("[ELEVENLABS CALL] Result:", result);
+
+    // Flip the active campaign-lead row to 'calling'. Best-effort: no-op
+    // when there's no active campaign (e.g. a one-off cron-triggered call).
+    if (body.leadId) {
+      await markCampaignLeadCalling({ leadId: body.leadId });
+    }
 
     return NextResponse.json(result);
   } catch (err: any) {

@@ -6,6 +6,11 @@ import { updateLeadAfterCall } from "../storage/leadStore";
 import { dealerLeads } from "@/lib/db/schema";
 import { dedupClaim } from "@/lib/queue/safeRedis";
 import { dialerSession } from "@/lib/queue/dialerSession";
+import {
+  completeCampaignLead,
+  finalizeCampaign,
+  markCampaignLeadCalling,
+} from "@/lib/queue/campaignTracker";
 import { scheduleElevenLabsCall } from "@/lib/queue/scheduler";
 import { appendSalesCallLog } from "@/lib/google/sheet";
 import { triggerElevenLabsCall } from "./triggerCall";
@@ -151,11 +156,14 @@ function resolveNextCallAt(
 async function advanceDialerToNextLead() {
   if (!(await dialerSession.isActive())) return;
 
+  const campaignId = await dialerSession.getCampaignId();
+
   let nextLead = null;
   while (await dialerSession.isActive()) {
     const nextLeadId = await dialerSession.getNext();
     if (!nextLeadId) {
       console.log("[ELEVENLABS] AI DIALER: queue complete, all leads called");
+      await finalizeCampaign(campaignId, "completed");
       break;
     }
 
@@ -179,6 +187,11 @@ async function advanceDialerToNextLead() {
     });
 
     await new Promise((r) => setTimeout(r, 5000));
+
+    await markCampaignLeadCalling({
+      leadId: nextLead.id,
+      campaignId,
+    });
 
     await triggerElevenLabsCall({
       phone: nextLead.phone!,
@@ -235,6 +248,20 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
 
     if (!transcript) {
       console.log("[ELEVENLABS WEBHOOK] No transcript on terminal event");
+      if (phone) {
+        const leadForPhone = await db.query.dealerLeads.findFirst({
+          where: (l, { eq }) => eq(l.phone, phone),
+        });
+        if (leadForPhone) {
+          await completeCampaignLead({
+            leadId: leadForPhone.id,
+            success: false,
+            bolnaCallId: conversationId || null,
+            outcome: "no_transcript",
+            intentScore: null,
+          });
+        }
+      }
       await advanceDialerToNextLead();
       return;
     }
@@ -287,6 +314,14 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
         provider: "elevenlabs",
       })
       .where(eq(dealerLeads.id, lead.id));
+
+    await completeCampaignLead({
+      leadId: lead.id,
+      success: true,
+      bolnaCallId: conversationId || null,
+      outcome: analysis.outcome,
+      intentScore: analysis.intent_score,
+    });
 
     if (decision.action === "schedule_call" && nextCallAt) {
       const messageId = await scheduleElevenLabsCall({

@@ -13,6 +13,7 @@ type DialerSession = {
   lastCallAt: number;
   provider?: DialerProvider;
   category?: string;
+  campaignId?: string;
 };
 
 const SESSION_KEY = "dialer:session";
@@ -69,13 +70,18 @@ function emptyStatus() {
     timedOut: false,
     provider: null as DialerProvider | null,
     category: null as string | null,
+    campaignId: null as string | null,
   };
 }
 
 export const dialerSession = {
   async start(
     queue: string[],
-    opts?: { provider?: DialerProvider; category?: string },
+    opts?: {
+      provider?: DialerProvider;
+      category?: string;
+      campaignId?: string;
+    },
   ) {
     await writeSession({
       queue,
@@ -84,12 +90,18 @@ export const dialerSession = {
       lastCallAt: Date.now(),
       provider: opts?.provider ?? "bolna",
       category: opts?.category,
+      campaignId: opts?.campaignId,
     });
   },
 
   async getProvider(): Promise<DialerProvider> {
     const session = await readSession();
     return session?.provider ?? "bolna";
+  },
+
+  async getCampaignId(): Promise<string | null> {
+    const session = await readSession();
+    return session?.campaignId ?? null;
   },
 
   async getNext(): Promise<string | null> {
@@ -143,6 +155,7 @@ export const dialerSession = {
       timedOut: Date.now() - session.lastCallAt > CALL_TIMEOUT_MS,
       provider: session.provider ?? "bolna",
       category: session.category ?? null,
+      campaignId: session.campaignId ?? null,
     };
   },
 

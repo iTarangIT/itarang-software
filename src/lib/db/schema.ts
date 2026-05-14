@@ -2753,6 +2753,81 @@ export const cityAliases = pgTable("city_aliases", {
   created_at: timestamp("created_at").defaultNow(),
 });
 
+// E-109 — persisted AI dialer campaigns. region_filter is the RegionSelection
+// JSON emitted by DialerStartModal, stored verbatim so a historical campaign's
+// scope is reproducible. Counters (calls_made / completed_leads / failed_leads)
+// are bumped by the webhook handler as each call ends; status flips to
+// 'completed' when the queue exhausts or 'stopped' when the user hits Stop.
+export const dialerCampaigns = pgTable(
+  "dialer_campaigns",
+  {
+    id: text().primaryKey().notNull(),
+    name: text().notNull(),
+    triggered_by: uuid("triggered_by"),
+    provider: text().notNull(),
+    category: text(),
+    region_filter: jsonb("region_filter"),
+    status: text().notNull().default("running"),
+    total_leads: integer("total_leads").notNull().default(0),
+    calls_made: integer("calls_made").notNull().default(0),
+    completed_leads: integer("completed_leads").notNull().default(0),
+    failed_leads: integer("failed_leads").notNull().default(0),
+    started_at: timestamp("started_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    stopped_by: uuid("stopped_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    statusIdx: index("idx_dialer_campaigns_status").on(t.status),
+    triggeredByStartedIdx: index(
+      "idx_dialer_campaigns_triggered_by_started",
+    ).on(t.triggered_by, t.started_at),
+    startedAtIdx: index("idx_dialer_campaigns_started_at").on(t.started_at),
+  }),
+);
+
+// E-109 — one row per (campaign, lead). lead_id is a soft FK to
+// dealer_leads.id (no DB-level FK; see migration comment). The webhook
+// handler resolves an active row for a lead via the partial index
+// idx_dialer_campaign_leads_active when the Redis session is stale.
+export const dialerCampaignLeads = pgTable(
+  "dialer_campaign_leads",
+  {
+    id: text().primaryKey().notNull(),
+    campaign_id: text("campaign_id")
+      .notNull()
+      .references(() => dialerCampaigns.id, { onDelete: "cascade" }),
+    lead_id: text("lead_id").notNull(),
+    queue_position: integer("queue_position").notNull(),
+    status: text().notNull().default("pending"),
+    bolna_call_id: text("bolna_call_id"),
+    call_outcome: text("call_outcome"),
+    intent_score: integer("intent_score"),
+    started_at: timestamp("started_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    campaignStatusIdx: index("idx_dialer_campaign_leads_campaign_status").on(
+      t.campaign_id,
+      t.status,
+    ),
+    campaignPositionIdx: index(
+      "idx_dialer_campaign_leads_campaign_position",
+    ).on(t.campaign_id, t.queue_position),
+    leadStatusIdx: index("idx_dialer_campaign_leads_lead_status").on(
+      t.lead_id,
+      t.status,
+    ),
+  }),
+);
+
 export const scraperLeadsDuplicates = pgTable("scraper_leads_duplicates", {
   id: text().primaryKey().notNull(),
   original_lead_id: text("original_lead_id"),
