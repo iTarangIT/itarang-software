@@ -1,0 +1,69 @@
+---
+title: Loan / Finance Flow (Application → Sanction → Disbursal → Repayment)
+---
+erDiagram
+    leads ||--o{ loan_applications : "lead_id"
+    leads ||--o| loan_details : "lead_id"
+    leads ||--o{ loan_sanctions : "lead_id"
+    leads ||--o{ loan_files : "lead_id"
+    product_selections ||--o| loan_sanctions : "product_selection_id"
+    loan_applications ||--o{ loan_files : "loan_application_id"
+    loan_files ||--o{ loan_payments : "loan_file_id"
+    dealers ||--o{ loan_files : "dealer_id"
+    dealers ||--o{ loan_applications : "dealer_id"
+    users ||--o{ loan_sanctions : "sanctioned_by / dealer_approved_by"
+
+    loan_applications {
+        varchar id PK
+        varchar lead_id FK
+        varchar dealer_id
+        numeric loan_amount
+        numeric emi_amount
+        varchar status "draft|submitted|approved|disbursed|rejected"
+        text nbfc_name
+        varchar facilitation_fee_status
+    }
+    loan_details {
+        varchar id PK
+        varchar lead_id FK
+        boolean loan_required
+        numeric loan_amount
+        numeric emi
+        varchar finance_type
+        varchar financier
+    }
+    loan_sanctions {
+        varchar id PK
+        varchar lead_id FK
+        varchar product_selection_id FK
+        numeric loan_amount
+        numeric disbursement_amount
+        numeric emi
+        integer tenure_months
+        varchar status "sanctioned|rejected|disbursed|closed"
+        uuid sanctioned_by
+        boolean dealer_approved
+        uuid nbfc_id
+    }
+    loan_files {
+        varchar id PK
+        varchar lead_id FK
+        varchar loan_application_id FK
+        varchar dealer_id FK
+        text borrower_name
+        numeric loan_amount
+        varchar disbursal_status
+        numeric total_paid
+        numeric overdue_amount
+        varchar loan_status
+        jsonb emi_schedule
+    }
+    loan_payments {
+        varchar id PK
+        varchar loan_file_id FK
+        varchar payment_type
+        numeric amount
+        timestamp payment_date
+        integer emi_month
+        varchar status
+    }

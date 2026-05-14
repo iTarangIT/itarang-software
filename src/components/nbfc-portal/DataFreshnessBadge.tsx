@@ -48,7 +48,16 @@ export default function DataFreshnessBadge() {
     let cancelled = false;
     fetch("/api/nbfc/portfolio/freshness", { cache: "no-store" })
       .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+          let detail = `HTTP ${r.status}`;
+          try {
+            const body = await r.json();
+            if (body?.error) detail = `${detail} — ${body.error}`;
+          } catch {
+            // non-JSON body (e.g. Next.js 404 HTML) — keep status only
+          }
+          throw new Error(detail);
+        }
         return r.json();
       })
       .then((json) => {
@@ -63,13 +72,17 @@ export default function DataFreshnessBadge() {
   }, []);
 
   if (error) {
+    // Network/route error — be honest: we don't actually know whether IoT is
+    // syncing. Keep the amber "IoT sync issue" copy (BRD) for is_stale=true
+    // only.
     return (
       <span
         data-testid="data-freshness-badge"
-        data-stale="true"
-        className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
+        data-stale="unknown"
+        title={error}
+        className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500"
       >
-        Data may be outdated — IoT sync issue
+        Freshness unavailable
       </span>
     );
   }

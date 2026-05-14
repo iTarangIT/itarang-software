@@ -140,7 +140,9 @@ export async function GET(
         paraphernalia: productSelections.paraphernalia,
         paraphernalia_lines: productSelections.paraphernalia_lines,
         category: productSelections.category,
-        sub_category: productSelections.sub_category,
+        // E-103 renamed the column to `model_number`; the client still expects
+        // `sub_category` in the response, so alias on the way out.
+        sub_category: productSelections.model_number,
         battery_price: productSelections.battery_price,
         charger_price: productSelections.charger_price,
         paraphernalia_cost: productSelections.paraphernalia_cost,

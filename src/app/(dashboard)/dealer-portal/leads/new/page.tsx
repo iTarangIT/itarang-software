@@ -75,6 +75,14 @@ function NewLeadWizardContent() {
 
     // ─── Draft Init ─────────────────────────────────────────────────────────
 
+    // The lead-create API uses two error shapes:
+    //   errorResponse → { error: { message } }
+    //   gateError     → { error: '<CODE>', message }   (e.g. DEALER_NOT_ACTIVE)
+    // Read both so structured gate errors surface their human message instead
+    // of falling back to a generic "retry" string.
+    const readApiError = (r: any, fallback: string) =>
+        r?.error?.message || r?.message || (typeof r?.error === 'string' ? r.error : null) || fallback;
+
     const initDraft = async (fresh = false) => {
         setInitLoading(true);
         setApiError(null);
@@ -101,7 +109,7 @@ function NewLeadWizardContent() {
                     }
                 }
             } else {
-                setApiError(result.error?.message || 'Initialization failed. Please retry.');
+                setApiError(readApiError(result, 'Initialization failed. Please retry.'));
             }
         } catch {
             setApiError('Connection lost. Please try again.');
@@ -133,7 +141,7 @@ function NewLeadWizardContent() {
                 setFormData((prev: any) => ({ ...prev, ...result.data.formData }));
                 setLastSaved('Loaded for editing');
             } else {
-                setApiError(result.error?.message || 'Could not load lead.');
+                setApiError(readApiError(result, 'Could not load lead.'));
             }
         } catch {
             setApiError('Could not load lead.');
@@ -337,7 +345,7 @@ function NewLeadWizardContent() {
                 }
             } else {
                 const details = result.error?.details?.map((d: any) => `${d.path}: ${d.message}`).join(', ');
-                setApiError(details ? `Validation error — ${details}` : (result.error?.message || 'Server Error'));
+                setApiError(details ? `Validation error — ${details}` : readApiError(result, 'Server Error'));
             }
         } catch {
             setApiError('Connection failed. Please retry.');
