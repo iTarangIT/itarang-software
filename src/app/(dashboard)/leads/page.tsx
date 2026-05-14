@@ -40,11 +40,13 @@ import {
   LeadCallStatus,
   type CallRowStatus,
 } from "@/components/leads/lead-call-status";
+import { CampaignBannerExpansion } from "@/components/leads/campaign-banner-expansion";
+import { CampaignsTable } from "@/components/leads/campaigns-table";
 
 const ENDED_VISIBLE_MS = 8000;
 const MANUAL_CALL_MAX_MS = 3 * 60 * 1000;
 
-type Tab = "leads" | "scraper" | "converted";
+type Tab = "leads" | "scraper" | "converted" | "campaigns";
 type DialerPhase = "idle" | "calling" | "countdown";
 type UploadStatus = "idle" | "parsing" | "uploading" | "done" | "error";
 
@@ -644,6 +646,9 @@ function AiDialerBanner({
   onStop,
   onSkipCountdown,
   provider,
+  campaignId,
+  expanded,
+  onToggleExpanded,
 }: {
   phase: DialerPhase;
   currentLead: any | null;
@@ -654,6 +659,9 @@ function AiDialerBanner({
   onStop: () => void;
   onSkipCountdown: () => void;
   provider: DialerProvider;
+  campaignId: string | null;
+  expanded: boolean;
+  onToggleExpanded: () => void;
 }) {
   const providerLabel = provider === "elevenlabs" ? "ElevenLabs" : "Bolna";
   const providerChip =
@@ -661,17 +669,25 @@ function AiDialerBanner({
       ? "bg-violet-500/20 text-violet-300 border-violet-500/40"
       : "bg-blue-500/20 text-blue-300 border-blue-500/40";
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded-xl px-5 py-4 mb-4 flex items-center justify-between gap-4">
+    <div className="bg-gray-900 border border-gray-700 rounded-xl px-5 py-4 mb-4">
+      <div className="flex items-center justify-between gap-4">
       <div className="flex items-center gap-3 min-w-0 flex-1">
-        <div
-          className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${phase === "calling" ? "bg-emerald-500" : "bg-amber-500"}`}
+        <button
+          type="button"
+          onClick={onToggleExpanded}
+          disabled={!campaignId}
+          aria-expanded={expanded}
+          aria-label={expanded ? "Collapse campaign details" : "Expand campaign details"}
+          className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+            phase === "calling" ? "bg-emerald-500" : "bg-amber-500"
+          } ${campaignId ? "hover:brightness-110 cursor-pointer" : "cursor-default"}`}
         >
           {phase === "calling" ? (
             <PhoneCall className="w-4 h-4 text-white animate-pulse" />
           ) : (
             <Clock className="w-4 h-4 text-white" />
           )}
-        </div>
+        </button>
         <div className="min-w-0">
           {phase === "calling" && currentLead && (
             <>
@@ -749,7 +765,23 @@ function AiDialerBanner({
         >
           <StopCircle className="w-3.5 h-3.5" /> Stop
         </button>
+        {campaignId && (
+          <button
+            onClick={onToggleExpanded}
+            aria-expanded={expanded}
+            aria-label={expanded ? "Collapse" : "Expand"}
+            className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
+          >
+            <ChevronDown
+              className={`w-4 h-4 transition-transform ${expanded ? "rotate-180" : ""}`}
+            />
+          </button>
+        )}
       </div>
+      </div>
+      {expanded && campaignId && (
+        <CampaignBannerExpansion campaignId={campaignId} active={phase !== "idle"} />
+      )}
     </div>
   );
 }
@@ -926,7 +958,7 @@ export default function LeadsUnifiedPage() {
   // came from, not the default Leads tab.
   const initialTab: Tab = (() => {
     const t = searchParams?.get("tab");
-    return t === "scraper" || t === "converted" ? t : "leads";
+    return t === "scraper" || t === "converted" || t === "campaigns" ? t : "leads";
   })();
   const [tab, setTab] = useState<Tab>(initialTab);
   const [search, setSearch] = useState("");
@@ -949,6 +981,11 @@ export default function LeadsUnifiedPage() {
   const [dialerIndex, setDialerIndex] = useState(0);
   const [dialerModalOpen, setDialerModalOpen] = useState(false);
   const [dialerProvider, setDialerProvider] = useState<DialerProvider>("bolna");
+  // Campaign id for the current dialer session; populated by /start response
+  // and reaffirmed by the /status poller. Drives the expandable banner panel
+  // and the link into the campaign detail page.
+  const [currentCampaignId, setCurrentCampaignId] = useState<string | null>(null);
+  const [bannerExpanded, setBannerExpanded] = useState(false);
 
   // Per-row call status (live indicator on each lead)
   const [callingLeadId, setCallingLeadId] = useState<string | null>(null);
@@ -1140,7 +1177,9 @@ export default function LeadsUnifiedPage() {
         const res = await fetch("/api/ai-dialer/status");
         const status = await res.json();
         if (!status.active) {
-          // Session ended on the backend — queue exhausted
+          // Session ended on the backend — queue exhausted. Keep
+          // currentCampaignId so the user can still expand and see the
+          // final breakdown until they navigate away or click Stop.
           if (pollerRef.current) clearInterval(pollerRef.current);
           setDialerOn(false);
           setDialerPhase("idle");
@@ -1148,6 +1187,9 @@ export default function LeadsUnifiedPage() {
         }
         if (status.provider && status.provider !== dialerProvider) {
           setDialerProvider(status.provider as DialerProvider);
+        }
+        if (status.campaignId && status.campaignId !== currentCampaignId) {
+          setCurrentCampaignId(status.campaignId);
         }
         setDialerCallsMade(status.callsMade);
         // Track per-row calling status: if currentLeadId changed, transition
@@ -1196,7 +1238,7 @@ export default function LeadsUnifiedPage() {
       setDialerOn(true);
       setDialerPhase("calling");
 
-      await fetch("/api/ai-dialer/start", {
+      const startRes = await fetch("/api/ai-dialer/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1208,6 +1250,14 @@ export default function LeadsUnifiedPage() {
           region,
         }),
       });
+      try {
+        const startJson = await startRes.json();
+        if (startJson?.campaignId) {
+          setCurrentCampaignId(startJson.campaignId);
+        }
+      } catch {
+        // Non-fatal; the /status poller will surface campaignId on the next tick.
+      }
 
       const callEndpoint =
         provider === "elevenlabs" ? "/api/elevenlabs/call" : "/api/bolna/call";
@@ -1239,6 +1289,8 @@ export default function LeadsUnifiedPage() {
     if (callingLeadId) markEnded(callingLeadId);
     setCallingLeadId(null);
     setCallingLeadStartedAt(0);
+    setCurrentCampaignId(null);
+    setBannerExpanded(false);
     fetch("/api/ai-dialer/stop", { method: "POST" });
   }, [callingLeadId, markEnded]);
 
@@ -1378,6 +1430,7 @@ export default function LeadsUnifiedPage() {
               { key: "scraper", label: "Scraper" },
               { key: "leads", label: "Leads" },
               { key: "converted", label: "My Converted Leads" },
+              { key: "campaigns", label: "Campaigns" },
             ] as { key: Tab; label: string }[]
           ).map(({ key, label }) => (
             <button
@@ -1391,7 +1444,7 @@ export default function LeadsUnifiedPage() {
             </button>
           ))}
         </div>
-        {tab !== "scraper" && (
+        {tab !== "scraper" && tab !== "campaigns" && (
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
@@ -1426,6 +1479,9 @@ export default function LeadsUnifiedPage() {
               onStop={handleDialerOff}
               onSkipCountdown={handleSkipCountdown}
               provider={dialerProvider}
+              campaignId={currentCampaignId}
+              expanded={bannerExpanded}
+              onToggleExpanded={() => setBannerExpanded((v) => !v)}
             />
           )}
           {leadsError && !leadsLoading && (
@@ -1649,6 +1705,13 @@ export default function LeadsUnifiedPage() {
               />
             </>
           )}
+        </div>
+      )}
+
+      {/* ── TAB: CAMPAIGNS (AI dialer history) ── */}
+      {tab === "campaigns" && (
+        <div>
+          <CampaignsTable />
         </div>
       )}
     </div>
