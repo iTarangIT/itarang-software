@@ -3,12 +3,28 @@ import { dealerLeads, scraperLeads } from "@/lib/db/schema";
 import { and, desc, ilike, isNotNull, ne, or, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { nanoid } from "nanoid";
+import {
+  normalizeCity,
+  normalizeState,
+  inferStateFromCity,
+} from "@/lib/scraper-enrichment";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    const { dealer_name, phone, shop_name, location, language, current_status } = body;
+    const {
+      dealer_name,
+      phone,
+      shop_name,
+      location,
+      language,
+      current_status,
+      state,
+      city,
+      area,
+      pincode,
+    } = body;
 
     if (!dealer_name || !phone) {
       return NextResponse.json(
@@ -33,10 +49,32 @@ export async function POST(req: NextRequest) {
 
     const id = `DL-${Date.now()}-${nanoid(8)}`;
 
-    await db.execute(
-      sql`INSERT INTO dealer_leads (id, dealer_name, phone, shop_name, location, language, current_status, total_attempts, final_intent_score, follow_up_history, created_at)
-          VALUES (${id}, ${dealer_name}, ${phone}, ${shop_name || null}, ${location || null}, ${language || "hindi"}, ${current_status || "new"}, 0, 0, '[]'::jsonb, NOW())`
-    );
+    // Normalize the structured region. If the caller only sent `location`,
+    // treat it as a city string so the region selector still sees the row.
+    const canonicalCity =
+      normalizeCity(city ?? location ?? undefined) ?? null;
+    const canonicalState =
+      normalizeState(state ?? undefined) ??
+      inferStateFromCity(canonicalCity) ??
+      null;
+
+    await db.insert(dealerLeads).values({
+      id,
+      dealer_name,
+      phone,
+      shop_name: shop_name || null,
+      location: location || canonicalCity,
+      state: canonicalState,
+      city: canonicalCity,
+      area: area || null,
+      pincode: pincode || null,
+      language: language || "hindi",
+      current_status: current_status || "new",
+      total_attempts: 0,
+      final_intent_score: 0,
+      follow_up_history: [],
+      created_at: new Date(),
+    });
 
     return NextResponse.json({ success: true, id });
   } catch (err: any) {

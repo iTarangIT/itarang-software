@@ -32,6 +32,24 @@ function isGoogleRetryable(
   return false;
 }
 
+// Structured location parts pulled from Google's addressComponents array.
+// Strictly stronger than regex-parsing formattedAddress — Google tags each
+// component with a `types` array (locality, administrative_area_level_1,
+// postal_code, country, sublocality_level_1) and we map those to our
+// canonical state/city/area/pincode/country fields. When Google omits a
+// component (rare but happens for poorly-mapped addresses), the field is
+// left undefined and the downstream normalizer falls back to the legacy
+// parseAddressComponents() regex against formattedAddress.
+export interface PlaceComponents {
+  state?: string;     // administrative_area_level_1 longText
+  city?: string;      // locality longText
+  area?: string;      // sublocality_level_1 longText (optional sub-city)
+  pincode?: string;   // postal_code longText
+  country?: string;   // country shortText (2-letter ISO, e.g. 'IN')
+  lat?: number;       // places.location.latitude
+  lng?: number;       // places.location.longitude
+}
+
 export interface PlaceResult {
   placeId: string;
   name: string;
@@ -40,6 +58,74 @@ export interface PlaceResult {
   phone: string | null;
   website: string | null;
   source: "google_places";
+  components?: PlaceComponents;
+}
+
+// Shape of a single entry in Google's `places.addressComponents` array.
+// Both camelCase (v1 API) and snake_case (legacy) variants are tolerated.
+interface RawAddressComponent {
+  types?: string[];
+  longText?: string;
+  shortText?: string;
+  long_name?: string;
+  short_name?: string;
+}
+
+// Map a single Google addressComponent[].types[] entry to our slot.
+// Google may return multiple types per component (e.g. ["locality","political"]);
+// we pick the first slot that matches.
+function pickAddressComponents(
+  components: RawAddressComponent[] | undefined,
+): PlaceComponents | undefined {
+  if (!Array.isArray(components) || !components.length) return undefined;
+  const out: PlaceComponents = {};
+  for (const c of components) {
+    const types: string[] = c?.types ?? [];
+    const long = c?.longText ?? c?.long_name ?? "";
+    const short = c?.shortText ?? c?.short_name ?? "";
+    if (!long && !short) continue;
+    if (types.includes("administrative_area_level_1") && !out.state) {
+      out.state = long;
+    } else if (types.includes("locality") && !out.city) {
+      out.city = long;
+    } else if (types.includes("sublocality_level_1") && !out.area) {
+      out.area = long;
+    } else if (types.includes("postal_code") && !out.pincode) {
+      out.pincode = long || short;
+    } else if (types.includes("country") && !out.country) {
+      out.country = short || long;
+    }
+  }
+  // Fallback: some Indian cities Google tags as administrative_area_level_2
+  // (district) rather than locality. Prefer locality, but if we have no
+  // city yet and an admin_area_level_3 / postal_town is present, use it.
+  if (!out.city) {
+    for (const c of components) {
+      const types: string[] = c?.types ?? [];
+      const long = c?.longText ?? c?.long_name ?? "";
+      if (
+        (types.includes("administrative_area_level_3") ||
+          types.includes("postal_town")) &&
+        long
+      ) {
+        out.city = long;
+        break;
+      }
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+// Shape of a single entry under data.places — only the fields we read.
+interface RawPlace {
+  id: string;
+  displayName?: { text?: string } | string;
+  formattedAddress?: string;
+  rating?: number | null;
+  nationalPhoneNumber?: string | null;
+  websiteUri?: string | null;
+  addressComponents?: RawAddressComponent[];
+  location?: { latitude?: number; longitude?: number };
 }
 
 async function fetchPage(
@@ -66,6 +152,10 @@ async function fetchPage(
           "places.rating",
           "places.nationalPhoneNumber",
           "places.websiteUri",
+          // Structured address parts — replaces regex parsing of
+          // formattedAddress at promote time. See pickAddressComponents().
+          "places.addressComponents",
+          "places.location",
           "nextPageToken",
         ].join(","),
       },
@@ -101,15 +191,29 @@ async function fetchPage(
 
   const data = await res.json();
 
-  const places = (data.places ?? []).map((place: any) => ({
-    placeId: place.id,
-    name: place.displayName?.text ?? place.displayName ?? "",
-    address: place.formattedAddress ?? "",
-    rating: place.rating ?? null,
-    phone: place.nationalPhoneNumber ?? null,
-    website: place.websiteUri ?? null,
-    source: "google_places" as const,
-  }));
+  const rawPlaces: RawPlace[] = Array.isArray(data?.places) ? data.places : [];
+  const places: PlaceResult[] = rawPlaces.map((place) => {
+    const components = pickAddressComponents(place.addressComponents);
+    const loc = place.location;
+    if (components && loc) {
+      if (typeof loc.latitude === "number") components.lat = loc.latitude;
+      if (typeof loc.longitude === "number") components.lng = loc.longitude;
+    }
+    const displayName =
+      typeof place.displayName === "string"
+        ? place.displayName
+        : place.displayName?.text ?? "";
+    return {
+      placeId: place.id,
+      name: displayName,
+      address: place.formattedAddress ?? "",
+      rating: place.rating ?? null,
+      phone: place.nationalPhoneNumber ?? null,
+      website: place.websiteUri ?? null,
+      source: "google_places" as const,
+      components,
+    };
+  });
 
   return { places, nextPageToken: data.nextPageToken };
 }

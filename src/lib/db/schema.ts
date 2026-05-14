@@ -19,6 +19,7 @@ import {
   primaryKey,
   unique,
   customType,
+  doublePrecision,
 } from "drizzle-orm/pg-core";
 
 import { relations, sql } from "drizzle-orm";
@@ -2676,6 +2677,17 @@ export const dealerLeads = pgTable("dealer_leads", {
   final_intent_score: integer("final_intent_score").default(0),
   created_at: timestamp("created_at").defaultNow(),
   location: text(),
+  // Structured region hierarchy — see drizzle/E-106. `location` stays for
+  // legacy callers (free-form city string); state/city/area/pincode power
+  // the region selector and the /api/ai-dialer/preview hot path. Indexes
+  // on (state, city) and a partial index on (state, city, current_status)
+  // WHERE phone IS NOT NULL live in the migration, not here.
+  state: text(),
+  city: text(),
+  area: text(),
+  pincode: text(),
+  country: text().default("IN"),
+  timezone: text(),
   memory: jsonb(),
   next_call_at: timestamp("next_call_at"),
   shop_name: text("shop_name"),
@@ -2685,6 +2697,60 @@ export const dealerLeads = pgTable("dealer_leads", {
   rejected_by: text("rejected_by"),
   dealer_id: text("dealer_id"),
   provider: text("provider").default("bolna"),
+});
+
+// Org-wide saved region groups for the AI dialer modal. `regions` is a
+// JSONB array of { state, cities[] } — empty cities = "all cities in this
+// state, resolved at query time". Created by E-106 migration.
+export const regionGroups = pgTable("region_groups", {
+  id: text().primaryKey().notNull(),
+  name: text().notNull(),
+  description: text(),
+  regions: jsonb().notNull().default([]),
+  created_by: text("created_by"),
+  created_at: timestamp("created_at").defaultNow(),
+  updated_at: timestamp("updated_at").defaultNow(),
+});
+
+// Canonical location reference tables, created by E-108. Replace the
+// hardcoded CITY_ALIASES / CITY_TO_STATE maps in scraper-enrichment.ts
+// with DB-backed lookups consumed by src/lib/locations/normalize.ts. Source
+// of truth is the migration; this TS mirror exists for type checking only.
+export const states = pgTable("states", {
+  code: text().primaryKey().notNull(),
+  name: text().notNull().unique(),
+  country: text().notNull().default("IN"),
+  is_ut: boolean("is_ut").notNull().default(false),
+  created_at: timestamp("created_at").defaultNow(),
+});
+
+export const cities = pgTable(
+  "cities",
+  {
+    id: text().primaryKey().notNull(),
+    name: text().notNull(),
+    state_code: text("state_code")
+      .notNull()
+      .references(() => states.code),
+    lat: doublePrecision(),
+    lng: doublePrecision(),
+    // 'seed' for migration-seeded rows, 'google_places' for rows
+    // auto-grown at promote time when Google addressComponents yields
+    // a new city in a known state.
+    source: text().default("seed"),
+    created_at: timestamp("created_at").defaultNow(),
+  },
+  (t) => ({
+    uq_name_state: unique("cities_name_state_unique").on(t.name, t.state_code),
+  }),
+);
+
+export const cityAliases = pgTable("city_aliases", {
+  alias_lower: text("alias_lower").primaryKey().notNull(),
+  city_id: text("city_id")
+    .notNull()
+    .references(() => cities.id),
+  created_at: timestamp("created_at").defaultNow(),
 });
 
 export const scraperLeadsDuplicates = pgTable("scraper_leads_duplicates", {

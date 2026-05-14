@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Plus,
   Phone,
@@ -28,13 +29,12 @@ import {
 } from "lucide-react";
 import { CallButton } from "@/components/leads/call-button";
 import { ScraperDashboard } from "@/components/scraper/ScraperDashboard";
-import { RunDetailView } from "@/components/scraper/RunDetailView";
 import { DownloadConvertedLeadsButton } from "@/components/leads/DownloadButton";
 import {
   DialerStartModal,
-  categoryMatcher,
   type DialerProvider,
   type DialerCategory,
+  type DialerStartPayload,
 } from "@/components/leads/dialer-start-modal";
 import {
   LeadCallStatus,
@@ -270,7 +270,14 @@ function normalizeRow(row: Record<string, string>) {
       "contact number",
       "number",
     ),
-    location: get("location", "city", "area", "address", "place", "state"),
+    // `location` stays for backwards compat with single-cell CSVs and is
+    // forwarded as the legacy dealer_leads.location text. The structured
+    // fields below feed the new region selector.
+    location: get("location", "city", "area", "address", "place"),
+    state: get("state", "province", "region"),
+    city: get("city", "town"),
+    area: get("area", "locality", "neighborhood"),
+    pincode: get("pincode", "pin", "postal_code", "zip", "zipcode"),
     language: get("language", "lang") ?? "hindi",
     current_status: get("status", "current_status", "lead status") ?? "new",
   };
@@ -913,15 +920,23 @@ function ConvertedLeadCard({
 // ─── Main Page ────────────────────────────────────────────────
 
 export default function LeadsUnifiedPage() {
-  const [tab, setTab] = useState<Tab>("leads");
+  const searchParams = useSearchParams();
+  // Honor `?tab=scraper` (or `?tab=converted`) on first render so the back
+  // button from /leads/scrape-runs/[id] lands on the Scraper tab the user
+  // came from, not the default Leads tab.
+  const initialTab: Tab = (() => {
+    const t = searchParams?.get("tab");
+    return t === "scraper" || t === "converted" ? t : "leads";
+  })();
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [search, setSearch] = useState("");
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
 
   const [leads, setLeads] = useState<any[]>([]);
   const [leadsTotal, setLeadsTotal] = useState(0);
   const [leadsPage, setLeadsPage] = useState(1);
   const [leadsLoading, setLeadsLoading] = useState(false);
+  const [leadsError, setLeadsError] = useState<string | null>(null);
 
   const [convertedLeads, setConvertedLeads] = useState<any[]>([]);
   const [convertedTotal, setConvertedTotal] = useState(0);
@@ -933,7 +948,6 @@ export default function LeadsUnifiedPage() {
   const [dialerQueue, setDialerQueue] = useState<any[]>([]);
   const [dialerIndex, setDialerIndex] = useState(0);
   const [dialerModalOpen, setDialerModalOpen] = useState(false);
-  const [dialerEligible, setDialerEligible] = useState<any[]>([]);
   const [dialerProvider, setDialerProvider] = useState<DialerProvider>("bolna");
 
   // Per-row call status (live indicator on each lead)
@@ -1020,7 +1034,22 @@ export default function LeadsUnifiedPage() {
       if (data.success) {
         setLeads(data.leads);
         setLeadsTotal(data.total);
+        setLeadsError(null);
+      } else {
+        // Surface API failures instead of rendering a silent empty state.
+        // Most commonly this fires when schema.ts and the live DB drift —
+        // e.g. a new E-NNN migration hasn't been applied to the host the
+        // dev server connects to (check the [DB] log on server start).
+        console.error("[leads] /api/dealer-leads failed:", data);
+        setLeads([]);
+        setLeadsTotal(0);
+        setLeadsError(data.error?.message ?? data.error ?? "Failed to load leads");
       }
+    } catch (err: any) {
+      console.error("[leads] /api/dealer-leads network error:", err);
+      setLeads([]);
+      setLeadsTotal(0);
+      setLeadsError(err?.message ?? "Network error loading leads");
     } finally {
       setLeadsLoading(false);
     }
@@ -1141,36 +1170,21 @@ export default function LeadsUnifiedPage() {
     }, 2000);
   }, [dialerProvider, callingLeadId, startCallingLead]);
 
-  // Click on the toggle (when off): fetch the full lead list and open the
-  // provider/category picker modal. We don't dial until the user confirms.
-  // The modal sees ALL leads (so totals match the dashboard); at confirm
-  // time we apply the hard filter (must have phone, not DNC) — but NOT the
-  // "called today" filter, since the user explicitly chose to dial them.
-  const handleDialerOn = useCallback(async () => {
-    const res = await fetch(`/api/dealer-leads?page=1&limit=500&search=`);
-    const data = await res.json();
-    if (!data.success) return;
-    setDialerEligible(data.leads);
+  // Click on the toggle (when off): open the region/segment picker. We
+  // no longer pre-fetch the full lead list — /api/ai-dialer/preview
+  // serves the modal's live counts and returns the queue (id + phone)
+  // server-side, so the picker scales to lead sets larger than 500.
+  const handleDialerOn = useCallback(() => {
     setDialerModalOpen(true);
   }, []);
 
-  // Modal confirmed → narrow the pool by category, persist the chosen
-  // provider in the dialer session, tag dealer_leads, and fire the first
-  // call via the chosen provider's endpoint. Subsequent calls advance via
-  // each provider's webhook (advanceDialerToNextLead).
+  // Modal confirmed → persist the chosen provider in the dialer session,
+  // tag dealer_leads, and fire the first call via the chosen provider's
+  // endpoint. Subsequent calls advance via each provider's webhook
+  // (advanceDialerToNextLead). The modal already filtered the queue by
+  // region + segment server-side, so we use it directly.
   const confirmDialerStart = useCallback(
-    async (provider: DialerProvider, category: DialerCategory) => {
-      const matches = categoryMatcher(category);
-      const queue = dialerEligible
-        .filter((l) => l.phone && l.phone.trim() !== "")
-        .filter(
-          (l) => !NO_CALL_STATUSES.includes(l.current_status ?? ""),
-        )
-        .filter((l) => matches(l.current_status ?? null))
-        .sort(
-          (a, b) =>
-            (b.final_intent_score ?? 0) - (a.final_intent_score ?? 0),
-        );
+    async ({ provider, category, region, queue }: DialerStartPayload) => {
       if (queue.length === 0) return;
 
       stopRef.current = false;
@@ -1189,24 +1203,28 @@ export default function LeadsUnifiedPage() {
           queueIds: queue.map((l) => l.id),
           provider,
           category,
+          // Audit/telemetry only — the server still trusts queueIds as
+          // the authoritative list. See /api/ai-dialer/start/route.ts.
+          region,
         }),
       });
 
       const callEndpoint =
         provider === "elevenlabs" ? "/api/elevenlabs/call" : "/api/bolna/call";
+      const head = queue[0];
       // Optimistically light up the row before the network round-trip so
       // the user sees instant feedback on the lead card.
-      startCallingLead(queue[0].id);
+      startCallingLead(head.id);
       await fetch(callEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: queue[0].phone, leadId: queue[0].id }),
+        body: JSON.stringify({ phone: head.phone, leadId: head.id }),
       });
 
       setDialerCallsMade(1);
       startDialerPoller();
     },
-    [dialerEligible, startDialerPoller, startCallingLead],
+    [startDialerPoller, startCallingLead],
   );
 
   const handleDialerOff = useCallback(() => {
@@ -1267,7 +1285,6 @@ export default function LeadsUnifiedPage() {
         isOpen={dialerModalOpen}
         onClose={() => setDialerModalOpen(false)}
         onConfirm={confirmDialerStart}
-        eligibleLeads={dialerEligible}
       />
 
       {/* HEADER */}
@@ -1367,7 +1384,6 @@ export default function LeadsUnifiedPage() {
               key={key}
               onClick={() => {
                 setTab(key);
-                setSelectedRunId(null);
               }}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab === key ? "bg-gray-900 text-white shadow-sm" : "text-gray-500 hover:text-gray-800"}`}
             >
@@ -1392,14 +1408,7 @@ export default function LeadsUnifiedPage() {
       {/* ── TAB: SCRAPER ── */}
       {tab === "scraper" && (
         <div>
-          {selectedRunId ? (
-            <RunDetailView
-              runId={selectedRunId}
-              onBack={() => setSelectedRunId(null)}
-            />
-          ) : (
-            <ScraperDashboard onSelectRun={(id) => setSelectedRunId(id)} />
-          )}
+          <ScraperDashboard />
         </div>
       )}
 
@@ -1418,6 +1427,23 @@ export default function LeadsUnifiedPage() {
               onSkipCountdown={handleSkipCountdown}
               provider={dialerProvider}
             />
+          )}
+          {leadsError && !leadsLoading && (
+            <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+              <div className="font-semibold mb-0.5">
+                Couldn&apos;t load leads
+              </div>
+              <div className="text-[12px] text-rose-700 break-all">
+                {leadsError}
+              </div>
+              <div className="text-[11px] text-rose-600 mt-2">
+                If this says &quot;column … does not exist&quot;, a pending
+                migration (e.g. <code>drizzle/E-106_*</code>) hasn&apos;t been
+                applied to the DB this dev server connects to. Check the
+                <code> [DB] connected to …</code> line in the server log to
+                see which host needs the migration.
+              </div>
+            </div>
           )}
           {leadsLoading ? (
             <LoadingSkeleton />
