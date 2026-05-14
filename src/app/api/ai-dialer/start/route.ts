@@ -8,7 +8,7 @@ const ALLOWED_PROVIDERS: DialerProvider[] = ["bolna", "elevenlabs"];
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { queueIds, provider: rawProvider, category } = body;
+  const { queueIds, provider: rawProvider, category, location } = body;
 
   if (!Array.isArray(queueIds) || queueIds.length === 0) {
     return NextResponse.json(
@@ -20,6 +20,17 @@ export async function POST(req: NextRequest) {
   const provider: DialerProvider = ALLOWED_PROVIDERS.includes(rawProvider)
     ? rawProvider
     : "bolna";
+
+  // `location` is sent by the new region-targeted dialer flow. We trust the
+  // client's queueIds as authoritative (they already had the location
+  // filter applied client-side), so the location here is only for audit /
+  // observability — useful when answering "what region was this session
+  // dialing?" from logs alone.
+  if (typeof location === "string" && location !== "all" && location.trim()) {
+    console.log(
+      `[AI DIALER] session.start provider=${provider} category=${category ?? "all"} location="${location}" queue=${queueIds.length}`,
+    );
+  }
 
   await dialerSession.start(queueIds, {
     provider,
