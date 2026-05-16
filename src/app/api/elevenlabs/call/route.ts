@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
 import { requireRole } from "@/lib/auth-utils";
-import { markCampaignLeadCalling } from "@/lib/queue/campaignTracker";
+import {
+  attachBolnaCallId,
+  markCampaignLeadCalling,
+} from "@/lib/queue/campaignTracker";
 
 // ElevenLabs calls are billed per-minute. Without auth, any anonymous POST
 // could burn provider credit and harass leads. Restrict to sales staff and
@@ -49,6 +52,13 @@ export async function POST(req: NextRequest) {
     // when there's no active campaign (e.g. a one-off cron-triggered call).
     if (body.leadId) {
       await markCampaignLeadCalling({ leadId: body.leadId });
+      // Persist the ElevenLabs conversation_id on the campaign-lead row
+      // (column is bolna_call_id but doubles for both providers) so
+      // /api/cron/dialer-poll can recover this call if the webhook drops.
+      const callId = (result as { call_id?: string })?.call_id;
+      if (result?.success && callId) {
+        await attachBolnaCallId({ leadId: body.leadId, callId });
+      }
     }
 
     return NextResponse.json(result);

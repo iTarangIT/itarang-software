@@ -4,6 +4,7 @@ import { dealerLeads, regionGroups } from "@/lib/db/schema";
 import { inArray } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { createCampaign } from "@/lib/queue/campaignTracker";
+import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { requireAuth } from "@/lib/auth-utils";
 
 const ALLOWED_PROVIDERS: DialerProvider[] = ["bolna", "elevenlabs"];
@@ -98,11 +99,34 @@ export async function POST(req: NextRequest) {
     console.error("[AI DIALER] Failed to bulk-tag dealer_leads.provider:", err);
   }
 
+  // Place the first call server-side via the DB-driven advance. The whole
+  // queue is now in dialer_campaign_leads; advanceCampaign atomically
+  // claims the first pending row, fires the call, persists the call id.
+  // Done after the response so the user sees instant UI feedback; the
+  // provider call placement (which can take a couple of seconds) doesn't
+  // block the redirect/banner update.
+  let firstCallPlaced = false;
+  let firstCallError: string | null = null;
+  if (campaignId) {
+    try {
+      const r = await advanceCampaign(campaignId);
+      firstCallPlaced = r.kind === "placed";
+      if (r.kind === "error") {
+        firstCallError = r.error;
+      }
+    } catch (err) {
+      firstCallError = err instanceof Error ? err.message : "advance threw";
+      console.error("[AI DIALER] start → advanceCampaign failed:", err);
+    }
+  }
+
   return NextResponse.json({
     success: true,
     provider,
     category: category ?? null,
     queued: queueIds.length,
     campaignId,
+    firstCallPlaced,
+    firstCallError,
   });
 }

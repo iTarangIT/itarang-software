@@ -1,203 +1,31 @@
-import { analyzeTranscript } from "@/lib/ai/analysis";
-import { decideNextAction } from "@/lib/ai/decision/engine";
+// Thin adapter: receives a verified ElevenLabs webhook event, normalizes it
+// into the shared finalize payload, and hands off to finalizeElevenLabsCall.
+// All post-call work lives in finalizeCall.ts so the polling backstop runs
+// the same code path.
+
+import { finalizeElevenLabsCall } from "./finalizeCall";
 import { db } from "@/lib/db";
+import { dialerCampaignLeads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { updateLeadAfterCall } from "../storage/leadStore";
-import { dealerLeads } from "@/lib/db/schema";
-import { dedupClaim } from "@/lib/queue/safeRedis";
-import { dialerSession } from "@/lib/queue/dialerSession";
-import {
-  completeCampaignLead,
-  finalizeCampaign,
-  markCampaignLeadCalling,
-} from "@/lib/queue/campaignTracker";
-import { scheduleElevenLabsCall } from "@/lib/queue/scheduler";
-import { appendSalesCallLog } from "@/lib/google/sheet";
-import { triggerElevenLabsCall } from "./triggerCall";
-import type { ElevenLabsWebhookEvent, ElevenLabsTranscriptTurn } from "./types";
-
-const PROCESSED_CALL_TTL_SECONDS = 10 * 60;
-
-async function claimCallForProcessing(callId: string): Promise<boolean> {
-  const { claimed, degraded } = await dedupClaim(
-    `elevenlabs:processed-call:${callId}`,
-    PROCESSED_CALL_TTL_SECONDS,
-    "elevenlabs:webhook-dedup",
-  );
-  if (degraded) {
-    console.warn(
-      `[elevenlabs:webhook] dedup falling back to process-local LRU (Redis degraded) for ${callId}`,
-    );
-  }
-  return claimed;
-}
-
-function getValidDate(input: any): Date | null {
-  if (!input) return null;
-  const d = new Date(input);
-  return isNaN(d.getTime()) ? null : d;
-}
+import { advanceCampaign } from "@/lib/queue/advanceCampaign";
+import { completeCampaignLead } from "@/lib/queue/campaignTracker";
+import type {
+  ElevenLabsWebhookEvent,
+  ElevenLabsTranscriptTurn,
+} from "./types";
 
 function transcriptArrayToString(turns?: ElevenLabsTranscriptTurn[]): string {
   if (!Array.isArray(turns) || turns.length === 0) return "";
   return turns
     .map((t) => {
       const role = (t.role || "").toLowerCase();
-      const speaker = role === "user" ? "user" : role === "agent" ? "agent" : role;
+      const speaker =
+        role === "user" ? "user" : role === "agent" ? "agent" : role;
       const message = (t.message || "").trim();
       return message ? `${speaker}: ${message}` : "";
     })
     .filter(Boolean)
     .join("\n");
-}
-
-function extractDealerLines(transcript: string): string {
-  return transcript
-    .split("\n")
-    .filter((line) => line.toLowerCase().startsWith("user:"))
-    .map((line) => line.replace(/^user:\s*/i, ""))
-    .join(" ");
-}
-
-function parseCallbackTimeFromTranscript(transcript: string): Date | null {
-  if (!transcript) return null;
-
-  const now = Date.now();
-  const t = extractDealerLines(transcript).toLowerCase();
-
-  const patterns: { regex: RegExp; multiplierMs: number }[] = [
-    { regex: /(\d+)\s*(second|sec|सेकंड)/i, multiplierMs: 1000 },
-    { regex: /(\d+)\s*(minute|min|मिनट|मिनिट|मिन)/i, multiplierMs: 60 * 1000 },
-    {
-      regex: /(\d+)\s*(hour|hr|घंटा|घंटे|ghanta|ghante)/i,
-      multiplierMs: 60 * 60 * 1000,
-    },
-    { regex: /(\d+)\s*(day|din|दिन)/i, multiplierMs: 24 * 60 * 60 * 1000 },
-  ];
-
-  for (const { regex, multiplierMs } of patterns) {
-    const match = t.match(regex);
-    if (match) {
-      const value = parseInt(match[1], 10);
-      if (!isNaN(value) && value > 0) {
-        return new Date(now + value * multiplierMs);
-      }
-    }
-  }
-
-  if (/kal|tomorrow|कल/.test(t)) return new Date(now + 24 * 60 * 60 * 1000);
-  if (/parso|day after|परसों/.test(t))
-    return new Date(now + 48 * 60 * 60 * 1000);
-  if (/thodi der|thoda time|थोड़ी देर|थोड़ा टाइम/.test(t))
-    return new Date(now + 30 * 60 * 1000);
-
-  return null;
-}
-
-function normalizeAnalysis(analysis: any) {
-  const safe = {
-    outcome: analysis.outcome || "unknown",
-    callback_time: analysis.callback_time || null,
-    intent_score: Math.max(
-      0,
-      Math.min(100, Number(analysis.intent_score || 0)),
-    ),
-    analysis: analysis.analysis || {
-      next_step_commitment: 0,
-      urgency_signals: 0,
-      product_curiosity: 0,
-      need_acknowledgment: 0,
-      objection_quality: 0,
-      engagement_depth: 0,
-      intent_score: 0,
-    },
-    memory: analysis.memory || {},
-  };
-
-  const hasQuantity = !!safe.memory?.quantity;
-  const hasCallback =
-    safe.outcome === "callback_requested" ||
-    (safe.memory?.followup_reason || "").toLowerCase().includes("callback");
-
-  if (hasCallback) safe.outcome = "callback_requested";
-  if (hasQuantity && safe.analysis.product_curiosity < 5)
-    safe.analysis.product_curiosity = 7;
-  if (hasCallback && safe.intent_score < 50) safe.intent_score = 60;
-  if (hasQuantity && hasCallback && safe.intent_score < 70)
-    safe.intent_score = 75;
-
-  return safe;
-}
-
-function resolveNextCallAt(
-  analysis: any,
-  transcript: string,
-  action: string,
-): Date | null {
-  if (action !== "schedule_call") return null;
-
-  const fromGemini = getValidDate(analysis.callback_time);
-  if (fromGemini) return fromGemini;
-
-  const fromTranscript = parseCallbackTimeFromTranscript(transcript);
-  if (fromTranscript) return fromTranscript;
-
-  const score = analysis.intent_score;
-  const delayMs =
-    score >= 75
-      ? 30 * 60 * 1000
-      : score >= 50
-        ? 2 * 60 * 60 * 1000
-        : 24 * 60 * 60 * 1000;
-
-  return new Date(Date.now() + delayMs);
-}
-
-async function advanceDialerToNextLead() {
-  if (!(await dialerSession.isActive())) return;
-
-  const campaignId = await dialerSession.getCampaignId();
-
-  let nextLead = null;
-  while (await dialerSession.isActive()) {
-    const nextLeadId = await dialerSession.getNext();
-    if (!nextLeadId) {
-      console.log("[ELEVENLABS] AI DIALER: queue complete, all leads called");
-      await finalizeCampaign(campaignId, "completed");
-      break;
-    }
-
-    const candidate = await db.query.dealerLeads.findFirst({
-      where: (l, { eq }) => eq(l.id, nextLeadId),
-    });
-
-    if (candidate?.phone) {
-      nextLead = candidate;
-      break;
-    }
-
-    console.log("[ELEVENLABS] AI DIALER: skipping lead with no phone", nextLeadId);
-  }
-
-  if (nextLead) {
-    console.log("[ELEVENLABS] AI DIALER: calling next lead", {
-      id: nextLead.id,
-      phone: nextLead.phone,
-      remaining: await dialerSession.remaining(),
-    });
-
-    await new Promise((r) => setTimeout(r, 5000));
-
-    await markCampaignLeadCalling({
-      leadId: nextLead.id,
-      campaignId,
-    });
-
-    await triggerElevenLabsCall({
-      phone: nextLead.phone!,
-      leadId: nextLead.id,
-    });
-  }
 }
 
 export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
@@ -213,8 +41,39 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
         conversation_id: data.conversation_id,
         reason: data.failure_reason,
       });
-      // Failed initiations should still advance the dialer.
-      await advanceDialerToNextLead();
+      // Failed initiations should still advance the dialer. Look up the
+      // campaign-lead row by the conversation id we stored at trigger time
+      // (the bolna_call_id column doubles for both providers), mark it
+      // failed, then advance the parent campaign.
+      try {
+        const row = await db
+          .select({
+            id: dialerCampaignLeads.id,
+            lead_id: dialerCampaignLeads.lead_id,
+            campaign_id: dialerCampaignLeads.campaign_id,
+          })
+          .from(dialerCampaignLeads)
+          .where(eq(dialerCampaignLeads.bolna_call_id, data.conversation_id))
+          .limit(1);
+        if (row[0]) {
+          const r = await completeCampaignLead({
+            leadId: row[0].lead_id,
+            success: false,
+            bolnaCallId: data.conversation_id,
+            outcome: data.failure_reason ?? "initiation_failed",
+            intentScore: null,
+            campaignId: row[0].campaign_id,
+          });
+          if (r.campaignId) {
+            await advanceCampaign(r.campaignId, { preCallDelayMs: 5_000 });
+          }
+        }
+      } catch (err) {
+        console.error(
+          "[elevenlabs:webhook] failed to advance after initiation failure:",
+          err,
+        );
+      }
       return;
     }
 
@@ -227,6 +86,14 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
       (data.conversation_initiation_client_data?.dynamic_variables
         ?.phone_number as string | undefined) ||
       "";
+    const recordingUrl =
+      (data.metadata as { recording_url?: string | null } | undefined)
+        ?.recording_url ?? null;
+    const duration =
+      typeof (data.metadata as { call_duration_secs?: number } | undefined)
+        ?.call_duration_secs === "number"
+        ? (data.metadata as { call_duration_secs: number }).call_duration_secs
+        : null;
 
     console.log("[ELEVENLABS WEBHOOK] Received:", {
       conversationId,
@@ -235,136 +102,16 @@ export async function handleElevenLabsWebhook(event: ElevenLabsWebhookEvent) {
       turns: data.transcript?.length ?? 0,
     });
 
-    if (conversationId) {
-      const claimed = await claimCallForProcessing(conversationId);
-      if (!claimed) {
-        console.log(
-          "[ELEVENLABS WEBHOOK] Already processed call, skipping:",
-          conversationId,
-        );
-        return;
-      }
-    }
-
-    if (!transcript) {
-      console.log("[ELEVENLABS WEBHOOK] No transcript on terminal event");
-      if (phone) {
-        const leadForPhone = await db.query.dealerLeads.findFirst({
-          where: (l, { eq }) => eq(l.phone, phone),
-        });
-        if (leadForPhone) {
-          await completeCampaignLead({
-            leadId: leadForPhone.id,
-            success: false,
-            bolnaCallId: conversationId || null,
-            outcome: "no_transcript",
-            intentScore: null,
-          });
-        }
-      }
-      await advanceDialerToNextLead();
-      return;
-    }
-
-    const rawAnalysis = await analyzeTranscript(transcript);
-    const analysis = normalizeAnalysis(rawAnalysis);
-
-    const decision = decideNextAction(analysis.intent_score, analysis.outcome);
-
-    const nextCallAt = resolveNextCallAt(analysis, transcript, decision.action);
-
-    if (!phone) {
-      console.error(
-        "[ELEVENLABS WEBHOOK] No phone in payload — cannot match lead",
-      );
-      return;
-    }
-
-    const lead = await db.query.dealerLeads.findFirst({
-      where: (l, { eq }) => eq(l.phone, phone),
+    await finalizeElevenLabsCall({
+      conversationId,
+      status: "completed",
+      transcript: transcript || null,
+      recordingUrl,
+      duration,
+      phone: phone || null,
+      conversation: data.transcript || undefined,
     });
-
-    if (!lead) {
-      console.warn("[ELEVENLABS WEBHOOK] No dealer_leads row for phone:", phone);
-      return;
-    }
-
-    const updatedLead = updateLeadAfterCall(
-      { ...lead, follow_up_history: lead.follow_up_history || [] },
-      {
-        transcript,
-        outcome: analysis.outcome,
-        nextCallAt,
-        analysis: analysis.analysis,
-        conversation: data.transcript || [],
-        memory: analysis.memory,
-        provider: "elevenlabs",
-      },
-    );
-
-    await db
-      .update(dealerLeads)
-      .set({
-        follow_up_history: updatedLead.follow_up_history,
-        total_attempts: updatedLead.total_attempts,
-        final_intent_score: updatedLead.final_intent_score,
-        current_status: updatedLead.current_status,
-        memory: updatedLead.memory,
-        next_call_at: nextCallAt,
-        provider: "elevenlabs",
-      })
-      .where(eq(dealerLeads.id, lead.id));
-
-    await completeCampaignLead({
-      leadId: lead.id,
-      success: true,
-      bolnaCallId: conversationId || null,
-      outcome: analysis.outcome,
-      intentScore: analysis.intent_score,
-    });
-
-    if (decision.action === "schedule_call" && nextCallAt) {
-      const messageId = await scheduleElevenLabsCall({
-        phone,
-        leadId: lead.id,
-        runAt: nextCallAt,
-      });
-      if (!messageId) {
-        // QStash quota exhausted or scheduling failed. dealer_leads.next_call_at
-        // is already set above, so the elevenlabs/call-scheduler cron is the
-        // recovery path. Log so quota exhaustion is visible in pm2 logs.
-        console.warn(
-          `[elevenlabs:webhook] scheduleElevenLabsCall returned null for ${lead.id} — relying on call-scheduler cron to recover`,
-        );
-      }
-    }
-
-    if (decision.action === "push_to_crm") {
-      await db
-        .update(dealerLeads)
-        .set({ current_status: "qualified" })
-        .where(eq(dealerLeads.id, lead.id));
-    }
-
-    const summary = analysis.memory?.intent_summary
-      ? `${analysis.outcome} — ${analysis.memory.intent_summary}`
-      : `${analysis.outcome} — Intent: ${analysis.intent_score}/100`;
-
-    appendSalesCallLog({
-      leadId: lead.id,
-      timestamp: new Date(),
-      direction: "outbound",
-      toNumber: phone,
-      fromNumber: process.env.ELEVENLABS_AGENT_PHONE_NUMBER_ID ?? "—",
-      transcript,
-      summary,
-      convId: conversationId ?? "—",
-    }).catch((err) =>
-      console.error("[ELEVENLABS SHEETS] Sales call log failed:", err),
-    );
-
-    await advanceDialerToNextLead();
   } catch (err) {
-    console.error("[ELEVENLABS WEBHOOK] handler error:", err);
+    console.error("[elevenlabs:webhook] handler error:", err);
   }
 }

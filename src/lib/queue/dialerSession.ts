@@ -86,6 +86,12 @@ export const dialerSession = {
     await writeSession({
       queue,
       position: 0,
+      // 1 — the caller fires the first /api/bolna/call (or /elevenlabs/call)
+      // immediately after start() returns, so by the time the next /status
+      // poll lands one call has already been placed. The DB-side counter
+      // (dialer_campaigns.calls_made) only advances when the webhook lands,
+      // so the live banner intentionally runs one call ahead of the DB to
+      // reflect placed-but-not-yet-completed.
       callsMade: 1,
       lastCallAt: Date.now(),
       provider: opts?.provider ?? "bolna",
