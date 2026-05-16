@@ -6,7 +6,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -20,7 +20,9 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
+  StopCircle,
 } from "lucide-react";
+import { CampaignLeadTranscriptDrawer } from "./CampaignLeadTranscriptDrawer";
 import {
   CampaignLeadStatusBadge,
   CampaignOutcomeBadge,
@@ -116,10 +118,23 @@ function StatCard({
   );
 }
 
-function LeadRow({ row, index }: { row: Lead; index: number }) {
+function LeadRow({
+  row,
+  index,
+  onSelect,
+}: {
+  row: Lead;
+  index: number;
+  onSelect: (leadId: string) => void;
+}) {
   const name = row.shopName || row.dealerName || `Lead ${row.queuePosition + 1}`;
   return (
-    <tr className={`border-t border-gray-100 ${index % 2 === 0 ? "bg-white" : "bg-gray-50/50"}`}>
+    <tr
+      className={`border-t border-gray-100 cursor-pointer hover:bg-emerald-50/40 transition-colors ${
+        index % 2 === 0 ? "bg-white" : "bg-gray-50/50"
+      }`}
+      onClick={() => onSelect(row.leadId)}
+    >
       <td className="px-3 py-2.5 text-xs font-mono text-gray-500 w-12">
         #{row.queuePosition + 1}
       </td>
@@ -171,6 +186,25 @@ export function CampaignDetailView({
 }) {
   const [bucket, setBucket] = useState<Bucket>("all");
   const [page, setPage] = useState(1);
+  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const stopMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/ai-dialer/campaigns/${campaignId}/stop`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error?.message ?? "Stop failed");
+      return json.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["dialer-campaign", campaignId] });
+      queryClient.invalidateQueries({
+        queryKey: ["dialer-campaign-leads", campaignId],
+      });
+    },
+  });
 
   const { data: campaign, isLoading: campaignLoading } = useQuery<Campaign>({
     queryKey: ["dialer-campaign", campaignId],
@@ -249,13 +283,38 @@ export function CampaignDetailView({
             <ArrowLeft className="w-4 h-4" /> Back to Campaigns
           </Link>
         )}
-        <a
-          href={`/api/ai-dialer/campaigns/${campaignId}/export.xlsx`}
-          download
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white"
-        >
-          <Download className="w-4 h-4" /> Export Excel
-        </a>
+        <div className="flex items-center gap-2">
+          {isRunning && (
+            <button
+              type="button"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "Force-stop this campaign? In-flight calls will be marked failed.",
+                  )
+                ) {
+                  stopMutation.mutate();
+                }
+              }}
+              disabled={stopMutation.isPending}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white"
+            >
+              {stopMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <StopCircle className="w-4 h-4" />
+              )}
+              Force stop
+            </button>
+          )}
+          <a
+            href={`/api/ai-dialer/campaigns/${campaignId}/export.xlsx`}
+            download
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white"
+          >
+            <Download className="w-4 h-4" /> Export Excel
+          </a>
+        </div>
       </div>
 
       <div className="rounded-2xl border border-gray-200 bg-white px-6 py-5">
@@ -384,12 +443,23 @@ export function CampaignDetailView({
               </thead>
               <tbody>
                 {flatLeads.map((row, i) => (
-                  <LeadRow key={row.id} row={row} index={i} />
+                  <LeadRow
+                    key={row.id}
+                    row={row}
+                    index={i}
+                    onSelect={setSelectedLeadId}
+                  />
                 ))}
               </tbody>
             </table>
           </div>
         )}
+
+        <CampaignLeadTranscriptDrawer
+          campaignId={campaignId}
+          leadId={selectedLeadId}
+          onClose={() => setSelectedLeadId(null)}
+        />
 
         {bucket !== "all" && (
           <div className="flex justify-between items-center px-4 py-3 border-t border-gray-100">
