@@ -183,10 +183,9 @@ async function ensureCity(
         state_code: stateCode,
         lat: lat ?? undefined,
         lng: lng ?? undefined,
-        source: "google_places",
+        source: "auto_grow",
       })
       .onConflictDoNothing();
-    invalidate();
     // Re-fetch by unique (name, state_code) so we return the canonical row
     // even if a concurrent insert raced us under a different id slug.
     const existing = await db
@@ -199,7 +198,18 @@ async function ensureCity(
       .from(cities)
       .where(and(eq(cities.name, name), eq(cities.state_code, stateCode)))
       .limit(1);
-    return existing[0] ?? null;
+    const row = existing[0] ?? null;
+    // Insert the lowercase-name alias so the in-memory cityByAlias map
+    // finds it on the next request — without this, resolveCity() would
+    // still miss "sonipat" because the alias row never existed.
+    if (row) {
+      await db
+        .insert(cityAliases)
+        .values({ alias_lower: name.trim().toLowerCase(), city_id: row.id })
+        .onConflictDoNothing();
+    }
+    invalidate();
+    return row;
   } catch (err) {
     console.error(
       `[locations] ensureCity failed for ${name} / ${stateCode}:`,
@@ -207,6 +217,38 @@ async function ensureCity(
     );
     return null;
   }
+}
+
+// Pick the best raw-city candidate for auto-grow. The cities table is the
+// source of truth for the region tree, so we only insert strings that look
+// like real city names. Reject:
+//   - empty / whitespace-only
+//   - longer than 60 chars (clearly a junk address line)
+//   - contains digits or commas (suggests it's a street/PO box, not a city)
+//   - contains common shop-name noise tokens
+function pickCityCandidate(
+  ...candidates: Array<string | null | undefined>
+): string | null {
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    if (trimmed.length < 2 || trimmed.length > 60) continue;
+    if (/[,;:]/.test(trimmed)) continue;
+    if (/\d/.test(trimmed)) continue;
+    // Reject obviously address-like tokens; cities don't contain these.
+    if (/\b(road|rd|st|street|nagar pin|po box|p\.o\.|sector|phase|block)\b/i.test(trimmed)) {
+      continue;
+    }
+    // Title-case for the canonical row so "sonipat" / "SONIPAT" both insert
+    // as "Sonipat".
+    return trimmed
+      .toLowerCase()
+      .split(/\s+/)
+      .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+      .join(" ");
+  }
+  return null;
 }
 
 // Resolve a free-form city string against the alias map. Returns the
@@ -274,8 +316,10 @@ export async function normalizeRegion(
   }
 
   // 3. Regex parse the address as a fallback.
+  let parsedCityFromAddress: string | null = null;
   if ((!city || !state) && input.address) {
     const parsed = parseAddressComponents(input.address);
+    if (parsed.city) parsedCityFromAddress = parsed.city;
     if (!city && parsed.city) {
       city = resolveCity(parsed.city, maps);
       if (city && source === "unresolved") source = "regex";
@@ -297,6 +341,27 @@ export async function normalizeRegion(
   if (city && !state) {
     state = maps.stateByCode.get(city.state_code);
     if (state) source = "inferred";
+  }
+
+  // 4b. Auto-grow for non-Google paths. When we have a canonical state but
+  // the city text didn't resolve via aliases (e.g. raw scrape source was
+  // Apify/Firecrawl with no addressComponents, or the city is a real place
+  // simply not yet in the cities seed — Sonipat, Panipat, etc.), insert
+  // the city under that state so future scrapes hit the fast canonical
+  // path and the region tree buckets it correctly by name.
+  if (!city && state) {
+    const candidate = pickCityCandidate(
+      input.rawCity,
+      parsedCityFromAddress,
+      input.components?.city,
+    );
+    if (candidate) {
+      const inserted = await ensureCity(candidate, state.code, lat, lng);
+      if (inserted) {
+        city = inserted;
+        if (source === "unresolved" || source === "alias") source = "alias";
+      }
+    }
   }
 
   // 5. Last-resort: legacy TS maps. Catches edge cases where the DB hasn't

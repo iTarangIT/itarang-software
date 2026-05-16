@@ -51,11 +51,15 @@ export function isEmptySelection(s: RegionSelection): boolean {
 interface RegionTreeCity {
   city: string;
   leadCount: number;
+  // Leads with a phone but not in a no-call status. The dialer modal
+  // operates on this number; the leadCount above is the raw total.
+  dialableCount?: number;
   pincodeCount: number;
 }
 interface RegionTreeState {
   state: string;
   leadCount: number;
+  dialableCount?: number;
   cities: RegionTreeCity[];
 }
 interface RegionGroupRow {
@@ -573,7 +577,23 @@ function CustomTab({
                     />
                   </button>
                   <div className="font-semibold">{s.state}</div>
-                  <span className="region-count">{s.leadCount} leads</span>
+                  <span
+                    className="region-count"
+                    title={
+                      typeof s.dialableCount === "number" &&
+                      s.dialableCount !== s.leadCount
+                        ? `${s.leadCount - s.dialableCount} excluded: converted / not interested / DNC / blacklisted`
+                        : undefined
+                    }
+                  >
+                    {s.leadCount} leads
+                    {typeof s.dialableCount === "number" &&
+                      s.dialableCount !== s.leadCount && (
+                        <span style={{ color: "#059669", marginLeft: 4 }}>
+                          · {s.dialableCount} dialable
+                        </span>
+                      )}
+                  </span>
                 </div>
                 {isExpanded && (
                   <div style={{ background: "#fcfcfd" }}>
@@ -608,7 +628,23 @@ function CustomTab({
                             {cityChecked && <Check className="w-3 h-3" />}
                           </span>
                           <div className="flex-1">{c.city}</div>
-                          <span className="region-count">{c.leadCount}</span>
+                          <span
+                            className="region-count"
+                            title={
+                              typeof c.dialableCount === "number" &&
+                              c.dialableCount !== c.leadCount
+                                ? `${c.leadCount - c.dialableCount} excluded: converted / not interested / DNC / blacklisted`
+                                : undefined
+                            }
+                          >
+                            {c.leadCount}
+                            {typeof c.dialableCount === "number" &&
+                              c.dialableCount !== c.leadCount && (
+                                <span style={{ color: "#059669", marginLeft: 4 }}>
+                                  · {c.dialableCount}
+                                </span>
+                              )}
+                          </span>
                         </div>
                       );
                     })}

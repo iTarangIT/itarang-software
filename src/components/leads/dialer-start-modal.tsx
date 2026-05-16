@@ -92,6 +92,15 @@ const PROVIDERS: {
 interface PreviewResponse {
   success: boolean;
   counts: Record<DialerCategory, number>;
+  // Leads in the selected region that have a phone but are excluded from
+  // dialing by status (converted / not_interested / dnc / blacklisted).
+  // Surfaced so the modal can explain the gap between "total leads in
+  // region" (region tree count) and "dialable leads" (counts.all).
+  excluded?: {
+    total: number;
+    byReason: Record<string, number>;
+  };
+  totalWithPhone?: number;
   queueIds: string[];
   queue: DialerQueueItem[];
 }
@@ -117,6 +126,11 @@ export function DialerStartModal({
   const [counts, setCounts] = useState<Record<DialerCategory, number>>({
     ...EMPTY_COUNTS,
   });
+  const [excluded, setExcluded] = useState<{
+    total: number;
+    byReason: Record<string, number>;
+  }>({ total: 0, byReason: {} });
+  const [totalWithPhone, setTotalWithPhone] = useState(0);
   const [queue, setQueue] = useState<DialerQueueItem[]>([]);
   const [showGroupManager, setShowGroupManager] = useState(false);
   const [saveAsName, setSaveAsName] = useState<string>("");
@@ -158,14 +172,20 @@ export function DialerStartModal({
         if (myId !== reqIdRef.current) return; // stale
         if (json.success) {
           setCounts(json.counts);
+          setExcluded(json.excluded ?? { total: 0, byReason: {} });
+          setTotalWithPhone(json.totalWithPhone ?? 0);
           setQueue(json.queue ?? []);
         } else {
           setCounts({ ...EMPTY_COUNTS });
+          setExcluded({ total: 0, byReason: {} });
+          setTotalWithPhone(0);
           setQueue([]);
         }
       } catch {
         if (myId === reqIdRef.current) {
           setCounts({ ...EMPTY_COUNTS });
+          setExcluded({ total: 0, byReason: {} });
+          setTotalWithPhone(0);
           setQueue([]);
         }
       } finally {
@@ -451,6 +471,17 @@ export function DialerStartModal({
                     <Loader2 className="inline w-3 h-3 mr-1 animate-spin" />
                     Updating…
                   </>
+                ) : excluded.total > 0 ? (
+                  <>
+                    <span className="font-semibold text-gray-700">
+                      {totalWithPhone}
+                    </span>{" "}
+                    total ·{" "}
+                    <span className="font-semibold text-emerald-700">
+                      {counts.all}
+                    </span>{" "}
+                    dialable
+                  </>
                 ) : (
                   <>
                     breakdown of{" "}
@@ -503,6 +534,18 @@ export function DialerStartModal({
                 Σ {counts.all}
               </span>
             </div>
+
+            {excluded.total > 0 && (
+              <div className="mb-4 -mt-2 text-[11px] text-gray-500">
+                <span className="font-medium text-gray-600">
+                  {excluded.total} excluded:
+                </span>{" "}
+                {Object.entries(excluded.byReason)
+                  .filter(([, n]) => n > 0)
+                  .map(([reason, n]) => `${n} ${reason.replace(/_/g, " ")}`)
+                  .join(" · ")}
+              </div>
+            )}
 
             <div className="grid grid-cols-4 gap-2">
               {CATEGORIES.map((c) => {
