@@ -24,24 +24,24 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dealerLeads, regionGroups } from "@/lib/db/schema";
-import { and, inArray, isNotNull, ne, or, eq, sql } from "drizzle-orm";
+import { regionGroups } from "@/lib/db/schema";
+import { inArray, sql } from "drizzle-orm";
 
 type RegionEntry = { state: string; cities?: string[] };
 
-const HOT_STATUSES = new Set(["hot", "qualified"]);
-const WARM_STATUSES = new Set([
-  "warm",
-  "callback_requested",
-  "contacted",
-  "interested",
-]);
 const NO_CALL_STATUSES = new Set(["converted", "not_interested", "dnc", "blacklisted"]);
 
-function bucketOf(status: string | null | undefined): "hot" | "warm" | "cold" {
-  const s = (status ?? "").toLowerCase().trim();
-  if (HOT_STATUSES.has(s)) return "hot";
-  if (WARM_STATUSES.has(s)) return "warm";
+// Bucket leads by the analyzer's measured intent score, not by current_status
+// text. Status text drifts across the system ("contacted", "callback_requested",
+// etc.) and most dialed leads landed in WARM regardless of actual quality,
+// which left users seeing Hot=0 · Warm=N · Cold=0. Score-based buckets match
+// what the analyzer measured and align with getLeadStatus() and the visual
+// badge thresholds (≥75 = qualified/hot). Uncalled leads have score = 0/null
+// → cold, which matches the user's intuition that an uncalled lead is cold.
+function bucketOf(score: number | null | undefined): "hot" | "warm" | "cold" {
+  const s = typeof score === "number" ? score : 0;
+  if (s >= 75) return "hot";
+  if (s >= 40) return "warm";
   return "cold";
 }
 
@@ -96,55 +96,124 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Build the region OR-group. If nothing is selected we fall through to
-    // "every callable lead".
-    const regionFilters = [] as any[];
-    if (states.length) regionFilters.push(inArray(dealerLeads.state, states));
-    for (const { state, city } of cities) {
-      regionFilters.push(
-        and(eq(dealerLeads.state, state), eq(dealerLeads.city, city)),
-      );
-    }
-    if (pincodes.length) regionFilters.push(inArray(dealerLeads.pincode, pincodes));
+    // Region matching uses the SAME canonical-city resolution as
+    // /api/dealer-leads/regions/tree (city_aliases → cities → states). The
+    // old exact-text filter (`dealer_leads.city = 'Sonipat'`) missed
+    // alias-variant raw values ('sonipat', 'SONIPAT', 'Sonepat'), so the
+    // tree showed Sonipat=53 but the dialer queued only 49. Filtering by
+    // the canonical bucket closes that gap.
+    //
+    // The CTE mirrors the tree exactly: COALESCE(canon_state, 'Unknown')
+    // and COALESCE(canon_city, INITCAP(TRIM(raw_city)), 'Unknown') so a
+    // city not yet in the canonical seed still buckets by its raw text.
+    const wantsRegionFilter =
+      states.length > 0 || cities.length > 0 || pincodes.length > 0;
 
-    const callable = and(
-      isNotNull(dealerLeads.phone),
-      ne(dealerLeads.phone, ""),
+    // Build the JSON arrays for the filter as PostgreSQL params (safe from
+    // injection — drizzle parameterizes via sql``). Using JSONB ANY()
+    // matches without needing to expand variadic IN-lists.
+    const statesJson = JSON.stringify(states);
+    const cityPairsJson = JSON.stringify(
+      cities.map((c) => ({ state: c.state, city: c.city })),
     );
+    const pincodesJson = JSON.stringify(pincodes);
 
-    const where = regionFilters.length
-      ? and(callable, or(...regionFilters))
-      : callable;
+    const result = await db.execute(sql`
+      WITH resolved AS (
+        SELECT
+          dl.id,
+          dl.phone,
+          dl.pincode,
+          dl.current_status,
+          dl.final_intent_score,
+          dl.dealer_name,
+          dl.shop_name,
+          c.name AS canon_city,
+          COALESCE(s_from_city.name, s_direct.name) AS canon_state,
+          dl.city AS raw_city
+        FROM dealer_leads dl
+        LEFT JOIN city_aliases ca ON ca.alias_lower = LOWER(TRIM(dl.city))
+        LEFT JOIN cities c ON c.id = ca.city_id
+        LEFT JOIN states s_from_city ON s_from_city.code = c.state_code
+        LEFT JOIN states s_direct ON LOWER(s_direct.name) = LOWER(TRIM(dl.state))
+        WHERE dl.phone IS NOT NULL AND dl.phone <> ''
+      ),
+      bucketed AS (
+        SELECT
+          id, phone, pincode, current_status, final_intent_score,
+          dealer_name, shop_name,
+          COALESCE(canon_state, 'Unknown') AS state_bucket,
+          COALESCE(canon_city, NULLIF(INITCAP(TRIM(raw_city)), ''), 'Unknown') AS city_bucket
+        FROM resolved
+      )
+      SELECT id, phone, current_status, final_intent_score, dealer_name, shop_name
+      FROM bucketed
+      WHERE
+        CASE
+          WHEN ${wantsRegionFilter} THEN
+            state_bucket = ANY(
+              SELECT jsonb_array_elements_text(${statesJson}::jsonb)
+            )
+            OR (
+              jsonb_array_length(${cityPairsJson}::jsonb) > 0
+              AND EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(${cityPairsJson}::jsonb) AS pair
+                WHERE pair->>'state' = state_bucket
+                  AND pair->>'city' = city_bucket
+              )
+            )
+            OR pincode = ANY(
+              SELECT jsonb_array_elements_text(${pincodesJson}::jsonb)
+            )
+          ELSE TRUE
+        END
+    `);
 
-    const rows = await db
-      .select({
-        id: dealerLeads.id,
-        phone: dealerLeads.phone,
-        current_status: dealerLeads.current_status,
-        final_intent_score: dealerLeads.final_intent_score,
-        dealer_name: dealerLeads.dealer_name,
-        shop_name: dealerLeads.shop_name,
-      })
-      .from(dealerLeads)
-      .where(where);
+    type PreviewRow = {
+      id: string;
+      phone: string | null;
+      current_status: string | null;
+      final_intent_score: number | null;
+      dealer_name: string | null;
+      shop_name: string | null;
+    };
+    const rows: PreviewRow[] =
+      (result as { rows?: PreviewRow[] }).rows ??
+      (result as unknown as PreviewRow[]);
 
     // Tally segments and apply the same NO_CALL filter the modal used to
     // apply client-side. Sort by intent score descending — hot leads dial
-    // first within the chosen category.
+    // first within the chosen category. Track excluded-by-reason so the
+    // UI can explain the gap between "total leads with phone" and
+    // "dialable leads" (e.g. 53 total vs 49 dialable for Haryana).
     const counts = { hot: 0, warm: 0, cold: 0, all: 0 };
+    const excludedByReason: Record<string, number> = {
+      converted: 0,
+      not_interested: 0,
+      dnc: 0,
+      blacklisted: 0,
+    };
     const dialable = [] as typeof rows;
     for (const r of rows) {
       const s = (r.current_status ?? "").toLowerCase().trim();
-      if (NO_CALL_STATUSES.has(s)) continue;
-      const b = bucketOf(r.current_status);
+      if (NO_CALL_STATUSES.has(s)) {
+        excludedByReason[s] = (excludedByReason[s] ?? 0) + 1;
+        continue;
+      }
+      const b = bucketOf(r.final_intent_score);
       counts[b] += 1;
       counts.all += 1;
       dialable.push(r);
     }
+    const excludedTotal = Object.values(excludedByReason).reduce(
+      (a, b) => a + b,
+      0,
+    );
 
     const filtered = (() => {
       if (!category || category === "all") return dialable;
-      return dialable.filter((r) => bucketOf(r.current_status) === category);
+      return dialable.filter((r) => bucketOf(r.final_intent_score) === category);
     })();
 
     filtered.sort(
@@ -154,6 +223,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       counts,
+      excluded: {
+        total: excludedTotal,
+        byReason: excludedByReason,
+      },
+      totalWithPhone: rows.length,
       queueIds: filtered.map((r) => r.id),
       queue: filtered.map((r) => ({
         id: r.id,

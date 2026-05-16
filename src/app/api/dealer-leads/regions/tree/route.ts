@@ -33,14 +33,22 @@ interface RawRow {
   state: string;
   city: string;
   count: number;
+  dialable_count: number;
   pincode_count: number;
 }
+
+// Mirror NO_CALL_STATUSES from /api/ai-dialer/preview so the "dialable"
+// count here matches the dialer modal's bucket totals exactly. Leads in
+// these statuses still have a phone but are skipped by the dialer.
+const NO_CALL_STATUSES_SQL = sql`('converted', 'not_interested', 'dnc', 'blacklisted')`;
 
 export const GET = withErrorHandler(async () => {
   const result = await db.execute(sql`
     WITH resolved AS (
       SELECT
         dl.pincode,
+        dl.current_status,
+        dl.city AS raw_city,
         -- Canonical city via the alias table. dl.city of "Bangalore",
         -- "bengaluru", or "BLR" all resolve to the same cities row.
         -- Junk values (e.g. "MARS Mysore Auto Rickshaw Service", "M28")
@@ -61,12 +69,29 @@ export const GET = withErrorHandler(async () => {
       state_bucket AS state,
       city_bucket  AS city,
       COUNT(*)::int AS count,
+      SUM(
+        CASE
+          WHEN LOWER(TRIM(COALESCE(current_status, ''))) IN ${NO_CALL_STATUSES_SQL}
+          THEN 0
+          ELSE 1
+        END
+      )::int AS dialable_count,
       COUNT(DISTINCT pincode)::int AS pincode_count
     FROM (
       SELECT
         COALESCE(canon_state, ${UNKNOWN_STATE}) AS state_bucket,
-        COALESCE(canon_city,  ${UNKNOWN_CITY})  AS city_bucket,
-        pincode
+        -- City bucket precedence: canonical name (alias-resolved) → raw
+        -- dl.city text capitalized (so legacy rows for cities not yet in
+        -- the canonical seed — Sonipat, Panipat, etc. — still bucket by
+        -- their real name instead of collapsing under "Unknown") →
+        -- "Unknown" only when dl.city is genuinely empty.
+        COALESCE(
+          canon_city,
+          NULLIF(INITCAP(TRIM(raw_city)), ''),
+          ${UNKNOWN_CITY}
+        ) AS city_bucket,
+        pincode,
+        current_status
       FROM resolved
     ) buckets
     GROUP BY state_bucket, city_bucket
@@ -86,20 +111,28 @@ export const GET = withErrorHandler(async () => {
     {
       state: string;
       leadCount: number;
-      cities: { city: string; leadCount: number; pincodeCount: number }[];
+      dialableCount: number;
+      cities: {
+        city: string;
+        leadCount: number;
+        dialableCount: number;
+        pincodeCount: number;
+      }[];
     }
   >();
 
   for (const r of rows) {
     let entry = byState.get(r.state);
     if (!entry) {
-      entry = { state: r.state, leadCount: 0, cities: [] };
+      entry = { state: r.state, leadCount: 0, dialableCount: 0, cities: [] };
       byState.set(r.state, entry);
     }
     entry.leadCount += r.count;
+    entry.dialableCount += r.dialable_count;
     entry.cities.push({
       city: r.city,
       leadCount: r.count,
+      dialableCount: r.dialable_count,
       pincodeCount: r.pincode_count,
     });
   }
