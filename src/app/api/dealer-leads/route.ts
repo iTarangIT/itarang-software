@@ -123,7 +123,7 @@ export async function GET(req: NextRequest) {
         )
       : phonePresent;
 
-    const [rows, countResult] = await Promise.all([
+    const [rows, countResult, statsResult] = await Promise.all([
       db
         .select()
         .from(dealerLeads)
@@ -135,12 +135,31 @@ export async function GET(req: NextRequest) {
         .select({ count: sql<number>`count(*)` })
         .from(dealerLeads)
         .where(where),
+      // Stats panel: hot/warm/qualified/scheduled counts across ALL matching
+      // leads (not just the current page). The page used to filter the
+      // visible 10 rows in JS, so every card read 0 unless a high-intent
+      // lead happened to be on page 1. Single query, all four counters.
+      db
+        .select({
+          hot: sql<number>`count(*) filter (where ${dealerLeads.current_status} = 'hot')`,
+          warm: sql<number>`count(*) filter (where ${dealerLeads.current_status} = 'warm')`,
+          qualified: sql<number>`count(*) filter (where ${dealerLeads.current_status} = 'qualified')`,
+          scheduled: sql<number>`count(*) filter (where ${dealerLeads.next_call_at} is not null)`,
+        })
+        .from(dealerLeads)
+        .where(where),
     ]);
 
     return NextResponse.json({
       success: true,
       leads: rows.map((l) => ({ ...l, _source: "dealer" })),
       total: Number(countResult[0].count),
+      stats: {
+        hot: Number(statsResult[0]?.hot ?? 0),
+        warm: Number(statsResult[0]?.warm ?? 0),
+        qualified: Number(statsResult[0]?.qualified ?? 0),
+        scheduled: Number(statsResult[0]?.scheduled ?? 0),
+      },
     });
   } catch (err: any) {
     return NextResponse.json(

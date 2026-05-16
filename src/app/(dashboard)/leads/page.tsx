@@ -966,6 +966,15 @@ export default function LeadsUnifiedPage() {
 
   const [leads, setLeads] = useState<any[]>([]);
   const [leadsTotal, setLeadsTotal] = useState(0);
+  // Stats panel counters — server-side, computed across all matching leads
+  // (not just the current page). Default to zeros so the cards render before
+  // the first fetch lands.
+  const [leadsStats, setLeadsStats] = useState({
+    hot: 0,
+    warm: 0,
+    qualified: 0,
+    scheduled: 0,
+  });
   const [leadsPage, setLeadsPage] = useState(1);
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadsError, setLeadsError] = useState<string | null>(null);
@@ -1061,36 +1070,48 @@ export default function LeadsUnifiedPage() {
 
   const LIMIT = 10;
 
-  const fetchLeads = useCallback(async (page: number, q: string) => {
-    setLeadsLoading(true);
-    try {
-      const res = await fetch(
-        `/api/dealer-leads?page=${page}&limit=${LIMIT}&search=${encodeURIComponent(q)}`,
-      );
-      const data = await res.json();
-      if (data.success) {
-        setLeads(data.leads);
-        setLeadsTotal(data.total);
-        setLeadsError(null);
-      } else {
-        // Surface API failures instead of rendering a silent empty state.
-        // Most commonly this fires when schema.ts and the live DB drift —
-        // e.g. a new E-NNN migration hasn't been applied to the host the
-        // dev server connects to (check the [DB] log on server start).
-        console.error("[leads] /api/dealer-leads failed:", data);
-        setLeads([]);
-        setLeadsTotal(0);
-        setLeadsError(data.error?.message ?? data.error ?? "Failed to load leads");
+  const fetchLeads = useCallback(
+    async (page: number, q: string, opts?: { silent?: boolean }) => {
+      // When the dialer is running we re-fetch every 2s to surface lead
+      // status transitions. `silent` skips the loading spinner so the
+      // table doesn't flash during background refreshes.
+      const silent = opts?.silent === true;
+      if (!silent) setLeadsLoading(true);
+      try {
+        const res = await fetch(
+          `/api/dealer-leads?page=${page}&limit=${LIMIT}&search=${encodeURIComponent(q)}`,
+        );
+        const data = await res.json();
+        if (data.success) {
+          setLeads(data.leads);
+          setLeadsTotal(data.total);
+          if (data.stats) setLeadsStats(data.stats);
+          setLeadsError(null);
+        } else {
+          // Surface API failures instead of rendering a silent empty state.
+          // Most commonly this fires when schema.ts and the live DB drift —
+          // e.g. a new E-NNN migration hasn't been applied to the host the
+          // dev server connects to (check the [DB] log on server start).
+          console.error("[leads] /api/dealer-leads failed:", data);
+          if (!silent) {
+            setLeads([]);
+            setLeadsTotal(0);
+          }
+          setLeadsError(data.error?.message ?? data.error ?? "Failed to load leads");
+        }
+      } catch (err: any) {
+        console.error("[leads] /api/dealer-leads network error:", err);
+        if (!silent) {
+          setLeads([]);
+          setLeadsTotal(0);
+        }
+        setLeadsError(err?.message ?? "Network error loading leads");
+      } finally {
+        if (!silent) setLeadsLoading(false);
       }
-    } catch (err: any) {
-      console.error("[leads] /api/dealer-leads network error:", err);
-      setLeads([]);
-      setLeadsTotal(0);
-      setLeadsError(err?.message ?? "Network error loading leads");
-    } finally {
-      setLeadsLoading(false);
-    }
-  }, []);
+    },
+    [],
+  );
 
   const fetchConvertedLeads = useCallback(async (page: number, q: string) => {
     setConvertedLoading(true);
@@ -1112,6 +1133,19 @@ export default function LeadsUnifiedPage() {
     if (tab === "leads") fetchLeads(leadsPage, search);
     if (tab === "converted") fetchConvertedLeads(convertedPage, search);
   }, [tab, leadsPage, convertedPage, search]);
+
+  // While the AI dialer is running, poll the leads list every 2s so the
+  // `current_status` column reflects lead transitions (pending → calling
+  // → completed) without forcing the user to refresh. Silent refresh —
+  // no loading flash. Polling stops the moment dialerOn flips back to
+  // false, so this costs nothing when no campaign is active.
+  useEffect(() => {
+    if (tab !== "leads" || !dialerOn) return;
+    const id = setInterval(() => {
+      fetchLeads(leadsPage, search, { silent: true });
+    }, 2000);
+    return () => clearInterval(id);
+  }, [tab, dialerOn, leadsPage, search, fetchLeads]);
 
   const handleSearch = (v: string) => {
     setSearch(v);
@@ -1259,18 +1293,12 @@ export default function LeadsUnifiedPage() {
         // Non-fatal; the /status poller will surface campaignId on the next tick.
       }
 
-      const callEndpoint =
-        provider === "elevenlabs" ? "/api/elevenlabs/call" : "/api/bolna/call";
+      // First call is now placed server-side by /api/ai-dialer/start via
+      // advanceCampaign. Just light up the row optimistically and start
+      // polling — the campaign-lead row's status='calling' from the DB
+      // is what /api/ai-dialer/status now reflects.
       const head = queue[0];
-      // Optimistically light up the row before the network round-trip so
-      // the user sees instant feedback on the lead card.
       startCallingLead(head.id);
-      await fetch(callEndpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: head.phone, leadId: head.id }),
-      });
-
       setDialerCallsMade(1);
       startDialerPoller();
     },
@@ -1313,12 +1341,16 @@ export default function LeadsUnifiedPage() {
     [],
   );
 
+  // Counts come from the server now (computed across ALL matching leads).
+  // The old client-side filter only saw the visible 10 rows on the current
+  // page, which is why Hot/Warm/Qualified always read 0 unless a high-intent
+  // lead happened to be on page 1.
   const stats = {
     total: leadsTotal,
-    hot: leads.filter((l) => l.current_status === "hot").length,
-    warm: leads.filter((l) => l.current_status === "warm").length,
-    qualified: leads.filter((l) => l.current_status === "qualified").length,
-    scheduled: leads.filter((l) => l.next_call_at).length,
+    hot: leadsStats.hot,
+    warm: leadsStats.warm,
+    qualified: leadsStats.qualified,
+    scheduled: leadsStats.scheduled,
   };
 
   const currentDialerLead = dialerQueue[dialerIndex] ?? null;
