@@ -6,6 +6,7 @@ import {
   tripQuotaCircuit,
 } from "./connection";
 import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
+import { runDialerPollOnce } from "@/lib/ai/pollCallStatus";
 import { log } from "@/lib/log";
 
 /**
@@ -27,6 +28,61 @@ if (process.env.ENABLE_CALL_WORKER === "1") {
   log.info(
     "[callWorker] disabled (ENABLE_CALL_WORKER!=1); no Redis polling. Set ENABLE_CALL_WORKER=1 to start.",
   );
+}
+
+/**
+ * AI dialer call-status polling tick — runs INDEPENDENT of the BullMQ
+ * worker gate. In production, Vercel cron hits /api/cron/dialer-poll
+ * every minute; on localhost (where Vercel cron doesn't fire) this
+ * setInterval is what makes calls auto-advance without ngrok.
+ *
+ * Set ENABLE_DIALER_POLL=0 to opt out explicitly. Otherwise: on in dev,
+ * off in production (where the cron handles it and a long-running
+ * worker normally doesn't exist).
+ */
+const DIALER_POLL_ENABLED =
+  process.env.ENABLE_DIALER_POLL === "1" ||
+  (process.env.NODE_ENV !== "production" &&
+    process.env.ENABLE_DIALER_POLL !== "0");
+
+if (DIALER_POLL_ENABLED) {
+  startDialerPollTick();
+}
+
+function startDialerPollTick() {
+  const INTERVAL_MS = 30_000;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const r = await runDialerPollOnce();
+      if (r.polled > 0) {
+        log.info(
+          `[dialer-poll] polled=${r.polled} finalized=${r.finalized} ` +
+            `notTerminal=${r.skippedNotTerminal} errors=${r.errors}`,
+        );
+      }
+    } catch (err) {
+      log.error("[dialer-poll] tick failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Kick once on boot so a freshly-started worker doesn't wait a full
+  // interval before reconciling any leftover calling rows.
+  setTimeout(tick, 5_000).unref?.();
+
+  const interval = setInterval(tick, INTERVAL_MS);
+  // unref so the timer doesn't block process exit on Ctrl+C.
+  if (typeof (interval as NodeJS.Timer).unref === "function") {
+    (interval as NodeJS.Timer).unref();
+  }
+  log.info("[dialer-poll] tick started (30s interval)");
 }
 
 function startWorker() {

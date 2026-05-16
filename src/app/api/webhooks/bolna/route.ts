@@ -4,9 +4,25 @@ import { leads, auditLogs, users, callRecords, conversationMessages, callSession
 import { eq, sql, desc } from 'drizzle-orm';
 import { withErrorHandler, successResponse, errorResponse, generateId } from '@/lib/api-utils';
 import { triggerBolnaCall } from '@/lib/bolna';
+import { after } from 'next/server';
+import { handleBolnaWebhook } from '@/lib/ai/bolna_ai';
 
 export const POST = withErrorHandler(async (req: Request) => {
     const body = await req.json();
+
+    // Belt-and-suspenders: this legacy route still serves the v1 callRecords /
+    // conversationMessages pipeline below, but Bolna's dashboard may also
+    // point here for the modern AI dialer flow. Fire the canonical handler
+    // in the background so the dialer campaign pipeline advances regardless
+    // of which URL is configured. Idempotent via Redis dedup in
+    // finalizeBolnaCall, so a duplicate at /api/bolna/webhook is a no-op.
+    after(async () => {
+        try {
+            await handleBolnaWebhook(body);
+        } catch (e) {
+            console.error('[legacy webhook] handleBolnaWebhook delegate failed', e);
+        }
+    });
 
     const {
         call_id,

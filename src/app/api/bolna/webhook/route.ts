@@ -13,23 +13,34 @@ export async function POST(req: NextRequest) {
     verifyBolnaWebhook(req);
   } catch (err) {
     if (err instanceof WebhookSecretMissingError) {
-      console.error(
-        "[bolna:webhook] BOLNA_WEBHOOK_SECRET is not configured — rejecting. " +
-          "Set this env var and configure Bolna to send Authorization: Bearer <secret>.",
-      );
-      return NextResponse.json(
-        { success: false, error: "Webhook not configured" },
-        { status: 401 },
-      );
-    }
-    if (err instanceof WebhookSignatureInvalidError) {
+      // In dev (localhost + ngrok), forcing operators to invent a shared
+      // secret just to test the call lifecycle is too much friction.
+      // Accept the request and log a warning. Production still rejects so
+      // a real deployment isn't open to spoofed Bolna callbacks.
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(
+          "[bolna:webhook] BOLNA_WEBHOOK_SECRET missing — accepting in dev. " +
+            "Set the env var (and configure Bolna to send Authorization: Bearer <secret>) before deploying.",
+        );
+        // fall through to body parsing
+      } else {
+        console.error(
+          "[bolna:webhook] BOLNA_WEBHOOK_SECRET is not configured in production — rejecting.",
+        );
+        return NextResponse.json(
+          { success: false, error: "Webhook not configured" },
+          { status: 401 },
+        );
+      }
+    } else if (err instanceof WebhookSignatureInvalidError) {
       console.warn("[bolna:webhook] auth failed:", err.message);
       return NextResponse.json(
         { success: false, error: "Unauthorized" },
         { status: 401 },
       );
+    } else {
+      throw err;
     }
-    throw err;
   }
 
   try {

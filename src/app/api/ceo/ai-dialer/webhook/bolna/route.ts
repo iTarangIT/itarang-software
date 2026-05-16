@@ -1,14 +1,28 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { db } from '@/lib/db';
 import { aiCallLogs, leads } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { runPostCallUpdate } from '@/lib/ai/langgraph/lead-qualification-graph';
+import { handleBolnaWebhook } from '@/lib/ai/bolna_ai';
 
 // Webhook endpoint — no auth required (Bolna callback)
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
         console.log('[Bolna Webhook] Received:', JSON.stringify(body).slice(0, 500));
+
+        // Belt-and-suspenders: this legacy route still does its own langgraph
+        // post-call update below. Also fire the canonical handler in the
+        // background so the modern AI dialer campaign pipeline advances
+        // regardless of which URL Bolna's dashboard points at. Idempotent via
+        // Redis dedup in finalizeBolnaCall.
+        after(async () => {
+            try {
+                await handleBolnaWebhook(body);
+            } catch (e) {
+                console.error('[ceo legacy webhook] handleBolnaWebhook delegate failed', e);
+            }
+        });
 
         const callId = body.call_id || body.id;
         const status = body.status || body.call_status;
