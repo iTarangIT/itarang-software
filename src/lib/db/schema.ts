@@ -3616,6 +3616,10 @@ export const nbfc = pgTable("nbfc", {
   // re-approving an already-approved NBFC.
   approved_by: uuid("approved_by"),
   approved_at: timestamp("approved_at", { withTimezone: true }),
+  // E-107 — Step 2.5 mid-flow CEO verification stamping. docs_verified_at
+  // is read by the LSP signer-form gate to unlock Step 3 for the Admin.
+  docs_verified_at: timestamp("docs_verified_at", { withTimezone: true }),
+  docs_verified_by: uuid("docs_verified_by"),
   // E-002 — activation timestamp. Distinct from approved_at: approved_at fires
   // when the final-approval gate releases (status='approved'); activated_at
   // fires when portal credentials are dispatched (status='active').
@@ -3625,6 +3629,10 @@ export const nbfc = pgTable("nbfc", {
   // legal_name match in the E-026B migration.
   tenant_id: uuid("tenant_id").references(() => nbfcTenants.id),
   created_by: integer("created_by").notNull(),
+  // E-108 — Supabase auth uuid of the user who created the row. Nullable for
+  // legacy rows (pre-E-108). New inserts always populate this so the "My
+  // Submitted Drafts" sidebar entry (/admin/nbfc?owner=me) can scope.
+  created_by_auth_id: uuid("created_by_auth_id"),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -3751,6 +3759,11 @@ export const nbfcLspAgreements = pgTable(
     itarang_signatory_2_email: varchar("itarang_signatory_2_email", { length: 200 }),
     signed_pdf_url: text("signed_pdf_url"),
     audit_trail_url: text("audit_trail_url"),
+    // E-110 — admin-uploaded blank template (the file Digio will eventually
+    // paint with signer fields). Filled at Step 3 "Send to CEO" and read by
+    // the CEO approval gate.
+    agreement_template_url: text("agreement_template_url"),
+    agreement_template_size: integer("agreement_template_size"),
     expires_at: timestamp("expires_at", { withTimezone: true }),
     created_by: integer("created_by"),
     initiated_by: integer("initiated_by"),
@@ -3764,6 +3777,52 @@ export const nbfcLspAgreements = pgTable(
     nbfcIdx: index("nbfc_lsp_agreements_nbfc_id_idx").on(table.nbfc_id),
     statusIdx: index("nbfc_lsp_agreements_status_idx").on(table.agreement_status),
     agreementIdIdx: index("nbfc_lsp_agreements_agreement_id_idx").on(table.agreement_id),
+  }),
+);
+
+// =============================================================================
+// E-109 — Per-signer rows for an NBFC LSP agreement (N signers, designation,
+// identity-document URL). Replaces the legacy 3 hardcoded signer columns on
+// nbfc_lsp_agreements for new initiations; old columns stay nullable for
+// backward compat. See drizzle/E-109_nbfc_lsp_agreement_signers.sql.
+// =============================================================================
+export const nbfcLspAgreementSigners = pgTable(
+  "nbfc_lsp_agreement_signers",
+  {
+    id: serial("id").primaryKey().notNull(),
+    nbfc_lsp_agreement_id: integer("nbfc_lsp_agreement_id")
+      .notNull()
+      .references(() => nbfcLspAgreements.id),
+    signer_order: integer("signer_order").notNull(),
+    party: varchar("party", { length: 20 }).notNull(),
+    full_name: varchar("full_name", { length: 200 }).notNull(),
+    email: varchar("email", { length: 200 }).notNull(),
+    designation: varchar("designation", { length: 120 }).notNull(),
+    identity_document_url: text("identity_document_url").notNull(),
+    identity_document_size: integer("identity_document_size"),
+    // E-112 — per-signer Digio signing status. See drizzle/E-112_*.sql.
+    digio_signer_identifier: varchar("digio_signer_identifier", { length: 200 }),
+    signing_status: varchar("signing_status", { length: 32 })
+      .notNull()
+      .default("pending"),
+    signed_at: timestamp("signed_at", { withTimezone: true }),
+    signing_url: text("signing_url"),
+    last_status_event_at: timestamp("last_status_event_at", {
+      withTimezone: true,
+    }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    agreementIdx: index("idx_nbfc_lsp_agreement_signers_agreement").on(
+      table.nbfc_lsp_agreement_id,
+      table.signer_order,
+    ),
+    statusIdx: index("idx_nbfc_lsp_signers_status").on(
+      table.nbfc_lsp_agreement_id,
+      table.signing_status,
+    ),
   }),
 );
 
@@ -3852,6 +3911,87 @@ export const nbfcStatusHistory = pgTable(
     nbfcIdx: index("nbfc_status_history_nbfc_id_idx").on(table.nbfc_id),
     occurredAtIdx: index("nbfc_status_history_occurred_at_idx").on(
       table.occurred_at,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-111 — CEO per-item correction request rounds (BRD §6.0.6 Step 4)
+// Each CEO "Request Corrections" submission writes one row to
+// nbfc_correction_rounds and one row per flagged item to
+// nbfc_correction_items. Round + item state machine:
+//   round:  open → resolved | superseded
+//   item:   pending → resolved | dismissed
+// When admin transitions request_correction → pending_admin_review, the
+// transition route auto-snapshots the new value/file_url into each pending
+// item and flips the round to resolved. See
+// `src/app/api/admin/nbfc/[nbfcId]/transition/route.ts`.
+// =============================================================================
+export const nbfcCorrectionRounds = pgTable(
+  "nbfc_correction_rounds",
+  {
+    id: serial("id").primaryKey(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id, { onDelete: "cascade" }),
+    round_number: integer("round_number").notNull(),
+    status: varchar("status", { length: 20 }).default("open").notNull(),
+    requested_by: uuid("requested_by").notNull(),
+    summary_remarks: text("summary_remarks"),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    resolved_by: uuid("resolved_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    uniqueRound: uniqueIndex("nbfc_correction_rounds_unique").on(
+      table.nbfc_id,
+      table.round_number,
+    ),
+    nbfcStatusIdx: index("idx_nbfc_correction_rounds_nbfc_status").on(
+      table.nbfc_id,
+      table.status,
+    ),
+  }),
+);
+
+export const nbfcCorrectionItems = pgTable(
+  "nbfc_correction_items",
+  {
+    id: serial("id").primaryKey(),
+    round_id: integer("round_id")
+      .notNull()
+      .references(() => nbfcCorrectionRounds.id, { onDelete: "cascade" }),
+    kind: varchar("kind", { length: 24 }).notNull(),
+    target_key: varchar("target_key", { length: 120 }).notNull(),
+    target_ref_id: integer("target_ref_id"),
+    previous_value: text("previous_value"),
+    previous_file_url: text("previous_file_url"),
+    remark: text("remark"),
+    resolution_status: varchar("resolution_status", { length: 20 })
+      .default("pending")
+      .notNull(),
+    new_value: text("new_value"),
+    new_file_url: text("new_file_url"),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    resolved_by: uuid("resolved_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    uniqueItem: uniqueIndex("nbfc_correction_items_unique").on(
+      table.round_id,
+      table.kind,
+      table.target_key,
+    ),
+    roundStatusIdx: index("idx_nbfc_correction_items_round_status").on(
+      table.round_id,
+      table.resolution_status,
     ),
   }),
 );

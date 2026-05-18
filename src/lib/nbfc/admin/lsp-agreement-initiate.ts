@@ -45,33 +45,28 @@ export function formatYyyymmddUtc(d: Date): string {
 
 /**
  * Build the signer array in the BRD-mandated order.
- * Index 0 signs first when sequential=true: NBFC → iTarang1 → iTarang2.
+ * Index 0 signs first when sequential=true: all NBFC signers, then all
+ * iTarang signers, each in the order the admin entered them in Step 3.
+ *
+ * Designation (free-form text the admin enters, e.g. "Director",
+ * "Authorised Signatory") becomes the Digio `reason` so the audit trail
+ * carries the human-meaningful role rather than a generic "NBFC Signatory".
  */
-export function buildSignerOrder(input: {
-  nbfcSignatoryName: string;
-  nbfcSignatoryEmail: string;
-  itarangSignatory1Name: string;
-  itarangSignatory1Email: string;
-  itarangSignatory2Name: string;
-  itarangSignatory2Email: string;
-}): MultiTemplateSigner[] {
-  return [
-    {
-      identifier: input.nbfcSignatoryEmail,
-      name: input.nbfcSignatoryName,
-      reason: "NBFC Signatory",
-    },
-    {
-      identifier: input.itarangSignatory1Email,
-      name: input.itarangSignatory1Name,
-      reason: "iTarang Signatory 1",
-    },
-    {
-      identifier: input.itarangSignatory2Email,
-      name: input.itarangSignatory2Name,
-      reason: "iTarang Signatory 2",
-    },
-  ];
+export interface SignerInput {
+  fullName: string;
+  email: string;
+  designation: string;
+}
+
+export function buildSignerOrder(
+  nbfcSigners: ReadonlyArray<SignerInput>,
+  itarangSigners: ReadonlyArray<SignerInput>,
+): MultiTemplateSigner[] {
+  return [...nbfcSigners, ...itarangSigners].map((s) => ({
+    identifier: s.email,
+    name: s.fullName,
+    reason: s.designation,
+  }));
 }
 
 /**

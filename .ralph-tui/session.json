@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "sessionId": "4620c75c-e74e-4ef8-8f82-c0707cb07aa1",
+  "status": "running",
+  "startedAt": "2026-05-12T13:57:42.930Z",
+  "updatedAt": "2026-05-12T13:57:42.931Z",
+  "currentIteration": 0,
+  "maxIterations": 5,
+  "tasksCompleted": 0,
+  "isPaused": false,
+  "agentPlugin": "claude",
+  "trackerState": {
+    "plugin": "json",
+    "totalTasks": 0,
+    "tasks": []
+  },
+  "iterations": [],
+  "skippedTaskIds": [],
+  "cwd": "C:\\Users\\Aniket\\OneDrive\\Desktop\\Itarang_17_04_2026\\itarang-software",
+  "activeTaskIds": [],
+  "subagentPanelVisible": false
+}

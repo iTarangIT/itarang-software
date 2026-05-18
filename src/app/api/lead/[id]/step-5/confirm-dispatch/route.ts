@@ -129,7 +129,7 @@ export async function POST(
       .where(eq(productSelections.lead_id, leadId))
       .orderBy(desc(productSelections.created_at))
       .limit(1);
-    if (!selection || !selection.battery_serial || !selection.charger_serial) {
+    if (!selection || !selection.battery_serial) {
       return NextResponse.json(
         { success: false, error: { message: "No product selection on this lead" } },
         { status: 400 },
@@ -194,7 +194,7 @@ export async function POST(
         tx,
         leadId,
         batterySerial: selection.battery_serial!,
-        chargerSerial: selection.charger_serial!,
+        chargerSerial: selection.charger_serial ?? null,
         dealerId: user.dealer_id!,
         customerName: lead.full_name || lead.owner_name || null,
         customerPhone: lead.phone || lead.mobile || null,

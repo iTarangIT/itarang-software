@@ -58,7 +58,24 @@ async function tryLaunchServerless() {
   });
 }
 
+// VPS / self-hosted path: use a system-installed Chromium with puppeteer-core.
+// Set PUPPETEER_EXECUTABLE_PATH to the absolute path of the chromium binary
+// (e.g. /usr/bin/chromium-browser or /usr/bin/google-chrome-stable).
+async function tryLaunchSystemChromium(executablePath: string) {
+  const { default: puppeteerCore } = await import("puppeteer-core");
+  return puppeteerCore.launch({
+    executablePath,
+    headless: true,
+    args: FAST_FLAGS,
+  });
+}
+
 async function launchBrowserOnce() {
+  const systemChromePath = process.env.PUPPETEER_EXECUTABLE_PATH?.trim();
+  if (systemChromePath) {
+    return await tryLaunchSystemChromium(systemChromePath);
+  }
+
   const isServerless =
     !!process.env.VERCEL ||
     !!process.env.AWS_LAMBDA_FUNCTION_NAME ||

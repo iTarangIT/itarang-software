@@ -10,6 +10,7 @@ import {
   Clock,
   Package,
   User,
+  Download,
 } from "lucide-react";
 
 // BRD V2 Part E — admin Step 4 product-review queue.
@@ -80,6 +81,17 @@ export default function AdminProductReviewQueuePage() {
     return () => clearInterval(interval);
   }, [statusFilter, paymentFilter, search]);
 
+  // Refetch when the tab regains focus so an admin who sanctions / rejects a
+  // lead on the detail page and Backs to the list sees the badge update
+  // immediately instead of waiting for the 30s interval.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") fetchRows(true);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [statusFilter, paymentFilter, search]);
+
   return (
     <div className="min-h-screen bg-[#F8F9FB]">
       <div className="max-w-[1400px] mx-auto px-6 py-8">
@@ -114,6 +126,16 @@ export default function AdminProductReviewQueuePage() {
             </button>
           ))}
           <div className="flex-1" />
+          <a
+            href={`/api/admin/product-reviews/export?${new URLSearchParams({
+              status: statusFilter,
+              ...(paymentFilter ? { payment_mode: paymentFilter } : {}),
+              ...(search ? { q: search } : {}),
+            }).toString()}`}
+            className="px-4 py-2 rounded-xl text-sm font-bold bg-white border border-gray-200 text-gray-700 hover:border-[#1D4ED8] hover:text-[#1D4ED8] inline-flex items-center gap-2"
+          >
+            <Download className="w-4 h-4" /> Export
+          </a>
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
