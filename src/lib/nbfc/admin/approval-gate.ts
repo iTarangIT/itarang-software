@@ -7,21 +7,27 @@
  * YAML).
  */
 import { db } from "@/lib/db";
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import {
   nbfc,
   nbfcComplianceDocuments,
+  nbfcCorrectionItems,
+  nbfcCorrectionRounds,
   nbfcLspAgreements,
 } from "@/lib/db/schema";
 import { REQUIRED_NBFC_DOC_TYPES } from "./required-docs";
-import {
-  hasSuccessfulEntityVerifications,
-  type EntityVerificationType,
-} from "./entity-kyc";
-import {
-  hasSuccessfulDirectorVerifications,
-  type DirectorVerificationType,
-} from "./director-kyc";
+import type { EntityVerificationType } from "./entity-kyc";
+import type { DirectorVerificationType } from "./director-kyc";
+
+// KYC verification is no longer a CEO-side approval gate — admin runs KYC
+// out-of-band on /admin/nbfc/[id]/kyc-review. The CEO approval surface
+// trusts the admin's submission and reads only docs + LSP state.
+
+export type PendingCorrections = {
+  roundId: number;
+  roundNumber: number;
+  openItemCount: number;
+};
 
 export type ReadinessResult = {
   canApprove: boolean;
@@ -30,6 +36,7 @@ export type ReadinessResult = {
   missingEntityKyc: EntityVerificationType[];
   missingDirectorKyc: DirectorVerificationType[];
   reason: string | null;
+  pendingCorrections: PendingCorrections | null;
 };
 
 export async function evaluateApprovalReadiness(
@@ -47,13 +54,16 @@ export async function evaluateApprovalReadiness(
       canApprove: false,
       missingDocs: [],
       lspAgreementStatus: "MISSING",
-      missingEntityKyc: ["cin", "pan", "gstin"],
-      missingDirectorKyc: ["pan", "aadhaar", "rc"],
+      missingEntityKyc: [],
+      missingDirectorKyc: [],
       reason: "NBFC not found",
+      pendingCorrections: null,
     };
   }
 
-  // 2) Compliance documents — every required type must be 'verified'.
+  // 2) Compliance documents — every required type must have at least one
+  // non-rejected upload. (CEO doc verification has been removed; uploads
+  // are accepted as-is by the admin self-serve flow.)
   const docs = await db
     .select({
       document_type: nbfcComplianceDocuments.document_type,
@@ -61,11 +71,11 @@ export async function evaluateApprovalReadiness(
     })
     .from(nbfcComplianceDocuments)
     .where(eq(nbfcComplianceDocuments.nbfc_id, nbfcId));
-  const verifiedTypes = new Set(
-    docs.filter((d) => d.status === "verified").map((d) => d.document_type),
+  const uploadedTypes = new Set(
+    docs.filter((d) => d.status !== "rejected").map((d) => d.document_type),
   );
   const missingDocs = REQUIRED_NBFC_DOC_TYPES.filter(
-    (t) => !verifiedTypes.has(t),
+    (t) => !uploadedTypes.has(t),
   );
 
   // 3) LSP agreement — must be COMPLETED.
@@ -77,36 +87,90 @@ export async function evaluateApprovalReadiness(
     .limit(1);
   const lspAgreementStatus = lsp?.agreement_status ?? "MISSING";
 
-  // 4) NBFC entity KYC — CIN, PAN, GSTIN must each have at least one
-  // status='success' row in nbfc_entity_kyc_verifications.
-  const entityKyc = await hasSuccessfulEntityVerifications(nbfcId);
-  // 5) Director KYC — PAN, Aadhaar, RC must each have at least one
-  // status='success' row in nbfc_director_kyc_verifications.
-  const directorKyc = await hasSuccessfulDirectorVerifications(nbfcId);
+  // KYC gates removed from CEO approval — admin owns KYC verification on
+  // /admin/nbfc/[id]/kyc-review. The CEO surface no longer reads or blocks
+  // on entity/director KYC state.
+
+  // In the new pre-Digio CEO-approval flow, the agreement is in
+  // PENDING_CEO_VERIFICATION at the time CEO approves — Digio is invoked
+  // *after* approval, not before it. So the approve gate accepts both the
+  // pre-Digio bundle state and any terminal signed state.
+  const APPROVABLE_LSP_STATUSES = new Set([
+    "PENDING_CEO_VERIFICATION",
+    "COMPLETED",
+    "SIGNED",
+  ]);
+
+  // E-111 — block approval when the latest correction round still has
+  // pending CEO-flagged items. The CEO can't approve while their own
+  // outstanding requests haven't been addressed by the admin.
+  // Wrapped so the gate still evaluates if E-111 tables aren't applied yet.
+  let pendingCorrections: PendingCorrections | null = null;
+  try {
+    const [latestRound] = await db
+      .select({
+        id: nbfcCorrectionRounds.id,
+        round_number: nbfcCorrectionRounds.round_number,
+        status: nbfcCorrectionRounds.status,
+      })
+      .from(nbfcCorrectionRounds)
+      .where(eq(nbfcCorrectionRounds.nbfc_id, nbfcId))
+      .orderBy(desc(nbfcCorrectionRounds.round_number))
+      .limit(1);
+
+    if (latestRound && latestRound.status === "open") {
+      const pendingItems = await db
+        .select({ id: nbfcCorrectionItems.id })
+        .from(nbfcCorrectionItems)
+        .where(
+          and(
+            eq(nbfcCorrectionItems.round_id, latestRound.id),
+            eq(nbfcCorrectionItems.resolution_status, "pending"),
+          ),
+        );
+      pendingCorrections = {
+        roundId: latestRound.id,
+        roundNumber: latestRound.round_number,
+        openItemCount: pendingItems.length,
+      };
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[E-111] correction round lookup failed in approval gate — migration not applied?",
+      err instanceof Error ? err.message : err,
+    );
+  }
 
   let reason: string | null = null;
-  if (missingDocs.length > 0) {
-    reason = `Required compliance documents not verified: ${missingDocs.join(", ")}`;
-  } else if (lspAgreementStatus !== "COMPLETED") {
-    reason = "Cannot activate until LSP Agreement is fully signed and downloaded from Digio.";
-  } else if (!entityKyc.ok) {
-    reason = `NBFC entity KYC not verified: ${entityKyc.missing.map((t) => t.toUpperCase()).join(", ")}`;
-  } else if (!directorKyc.ok) {
-    reason = `Director KYC not verified: ${directorKyc.missing.map((t) => t.toUpperCase()).join(", ")}`;
+  if (
+    pendingCorrections &&
+    pendingCorrections.openItemCount > 0
+  ) {
+    reason = `Pending CEO-flagged corrections: ${pendingCorrections.openItemCount} item${
+      pendingCorrections.openItemCount === 1 ? "" : "s"
+    } not yet resolved.`;
+  } else if (missingDocs.length > 0) {
+    reason = `Required compliance documents missing: ${missingDocs.join(", ")}`;
+  } else if (!APPROVABLE_LSP_STATUSES.has(lspAgreementStatus)) {
+    reason = "Agreement bundle missing or not in a reviewable state.";
   }
+
+  const blockedByCorrections =
+    !!pendingCorrections && pendingCorrections.openItemCount > 0;
 
   return {
     exists: true,
     currentStatus: row.status,
     canApprove:
+      !blockedByCorrections &&
       missingDocs.length === 0 &&
-      lspAgreementStatus === "COMPLETED" &&
-      entityKyc.ok &&
-      directorKyc.ok,
+      APPROVABLE_LSP_STATUSES.has(lspAgreementStatus),
     missingDocs: [...missingDocs],
     lspAgreementStatus,
-    missingEntityKyc: entityKyc.missing,
-    missingDirectorKyc: directorKyc.missing,
+    missingEntityKyc: [],
+    missingDirectorKyc: [],
     reason,
+    pendingCorrections,
   };
 }
