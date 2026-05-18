@@ -5,7 +5,7 @@
  * or email='sanchit@itarang.com'). Other roles see a 403 banner — the
  * actual approve action is also CEO-gated server-side.
  */
-import { eq, and, count } from "drizzle-orm";
+import { eq, and, count, desc } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import {
@@ -15,7 +15,7 @@ import {
 } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { REQUIRED_NBFC_DOC_TYPES } from "@/lib/nbfc/admin/required-docs";
-import { PageShell, buildNbfcSteps } from "@/components/layout/PageShell";
+import { PageShell } from "@/components/layout/PageShell";
 import NbfcApprovalsQueue, {
   type PendingNbfc,
 } from "@/components/admin/nbfc/NbfcApprovalsQueue";
@@ -64,7 +64,8 @@ export default async function NbfcApprovalsPage() {
     );
   }
 
-  // Pending NBFCs.
+  // Pending NBFCs — newest submission at the top of the CEO queue so the
+  // most-recently-submitted application is the first thing Sanchit sees.
   const pending = await db
     .select({
       id: nbfc.id,
@@ -74,7 +75,8 @@ export default async function NbfcApprovalsPage() {
       updatedAt: nbfc.updated_at,
     })
     .from(nbfc)
-    .where(eq(nbfc.status, "pending_admin_review"));
+    .where(eq(nbfc.status, "pending_admin_review"))
+    .orderBy(desc(nbfc.updated_at));
 
   // For each pending NBFC, fetch verified-doc count + LSP agreement status.
   // Loop one-by-one; volume is tiny (CEO never has more than a handful).
@@ -110,11 +112,6 @@ export default async function NbfcApprovalsPage() {
     }),
   );
 
-  const steps = buildNbfcSteps({
-    active: "approval",
-    done: ["master", "documents", "lsp"],
-  });
-
   return (
     <PageShell
       eyebrow="CEO Queue"
@@ -123,7 +120,6 @@ export default async function NbfcApprovalsPage() {
         rows.length === 1 ? "" : "s"
       } awaiting your sign-off.`}
       breadcrumb={[{ label: "Admin", href: "/admin" }, { label: "NBFC Approvals" }]}
-      steps={steps}
     >
       <NbfcApprovalsQueue rows={rows} />
     </PageShell>

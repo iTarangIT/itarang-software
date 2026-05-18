@@ -105,12 +105,30 @@ export async function resolveAdminActor(headers: Headers): Promise<AdminActor> {
   if (error || !user) {
     throw new Error("UNAUTHORIZED: no session user");
   }
-  const rows = await db
-    .select({ id: users.id, role: users.role })
-    .from(users)
-    .where(eq(users.id, user.id))
-    .limit(1);
-  const row = rows[0];
+  let row =
+    (
+      await db
+        .select({ id: users.id, role: users.role })
+        .from(users)
+        .where(eq(users.id, user.id))
+        .limit(1)
+    )[0] ?? null;
+  // Fallback by email — older `users` rows were seeded with random UUIDs that
+  // don't match the Supabase auth user.id. The canonical `requireAuth` in
+  // src/lib/auth-utils.ts and `requireAdmin` in src/app/api/admin/nbfc/[nbfcId]/
+  // route.ts already do this, so `resolveAdminActor` must match or the
+  // compliance-documents upload (and other NBFC admin POSTs that share this
+  // helper) 403 for legitimately-admin users.
+  if (!row && user.email) {
+    row =
+      (
+        await db
+          .select({ id: users.id, role: users.role })
+          .from(users)
+          .where(eq(users.email, user.email))
+          .limit(1)
+      )[0] ?? null;
+  }
   if (!row || !ADMIN_ROLES.includes(row.role as (typeof ADMIN_ROLES)[number])) {
     throw new Error("FORBIDDEN: not an admin");
   }

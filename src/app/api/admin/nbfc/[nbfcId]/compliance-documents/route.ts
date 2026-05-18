@@ -17,11 +17,14 @@ import { resolveAdminActor, statusFromError } from "@/lib/nbfc/admin/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// Slugs aligned with BRD §6.0.4 and src/lib/nbfc/admin/required-docs.ts —
+// these are the same vocabulary the Step 2.5 verification gate reads, so a
+// document uploaded with one of these slugs can actually satisfy approval.
 const DOCUMENT_TYPES = [
   "rbi_cor",
-  "certificate_of_incorporation",
-  "pan_card_company",
-  "gst_registration",
+  "incorporation_certificate",
+  "pan_card",
+  "gst_certificate",
   "audited_financials",
   "board_resolution",
   "fair_practices_code",
@@ -31,9 +34,20 @@ const DOCUMENT_TYPES = [
   "recovery_immobilisation_sop",
 ] as const;
 
+// The upload helper at .../compliance-documents/upload returns same-origin
+// paths like "/nbfc-uploads/{id}/…pdf" (files live under public/), so
+// fileUrl must accept either an absolute http(s) URL (future S3 swap-in)
+// or a /-prefixed path. `z.string().url()` would reject the relative form
+// and break local uploads with "UNPROCESSABLE: validation failed".
+// Permissive on the trailing characters — the upload helper controls the
+// filename, so character-class whitelisting here only invents new platform-
+// specific failures (it rejected Windows backslash-leaked paths previously).
+const FILE_URL_RE = /^(?:https?:\/\/\S+|\/\S+)$/;
 const Body = z.object({
   documentType: z.enum(DOCUMENT_TYPES),
-  fileUrl: z.string().url(),
+  fileUrl: z.string().min(1).regex(FILE_URL_RE, {
+    message: "fileUrl must be an absolute URL or a same-origin path",
+  }),
   expiryDate: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)

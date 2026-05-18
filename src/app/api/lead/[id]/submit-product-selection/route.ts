@@ -30,7 +30,9 @@ const ParaLineSchema = z.object({
 
 const BodySchema = z.object({
   batterySerial: z.string().min(1),
-  chargerSerial: z.string().min(1),
+  // Charger is optional — battery-only sales (with or without paraphernalia)
+  // are a valid order. When null/undefined, charger inventory is left alone.
+  chargerSerial: z.string().min(1).nullable().optional(),
   paraphernalia: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
   paraphernaliaLines: z.array(ParaLineSchema).optional(),
   dealerMargin: z.number().min(0),
@@ -155,15 +157,17 @@ export async function POST(
         notes: "Step 4 product-selection submit (battery)",
         when: now,
       });
-      await reserveInventorySerial({
-        tx,
-        serial: body.chargerSerial,
-        dealerId: user.dealer_id,
-        leadId,
-        performedBy: user.id,
-        notes: "Step 4 product-selection submit (charger)",
-        when: now,
-      });
+      if (body.chargerSerial) {
+        await reserveInventorySerial({
+          tx,
+          serial: body.chargerSerial,
+          dealerId: user.dealer_id,
+          leadId,
+          performedBy: user.id,
+          notes: "Step 4 product-selection submit (charger)",
+          when: now,
+        });
+      }
 
       // Advance lead
       await tx
@@ -188,7 +192,7 @@ export async function POST(
         productSelectionId: result.productSelectionId,
         inventoryLocked: {
           battery: body.batterySerial,
-          charger: body.chargerSerial,
+          charger: body.chargerSerial ?? null,
         },
       },
     });

@@ -711,13 +711,44 @@ export function Sidebar() {
   }, [inferredRole]);
 
   const financeGatedItemIds = new Set(["loans", "loan-mgmt"]);
-  const menuItems =
+  let menuItems =
     inferredRole === "dealer" && dealerFinanceEnabled === false
       ? rawMenuItems.map((group: any) => ({
           ...group,
           items: group.items.filter((item: any) => !financeGatedItemIds.has(item.id)),
         }))
       : rawMenuItems;
+
+  // NBFC Onboarding Plan §15.1 — count badge on the CEO "Pending NBFC
+  // Approvals" link, fetched once on mount. Polling is overkill for a queue
+  // that turns over a handful of times per week.
+  const [pendingNbfcCount, setPendingNbfcCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (inferredRole !== "ceo") return;
+    let cancelled = false;
+    fetch("/api/admin/nbfc/approvals/count", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((j) => {
+        if (!cancelled) setPendingNbfcCount(Number(j.count ?? 0));
+      })
+      .catch(() => {
+        /* silent — badge stays absent on failure */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inferredRole]);
+
+  if (pendingNbfcCount && pendingNbfcCount > 0) {
+    menuItems = menuItems.map((group: any) => ({
+      ...group,
+      items: group.items.map((item: any) =>
+        item.id === "nbfc-approvals"
+          ? { ...item, badge: pendingNbfcCount }
+          : item,
+      ),
+    }));
+  }
 
   // BRD §6.B sidebar — solid #02314e navy, 9px ALL CAPS section labels at
   // rgba(255,255,255,0.30), 13px DM Sans Medium nav items, 3px transparent
@@ -763,7 +794,18 @@ export function Sidebar() {
                       )}
                       strokeWidth={1.75}
                     />
-                    <span className="truncate">{item.label}</span>
+                    <span className="truncate flex-1">{item.label}</span>
+                    {item.badge ? (
+                      <span
+                        className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold"
+                        style={{
+                          background: "var(--color-brand-sky)",
+                          color: "#fff",
+                        }}
+                      >
+                        {item.badge}
+                      </span>
+                    ) : null}
                   </Link>
                 );
               })}

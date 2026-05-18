@@ -4,6 +4,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leads, loanSanctions, productSelections, users } from "@/lib/db/schema";
 import { requireAdminAppUser } from "@/lib/kyc/admin-workflow";
+import { tryToPaymentMode } from "@/lib/sales/payment-mode";
 
 // BRD V2 Part E — admin Step 4 product-review queue.
 // Returns the latest product_selection per lead, joined with the latest
@@ -37,7 +38,9 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const statusFilter = parseStatus(searchParams.get("status"));
-    const paymentMode = searchParams.get("payment_mode")?.trim().toLowerCase() || "";
+    const rawPayment = searchParams.get("payment_mode")?.trim().toLowerCase() || "";
+    const paymentMode: "cash" | "finance" | "" =
+      rawPayment === "cash" || rawPayment === "finance" ? rawPayment : "";
     const search = searchParams.get("q")?.trim().toLowerCase() || "";
 
     // Latest product selection per lead. There's no per-lead unique constraint,
@@ -134,11 +137,20 @@ export async function GET(req: NextRequest) {
         const lead = leadById.get(leadId);
         const sanction = latestSanctionByLead.get(leadId) ?? null;
 
-        const loanStatus = sanction?.status ?? null; // 'sanctioned' | 'rejected' | null
+        // Derive status from BOTH sources so the badge stays correct even if
+        // only one of (loan_sanctions / product_selections.admin_decision) is
+        // written. Sanction / reject routes today write both, but reading from
+        // either source is safer against future code paths.
+        const adminDecision = String(sel.admin_decision ?? "").toLowerCase();
+        const loanStatus = String(sanction?.status ?? "").toLowerCase();
         let derivedStatus: "pending" | "sanctioned" | "rejected";
-        if (loanStatus === "sanctioned") derivedStatus = "sanctioned";
-        else if (loanStatus === "rejected") derivedStatus = "rejected";
-        else derivedStatus = "pending";
+        if (adminDecision === "sanctioned" || loanStatus === "sanctioned") {
+          derivedStatus = "sanctioned";
+        } else if (adminDecision === "rejected" || loanStatus === "rejected") {
+          derivedStatus = "rejected";
+        } else {
+          derivedStatus = "pending";
+        }
 
         const dealerInfo = lead?.dealer_id
           ? dealerByDealerId.get(lead.dealer_id) ?? null
@@ -175,7 +187,15 @@ export async function GET(req: NextRequest) {
 
     const filtered = allRows
       .filter((r) => (statusFilter === "all" ? true : r.status === statusFilter))
-      .filter((r) => (paymentMode ? r.payment_mode === paymentMode : true))
+      .filter((r) => {
+        if (!paymentMode) return true;
+        // Collapse every legal payment_method variant ('Cash' / 'Other finance' /
+        // 'Dealer finance' / legacy 'cash' / 'upfront' / 'finance' /
+        // 'other_finance' / 'dealer_finance') to 'cash' or 'finance' before
+        // comparing. Direct === lost rows whose raw value was anything but a
+        // lowercase 'cash'/'finance'.
+        return tryToPaymentMode(r.payment_mode) === paymentMode;
+      })
       .filter((r) => {
         if (!search) return true;
         return (

@@ -22,6 +22,7 @@ import {
   NBFC_STATUSES,
   validateTransition,
 } from "@/lib/nbfc/admin/status-transitions";
+import { autoResolveOpenRoundOnResubmit } from "@/lib/nbfc/admin/correction-resolver";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -161,6 +162,26 @@ export async function POST(
       occurred_at: nbfcStatusHistory.occurred_at,
     });
 
+  // E-111 — when admin resubmits after a CEO request_correction round, auto-
+  // resolve all still-pending items by snapshotting the current value/file.
+  // No-op if there is no open round (e.g. legacy transitions that pre-date
+  // the round model). Failures are non-fatal — the transition row is the
+  // canonical signal; the round status is advisory.
+  let resolvedRound: number | null = null;
+  let resolvedItemCount = 0;
+  if (guard.from === "request_correction" && guard.to === "pending_admin_review") {
+    try {
+      const res = await autoResolveOpenRoundOnResubmit(id, adminUserId);
+      if (res.ok) {
+        resolvedRound = res.roundId;
+        resolvedItemCount = res.resolvedItemCount;
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[E-111] auto-resolve open round failed:", err);
+    }
+  }
+
   // Notification side-effects (best-effort, non-blocking on failure).
   try {
     if (guard.to === "rejected") {
@@ -189,5 +210,7 @@ export async function POST(
     to: updated.status,
     occurredAt: hist.occurred_at,
     historyId: hist.id,
+    resolvedRound,
+    resolvedItemCount,
   });
 }

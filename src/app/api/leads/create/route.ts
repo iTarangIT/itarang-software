@@ -9,14 +9,13 @@ import { eq, and, sql, desc } from 'drizzle-orm';
 import {
     dealerOnboardingApplications,
     dealers,
-    dealerNbfcAssignments,
 } from '@/lib/db/schema';
 
 // [E-105] Lead-creation dealer-status gate (Sync Audit G-10).
 // Returns a structured 403 response with a stable string error code so the
 // dealer-portal UI can localise messages without parsing message text.
 function gateError(
-    code: 'DEALER_NOT_ACTIVE' | 'FINANCE_NOT_ENABLED' | 'NO_ACTIVE_NBFC',
+    code: 'DEALER_NOT_ACTIVE' | 'FINANCE_NOT_ENABLED',
     message: string,
     extra: Record<string, unknown> = {}
 ) {
@@ -29,15 +28,22 @@ function gateError(
 /**
  * [E-105] Validate that the calling dealer is permitted to create a lead.
  *
- * Three pre-insert guards (BRD §F.1):
+ * Two pre-insert guards (BRD §F.1):
  *  1. dealer.onboarding_status === 'active' (always)
  *  2. dealer.finance_enabled === true        (finance-path only)
- *  3. ≥1 active dealer_nbfc_assignments row (finance-path only)
+ *
+ * NBFC assignment is intentionally NOT checked here. A lead doesn't need an
+ * NBFC to be captured / KYC'd — the NBFC is only chosen at loan-sanction
+ * time (Step 5), where the existing LenderDropdown already surfaces a
+ * "No lenders assigned to this dealer" empty state if the assignment is
+ * missing. Gating at lead-create contradicted the wizard's Hot+Finance →
+ * Step 2 KYC routing and stopped admin-approved dealers from progressing.
  *
  * paymentMethod is treated as finance-path when it is anything other than the
  * cash-equivalent values ('cash' / legacy 'upfront'). When paymentMethod is
  * undefined (e.g. initializeDraft mode where payment hasn't been chosen yet)
- * only the onboarding_status guard runs — the finance guards apply at commit.
+ * only the onboarding_status guard runs — the finance-enabled guard applies
+ * at commit.
  *
  * Returns null on pass, or a NextResponse with the structured 403 body on
  * fail.
@@ -87,23 +93,6 @@ async function checkDealerStatusGate(
         return gateError(
             'FINANCE_NOT_ENABLED',
             'Finance-path leads require Finance Enablement to be active. Please contact iTarang to activate.'
-        );
-    }
-
-    const [{ count: activeAssignments } = { count: 0 }] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(dealerNbfcAssignments)
-        .where(
-            and(
-                eq(dealerNbfcAssignments.dealer_id, dealer.id),
-                eq(dealerNbfcAssignments.status, 'active')
-            )
-        );
-
-    if (!activeAssignments || activeAssignments === 0) {
-        return gateError(
-            'NO_ACTIVE_NBFC',
-            'No active lending partner is assigned to your account. Please contact iTarang admin.'
         );
     }
 
