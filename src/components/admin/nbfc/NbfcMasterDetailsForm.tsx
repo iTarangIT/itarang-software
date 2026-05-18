@@ -52,6 +52,13 @@ export interface NbfcMasterDetailsFormProps {
   mode: Mode;
   nbfcId?: string;
   initial?: Record<string, unknown>;
+  hasOpenCorrectionRound?: boolean;
+  /**
+   * Read-only mode. When true (NBFC is approved/active), every input is
+   * disabled and the bottom CTAs are hidden. The page renders
+   * NbfcReadOnlyBanner above this form.
+   */
+  locked?: boolean;
 }
 
 type SubmitIntent = "draft" | "submit-for-ceo";
@@ -65,8 +72,36 @@ interface CreatedState {
 
 // Mirrors src/app/api/admin/nbfc/route.ts createSchema.rbiRegistrationNo
 const RBI_REG_REGEX = /^N-\d{2}\.\d{5}\.\d{2}\.\d{2}\.\d{4}\.\d{5}\.\d{2}$/;
+const RBI_REG_PATTERN = "N-\\d{2}\\.\\d{5}\\.\\d{2}\\.\\d{2}\\.\\d{4}\\.\\d{5}\\.\\d{2}";
 const RBI_REG_HINT = "N-DD.DDDDD.DD.DD.DDDD.DDDDD.DD";
 const RBI_REG_ERROR = `Must match RBI format ${RBI_REG_HINT} (e.g. N-13.00243.00.00.0000.00000.00)`;
+
+// Letters + space + . - ' so legitimate Indian names/places (St. Thomas Mount,
+// D'Souza, Jean-Paul) survive. Reject digits and other symbols.
+const ALPHA_NAME_PATTERN = "[A-Za-z\\s.'\\-]+";
+function stripToAlpha(value: string): string {
+  return value.replace(/[^A-Za-z\s.'\-]/g, "");
+}
+function normaliseStateCodes(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z,\s]/g, "");
+}
+// CIN / GSTIN / PAN are stored as uppercase by the server. Forcing the
+// caret to stay put by reassigning to the same node is required because
+// React-controlled defaultValue inputs would otherwise re-render on every
+// keystroke and lose the cursor position.
+function upperCaseInPlace(el: HTMLInputElement) {
+  const start = el.selectionStart;
+  const end = el.selectionEnd;
+  const upper = el.value.toUpperCase();
+  if (el.value !== upper) {
+    el.value = upper;
+    try {
+      if (start !== null && end !== null) el.setSelectionRange(start, end);
+    } catch {
+      // Some input types (e.g. type=email) reject setSelectionRange; ignore.
+    }
+  }
+}
 
 function validateRbi(value: string): string | null {
   if (!value) return null;
@@ -83,19 +118,89 @@ const NBFC_TYPES: ReadonlyArray<{ value: string; label: string }> = [
   { value: "other", label: "Other" },
 ];
 
+// Maps the Zod schema's dotted path (server response) to the form input's
+// `name` attribute. Keeps the highlight wiring in one place instead of
+// scattered string literals.
+const ZOD_PATH_TO_INPUT_NAME: Record<string, string> = {
+  legalName: "legalName",
+  shortName: "shortName",
+  rbiRegistrationNo: "rbiRegistrationNo",
+  cin: "cin",
+  gstNumber: "gstNumber",
+  panNumber: "panNumber",
+  nbfcType: "nbfcType",
+  "registeredAddress.line1": "addr_line1",
+  "registeredAddress.line2": "addr_line2",
+  "registeredAddress.city": "addr_city",
+  "registeredAddress.district": "addr_district",
+  "registeredAddress.state": "addr_state",
+  "registeredAddress.pin": "addr_pin",
+  primaryContactName: "primaryContactName",
+  primaryContactEmail: "primaryContactEmail",
+  primaryContactPhone: "primaryContactPhone",
+  grievanceOfficerName: "grievanceOfficerName",
+  grievanceHelpline: "grievanceHelpline",
+  grievanceUrl: "grievanceUrl",
+  nodalOfficer: "nodalOfficer",
+  partnershipDate: "partnershipDate",
+  activeGeographies: "activeGeographies",
+  fldgTerms: "fldgTerms",
+};
+
+// Friendly fallbacks for fields whose default Zod messages ("Invalid",
+// "Required") read as noise. Keyed by the input `name`.
+const FRIENDLY_FIELD_ERROR: Record<string, string> = {
+  cin: "CIN must be 21 characters (e.g. L65910MH1987PLC042961)",
+  gstNumber: "GSTIN must be 15 chars (e.g. 27AABCB1518L1ZS)",
+  panNumber: "PAN must be 10 chars (e.g. AABCB1518L)",
+  rbiRegistrationNo: RBI_REG_ERROR,
+  primaryContactEmail: "Enter a valid email address",
+  primaryContactPhone: "Phone must be 10 digits",
+  grievanceUrl: "Enter a valid URL (https://…)",
+  addr_pin: "PIN must be 6 digits",
+  activeGeographies:
+    "Comma-separated two-letter state codes (e.g. MH, GJ, RJ)",
+  partnershipDate: "Pick a partnership date",
+};
+
 export default function NbfcMasterDetailsForm({
   mode,
   nbfcId,
   initial,
+  hasOpenCorrectionRound = false,
+  locked = false,
 }: NbfcMasterDetailsFormProps) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement | null>(null);
   const [submitting, setSubmitting] = useState<SubmitIntent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<CreatedState | null>(null);
-  const [rbiError, setRbiError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [rbiTouched, setRbiTouched] = useState(false);
   const [restored, setRestored] = useState(false);
+
+  const rbiError = fieldErrors.rbiRegistrationNo ?? null;
+
+  function setFieldError(name: string, msg: string | null) {
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      if (msg) next[name] = msg;
+      else delete next[name];
+      return next;
+    });
+  }
+
+  function clearFieldErrorOnChange(name: string) {
+    return () => {
+      if (fieldErrors[name]) setFieldError(name, null);
+    };
+  }
+
+  function inputErrorClass(name: string): string {
+    return fieldErrors[name]
+      ? "border-[color:var(--color-danger)] ring-1 ring-[color:var(--color-danger)]"
+      : "";
+  }
 
   // Rehydrate in-progress create-mode draft from localStorage on mount.
   // Edit mode is skipped because its initial values are DB-backed.
@@ -160,12 +265,51 @@ export default function NbfcMasterDetailsForm({
     }
   }
 
+  function focusFirstError(errors: Record<string, string>) {
+    const form = formRef.current;
+    if (!form) return;
+    const firstName = Object.keys(errors)[0];
+    if (!firstName) return;
+    const el = form.elements.namedItem(firstName) as
+      | HTMLInputElement
+      | HTMLTextAreaElement
+      | HTMLSelectElement
+      | null;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    // Defer focus so the scroll animation isn't interrupted.
+    setTimeout(() => el.focus({ preventScroll: true }), 250);
+  }
+
   async function runSubmit(form: HTMLFormElement, intent: SubmitIntent) {
+    // Hard guard for read-only mode — the UI hides the CTAs but a stray
+    // programmatic submit (Enter key, etc.) must also be a no-op.
+    if (locked) return;
     setSubmitting(intent);
     setError(null);
+    setFieldErrors({});
 
     // Browser-native required-field check; cheaper than re-implementing.
     if (!form.checkValidity()) {
+      // Walk every form control and surface every invalid one (not just the
+      // browser's default "first failure tooltip" UX) so the user sees red
+      // borders + inline messages on all of them at once.
+      const native: Record<string, string> = {};
+      for (const el of Array.from(form.elements)) {
+        const ctrl = el as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+        if (!ctrl.name || ctrl.willValidate === false) continue;
+        if (!ctrl.checkValidity()) {
+          native[ctrl.name] =
+            FRIENDLY_FIELD_ERROR[ctrl.name] ||
+            ctrl.validationMessage ||
+            "Please check this field";
+        }
+      }
+      setFieldErrors(native);
+      setError(
+        "Some fields don't match the required format — see highlighted fields below.",
+      );
+      focusFirstError(native);
       form.reportValidity();
       setSubmitting(null);
       return;
@@ -175,19 +319,27 @@ export default function NbfcMasterDetailsForm({
     const rbiCheck = validateRbi(rbiValue);
     if (rbiCheck) {
       setRbiTouched(true);
-      setRbiError(rbiCheck);
+      setFieldError("rbiRegistrationNo", rbiCheck);
+      setError(
+        "Some fields don't match the required format — see highlighted fields below.",
+      );
+      focusFirstError({ rbiRegistrationNo: rbiCheck });
       setSubmitting(null);
       return;
     }
 
     const fd = new FormData(form);
+    // CIN, GSTIN, PAN are stored with `.uppercase` CSS but the underlying
+    // value preserves whatever case the user typed. Normalise here so the
+    // server's strict [A-Z]{...} regexes don't reject "khupk6198m" when the
+    // user *thought* they typed uppercase (the field looked uppercase).
     const payload = {
-      legalName: String(fd.get("legalName") || ""),
-      shortName: String(fd.get("shortName") || ""),
-      rbiRegistrationNo: String(fd.get("rbiRegistrationNo") || ""),
-      cin: String(fd.get("cin") || ""),
-      gstNumber: String(fd.get("gstNumber") || ""),
-      panNumber: String(fd.get("panNumber") || ""),
+      legalName: String(fd.get("legalName") || "").trim(),
+      shortName: String(fd.get("shortName") || "").trim(),
+      rbiRegistrationNo: String(fd.get("rbiRegistrationNo") || "").trim(),
+      cin: String(fd.get("cin") || "").trim().toUpperCase(),
+      gstNumber: String(fd.get("gstNumber") || "").trim().toUpperCase(),
+      panNumber: String(fd.get("panNumber") || "").trim().toUpperCase(),
       nbfcType: String(fd.get("nbfcType") || ""),
       registeredAddress: {
         line1: String(fd.get("addr_line1") || ""),
@@ -224,18 +376,36 @@ export default function NbfcMasterDetailsForm({
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.success) {
-        const fieldErrors = j?.details?.fieldErrors as
-          | Record<string, string[]>
-          | undefined;
-        if (fieldErrors?.rbiRegistrationNo?.length) {
+        if (j.error === "validation_failed") {
+          // New shape: details.fieldErrors is a path-keyed flat map
+          // (e.g. "registeredAddress.city": "Letters only"). Translate
+          // each path into the form input's `name` so we can highlight it.
+          const rawFieldErrors =
+            (j?.details?.fieldErrors as Record<string, string | string[]>) ||
+            {};
+          const mapped: Record<string, string> = {};
+          for (const [path, msg] of Object.entries(rawFieldErrors)) {
+            const inputName = ZOD_PATH_TO_INPUT_NAME[path] ?? path;
+            const flat = Array.isArray(msg) ? msg[0] : msg;
+            if (!flat) continue;
+            mapped[inputName] =
+              FRIENDLY_FIELD_ERROR[inputName] || String(flat);
+          }
+          if (mapped.rbiRegistrationNo) setRbiTouched(true);
+          setFieldErrors(mapped);
+          setError(
+            "Some fields don't match the required format — see highlighted fields below.",
+          );
+          focusFirstError(mapped);
+        } else if (j.error === "rbi_registration_no_already_exists") {
           setRbiTouched(true);
-          setRbiError(RBI_REG_ERROR);
+          const msg = "This RBI registration number is already on file";
+          setFieldErrors({ rbiRegistrationNo: msg });
+          setError(msg);
+          focusFirstError({ rbiRegistrationNo: msg });
+        } else {
+          setError(j.error || `Request failed (${res.status})`);
         }
-        setError(
-          j.error === "validation_failed"
-            ? "Some fields don't match the required format — see highlighted fields below."
-            : j.error || `Request failed (${res.status})`,
-        );
         setSubmitting(null);
         return;
       }
@@ -243,39 +413,39 @@ export default function NbfcMasterDetailsForm({
       if (mode === "create") {
         const createdId: number = j.id;
         const createdNbfcId: string = j.nbfcId;
-        let status = j.status ?? "draft";
+        const status = j.status ?? "draft";
 
-        // "Submit for CEO Approval" — chain a transition request right after
-        // the create. Tolerate transient failures (e.g. role gate quirks):
-        // the create itself already succeeded, so we always show the success
-        // card with the resulting status.
-        if (intent === "submit-for-ceo") {
-          try {
-            const tx = await fetch(
-              `/api/admin/nbfc/${createdId}/transition`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  to: "pending_admin_review",
-                  reason:
-                    "Submitted for CEO approval (sales-head onboarding form)",
-                }),
-              },
-            );
-            if (tx.ok) status = "pending_admin_review";
-          } catch {
-            // swallow — show the create success regardless
-          }
-        }
-
+        // Per BRD §6.0.2, Step 1 only persists the master record (status:
+        // draft). The transition to pending_admin_review is Step 5 and is
+        // performed downstream — it does not belong on the Step 1 form.
         clearPersistedDraft();
         setDone({ id: createdId, nbfcId: createdNbfcId, status, intent });
         setSubmitting(null);
         return;
       }
 
-      // edit mode — toast-style success flash via router refresh
+      // edit mode — if the NBFC is still a draft, surface the same Next CTA
+      // success card used by create mode so the admin keeps moving through
+      // the 3-step flow (Master → Documents → LSP). When a CEO correction
+      // round is open, also surface a success card so the admin gets a clear
+      // Next → Approval handoff instead of a silent refresh. Once the NBFC
+      // has left draft AND has no open round (e.g. approved/active
+      // grievance-only edits), fall back to a toast-style success flash.
+      const editedStatus: string = j.status ?? "";
+      const editedNbfcId: string | undefined = j.nbfcId;
+      const editedPk = Number(nbfcId);
+      const eligibleForSuccessCard =
+        editedStatus === "draft" || hasOpenCorrectionRound;
+      if (eligibleForSuccessCard && Number.isInteger(editedPk) && editedPk > 0) {
+        setDone({
+          id: editedPk,
+          nbfcId: editedNbfcId ?? "",
+          status: editedStatus,
+          intent,
+        });
+        setSubmitting(null);
+        return;
+      }
       router.refresh();
       setSubmitting(null);
     } catch (err) {
@@ -296,7 +466,30 @@ export default function NbfcMasterDetailsForm({
   }
 
   if (done) {
-    const isPending = done.status === "pending_admin_review";
+    const isDraftOnly = done.intent === "draft";
+    const isEdit = mode === "edit";
+    const isCorrectionFlow = isEdit && hasOpenCorrectionRound;
+    const eyebrowText = isEdit ? "Master details" : "NBFC created";
+    const headingText = isCorrectionFlow
+      ? "Corrections saved"
+      : isEdit
+        ? "Changes saved"
+        : isDraftOnly
+          ? "Saved as draft"
+          : "Master details saved";
+    const subtitleText = isCorrectionFlow
+      ? "Review the application and submit corrections for CEO approval from the Approval step."
+      : isEdit
+        ? "Continue to compliance documents to keep moving through onboarding."
+        : isDraftOnly
+          ? "Pick up where you left off any time — the record is parked as a draft in the directory."
+          : "Next: upload the 11 compliance documents required by RBI DL Directions 2025 (BRD §6.0.4).";
+    const nextHref = isCorrectionFlow
+      ? `/admin/nbfc/${done.id}/approval`
+      : `/admin/nbfc/${done.id}/documents`;
+    const nextLabel = isCorrectionFlow
+      ? "Next → Approval"
+      : "Next → Compliance Documents";
     return (
       <div className="card-iTarang p-8">
         <div className="flex items-start gap-4">
@@ -311,68 +504,71 @@ export default function NbfcMasterDetailsForm({
           </div>
           <div className="flex-1 space-y-3">
             <div>
-              <p className="section-label">NBFC created</p>
+              <p className="section-label">{eyebrowText}</p>
               <h2 className="mt-1 text-2xl font-semibold text-[color:var(--color-brand-navy)]">
-                {isPending
-                  ? "Submitted for CEO Approval"
-                  : "Saved as draft"}
+                {headingText}
               </h2>
               <p className="text-sm text-[color:var(--color-ink-muted)] mt-1">
-                {isPending
-                  ? "CEO Sanchit will review compliance documents and the LSP agreement before approving."
-                  : "Continue uploading compliance documents and initiate the LSP agreement before submitting."}
+                {subtitleText}
               </p>
             </div>
 
-            <dl className="grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-2 pt-2">
-              <div>
-                <dt className="section-label-muted">Public ID</dt>
-                <dd
-                  data-testid="nbfc-id"
-                  className="font-mono text-sm font-semibold text-[color:var(--color-brand-navy)] mt-1"
-                >
-                  {done.nbfcId}
-                </dd>
-              </div>
-              <div>
-                <dt className="section-label-muted">Internal PK</dt>
-                <dd
-                  data-testid="nbfc-pk"
-                  className="font-mono text-sm font-semibold text-[color:var(--color-brand-navy)] mt-1"
-                >
-                  {done.id}
-                </dd>
-              </div>
-              <div>
-                <dt className="section-label-muted">Status</dt>
-                <dd className="mt-1">
-                  <span
-                    className={
-                      isPending ? "status-pill-info" : "status-pill-neutral"
-                    }
+            {/* Public ID / Internal PK / Status — useful on create as a
+             * confirmation the row persisted, but redundant on edit (the
+             * admin already knows the NBFC). Hidden in edit mode. */}
+            {!isEdit && (
+              <dl className="grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-2 pt-2">
+                <div>
+                  <dt className="section-label-muted">Public ID</dt>
+                  <dd
+                    data-testid="nbfc-id"
+                    className="font-mono text-sm font-semibold text-[color:var(--color-brand-navy)] mt-1"
                   >
-                    {done.status}
-                  </span>
-                </dd>
-              </div>
-            </dl>
+                    {done.nbfcId}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="section-label-muted">Internal PK</dt>
+                  <dd
+                    data-testid="nbfc-pk"
+                    className="font-mono text-sm font-semibold text-[color:var(--color-brand-navy)] mt-1"
+                  >
+                    {done.id}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="section-label-muted">Status</dt>
+                  <dd className="mt-1">
+                    <span className="status-pill-neutral">{done.status}</span>
+                  </dd>
+                </div>
+              </dl>
+            )}
 
             <div className="flex flex-wrap gap-2 pt-4">
-              <a
-                href={`/admin/nbfc/${done.id}/lsp-agreement`}
-                className="btn-primary"
-              >
-                Continue → LSP Agreement
+              <a href={nextHref} className="btn-primary">
+                {nextLabel}
               </a>
-              <a
-                href={`/admin/nbfc/${done.id}/edit`}
-                className="btn-ghost"
-              >
-                Edit details
-              </a>
-              <a href="/admin/nbfc" className="btn-ghost">
-                Back to directory
-              </a>
+              {!isEdit && (
+                <a
+                  href={`/admin/nbfc/${done.id}/edit`}
+                  className="btn-ghost"
+                >
+                  Edit details
+                </a>
+              )}
+              {isEdit ? (
+                <a
+                  href={`/admin/nbfc/${done.id}/edit`}
+                  className="btn-ghost"
+                >
+                  Back to Master
+                </a>
+              ) : (
+                <a href="/admin/nbfc" className="btn-ghost">
+                  Back to directory
+                </a>
+              )}
             </div>
           </div>
         </div>
@@ -389,6 +585,24 @@ export default function NbfcMasterDetailsForm({
       onChange={persistDraft}
       className="space-y-8"
     >
+      {/* Lock the entire form when read-only. Three layers of defense:
+            1. `inert` blocks focus + keyboard + mouse on every descendant
+               (React 19's native prop — works without per-input changes).
+            2. `<fieldset disabled>` propagates `disabled` to every form
+               control for browsers that don't yet honor `inert` fully.
+            3. `opacity-60` + `cursor-not-allowed` give a clear visual
+               signal that nothing here is editable.
+          When unlocked, the wrapper is invisible (`display: contents`)
+          so layout is identical to before. */}
+      <fieldset
+        disabled={locked}
+        inert={locked || undefined}
+        className={
+          locked
+            ? "block opacity-60 cursor-not-allowed select-none border-0 p-0 m-0 space-y-8"
+            : "contents"
+        }
+      >
       {restored && (
         <div
           role="status"
@@ -425,30 +639,36 @@ export default function NbfcMasterDetailsForm({
         title="RBI registration & legal entity"
         helper="The legal-name and registration numbers are validated by RBI's E-004 format rules."
       >
-        <Field label="Legal name" hint="As registered with RBI" full>
+        <Field label="Legal name" hint="As registered with RBI" full error={fieldErrors.legalName}>
           <input
             name="legalName"
             placeholder="e.g. Bajaj Finance Limited"
             defaultValue={initialMap.legalName ?? ""}
             required
-            className="input-itarang"
+            aria-invalid={fieldErrors.legalName ? true : undefined}
+            onInput={clearFieldErrorOnChange("legalName")}
+            className={`input-itarang ${inputErrorClass("legalName")}`}
           />
         </Field>
-        <Field label="Short name" hint="Appears in dealer dropdown">
+        <Field label="Short name" hint="Appears in dealer dropdown" error={fieldErrors.shortName}>
           <input
             name="shortName"
             placeholder="e.g. Bajaj Finance"
             defaultValue={initialMap.shortName ?? ""}
             required
-            className="input-itarang"
+            aria-invalid={fieldErrors.shortName ? true : undefined}
+            onInput={clearFieldErrorOnChange("shortName")}
+            className={`input-itarang ${inputErrorClass("shortName")}`}
           />
         </Field>
-        <Field label="NBFC type">
+        <Field label="NBFC type" error={fieldErrors.nbfcType}>
           <select
             name="nbfcType"
             required
             defaultValue={initialMap.nbfcType ?? "nbfc_icc"}
-            className="input-itarang"
+            aria-invalid={fieldErrors.nbfcType ? true : undefined}
+            onChange={clearFieldErrorOnChange("nbfcType")}
+            className={`input-itarang ${inputErrorClass("nbfcType")}`}
           >
             {NBFC_TYPES.map((t) => (
               <option key={t.value} value={t.value}>
@@ -468,46 +688,73 @@ export default function NbfcMasterDetailsForm({
             placeholder="N-13.00243.00.00.0000.00000.00"
             defaultValue={initialMap.rbiRegistrationNo ?? ""}
             required
+            pattern={RBI_REG_PATTERN}
+            title={`RBI CoR format: ${RBI_REG_HINT}`}
             aria-invalid={rbiTouched && rbiError ? true : undefined}
             onBlur={(e) => {
               setRbiTouched(true);
-              setRbiError(validateRbi(e.currentTarget.value));
+              setFieldError("rbiRegistrationNo", validateRbi(e.currentTarget.value));
             }}
             onChange={(e) => {
-              if (rbiTouched) setRbiError(validateRbi(e.currentTarget.value));
+              if (rbiTouched)
+                setFieldError("rbiRegistrationNo", validateRbi(e.currentTarget.value));
             }}
             className={`input-itarang font-mono text-[13px] ${
               rbiTouched && rbiError
-                ? "border-[color:var(--color-danger)]"
+                ? "border-[color:var(--color-danger)] ring-1 ring-[color:var(--color-danger)]"
                 : ""
             }`}
           />
         </Field>
-        <Field label="CIN" hint="21 chars" mono>
+        <Field label="CIN" hint="21 chars" mono error={fieldErrors.cin}>
           <input
             name="cin"
             placeholder="L65910MH1987PLC042961"
             defaultValue={initialMap.cin ?? ""}
             required
-            className="input-itarang font-mono text-[13px] uppercase"
+            pattern="[A-Z0-9]{21}"
+            title="21-character alphanumeric CIN (uppercase)"
+            maxLength={25}
+            aria-invalid={fieldErrors.cin ? true : undefined}
+            onInput={(e) => {
+              upperCaseInPlace(e.currentTarget);
+              if (fieldErrors.cin) setFieldError("cin", null);
+            }}
+            className={`input-itarang font-mono text-[13px] uppercase ${inputErrorClass("cin")}`}
           />
         </Field>
-        <Field label="GSTIN" mono>
+        <Field label="GSTIN" hint="15 chars" mono error={fieldErrors.gstNumber}>
           <input
             name="gstNumber"
             placeholder="27AABCB1518L1ZS"
             defaultValue={initialMap.gstNumber ?? ""}
             required
-            className="input-itarang font-mono text-[13px] uppercase"
+            pattern="\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1}"
+            title="GSTIN format: 2 digits + 5 letters + 4 digits + letter + alphanumeric + Z + alphanumeric"
+            maxLength={15}
+            aria-invalid={fieldErrors.gstNumber ? true : undefined}
+            onInput={(e) => {
+              upperCaseInPlace(e.currentTarget);
+              if (fieldErrors.gstNumber) setFieldError("gstNumber", null);
+            }}
+            className={`input-itarang font-mono text-[13px] uppercase ${inputErrorClass("gstNumber")}`}
           />
         </Field>
-        <Field label="PAN" mono>
+        <Field label="PAN" hint="10 chars" mono error={fieldErrors.panNumber}>
           <input
             name="panNumber"
             placeholder="AABCB1518L"
             defaultValue={initialMap.panNumber ?? ""}
             required
-            className="input-itarang font-mono text-[13px] uppercase"
+            pattern="[A-Z]{5}\d{4}[A-Z]"
+            title="PAN format: 5 letters + 4 digits + 1 letter (uppercase)"
+            maxLength={10}
+            aria-invalid={fieldErrors.panNumber ? true : undefined}
+            onInput={(e) => {
+              upperCaseInPlace(e.currentTarget);
+              if (fieldErrors.panNumber) setFieldError("panNumber", null);
+            }}
+            className={`input-itarang font-mono text-[13px] uppercase ${inputErrorClass("panNumber")}`}
           />
         </Field>
       </Section>
@@ -516,54 +763,81 @@ export default function NbfcMasterDetailsForm({
         eyebrow="Registered Address"
         title="As declared on the Certificate of Registration"
       >
-        <Field label="Address line 1" full>
+        <Field label="Address line 1" full error={fieldErrors.addr_line1}>
           <input
             name="addr_line1"
             defaultValue={initialMap.addr_line1 ?? ""}
             required
-            className="input-itarang"
+            aria-invalid={fieldErrors.addr_line1 ? true : undefined}
+            onInput={clearFieldErrorOnChange("addr_line1")}
+            className={`input-itarang ${inputErrorClass("addr_line1")}`}
           />
         </Field>
-        <Field label="Address line 2" full>
+        <Field label="Address line 2" full error={fieldErrors.addr_line2}>
           <input
             name="addr_line2"
             defaultValue={initialMap.addr_line2 ?? ""}
-            className="input-itarang"
+            aria-invalid={fieldErrors.addr_line2 ? true : undefined}
+            onInput={clearFieldErrorOnChange("addr_line2")}
+            className={`input-itarang ${inputErrorClass("addr_line2")}`}
           />
         </Field>
-        <Field label="City">
+        <Field label="City" error={fieldErrors.addr_city}>
           <input
             name="addr_city"
             defaultValue={initialMap.addr_city ?? ""}
             required
-            className="input-itarang"
+            pattern={ALPHA_NAME_PATTERN}
+            title="Letters only"
+            aria-invalid={fieldErrors.addr_city ? true : undefined}
+            onInput={(e) => {
+              e.currentTarget.value = stripToAlpha(e.currentTarget.value);
+              if (fieldErrors.addr_city) setFieldError("addr_city", null);
+            }}
+            className={`input-itarang ${inputErrorClass("addr_city")}`}
           />
         </Field>
-        <Field label="District">
+        <Field label="District" error={fieldErrors.addr_district}>
           <input
             name="addr_district"
             defaultValue={initialMap.addr_district ?? ""}
             required
-            className="input-itarang"
+            pattern={ALPHA_NAME_PATTERN}
+            title="Letters only"
+            aria-invalid={fieldErrors.addr_district ? true : undefined}
+            onInput={(e) => {
+              e.currentTarget.value = stripToAlpha(e.currentTarget.value);
+              if (fieldErrors.addr_district) setFieldError("addr_district", null);
+            }}
+            className={`input-itarang ${inputErrorClass("addr_district")}`}
           />
         </Field>
-        <Field label="State">
+        <Field label="State" error={fieldErrors.addr_state}>
           <input
             name="addr_state"
             defaultValue={initialMap.addr_state ?? ""}
             required
-            className="input-itarang"
+            pattern={ALPHA_NAME_PATTERN}
+            title="Letters only"
+            aria-invalid={fieldErrors.addr_state ? true : undefined}
+            onInput={(e) => {
+              e.currentTarget.value = stripToAlpha(e.currentTarget.value);
+              if (fieldErrors.addr_state) setFieldError("addr_state", null);
+            }}
+            className={`input-itarang ${inputErrorClass("addr_state")}`}
           />
         </Field>
-        <Field label="PIN code" hint="6 digits">
+        <Field label="PIN code" hint="6 digits" error={fieldErrors.addr_pin}>
           <input
             name="addr_pin"
             defaultValue={initialMap.addr_pin ?? ""}
             required
-            className="input-itarang font-mono"
             inputMode="numeric"
             pattern="\d{6}"
             maxLength={6}
+            aria-invalid={fieldErrors.addr_pin ? true : undefined}
+            onInput={clearFieldErrorOnChange("addr_pin")}
+            className={`input-itarang font-mono ${inputErrorClass("addr_pin")}`}
           />
         </Field>
       </Section>
@@ -572,32 +846,44 @@ export default function NbfcMasterDetailsForm({
         eyebrow="Primary Contacts"
         title="Day-to-day point of contact for partnership operations"
       >
-        <Field label="Contact name">
+        <Field label="Contact name" error={fieldErrors.primaryContactName}>
           <input
             name="primaryContactName"
             defaultValue={initialMap.primaryContactName ?? ""}
             required
-            className="input-itarang"
+            pattern={ALPHA_NAME_PATTERN}
+            title="Letters only"
+            aria-invalid={fieldErrors.primaryContactName ? true : undefined}
+            onInput={(e) => {
+              e.currentTarget.value = stripToAlpha(e.currentTarget.value);
+              if (fieldErrors.primaryContactName)
+                setFieldError("primaryContactName", null);
+            }}
+            className={`input-itarang ${inputErrorClass("primaryContactName")}`}
           />
         </Field>
-        <Field label="Contact email">
+        <Field label="Contact email" error={fieldErrors.primaryContactEmail}>
           <input
             name="primaryContactEmail"
             type="email"
             defaultValue={initialMap.primaryContactEmail ?? ""}
             required
-            className="input-itarang"
+            aria-invalid={fieldErrors.primaryContactEmail ? true : undefined}
+            onInput={clearFieldErrorOnChange("primaryContactEmail")}
+            className={`input-itarang ${inputErrorClass("primaryContactEmail")}`}
           />
         </Field>
-        <Field label="Contact phone" hint="10 digits">
+        <Field label="Contact phone" hint="10 digits" error={fieldErrors.primaryContactPhone}>
           <input
             name="primaryContactPhone"
             defaultValue={initialMap.primaryContactPhone ?? ""}
             required
-            className="input-itarang font-mono"
             inputMode="tel"
             pattern="\d{10}"
             maxLength={10}
+            aria-invalid={fieldErrors.primaryContactPhone ? true : undefined}
+            onInput={clearFieldErrorOnChange("primaryContactPhone")}
+            className={`input-itarang font-mono ${inputErrorClass("primaryContactPhone")}`}
           />
         </Field>
       </Section>
@@ -607,36 +893,51 @@ export default function NbfcMasterDetailsForm({
         title="RBI Digital Lending Directions 2025 — mandatory"
         helper="Officer name, helpline, and grievance URL are required for every NBFC."
       >
-        <Field label="Grievance officer">
+        <Field label="Grievance officer" error={fieldErrors.grievanceOfficerName}>
           <input
             name="grievanceOfficerName"
             defaultValue={initialMap.grievanceOfficerName ?? ""}
             required
-            className="input-itarang"
+            pattern={ALPHA_NAME_PATTERN}
+            title="Letters only"
+            aria-invalid={fieldErrors.grievanceOfficerName ? true : undefined}
+            onInput={(e) => {
+              e.currentTarget.value = stripToAlpha(e.currentTarget.value);
+              if (fieldErrors.grievanceOfficerName)
+                setFieldError("grievanceOfficerName", null);
+            }}
+            className={`input-itarang ${inputErrorClass("grievanceOfficerName")}`}
           />
         </Field>
-        <Field label="Grievance helpline">
+        <Field label="Grievance helpline" error={fieldErrors.grievanceHelpline}>
           <input
             name="grievanceHelpline"
             defaultValue={initialMap.grievanceHelpline ?? ""}
             required
-            className="input-itarang"
+            aria-invalid={fieldErrors.grievanceHelpline ? true : undefined}
+            onInput={clearFieldErrorOnChange("grievanceHelpline")}
+            className={`input-itarang ${inputErrorClass("grievanceHelpline")}`}
           />
         </Field>
-        <Field label="Grievance URL">
+        <Field label="Grievance URL" error={fieldErrors.grievanceUrl}>
           <input
             name="grievanceUrl"
             type="url"
             defaultValue={initialMap.grievanceUrl ?? ""}
             required
-            className="input-itarang"
+            placeholder="https://example.com/grievance"
+            aria-invalid={fieldErrors.grievanceUrl ? true : undefined}
+            onInput={clearFieldErrorOnChange("grievanceUrl")}
+            className={`input-itarang ${inputErrorClass("grievanceUrl")}`}
           />
         </Field>
-        <Field label="Nodal officer (optional)" full>
+        <Field label="Nodal officer (optional)" full error={fieldErrors.nodalOfficer}>
           <input
             name="nodalOfficer"
             defaultValue={initialMap.nodalOfficer ?? ""}
-            className="input-itarang"
+            aria-invalid={fieldErrors.nodalOfficer ? true : undefined}
+            onInput={clearFieldErrorOnChange("nodalOfficer")}
+            className={`input-itarang ${inputErrorClass("nodalOfficer")}`}
           />
         </Field>
       </Section>
@@ -645,30 +946,42 @@ export default function NbfcMasterDetailsForm({
         eyebrow="Partnership"
         title="iTarang ↔ NBFC commercial terms"
       >
-        <Field label="Partnership date">
+        <Field label="Partnership date" error={fieldErrors.partnershipDate}>
           <input
             name="partnershipDate"
             type="date"
             defaultValue={initialMap.partnershipDate ?? ""}
             required
-            className="input-itarang"
+            aria-invalid={fieldErrors.partnershipDate ? true : undefined}
+            onChange={clearFieldErrorOnChange("partnershipDate")}
+            className={`input-itarang ${inputErrorClass("partnershipDate")}`}
           />
         </Field>
-        <Field label="Active geographies" hint="Comma-separated state codes">
+        <Field label="Active geographies" hint="Comma-separated state codes" error={fieldErrors.activeGeographies}>
           <input
             name="activeGeographies"
             defaultValue={initialMap.activeGeographies ?? ""}
             placeholder="MH, GJ, RJ, KA, TN"
             required
-            className="input-itarang"
+            pattern="[A-Z]{2}(?:\s*,\s*[A-Z]{2})*"
+            title="Comma-separated two-letter state codes (e.g. MH, GJ, RJ)"
+            aria-invalid={fieldErrors.activeGeographies ? true : undefined}
+            onInput={(e) => {
+              e.currentTarget.value = normaliseStateCodes(e.currentTarget.value);
+              if (fieldErrors.activeGeographies)
+                setFieldError("activeGeographies", null);
+            }}
+            className={`input-itarang uppercase ${inputErrorClass("activeGeographies")}`}
           />
         </Field>
-        <Field label="FLDG / Guarantee terms (optional)" full>
+        <Field label="FLDG / Guarantee terms (optional)" full error={fieldErrors.fldgTerms}>
           <textarea
             name="fldgTerms"
             defaultValue={initialMap.fldgTerms ?? ""}
             placeholder="e.g. 5% FLDG capped at portfolio level, replenished quarterly"
-            className="input-itarang-textarea min-h-[88px]"
+            aria-invalid={fieldErrors.fldgTerms ? true : undefined}
+            onInput={clearFieldErrorOnChange("fldgTerms")}
+            className={`input-itarang-textarea min-h-[88px] ${inputErrorClass("fldgTerms")}`}
           />
         </Field>
       </Section>
@@ -693,44 +1006,56 @@ export default function NbfcMasterDetailsForm({
 
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-4 border-t border-[color:var(--color-border)]">
         <p className="text-xs text-[color:var(--color-ink-muted)] max-w-md">
-          Submitting hands the NBFC off to{" "}
-          <span className="font-semibold text-[color:var(--color-brand-navy)]">
-            CEO Sanchit
-          </span>{" "}
-          for review. You can still edit details and continue uploading
-          compliance documents while the review is pending.
+          {hasOpenCorrectionRound ? (
+            <>
+              Next saves your corrections and moves you to the{" "}
+              <span className="font-semibold text-[color:var(--color-brand-navy)]">
+                Approval
+              </span>{" "}
+              step to resubmit for CEO review.
+            </>
+          ) : (
+            <>
+              Next saves the master details and moves you to{" "}
+              <span className="font-semibold text-[color:var(--color-brand-navy)]">
+                compliance documents
+              </span>
+              . You can keep editing master details later from the NBFC directory.
+            </>
+          )}
         </p>
-        <div className="flex flex-wrap gap-2 justify-end">
-          <button
-            type="button"
-            onClick={saveDraft}
-            disabled={submitting !== null}
-            className="btn-ghost"
-          >
-            {submitting === "draft" && (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            )}
-            Save Draft
-          </button>
-          {/*
-            aria-label="Create NBFC" preserves the headed test selector
-            getByRole("button", { name: /Create NBFC/i }).
-          */}
-          <button
-            type="submit"
-            disabled={submitting !== null}
-            aria-label="Create NBFC"
-            className="btn-primary"
-          >
-            {submitting === "submit-for-ceo" && (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            )}
-            {mode === "create"
-              ? "Submit for CEO Approval"
-              : "Save changes"}
-          </button>
-        </div>
+        {!locked && (
+          <div className="flex flex-wrap gap-2 justify-end">
+            <button
+              type="button"
+              onClick={saveDraft}
+              disabled={submitting !== null}
+              className="btn-ghost"
+            >
+              {submitting === "draft" && (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              )}
+              Save Draft
+            </button>
+            {/*
+              aria-label="Create NBFC" preserves the headed test selector
+              getByRole("button", { name: /Create NBFC/i }).
+            */}
+            <button
+              type="submit"
+              disabled={submitting !== null}
+              aria-label="Create NBFC"
+              className="btn-primary"
+            >
+              {submitting === "submit-for-ceo" && (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              )}
+              {mode === "create" ? "Next" : "Save changes"}
+            </button>
+          </div>
+        )}
       </div>
+      </fieldset>
     </form>
   );
 }

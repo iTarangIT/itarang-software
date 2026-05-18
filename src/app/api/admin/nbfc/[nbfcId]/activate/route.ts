@@ -20,11 +20,12 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { randomUUID, randomInt } from "node:crypto";
 import { db } from "@/lib/db";
 import {
   nbfc,
+  nbfcLspAgreements,
   nbfcPortalCredentials,
   nbfcTenants,
   nbfcUsers,
@@ -35,6 +36,7 @@ import { sql } from "drizzle-orm";
 import { requireAdminOrTestBypass } from "@/lib/auth/adminTestBypass";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { enqueueNbfcPortalCredentialsJob } from "@/lib/queue/jobs/sendNbfcPortalCredentialsJob";
+import { downloadPdfBuffer } from "@/lib/email/downloadPdfBuffer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -132,6 +134,41 @@ export async function POST(
   if (!auth.ok) return auth.response;
   const adminUserId = auth.user.id;
 
+  // Admin-team gate. Activation is now the admin's manual step (was CEO-only
+  // before — the user moved this off the CEO so the credential dispatch
+  // happens at the admin's pace once both signers complete). CEO retained as
+  // a permitted caller so the test_bypass path and any CEO-driven recovery
+  // still work.
+  const ACTIVATION_ROLES = new Set([
+    "admin",
+    "sales_head",
+    "business_head",
+    "ceo",
+  ]);
+  if (auth.user.via !== "test_bypass") {
+    const role = (auth.user.role ?? "").toLowerCase();
+    const email = (auth.user.email ?? "").toLowerCase();
+    if (!ACTIVATION_ROLES.has(role) && email !== "sanchit@itarang.com") {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "FORBIDDEN",
+          message: "Only the admin team or CEO may activate an NBFC.",
+        },
+        { status: 403 },
+      );
+    }
+  } else if (!ACTIVATION_ROLES.has((auth.user.role ?? "").toLowerCase())) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "FORBIDDEN",
+        message: "Only the admin team or CEO may activate an NBFC.",
+      },
+      { status: 403 },
+    );
+  }
+
   const { nbfcId } = await ctx.params;
   const id = Number.parseInt(nbfcId, 10);
   if (!Number.isInteger(id) || id <= 0) {
@@ -174,6 +211,7 @@ export async function POST(
       rbi_registration_no: nbfc.rbi_registration_no,
       grievance_url: nbfc.grievance_url,
       grievance_helpline: nbfc.grievance_helpline,
+      lsp_agreement_id: nbfc.lsp_agreement_id,
     })
     .from(nbfc)
     .where(eq(nbfc.id, id))
@@ -199,6 +237,36 @@ export async function POST(
       },
       { status: 409 },
     );
+  }
+
+  // Both signers must have completed before first-time activation. (Skip on
+  // resend since the agreement is already terminal in that path.) The
+  // nbfc_lsp_agreements table may carry several history rows when an
+  // agreement was re-initiated — accept activation as long as at least one
+  // row reached COMPLETED, mirroring the lspTerminalRows lookup the
+  // /admin/nbfc/[id]/review page uses to drive its UI.
+  if (isApproved) {
+    const [completedAgreement] = await db
+      .select({ id: nbfcLspAgreements.id })
+      .from(nbfcLspAgreements)
+      .where(
+        and(
+          eq(nbfcLspAgreements.nbfc_id, id),
+          eq(nbfcLspAgreements.agreement_status, "COMPLETED"),
+        ),
+      )
+      .limit(1);
+    if (!completedAgreement) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "AGREEMENT_NOT_COMPLETED",
+          message:
+            "LSP agreement must be fully signed before the NBFC can be activated.",
+        },
+        { status: 409 },
+      );
+    }
   }
 
   // 2. Generate password first so we can plumb it into Supabase user creation;
@@ -292,10 +360,15 @@ export async function POST(
       email: row.primary_contact_email,
       name: row.primary_contact_name,
       role: "nbfc_partner",
+      must_change_password: true,
     })
     .onConflictDoUpdate({
       target: users.id,
-      set: { role: "nbfc_partner", updated_at: now },
+      set: {
+        role: "nbfc_partner",
+        must_change_password: true,
+        updated_at: now,
+      },
     });
 
   // nbfc_users has no PK on (user_id, tenant_id); guard the duplicate via a
@@ -309,7 +382,51 @@ export async function POST(
     )
   `);
 
-  // 4. Enqueue email — on failure, revert status to 'approved' and bubble.
+  // 4. Resolve the canonical signed LSP agreement + audit-trail PDFs so we
+  //    can attach them to the welcome email. Prefer the row pointed at by
+  //    nbfc.lsp_agreement_id (set by the Digio webhook when the agreement
+  //    reaches COMPLETED), fall back to the most-recent COMPLETED row for
+  //    legacy data where the FK was never propagated. PDFs live under
+  //    public/nbfc-uploads and are served as static files; we fetch them
+  //    via the app origin.
+  const [latestAgreementPdfs] = row.lsp_agreement_id
+    ? await db
+        .select({
+          signed_pdf_url: nbfcLspAgreements.signed_pdf_url,
+          audit_trail_url: nbfcLspAgreements.audit_trail_url,
+        })
+        .from(nbfcLspAgreements)
+        .where(eq(nbfcLspAgreements.id, row.lsp_agreement_id))
+        .limit(1)
+    : await db
+        .select({
+          signed_pdf_url: nbfcLspAgreements.signed_pdf_url,
+          audit_trail_url: nbfcLspAgreements.audit_trail_url,
+        })
+        .from(nbfcLspAgreements)
+        .where(
+          and(
+            eq(nbfcLspAgreements.nbfc_id, id),
+            eq(nbfcLspAgreements.agreement_status, "COMPLETED"),
+          ),
+        )
+        .orderBy(desc(nbfcLspAgreements.id))
+        .limit(1);
+
+  const appOrigin = process.env.NEXT_PUBLIC_APP_URL ?? req.nextUrl.origin;
+  const toAbsoluteUrl = (u?: string | null): string | null => {
+    if (!u) return null;
+    return /^https?:\/\//i.test(u) ? u : `${appOrigin}${u}`;
+  };
+
+  const [signedAgreementPdf, auditTrailPdf] = await Promise.all([
+    downloadPdfBuffer(toAbsoluteUrl(latestAgreementPdfs?.signed_pdf_url)),
+    downloadPdfBuffer(toAbsoluteUrl(latestAgreementPdfs?.audit_trail_url)),
+  ]);
+
+  const loginUrl = `${appOrigin}/nbfc/portfolio`;
+
+  // 5. Send welcome email — on failure, revert status to 'approved' and bubble.
   try {
     await enqueueNbfcPortalCredentialsJob({
       nbfcId: id,
@@ -317,6 +434,12 @@ export async function POST(
       toEmail: row.primary_contact_email,
       password,
       supabaseUserId,
+      primaryContactName: row.primary_contact_name,
+      nbfcLegalName: row.legal_name,
+      nbfcCode: row.nbfc_id,
+      loginUrl,
+      signedAgreementPdf,
+      auditTrailPdf,
     });
   } catch (e) {
     // Revert: mark credential row failed and reset NBFC status only when this

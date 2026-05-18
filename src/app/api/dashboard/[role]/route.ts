@@ -10,11 +10,15 @@ import {
   pdiRecords,
   accounts,
   provisions,
+  nbfc,
+  nbfcLspAgreements,
+  nbfcLspAgreementSigners,
 } from "@/lib/db/schema";
 
-import { eq, gte, sql, and, desc, count } from "drizzle-orm";
+import { eq, gte, sql, and, desc, count, inArray } from "drizzle-orm";
 import { requireAuth } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
+import { LSP_IN_FLIGHT_STATUSES } from "@/components/admin/nbfc/lspStatusTone";
 
 export const GET = withErrorHandler(
   async (req: Request, { params }: { params: Promise<{ role: string }> }) => {
@@ -52,6 +56,76 @@ export const GET = withErrorHandler(
         .from(dealerLeads)
         .where(gte(dealerLeads.created_at, startOfMonthDate));
 
+      // NBFC LSP agreements currently in flight — Digio has the auto-filled
+      // PDF and signers are working through the sequence. Surfaces on the CEO
+      // landing card so Sanchit sees signing progress without navigating into
+      // every NBFC's review page.
+      const inFlightAgreements = await db
+        .select({
+          nbfcId: nbfc.id,
+          nbfcShortId: nbfc.nbfc_id,
+          legalName: nbfc.legal_name,
+          agreementId: nbfcLspAgreements.id,
+          agreementStatus: nbfcLspAgreements.agreement_status,
+          initiatedAt: nbfcLspAgreements.initiated_at,
+          createdAt: nbfcLspAgreements.created_at,
+        })
+        .from(nbfcLspAgreements)
+        .innerJoin(nbfc, eq(nbfc.id, nbfcLspAgreements.nbfc_id))
+        .where(
+          inArray(
+            nbfcLspAgreements.agreement_status,
+            LSP_IN_FLIGHT_STATUSES as unknown as string[],
+          ),
+        )
+        .orderBy(
+          desc(nbfcLspAgreements.initiated_at),
+          desc(nbfcLspAgreements.created_at),
+        )
+        .limit(10);
+
+      const agreementIds = inFlightAgreements.map((a) => a.agreementId);
+      const signerCounts = agreementIds.length
+        ? await db
+            .select({
+              agreementId: nbfcLspAgreementSigners.nbfc_lsp_agreement_id,
+              total: sql<number>`COUNT(*)`,
+              signed: sql<number>`COUNT(*) FILTER (WHERE ${nbfcLspAgreementSigners.signing_status} = 'signed')`,
+            })
+            .from(nbfcLspAgreementSigners)
+            .where(
+              inArray(
+                nbfcLspAgreementSigners.nbfc_lsp_agreement_id,
+                agreementIds,
+              ),
+            )
+            .groupBy(nbfcLspAgreementSigners.nbfc_lsp_agreement_id)
+        : [];
+      const countsByAgreement = new Map<
+        number,
+        { total: number; signed: number }
+      >();
+      for (const r of signerCounts) {
+        countsByAgreement.set(r.agreementId, {
+          total: Number(r.total),
+          signed: Number(r.signed),
+        });
+      }
+      const nbfcSigningQueue = inFlightAgreements.map((a) => {
+        const counts = countsByAgreement.get(a.agreementId) ?? {
+          total: 0,
+          signed: 0,
+        };
+        return {
+          nbfcId: a.nbfcId,
+          nbfcShortId: a.nbfcShortId,
+          legalName: a.legalName,
+          agreementStatus: a.agreementStatus,
+          signed: counts.signed,
+          total: counts.total,
+        };
+      });
+
       return successResponse({
         revenue: Number(revenueResult?.revenue || 0),
         conversionRate: conversionResult?.total_leads
@@ -59,6 +133,7 @@ export const GET = withErrorHandler(
               Number(conversionResult.total_leads)) *
             100
           : 0,
+        nbfcSigningQueue,
         lastUpdated: new Date().toISOString(),
       });
     }
