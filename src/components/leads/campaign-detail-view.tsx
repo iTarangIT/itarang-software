@@ -21,6 +21,7 @@ import {
   XCircle,
   Clock,
   StopCircle,
+  PhoneOutgoing,
 } from "lucide-react";
 import { CampaignLeadTranscriptDrawer } from "./CampaignLeadTranscriptDrawer";
 import {
@@ -206,6 +207,30 @@ export function CampaignDetailView({
     },
   });
 
+  // Manual nudge to place the next pending call. Needed when the
+  // watchdog swept a stalled 'calling' row but no webhook re-entered
+  // advanceCampaign — the remaining pending leads would sit untouched
+  // without this trigger.
+  const advanceMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(
+        `/api/ai-dialer/campaigns/${campaignId}/advance`,
+        { method: "POST" },
+      );
+      const json = await res.json();
+      if (!json.success) {
+        throw new Error(json.error?.message ?? "Advance failed");
+      }
+      return json.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["dialer-campaign", campaignId] });
+      queryClient.invalidateQueries({
+        queryKey: ["dialer-campaign-leads", campaignId],
+      });
+    },
+  });
+
   const { data: campaign, isLoading: campaignLoading } = useQuery<Campaign>({
     queryKey: ["dialer-campaign", campaignId],
     queryFn: async () => {
@@ -284,6 +309,22 @@ export function CampaignDetailView({
           </Link>
         )}
         <div className="flex items-center gap-2">
+          {isRunning && (
+            <button
+              type="button"
+              onClick={() => advanceMutation.mutate()}
+              disabled={advanceMutation.isPending}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white"
+              title="Place the next pending call in this campaign"
+            >
+              {advanceMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <PhoneOutgoing className="w-4 h-4" />
+              )}
+              Call next
+            </button>
+          )}
           {isRunning && (
             <button
               type="button"

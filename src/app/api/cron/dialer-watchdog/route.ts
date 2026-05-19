@@ -23,6 +23,7 @@ import {
   finalizeCampaign,
   sweepStalledCallingLeads,
 } from "@/lib/queue/campaignTracker";
+import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { and, desc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
@@ -61,6 +62,20 @@ export async function GET(req: Request) {
 
     for (const c of running) {
       const swept = await sweepStalledCallingLeads(c.id);
+
+      // If we just force-failed in-flight rows, no webhook will fire to
+      // re-enter advanceCampaign — so the campaign would sit on its
+      // remaining pending rows forever. Kick it forward here.
+      if (swept > 0) {
+        try {
+          await advanceCampaign(c.id);
+        } catch (err) {
+          console.error(
+            `[dialer-watchdog] post-sweep advance failed for ${c.id}:`,
+            err,
+          );
+        }
+      }
 
       // A campaign that's been running > 2h with no completed/failed row in
       // the last 10 min is dead — finalize as stopped. Treat the campaign's
