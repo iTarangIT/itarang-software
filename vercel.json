@@ -35,6 +35,10 @@
     {
       "path": "/api/cron/dialer-poll",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/backfill-call-costs",
+      "schedule": "*/15 * * * *"
     }
   ],
   "functions": {
