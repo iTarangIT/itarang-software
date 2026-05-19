@@ -23,6 +23,7 @@ import {
   CreditCard,
   Megaphone,
   Shield,
+  TrendingUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -563,6 +564,20 @@ const roleNavigation: Record<string, any[]> = {
     },
   ],
 
+  sales_insight: [
+    {
+      section: "INSIGHTS",
+      items: [
+        {
+          id: "converted-leads",
+          label: "Converted Leads",
+          icon: TrendingUp,
+          href: "/sales-insight",
+        },
+      ],
+    },
+  ],
+
   dealer: [
     {
       section: "OVERVIEW",
@@ -682,6 +697,7 @@ export function Sidebar() {
     if (pathname.startsWith("/service-engineer")) return "service_engineer";
     if (pathname.startsWith("/sales-manager")) return "sales_manager";
     if (pathname.startsWith("/sales-executive")) return "sales_executive";
+    if (pathname.startsWith("/sales-insight")) return "sales_insight";
     return "user";
   })();
 
