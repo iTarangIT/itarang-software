@@ -78,6 +78,14 @@
   --gradient-dark:    linear-gradient(145deg, #02314e 0%, #0a3d5c 100%);
   --brand-sky-soft:   rgba(19, 143, 198, 0.10);
   --brand-sky-glow:   rgba(19, 143, 198, 0.30);
+
+  /* Font family vars — previously injected by next/font/google, now defined
+   * statically because the sandbox VPS can't reach fonts.googleapis.com at
+   * build time. layout.tsx loads the Google Fonts stylesheet via <link>,
+   * the browser fetches the woff2 files, and these vars resolve to the
+   * loaded families (with system-font fallbacks if loading fails). */
+  --font-dm-sans: "DM Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-dm-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 @layer base {
