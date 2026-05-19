@@ -190,6 +190,15 @@ jobs:
             export CI=1
             export NEXT_TELEMETRY_DISABLED=1
 
+            echo "--- cleaning prior build state ---"
+            # Forces deterministic builds. Without this, .next/standalone/.next/server,
+            # .next/cache/turbopack, and leftover .next/static remnants from the prior
+            # deploy can leak chunk references that the current build doesn't re-emit.
+            # That's what caused 19 NOT-ON-DISK chunks (incl. a turbopack-*.js residue)
+            # on the deploy immediately after switching package.json to --webpack.
+            # Keeps node_modules; only nukes Next's build outputs.
+            rm -rf .next
+
             time npm run build
 
             echo "--- staging standalone bundle ---"
@@ -424,6 +433,12 @@ jobs:
             export GITHUB_SHA=$(git rev-parse HEAD)
             export CI=1
             export NEXT_TELEMETRY_DISABLED=1
+
+            # Same clean-slate requirement as the primary build above.
+            # Without this, the rollback inherits the failed-build's
+            # polluted .next/ and reproduces the broken state.
+            rm -rf .next
+
             time npm run build
 
             echo "--- staging standalone bundle (rollback) ---"
