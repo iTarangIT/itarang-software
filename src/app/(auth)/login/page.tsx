@@ -129,6 +129,8 @@ export default function LoginPage() {
                 navigateTo('/sales-manager');
             } else if (appUser.role === 'sales_executive') {
                 navigateTo('/sales-executive');
+            } else if (appUser.role === 'sales_insight') {
+                navigateTo('/sales-insight');
             } else {
                 navigateTo('/');
             }
