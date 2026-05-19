@@ -25,6 +25,7 @@ import {
   resolveNextCallAt,
 } from "@/lib/ai/analysis/postCallHelpers";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
+import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
 
 export type BolnaFinalizePayload = {
   callId: string;
@@ -116,6 +117,10 @@ export async function finalizeBolnaCall(
         intentReason: null,
         nextAction: null,
       });
+
+      // Even failed calls (e.g. answer-by-voicemail) accrue some cost on
+      // Bolna's side. Best-effort fetch; backfill cron retries on race.
+      await fetchAndPersistCallCost("bolna", callId);
 
       const r = await completeCampaignLead({
         leadId: leadForPhone.id,
@@ -211,6 +216,10 @@ export async function finalizeBolnaCall(
     intentReason: analysis.memory?.intent_summary ?? null,
     nextAction: decision.action ?? null,
   });
+
+  // Capture per-call cost from Bolna /executions/{id}. Best-effort: failure
+  // is logged, never thrown. Backfill cron is the recovery path.
+  await fetchAndPersistCallCost("bolna", callId);
 
   const completeR = await completeCampaignLead({
     leadId: lead.id,
