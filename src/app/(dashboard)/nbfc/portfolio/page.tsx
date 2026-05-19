@@ -10,8 +10,8 @@ export const dynamic = "force-dynamic";
 export default function NbfcPortfolioPage() {
   return (
     <div className="space-y-6">
-      <header className="flex items-end justify-between gap-4">
-        <div>
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
+        <div className="min-w-0">
           <p className="section-label-muted">Portfolio</p>
           <h1 className="text-2xl font-semibold text-[color:var(--color-brand-navy)] mt-1">
             Portfolio Overview

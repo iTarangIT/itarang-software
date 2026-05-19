@@ -14,12 +14,14 @@ import {
   CircleDollarSign,
   Gauge,
   Layers3,
+  Receipt,
   TrendingUp,
 } from "lucide-react";
 
 interface SummaryResponse {
   total_active_loans: number;
   portfolio_value: number;
+  avg_emi: number;
   disbursement_this_month: number;
   delinquency_rate: number;
   avg_portfolio_cds: number;
@@ -106,7 +108,7 @@ export default function PortfolioSummaryCards() {
         className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
         data-testid="portfolio-summary-loading"
       >
-        {Array.from({ length: 6 }).map((_, i) => (
+        {Array.from({ length: 7 }).map((_, i) => (
           <div key={i} className="card-iTarang p-5 animate-pulse">
             <div className="h-3 w-24 bg-[color:var(--color-border)] rounded" />
             <div className="h-7 w-32 bg-[color:var(--color-border)] rounded mt-3" />
@@ -132,6 +134,14 @@ export default function PortfolioSummaryCards() {
       value: `₹${inr(data.portfolio_value)}`,
       caption: "Sum of loan_amount across active book.",
       Icon: CircleDollarSign,
+      tone: "neutral",
+    },
+    {
+      key: "avg_emi",
+      label: "Avg EMI",
+      value: `₹${inr(data.avg_emi)}`,
+      caption: "Mean EMI across active loans.",
+      Icon: Receipt,
       tone: "neutral",
     },
     {

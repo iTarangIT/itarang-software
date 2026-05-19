@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+/* iTarang is a light-only theme (see brand-system comment below). Some NBFC
+ * portal pages were authored with `dark:bg-slate-900` / `dark:text-slate-*`
+ * variants that flip the UI to a near-unreadable dark surface whenever the
+ * viewer's OS reports prefers-color-scheme: dark. We redirect the `dark`
+ * variant to a selector that never matches so every `dark:*` class becomes a
+ * no-op portal-wide. Cheaper and safer than scrubbing 60+ call sites. */
+@custom-variant dark (&:where(.__itarang_dark_disabled *));
+
 /* ==========================================================================
  * iTarang Brand System — BRD §6.B
  * Single source of truth for color, typography, and component primitives.
