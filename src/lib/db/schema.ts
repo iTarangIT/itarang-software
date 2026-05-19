@@ -926,11 +926,23 @@ export const aiCallLogs = pgTable(
     call_duration: integer("call_duration"),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
     call_id: varchar("call_id", { length: 255 }).notNull(),
+    // E-110: per-call cost capture from provider APIs. All integer USD
+    // cents; displayed in INR via NEXT_PUBLIC_USD_TO_INR_RATE at render.
+    total_cost_cents: integer("total_cost_cents"),
+    llm_cost_cents: integer("llm_cost_cents"),
+    tts_cost_cents: integer("tts_cost_cents"),
+    stt_cost_cents: integer("stt_cost_cents"),
+    telephony_cost_cents: integer("telephony_cost_cents"),
+    platform_cost_cents: integer("platform_cost_cents"),
+    cost_currency: varchar("cost_currency", { length: 3 }).default("USD"),
+    cost_source: varchar("cost_source", { length: 20 }),
+    cost_fetched_at: timestamp("cost_fetched_at", { withTimezone: true }),
   },
   (table) => {
     return {
       aiCallLogsLeadIdIdx: index("ai_call_logs_lead_id_idx").on(table.lead_id),
       aiCallLogsCallIdIdx: index("ai_call_logs_call_id_idx").on(table.call_id),
+      aiCallLogsStartedAtIdx: index("ai_call_logs_started_at_idx").on(table.started_at),
     };
   },
 );
