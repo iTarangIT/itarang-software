@@ -10,7 +10,15 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { eq, inArray, sql } from "drizzle-orm";
-import { nbfcLoans, loanFiles, nbfcRiskRules } from "@/lib/db/schema";
+import {
+  dealers,
+  inventory,
+  leads,
+  loanFiles,
+  loanSanctions,
+  nbfcLoans,
+  nbfcRiskRules,
+} from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 
 export const dynamic = "force-dynamic";
@@ -25,12 +33,17 @@ interface SearchParams {
   page_size?: string;
 }
 
+// BRD §6.1.4 — Status values: Sanctioned | Dealer Approved | Disbursed |
+// Active | Closed | Overdue. Strip stages mirror these; "Active" includes
+// disbursed-but-not-overdue rows so the strip stays useful even when sanctions
+// haven't been transitioned to 'active' yet.
 const STAGES = [
-  { id: "active", label: "Active", match: ["active"] },
+  { id: "sanctioned", label: "Sanctioned", match: ["sanctioned"] },
+  { id: "dealer_approved", label: "Dealer Approved", match: ["dealer_approved"] },
+  { id: "disbursed", label: "Disbursed", match: ["disbursed"] },
+  { id: "active", label: "Active", match: ["active", "disbursed"] },
   { id: "overdue", label: "Overdue", match: ["overdue"] },
-  { id: "disbursed", label: "Disbursed", match: ["active", "overdue"] },
   { id: "closed", label: "Closed", match: ["closed", "foreclosed"] },
-  { id: "pending", label: "Pending Disb.", match: ["pending"] },
 ];
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
@@ -80,44 +93,117 @@ export default async function NbfcLeadsPage({
   const page = Math.max(1, Number(params.page ?? 1));
   const pageSize = Math.min(100, Math.max(20, Number(params.page_size ?? 20)));
 
-  // Stage counts (always over the unfiltered tenant set so the strip is stable).
+  // BRD §6.1.4 columns:
+  //   Lead Reference ID  ← leads.reference_id
+  //   Customer Name      ← leads.full_name
+  //   Dealer             ← dealers.company_name (joined via leads.dealer_id =
+  //                        dealers.dealer_id, the varchar code — not the
+  //                        numeric serial PK)
+  //   Battery Serial     ← inventory.serial_number (linked_lead_id = leads.id)
+  //   Loan Amount        ← loan_sanctions.loan_amount
+  //   Loan File No.      ← loan_sanctions.loan_file_number
+  //   Status             ← loan_sanctions.status
+  //   CDS Score          ← borrower_risk_scores.cds_score (latest)
+  //   EMI Status         ← loan_files.next_emi_date + overdue_days
+  //
+  // We start from nbfc_loans for tenant scoping (its tenant_id is the
+  // authoritative tenant link for this surface), then fan out with LEFT JOINs.
+  // Inventory and loan_sanctions are pulled in side-queries and merged in JS
+  // so cardinality doesn't multiply rows.
   const allRows = (await db
     .select({
       loan_application_id: nbfcLoans.loan_application_id,
       vehicleno: nbfcLoans.vehicleno,
       current_dpd: nbfcLoans.current_dpd,
       outstanding_amount: nbfcLoans.outstanding_amount,
-      borrower_name: loanFiles.borrower_name,
-      loan_status: loanFiles.loan_status,
+      lead_id: loanFiles.lead_id,
       next_emi_date: loanFiles.next_emi_date,
       overdue_days: loanFiles.overdue_days,
-      loan_file_number: loanFiles.id,
+      loan_files_status: loanFiles.loan_status,
       created_at: loanFiles.created_at,
+      reference_id: leads.reference_id,
+      full_name: leads.full_name,
+      lead_dealer_id: leads.dealer_id,
+      dealer_name: dealers.company_name,
     })
     .from(nbfcLoans)
     .leftJoin(loanFiles, eq(loanFiles.loan_application_id, nbfcLoans.loan_application_id))
+    .leftJoin(leads, eq(leads.id, loanFiles.lead_id))
+    .leftJoin(dealers, eq(dealers.dealer_id, leads.dealer_id))
     .where(eq(nbfcLoans.tenant_id, tenant.id))) as Array<{
     loan_application_id: string;
     vehicleno: string | null;
     current_dpd: number | null;
     outstanding_amount: string | null;
-    borrower_name: string | null;
-    loan_status: string | null;
+    lead_id: string | null;
     next_emi_date: Date | null;
     overdue_days: number | null;
-    loan_file_number: string | null;
+    loan_files_status: string | null;
     created_at: Date | null;
+    reference_id: string | null;
+    full_name: string | null;
+    lead_dealer_id: string | null;
+    dealer_name: string | null;
   }>;
 
-  // Latest CDS score per loan_application_id (best-effort — table is keyed on
-  // loan_sanction_id which we don't persistently link to nbfcLoans yet).
+  const tenantLeadIds = Array.from(
+    new Set(allRows.map((r) => r.lead_id).filter((v): v is string => !!v)),
+  );
+
+  // loan_sanctions for THIS tenant — keyed by lead_id. A lead can in principle
+  // have multiple sanctions across NBFCs, but loan_sanctions.nbfc_id filter
+  // narrows to this tenant; if multiple still exist we prefer the most recent.
+  const sanctionRows =
+    tenantLeadIds.length === 0
+      ? []
+      : await db
+          .select({
+            id: loanSanctions.id,
+            lead_id: loanSanctions.lead_id,
+            loan_amount: loanSanctions.loan_amount,
+            loan_file_number: loanSanctions.loan_file_number,
+            status: loanSanctions.status,
+            sanctioned_at: loanSanctions.sanctioned_at,
+          })
+          .from(loanSanctions)
+          .where(
+            sql`${loanSanctions.nbfc_id} = ${tenant.id}::uuid AND ${loanSanctions.lead_id} = ANY(${tenantLeadIds})`,
+          );
+  const sanctionByLead = new Map<string, (typeof sanctionRows)[number]>();
+  for (const s of sanctionRows) {
+    const prev = sanctionByLead.get(s.lead_id);
+    if (!prev || (s.sanctioned_at && prev.sanctioned_at && s.sanctioned_at > prev.sanctioned_at)) {
+      sanctionByLead.set(s.lead_id, s);
+    }
+  }
+
+  // Battery serial — first inventory row linked to each lead. Multiple
+  // inventories per lead is rare (warranty exchange, etc.); we show one.
+  const inventoryRows =
+    tenantLeadIds.length === 0
+      ? []
+      : await db
+          .select({
+            linked_lead_id: inventory.linked_lead_id,
+            serial_number: inventory.serial_number,
+          })
+          .from(inventory)
+          .where(sql`${inventory.linked_lead_id} = ANY(${tenantLeadIds})`);
+  const serialByLead = new Map<string, string>();
+  for (const inv of inventoryRows) {
+    if (inv.linked_lead_id && inv.serial_number && !serialByLead.has(inv.linked_lead_id)) {
+      serialByLead.set(inv.linked_lead_id, inv.serial_number);
+    }
+  }
+
+  // Latest CDS per loan_sanction_id (BRD §6.1.4 — "computed nightly").
   const cdsRows = (await db.execute(sql`
     SELECT DISTINCT ON (loan_sanction_id) loan_sanction_id::text AS loan_sanction_id, cds_score::float AS cds_score
     FROM borrower_risk_scores
     WHERE tenant_id = ${tenant.id}
     ORDER BY loan_sanction_id, computed_at DESC
   `)) as unknown as Array<{ loan_sanction_id: string; cds_score: number | null }>;
-  const cdsByLoan = new Map(cdsRows.map((r) => [r.loan_sanction_id, r.cds_score]));
+  const cdsBySanction = new Map(cdsRows.map((r) => [r.loan_sanction_id, r.cds_score]));
 
   // Apply filters in JS (set is bounded by tenant size).
   const statusFilter = params.status?.toLowerCase();
@@ -127,13 +213,25 @@ export default async function NbfcLeadsPage({
   const to = params.to ? new Date(params.to).getTime() + 24 * 3600 * 1000 - 1 : null;
 
   const enriched = allRows.map((r) => {
-    const cds = cdsByLoan.get(r.loan_application_id) ?? null;
+    const sanction = r.lead_id ? sanctionByLead.get(r.lead_id) : undefined;
+    const cds = sanction ? cdsBySanction.get(sanction.id) ?? null : null;
+    // BRD: Status from loan_sanctions.status. Overlay "overdue" when DPD>0 so
+    // the strip's overdue stage isn't blank when sanctions still say 'active'.
+    const baseStatus = (sanction?.status ?? r.loan_files_status ?? "").toLowerCase();
+    const effective_status =
+      (r.current_dpd ?? 0) > 0 && (baseStatus === "active" || baseStatus === "disbursed")
+        ? "overdue"
+        : baseStatus;
     return {
       loan_application_id: r.loan_application_id,
-      vehicleno: r.vehicleno,
-      borrower_name: r.borrower_name,
-      loan_file_number: r.loan_file_number,
-      loan_status: r.loan_status,
+      lead_id: r.lead_id,
+      reference_id: r.reference_id,
+      full_name: r.full_name,
+      dealer_name: r.dealer_name,
+      battery_serial: r.lead_id ? serialByLead.get(r.lead_id) ?? r.vehicleno : r.vehicleno,
+      loan_amount: sanction?.loan_amount != null ? Number(sanction.loan_amount) : null,
+      loan_file_number: sanction?.loan_file_number ?? null,
+      status: effective_status,
       current_dpd: r.current_dpd,
       outstanding_amount: r.outstanding_amount != null ? Number(r.outstanding_amount) : null,
       overdue_days: r.overdue_days,
@@ -147,11 +245,11 @@ export default async function NbfcLeadsPage({
   const filtered = enriched.filter((r) => {
     if (statusFilter) {
       const stage = STAGES.find((s) => s.id === statusFilter);
-      if (stage && !stage.match.includes((r.loan_status ?? "").toLowerCase())) return false;
+      if (stage && !stage.match.includes(r.status)) return false;
     }
     if (bandFilter && r.cds_band !== bandFilter) return false;
     if (q) {
-      const hay = `${r.loan_application_id} ${r.vehicleno ?? ""} ${r.borrower_name ?? ""} ${r.loan_file_number ?? ""}`.toLowerCase();
+      const hay = `${r.reference_id ?? ""} ${r.loan_application_id} ${r.battery_serial ?? ""} ${r.full_name ?? ""} ${r.dealer_name ?? ""} ${r.loan_file_number ?? ""}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     if (from != null && (r.created_at?.getTime() ?? 0) < from) return false;
@@ -166,7 +264,7 @@ export default async function NbfcLeadsPage({
 
   const stageCounts = STAGES.map((s) => ({
     ...s,
-    count: enriched.filter((r) => s.match.includes((r.loan_status ?? "").toLowerCase())).length,
+    count: enriched.filter((r) => s.match.includes(r.status)).length,
   }));
 
   function urlFor(overrides: Partial<SearchParams>): string {
@@ -191,7 +289,7 @@ export default async function NbfcLeadsPage({
         </p>
       </header>
 
-      <section className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {stageCounts.map((s) => (
           <Link
             key={s.id}
@@ -206,7 +304,7 @@ export default async function NbfcLeadsPage({
         ))}
       </section>
 
-      <form className="flex flex-wrap items-end gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3">
+      <form className="card-iTarang flex flex-wrap items-end gap-3 p-3">
         <div>
           <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
             CDS band
@@ -266,37 +364,72 @@ export default async function NbfcLeadsPage({
         )}
       </form>
 
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-900 text-xs uppercase tracking-widest text-slate-500">
+      <div className="card-iTarang overflow-hidden">
+        <table className="w-full text-sm text-[color:var(--color-ink)]">
+          <thead className="bg-slate-50 text-xs uppercase tracking-widest text-slate-500">
             <tr>
-              <th className="px-3 py-2.5 text-left font-bold">Loan</th>
-              <th className="px-3 py-2.5 text-left font-bold">Borrower</th>
-              <th className="px-3 py-2.5 text-left font-bold">Battery</th>
+              <th className="px-3 py-2.5 text-left font-bold">Lead Ref.</th>
+              <th className="px-3 py-2.5 text-left font-bold">Customer</th>
+              <th className="px-3 py-2.5 text-left font-bold">Dealer</th>
+              <th className="px-3 py-2.5 text-left font-bold">Battery Serial</th>
+              <th className="px-3 py-2.5 text-right font-bold">Loan Amount</th>
+              <th className="px-3 py-2.5 text-left font-bold">Loan File No.</th>
               <th className="px-3 py-2.5 text-left font-bold">Status</th>
-              <th className="px-3 py-2.5 text-left font-bold">CDS</th>
-              <th className="px-3 py-2.5 text-right font-bold">Outstanding</th>
-              <th className="px-3 py-2.5 text-left font-bold">EMI status</th>
+              <th className="px-3 py-2.5 text-left font-bold">CDS Score</th>
+              <th className="px-3 py-2.5 text-left font-bold">EMI Status</th>
             </tr>
           </thead>
           <tbody>
             {slice.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-3 py-12 text-center text-slate-500 text-sm">
+                <td colSpan={9} className="px-3 py-12 text-center text-slate-500 text-sm">
                   No leads match these filters.
                 </td>
               </tr>
             ) : (
               slice.map((r) => (
-                <tr key={r.loan_application_id} className="border-t border-slate-100 dark:border-slate-800">
-                  <td className="px-3 py-2 font-mono text-xs">{r.loan_application_id}</td>
-                  <td className="px-3 py-2">
-                    <div className="font-medium">{r.borrower_name ?? "—"}</div>
-                    <div className="text-xs text-slate-500">{r.loan_file_number ?? ""}</div>
+                <tr key={r.loan_application_id} className="border-t border-slate-100">
+                  <td className="px-3 py-2 font-mono text-xs">
+                    {/* BRD: "Clickable — opens lead detail modal (read-only)".
+                        Modal pending — for now this is a styled, non-navigating
+                        anchor so the click affordance is in place. */}
+                    {r.reference_id ? (
+                      <Link
+                        href={`/nbfc/leads?focus=${encodeURIComponent(r.reference_id)}`}
+                        className="font-semibold text-[color:var(--color-brand-sky)] hover:underline"
+                      >
+                        {r.reference_id}
+                      </Link>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
                   </td>
-                  <td className="px-3 py-2 font-mono text-xs">{r.vehicleno ?? "—"}</td>
+                  <td className="px-3 py-2">
+                    <div className="font-medium">{r.full_name ?? "—"}</div>
+                  </td>
+                  <td className="px-3 py-2 text-xs">{r.dealer_name ?? "—"}</td>
+                  <td className="px-3 py-2 font-mono text-xs">
+                    {r.battery_serial ? (
+                      <Link
+                        href={`/nbfc/batteries?q=${encodeURIComponent(r.battery_serial)}`}
+                        className="text-[color:var(--color-brand-sky)] hover:underline"
+                      >
+                        {r.battery_serial}
+                      </Link>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {r.loan_amount != null
+                      ? `₹${r.loan_amount.toLocaleString("en-IN")}`
+                      : "—"}
+                  </td>
+                  <td className="px-3 py-2 font-mono text-xs">
+                    {r.loan_file_number ?? "—"}
+                  </td>
                   <td className="px-3 py-2 text-xs uppercase font-bold">
-                    {r.loan_status ?? "—"}
+                    {r.status || "—"}
                   </td>
                   <td className="px-3 py-2">
                     <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${BAND_TONE[r.cds_band]}`}>
@@ -304,11 +437,6 @@ export default async function NbfcLeadsPage({
                         ? "—"
                         : `${r.cds_band} · ${r.cds_score?.toFixed(0) ?? "?"}`}
                     </span>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {r.outstanding_amount != null
-                      ? `₹${r.outstanding_amount.toLocaleString("en-IN")}`
-                      : "—"}
                   </td>
                   <td className="px-3 py-2 text-xs">
                     {r.overdue_days != null && r.overdue_days > 0 ? (

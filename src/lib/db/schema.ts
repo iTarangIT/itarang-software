@@ -3860,6 +3860,32 @@ export const nbfcLoanProducts = pgTable("nbfc_loan_products", {
     length: 32,
   }).notNull(),
   status: varchar("status", { length: 16 }).default("active").notNull(),
+  // E-113 — Scheme highlights, geography, and eligibility checklist.
+  // Deprecated by E-114 — replaced by active_locations. Kept for additive-migration policy.
+  active_cities: jsonb("active_cities")
+    .$type<string[]>()
+    .notNull()
+    .default(sql`'[]'::jsonb`),
+  // E-114 — Structured state+city pairs, queryable via JSONB @> for dealer filter.
+  active_locations: jsonb("active_locations")
+    .$type<{ state: string; city: string }[]>()
+    .notNull()
+    .default(sql`'[]'::jsonb`),
+  processing_fee_owned_rupees: integer("processing_fee_owned_rupees"),
+  processing_fee_rented_rupees: integer("processing_fee_rented_rupees"),
+  health_life_insurance_owned_rupees: integer("health_life_insurance_owned_rupees"),
+  health_life_insurance_rented_rupees: integer("health_life_insurance_rented_rupees"),
+  disbursement_tat_hours: integer("disbursement_tat_hours"),
+  min_credit_score: integer("min_credit_score"),
+  // E-115 — CIBIL/CRIF applicability + upper bound. cibil_required = null means
+  // "legacy row, unknown"; false = bureau check waived; true = both min and max
+  // must be set (enforced by the API Zod refinement).
+  cibil_required: boolean("cibil_required"),
+  max_credit_score: integer("max_credit_score"),
+  eligibility_documents: jsonb("eligibility_documents")
+    .$type<string[]>()
+    .notNull()
+    .default(sql`'[]'::jsonb`),
   created_at: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),

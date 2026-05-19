@@ -16,6 +16,7 @@ import {
 export interface PortfolioSummary {
   total_active_loans: number;
   portfolio_value: number;
+  avg_emi: number;
   disbursement_this_month: number;
   delinquency_rate: number;
   avg_portfolio_cds: number;
@@ -39,6 +40,7 @@ export async function computePortfolioSummary(tenantId: string): Promise<Portfol
     .select({
       id: loanSanctions.id,
       loan_amount: loanSanctions.loan_amount,
+      emi: loanSanctions.emi,
     })
     .from(loanSanctions)
     .where(
@@ -54,6 +56,17 @@ export async function computePortfolioSummary(tenantId: string): Promise<Portfol
     (acc, r) => acc + (r.loan_amount != null ? Number(r.loan_amount) : 0),
     0,
   );
+
+  // Avg EMI (BRD §6.1.2) — mean of loan_sanctions.emi across the active book.
+  // Skip rows where emi is null so a row with missing EMI doesn't drag the mean
+  // toward zero.
+  const emiValues = activeLoans
+    .map((r) => (r.emi != null ? Number(r.emi) : null))
+    .filter((v): v is number => typeof v === "number" && !Number.isNaN(v));
+  const avg_emi =
+    emiValues.length === 0
+      ? 0
+      : Math.round(emiValues.reduce((a, b) => a + b, 0) / emiValues.length);
 
   // Disbursement this month (IST calendar month).
   const monthStart = startOfCurrentMonthIST();
@@ -130,6 +143,7 @@ export async function computePortfolioSummary(tenantId: string): Promise<Portfol
   return {
     total_active_loans,
     portfolio_value,
+    avg_emi,
     disbursement_this_month,
     delinquency_rate,
     avg_portfolio_cds,
