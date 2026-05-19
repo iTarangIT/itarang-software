@@ -86,6 +86,8 @@ export async function middleware(request: NextRequest) {
     sales_manager: "/sales-manager",
     sales_executive: "/sales-executive",
     sales_insight: "/sales-insight",
+    inside_sales_rep: "/inside-sales",
+    asm: "/asm",
     finance_controller: "/finance-controller",
     inventory_manager: "/inventory-manager",
     service_engineer: "/service-engineer",
