@@ -6,13 +6,22 @@
 import { db } from "@/lib/db";
 import { dialerCampaigns, users } from "@/lib/db/schema";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, type SQL } from "drizzle-orm";
 
 export const GET = withErrorHandler(async (req: Request) => {
   const { searchParams } = new URL(req.url);
   const page = Math.max(1, Number(searchParams.get("page") || 1));
-  const limit = 10;
+  // Default 10 keeps the existing CampaignsTable pagination unchanged.
+  // Cost Analytics dropdown opts in to a larger limit (capped at 200).
+  const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") || 10)));
   const offset = (page - 1) * limit;
+
+  // Optional provider filter for the Cost Analytics campaign picker.
+  const provider = searchParams.get("provider");
+  const filters: SQL[] = [];
+  if (provider === "bolna" || provider === "elevenlabs") {
+    filters.push(eq(dialerCampaigns.provider, provider));
+  }
 
   const rows = await db
     .select({
@@ -33,6 +42,7 @@ export const GET = withErrorHandler(async (req: Request) => {
     })
     .from(dialerCampaigns)
     .leftJoin(users, eq(users.id, dialerCampaigns.triggered_by))
+    .where(filters.length ? and(...filters) : undefined)
     .orderBy(desc(dialerCampaigns.started_at))
     .limit(limit)
     .offset(offset);
