@@ -131,6 +131,10 @@ export default function LoginPage() {
                 navigateTo('/sales-executive');
             } else if (appUser.role === 'sales_insight') {
                 navigateTo('/sales-insight');
+            } else if (appUser.role === 'inside_sales_rep') {
+                navigateTo('/inside-sales');
+            } else if (appUser.role === 'asm') {
+                navigateTo('/asm');
             } else {
                 navigateTo('/');
             }

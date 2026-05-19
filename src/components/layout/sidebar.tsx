@@ -24,6 +24,8 @@ import {
   Megaphone,
   Shield,
   TrendingUp,
+  ListChecks,
+  MapPinned,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -578,6 +580,34 @@ const roleNavigation: Record<string, any[]> = {
     },
   ],
 
+  inside_sales_rep: [
+    {
+      section: "INSIDE SALES",
+      items: [
+        {
+          id: "my-queue",
+          label: "My Queue",
+          icon: ListChecks,
+          href: "/inside-sales",
+        },
+      ],
+    },
+  ],
+
+  asm: [
+    {
+      section: "FIELD WORK",
+      items: [
+        {
+          id: "my-visits",
+          label: "My Visits",
+          icon: MapPinned,
+          href: "/asm",
+        },
+      ],
+    },
+  ],
+
   dealer: [
     {
       section: "OVERVIEW",
@@ -698,6 +728,8 @@ export function Sidebar() {
     if (pathname.startsWith("/sales-manager")) return "sales_manager";
     if (pathname.startsWith("/sales-executive")) return "sales_executive";
     if (pathname.startsWith("/sales-insight")) return "sales_insight";
+    if (pathname.startsWith("/inside-sales")) return "inside_sales_rep";
+    if (pathname.startsWith("/asm")) return "asm";
     return "user";
   })();
 

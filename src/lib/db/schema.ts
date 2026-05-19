@@ -2709,6 +2709,45 @@ export const dealerLeads = pgTable("dealer_leads", {
   rejected_by: text("rejected_by"),
   dealer_id: text("dealer_id"),
   provider: text("provider").default("bolna"),
+  // ---- Part 0 BRD additions (E-112). See drizzle/E-112_dealer_leads_part0_columns.sql.
+  // Lifecycle / status (BRD §0.7)
+  lead_status: varchar("lead_status", { length: 50 }),
+  ai_recall_status: varchar("ai_recall_status", { length: 30 }),
+  lost_reason: varchar("lost_reason", { length: 100 }),
+  lost_reason_notes: text("lost_reason_notes"),
+  previous_lost_reason: varchar("previous_lost_reason", { length: 100 }),
+  onboarding_dropout_reason: varchar("onboarding_dropout_reason", { length: 50 }),
+  onboarding_dropout_notes: text("onboarding_dropout_notes"),
+  interest_level: varchar("interest_level", { length: 20 }),
+  preliminary_payment_intent: text("preliminary_payment_intent"),
+  pre_transfer_status: varchar("pre_transfer_status", { length: 50 }),
+  brochure_sent_at: timestamp("brochure_sent_at", { withTimezone: true }),
+  // Ownership / attribution (BRD §0.3) — text matches dealer_leads.id type
+  originator_id: text("originator_id"),
+  current_owner_id: text("current_owner_id"),
+  closing_owner_id: text("closing_owner_id"),
+  closing_role: varchar("closing_role", { length: 50 }),
+  ai_session_id: text("ai_session_id"),
+  asm_id: text("asm_id"),
+  assigned_at: timestamp("assigned_at", { withTimezone: true }),
+  closed_at: timestamp("closed_at", { withTimezone: true }),
+  last_touchpoint_at: timestamp("last_touchpoint_at", { withTimezone: true }),
+  next_follow_up_at: timestamp("next_follow_up_at", { withTimezone: true }),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  // Escalation (BRD §0.6)
+  escalation_status: varchar("escalation_status", { length: 30 }),
+  escalation_count: integer("escalation_count").default(0),
+  last_escalation_id: uuid("last_escalation_id"),
+  // Cross-table links (BRD §0.4, §0.11)
+  upload_batch_id: uuid("upload_batch_id"),
+  dealer_onboarding_application_id: uuid("dealer_onboarding_application_id"),
+  // Business profile (BRD §0.4)
+  segments: jsonb("segments").default([]),
+  address_history: jsonb("address_history").default([]),
+  address_notes: text("address_notes"),
+  // Soft delete (BRD §0.13)
+  is_active: boolean("is_active").default(true),
+  deleted_at: timestamp("deleted_at", { withTimezone: true }),
 });
 
 // Org-wide saved region groups for the AI dialer modal. `regions` is a
@@ -5081,5 +5120,351 @@ export const paraphernaliaStock = pgTable(
       table.item_type,
     ),
     paraStockDealerIdx: index("paraphernalia_stock_dealer_idx").on(table.dealer_id),
+  }),
+);
+
+// ─────────────────────────────────────────────────────────────────────────
+// Part 0 BRD support tables (E-113 .. E-124).
+// dealer_lead_id columns are text — matches dealer_leads.id (legacy text PK,
+// flagged for Phase 0 reconciliation in BRD §0.13). All other id columns are
+// uuid. No `.references()` — follows the audit_logs / aiCallLogs convention;
+// integrity is enforced at the app layer.
+// ─────────────────────────────────────────────────────────────────────────
+
+// E-113 — Per-interaction history. Single writer in src/lib/touchpoints/write.ts.
+export const leadTouchpoints = pgTable(
+  "lead_touchpoints",
+  {
+    touchpoint_id: uuid("touchpoint_id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    touchpoint_type: varchar("touchpoint_type", { length: 50 }).notNull(),
+    performed_by: text("performed_by"),
+    performed_at: timestamp("performed_at", { withTimezone: true }).notNull(),
+    call_status: varchar("call_status", { length: 30 }),
+    call_duration_sec: integer("call_duration_sec"),
+    is_engaged: boolean("is_engaged").default(false),
+    remarks: text(),
+    attachments: jsonb().default([]),
+    next_action: varchar("next_action", { length: 50 }),
+    next_action_at: timestamp("next_action_at", { withTimezone: true }),
+    external_system: varchar("external_system", { length: 50 }),
+    external_event_id: text("external_event_id"),
+    sync_method: varchar("sync_method", { length: 30 }).default("manual"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    leadPerfIdx: index("lead_touchpoints_lead_perf_idx").on(
+      t.dealer_lead_id,
+      t.performed_at,
+    ),
+    typeCallIdx: index("lead_touchpoints_type_call_idx").on(
+      t.touchpoint_type,
+      t.call_status,
+    ),
+    performerIdx: index("lead_touchpoints_performer_idx").on(
+      t.performed_by,
+      t.performed_at,
+    ),
+    externalUniq: uniqueIndex("lead_touchpoints_external_uniq").on(
+      t.external_system,
+      t.external_event_id,
+    ),
+  }),
+);
+
+// E-114 — ASM ground visits (BRD §0.8).
+export const leadVisits = pgTable(
+  "lead_visits",
+  {
+    visit_id: uuid("visit_id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    asm_id: text("asm_id").notNull(),
+    scheduled_date: date("scheduled_date"),
+    actual_visit_date: date("actual_visit_date"),
+    visit_status: varchar("visit_status", { length: 30 }).notNull(),
+    visit_outcome: varchar("visit_outcome", { length: 30 }),
+    visit_remarks: text("visit_remarks"),
+    photos: jsonb().default([]),
+    gps_check_in_lat: numeric("gps_check_in_lat", { precision: 10, scale: 6 }),
+    gps_check_in_lng: numeric("gps_check_in_lng", { precision: 10, scale: 6 }),
+    next_action: varchar("next_action", { length: 30 }),
+    next_visit_date: date("next_visit_date"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    leadSchedIdx: index("lead_visits_lead_sched_idx").on(
+      t.dealer_lead_id,
+      t.scheduled_date,
+    ),
+    asmStatusIdx: index("lead_visits_asm_status_idx").on(
+      t.asm_id,
+      t.visit_status,
+    ),
+  }),
+);
+
+// E-115 — Escalation events + resolution (BRD §0.6).
+export const leadEscalations = pgTable(
+  "lead_escalations",
+  {
+    escalation_id: uuid("escalation_id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    raised_by: text("raised_by").notNull(),
+    raised_at: timestamp("raised_at", { withTimezone: true }).notNull(),
+    escalation_reason: varchar("escalation_reason", { length: 50 }).notNull(),
+    escalation_notes: text("escalation_notes").notNull(),
+    suggested_action: text("suggested_action"),
+    urgency: varchar("urgency", { length: 20 }).notNull(),
+    status: varchar("status", { length: 30 }).notNull().default("pending_review"),
+    ceo_comment: text("ceo_comment"),
+    ceo_recommendation: text("ceo_recommendation"),
+    ceo_recommended_at: timestamp("ceo_recommended_at", { withTimezone: true }),
+    resolved_by: text("resolved_by"),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    resolution_action: varchar("resolution_action", { length: 30 }),
+    resolution_notes: text("resolution_notes"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    statusUrgIdx: index("lead_escalations_status_urg_idx").on(
+      t.status,
+      t.urgency,
+      t.raised_at,
+    ),
+    leadRaisedIdx: index("lead_escalations_lead_raised_idx").on(
+      t.dealer_lead_id,
+      t.raised_at,
+    ),
+  }),
+);
+
+// E-116 — Versioned commercials (BRD §0.10).
+export const dealerLeadCommercials = pgTable(
+  "dealer_lead_commercials",
+  {
+    commercial_id: uuid("commercial_id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    version_no: integer("version_no").notNull(),
+    is_current: boolean("is_current").default(false),
+    event_type: varchar("event_type", { length: 30 }).notNull(),
+    price_quoted: numeric("price_quoted", { precision: 14, scale: 2 }),
+    quote_document_url: text("quote_document_url"),
+    brochure_url: text("brochure_url"),
+    brochure_sent_at: timestamp("brochure_sent_at", { withTimezone: true }),
+    credit_terms: text("credit_terms"),
+    delivery_terms: text("delivery_terms"),
+    warranty_terms: text("warranty_terms"),
+    final_price: numeric("final_price", { precision: 14, scale: 2 }),
+    payment_method: varchar("payment_method", { length: 20 }),
+    deal_notes: text("deal_notes"),
+    notes: text(),
+    created_by: text("created_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+    withdrawn_at: timestamp("withdrawn_at", { withTimezone: true }),
+  },
+  (t) => ({
+    leadVersionUniq: uniqueIndex(
+      "dealer_lead_commercials_lead_version_uniq",
+    ).on(t.dealer_lead_id, t.version_no),
+    leadVersionDescIdx: index(
+      "dealer_lead_commercials_lead_version_desc_idx",
+    ).on(t.dealer_lead_id, t.version_no),
+    currentIdx: index("dealer_lead_commercials_current_idx").on(
+      t.dealer_lead_id,
+    ),
+  }),
+);
+
+// E-117 — Full status change audit (BRD §0.7).
+export const dealerLeadStatusHistory = pgTable(
+  "dealer_lead_status_history",
+  {
+    history_id: uuid("history_id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    from_status: varchar("from_status", { length: 50 }),
+    to_status: varchar("to_status", { length: 50 }).notNull(),
+    from_lost_reason: varchar("from_lost_reason", { length: 100 }),
+    to_lost_reason: varchar("to_lost_reason", { length: 100 }),
+    changed_by: text("changed_by").notNull(),
+    changed_at: timestamp("changed_at", { withTimezone: true }).notNull(),
+    reason_notes: text("reason_notes"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    leadChangedIdx: index(
+      "dealer_lead_status_history_lead_changed_idx",
+    ).on(t.dealer_lead_id, t.changed_at),
+    changedAtIdx: index("dealer_lead_status_history_changed_at_idx").on(
+      t.changed_at,
+    ),
+  }),
+);
+
+// E-118 — ASM territory mapping (BRD §0.8).
+export const asmTerritories = pgTable(
+  "asm_territories",
+  {
+    territory_id: uuid("territory_id").primaryKey().defaultRandom(),
+    asm_id: text("asm_id").notNull(),
+    state: varchar("state", { length: 100 }).notNull(),
+    city: varchar("city", { length: 100 }),
+    active_from: date("active_from"),
+    active_to: date("active_to"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    stateCityIdx: index("asm_territories_state_city_idx").on(t.state, t.city),
+    asmIdx: index("asm_territories_asm_idx").on(t.asm_id),
+  }),
+);
+
+// E-119 — Bulk upload audit + 24h rollback (BRD §0.4).
+export const uploadBatches = pgTable(
+  "upload_batches",
+  {
+    batch_id: uuid("batch_id").primaryKey().defaultRandom(),
+    uploaded_by: text("uploaded_by").notNull(),
+    file_name: text("file_name").notNull(),
+    total_rows: integer("total_rows").default(0),
+    valid_rows: integer("valid_rows").default(0),
+    errored_rows: integer("errored_rows").default(0),
+    duplicate_rows: integer("duplicate_rows").default(0),
+    routing_to_ai: boolean("routing_to_ai").default(false),
+    source_label: text("source_label"),
+    status: varchar("status", { length: 30 }).default("pending"),
+    rollback_window_until: timestamp("rollback_window_until", {
+      withTimezone: true,
+    }),
+    rolled_back_at: timestamp("rolled_back_at", { withTimezone: true }),
+    rolled_back_by: text("rolled_back_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    uploaderCreatedIdx: index("upload_batches_uploader_created_idx").on(
+      t.uploaded_by,
+      t.created_at,
+    ),
+    rollbackPendingIdx: index("upload_batches_rollback_pending_idx").on(
+      t.rollback_window_until,
+    ),
+  }),
+);
+
+// E-120 — Admin-tunable assignment config (single-row table) (BRD §0.2, §0.1).
+export const assignmentConfig = pgTable("assignment_config", {
+  config_id: uuid("config_id").primaryKey().defaultRandom(),
+  intent_score_threshold: integer("intent_score_threshold").default(60),
+  working_hours_start: varchar("working_hours_start", { length: 8 }).default("09:00"),
+  working_hours_end: varchar("working_hours_end", { length: 8 }).default("19:00"),
+  working_days: jsonb("working_days").default([
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri",
+    "sat",
+  ]),
+  updated_by: text("updated_by"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+// E-121 — Working-day calendar (BRD §0.1 Glossary).
+export const holidayCalendar = pgTable(
+  "holiday_calendar",
+  {
+    holiday_id: uuid("holiday_id").primaryKey().defaultRandom(),
+    holiday_date: date("holiday_date").notNull(),
+    holiday_name: varchar("holiday_name", { length: 200 }).notNull(),
+    is_active: boolean("is_active").default(true),
+    created_by: text("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    dateUniq: uniqueIndex("holiday_calendar_date_uniq").on(t.holiday_date),
+    activeIdx: index("holiday_calendar_active_idx").on(
+      t.is_active,
+      t.holiday_date,
+    ),
+  }),
+);
+
+// E-122 — Phone collision + address mismatch merge requests (BRD §0.4).
+export const duplicateMergeRequests = pgTable(
+  "duplicate_merge_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    request_type: varchar("request_type", { length: 50 }).notNull(),
+    source_lead_id: text("source_lead_id"),
+    target_lead_id: text("target_lead_id").notNull(),
+    requested_by: text("requested_by"),
+    request_notes: text("request_notes"),
+    status: varchar("status", { length: 30 }).notNull().default("pending"),
+    resolution_action: varchar("resolution_action", { length: 50 }),
+    admin_resolution_notes: text("admin_resolution_notes"),
+    resolved_by: text("resolved_by"),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    statusCreatedIdx: index("duplicate_merge_requests_status_created_idx").on(
+      t.status,
+      t.created_at,
+    ),
+    targetIdx: index("duplicate_merge_requests_target_idx").on(
+      t.target_lead_id,
+    ),
+  }),
+);
+
+// E-123 — Manual interest_level override audit (BRD §0.7).
+export const interestLevelOverrides = pgTable(
+  "interest_level_overrides",
+  {
+    override_id: uuid("override_id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    from_value: varchar("from_value", { length: 20 }),
+    to_value: varchar("to_value", { length: 20 }).notNull(),
+    reason: text().notNull(),
+    changed_by: text("changed_by").notNull(),
+    changed_at: timestamp("changed_at", { withTimezone: true }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    leadChangedIdx: index("interest_level_overrides_lead_changed_idx").on(
+      t.dealer_lead_id,
+      t.changed_at,
+    ),
+    changerIdx: index("interest_level_overrides_changer_idx").on(
+      t.changed_by,
+      t.changed_at,
+    ),
+  }),
+);
+
+// E-124 — Per-rep saved filters / defaults (BRD §0.13).
+export const userPreferences = pgTable(
+  "user_preferences",
+  {
+    pref_id: uuid("pref_id").primaryKey().defaultRandom(),
+    user_id: text("user_id").notNull(),
+    pref_key: varchar("pref_key", { length: 100 }).notNull(),
+    pref_value: jsonb("pref_value").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    userKeyUniq: uniqueIndex("user_preferences_user_key_uniq").on(
+      t.user_id,
+      t.pref_key,
+    ),
   }),
 );
