@@ -42,11 +42,23 @@ import {
 } from "@/components/leads/lead-call-status";
 import { CampaignBannerExpansion } from "@/components/leads/campaign-banner-expansion";
 import { CampaignsTable } from "@/components/leads/campaigns-table";
+import { CostAnalyticsView } from "@/components/leads/cost-analytics-view";
 
 const ENDED_VISIBLE_MS = 8000;
 const MANUAL_CALL_MAX_MS = 3 * 60 * 1000;
 
-type Tab = "leads" | "scraper" | "converted" | "campaigns";
+type Tab = "leads" | "scraper" | "converted" | "campaigns" | "cost-analytics";
+
+// Roles allowed to see the Cost Analytics tab. Mirrors the server-side
+// gate in /api/campaigns/cost-analytics so the UI never surfaces a tab
+// that the API would refuse.
+const COST_ANALYTICS_ROLES = new Set([
+  "ceo",
+  "business_head",
+  "sales_head",
+  "finance_controller",
+  "admin",
+]);
 type DialerPhase = "idle" | "calling" | "countdown";
 type UploadStatus = "idle" | "parsing" | "uploading" | "done" | "error";
 
@@ -958,8 +970,36 @@ export default function LeadsUnifiedPage() {
   // came from, not the default Leads tab.
   const initialTab: Tab = (() => {
     const t = searchParams?.get("tab");
-    return t === "scraper" || t === "converted" || t === "campaigns" ? t : "leads";
+    return t === "scraper" ||
+      t === "converted" ||
+      t === "campaigns" ||
+      t === "cost-analytics"
+      ? t
+      : "leads";
   })();
+
+  // User role for cost-analytics tab visibility. Fetched once; failure
+  // leaves canSeeCostAnalytics=false so we never accidentally show a tab
+  // to an unauthorized user (the API would block them anyway).
+  const [canSeeCostAnalytics, setCanSeeCostAnalytics] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/user/profile")
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        const role = json?.data?.role as string | undefined;
+        if (role && COST_ANALYTICS_ROLES.has(role)) {
+          setCanSeeCostAnalytics(true);
+        }
+      })
+      .catch(() => {
+        // Silent failure — tab stays hidden.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [tab, setTab] = useState<Tab>(initialTab);
   const [search, setSearch] = useState("");
   const [showUpload, setShowUpload] = useState(false);
@@ -1463,6 +1503,9 @@ export default function LeadsUnifiedPage() {
               { key: "leads", label: "Leads" },
               { key: "converted", label: "My Converted Leads" },
               { key: "campaigns", label: "Campaigns" },
+              ...(canSeeCostAnalytics
+                ? [{ key: "cost-analytics" as Tab, label: "Cost Analytics" }]
+                : []),
             ] as { key: Tab; label: string }[]
           ).map(({ key, label }) => (
             <button
@@ -1476,7 +1519,7 @@ export default function LeadsUnifiedPage() {
             </button>
           ))}
         </div>
-        {tab !== "scraper" && tab !== "campaigns" && (
+        {tab !== "scraper" && tab !== "campaigns" && tab !== "cost-analytics" && (
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
@@ -1745,6 +1788,11 @@ export default function LeadsUnifiedPage() {
         <div>
           <CampaignsTable />
         </div>
+      )}
+
+      {/* ── TAB: COST ANALYTICS (enterprise cost dashboard) ── */}
+      {tab === "cost-analytics" && canSeeCostAnalytics && (
+        <CostAnalyticsView />
       )}
     </div>
   );
