@@ -46,6 +46,25 @@ const createBodySchema = z
     fileChargePct: z.number().min(0).max(100).optional(),
     disbursementMethod: z.enum(DISBURSEMENT_METHODS),
     status: z.enum(STATUS_VALUES).default("active"),
+    activeLocations: z
+      .array(
+        z.object({
+          state: z.string().trim().min(1).max(80),
+          city: z.string().trim().min(1).max(120),
+        }),
+      )
+      .default([]),
+    processingFeeOwnedRupees: z.number().int().nonnegative().optional(),
+    processingFeeRentedRupees: z.number().int().nonnegative().optional(),
+    healthLifeInsuranceOwnedRupees: z.number().int().nonnegative().optional(),
+    healthLifeInsuranceRentedRupees: z.number().int().nonnegative().optional(),
+    disbursementTatHours: z.number().int().positive().optional(),
+    minCreditScore: z.number().int().min(300).max(900).optional(),
+    maxCreditScore: z.number().int().min(300).max(900).optional(),
+    cibilRequired: z.boolean().optional(),
+    eligibilityDocuments: z
+      .array(z.string().trim().min(1).max(500))
+      .default([]),
   })
   .refine((d) => d.loanAmountMax > d.loanAmountMin, {
     message: "loanAmountMax must be > loanAmountMin",
@@ -58,7 +77,27 @@ const createBodySchema = z
   .refine((d) => d.maxRoiPct >= d.minRoiPct, {
     message: "maxRoiPct must be >= minRoiPct",
     path: ["maxRoiPct"],
-  });
+  })
+  .refine(
+    (d) =>
+      d.cibilRequired !== true ||
+      (d.minCreditScore !== undefined && d.maxCreditScore !== undefined),
+    {
+      message:
+        "minCreditScore and maxCreditScore are required when cibilRequired is true",
+      path: ["maxCreditScore"],
+    },
+  )
+  .refine(
+    (d) =>
+      d.minCreditScore === undefined ||
+      d.maxCreditScore === undefined ||
+      d.maxCreditScore >= d.minCreditScore,
+    {
+      message: "maxCreditScore must be >= minCreditScore",
+      path: ["maxCreditScore"],
+    },
+  );
 
 const listQuerySchema = z.object({
   status: z.enum(STATUS_VALUES).optional(),
@@ -158,6 +197,22 @@ export async function POST(
         body.fileChargePct !== undefined ? body.fileChargePct.toString() : null,
       disbursement_method: body.disbursementMethod,
       status: body.status,
+      active_locations: body.activeLocations,
+      processing_fee_owned_rupees: body.processingFeeOwnedRupees ?? null,
+      processing_fee_rented_rupees: body.processingFeeRentedRupees ?? null,
+      health_life_insurance_owned_rupees:
+        body.healthLifeInsuranceOwnedRupees ?? null,
+      health_life_insurance_rented_rupees:
+        body.healthLifeInsuranceRentedRupees ?? null,
+      disbursement_tat_hours: body.disbursementTatHours ?? null,
+      // CIBIL gate: when explicitly waived, force both score columns to null
+      // so a stale min_credit_score from a prior shape can't leak through.
+      cibil_required: body.cibilRequired ?? null,
+      min_credit_score:
+        body.cibilRequired === false ? null : body.minCreditScore ?? null,
+      max_credit_score:
+        body.cibilRequired === false ? null : body.maxCreditScore ?? null,
+      eligibility_documents: body.eligibilityDocuments,
     })
     .returning({
       id: nbfcLoanProducts.id,
