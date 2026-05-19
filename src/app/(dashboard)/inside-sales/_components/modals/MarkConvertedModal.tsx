@@ -1,0 +1,95 @@
+"use client";
+
+import { useState } from "react";
+import { toast } from "sonner";
+import { CheckCircle2 } from "lucide-react";
+import { Modal } from "../Modal";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+
+type Props = {
+    open: boolean;
+    onClose: () => void;
+    leadId: string;
+    hasFinalPrice: boolean;
+    onSuccess: () => void;
+};
+
+export function MarkConvertedModal({ open, onClose, leadId, hasFinalPrice, onSuccess }: Props) {
+    const [notes, setNotes] = useState("");
+    const [submitting, setSubmitting] = useState(false);
+
+    const submit = async () => {
+        if (!hasFinalPrice) {
+            toast.error("Set final_price on the current commercials row before marking Converted (BRD §0.10).");
+            return;
+        }
+        setSubmitting(true);
+        try {
+            const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/mark-converted`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ notes: notes.trim() || null }),
+            });
+            const json = await res.json();
+            if (!res.ok) throw new Error(json?.error?.message ?? "Failed to mark converted");
+            toast.success("Lead marked Converted.");
+            setNotes("");
+            onSuccess();
+        } catch (err) {
+            toast.error((err as Error).message);
+        } finally {
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <Modal
+            open={open}
+            onClose={() => !submitting && onClose()}
+            title="Mark Converted"
+            width="sm"
+            closeOnBackdrop={!submitting}
+            footer={
+                <>
+                    <Button type="button" variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
+                    <Button
+                        type="button"
+                        onClick={submit}
+                        disabled={submitting || !hasFinalPrice}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                    >
+                        {submitting ? "Saving…" : "Mark Converted"}
+                    </Button>
+                </>
+            }
+        >
+            <div className="space-y-4">
+                <div className="flex items-start gap-3">
+                    <div className="shrink-0 h-10 w-10 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                        <CheckCircle2 className="h-5 w-5" />
+                    </div>
+                    <div className="space-y-1 text-sm text-gray-700">
+                        <p>Marks the lead as <span className="font-semibold">Converted</span>. closing_owner_id = you; closing_role = is_phone.</p>
+                        <p className="text-xs text-gray-500">
+                            Onboarding application creation is handled by the admin loopback in Module 3 — this action only seals the sales-stage close.
+                        </p>
+                    </div>
+                </div>
+                {!hasFinalPrice && (
+                    <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                        <span className="font-semibold">Blocked:</span> final_price must be set on the current commercials row. Use Update Commercials with event_type = final_terms first.
+                    </div>
+                )}
+                <div>
+                    <Label>Conversion notes (optional)</Label>
+                    <textarea
+                        className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm min-h-[64px]"
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                    />
+                </div>
+            </div>
+        </Modal>
+    );
+}
