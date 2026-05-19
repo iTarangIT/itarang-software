@@ -202,6 +202,25 @@ jobs:
             ls -la .next/standalone/.next/static | head -3
             ls -la .next/standalone/public 2>/dev/null | head -3 || echo "(no public dir)"
 
+            echo "--- verifying chunk manifest ---"
+            # Walks every .next/ manifest and fails the deploy if any
+            # referenced chunk is missing on disk. Catches the silent
+            # failure mode where a build emits manifest entries pointing at
+            # chunks that didn't get written — the deploy looks healthy
+            # via /api/health, but every dashboard route ChunkLoadErrors.
+            # Same verifier production uses (deploy-production.yml:101).
+            node scripts/verify-chunk-manifest.js
+
+            echo "--- verifying standalone static tree is non-empty ---"
+            # Defense in depth: the cp -r above could partially succeed
+            # (disk pressure, interrupted run). Sanity-check the count.
+            CHUNK_COUNT=$(find .next/standalone/.next/static/chunks -type f 2>/dev/null | wc -l)
+            if [ "$CHUNK_COUNT" -lt 5 ]; then
+              echo "❌ standalone chunks dir has only $CHUNK_COUNT files — copy failed"
+              exit 1
+            fi
+            echo "standalone has $CHUNK_COUNT chunk files"
+
             echo "Free mem after build:"; free -m || true
             echo "<<< [$(date -u +%H:%M:%S)] Build done"
 
@@ -295,6 +314,35 @@ jobs:
             curl -s "$HEALTH_URL" | head -c 800
             echo ""
             echo "<<< [$(date -u +%H:%M:%S)] Healthy"
+
+      # ──────────────────────────────────────────────────────────────────
+      # 2g. Verify the running app actually serves every asset its HTML
+      #     references. /api/health only proves the process is up — it
+      #     does not prove chunks are reachable. Without this, the
+      #     standalone-static-missing failure mode silently ships and
+      #     real users hit ChunkLoadError on every page.
+      # ──────────────────────────────────────────────────────────────────
+      - name: Verify served assets
+        id: served
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-served.log"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+
+            echo ">>> [$(date -u +%H:%M:%S)] Served-asset verification"
+            cd "$APP_DIR"
+            PORT=3003 node scripts/verify-served-assets.js
+            echo "<<< [$(date -u +%H:%M:%S)] Served assets reachable"
 
       # ──────────────────────────────────────────────────────────────────
       # 3. On failure: dump everything useful to the GitHub Actions log
