@@ -1,7 +1,7 @@
 // POST /api/inside-sales/lead/[id]/mark-converted
 // BRD §0.7 + §0.10 — terminal Converted. Hard validation: final_price MUST be
-// set on the current commercials row. Onboarding application row creation is
-// deferred to Module 3.
+// set on the current commercials row. On success it also creates the draft
+// dealer_onboarding_applications row (BRD §0.13 Point A).
 
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -11,6 +11,7 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { canTransition, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
+import { createOnboardingApplicationForConvertedLead } from "@/lib/onboarding/fromConvertedLead";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
 
@@ -67,6 +68,20 @@ export const POST = withErrorHandler(
             },
         });
 
-        return successResponse({ ok: true });
+        // BRD §0.13 Point A — hand the won deal to onboarding. Wrapped: a
+        // failure here must never fail the conversion (the lead is already
+        // Converted and its status touchpoint written).
+        let onboardingApplicationId: string | null = null;
+        try {
+            const result = await createOnboardingApplicationForConvertedLead(id);
+            onboardingApplicationId = result.applicationId;
+        } catch (err) {
+            console.error(
+                "[mark-converted] onboarding application creation failed:",
+                err,
+            );
+        }
+
+        return successResponse({ ok: true, onboardingApplicationId });
     },
 );
