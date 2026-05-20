@@ -2710,6 +2710,9 @@ export const dealerLeads = pgTable("dealer_leads", {
   rejected_by: text("rejected_by"),
   dealer_id: text("dealer_id"),
   provider: text("provider").default("bolna"),
+  // Lead-acquisition source (E-126). ai_dialer_lead / manual_upload_lead /
+  // reference / trade_show / other. Drives BRD §0.11 Report 5.
+  source: varchar("source", { length: 40 }),
   // ---- Part 0 BRD additions (E-112). See drizzle/E-112_dealer_leads_part0_columns.sql.
   // Lifecycle / status (BRD §0.7)
   lead_status: varchar("lead_status", { length: 50 }),
