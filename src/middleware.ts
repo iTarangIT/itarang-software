@@ -204,6 +204,11 @@ export async function middleware(request: NextRequest) {
       "ceo",
       "sales_head",
     ],
+    // Part 0 Module 3 — the admin / ops workspace. The Ops-Manager persona is
+    // held by the sales_head account, so sales_head gets full access (admin +
+    // CEO too). This bare "/admin" prefix is LAST so the specific entries
+    // above are matched first by the prefix find().
+    "/admin": ["admin", "sales_head", "ceo"],
   };
 
   const allowedSharedRoles = Object.entries(sharedRouteAccess).find(

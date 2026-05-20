@@ -26,6 +26,12 @@ import {
   TrendingUp,
   ListChecks,
   MapPinned,
+  AlertTriangle,
+  Upload,
+  Settings,
+  BarChart3,
+  GitMerge,
+  UserMinus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -40,6 +46,29 @@ const roleNavigation: Record<string, any[]> = {
           label: "Dashboard",
           icon: LayoutDashboard,
           href: "/ceo",
+        },
+      ],
+    },
+    {
+      section: "PART 0 OVERSIGHT",
+      items: [
+        {
+          id: "ceo-admin-dashboard",
+          label: "Ops Dashboard",
+          icon: LayoutDashboard,
+          href: "/admin",
+        },
+        {
+          id: "ceo-escalations",
+          label: "Escalations",
+          icon: AlertTriangle,
+          href: "/admin/escalations",
+        },
+        {
+          id: "ceo-reports",
+          label: "Reports",
+          icon: BarChart3,
+          href: "/admin/reports",
         },
       ],
     },
@@ -131,6 +160,53 @@ const roleNavigation: Record<string, any[]> = {
           label: "Dashboard",
           icon: LayoutDashboard,
           href: "/sales-head",
+        },
+      ],
+    },
+    {
+      section: "LEAD MANAGEMENT",
+      items: [
+        {
+          id: "sh-admin-dashboard",
+          label: "Ops Dashboard",
+          icon: LayoutDashboard,
+          href: "/admin",
+        },
+        {
+          id: "sh-escalations",
+          label: "Escalations",
+          icon: AlertTriangle,
+          href: "/admin/escalations",
+        },
+        {
+          id: "sh-merge-requests",
+          label: "Merge Requests",
+          icon: GitMerge,
+          href: "/admin/merge-requests",
+        },
+        {
+          id: "sh-onboarding-dropouts",
+          label: "Onboarding Dropouts",
+          icon: UserMinus,
+          href: "/admin/onboarding-dropouts",
+        },
+        {
+          id: "sh-lead-upload",
+          label: "Bulk Upload",
+          icon: Upload,
+          href: "/admin/upload",
+        },
+        {
+          id: "sh-reports",
+          label: "Reports",
+          icon: BarChart3,
+          href: "/admin/reports",
+        },
+        {
+          id: "sh-settings",
+          label: "Settings",
+          icon: Settings,
+          href: "/admin/settings",
         },
       ],
     },
@@ -329,6 +405,47 @@ const roleNavigation: Record<string, any[]> = {
           label: "Dashboard",
           icon: LayoutDashboard,
           href: "/admin",
+        },
+      ],
+    },
+    {
+      section: "LEAD MANAGEMENT",
+      items: [
+        {
+          id: "admin-escalations",
+          label: "Escalations",
+          icon: AlertTriangle,
+          href: "/admin/escalations",
+        },
+        {
+          id: "admin-merge-requests",
+          label: "Merge Requests",
+          icon: GitMerge,
+          href: "/admin/merge-requests",
+        },
+        {
+          id: "admin-onboarding-dropouts",
+          label: "Onboarding Dropouts",
+          icon: UserMinus,
+          href: "/admin/onboarding-dropouts",
+        },
+        {
+          id: "admin-lead-upload",
+          label: "Bulk Upload",
+          icon: Upload,
+          href: "/admin/upload",
+        },
+        {
+          id: "admin-reports",
+          label: "Reports",
+          icon: BarChart3,
+          href: "/admin/reports",
+        },
+        {
+          id: "admin-settings",
+          label: "Settings",
+          icon: Settings,
+          href: "/admin/settings",
         },
       ],
     },
