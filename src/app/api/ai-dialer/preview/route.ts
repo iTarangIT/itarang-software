@@ -26,6 +26,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { regionGroups } from "@/lib/db/schema";
 import { inArray, sql } from "drizzle-orm";
+import { AI_DIALABLE_SQL } from "@/lib/ai-dialer/exclusionFilter";
 
 type RegionEntry = { state: string; cities?: string[] };
 
@@ -137,6 +138,8 @@ export async function POST(req: NextRequest) {
         LEFT JOIN states s_from_city ON s_from_city.code = c.state_code
         LEFT JOIN states s_direct ON LOWER(s_direct.name) = LOWER(TRIM(dl.state))
         WHERE dl.phone IS NOT NULL AND dl.phone <> ''
+          -- BRD §0.2 — never queue a lead Inside Sales / ASM are working.
+          AND ${AI_DIALABLE_SQL}
       ),
       bucketed AS (
         SELECT
@@ -238,10 +241,10 @@ export async function POST(req: NextRequest) {
         current_status: r.current_status,
       })),
     });
-  } catch (err: any) {
+  } catch (err) {
     console.error("[AI DIALER] preview error:", err);
     return NextResponse.json(
-      { success: false, error: err.message ?? "Preview failed" },
+      { success: false, error: (err as Error)?.message ?? "Preview failed" },
       { status: 500 },
     );
   }

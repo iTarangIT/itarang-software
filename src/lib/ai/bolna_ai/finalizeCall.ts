@@ -14,7 +14,8 @@ import { analyzeTranscript } from "@/lib/ai/analysis";
 import { decideNextAction } from "@/lib/ai/decision/engine";
 import { db } from "@/lib/db";
 import { aiCallLogs, dealerLeads } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { reactivateLead } from "@/lib/leads/reactivation";
 import { updateLeadAfterCall } from "../storage/leadStore";
 import { completeCampaignLead } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
@@ -196,6 +197,16 @@ export async function finalizeBolnaCall(
     })
     .where(eq(dealerLeads.id, lead.id));
 
+  // BRD §0.9 — reactivation on AI recall. If this was an AI re-engagement of
+  // a Lost lead (ai_recall_status='awaiting_re_dial') and the new intent
+  // score clears the assignment threshold, reactivate the lead. Wrapped — a
+  // reactivation failure must never break call finalization.
+  try {
+    await maybeReactivateOnRecall(lead.id, analysis.intent_score);
+  } catch (err) {
+    console.error("[bolna:finalize] recall reactivation failed:", err);
+  }
+
   // Summary text feeds both the sheet logger and the transcript drawer.
   const summary = analysis.memory?.intent_summary
     ? `${analysis.outcome} — ${analysis.memory.intent_summary}`
@@ -267,6 +278,52 @@ export async function finalizeBolnaCall(
       preCallDelayMs: ADVANCE_DELAY_MS,
     });
   }
+}
+
+// BRD §0.9 — when an AI re-engagement call (a Lost lead an admin pushed to
+// the dialer, ai_recall_status='awaiting_re_dial') scores at or above the
+// admin-tuned intent threshold, run the unified reactivation procedure and
+// flip ai_recall_status to 'qualified'. Below threshold: leave it untouched
+// so the dialer may retry per its own rules.
+async function maybeReactivateOnRecall(
+  leadId: string,
+  score: number | null,
+): Promise<void> {
+  if (score == null) return;
+
+  const rows = await db.execute<{
+    lead_status: string | null;
+    ai_recall_status: string | null;
+  }>(sql`
+    SELECT lead_status, ai_recall_status FROM dealer_leads
+    WHERE id = ${leadId} LIMIT 1
+  `);
+  const r = rows[0];
+  if (
+    !r ||
+    r.lead_status !== "Lost" ||
+    r.ai_recall_status !== "awaiting_re_dial"
+  ) {
+    return;
+  }
+
+  const cfg = await db.execute<{ t: number | null }>(sql`
+    SELECT intent_score_threshold AS t FROM assignment_config
+    ORDER BY created_at ASC LIMIT 1
+  `);
+  const threshold = Number(cfg[0]?.t ?? 60);
+  if (score < threshold) return;
+
+  await reactivateLead({
+    leadId,
+    trigger: "ai_dialer",
+    performedBy: null,
+    notes: `AI re-engagement scored ${score}/100 (threshold ${threshold}) — reactivating.`,
+  });
+  await db.execute(sql`
+    UPDATE dealer_leads SET ai_recall_status = 'qualified', updated_at = NOW()
+    WHERE id = ${leadId}
+  `);
 }
 
 // Upsert into ai_call_logs by call_id so re-finalizes (e.g. poll runs

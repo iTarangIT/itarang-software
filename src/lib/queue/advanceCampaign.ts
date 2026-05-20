@@ -33,6 +33,7 @@ import {
 } from "./campaignTracker";
 import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
 import { triggerElevenLabsCall } from "@/lib/ai/elevenlabs/triggerCall";
+import { isAiDialable } from "@/lib/ai-dialer/exclusionFilter";
 
 export type AdvanceResult =
   | { kind: "placed"; leadId: string; campaignLeadId: string; callId: string | null }
@@ -157,6 +158,8 @@ export async function advanceCampaign(
         .select({
           id: dealerLeads.id,
           phone: dealerLeads.phone,
+          lead_status: dealerLeads.lead_status,
+          ai_recall_status: dealerLeads.ai_recall_status,
         })
         .from(dealerLeads)
         .where(eq(dealerLeads.id, claimed.leadId))
@@ -182,6 +185,33 @@ export async function advanceCampaign(
           .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
         // Failure path — bump failed_leads only. calls_made stays unchanged
         // so it reflects "calls that actually went through to the dealer".
+        await db
+          .update(dialerCampaigns)
+          .set({
+            failed_leads: sql`${dialerCampaigns.failed_leads} + 1`,
+          })
+          .where(eq(dialerCampaigns.id, campaignId));
+        continue;
+      }
+
+      // BRD §0.2 — defensive exclusion filter. A lead can enter an active
+      // sales state after the campaign was queued; skip it the same way as a
+      // no-phone lead so the campaign keeps advancing and the dialer never
+      // re-contacts a lead Inside Sales / ASM are working.
+      if (!isAiDialable(lead[0])) {
+        console.warn("[advanceCampaign] skipping lead now in an active sales state", {
+          campaignId,
+          leadId: claimed.leadId,
+          leadStatus: lead[0].lead_status,
+        });
+        await db
+          .update(dialerCampaignLeads)
+          .set({
+            status: "failed",
+            completed_at: new Date(),
+            call_outcome: "ineligible_active_lead",
+          })
+          .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
         await db
           .update(dialerCampaigns)
           .set({
