@@ -19,7 +19,7 @@ import {
   type TooltipProps,
 } from "recharts";
 import { TrendingUp } from "lucide-react";
-import { formatINR, usdCentsToInr } from "@/lib/currency";
+import { formatINR, costCentsToInr } from "@/lib/currency";
 import type { TrendPoint } from "./types";
 
 const ACCENT = "#0d9488"; // brand teal
@@ -68,7 +68,7 @@ export function CostTrendChart({ data, loading }: CostTrendChartProps) {
   const chartData = data.map((d) => ({
     date: d.date,
     label: shortDate(d.date),
-    inr: usdCentsToInr(d.costCents),
+    inr: costCentsToInr(d.costCents),
     calls: d.calls,
   }));
 

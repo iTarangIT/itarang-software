@@ -6,8 +6,8 @@
 //   - With campaign_id: row per call with full component breakdown for
 //     audit / reconciliation
 //
-// INR conversion happens here (server side) so the file is self-contained
-// — the recipient doesn't need to know the env var rate.
+// Costs are stored as INR paise; this file only formats them to rupees —
+// no FX conversion (both providers are normalized to INR upstream).
 
 import { db } from "@/lib/db";
 import { withErrorHandler } from "@/lib/api-utils";
@@ -17,7 +17,7 @@ import {
   buildCallDetailSql,
   type CostAnalyticsFilters,
 } from "@/lib/campaigns/cost-analytics-query";
-import { usdCentsToInr, getUsdToInrRate } from "@/lib/currency";
+import { costCentsToInr } from "@/lib/currency";
 
 const ALLOWED_ROLES = [
   "ceo",
@@ -43,9 +43,9 @@ function unwrap<T>(r: { rows: T[] } | T[]): T[] {
   return r.rows ?? [];
 }
 
-function inrCell(usdCents: number | null | undefined): string {
-  if (usdCents == null) return "";
-  return usdCentsToInr(usdCents).toFixed(2);
+function inrCell(cents: number | null | undefined): string {
+  if (cents == null) return "";
+  return costCentsToInr(cents).toFixed(2);
 }
 
 export const GET = withErrorHandler(async (req: Request) => {
@@ -66,7 +66,6 @@ export const GET = withErrorHandler(async (req: Request) => {
     limit: MAX_EXPORT_ROWS,
   };
 
-  const rate = getUsdToInrRate();
   const today = new Date().toISOString().slice(0, 10);
   const lines: string[] = [];
   let filename: string;
@@ -176,10 +175,8 @@ export const GET = withErrorHandler(async (req: Request) => {
     filename = `iTarang_Campaigns_Cost_${today}.csv`;
   }
 
-  // Footnote: include the conversion rate at the bottom so reviewers can
-  // reproduce the numbers without checking env vars.
   lines.push("");
-  lines.push(`# USD->INR rate applied: ${rate}`);
+  lines.push(`# Amounts in INR, as billed by the provider`);
   lines.push(`# Exported: ${new Date().toISOString()}`);
 
   const body = "﻿" + lines.join("\r\n");

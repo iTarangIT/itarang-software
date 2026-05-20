@@ -10,7 +10,7 @@
 
 import { db } from "@/lib/db";
 import { aiCallLogs } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { fetchBolnaCallCost, type NormalizedCallCost } from "@/lib/ai/bolna_ai/fetchCallCost";
 import { fetchElevenLabsCallCost } from "@/lib/ai/elevenlabs/fetchCallCost";
 
@@ -50,6 +50,10 @@ export async function fetchAndPersistCallCost(
       return;
     }
 
+    // Update cost fields unconditionally. Only update call_duration when
+    // we have a value AND the existing row has it null/zero — webhook-set
+    // values are authoritative once written, so the cost backfill should
+    // never overwrite a non-zero duration.
     await db
       .update(aiCallLogs)
       .set({
@@ -64,6 +68,18 @@ export async function fetchAndPersistCallCost(
         cost_fetched_at: new Date(),
       })
       .where(eq(aiCallLogs.call_id, callId));
+
+    if (cost.durationSecs != null && cost.durationSecs > 0) {
+      await db
+        .update(aiCallLogs)
+        .set({ call_duration: cost.durationSecs })
+        .where(
+          and(
+            eq(aiCallLogs.call_id, callId),
+            sql`(${aiCallLogs.call_duration} IS NULL OR ${aiCallLogs.call_duration} = 0)`,
+          ),
+        );
+    }
   } catch (err) {
     console.error(`[cost] ${provider} persist failed for ${callId}:`, err);
   }
