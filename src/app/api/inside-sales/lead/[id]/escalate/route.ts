@@ -11,6 +11,7 @@ import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-util
 import { writeTouchpoint } from "@/lib/touchpoints/write";
 import { assertOwner } from "@/lib/leads/ownership";
 import { OPEN_STATUSES, type LeadStatus } from "@/lib/lifecycle/transitions";
+import { notifyRoles } from "@/lib/notifications/notify";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
 
@@ -93,6 +94,28 @@ export const POST = withErrorHandler(
                 body.suggested_action ? `\n\nSuggested: ${body.suggested_action}` : ""
             }`,
         });
+
+        // BRD §0.6 — in-app escalation alerts. Admin + sales_head on every
+        // escalation; CEO additionally on Urgent. Wrapped — a notification
+        // failure must never break escalation creation.
+        try {
+            const roles =
+                body.urgency === "urgent"
+                    ? ["admin", "sales_head", "ceo"]
+                    : ["admin", "sales_head"];
+            await notifyRoles(roles, {
+                type: "escalation_raised",
+                title:
+                    body.urgency === "urgent"
+                        ? "Urgent escalation raised"
+                        : "Escalation raised",
+                message: `${body.escalation_reason.replace(/_/g, " ")} — raised by ${user.name}`,
+                data: { escalation_id: escalationId, lead_id: id },
+                leadId: id,
+            });
+        } catch (err) {
+            console.error("[escalate] notification failed:", err);
+        }
 
         return successResponse({ escalation_id: escalationId });
     },

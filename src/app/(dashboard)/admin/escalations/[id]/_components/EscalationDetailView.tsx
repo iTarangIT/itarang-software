@@ -2,7 +2,7 @@
 
 // BRD §0.6 — escalation resolution thread. Left: full touchpoint + status
 // history (reused from Module 1). Right: escalation detail, CEO advisory
-// (read-only — authoring is Module 4), and the admin resolution action.
+// (authored here by the CEO — Module 4), and the admin resolution action.
 
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -22,6 +22,7 @@ import type { LeadStatus } from "@/lib/lifecycle/transitions";
 import type { EscalationThreadBundle } from "@/lib/admin/types";
 import { UrgencyChip, humanize } from "../../_components/escalationUi";
 import { ResolveEscalationModal } from "../../_components/ResolveEscalationModal";
+import { CeoAdvisoryModal } from "../../_components/CeoAdvisoryModal";
 
 function fmt(iso: string | null): string {
     if (!iso) return "—";
@@ -48,6 +49,7 @@ export function EscalationDetailView({
 }) {
     const qc = useQueryClient();
     const [modalOpen, setModalOpen] = useState(false);
+    const [ceoModalOpen, setCeoModalOpen] = useState(false);
 
     const query = useQuery<{ success: true; data: EscalationThreadBundle }>({
         queryKey: ["admin-escalation", escalationId],
@@ -220,10 +222,20 @@ export function EscalationDetailView({
                                 >
                                     Resolve Escalation
                                 </Button>
+                            ) : viewerRole === "ceo" ? (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    className="w-full"
+                                    onClick={() => setCeoModalOpen(true)}
+                                >
+                                    {hasCeoInput
+                                        ? "Update CEO Advisory"
+                                        : "Add CEO Advisory"}
+                                </Button>
                             ) : (
                                 <p className="text-xs text-ink-muted text-center">
-                                    Pending admin resolution. CEO advises;
-                                    admin executes (BRD §0.6).
+                                    Pending admin resolution.
                                 </p>
                             )}
                         </div>
@@ -260,6 +272,19 @@ export function EscalationDetailView({
                     });
                     qc.invalidateQueries({ queryKey: ["admin-escalations"] });
                     qc.invalidateQueries({ queryKey: ["admin-dashboard"] });
+                }}
+            />
+
+            <CeoAdvisoryModal
+                open={ceoModalOpen}
+                onClose={() => setCeoModalOpen(false)}
+                escalationId={escalationId}
+                existingComment={e.ceo_comment}
+                onSuccess={() => {
+                    setCeoModalOpen(false);
+                    qc.invalidateQueries({
+                        queryKey: ["admin-escalation", escalationId],
+                    });
                 }}
             />
         </div>
