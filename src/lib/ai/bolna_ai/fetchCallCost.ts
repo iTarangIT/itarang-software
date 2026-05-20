@@ -13,7 +13,7 @@
 //     conversation_duration: float,
 //     status: string,
 //     cost_breakdown: {
-//       llm: float,
+//       llm: float,                       // USD cents
 //       network: float,                   // → telephony
 //       platform: float,                  // Bolna platform fee
 //       synthesizer: float,               // → TTS
@@ -21,26 +21,47 @@
 //     },
 //     telephony_data: { duration, recording_url, ... }
 //   }
+//
+// **Currency:** Bolna invoices this account in USD, so every figure above is
+// in USD cents. We convert USD → INR once, here at fetch time, and the rest
+// of the pipeline + the dashboard work purely in INR paise. The USD/INR rate
+// is env-overridable (`USD_TO_INR_RATE`); it drifts with the market, so
+// refresh it from a recent invoice periodically. (ElevenLabs, by contrast,
+// bills in ₹ — see elevenlabs/fetchCallCost.ts — and needs no FX step.)
 
 const BOLNA_BASE_URL =
   process.env.BOLNA_BASE_URL || "https://api.bolna.ai";
 
 export type NormalizedCallCost = {
   success: boolean;
+  // All `*Cents` fields are INR paise — the unit stored in ai_call_logs.
   totalCents: number | null;
   llmCents: number | null;
   ttsCents: number | null;
   sttCents: number | null;
   telephonyCents: number | null;
   platformCents: number | null;
-  currency: "USD";
+  // Talk duration in whole seconds. Persisted to ai_call_logs.call_duration so
+  // the cost-analytics dashboard's "avg cost / minute" denominator is correct
+  // even when the original webhook never delivered duration.
+  durationSecs: number | null;
+  currency: "INR";
   source: "provider_api";
   error?: string;
 };
 
-function toCents(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return Math.round(value);
+function usdToInrRate(): number {
+  const raw = process.env.USD_TO_INR_RATE;
+  const parsed = raw ? Number(raw) : NaN;
+  // Default 96.86 — May 2026 market rate. Override via env from an invoice.
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 96.86;
+}
+
+// Bolna returns each cost figure in USD cents; convert to INR paise.
+// USD cents × (₹/$) = INR paise (the /100 and ×100 cancel).
+function toInrPaise(usdCents: unknown, rate: number): number | null {
+  if (typeof usdCents !== "number" || !Number.isFinite(usdCents)) return null;
+  return Math.round(usdCents * rate);
 }
 
 export async function fetchBolnaCallCost(
@@ -55,7 +76,8 @@ export async function fetchBolnaCallCost(
     sttCents: null,
     telephonyCents: null,
     platformCents: null,
-    currency: "USD",
+    durationSecs: null,
+    currency: "INR",
     source: "provider_api",
   };
 
@@ -83,6 +105,8 @@ export async function fetchBolnaCallCost(
 
     const data = (await res.json()) as {
       total_cost?: number;
+      conversation_duration?: number;
+      telephony_data?: { duration?: number };
       cost_breakdown?: {
         llm?: number;
         synthesizer?: number;
@@ -92,16 +116,28 @@ export async function fetchBolnaCallCost(
       };
     };
     const breakdown = data.cost_breakdown ?? {};
+    const rate = usdToInrRate();
+    const durationCandidate =
+      typeof data.conversation_duration === "number"
+        ? data.conversation_duration
+        : typeof data.telephony_data?.duration === "number"
+          ? data.telephony_data.duration
+          : null;
+    const durationSecs =
+      durationCandidate != null && Number.isFinite(durationCandidate)
+        ? Math.round(durationCandidate)
+        : null;
 
     return {
       success: true,
-      totalCents: toCents(data.total_cost),
-      llmCents: toCents(breakdown.llm),
-      ttsCents: toCents(breakdown.synthesizer),
-      sttCents: toCents(breakdown.transcriber),
-      telephonyCents: toCents(breakdown.network),
-      platformCents: toCents(breakdown.platform),
-      currency: "USD",
+      totalCents: toInrPaise(data.total_cost, rate),
+      llmCents: toInrPaise(breakdown.llm, rate),
+      ttsCents: toInrPaise(breakdown.synthesizer, rate),
+      sttCents: toInrPaise(breakdown.transcriber, rate),
+      telephonyCents: toInrPaise(breakdown.network, rate),
+      platformCents: toInrPaise(breakdown.platform, rate),
+      durationSecs,
+      currency: "INR",
       source: "provider_api",
     };
   } catch (err) {

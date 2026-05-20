@@ -7,7 +7,7 @@
 "use client";
 
 import { Wallet, PhoneCall, Clock, TrendingDown, AlertCircle } from "lucide-react";
-import { formatINR, formatINRDetailed, getUsdToInrRate } from "@/lib/currency";
+import { formatINR, formatINRDetailed } from "@/lib/currency";
 import type { SummaryKPI } from "./types";
 
 function formatDuration(secs: number): string {
@@ -32,7 +32,6 @@ export function KPIRow({ summary, loading }: KPIRowProps) {
       ? Math.round((summary.coverage.withCost / summary.coverage.total) * 100)
       : 100;
   const missing = summary.coverage.total - summary.coverage.withCost;
-  const rate = getUsdToInrRate();
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-6 gap-3">
@@ -63,7 +62,7 @@ export function KPIRow({ summary, loading }: KPIRowProps) {
             </span>
           </div>
           <p className="mt-2 text-[11px] text-gray-400">
-            USD→INR @ {rate} · ${(summary.totalCostCents / 100).toFixed(2)}
+            As billed by the provider, in ₹
           </p>
           {missing > 0 && (
             <div className="mt-3 flex items-center gap-1.5 text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5">
