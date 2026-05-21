@@ -117,9 +117,16 @@ const chargerRowSchema = z.object({
       "Category must be one of: 3W, 2W, 4W, Inverter, Solar, Other",
     ),
   invoice_number: z.string().min(1, "Invoice Number is required"),
-  invoice_date: soldDateString,
+  sold_date: soldDateString,
   invoice_value: z.coerce.number().positive("Invoice Value must be positive"),
   supplier_name: z.string().min(1, "Supplier Name is required"),
+  oem_warranty_date: dateString,
+  oem_warranty_months: z.coerce
+    .number()
+    .int()
+    .positive("Warranty months must be positive"),
+  oem_warranty_clauses: z.string().optional().nullable(),
+  batch_reference: z.string().optional().nullable(),
   physical_condition: z
     .string()
     .min(1)
@@ -150,6 +157,7 @@ const paraphernaliaRowSchema = z.object({
     ),
   quantity: z.coerce.number().int().positive("Quantity must be > 0"),
   unit_cost: z.coerce.number().positive("Unit Cost must be positive"),
+  gst_percent: z.coerce.number().min(0).max(50).optional().nullable(),
   invoice_number: z.string().min(1, "Invoice Number is required"),
   invoice_date: soldDateString,
   supplier: z.string().optional().nullable(),

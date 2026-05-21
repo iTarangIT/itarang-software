@@ -12,6 +12,7 @@ import {
 } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { finalizeSale } from "@/lib/sales/sale-finalization";
+import { projectDisbursedLoan } from "@/lib/nbfc/servicing/projectDisbursedLoan";
 import { toPaymentMode } from "@/lib/sales/payment-mode";
 import { notifyDispatchConfirmed } from "@/lib/notifications";
 import { sendKycSms } from "@/lib/sms";
@@ -177,6 +178,11 @@ export async function POST(
             updated_at: now,
           })
           .where(eq(loanSanctions.id, loan.id));
+
+        // Project the disbursed loan into the NBFC servicing ledger so the
+        // partner portal (portfolio, batteries, leads, recovery) lights up
+        // from real loan data. No-ops for cash sales / unmapped lenders.
+        await projectDisbursedLoan(tx, loan.id);
       }
 
       // Inventory sold + warranty + after-sales.

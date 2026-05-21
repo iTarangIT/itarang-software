@@ -4832,6 +4832,31 @@ export const auctionSettlements = pgTable(
   }),
 );
 
+// E-093 — auction_auto_bids (BRD §6.1.7 Auto-Bid).
+// Persists the bidder's standing-order maximum for a lot. Only one row per
+// (lot_id, tenant_id) may be 'active' (enforced by a partial-unique index in
+// the migration); cancelled rows remain for audit.
+export const auctionAutoBids = pgTable(
+  "auction_auto_bids",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    max_amount: numeric("max_amount", { precision: 12, scale: 2 }).notNull(),
+    status: varchar({ length: 16 }).notNull().default("active"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    lotIdx: index("auction_auto_bids_lot_idx").on(table.lot_id),
+    tenantIdx: index("auction_auto_bids_tenant_idx").on(table.tenant_id),
+  }),
+);
+
 // =============================================================================
 // NBFC entity KYC verifications (CIN, PAN, GSTIN)
 // Sanchit (CEO) runs these from /admin/nbfc/[id]/kyc-review before the final

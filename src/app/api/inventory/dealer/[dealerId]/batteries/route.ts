@@ -20,7 +20,7 @@ async function resolveCategoryName(input: string): Promise<string> {
 // BRD V2 §2.3 — dealer battery inventory list for Step 4.
 // Filters: dealer_id + asset_type=Battery + status=available.
 // Reserved/Dispatched/Sold are hidden — Step 4 only offers selectable stock.
-// Optional query params: category, subCategory, productId.
+// Optional query params: category, subCategory.
 // Sort: oem_invoice_date ASC (oldest first — BRD ageing priority rule).
 
 export async function GET(
@@ -42,7 +42,6 @@ export async function GET(
     const { searchParams } = new URL(req.url);
     const category = searchParams.get("category");
     const subCategory = searchParams.get("subCategory");
-    const productId = searchParams.get("productId");
 
     const filters = [
       eq(inventory.dealer_id, dealerId),
@@ -55,10 +54,10 @@ export async function GET(
       // rows tagged "3W Batteries", "3W Vehicles", etc.
       filters.push(ilike(inventory.asset_category, `${categoryName}%`));
     }
-    // When the lead has a primary_product_id (Step 1 "Product Type"),
-    // restrict inventory to that exact product. Falls back to free
-    // listing when no productId is supplied.
-    if (productId) filters.push(eq(inventory.product_id, productId));
+    // Step 4 is where the dealer selects the actual battery, so every
+    // available battery in the category is listed — exactly like the chargers
+    // route. (It must NOT be narrowed to lead.primary_product_id: that "Product
+    // Type" can be a charger or paraphernalia, which would zero the list.)
     if (subCategory) filters.push(eq(inventory.model_type, subCategory));
 
     const rows = await db

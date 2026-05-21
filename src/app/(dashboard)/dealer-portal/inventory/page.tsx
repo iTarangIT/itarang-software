@@ -17,6 +17,7 @@ type InventoryItem = {
     quantity_reserved: number;
     quantity_sold: number;
     unit_price: number;
+    available_value: number;
     warehouse_location: string | null;
     received_at: string | null;
     is_new: boolean;
@@ -81,7 +82,7 @@ function buildInventoryCsv(rows: InventoryItem[]): string {
         r.quantity_reserved,
         r.quantity_sold,
         r.unit_price,
-        r.unit_price * r.quantity_available,
+        r.available_value,
         r.received_at ? new Date(r.received_at).toISOString().slice(0, 10) : '',
         r.status,
     ].map(csvEscape).join(','));
@@ -103,7 +104,7 @@ function downloadCsv(filename: string, csv: string) {
 export default function InventoryPage() {
     const [search, setSearch] = useState('');
     const [categoryFilter, setCategoryFilter] = useState<string>('all');
-    const [statusFilter] = useState('all');
+    const [statusFilter, setStatusFilter] = useState('all');
     const [incoming, setIncoming] = useState<IncomingTransfer[]>([]);
     const [loadingIncoming, setLoadingIncoming] = useState(true);
     const [acking, setAcking] = useState<string | null>(null);
@@ -177,14 +178,15 @@ export default function InventoryPage() {
         }
     };
 
-    const items = useMemo(() => inventory.filter(item => {
+    // Scoped by category + search only — NOT by the Low/Out-of-Stock status
+    // filter, so the KPI cards (which ARE the status filter UI) stay stable.
+    const categoryScopedItems = useMemo(() => inventory.filter(item => {
         if (
             categoryFilter !== 'all' &&
             (item.category ?? '').toLowerCase() !== categoryFilter.toLowerCase()
         ) {
             return false;
         }
-        if (statusFilter !== 'all' && item.status !== statusFilter) return false;
         if (search) {
             const q = search.toLowerCase();
             if (
@@ -196,12 +198,31 @@ export default function InventoryPage() {
             }
         }
         return true;
-    }), [inventory, categoryFilter, statusFilter, search]);
+    }), [inventory, categoryFilter, search]);
 
-    const totalItems = inventory.reduce((s, i) => s + i.quantity_available, 0);
-    const totalValue = inventory.reduce((s, i) => s + i.quantity_available * i.unit_price, 0);
-    const lowStockCount = inventory.filter(i => i.status === 'low_stock').length;
-    const outOfStockCount = inventory.filter(i => i.status === 'out_of_stock').length;
+    // The table is additionally narrowed by the clickable Low/Out-of-Stock cards.
+    const items = useMemo(
+        () =>
+            statusFilter === 'all'
+                ? categoryScopedItems
+                : categoryScopedItems.filter(i => i.status === statusFilter),
+        [categoryScopedItems, statusFilter],
+    );
+
+    // KPI cards reflect the active category/search filter but NOT the status
+    // filter — clicking "Low Stock" must not zero out "Out of Stock". "Total
+    // Units" is a true total across statuses (available + reserved + sold).
+    const totalItems = categoryScopedItems.reduce(
+        (s, i) => s + i.quantity_available + i.quantity_reserved + i.quantity_sold,
+        0,
+    );
+    const totalValue = categoryScopedItems.reduce((s, i) => s + i.available_value, 0);
+    const lowStockCount = categoryScopedItems.filter(i => i.status === 'low_stock').length;
+    const outOfStockCount = categoryScopedItems.filter(i => i.status === 'out_of_stock').length;
+    // Column-header totals — sums of the currently displayed table (`items`).
+    const totalAvailable = items.reduce((s, i) => s + i.quantity_available, 0);
+    const totalReserved = items.reduce((s, i) => s + i.quantity_reserved, 0);
+    const totalSold = items.reduce((s, i) => s + i.quantity_sold, 0);
 
     return (
         <div className="space-y-6">
@@ -278,8 +299,22 @@ export default function InventoryPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <KpiCard icon={<Package className="h-5 w-5" />} title="Total Units" value={totalItems.toString()} tone="blue" />
                 <KpiCard icon={<BarChart3 className="h-5 w-5" />} title="Stock Value" value={totalValue > 0 ? `₹${(totalValue / 100000).toFixed(1)}L` : '₹0'} tone="green" />
-                <KpiCard icon={<AlertTriangle className="h-5 w-5" />} title="Low Stock" value={lowStockCount.toString()} tone="yellow" />
-                <KpiCard icon={<AlertTriangle className="h-5 w-5" />} title="Out of Stock" value={outOfStockCount.toString()} tone="red" />
+                <KpiCard
+                    icon={<AlertTriangle className="h-5 w-5" />}
+                    title="Low Stock"
+                    value={lowStockCount.toString()}
+                    tone="yellow"
+                    active={statusFilter === 'low_stock'}
+                    onClick={() => setStatusFilter(s => (s === 'low_stock' ? 'all' : 'low_stock'))}
+                />
+                <KpiCard
+                    icon={<AlertTriangle className="h-5 w-5" />}
+                    title="Out of Stock"
+                    value={outOfStockCount.toString()}
+                    tone="red"
+                    active={statusFilter === 'out_of_stock'}
+                    onClick={() => setStatusFilter(s => (s === 'out_of_stock' ? 'all' : 'out_of_stock'))}
+                />
             </div>
 
             {/* Search & Filter */}
@@ -322,9 +357,15 @@ export default function InventoryPage() {
                             <tr className="border-b border-gray-100 bg-gray-50">
                                 <th className="px-5 py-3 text-left font-semibold text-gray-600">Product</th>
                                 <th className="px-5 py-3 text-left font-semibold text-gray-600">Inventory Detail</th>
-                                <th className="px-5 py-3 text-center font-semibold text-gray-600">Available</th>
-                                <th className="px-5 py-3 text-center font-semibold text-gray-600">Reserved</th>
-                                <th className="px-5 py-3 text-center font-semibold text-gray-600">Sold</th>
+                                <th className="px-5 py-3 text-center font-semibold text-gray-600">
+                                    <ColumnHead label="Available" count={totalAvailable} />
+                                </th>
+                                <th className="px-5 py-3 text-center font-semibold text-gray-600">
+                                    <ColumnHead label="Reserved" count={totalReserved} />
+                                </th>
+                                <th className="px-5 py-3 text-center font-semibold text-gray-600">
+                                    <ColumnHead label="Sold" count={totalSold} />
+                                </th>
                                 <th className="px-5 py-3 text-left font-semibold text-gray-600">Received</th>
                                 <th className="px-5 py-3 text-right font-semibold text-gray-600">Unit Price</th>
                                 <th className="px-5 py-3 text-center font-semibold text-gray-600">Status</th>
@@ -392,10 +433,42 @@ export default function InventoryPage() {
     );
 }
 
-function KpiCard({ icon, title, value, tone }: { icon: React.ReactNode; title: string; value: string; tone: string }) {
-    const colors: Record<string, string> = { blue: 'bg-blue-50 text-blue-600', green: 'bg-green-50 text-green-600', yellow: 'bg-yellow-50 text-yellow-600', red: 'bg-red-50 text-red-600' };
+// Stacked column header — the status name with its current total directly
+// below, so dealers see the available / reserved / sold breakdown at a glance.
+function ColumnHead({ label, count }: { label: string; count: number }) {
     return (
-        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+        <div className="flex flex-col items-center leading-tight">
+            <span>{label}</span>
+            <span className="mt-1 inline-block rounded-md bg-gray-100 px-2 py-0.5 text-xs font-bold text-gray-700">
+                {count.toLocaleString()}
+            </span>
+        </div>
+    );
+}
+
+function KpiCard({ icon, title, value, tone, onClick, active }: { icon: React.ReactNode; title: string; value: string; tone: string; onClick?: () => void; active?: boolean }) {
+    const colors: Record<string, string> = { blue: 'bg-blue-50 text-blue-600', green: 'bg-green-50 text-green-600', yellow: 'bg-yellow-50 text-yellow-600', red: 'bg-red-50 text-red-600' };
+    const activeRing: Record<string, string> = { blue: 'ring-blue-300', green: 'ring-green-300', yellow: 'ring-yellow-300', red: 'ring-red-300' };
+    const clickable = typeof onClick === 'function';
+    return (
+        <div
+            onClick={onClick}
+            role={clickable ? 'button' : undefined}
+            tabIndex={clickable ? 0 : undefined}
+            onKeyDown={
+                clickable
+                    ? e => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              onClick!();
+                          }
+                      }
+                    : undefined
+            }
+            className={`rounded-2xl border bg-white p-5 shadow-sm transition-colors ${
+                clickable ? 'cursor-pointer hover:bg-gray-50' : ''
+            } ${active ? `border-transparent ring-2 ${activeRing[tone]}` : 'border-gray-100'}`}
+        >
             <div className="flex items-center gap-3">
                 <div className={`rounded-xl p-2 ${colors[tone]}`}>{icon}</div>
                 <div>

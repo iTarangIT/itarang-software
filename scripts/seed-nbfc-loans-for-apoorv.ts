@@ -1,4 +1,18 @@
 /**
+ * ⚠ DEPRECATED — superseded by the disbursement bridge.
+ *
+ * The NBFC portal is now populated automatically: when a loan disburses
+ * (Step 5 dispatch confirmation) `projectDisbursedLoan()` creates its
+ * nbfc_loans + emi_schedules records. For existing disbursed loans run
+ * `scripts/backfill-nbfc-servicing.ts` instead — that drives the portal off
+ * REAL loan_sanctions data rather than synthetic rows.
+ *
+ * This script writes nbfc_loans / loan_sanctions / borrower_risk_scores /
+ * telemetry_ingestion_log directly and is kept only as a last-resort demo
+ * fixture for a sandbox that has no real disbursed loans at all. Prefer
+ * running a lead through Step 4 → Step 5 instead.
+ *
+ * ---------------------------------------------------------------------------
  * Seed 50 nbfc_loans rows for apoorvgupta.dce@gmail.com on tenant nbfc-lm2qdk8y.
  *
  * Run:  tsx scripts/seed-nbfc-loans-for-apoorv.ts

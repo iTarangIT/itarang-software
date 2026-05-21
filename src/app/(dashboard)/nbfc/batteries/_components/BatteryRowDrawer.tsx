@@ -33,7 +33,26 @@ interface RowProps {
     open_alerts: number;
     lat: number | null;
     lon: number | null;
+    cds_score: number | null;
+    pci_score: number | null;
+    confidence: string | null;
+    risk_computed_at: Date | null;
   };
+}
+
+// BRD §6.1.5 — mirror the band thresholds used on the table page.
+function cdsBand(score: number | null): { label: string; tone: string } {
+  if (score == null) return { label: "—", tone: "bg-slate-100 text-slate-500" };
+  if (score >= 85) return { label: "Very High", tone: "bg-red-50 text-red-700" };
+  if (score >= 70) return { label: "High", tone: "bg-orange-50 text-orange-700" };
+  if (score >= 40) return { label: "Medium", tone: "bg-amber-50 text-amber-700" };
+  return { label: "Low", tone: "bg-emerald-50 text-emerald-700" };
+}
+function pciBand(score: number | null): { label: string; tone: string } {
+  if (score == null) return { label: "—", tone: "bg-slate-100 text-slate-500" };
+  if (score < 0.40) return { label: "Concern", tone: "bg-red-50 text-red-700" };
+  if (score <= 0.75) return { label: "Monitor", tone: "bg-amber-50 text-amber-700" };
+  return { label: "Healthy", tone: "bg-emerald-50 text-emerald-700" };
 }
 
 export default async function BatteryRowDrawer({ row }: RowProps) {
@@ -57,7 +76,7 @@ export default async function BatteryRowDrawer({ row }: RowProps) {
 
   return (
     <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-5">
-      <header className="flex items-start justify-between gap-3">
+      <header className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <p className="section-label-muted">Battery detail</p>
           <h2 className="text-lg font-semibold mt-1">{row.vehicleno}</h2>
@@ -65,11 +84,44 @@ export default async function BatteryRowDrawer({ row }: RowProps) {
             {row.borrower_name ?? "—"} · loan {row.loan_application_id}
           </p>
         </div>
-        <div className="text-right text-xs text-slate-500">
+        <div className="text-right text-xs text-slate-500 space-y-1">
           <div>DPD: <span className="font-bold text-slate-900">{row.current_dpd ?? 0}d</span></div>
           {row.outstanding_amount != null ? (
             <div>
               Outstanding: <span className="font-bold text-slate-900">₹{row.outstanding_amount.toLocaleString("en-IN")}</span>
+            </div>
+          ) : null}
+          <div className="flex items-center justify-end gap-1.5 pt-1">
+            <span>CDS:</span>
+            {row.cds_score != null ? (
+              <>
+                <span className="font-bold text-slate-900 tabular-nums">{Math.round(row.cds_score)}</span>
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${cdsBand(row.cds_score).tone}`}>
+                  {cdsBand(row.cds_score).label}
+                </span>
+              </>
+            ) : (
+              <span className="text-slate-400">—</span>
+            )}
+          </div>
+          <div className="flex items-center justify-end gap-1.5">
+            <span>PCI:</span>
+            {row.pci_score != null ? (
+              <>
+                <span className="font-bold text-slate-900 tabular-nums">{row.pci_score.toFixed(2)}</span>
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${pciBand(row.pci_score).tone}`}>
+                  {pciBand(row.pci_score).label}
+                </span>
+              </>
+            ) : (
+              <span className="text-slate-400">—</span>
+            )}
+          </div>
+          {row.confidence || row.risk_computed_at ? (
+            <div className="text-[10px] uppercase tracking-widest text-slate-400">
+              {row.confidence ? `Confidence: ${row.confidence}` : null}
+              {row.confidence && row.risk_computed_at ? " · " : null}
+              {row.risk_computed_at ? `Computed ${row.risk_computed_at.toLocaleString()}` : null}
             </div>
           ) : null}
         </div>
