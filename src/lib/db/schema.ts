@@ -5283,6 +5283,10 @@ export const dealerLeadCommercials = pgTable(
     final_price: numeric("final_price", { precision: 14, scale: 2 }),
     payment_method: varchar("payment_method", { length: 20 }),
     deal_notes: text("deal_notes"),
+    // Structured product line-items (E-128): array of
+    // { asset_type, product_id, product_name, model_id, unit_price, quantity }
+    // sourced from the product_master_* tables.
+    product_lines: jsonb("product_lines").default([]),
     notes: text(),
     created_by: text("created_by").notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),

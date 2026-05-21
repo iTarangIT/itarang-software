@@ -105,6 +105,35 @@ export type LeadDetailTouchpoint = {
     next_action_at: string | null;
 };
 
+// One product line-item on a commercials quote (E-128). asset_type maps to
+// the three product-master tables; unit_price is snapshotted at quote time.
+export type AssetType = "battery" | "charger" | "paraphernalia";
+
+export type CommercialsProductLine = {
+    asset_type: AssetType;
+    product_id: string;
+    product_name: string;
+    model_id: string;
+    unit_price: number | null;
+    quantity: number;
+};
+
+// One product-master option for the picker dropdown.
+export type ProductMasterOption = {
+    id: string;
+    label: string;
+    model_id: string;
+    detail: string | null;
+    unit_price: number | null;
+    max_quantity: number | null;
+};
+
+export type ProductMasterResponse = {
+    battery: ProductMasterOption[];
+    charger: ProductMasterOption[];
+    paraphernalia: ProductMasterOption[];
+};
+
 export type LeadDetailCommercials = {
     commercial_id: string;
     version_no: number;
@@ -120,6 +149,7 @@ export type LeadDetailCommercials = {
     final_price: string | null;
     payment_method: string | null;
     deal_notes: string | null;
+    product_lines: CommercialsProductLine[];
     notes: string | null;
     created_by: string | null;
     created_at: string;
@@ -181,6 +211,7 @@ export type CommercialsInput = {
     final_price?: number | null;
     payment_method?: "cash" | "finance" | null;
     deal_notes?: string | null;
+    product_lines?: CommercialsProductLine[];
     notes?: string | null;
 };
 
