@@ -15,8 +15,8 @@ export default async function AdminUploadPage() {
                     Bulk Lead Upload
                 </h1>
                 <p className="mt-1 text-sm text-ink-muted">
-                    Upload a dealer-prospect CSV (max 5 MB / 5000 rows). Required
-                    columns: phone, dealer_name, city, state.
+                    Upload a dealer-prospect CSV or Excel file (max 5 MB /
+                    5000 rows). Required columns: phone, dealer_name, city, state.
                 </p>
             </header>
             <UploadWizard />
