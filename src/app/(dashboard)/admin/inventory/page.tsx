@@ -261,7 +261,7 @@ export default function AdminInventoryDashboard() {
           />
           <KpiCard
             icon={<Banknote className="w-5 h-5" />}
-            label="Network value"
+            label="Stock value"
             value={totalValueFmt}
             tone="indigo"
           />
