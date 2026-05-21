@@ -1,0 +1,20 @@
+---
+title: Lead Creation, KYC, Co-borrower & Consent Flow
+---
+erDiagram
+    leads ||--o| personal_details : "lead_id"
+    leads ||--o{ lead_documents : "lead_id"
+    leads ||--o{ lead_assignments : "lead_id"
+    leads ||--o{ kyc_documents : "lead_id"
+    leads ||--o{ kyc_verifications : "lead_id"
+    leads ||--|| kyc_verification_metadata : "lead_id PK"
+    leads ||--o{ kyc_data_audit : "lead_id"
+    leads ||--o{ co_borrowers : "lead_id"
+    co_borrowers ||--o{ co_borrower_documents : "co_borrower_id"
+    leads ||--o{ consent_records : "lead_id"
+    leads ||--o{ other_document_requests : "lead_id"
+    leads ||--o{ audit_logs : "entity_id"
+    dealer_leads ||--o{ leads : "scraped → CRM"
+    users ||--o{ lead_assignments : "owner / actor"
+    users ||--o{ kyc_verifications : "admin_action_by"
+    users ||--o{ consent_records : "verified_by"

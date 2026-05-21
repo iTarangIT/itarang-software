@@ -39,8 +39,9 @@ export default function ChangePasswordPage() {
         return;
       }
 
-      // redirect to dashboard
-      window.location.href = "/dealer-portal";
+      // Redirect to root — middleware routes to the user's role dashboard
+      // (nbfc_partner → /nbfc/portfolio, dealer → /dealer-portal, etc.).
+      window.location.href = "/";
     } catch (err) {
       setError("Something went wrong");
     } finally {
