@@ -130,6 +130,30 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                                         <Field label="Credit Terms" value={cc.credit_terms} />
                                                         <Field label="Delivery Terms" value={cc.delivery_terms} />
                                                         <Field label="Warranty" value={cc.warranty_terms} />
+                                                        {cc.product_lines?.length ? (
+                                                            <div className="col-span-2">
+                                                                <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Products</div>
+                                                                <ul className="space-y-1">
+                                                                    {cc.product_lines.map((p, i) => (
+                                                                        <li
+                                                                            key={`${p.asset_type}-${p.product_id}-${i}`}
+                                                                            className="flex items-center gap-2 rounded border border-gray-100 bg-gray-50/60 px-2 py-1 text-xs"
+                                                                        >
+                                                                            <span className="shrink-0 rounded bg-gray-200 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-gray-600">
+                                                                                {p.asset_type}
+                                                                            </span>
+                                                                            <span className="flex-1 truncate text-gray-800">{p.product_name}</span>
+                                                                            <span className="shrink-0 tabular-nums text-gray-600">× {p.quantity}</span>
+                                                                            {p.unit_price != null && (
+                                                                                <span className="shrink-0 tabular-nums text-gray-900">
+                                                                                    ₹{(p.unit_price * p.quantity).toLocaleString("en-IN")}
+                                                                                </span>
+                                                                            )}
+                                                                        </li>
+                                                                    ))}
+                                                                </ul>
+                                                            </div>
+                                                        ) : null}
                                                         <div className="col-span-2">
                                                             <Field label="Deal Notes" value={cc.deal_notes ? <p className="whitespace-pre-wrap">{cc.deal_notes}</p> : null} />
                                                         </div>
@@ -140,6 +164,18 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                                                     value={
                                                                         <a href={cc.quote_document_url} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline text-sm">
                                                                             Open quote
+                                                                        </a>
+                                                                    }
+                                                                />
+                                                            </div>
+                                                        )}
+                                                        {cc.brochure_url && (
+                                                            <div className="col-span-2">
+                                                                <Field
+                                                                    label="Brochure"
+                                                                    value={
+                                                                        <a href={cc.brochure_url} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline text-sm">
+                                                                            Open brochure
                                                                         </a>
                                                                     }
                                                                 />

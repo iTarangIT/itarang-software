@@ -96,7 +96,8 @@ export const GET = withErrorHandler(
                     commercial_id, version_no, is_current, event_type,
                     price_quoted::text, quote_document_url, brochure_url, brochure_sent_at,
                     credit_terms, delivery_terms, warranty_terms,
-                    final_price::text, payment_method, deal_notes, notes,
+                    final_price::text, payment_method, deal_notes,
+                    COALESCE(product_lines, '[]'::jsonb) AS product_lines, notes,
                     created_by, created_at, withdrawn_at
                 FROM dealer_lead_commercials
                 WHERE dealer_lead_id = ${id}

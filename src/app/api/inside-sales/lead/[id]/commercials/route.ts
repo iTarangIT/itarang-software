@@ -32,6 +32,20 @@ const BodySchema = z.object({
     final_price: z.number().nonnegative().nullable().optional(),
     payment_method: z.enum(["cash", "finance"]).nullable().optional(),
     deal_notes: z.string().max(5000).nullable().optional(),
+    // Structured product line-items (E-128) — sourced from product_master_*.
+    product_lines: z
+        .array(
+            z.object({
+                asset_type: z.enum(["battery", "charger", "paraphernalia"]),
+                product_id: z.string().min(1),
+                product_name: z.string().min(1).max(200),
+                model_id: z.string().max(100),
+                unit_price: z.number().nonnegative().nullable(),
+                quantity: z.number().int().positive().max(100000),
+            }),
+        )
+        .max(100)
+        .optional(),
     notes: z.string().max(5000).nullable().optional(),
 });
 
@@ -76,6 +90,7 @@ export const POST = withErrorHandler(
                     final_price: body.final_price != null ? String(body.final_price) : null,
                     payment_method: body.payment_method ?? null,
                     deal_notes: body.deal_notes ?? null,
+                    product_lines: body.product_lines ?? [],
                     notes: body.notes ?? null,
                     created_by: user.id,
                 })
