@@ -159,7 +159,7 @@ export async function validateUpload(
             ? ((await db.execute<ExistingLead>(sql`
                   SELECT id, phone, lead_status, city, state
                   FROM dealer_leads
-                  WHERE phone = ANY(${validPhones})
+                  WHERE phone IN ${validPhones}
               `)) as unknown as ExistingLead[])
             : [];
     const existingByPhone = new Map(existing.map((e) => [e.phone, e]));
@@ -182,7 +182,7 @@ export async function validateUpload(
                 SELECT ca.alias_lower, c.name
                 FROM city_aliases ca
                 JOIN cities c ON c.id = ca.city_id
-                WHERE ca.alias_lower = ANY(${cityInputs})
+                WHERE ca.alias_lower IN ${cityInputs}
             `)) as unknown as { alias_lower: string; name: string }[];
             for (const a of aliasRows) cityCanon.set(a.alias_lower, a.name);
         } catch {

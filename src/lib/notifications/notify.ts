@@ -31,6 +31,6 @@ export async function notifyRoles(
             ${JSON.stringify(n.data ?? {})}::jsonb, ${n.leadId ?? null},
             false, NOW()
         FROM users u
-        WHERE LOWER(u.role) = ANY(${lower}) AND u.is_active = TRUE
+        WHERE LOWER(u.role) IN ${lower} AND u.is_active = TRUE
     `);
 }
