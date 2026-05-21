@@ -703,16 +703,17 @@ export default function ProductSelectionPage() {
   }, [chargerFilter, deferredChargerSearch, chargers.length]);
 
   // ── Submit gating ───────────────────────────────────────────────────
+  // Charger is optional — a battery-only sale (with or without paraphernalia)
+  // is a valid order. Inventory-side guards still enforce that any charger
+  // serial submitted has to be a real available row.
   const pendingRequirements = useMemo(() => {
     const list: string[] = [];
     if (!selectedBattery) list.push("Battery serial");
-    if (!selectedCharger) list.push("Charger serial");
     return list;
-  }, [selectedBattery, selectedCharger]);
+  }, [selectedBattery]);
 
   const canSubmit =
     !!selectedBattery &&
-    !!selectedCharger &&
     !submitting &&
     !access?.readOnly;
 
@@ -727,7 +728,7 @@ export default function ProductSelectionPage() {
 
   // ── Handlers ────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!canSubmit || !selectedBattery || !selectedCharger) return;
+    if (!canSubmit || !selectedBattery) return;
     if (access?.paymentMode === "cash") {
       setConfirmOpen(true);
       return;
@@ -741,7 +742,7 @@ export default function ProductSelectionPage() {
     try {
       const body = {
         batterySerial: selectedBattery!.serial_number,
-        chargerSerial: selectedCharger!.serial_number,
+        chargerSerial: selectedCharger?.serial_number ?? null,
         paraphernalia: paramList,
         paraphernaliaLines: paraLines,
         dealerMargin: Number(dealerMargin || 0),

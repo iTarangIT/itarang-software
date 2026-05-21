@@ -12,7 +12,8 @@
  * Prereqs: drizzle/E-026_loan_sanctions_nbfc_lifecycle.sql and
  * drizzle/E-026B_nbfc_tenant_bridge.sql must already be applied.
  */
-import "dotenv/config";
+import dotenv from "dotenv";
+dotenv.config({ path: ".env.local" });
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 

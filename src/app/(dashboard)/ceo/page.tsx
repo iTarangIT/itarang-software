@@ -13,10 +13,21 @@ import {
     UserCheck,
     Briefcase,
     Loader2,
-    Users
+    Users,
+    FileSignature
 } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { lspStatusToneClass } from '@/components/admin/nbfc/lspStatusTone';
+
+type NbfcSigningRow = {
+    nbfcId: number;
+    nbfcShortId: string;
+    legalName: string;
+    agreementStatus: string;
+    signed: number;
+    total: number;
+};
 
 
 export default function CEODashboard() {
@@ -145,8 +156,15 @@ export default function CEODashboard() {
                         </div>
                         <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-2xl"></div>
                     </div>
+
+                    <NbfcSigningCard rows={(m.nbfcSigningQueue ?? []) as NbfcSigningRow[]} />
                 </div>
             </div>
+
+            {/* NBFC Agreements in Signing — populated by the CEO dashboard
+                API once the CEO clicks "Approve & Send Agreement for Signing"
+                and Digio starts collecting signatures. Empty until any NBFC
+                has an agreement in flight. */}
 
             {/* Sales Teams Overview */}
             <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
@@ -176,6 +194,55 @@ export default function CEODashboard() {
                     ))}
                 </div>
             </div>
+        </div>
+    );
+}
+
+function NbfcSigningCard({ rows }: { rows: NbfcSigningRow[] }) {
+    return (
+        <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <FileSignature className="w-4 h-4 text-brand-600" />
+                NBFC Agreements in Signing
+            </h3>
+            {rows.length === 0 ? (
+                <p className="text-xs text-gray-500 leading-relaxed">
+                    No agreements awaiting signatures. Approve a pending NBFC to send the auto-filled agreement to its signers via Digio.
+                </p>
+            ) : (
+                <div className="space-y-3">
+                    {rows.map((row) => (
+                        <Link
+                            key={row.nbfcId}
+                            href={`/admin/nbfc/${row.nbfcId}/review`}
+                            className="block p-3 rounded-xl bg-gray-50 border border-gray-100 hover:bg-white hover:border-brand-100 transition-all"
+                        >
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-semibold text-gray-900 truncate">{row.legalName}</p>
+                                    <p className="text-[10px] font-mono text-gray-400 mt-0.5">{row.nbfcShortId}</p>
+                                </div>
+                                <ArrowRight className="w-3 h-3 text-gray-400 shrink-0 mt-1" />
+                            </div>
+                            <div className="flex items-center gap-2 mt-2">
+                                <span className={lspStatusToneClass(row.agreementStatus)}>
+                                    {row.agreementStatus}
+                                </span>
+                                {row.total > 0 && (
+                                    <span className="text-[11px] text-gray-500 font-mono">
+                                        Signed {row.signed}/{row.total}
+                                    </span>
+                                )}
+                            </div>
+                        </Link>
+                    ))}
+                </div>
+            )}
+            <Link href="/admin/nbfc/approvals">
+                <button className="w-full py-2.5 text-xs font-semibold text-brand-700 hover:bg-brand-50 rounded-xl transition-colors flex items-center justify-center gap-2 mt-4">
+                    Pending NBFC Approvals <ArrowRight className="w-3 h-3" />
+                </button>
+            </Link>
         </div>
     );
 }

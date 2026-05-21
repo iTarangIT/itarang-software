@@ -1,0 +1,82 @@
+---
+title: Dealer Onboarding Flow
+---
+erDiagram
+    users ||--o{ dealer_onboarding_applications : "dealer_user_id"
+    dealer_onboarding_applications ||--o{ dealer_onboarding_documents : "application_id"
+    dealer_onboarding_applications ||--o{ dealer_correction_rounds : "application_id"
+    dealer_correction_rounds ||--o{ dealer_correction_items : "round_id"
+    dealer_correction_items }o..o{ dealer_onboarding_documents : "previous/new_document_id"
+    dealer_onboarding_applications ||--o{ dealer_agreement_signers : "application_id"
+    dealer_onboarding_applications ||--o{ dealer_agreement_events : "application_id"
+    dealer_onboarding_applications ||--o| dealers : "approved (soft FK application_id)"
+    admin_verification_queue }o--|| dealer_onboarding_applications : "queue_type=dealer_onboarding"
+    users ||--o{ admin_verification_queue : "assigned_to / submitted_by"
+
+    dealer_onboarding_applications {
+        uuid id PK
+        uuid dealer_user_id FK
+        text company_name
+        varchar onboarding_status
+        varchar review_status
+        integer correction_count
+        boolean is_locked
+        varchar agreement_status
+        timestamp signed_at
+    }
+    dealer_onboarding_documents {
+        uuid id PK
+        uuid application_id FK
+        varchar document_type
+        varchar verification_status
+        jsonb api_verification_results
+    }
+    dealer_correction_rounds {
+        uuid id PK
+        uuid application_id FK
+        integer round_number
+        varchar status
+        jsonb requested_fields
+        jsonb requested_documents
+        text token_hash UK
+    }
+    dealer_correction_items {
+        uuid id PK
+        uuid round_id FK
+        varchar kind
+        varchar key
+        text previous_value
+        text new_value
+    }
+    dealer_agreement_signers {
+        uuid id PK
+        uuid application_id FK
+        varchar signer_role
+        varchar signer_status
+        timestamp signed_at
+    }
+    dealer_agreement_events {
+        uuid id PK
+        uuid application_id FK
+        varchar event_type
+        jsonb event_payload
+    }
+    dealers {
+        serial id PK
+        varchar dealer_id UK
+        varchar onboarding_status
+        varchar application_id "soft FK"
+        boolean finance_enabled
+    }
+    admin_verification_queue {
+        varchar id PK
+        varchar queue_type
+        text lead_id
+        varchar status
+        uuid assigned_to FK
+    }
+    users {
+        uuid id PK
+        text email
+        varchar role
+    }

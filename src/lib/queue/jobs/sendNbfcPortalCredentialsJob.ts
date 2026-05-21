@@ -1,17 +1,16 @@
 /**
- * E-002 — Email job: send NBFC portal credentials to primary_contact_email.
+ * E-002 — Send NBFC portal credentials to primary_contact_email.
  *
- * The activation route enqueues a job here when the NBFC flips from approved
- * to active. The actual SMTP send is intentionally out of scope of this loop;
- * the Bull queue + job descriptor exposes the contract that the email worker
- * (or downstream Resend/Postmark integration) will consume.
+ * Originally this was a BullMQ enqueue with the worker "intentionally out of
+ * scope" — but no worker was ever built, so credentials never reached the
+ * NBFC. Mirroring the dealer welcome-email pattern, we now send the email
+ * inline via nodemailer at activation time.
  *
- * Tests assert that `enqueueNbfcPortalCredentialsJob` is invoked with the
- * primary_contact_email and the freshly generated password — using the
- * exported in-memory recorder when `NBFC_PORTAL_EMAIL_INMEMORY=1` is set.
+ * The in-memory recorder branch (NBFC_PORTAL_EMAIL_INMEMORY=1) is preserved
+ * so existing tests that assert the function was called with the right
+ * email + password keep passing.
  */
-import { Queue } from "bullmq";
-import { connection } from "../connection";
+import { sendNbfcWelcomeEmail } from "@/lib/email/sendNbfcWelcomeEmail";
 
 export type NbfcPortalCredentialJob = {
   nbfcId: number;
@@ -19,28 +18,14 @@ export type NbfcPortalCredentialJob = {
   toEmail: string;
   password: string;
   supabaseUserId: string;
+  primaryContactName: string;
+  nbfcLegalName: string;
+  nbfcCode: string;
+  loginUrl: string;
+  signedAgreementPdf?: Buffer | null;
+  auditTrailPdf?: Buffer | null;
 };
 
-const QUEUE_NAME = "nbfc-portal-credentials";
-
-let _queue: Queue<NbfcPortalCredentialJob> | null = null;
-
-function getQueue(): Queue<NbfcPortalCredentialJob> {
-  if (_queue) return _queue;
-  _queue = new Queue<NbfcPortalCredentialJob>(QUEUE_NAME, {
-    connection,
-    defaultJobOptions: {
-      attempts: 3,
-      backoff: { type: "exponential", delay: 5000 },
-      removeOnComplete: { age: 24 * 60 * 60, count: 1000 },
-      removeOnFail: { age: 7 * 24 * 60 * 60 },
-    },
-  });
-  return _queue;
-}
-
-// In-memory recorder used by tests — avoids touching Redis. Activates when
-// NBFC_PORTAL_EMAIL_INMEMORY=1 (set by the loop test runner).
 export const __inMemoryNbfcCredentialJobs: NbfcPortalCredentialJob[] = [];
 
 function isInMemoryMode(): boolean {
@@ -54,10 +39,28 @@ export async function enqueueNbfcPortalCredentialsJob(
     __inMemoryNbfcCredentialJobs.push(payload);
     return { id: `inmem-${__inMemoryNbfcCredentialJobs.length}` };
   }
-  const job = await getQueue().add("send-portal-credentials", payload, {
-    jobId: payload.credentialId,
+
+  await sendNbfcWelcomeEmail({
+    toEmail: payload.toEmail,
+    primaryContactName: payload.primaryContactName,
+    nbfcLegalName: payload.nbfcLegalName,
+    nbfcCode: payload.nbfcCode,
+    loginEmail: payload.toEmail,
+    password: payload.password,
+    loginUrl: payload.loginUrl,
+    supportEmail:
+      process.env.NBFC_SUPPORT_EMAIL ||
+      process.env.DEALER_SUPPORT_EMAIL ||
+      "support@itarang.com",
+    supportPhone:
+      process.env.NBFC_SUPPORT_PHONE ||
+      process.env.DEALER_SUPPORT_PHONE ||
+      "+91-8076841497",
+    signedAgreementPdf: payload.signedAgreementPdf,
+    auditTrailPdf: payload.auditTrailPdf,
   });
-  return { id: String(job.id) };
+
+  return { id: payload.credentialId };
 }
 
 export function __resetInMemoryNbfcCredentialJobs() {

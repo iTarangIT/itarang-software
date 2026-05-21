@@ -57,6 +57,15 @@ jobs:
               echo "No previous BUILD_ID/.next/static — first build or clean checkout"
             fi
 
+            echo "=== Cleaning prior build state ==="
+            # Forces deterministic builds. The archive ring above already
+            # snapshot the prior .next/static into $ARCHIVE_DIR/$OLD_BUILD_ID,
+            # so the stale-tab grace period is preserved. Without this nuke,
+            # .next/standalone/.next/server + .next/cache/turbopack can carry
+            # references the new build doesn't re-emit, surfacing as
+            # NOT-ON-DISK chunks at the served-asset verification step.
+            rm -rf .next
+
             echo "=== Building Next.js (standalone) ==="
             export GITHUB_SHA=$(git rev-parse HEAD)
             echo "Building with GITHUB_SHA=$GITHUB_SHA"
