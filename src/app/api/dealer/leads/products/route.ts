@@ -193,7 +193,7 @@ export const GET = withErrorHandler(async (req: Request) => {
           const voltageInt = Math.round(Number(inv.voltage_v) || 0);
           const capacityInt = Math.round(Number(inv.capacity_ah) || 0);
 
-          const [inserted] = await tx
+          let [inserted] = await tx
             .insert(products)
             .values({
               category_id: canonicalCategoryRow.id,
@@ -208,6 +208,17 @@ export const GET = withErrorHandler(async (req: Request) => {
               warranty_months: 0,
               status: "active",
             })
+            // The (category_id, voltage_v, capacity_ah) unique constraint can
+            // already be held by a different SKU — e.g. two paraphernalia items
+            // both at 0V/0Ah. Skip on conflict instead of aborting the whole
+            // transaction (that 23505 was 500-ing the route → empty dropdown).
+            .onConflictDoNothing({
+              target: [
+                products.category_id,
+                products.voltage_v,
+                products.capacity_ah,
+              ],
+            })
             .returning({
               id: products.id,
               name: products.name,
@@ -220,6 +231,33 @@ export const GET = withErrorHandler(async (req: Request) => {
               status: products.status,
               category_id: products.category_id,
             });
+
+          // Conflict skipped the insert — reuse the row already occupying that
+          // (category, voltage, capacity) slot so the SKU still resolves.
+          if (!inserted) {
+            [inserted] = await tx
+              .select({
+                id: products.id,
+                name: products.name,
+                slug: products.slug,
+                sku: products.sku,
+                hsn_code: products.hsn_code,
+                warranty_months: products.warranty_months,
+                is_serialized: products.is_serialized,
+                sort_order: products.sort_order,
+                status: products.status,
+                category_id: products.category_id,
+              })
+              .from(products)
+              .where(
+                and(
+                  eq(products.category_id, canonicalCategoryRow.id),
+                  eq(products.voltage_v, voltageInt),
+                  eq(products.capacity_ah, capacityInt),
+                ),
+              )
+              .limit(1);
+          }
 
           if (!inserted) continue;
 

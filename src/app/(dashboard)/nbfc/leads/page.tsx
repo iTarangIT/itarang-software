@@ -12,7 +12,6 @@ import { db } from "@/lib/db";
 import { eq, inArray, sql } from "drizzle-orm";
 import {
   dealers,
-  inventory,
   leads,
   loanFiles,
   loanSanctions,
@@ -96,107 +95,70 @@ export default async function NbfcLeadsPage({
   // BRD §6.1.4 columns:
   //   Lead Reference ID  ← leads.reference_id
   //   Customer Name      ← leads.full_name
-  //   Dealer             ← dealers.company_name (joined via leads.dealer_id =
-  //                        dealers.dealer_id, the varchar code — not the
-  //                        numeric serial PK)
-  //   Battery Serial     ← inventory.serial_number (linked_lead_id = leads.id)
+  //   Dealer             ← dealers.company_name (via leads.dealer_id)
+  //   Battery Serial     ← nbfc_loans.vehicleno (the financed asset)
   //   Loan Amount        ← loan_sanctions.loan_amount
   //   Loan File No.      ← loan_sanctions.loan_file_number
   //   Status             ← loan_sanctions.status
   //   CDS Score          ← borrower_risk_scores.cds_score (latest)
-  //   EMI Status         ← loan_files.next_emi_date + overdue_days
+  //   EMI Status         ← loan_files.next_emi_date + overdue_days (legacy)
   //
-  // We start from nbfc_loans for tenant scoping (its tenant_id is the
-  // authoritative tenant link for this surface), then fan out with LEFT JOINs.
-  // Inventory and loan_sanctions are pulled in side-queries and merged in JS
-  // so cardinality doesn't multiply rows.
+  // Loan-centric: one row per nbfc_loans row. The disbursement bridge
+  // (projectDisbursedLoan) guarantees nbfc_loans.loan_application_id ===
+  // loan_sanctions.id, so we join the canonical origination record DIRECTLY on
+  // that key — and reach the borrower via loan_sanctions.lead_id. The legacy
+  // loan_files table is kept only as an optional LEFT JOIN for the EMI-status
+  // columns; routing the primary join through it (the old design) left every
+  // row blank because the bridge never populates loan_files.
   const allRows = (await db
     .select({
       loan_application_id: nbfcLoans.loan_application_id,
       vehicleno: nbfcLoans.vehicleno,
       current_dpd: nbfcLoans.current_dpd,
       outstanding_amount: nbfcLoans.outstanding_amount,
-      lead_id: loanFiles.lead_id,
-      next_emi_date: loanFiles.next_emi_date,
-      overdue_days: loanFiles.overdue_days,
-      loan_files_status: loanFiles.loan_status,
-      created_at: loanFiles.created_at,
+      sanction_id: loanSanctions.id,
+      loan_amount: loanSanctions.loan_amount,
+      loan_file_number: loanSanctions.loan_file_number,
+      sanction_status: loanSanctions.status,
+      sanctioned_at: loanSanctions.sanctioned_at,
+      lead_id: loanSanctions.lead_id,
       reference_id: leads.reference_id,
       full_name: leads.full_name,
       lead_dealer_id: leads.dealer_id,
       dealer_name: dealers.company_name,
+      next_emi_date: loanFiles.next_emi_date,
+      overdue_days: loanFiles.overdue_days,
+      loan_files_status: loanFiles.loan_status,
     })
     .from(nbfcLoans)
-    .leftJoin(loanFiles, eq(loanFiles.loan_application_id, nbfcLoans.loan_application_id))
-    .leftJoin(leads, eq(leads.id, loanFiles.lead_id))
+    .leftJoin(loanSanctions, eq(loanSanctions.id, nbfcLoans.loan_application_id))
+    .leftJoin(leads, eq(leads.id, loanSanctions.lead_id))
     .leftJoin(dealers, eq(dealers.dealer_id, leads.dealer_id))
+    .leftJoin(loanFiles, eq(loanFiles.loan_application_id, nbfcLoans.loan_application_id))
     .where(eq(nbfcLoans.tenant_id, tenant.id))) as Array<{
     loan_application_id: string;
     vehicleno: string | null;
     current_dpd: number | null;
     outstanding_amount: string | null;
+    sanction_id: string | null;
+    loan_amount: string | null;
+    loan_file_number: string | null;
+    sanction_status: string | null;
+    sanctioned_at: Date | null;
     lead_id: string | null;
-    next_emi_date: Date | null;
-    overdue_days: number | null;
-    loan_files_status: string | null;
-    created_at: Date | null;
     reference_id: string | null;
     full_name: string | null;
     lead_dealer_id: string | null;
     dealer_name: string | null;
+    next_emi_date: Date | null;
+    overdue_days: number | null;
+    loan_files_status: string | null;
   }>;
 
-  const tenantLeadIds = Array.from(
-    new Set(allRows.map((r) => r.lead_id).filter((v): v is string => !!v)),
-  );
-
-  // loan_sanctions for THIS tenant — keyed by lead_id. A lead can in principle
-  // have multiple sanctions across NBFCs, but loan_sanctions.nbfc_id filter
-  // narrows to this tenant; if multiple still exist we prefer the most recent.
-  const sanctionRows =
-    tenantLeadIds.length === 0
-      ? []
-      : await db
-          .select({
-            id: loanSanctions.id,
-            lead_id: loanSanctions.lead_id,
-            loan_amount: loanSanctions.loan_amount,
-            loan_file_number: loanSanctions.loan_file_number,
-            status: loanSanctions.status,
-            sanctioned_at: loanSanctions.sanctioned_at,
-          })
-          .from(loanSanctions)
-          .where(
-            sql`${loanSanctions.nbfc_id} = ${tenant.id}::uuid AND ${loanSanctions.lead_id} = ANY(${tenantLeadIds})`,
-          );
-  const sanctionByLead = new Map<string, (typeof sanctionRows)[number]>();
-  for (const s of sanctionRows) {
-    const prev = sanctionByLead.get(s.lead_id);
-    if (!prev || (s.sanctioned_at && prev.sanctioned_at && s.sanctioned_at > prev.sanctioned_at)) {
-      sanctionByLead.set(s.lead_id, s);
-    }
-  }
-
-  // Battery serial — first inventory row linked to each lead. Multiple
-  // inventories per lead is rare (warranty exchange, etc.); we show one.
-  const inventoryRows =
-    tenantLeadIds.length === 0
-      ? []
-      : await db
-          .select({
-            linked_lead_id: inventory.linked_lead_id,
-            serial_number: inventory.serial_number,
-          })
-          .from(inventory)
-          .where(sql`${inventory.linked_lead_id} = ANY(${tenantLeadIds})`);
-  const serialByLead = new Map<string, string>();
-  for (const inv of inventoryRows) {
-    if (inv.linked_lead_id && inv.serial_number && !serialByLead.has(inv.linked_lead_id)) {
-      serialByLead.set(inv.linked_lead_id, inv.serial_number);
-    }
-  }
-
   // Latest CDS per loan_sanction_id (BRD §6.1.4 — "computed nightly").
+  // Best-effort: borrower_risk_scores.loan_sanction_id is uuid while
+  // loan_sanctions.id is varchar — they only align for uuid-keyed loans, so
+  // this degrades cleanly to "—" when the keys don't match.
   const cdsRows = (await db.execute(sql`
     SELECT DISTINCT ON (loan_sanction_id) loan_sanction_id::text AS loan_sanction_id, cds_score::float AS cds_score
     FROM borrower_risk_scores
@@ -213,11 +175,10 @@ export default async function NbfcLeadsPage({
   const to = params.to ? new Date(params.to).getTime() + 24 * 3600 * 1000 - 1 : null;
 
   const enriched = allRows.map((r) => {
-    const sanction = r.lead_id ? sanctionByLead.get(r.lead_id) : undefined;
-    const cds = sanction ? cdsBySanction.get(sanction.id) ?? null : null;
+    const cds = r.sanction_id ? cdsBySanction.get(r.sanction_id) ?? null : null;
     // BRD: Status from loan_sanctions.status. Overlay "overdue" when DPD>0 so
     // the strip's overdue stage isn't blank when sanctions still say 'active'.
-    const baseStatus = (sanction?.status ?? r.loan_files_status ?? "").toLowerCase();
+    const baseStatus = (r.sanction_status ?? r.loan_files_status ?? "").toLowerCase();
     const effective_status =
       (r.current_dpd ?? 0) > 0 && (baseStatus === "active" || baseStatus === "disbursed")
         ? "overdue"
@@ -228,15 +189,15 @@ export default async function NbfcLeadsPage({
       reference_id: r.reference_id,
       full_name: r.full_name,
       dealer_name: r.dealer_name,
-      battery_serial: r.lead_id ? serialByLead.get(r.lead_id) ?? r.vehicleno : r.vehicleno,
-      loan_amount: sanction?.loan_amount != null ? Number(sanction.loan_amount) : null,
-      loan_file_number: sanction?.loan_file_number ?? null,
+      battery_serial: r.vehicleno,
+      loan_amount: r.loan_amount != null ? Number(r.loan_amount) : null,
+      loan_file_number: r.loan_file_number,
       status: effective_status,
       current_dpd: r.current_dpd,
       outstanding_amount: r.outstanding_amount != null ? Number(r.outstanding_amount) : null,
       overdue_days: r.overdue_days,
       next_emi_date: r.next_emi_date,
-      created_at: r.created_at,
+      created_at: r.sanctioned_at,
       cds_score: cds,
       cds_band: cdsBand(cds, bands),
     };

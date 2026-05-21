@@ -288,7 +288,10 @@ export const GET = withErrorHandler(async (req: Request) => {
     const kpiRows = await db
       .select({
         status: inventory.status,
-        units: sql<number>`count(*)::int`,
+        // Count real units, not rows: a paraphernalia lot is one row carrying
+        // a `quantity` (e.g. 56), so count its quantity; serialized
+        // battery/charger rows count 1 each (their `quantity` is null).
+        units: sql<number>`sum(case when ${inventory.inventory_type} = 'paraphernalia_lot' then coalesce(${inventory.quantity}, 1) else 1 end)::int`,
         value: sql<number>`coalesce(sum(${inventory.inventory_amount}),0)::float`,
       })
       .from(inventory)

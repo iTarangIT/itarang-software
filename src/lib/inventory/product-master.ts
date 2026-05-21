@@ -4,7 +4,7 @@ import {
   productMasterChargers,
   productMasterParaphernalia,
 } from "@/lib/db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { AssetType } from "./csv-templates";
 
 export interface BatteryMaster {
@@ -125,12 +125,14 @@ export async function resolveProductMaster(
 ): Promise<ResolveResult<MasterRow>> {
   const trimmed = String(key || "").trim();
   if (!trimmed) return { ok: false, reason: "NOT_FOUND" };
+  // Case-insensitive match — consistent with loadProductMasterBatch().
+  const trimmedLower = trimmed.toLowerCase();
 
   if (assetType === "battery") {
     const [row] = await db
       .select()
       .from(productMasterBatteries)
-      .where(eq(productMasterBatteries.model_id, trimmed))
+      .where(eq(sql`lower(${productMasterBatteries.model_id})`, trimmedLower))
       .limit(1);
     if (!row) return { ok: false, reason: "NOT_FOUND" };
     if (row.status !== "active") return { ok: false, reason: "INACTIVE" };
@@ -141,7 +143,7 @@ export async function resolveProductMaster(
     const [row] = await db
       .select()
       .from(productMasterChargers)
-      .where(eq(productMasterChargers.model_id, trimmed))
+      .where(eq(sql`lower(${productMasterChargers.model_id})`, trimmedLower))
       .limit(1);
     if (!row) return { ok: false, reason: "NOT_FOUND" };
     if (row.status !== "active") return { ok: false, reason: "INACTIVE" };
@@ -151,7 +153,7 @@ export async function resolveProductMaster(
   const [row] = await db
     .select()
     .from(productMasterParaphernalia)
-    .where(eq(productMasterParaphernalia.item_type_code, trimmed))
+    .where(eq(sql`lower(${productMasterParaphernalia.item_type_code})`, trimmedLower))
     .limit(1);
   if (!row) return { ok: false, reason: "NOT_FOUND" };
   if (row.status !== "active") return { ok: false, reason: "INACTIVE" };
@@ -161,7 +163,10 @@ export async function resolveProductMaster(
 /**
  * Bulk loader for the bulk-upload pre-flight phase.
  * Returns a Map keyed by lower-cased model_id / item_type_code so per-row
- * lookups are O(1) and case-insensitive.
+ * lookups are O(1) and case-insensitive. Only **active** Product Master rows
+ * are returned — an absent OR inactive model resolves to a Map miss, so the
+ * bulk-upload validate/commit routes flag it as an error (consistent with the
+ * single-item resolveProductMaster()).
  */
 export async function loadProductMasterBatch(
   assetType: "battery",
@@ -182,6 +187,9 @@ export async function loadProductMasterBatch(
   const cleaned = Array.from(
     new Set(keys.map((k) => String(k || "").trim()).filter(Boolean)),
   );
+  // Lower-cased keys so the DB match (lower(model_id) IN …) is case-insensitive,
+  // honouring this function's documented contract.
+  const cleanedLower = cleaned.map((k) => k.toLowerCase());
   const result = new Map<string, MasterRow>();
   if (!cleaned.length) return result;
 
@@ -189,7 +197,12 @@ export async function loadProductMasterBatch(
     const rows = await db
       .select()
       .from(productMasterBatteries)
-      .where(inArray(productMasterBatteries.model_id, cleaned));
+      .where(
+        and(
+          inArray(sql`lower(${productMasterBatteries.model_id})`, cleanedLower),
+          eq(productMasterBatteries.status, "active"),
+        ),
+      );
     for (const row of rows) result.set(row.model_id.toLowerCase(), mapBattery(row));
     return result;
   }
@@ -198,7 +211,12 @@ export async function loadProductMasterBatch(
     const rows = await db
       .select()
       .from(productMasterChargers)
-      .where(inArray(productMasterChargers.model_id, cleaned));
+      .where(
+        and(
+          inArray(sql`lower(${productMasterChargers.model_id})`, cleanedLower),
+          eq(productMasterChargers.status, "active"),
+        ),
+      );
     for (const row of rows) result.set(row.model_id.toLowerCase(), mapCharger(row));
     return result;
   }
@@ -206,8 +224,17 @@ export async function loadProductMasterBatch(
   const rows = await db
     .select()
     .from(productMasterParaphernalia)
-    .where(inArray(productMasterParaphernalia.item_type_code, cleaned));
-  for (const row of rows) result.set(row.item_type_code.toLowerCase(), mapParaphernalia(row));
+    .where(
+      and(
+        inArray(
+          sql`lower(${productMasterParaphernalia.item_type_code})`,
+          cleanedLower,
+        ),
+        eq(productMasterParaphernalia.status, "active"),
+      ),
+    );
+  for (const row of rows)
+    result.set(row.item_type_code.toLowerCase(), mapParaphernalia(row));
   return result;
 }
 

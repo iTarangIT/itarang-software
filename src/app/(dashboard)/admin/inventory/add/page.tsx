@@ -210,6 +210,8 @@ export default function AddInventoryItemPage() {
             ? s.category
             : "",
         imei_id: selectedBattery.iot_compatible ? s.imei_id || "" : "",
+        // OEM warranty months is auto-filled from Product Master (must match it).
+        oem_warranty_months: String(selectedBattery.warranty_months),
       }));
     } else if (selectedCharger) {
       setIotEnabled(false);
@@ -228,6 +230,8 @@ export default function AddInventoryItemPage() {
           : s.category && chargerCategories.includes(s.category)
             ? s.category
             : "",
+        // OEM warranty months is auto-filled from Product Master (must match it).
+        oem_warranty_months: String(selectedCharger.warranty_months),
       }));
     } else if (selectedPara) {
       setIotEnabled(false);
@@ -577,7 +581,7 @@ export default function AddInventoryItemPage() {
               <TextField label="GST %" name="gst_percent" type="number" form={form} setField={setField} />
               <TextField label="Supplier / OEM Name" name="supplier_name" form={form} setField={setField} />
               <TextField label="OEM Warranty Start Date" name="oem_warranty_date" type="date" form={form} setField={setField} />
-              <TextField label="OEM Warranty Months" name="oem_warranty_months" type="number" form={form} setField={setField} />
+              <TextField label="OEM Warranty Months (from Product Master)" name="oem_warranty_months" type="number" form={form} setField={setField} disabled />
               <TextField label="Batch Reference (optional)" name="batch_reference" form={form} setField={setField} />
               <TextField label="Warehouse Location" name="warehouse_location" form={form} setField={setField} />
               <TextField label="OEM Warranty Clauses (optional)" name="oem_warranty_clauses" form={form} setField={setField} />
@@ -651,11 +655,15 @@ export default function AddInventoryItemPage() {
               )}
             </div>
             <TextField label="Invoice Number" name="invoice_number" form={form} setField={setField} />
-            <TextField label="Invoice Date" name="invoice_date" type="date" form={form} setField={setField} />
+            <TextField label="Sold / Invoice Date" name="sold_date" type="date" form={form} setField={setField} />
             <TextField label="Invoice Value (₹, pre-GST)" name="invoice_value" type="number" form={form} setField={setField} />
             <TextField label="HSN Code (8 digits)" name="hsn_code" form={form} setField={setField} />
             <TextField label="GST %" name="gst_percent" type="number" form={form} setField={setField} />
             <TextField label="Supplier / OEM Name" name="supplier_name" form={form} setField={setField} />
+            <TextField label="OEM Warranty Start Date" name="oem_warranty_date" type="date" form={form} setField={setField} />
+            <TextField label="OEM Warranty Months (from Product Master)" name="oem_warranty_months" type="number" form={form} setField={setField} disabled />
+            <TextField label="Batch Reference (optional)" name="batch_reference" form={form} setField={setField} />
+            <TextField label="OEM Warranty Clauses (optional)" name="oem_warranty_clauses" form={form} setField={setField} />
             <TextField label="Warehouse Location" name="warehouse_location" form={form} setField={setField} />
           </div>
         )}
@@ -826,12 +834,14 @@ function TextField({
   type = "text",
   form,
   setField,
+  disabled = false,
 }: {
   label: string;
   name: string;
   type?: string;
   form: Record<string, string>;
   setField: (name: string, value: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <div>
@@ -840,7 +850,8 @@ function TextField({
         type={type}
         value={form[name] || ""}
         onChange={(e) => setField(name, e.target.value)}
-        className={INPUT}
+        disabled={disabled}
+        className={disabled ? INPUT_DISABLED : INPUT}
       />
     </div>
   );

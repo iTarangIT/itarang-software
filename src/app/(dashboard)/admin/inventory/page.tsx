@@ -98,7 +98,9 @@ export default function AdminInventoryDashboard() {
   const [kpis, setKpis] = useState<KPIs | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeSerial, setActiveSerial] = useState<string | null>(null);
+  const [activeInventoryId, setActiveInventoryId] = useState<string | null>(
+    null,
+  );
 
   const updateFilters = (patch: Partial<InventoryFilters>) => {
     setPage(1);
@@ -433,9 +435,7 @@ export default function AdminInventoryDashboard() {
                     <tr
                       key={r.id}
                       className="hover:bg-blue-50/30 cursor-pointer transition-colors"
-                      onClick={() =>
-                        r.serialNumber && setActiveSerial(r.serialNumber)
-                      }
+                      onClick={() => setActiveInventoryId(r.id)}
                     >
                       <td className="px-3 py-2.5 font-mono text-[#0047AB] font-bold">
                         {r.serialNumber || "—"}
@@ -500,10 +500,10 @@ export default function AdminInventoryDashboard() {
       </div>
 
       {/* ─── Detail Card Modal ─────────────────────────────────────────── */}
-      {activeSerial && (
+      {activeInventoryId && (
         <div
           className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 overflow-auto"
-          onClick={() => setActiveSerial(null)}
+          onClick={() => setActiveInventoryId(null)}
         >
           <div
             className="bg-white rounded-2xl max-w-3xl w-full shadow-2xl my-8"
@@ -514,13 +514,13 @@ export default function AdminInventoryDashboard() {
                 Inventory Detail
               </h2>
               <button
-                onClick={() => setActiveSerial(null)}
+                onClick={() => setActiveInventoryId(null)}
                 className="p-1 rounded-lg hover:bg-gray-100"
               >
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
-            <InventoryDetailCard serial={activeSerial} />
+            <InventoryDetailCard inventoryId={activeInventoryId} />
           </div>
         </div>
       )}
