@@ -48,7 +48,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                    ow.name AS owner_name, dl.created_at
             FROM dealer_leads dl
             LEFT JOIN users ow ON ow.id::text = dl.current_owner_id
-            WHERE dl.id = ANY(${ids})
+            WHERE dl.id IN ${ids}
             ORDER BY dl.created_at DESC
         `);
         const headers = [
@@ -80,7 +80,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         id: string;
         lead_status: string | null;
     }>(sql`
-        SELECT id, lead_status FROM dealer_leads WHERE id = ANY(${ids})
+        SELECT id, lead_status FROM dealer_leads WHERE id IN ${ids}
     `)) as unknown as { id: string; lead_status: string | null }[];
 
     let affected = 0;
