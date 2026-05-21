@@ -95,6 +95,19 @@ export async function GET(req: Request) {
     col.numFmt = "@";
   }
 
+  // Lock integer columns (quantities, star rating) to a plain "0" number
+  // format so Excel keeps them as numbers.
+  for (const idx of template.integerColumnIndexes) {
+    sheet.getColumn(idx + 1).numFmt = "0";
+  }
+
+  // Lock text columns to "@" (Text). Used for count fields Excel keeps
+  // date-coercing (oem_warranty_months: typing 6 became 1/6/1900). A Text
+  // cell stores exactly what is typed — Excel never turns it into a date.
+  for (const idx of template.textColumnIndexes) {
+    sheet.getColumn(idx + 1).numFmt = "@";
+  }
+
   // Append any sample rows (paraphernalia keeps one). Date columns are still
   // emitted as plain strings; the Text format above prevents conversion.
   for (const row of template.samples) {

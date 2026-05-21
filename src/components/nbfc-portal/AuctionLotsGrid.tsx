@@ -22,6 +22,9 @@ export interface AuctionLot {
   current_bid: number;
   bidder_count: number;
   ends_at: string;
+  // BRD §6.1.7 — surfaced to the bid modal so bidders can see their position.
+  your_last_bid?: number | null;
+  your_auto_bid_max?: number | null;
 }
 
 interface AuctionLotsGridProps {

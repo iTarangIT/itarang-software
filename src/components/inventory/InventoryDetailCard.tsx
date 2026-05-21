@@ -1,7 +1,8 @@
 "use client";
 
 // BRD V2 §5.0.5 — Battery / Charger Detail Card.
-// Read-only modal body. Loaded from /api/inventory/[serial]/card.
+// Read-only modal body. Loaded from /api/inventory/[serial]/card by inventory id
+// (or serial — non-serialized items have no serial).
 
 import { useEffect, useState } from "react";
 import {
@@ -57,7 +58,11 @@ interface DetailCard {
   history: { at: string; label: string; detail: string; actor?: string | null }[];
 }
 
-export default function InventoryDetailCard({ serial }: { serial: string }) {
+export default function InventoryDetailCard({
+  inventoryId,
+}: {
+  inventoryId: string;
+}) {
   const [data, setData] = useState<DetailCard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +74,7 @@ export default function InventoryDetailCard({ serial }: { serial: string }) {
       setError(null);
       try {
         const res = await fetch(
-          `/api/inventory/${encodeURIComponent(serial)}/card`,
+          `/api/inventory/${encodeURIComponent(inventoryId)}/card`,
         );
         const json = await res.json();
         if (cancelled) return;
@@ -84,7 +89,7 @@ export default function InventoryDetailCard({ serial }: { serial: string }) {
     return () => {
       cancelled = true;
     };
-  }, [serial]);
+  }, [inventoryId]);
 
   if (loading) {
     return (
@@ -108,10 +113,10 @@ export default function InventoryDetailCard({ serial }: { serial: string }) {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 border-b border-gray-100">
         <div>
           <p className="text-[10px] uppercase tracking-wider font-bold text-gray-400">
-            Serial
+            {data.serial_number ? "Serial" : "Inventory ID"}
           </p>
           <p className="text-xl font-mono font-black text-gray-900">
-            {data.serial_number}
+            {data.serial_number ?? data.inventory_id}
           </p>
           <p className="text-xs text-gray-500 mt-1">
             {data.product_name ?? data.model_number}
