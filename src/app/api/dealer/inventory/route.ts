@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { and, eq, notInArray } from "drizzle-orm";
+import { and, eq, notInArray, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { inventory, paraphernaliaStock, products } from "@/lib/db/schema";
@@ -14,6 +14,8 @@ type AggregatedRow = {
   quantity_reserved: number;
   quantity_sold: number;
   unit_price: number;
+  /** True value of available stock (Σ per-unit value), not count × unit_price. */
+  available_value: number;
   warehouse_location: string | null;
   received_at: string | null;
   is_new: boolean;
@@ -49,6 +51,7 @@ export async function GET() {
         product_name: products.name,
         status: inventory.status,
         final_amount: inventory.final_amount,
+        inventory_amount: inventory.inventory_amount,
         warehouse_location: inventory.warehouse_location,
         allocated_to_dealer_at: inventory.allocated_to_dealer_at,
         created_at: inventory.created_at,
@@ -58,7 +61,11 @@ export async function GET() {
       .where(
         and(
           eq(inventory.dealer_id, dealerId),
-          notInArray(inventory.status, ["transferred_out", "write-off"]),
+          notInArray(inventory.status, ["transferred_out", "written_off"]),
+          // Paraphernalia lives in the paraphernalia_stock ledger (queried
+          // below). `paraphernalia_lot` rows in `inventory` are invoice
+          // receipts — exclude them so paraphernalia isn't double-counted.
+          sql`${inventory.inventory_type} is distinct from 'paraphernalia_lot'`,
         ),
       );
 
@@ -70,6 +77,7 @@ export async function GET() {
         sku: string;
         warehouse_location: string | null;
         unit_price: number;
+        available_value: number;
         quantity_available: number;
         quantity_reserved: number;
         quantity_sold: number;
@@ -89,14 +97,20 @@ export async function GET() {
         sku,
         warehouse_location: r.warehouse_location ?? null,
         unit_price: 0,
+        available_value: 0,
         quantity_available: 0,
         quantity_reserved: 0,
         quantity_sold: 0,
         latest_received: null,
       };
 
-      if (r.status === "available") existing.quantity_available += 1;
-      else if (r.status === "reserved") existing.quantity_reserved += 1;
+      // Status → bucket mapping mirrors getInventorySummary() in
+      // @/lib/inventory/summary so this view and the admin dashboard agree.
+      if (r.status === "available" || r.status === "transferred_in") {
+        existing.quantity_available += 1;
+        // coalesce(final_amount, inventory_amount) — matches the admin aggregator.
+        existing.available_value += Number(r.final_amount ?? r.inventory_amount ?? 0) || 0;
+      } else if (r.status === "reserved") existing.quantity_reserved += 1;
       else if (r.status === "sold" || r.status === "dispatched") existing.quantity_sold += 1;
 
       if (existing.unit_price === 0 && r.final_amount) {
@@ -149,6 +163,7 @@ export async function GET() {
         quantity_reserved: g.quantity_reserved,
         quantity_sold: g.quantity_sold,
         unit_price: g.unit_price,
+        available_value: g.available_value,
         warehouse_location: g.warehouse_location,
         received_at: g.latest_received ? new Date(g.latest_received).toISOString() : null,
         is_new: isNew,
@@ -158,16 +173,19 @@ export async function GET() {
 
     for (const p of paraRows) {
       const receivedTs = p.last_upload_at ? new Date(p.last_upload_at).getTime() : null;
-      const unitPrice = p.unit_cost ? Number(p.unit_cost) : 0;
+      const rawUnitPrice = p.unit_cost ? Number(p.unit_cost) : 0;
+      const unitPrice = Number.isNaN(rawUnitPrice) ? 0 : rawUnitPrice;
+      const availableQty = p.available_qty ?? 0;
       rows.push({
         id: `paraphernalia__${p.id}`,
         product_name: p.item_label,
         sku: p.item_type,
         category: "Paraphernalia",
-        quantity_available: p.available_qty ?? 0,
+        quantity_available: availableQty,
         quantity_reserved: p.reserved_qty ?? 0,
         quantity_sold: p.sold_qty ?? 0,
-        unit_price: Number.isNaN(unitPrice) ? 0 : unitPrice,
+        unit_price: unitPrice,
+        available_value: availableQty * unitPrice,
         warehouse_location: null,
         received_at: receivedTs ? new Date(receivedTs).toISOString() : null,
         is_new: receivedTs !== null && now - receivedTs <= NEW_WINDOW_MS,

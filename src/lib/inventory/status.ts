@@ -1,6 +1,9 @@
 export const INVENTORY_STATUSES = [
   "available",
   "reserved",
+  // Transient finance-flow state set by Step 5 confirm-dispatch; settles to
+  // "sold" on delivery. Counted as sold by the inventory summary aggregator.
+  "dispatched",
   "sold",
   "written_off",
   "transferred_out",

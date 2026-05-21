@@ -737,7 +737,11 @@ function NewLeadWizardContent() {
                                                     className="w-full h-10 px-4 bg-white border-2 border-[#EBEBEB] rounded-xl text-sm outline-none focus:border-[#1D4ED8]"
                                                 >
                                                     <option value="">Select product</option>
-                                                    {products.map((p: any) => <option key={p.id} value={p.id}>{p.name} — {p.voltage_v}V / {p.capacity_ah}Ah | SKU: {p.sku}</option>)}
+                                                    {products.map((p: any) => (
+                                                        <option key={p.id} value={p.id}>
+                                                            {p.name} — {p.voltage_v}V / {p.capacity_ah}Ah | SKU: {p.sku}{p.warranty_months ? ` | ${p.warranty_months}mo warranty` : ''}{typeof p.available_quantity === 'number' ? ` · ${p.available_quantity} avail.` : ''}{outOfStockProducts.includes(p.id) ? ' (Out of Stock)' : ''}
+                                                        </option>
+                                                    ))}
                                                 </select>
                                             </div>
                                             <button onClick={() => { setAdditionalProducts(prev => prev.filter((_, i) => i !== idx)); setIsModified(true); }} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
