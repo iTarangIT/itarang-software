@@ -53,6 +53,23 @@ export default async function RecoveryPage() {
   const tenant = await getCurrentTenant();
   await requireNbfcAccess(tenant.id);
 
+  // 0. Tenant legal identity — drives the §6.1.6 Borrower Notice Preview.
+  const tenantLegalRows = await db
+    .select({
+      legal_name: nbfcTenants.nbfc_legal_name,
+      grievance_url: nbfcTenants.grievance_url,
+      grievance_helpline: nbfcTenants.grievance_helpline,
+    })
+    .from(nbfcTenants)
+    .where(eq(nbfcTenants.id, tenant.id))
+    .limit(1);
+  const tenantLegal = {
+    legal_name: tenantLegalRows[0]?.legal_name ?? null,
+    display_name: tenant.display_name,
+    grievance_url: tenantLegalRows[0]?.grievance_url ?? null,
+    grievance_helpline: tenantLegalRows[0]?.grievance_helpline ?? null,
+  };
+
   // 1. Pipeline rows for tenant.
   const rows = await db
     .select({
@@ -318,6 +335,7 @@ export default async function RecoveryPage() {
         stages={STAGES as unknown as Stage[]}
         stageLabels={STAGE_LABEL}
         rows={enrichedRows}
+        tenantLegal={tenantLegal}
       />
 
       {/* Pending immobilisations */}
@@ -328,42 +346,54 @@ export default async function RecoveryPage() {
             iTarang sales_head approves; on approval the device-immobilisation row is written.
           </p>
         </div>
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-800/50 text-xs uppercase tracking-widest text-slate-500">
-            <tr>
-              <th className="px-3 py-2 text-left font-bold">Created</th>
-              <th className="px-3 py-2 text-left font-bold">Loan</th>
-              <th className="px-3 py-2 text-left font-bold">Reason</th>
-              <th className="px-3 py-2 text-left font-bold">Status</th>
-              <th className="px-3 py-2 text-left font-bold">Expires</th>
-            </tr>
-          </thead>
-          <tbody>
-            {enrichedRequests.length === 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 dark:bg-slate-800/50 text-xs uppercase tracking-widest text-slate-500">
               <tr>
-                <td colSpan={5} className="px-3 py-8 text-center text-slate-500">
-                  No immobilisation requests yet.
-                </td>
+                <th className="px-3 py-2 text-left font-bold">Created</th>
+                <th className="px-3 py-2 text-left font-bold">Loan</th>
+                <th className="px-3 py-2 text-left font-bold">Reason</th>
+                <th className="px-3 py-2 text-left font-bold">Status</th>
+                <th className="px-3 py-2 text-left font-bold">Expires</th>
               </tr>
-            ) : (
-              enrichedRequests.map((r) => (
-                <tr key={r.id} className="border-t border-slate-100 dark:border-slate-800">
-                  <td className="px-3 py-2 text-xs text-slate-500 tabular-nums">
-                    {r.created_at?.toLocaleString() ?? "—"}
-                  </td>
-                  <td className="px-3 py-2 font-mono text-xs">{r.loan_application_id}</td>
-                  <td className="px-3 py-2 text-xs uppercase font-bold">{r.reason_code}</td>
-                  <td className="px-3 py-2">
-                    <ImmobilisationStatusPill status={r.status} executed={r.executed} />
-                  </td>
-                  <td className="px-3 py-2 text-xs text-slate-500 tabular-nums">
-                    {r.expires_at?.toLocaleString() ?? "—"}
+            </thead>
+            <tbody>
+              {enrichedRequests.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-3 py-8 text-center text-slate-500">
+                    No immobilisation requests yet.
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                enrichedRequests.map((r) => (
+                  <tr
+                    key={r.id}
+                    className="border-t border-slate-100 dark:border-slate-800"
+                  >
+                    <td className="px-3 py-2 text-xs text-slate-500 tabular-nums">
+                      {r.created_at?.toLocaleString() ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs">
+                      {r.loan_application_id}
+                    </td>
+                    <td className="px-3 py-2 text-xs uppercase font-bold">
+                      {r.reason_code}
+                    </td>
+                    <td className="px-3 py-2">
+                      <ImmobilisationStatusPill
+                        status={r.status}
+                        executed={r.executed}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-500 tabular-nums">
+                      {r.expires_at?.toLocaleString() ?? "—"}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       {/* Battery Evaluations — Needs Inspection (BRD §6.1.7) */}

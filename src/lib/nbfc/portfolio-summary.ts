@@ -5,10 +5,11 @@
  * spinning up a Next.js server. The route handler in
  * src/app/api/nbfc/portfolio/summary/route.ts is a thin wrapper around this.
  */
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   borrowerRiskScores,
+  emiSchedules,
   loanSanctions,
   nbfcRecoveryPipeline,
 } from "@/lib/db/schema";
@@ -85,19 +86,23 @@ export async function computePortfolioSummary(tenantId: string): Promise<Portfol
     0,
   );
 
-  // Delinquency rate — until a per-EMI table exists, derive from nbfc_loans.current_dpd
-  // for the same tenant. Tenant-scoped: nbfc_loans.tenant_id = tenantId.
+  // Delinquency rate (BRD §6.1.3) — active loans carrying at least one EMI
+  // overdue by more than 30 days, derived from the per-EMI ledger
+  // (emi_schedules) rather than the denormalised nbfc_loans.current_dpd proxy.
   let overdue_count = 0;
   if (total_active_loans > 0) {
-    const overdueRows = await db.execute<{ overdue: number }>(sql`
-      SELECT COUNT(*)::int AS overdue
-      FROM nbfc_loans
-      WHERE tenant_id = ${tenantId}::uuid
-        AND current_dpd > 30
-        AND is_active = true
-    `);
-    const arr = overdueRows as unknown as Array<{ overdue: number }>;
-    overdue_count = arr[0]?.overdue ?? 0;
+    const activeIds = activeLoans.map((r) => r.id);
+    const overdueRows = await db
+      .selectDistinct({ loan_sanction_id: emiSchedules.loan_sanction_id })
+      .from(emiSchedules)
+      .where(
+        and(
+          inArray(emiSchedules.loan_sanction_id, activeIds),
+          inArray(emiSchedules.status, ["overdue", "missed"]),
+          sql`COALESCE(${emiSchedules.days_overdue}, 0) > 30`,
+        ),
+      );
+    overdue_count = overdueRows.length;
   }
   const delinquency_rate =
     total_active_loans === 0
