@@ -192,7 +192,7 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "sh-lead-upload",
-          label: "Bulk Upload",
+          label: "Bulk Lead Upload",
           icon: Upload,
           href: "/admin/upload",
         },
@@ -431,7 +431,7 @@ const roleNavigation: Record<string, any[]> = {
         },
         {
           id: "admin-lead-upload",
-          label: "Bulk Upload",
+          label: "Bulk Lead Upload",
           icon: Upload,
           href: "/admin/upload",
         },
