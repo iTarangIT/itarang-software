@@ -22,6 +22,7 @@ type InventoryItem = {
   quantity_reserved: number;
   quantity_sold: number;
   unit_price: number;
+  available_value: number;
   warehouse_location: string | null;
   received_at: string | null;
   is_new: boolean;
@@ -170,7 +171,7 @@ export default function DealerInventoryDetailModal({
 
   if (!item) return null;
 
-  const totalStockValue = item.unit_price * item.quantity_available;
+  const totalStockValue = item.available_value;
   const isPara = item.category.toLowerCase() === 'paraphernalia';
 
   return (

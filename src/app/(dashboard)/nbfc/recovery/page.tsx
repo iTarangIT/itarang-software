@@ -8,7 +8,7 @@
  * /api/nbfc/actions/battery-immobilisation/initiate).
  */
 import { db } from "@/lib/db";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import {
   nbfcRecoveryPipeline,
   nbfcLoans,
@@ -16,10 +16,18 @@ import {
   iotDevices,
   dualApprovalRequests,
   nbfcImmobilisationActions,
+  auctionLots,
+  auctionBids,
+  auctionSettlements,
+  auctionAutoBids,
+  nbfcTenants,
 } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import { getVehicleStates } from "@/lib/db/iot-queries";
 import RecoveryKanban from "./_components/RecoveryKanban";
+import PendingEvaluationsList from "./_components/PendingEvaluationsList";
+import { AuctionLotsGrid, type AuctionLot } from "@/components/nbfc-portal/AuctionLotsGrid";
+import { AuctionSettlementsTable, type SettlementRow, type SettlementStatus } from "@/components/nbfc-portal/AuctionSettlementsTable";
 
 export const dynamic = "force-dynamic";
 
@@ -162,6 +170,123 @@ export default async function RecoveryPage() {
     expires_at: p.expires_at,
   }));
 
+  // 5. Battery Evaluations entry point — rows currently in needs_inspection.
+  const pendingEvaluations = enrichedRows
+    .filter((r) => r.stage === "needs_inspection")
+    .map((r) => ({
+      id: r.id,
+      battery_serial: r.battery_serial,
+      borrower_name: r.borrower_name,
+      live_soh_pct: r.live_soh_pct,
+      age_days: r.age_days,
+    }));
+
+  // 6. Auction Marketplace — live lots with current bid + bidder count.
+  const lotRows = await db
+    .select({
+      id: auctionLots.id,
+      lot_code: auctionLots.lot_code,
+      capacity: auctionLots.capacity,
+      avg_soh: auctionLots.avg_soh,
+      age_months: auctionLots.age_months,
+      quantity: auctionLots.quantity,
+      base_price: auctionLots.base_price,
+      bid_increment: auctionLots.bid_increment,
+      ends_at: auctionLots.ends_at,
+      max_bid: sql<string | null>`MAX(${auctionBids.amount})`,
+      bidder_count: sql<string>`COUNT(DISTINCT ${auctionBids.tenant_id})`,
+    })
+    .from(auctionLots)
+    .leftJoin(auctionBids, eq(auctionBids.lot_id, auctionLots.id))
+    .where(and(eq(auctionLots.status, "live"), gt(auctionLots.ends_at, new Date())))
+    .groupBy(auctionLots.id)
+    .orderBy(auctionLots.ends_at)
+    .limit(50);
+
+  // BRD §6.1.7 — per-tenant max bid and active auto-bid max, keyed by lot.
+  const lotIds = lotRows.map((l) => l.id);
+  let yourBidByLot = new Map<string, number>();
+  let autoBidByLot = new Map<string, number>();
+  if (lotIds.length > 0) {
+    const [myBids, myAutoBids] = await Promise.all([
+      db
+        .select({
+          lot_id: auctionBids.lot_id,
+          my_max: sql<string>`MAX(${auctionBids.amount})`,
+        })
+        .from(auctionBids)
+        .where(
+          and(
+            eq(auctionBids.tenant_id, tenant.id),
+            inArray(auctionBids.lot_id, lotIds),
+          ),
+        )
+        .groupBy(auctionBids.lot_id),
+      db
+        .select({
+          lot_id: auctionAutoBids.lot_id,
+          max_amount: auctionAutoBids.max_amount,
+        })
+        .from(auctionAutoBids)
+        .where(
+          and(
+            eq(auctionAutoBids.tenant_id, tenant.id),
+            eq(auctionAutoBids.status, "active"),
+            inArray(auctionAutoBids.lot_id, lotIds),
+          ),
+        ),
+    ]);
+    yourBidByLot = new Map(myBids.map((b) => [b.lot_id, Number(b.my_max)]));
+    autoBidByLot = new Map(myAutoBids.map((b) => [b.lot_id, Number(b.max_amount)]));
+  }
+
+  const lots: AuctionLot[] = lotRows.map((l) => {
+    const basePrice = Number(l.base_price);
+    return {
+      lot_id: l.id,
+      lot_code: l.lot_code,
+      capacity: l.capacity,
+      avg_soh: l.avg_soh != null ? Number(l.avg_soh) : null,
+      age_months: l.age_months,
+      quantity: l.quantity,
+      base_price: basePrice,
+      bid_increment: Number(l.bid_increment),
+      current_bid: l.max_bid != null ? Number(l.max_bid) : basePrice,
+      bidder_count: l.bidder_count != null ? Number(l.bidder_count) : 0,
+      ends_at: l.ends_at.toISOString(),
+      your_last_bid: yourBidByLot.get(l.id) ?? null,
+      your_auto_bid_max: autoBidByLot.get(l.id) ?? null,
+    };
+  });
+
+  // 7. Post-auction settlements — this tenant as seller.
+  const settlementRows = await db
+    .select({
+      id: auctionSettlements.id,
+      lot_code: auctionLots.lot_code,
+      final_price: auctionSettlements.final_price,
+      winner_tenant_id: auctionSettlements.winner_tenant_id,
+      winner_name: nbfcTenants.display_name,
+      status: auctionSettlements.status,
+      updated_at: auctionSettlements.updated_at,
+    })
+    .from(auctionSettlements)
+    .innerJoin(auctionLots, eq(auctionLots.id, auctionSettlements.lot_id))
+    .innerJoin(nbfcTenants, eq(nbfcTenants.id, auctionSettlements.winner_tenant_id))
+    .where(eq(auctionSettlements.seller_tenant_id, tenant.id))
+    .orderBy(desc(auctionSettlements.updated_at))
+    .limit(50);
+
+  const settlements: SettlementRow[] = settlementRows.map((s) => ({
+    id: s.id,
+    lot_id: s.lot_code,
+    final_price: Number(s.final_price),
+    winner_tenant_id: s.winner_tenant_id,
+    winner_name: s.winner_name,
+    status: s.status as SettlementStatus,
+    updated_at: s.updated_at.toISOString(),
+  }));
+
   return (
     <div className="space-y-6">
       <header>
@@ -239,6 +364,51 @@ export default async function RecoveryPage() {
             )}
           </tbody>
         </table>
+      </section>
+
+      {/* Battery Evaluations — Needs Inspection (BRD §6.1.7) */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800">
+          <h2 className="font-semibold">Battery evaluations — needs inspection</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            3-step form per BRD §6.1.7 — Technical → Refurbishment Analysis → Pricing.
+            Base auction price auto-computes from SOH on submit.
+          </p>
+        </div>
+        <PendingEvaluationsList rows={pendingEvaluations} />
+      </section>
+
+      {/* Auction Marketplace — Live Lots (BRD §6.1.7) */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800">
+          <h2 className="font-semibold">Auction marketplace — live lots</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Lot ID · capacity · avg SOH · age · qty · base · current bid · bidder count · countdown.
+            Bidding modal enforces min-next-bid and a binding confirmation per RBI audit requirements.
+          </p>
+        </div>
+        <div className="p-4">
+          {lots.length === 0 ? (
+            <p className="text-center text-slate-500 text-sm py-8">No live auctions.</p>
+          ) : (
+            <AuctionLotsGrid lots={lots} />
+          )}
+        </div>
+      </section>
+
+      {/* Post-auction Settlements (BRD §6.1.7) */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800">
+          <h2 className="font-semibold">Post-auction settlements</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Status flow: Payment Pending → In Transit → Delivered. Each transition is audit-logged.
+          </p>
+        </div>
+        {settlements.length === 0 ? (
+          <p className="text-center text-slate-500 text-sm py-8">No settlements yet.</p>
+        ) : (
+          <AuctionSettlementsTable rows={settlements} />
+        )}
       </section>
     </div>
   );

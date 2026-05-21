@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { getCurrentTenant } from "@/lib/nbfc/tenant";
 import NbfcPortalSidebar from "@/components/nbfc-portal/NbfcPortalSidebar";
+import NbfcPortalHeader from "@/components/nbfc-portal/NbfcPortalHeader";
 
 /**
  * NBFC Portal shell — BRD §6.1.2.
@@ -20,6 +21,7 @@ export default async function NbfcLayout({ children }: { children: ReactNode }) 
         aumInr={tenant.aum_inr ? Number(tenant.aum_inr) : null}
       />
       <div className="flex-1 md:ml-64 flex flex-col min-h-screen">
+        <NbfcPortalHeader tenantName={tenant.display_name} />
         <main className="flex-1 p-6 md:p-8 overflow-y-auto">
           <div className="max-w-7xl mx-auto">{children}</div>
         </main>

@@ -25,6 +25,7 @@ import {
   type ChargerMaster,
   type ParaphernaliaMaster,
 } from "@/lib/inventory/product-master";
+import { registerIotDevice } from "@/lib/iot/registerDevice";
 
 type StructuredError = {
   row: number;
@@ -179,6 +180,46 @@ export const POST = withErrorHandler(async (req: Request) => {
   );
   const productBySku = new Map(productRows.map((p) => [p.sku.toLowerCase(), p]));
 
+  // ── Invoice consistency + per-asset-type uniqueness ──────────────────────
+  // Every row must carry the same invoice_number (battery/charger: also the
+  // same invoice_value); that invoice_number must not already exist for the
+  // SAME asset type. One supplier invoice can span a battery upload AND a
+  // charger upload. Defence-in-depth — the Step 4 preview enforces the same.
+  const refInvoiceNumber = String(rows[0]?.invoice_number || "").trim();
+  const refInvoiceValue =
+    assetType === "paraphernalia" ? null : Number(rows[0]?.invoice_value);
+  const inventoryTypeForAsset =
+    assetType === "paraphernalia" ? "paraphernalia_lot" : assetType;
+  const invoiceNumberAlreadyUsed =
+    refInvoiceNumber.length > 0 &&
+    (
+      await db
+        .select({ id: inventory.id })
+        .from(inventory)
+        .where(
+          and(
+            eq(inventory.oem_invoice_number, refInvoiceNumber),
+            eq(inventory.inventory_type, inventoryTypeForAsset),
+          ),
+        )
+        .limit(1)
+    ).length > 0;
+  const invoiceValueAlreadyUsed =
+    refInvoiceValue != null &&
+    !Number.isNaN(refInvoiceValue) &&
+    (
+      await db
+        .select({ id: inventory.id })
+        .from(inventory)
+        .where(
+          and(
+            eq(inventory.inventory_amount, String(refInvoiceValue)),
+            eq(inventory.inventory_type, inventoryTypeForAsset),
+          ),
+        )
+        .limit(1)
+    ).length > 0;
+
   const errors: StructuredError[] = [];
   const seenSerials = new Set<string>();
   const seenImeis = new Set<string>();
@@ -216,6 +257,50 @@ export const POST = withErrorHandler(async (req: Request) => {
     }
 
     const r = parsed.data as Record<string, unknown>;
+
+    // Invoice — one file = one invoice, and that invoice must be brand-new.
+    if (refInvoiceNumber) {
+      const rowInvoiceNumber = String(r.invoice_number || "").trim();
+      if (rowInvoiceNumber !== refInvoiceNumber) {
+        errors.push({
+          row: rowNumber,
+          field: "invoice_number",
+          code: "INVOICE_NUMBER_MISMATCH",
+          message: `invoice_number must be identical on every row of one upload (expected '${refInvoiceNumber}').`,
+        });
+        continue;
+      }
+      if (invoiceNumberAlreadyUsed) {
+        errors.push({
+          row: rowNumber,
+          field: "invoice_number",
+          code: "DUPLICATE_INVOICE",
+          message: `invoice_number '${refInvoiceNumber}' was already used by a previous ${assetType} upload — use a new invoice number for this asset type.`,
+        });
+        continue;
+      }
+    }
+    if (refInvoiceValue != null && !Number.isNaN(refInvoiceValue)) {
+      const rowInvoiceValue = Number(r.invoice_value);
+      if (rowInvoiceValue !== refInvoiceValue) {
+        errors.push({
+          row: rowNumber,
+          field: "invoice_value",
+          code: "INVOICE_VALUE_MISMATCH",
+          message: `invoice_value must be identical on every row of one upload (expected ${refInvoiceValue}).`,
+        });
+        continue;
+      }
+      if (invoiceValueAlreadyUsed) {
+        errors.push({
+          row: rowNumber,
+          field: "invoice_value",
+          code: "DUPLICATE_INVOICE_VALUE",
+          message: `invoice_value '${refInvoiceValue}' was already used by a previous ${assetType} upload — use a new invoice value for this asset type.`,
+        });
+        continue;
+      }
+    }
 
     const serial =
       assetType === "battery"
@@ -314,6 +399,16 @@ export const POST = withErrorHandler(async (req: Request) => {
         });
         continue;
       }
+      const batteryOemWm = Number(r.oem_warranty_months);
+      if (bMaster.warrantyMonths > 0 && batteryOemWm !== bMaster.warrantyMonths) {
+        errors.push({
+          row: rowNumber,
+          field: "oem_warranty_months",
+          code: "WARRANTY_MISMATCH",
+          message: `oem_warranty_months '${batteryOemWm}' must match the Product Master warranty (${bMaster.warrantyMonths} months) for model '${bMaster.modelId}'.`,
+        });
+        continue;
+      }
     } else if (assetType === "charger") {
       cMaster = chargerMaster.get(lookup) ?? null;
       if (!cMaster) {
@@ -322,6 +417,16 @@ export const POST = withErrorHandler(async (req: Request) => {
           field: "model_id",
           code: "MODEL_NOT_FOUND",
           message: `Model ID '${masterKey}' not found or inactive in charger Product Master.`,
+        });
+        continue;
+      }
+      const chargerOemWm = Number(r.oem_warranty_months);
+      if (cMaster.warrantyMonths > 0 && chargerOemWm !== cMaster.warrantyMonths) {
+        errors.push({
+          row: rowNumber,
+          field: "oem_warranty_months",
+          code: "WARRANTY_MISMATCH",
+          message: `oem_warranty_months '${chargerOemWm}' must match the Product Master warranty (${cMaster.warrantyMonths} months) for model '${cMaster.modelId}'.`,
         });
         continue;
       }
@@ -345,6 +450,16 @@ export const POST = withErrorHandler(async (req: Request) => {
           field: "category",
           code: "CATEGORY_NOT_COMPATIBLE",
           message: `Category '${category}' is not compatible with ${pMaster.itemTypeCode}. Compatible: ${pMaster.compatibleCategories.join(", ")}.`,
+        });
+        continue;
+      }
+      const paraQty = Number(r.quantity);
+      if (pMaster.maxQtyPerLead > 0 && paraQty > pMaster.maxQtyPerLead) {
+        errors.push({
+          row: rowNumber,
+          field: "quantity",
+          code: "QUANTITY_EXCEEDS_MAX",
+          message: `Quantity ${paraQty} exceeds the Product Master max quantity per lead (${pMaster.maxQtyPerLead}) for item '${pMaster.itemTypeCode}'.`,
         });
         continue;
       }
@@ -458,8 +573,35 @@ export const POST = withErrorHandler(async (req: Request) => {
             created_at: now,
             updated_at: now,
           });
+
+          // BRD §6.2.2 — auto-register the IoT device. Best-effort: per-row
+          // failure is logged to the upload report but does not abort the row.
+          if (iotEnabled && iotImei) {
+            try {
+              await registerIotDevice(
+                {
+                  serialNumber: serial,
+                  imeiId: iotImei,
+                  dealerId,
+                  model: bMaster.modelName,
+                  category,
+                },
+                tx,
+              );
+            } catch (e) {
+              console.warn("[inventory/bulk-upload] iot register failed", {
+                serial,
+                imei: iotImei,
+                err: e instanceof Error ? e.message : String(e),
+              });
+            }
+          }
         } else if (assetType === "charger" && cMaster) {
-          const invoiceDate = safeDate(r.invoice_date) ?? now;
+          const soldDate = safeDate(r.sold_date) ?? now;
+          const warrantyDate = safeDate(r.oem_warranty_date) ?? soldDate;
+          const oemWarrantyMonths = Number(r.oem_warranty_months || 0);
+          const expiry = new Date(warrantyDate);
+          expiry.setMonth(expiry.getMonth() + oemWarrantyMonths);
           const value = Number(r.invoice_value || 0);
           const gstPercent = r.gst_percent != null ? Number(r.gst_percent) : 0;
           const gstAmount = value * (gstPercent / 100);
@@ -488,7 +630,14 @@ export const POST = withErrorHandler(async (req: Request) => {
             gst_percent: gstPercent ? gstPercent.toFixed(2) : null,
             gst_amount: gstPercent ? gstAmount.toFixed(2) : null,
             oem_invoice_number: String(r.invoice_number || ""),
-            oem_invoice_date: invoiceDate,
+            oem_invoice_date: soldDate,
+            oem_warranty_date: warrantyDate.toISOString().slice(0, 10),
+            oem_warranty_months: oemWarrantyMonths,
+            oem_warranty_expiry: expiry.toISOString().slice(0, 10),
+            oem_warranty_clauses: r.oem_warranty_clauses
+              ? String(r.oem_warranty_clauses)
+              : null,
+            batch_number: r.batch_reference ? String(r.batch_reference) : null,
             inventory_amount: value.toString(),
             final_amount: finalAmount.toFixed(2),
             oem_name: String(r.supplier_name || ""),
@@ -509,6 +658,9 @@ export const POST = withErrorHandler(async (req: Request) => {
           const invoiceDate = safeDate(r.invoice_date) ?? now;
           const value = Number(r.unit_cost || 0);
           const qty = Number(r.quantity || 1);
+          const gstPercent = r.gst_percent != null ? Number(r.gst_percent) : 0;
+          const gstAmount = value * (gstPercent / 100);
+          const finalAmount = value + gstAmount;
           const itemType = pMaster.itemTypeCode;
           const compatible = pMaster.compatibleCategories;
           const label = pMaster.displayLabel;
@@ -523,10 +675,12 @@ export const POST = withErrorHandler(async (req: Request) => {
             sub_category: category,
             model_type: label,
             quantity: qty,
+            gst_percent: gstPercent ? gstPercent.toFixed(2) : null,
+            gst_amount: gstPercent ? gstAmount.toFixed(2) : null,
             oem_invoice_number: String(r.invoice_number || ""),
             oem_invoice_date: invoiceDate,
             inventory_amount: value.toString(),
-            final_amount: value.toString(),
+            final_amount: finalAmount.toFixed(2),
             oem_name: r.supplier ? String(r.supplier) : null,
             warehouse_location: r.warehouse_location
               ? String(r.warehouse_location)

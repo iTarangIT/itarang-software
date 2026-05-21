@@ -13,7 +13,7 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { and, eq } from "drizzle-orm";
-import { nbfcLoans, loanFiles } from "@/lib/db/schema";
+import { nbfcLoans, loanFiles, borrowerRiskScores } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import {
   getFleetSummary,
@@ -29,8 +29,42 @@ export const dynamic = "force-dynamic";
 interface SearchParams {
   status?: string;
   severity?: string;
+  risk?: string;
   q?: string;
   serial?: string;
+}
+
+interface RiskScoreRow {
+  cds_score: number | null;
+  pci_score: number | null;
+  confidence: string | null;
+  computed_at: Date | null;
+}
+
+// BRD §6.1.5 — CDS bands. Higher = riskier (0–100).
+function cdsBand(score: number | null): { label: string; tone: string } {
+  if (score == null) return { label: "—", tone: "bg-slate-100 text-slate-500" };
+  if (score >= 85) return { label: "Very High", tone: "bg-red-50 text-red-700" };
+  if (score >= 70) return { label: "High", tone: "bg-orange-50 text-orange-700" };
+  if (score >= 40) return { label: "Medium", tone: "bg-amber-50 text-amber-700" };
+  return { label: "Low", tone: "bg-emerald-50 text-emerald-700" };
+}
+
+// BRD §6.1.5 — PCI bands. Higher = healthier payer (0.0–1.0).
+function pciBand(score: number | null): { label: string; tone: string } {
+  if (score == null) return { label: "—", tone: "bg-slate-100 text-slate-500" };
+  if (score < 0.40) return { label: "Concern", tone: "bg-red-50 text-red-700" };
+  if (score <= 0.75) return { label: "Monitor", tone: "bg-amber-50 text-amber-700" };
+  return { label: "Healthy", tone: "bg-emerald-50 text-emerald-700" };
+}
+
+function confidenceTone(c: string | null): string {
+  if (c == null) return "text-slate-400";
+  const v = c.toUpperCase();
+  if (v === "HIGH") return "text-emerald-700";
+  if (v === "MEDIUM") return "text-amber-700";
+  if (v === "LOW") return "text-slate-500";
+  return "text-slate-500";
 }
 
 interface PortfolioRow {
@@ -89,6 +123,36 @@ export default async function BatteriesPage({
 
   const vehiclenos = portfolioRows.map((r) => r.vehicleno);
 
+  // 2a. Borrower risk scores (CDS / PCI / confidence) — BRD §6.1.5.
+  // borrower_risk_scores is append-only (nightly), so we keep the latest row
+  // per loan_sanction_id by sorting computed_at DESC and skipping subsequent
+  // duplicates. Key is the string form of loan_sanction_id, which matches
+  // nbfcLoans.loan_application_id (== loanSanctions.id, see computeCds.ts).
+  const riskRows = await db
+    .select({
+      loan_sanction_id: borrowerRiskScores.loan_sanction_id,
+      cds_score: borrowerRiskScores.cds_score,
+      pci_score: borrowerRiskScores.pci_score,
+      confidence: borrowerRiskScores.confidence,
+      computed_at: borrowerRiskScores.computed_at,
+    })
+    .from(borrowerRiskScores)
+    .where(eq(borrowerRiskScores.tenant_id, tenant.id));
+
+  const riskByLoan = new Map<string, RiskScoreRow>();
+  for (const r of riskRows.sort(
+    (a, b) => (b.computed_at?.getTime() ?? 0) - (a.computed_at?.getTime() ?? 0),
+  )) {
+    const key = String(r.loan_sanction_id);
+    if (riskByLoan.has(key)) continue;
+    riskByLoan.set(key, {
+      cds_score: r.cds_score != null ? Number(r.cds_score) : null,
+      pci_score: r.pci_score != null ? Number(r.pci_score) : null,
+      confidence: r.confidence,
+      computed_at: r.computed_at,
+    });
+  }
+
   // 2. Live state + open alerts from the VPS — wrapped to degrade if VPS down.
   let summary: Awaited<ReturnType<typeof getFleetSummary>> | null = null;
   let states: VehicleStateRow[] = [];
@@ -114,6 +178,7 @@ export default async function BatteriesPage({
   const enriched = portfolioRows.map((p) => {
     const s = stateByVehicle.get(p.vehicleno);
     const freshness = classifyFreshness(s?.last_gps_at ?? null);
+    const risk = riskByLoan.get(p.loan_application_id);
     return {
       ...p,
       online: s?.online ?? false,
@@ -126,16 +191,26 @@ export default async function BatteriesPage({
       freshness: freshness.freshness,
       freshness_badge: freshness.badge,
       open_alerts: alertsByVehicle.get(p.vehicleno) ?? 0,
+      cds_score: risk?.cds_score ?? null,
+      pci_score: risk?.pci_score ?? null,
+      confidence: risk?.confidence ?? null,
+      risk_computed_at: risk?.computed_at ?? null,
     };
   });
 
   const statusFilter = params.status?.toLowerCase();
   const severityFilter = params.severity?.toLowerCase();
+  const riskFilter = params.risk?.toLowerCase();
   const q = params.q?.toLowerCase().trim() ?? "";
 
   const filtered = enriched.filter((r) => {
     if (statusFilter && r.freshness !== statusFilter) return false;
     if (severityFilter === "open" && r.open_alerts === 0) return false;
+    if (riskFilter === "high") {
+      if (r.cds_score == null || r.cds_score < 70) return false;
+    } else if (riskFilter === "low_pci") {
+      if (r.pci_score == null || r.pci_score >= 0.40) return false;
+    }
     if (q) {
       const hay = `${r.vehicleno} ${r.loan_application_id} ${r.borrower_name ?? ""}`.toLowerCase();
       if (!hay.includes(q)) return false;
@@ -144,6 +219,26 @@ export default async function BatteriesPage({
   });
 
   const drawerRow = params.serial ? enriched.find((r) => r.vehicleno === params.serial) : null;
+
+  // KPI roll-ups for the CDS / PCI cards (BRD §6.1.5).
+  const cdsValues = enriched
+    .map((r) => r.cds_score)
+    .filter((v): v is number => typeof v === "number");
+  const avgCds =
+    cdsValues.length === 0
+      ? null
+      : cdsValues.reduce((a, b) => a + b, 0) / cdsValues.length;
+  const avgCdsTone =
+    avgCds == null
+      ? undefined
+      : avgCds >= 70
+        ? "red"
+        : avgCds >= 40
+          ? undefined
+          : "green";
+  const healthyCount = enriched.filter(
+    (r) => r.pci_score != null && r.pci_score > 0.75,
+  ).length;
 
   return (
     <div className="space-y-6">
@@ -172,6 +267,7 @@ export default async function BatteriesPage({
               href={`?${new URLSearchParams({
                 ...(params.status ? { status: params.status } : {}),
                 ...(params.severity ? { severity: params.severity } : {}),
+                ...(params.risk ? { risk: params.risk } : {}),
                 ...(params.q ? { q: params.q } : {}),
               }).toString()}`}
               scroll={false}
@@ -185,7 +281,7 @@ export default async function BatteriesPage({
       ) : null}
 
       {/* KPI strip */}
-      <section className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <section className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
         <Kpi label="Total" value={summary?.total ?? portfolioRows.length} />
         <Kpi label="Online" value={summary?.online ?? 0} accent="green" />
         <Kpi label="Fresh ≤5m" value={summary?.fresh_5m ?? 0} />
@@ -194,6 +290,18 @@ export default async function BatteriesPage({
           value={summary?.avg_soc != null ? `${summary.avg_soc.toFixed(0)}%` : "—"}
         />
         <Kpi label="Open alerts" value={summary?.open_alerts ?? 0} accent="red" />
+        <Kpi
+          label="Avg CDS"
+          value={avgCds != null ? avgCds.toFixed(0) : "—"}
+          accent={avgCdsTone}
+          sub={cdsValues.length > 0 ? `${cdsValues.length} scored` : "no scores yet"}
+        />
+        <Kpi
+          label="Healthy payers"
+          value={healthyCount}
+          accent="green"
+          sub={`PCI > 0.75 / ${enriched.length} loans`}
+        />
       </section>
 
       {/* Filter bar */}
@@ -220,6 +328,16 @@ export default async function BatteriesPage({
             <option value="open">Open alerts only</option>
           </select>
         </div>
+        <div>
+          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+            Risk
+          </label>
+          <select name="risk" defaultValue={params.risk ?? ""} className="border rounded px-2 py-1 text-sm">
+            <option value="">All</option>
+            <option value="high">CDS ≥ 70 (High / Very High)</option>
+            <option value="low_pci">PCI &lt; 0.40 (Concern)</option>
+          </select>
+        </div>
         <div className="flex-1 min-w-[200px]">
           <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
             Search
@@ -238,7 +356,7 @@ export default async function BatteriesPage({
         >
           Apply
         </button>
-        {(params.status || params.severity || params.q) && (
+        {(params.status || params.severity || params.risk || params.q) && (
           <Link href="/nbfc/batteries" className="text-xs underline text-slate-500 self-center">
             Reset
           </Link>
@@ -246,8 +364,8 @@ export default async function BatteriesPage({
       </form>
 
       {/* Table */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
+        <table className="w-full text-sm min-w-[1100px]">
           <thead className="bg-slate-50 dark:bg-slate-900 text-xs uppercase tracking-widest text-slate-500">
             <tr>
               <th className="px-3 py-2.5 text-left font-bold">Serial / Vehicle</th>
@@ -255,6 +373,9 @@ export default async function BatteriesPage({
               <th className="px-3 py-2.5 text-right font-bold">SOC</th>
               <th className="px-3 py-2.5 text-right font-bold">SOH</th>
               <th className="px-3 py-2.5 text-right font-bold">Temp</th>
+              <th className="px-3 py-2.5 text-left font-bold" title="Credit Default Score — 0–100, higher = riskier">CDS</th>
+              <th className="px-3 py-2.5 text-left font-bold" title="Payment Consistency Index — 0.0–1.0, higher = healthier">PCI</th>
+              <th className="px-3 py-2.5 text-left font-bold">Conf.</th>
               <th className="px-3 py-2.5 text-left font-bold">Last seen</th>
               <th className="px-3 py-2.5 text-left font-bold">Freshness</th>
               <th className="px-3 py-2.5 text-right font-bold">Alerts</th>
@@ -264,12 +385,15 @@ export default async function BatteriesPage({
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={9} className="px-3 py-12 text-center text-slate-500 text-sm">
+                <td colSpan={12} className="px-3 py-12 text-center text-slate-500 text-sm">
                   No batteries match these filters.
                 </td>
               </tr>
             ) : (
-              filtered.map((r) => (
+              filtered.map((r) => {
+                const cds = cdsBand(r.cds_score);
+                const pci = pciBand(r.pci_score);
+                return (
                 <tr key={r.vehicleno} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50">
                   <td className="px-3 py-2 font-mono text-xs">{r.vehicleno}</td>
                   <td className="px-3 py-2">
@@ -284,6 +408,35 @@ export default async function BatteriesPage({
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {r.pack_temp_c != null ? `${r.pack_temp_c.toFixed(0)}°C` : "—"}
+                  </td>
+                  <td className="px-3 py-2">
+                    {r.cds_score != null ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="tabular-nums font-semibold">{Math.round(r.cds_score)}</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${cds.tone}`}>
+                          {cds.label}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    {r.pci_score != null ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="tabular-nums font-semibold">{r.pci_score.toFixed(2)}</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${pci.tone}`}>
+                          {pci.label}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={`text-[10px] font-bold uppercase tracking-widest ${confidenceTone(r.confidence)}`}>
+                      {r.confidence ?? "—"}
+                    </span>
                   </td>
                   <td className="px-3 py-2 text-xs text-slate-500 tabular-nums">
                     {r.last_gps_at ? r.last_gps_at.toLocaleString() : "—"}
@@ -307,6 +460,7 @@ export default async function BatteriesPage({
                       href={`?${new URLSearchParams({
                         ...(params.status ? { status: params.status } : {}),
                         ...(params.severity ? { severity: params.severity } : {}),
+                        ...(params.risk ? { risk: params.risk } : {}),
                         ...(params.q ? { q: params.q } : {}),
                         serial: r.vehicleno,
                       }).toString()}`}
@@ -317,7 +471,8 @@ export default async function BatteriesPage({
                     </Link>
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>
@@ -331,10 +486,12 @@ function Kpi({
   label,
   value,
   accent,
+  sub,
 }: {
   label: string;
   value: number | string;
   accent?: "green" | "red";
+  sub?: string;
 }) {
   const tone =
     accent === "green"
@@ -346,6 +503,7 @@ function Kpi({
     <div className="card-iTarang p-4">
       <p className="section-label-muted">{label}</p>
       <p className={`mt-2 text-2xl font-semibold tabular-nums ${tone}`}>{value}</p>
+      {sub ? <p className="mt-1 text-[10px] uppercase tracking-widest text-slate-400">{sub}</p> : null}
     </div>
   );
 }
