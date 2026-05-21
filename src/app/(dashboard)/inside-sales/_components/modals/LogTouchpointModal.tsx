@@ -42,6 +42,13 @@ export function LogTouchpointModal({ open, onClose, leadId, lead, onSuccess, onS
     const [followUpAt, setFollowUpAt] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
+    // Every lead status except New_Unassigned — the initial, pre-assignment
+    // state, which a lead can never transition back into. The server still
+    // validates the chosen transition against the BRD §0.7 map on save.
+    const statusTargets: LeadStatus[] = LEAD_STATUS.filter(
+        (s) => s !== "New_Unassigned",
+    );
+
     const reset = () => {
         setType("inside_sales_call");
         setCallStatus("");
@@ -204,7 +211,7 @@ export function LogTouchpointModal({ open, onClose, leadId, lead, onSuccess, onS
                             onChange={(e) => setToStatus(e.target.value as LeadStatus | "")}
                         >
                             <option value="">— select —</option>
-                            {LEAD_STATUS.map((s) => (
+                            {statusTargets.map((s) => (
                                 <option key={s} value={s}>{s}</option>
                             ))}
                         </select>
