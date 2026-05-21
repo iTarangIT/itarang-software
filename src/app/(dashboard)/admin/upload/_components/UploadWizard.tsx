@@ -1,11 +1,13 @@
 "use client";
 
 // BRD §0.4 — the 4-step upload wizard: choose file → validate → set options →
-// confirm import. Validation and import both re-parse the CSV server-side.
+// confirm import. Accepts a CSV or an Excel (.xlsx/.xls) file; an Excel file
+// is converted to CSV in the browser so the server side stays CSV-only.
 
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import * as XLSX from "xlsx";
 import {
     CheckCircle2,
     Loader2,
@@ -56,7 +58,27 @@ export function UploadWizard() {
             toast.error("File exceeds the 5 MB limit.");
             return;
         }
-        const text = await file.text();
+        let text: string;
+        const name = file.name.toLowerCase();
+        try {
+            if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+                // Excel — convert the first sheet to CSV in the browser.
+                const buf = await file.arrayBuffer();
+                const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
+                const sheetName = wb.SheetNames[0];
+                const ws = sheetName ? wb.Sheets[sheetName] : undefined;
+                if (!ws) {
+                    toast.error("That Excel file has no readable sheet.");
+                    return;
+                }
+                text = XLSX.utils.sheet_to_csv(ws);
+            } else {
+                text = await file.text();
+            }
+        } catch {
+            toast.error("Could not read that file. Use a .csv or .xlsx file.");
+            return;
+        }
         setFileName(file.name);
         setCsvText(text);
         setValidation(null);
@@ -148,11 +170,11 @@ export function UploadWizard() {
                 <label className="inline-flex items-center gap-2 cursor-pointer rounded-lg border border-dashed border-border px-4 py-3 hover:bg-bg transition">
                     <UploadIcon className="h-4 w-4 text-ink-muted" />
                     <span className="text-sm text-ink-muted">
-                        {fileName || "Choose a CSV file…"}
+                        {fileName || "Choose a CSV or Excel file…"}
                     </span>
                     <input
                         type="file"
-                        accept=".csv,text/csv"
+                        accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                         className="hidden"
                         onChange={(e) => onFile(e.target.files?.[0] ?? null)}
                     />
