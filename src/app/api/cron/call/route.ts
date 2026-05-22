@@ -4,6 +4,7 @@ import { triggerBolnaCall } from "@/lib/ai/bolna_ai/triggerCall";
 import { quotaCircuit } from "@/lib/queue/connection";
 import { log } from "@/lib/log";
 import { eq, and } from "drizzle-orm";
+import { aiDialableCondition } from "@/lib/ai-dialer/exclusionFilter";
 
 const MAX_CONSECUTIVE_5XX = 3;
 
@@ -18,6 +19,8 @@ export async function GET() {
         // Skip leads explicitly tagged for ElevenLabs — handled by
         // /api/elevenlabs/call-scheduler. NULL provider = legacy/Bolna.
         or(isNull(l.provider), ne(l.provider, "elevenlabs")),
+        // BRD §0.2 — never call a lead in an active sales state.
+        aiDialableCondition(),
       ),
   });
 
