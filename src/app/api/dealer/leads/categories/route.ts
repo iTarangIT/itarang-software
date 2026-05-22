@@ -8,56 +8,81 @@ import {
   canonicalizeAssetCategory,
 } from "@/lib/inventory/vehicle-class";
 
-export const GET = withErrorHandler(async () => {
+export const GET = withErrorHandler(async (req: Request) => {
   const user = await requireRole(["dealer"]);
   const dealerId = user.dealer_id;
   if (!dealerId) {
     return errorResponse("No dealer account is linked to this user.", 403);
   }
 
+  // Optional asset-kind filter (battery | charger | paraphernalia). When absent
+  // or unrecognised the endpoint behaves exactly as before (counts every kind).
+  const assetTypeParam = (new URL(req.url).searchParams.get("assetType") || "")
+    .trim()
+    .toLowerCase();
+  const assetType =
+    assetTypeParam === "battery" ||
+    assetTypeParam === "charger" ||
+    assetTypeParam === "paraphernalia"
+      ? assetTypeParam
+      : null;
+
   // Serialized stock (battery / charger) — one unit per available inventory
   // row. `paraphernalia_lot` rows are invoice receipts and are excluded here;
   // their real quantity comes from the paraphernalia_stock ledger below.
-  const serializedRows = await db
-    .select({
-      asset_category: inventory.asset_category,
-      available_count: sql<number>`count(*)::int`,
-    })
-    .from(inventory)
-    .where(
-      and(
-        eq(inventory.dealer_id, dealerId),
-        eq(inventory.status, "available"),
-        sql`${inventory.inventory_type} is distinct from 'paraphernalia_lot'`,
-      ),
-    )
-    .groupBy(inventory.asset_category);
+  // Skipped entirely when the caller asked for paraphernalia only.
+  const serializedRows =
+    assetType === "paraphernalia"
+      ? []
+      : await db
+          .select({
+            asset_category: inventory.asset_category,
+            available_count: sql<number>`count(*)::int`,
+          })
+          .from(inventory)
+          .where(
+            and(
+              eq(inventory.dealer_id, dealerId),
+              eq(inventory.status, "available"),
+              sql`${inventory.inventory_type} is distinct from 'paraphernalia_lot'`,
+              assetType === "battery" || assetType === "charger"
+                ? sql`lower(${inventory.asset_type}) = ${assetType}`
+                : undefined,
+            ),
+          )
+          .groupBy(inventory.asset_category);
 
   // Paraphernalia lot rows — distinct (vehicle class, item_type) pairs that
   // have available stock. A lot row's asset_type is the paraphernalia
   // item_type; its asset_category attributes it to a vehicle class.
-  const paraLotRows = await db
-    .selectDistinct({
-      asset_category: inventory.asset_category,
-      item_type: inventory.asset_type,
-    })
-    .from(inventory)
-    .where(
-      and(
-        eq(inventory.dealer_id, dealerId),
-        eq(inventory.status, "available"),
-        eq(inventory.inventory_type, "paraphernalia_lot"),
-      ),
-    );
+  // Skipped when the caller asked for battery/charger only.
+  const skipParaphernalia = assetType === "battery" || assetType === "charger";
+  const paraLotRows = skipParaphernalia
+    ? []
+    : await db
+        .selectDistinct({
+          asset_category: inventory.asset_category,
+          item_type: inventory.asset_type,
+        })
+        .from(inventory)
+        .where(
+          and(
+            eq(inventory.dealer_id, dealerId),
+            eq(inventory.status, "available"),
+            eq(inventory.inventory_type, "paraphernalia_lot"),
+          ),
+        );
 
   // Live paraphernalia ledger — the real available quantity per item_type.
-  const paraStockRows = await db
-    .select({
-      item_type: paraphernaliaStock.item_type,
-      available_qty: paraphernaliaStock.available_qty,
-    })
-    .from(paraphernaliaStock)
-    .where(eq(paraphernaliaStock.dealer_id, dealerId));
+  const paraStockRows = skipParaphernalia
+    ? []
+    : await db
+        .select({
+          item_type: paraphernaliaStock.item_type,
+          available_qty: paraphernaliaStock.available_qty,
+        })
+        .from(paraphernaliaStock)
+        .where(eq(paraphernaliaStock.dealer_id, dealerId));
   const paraStockByType = new Map<string, number>();
   for (const r of paraStockRows) paraStockByType.set(r.item_type, r.available_qty);
 

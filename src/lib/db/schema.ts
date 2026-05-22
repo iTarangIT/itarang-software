@@ -327,6 +327,9 @@ export const leads = pgTable("leads", {
   is_current_same: boolean("is_current_same").default(false).notNull(),
   product_category_id: varchar("product_category_id", { length: 255 }),
   product_type_id: varchar("product_type_id", { length: 255 }),
+  // E-116 — primary product's asset kind (battery | charger | paraphernalia);
+  // lets the new-lead "Product Details" cascade reload when a lead is edited.
+  asset_type: varchar("asset_type", { length: 20 }),
   vehicle_owner_name: text("vehicle_owner_name"),
   vehicle_owner_phone: varchar("vehicle_owner_phone", { length: 20 }),
   auto_filled: boolean("auto_filled").default(false).notNull(),
@@ -403,6 +406,20 @@ export const leads = pgTable("leads", {
   coupon_status: varchar("coupon_status", { length: 20 }),
   borrower_consent_status: varchar("borrower_consent_status", { length: 30 }).default('awaiting_signature'),
   sold_at: timestamp("sold_at", { withTimezone: true }),
+});
+
+// E-116 — extra products attached to a lead via the new-lead form's
+// "Add Another Product" rows. The primary product stays on leads.primary_product_id;
+// this table holds only the additional selections. `category_slug` + `asset_type`
+// are stored so the 3-level cascade fully rehydrates in edit mode without probing.
+export const leadProducts = pgTable("lead_products", {
+  id: uuid("id").primaryKey().defaultRandom().notNull(),
+  lead_id: varchar("lead_id", { length: 255 }).notNull(),
+  product_id: uuid("product_id").notNull(),
+  product_category_id: varchar("product_category_id", { length: 255 }),
+  category_slug: varchar("category_slug", { length: 16 }),
+  asset_type: varchar("asset_type", { length: 20 }),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // export const leads_commented = pgTable(

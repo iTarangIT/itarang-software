@@ -25,6 +25,7 @@ import postgres from "postgres";
 
 const globalForIotDb = globalThis as unknown as {
   iotPgClient: ReturnType<typeof postgres> | undefined;
+  iotPgClientUrl: string | undefined;
 };
 
 let cachedDb: ReturnType<typeof drizzle> | undefined;
@@ -56,8 +57,6 @@ function createClient(connectionString: string) {
 }
 
 export function getIotSql() {
-  if (globalForIotDb.iotPgClient) return globalForIotDb.iotPgClient;
-
   const connectionString = process.env.IOT_DATABASE_URL;
   if (!connectionString) {
     throw new Error(
@@ -65,13 +64,27 @@ export function getIotSql() {
     );
   }
 
-  const client = createClient(connectionString);
-  if (process.env.NODE_ENV !== "production") {
-    globalForIotDb.iotPgClient = client;
-  } else {
-    // Cache in production too — avoids reopening pools per request.
-    globalForIotDb.iotPgClient = client;
+  // Reuse the cached pool only when it was built from the *current* connection
+  // string. Next.js dev reloads .env.local without killing the Node process,
+  // so the client cached on globalThis (and a stale sslmode baked into it)
+  // would otherwise survive until a full process restart.
+  if (
+    globalForIotDb.iotPgClient &&
+    globalForIotDb.iotPgClientUrl === connectionString
+  ) {
+    return globalForIotDb.iotPgClient;
   }
+
+  // First call, or the connection string changed — dispose any stale pool and
+  // rebuild. In production the URL is stable, so this rebuilds exactly once.
+  if (globalForIotDb.iotPgClient) {
+    void globalForIotDb.iotPgClient.end({ timeout: 1 }).catch(() => {});
+  }
+
+  const client = createClient(connectionString);
+  globalForIotDb.iotPgClient = client;
+  globalForIotDb.iotPgClientUrl = connectionString;
+  cachedDb = undefined; // force getIotDb() to re-wrap the fresh client
   return client;
 }
 
