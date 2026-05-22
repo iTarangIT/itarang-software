@@ -19,6 +19,7 @@ import {
   Plus,
   ArrowRightLeft,
   FileBarChart2,
+  Download,
   X,
 } from "lucide-react";
 
@@ -97,6 +98,7 @@ export default function AdminInventoryDashboard() {
   const [rows, setRows] = useState<InventoryRow[]>([]);
   const [kpis, setKpis] = useState<KPIs | null>(null);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeInventoryId, setActiveInventoryId] = useState<string | null>(
     null,
@@ -105,6 +107,37 @@ export default function AdminInventoryDashboard() {
   const updateFilters = (patch: Partial<InventoryFilters>) => {
     setPage(1);
     setFilters((f) => ({ ...f, ...patch }));
+  };
+
+  // Export the full filtered result set as CSV. The /all endpoint honours the
+  // same filters as the table and returns up to 5000 rows when format=csv —
+  // so the download reflects the active Dealer/Status/Sub-category/Search,
+  // not just the current page.
+  const handleDownloadCsv = async () => {
+    setExporting(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      Object.entries(filters).forEach(([k, v]) => {
+        if (v) params.set(k, v);
+      });
+      params.set("format", "csv");
+      const res = await fetch(`/api/admin/inventory/all?${params.toString()}`);
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `inventory-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "CSV export failed");
+    } finally {
+      setExporting(false);
+    }
   };
 
   useEffect(() => {
@@ -211,6 +244,19 @@ export default function AdminInventoryDashboard() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleDownloadCsv}
+              disabled={exporting || loading || total === 0}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-800 rounded-xl text-sm font-bold hover:bg-gray-50 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {exporting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+              {exporting ? "Exporting…" : "Download CSV"}
+            </button>
             <Link
               href="/admin/inventory/upload"
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-colors shadow-sm"

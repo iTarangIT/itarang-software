@@ -13,6 +13,10 @@
       "schedule": "0 0 * * *"
     },
     {
+      "path": "/api/cron/nbfc/compute-pci",
+      "schedule": "15 0 * * *"
+    },
+    {
       "path": "/api/cron/nbfc/evaluate-anomaly-flags",
       "schedule": "10 0 * * *"
     },

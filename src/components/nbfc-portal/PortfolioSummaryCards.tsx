@@ -8,9 +8,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Activity,
   AlertOctagon,
+  ArrowRight,
   CircleDollarSign,
   Gauge,
   Layers3,
@@ -39,6 +41,8 @@ type CardSpec = {
   caption: string;
   Icon: React.ComponentType<{ className?: string }>;
   tone: "neutral" | "success" | "warning";
+  /** When set, the card becomes a drill-through link to a related screen. */
+  href?: string;
 };
 
 function toneStyles(tone: CardSpec["tone"]) {
@@ -127,6 +131,7 @@ export default function PortfolioSummaryCards() {
       caption: "Disbursed and not yet closed.",
       Icon: Layers3,
       tone: "neutral",
+      href: "/nbfc/leads",
     },
     {
       key: "portfolio_value",
@@ -159,6 +164,7 @@ export default function PortfolioSummaryCards() {
       caption: "Active loans with EMI overdue > 30 days.",
       Icon: AlertOctagon,
       tone: data.delinquency_rate > 5 ? "warning" : "neutral",
+      href: "/nbfc/leads?status=overdue",
     },
     {
       key: "avg_portfolio_cds",
@@ -167,6 +173,7 @@ export default function PortfolioSummaryCards() {
       caption: "Borrower credit score, refreshed daily.",
       Icon: Gauge,
       tone: "neutral",
+      href: "/nbfc/leads?sort=cds",
     },
     {
       key: "recovery_value_locked",
@@ -175,6 +182,7 @@ export default function PortfolioSummaryCards() {
       caption: "Estimated value in recovery pipeline.",
       Icon: Activity,
       tone: "neutral",
+      href: "/nbfc/recovery",
     },
   ];
 
@@ -185,22 +193,15 @@ export default function PortfolioSummaryCards() {
     >
       {cards.map((c) => {
         const tone = toneStyles(c.tone);
-        return (
-          <div
-            key={c.key}
-            data-testid={`portfolio-card-${c.key}`}
-            className="card-iTarang p-5 transition-shadow hover:shadow-md"
-          >
+        const inner = (
+          <>
             <div className="flex items-start justify-between gap-3">
               <p className="section-label-muted">{c.label}</p>
               <span
                 className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
                 style={tone.iconWrap}
               >
-                <c.Icon
-                  className="w-4 h-4"
-                  style={{ color: tone.iconColor }}
-                />
+                <c.Icon className="w-4 h-4" style={{ color: tone.iconColor }} />
               </span>
             </div>
             <p className="mt-3 text-[28px] leading-tight font-semibold text-[color:var(--color-brand-navy)] tabular-nums">
@@ -209,6 +210,31 @@ export default function PortfolioSummaryCards() {
             <p className="mt-2 text-[12px] text-[color:var(--color-ink-muted)]">
               {c.caption}
             </p>
+            {c.href ? (
+              <span className="mt-3 inline-flex items-center gap-1 text-[12px] font-semibold text-[color:var(--color-brand-sky)]">
+                View details
+                <ArrowRight className="w-3.5 h-3.5" />
+              </span>
+            ) : null}
+          </>
+        );
+        const cardClass = "card-iTarang p-5 transition-shadow hover:shadow-md";
+        return c.href ? (
+          <Link
+            key={c.key}
+            href={c.href}
+            data-testid={`portfolio-card-${c.key}`}
+            className={`${cardClass} block focus:outline-none focus:ring-2 focus:ring-[color:var(--color-brand-sky)]`}
+          >
+            {inner}
+          </Link>
+        ) : (
+          <div
+            key={c.key}
+            data-testid={`portfolio-card-${c.key}`}
+            className={cardClass}
+          >
+            {inner}
           </div>
         );
       })}

@@ -109,8 +109,8 @@ async function RiskTab({
         </p>
       </header>
       <TabBar active="risk" params={params} />
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
+        <table className="w-full min-w-[640px] text-sm">
           <thead className="bg-slate-50 dark:bg-slate-900 text-xs text-slate-500 uppercase">
             <tr>
               <th className="px-4 py-3 text-left font-medium">When</th>
@@ -234,8 +234,8 @@ async function ActionsTab({
         )}
       </form>
 
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
+        <table className="w-full min-w-[640px] text-sm">
           <thead className="bg-slate-50 dark:bg-slate-900 text-xs text-slate-500 uppercase">
             <tr>
               <th className="px-4 py-3 text-left font-medium">When</th>
