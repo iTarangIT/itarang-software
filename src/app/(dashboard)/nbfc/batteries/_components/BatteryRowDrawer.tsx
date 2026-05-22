@@ -67,7 +67,7 @@ export default async function BatteryRowDrawer({ row }: RowProps) {
     [health, geofence, immobilizer, charges, faults] = await Promise.all([
       getBatteryHealth(row.vehicleno),
       getGeofenceEvents(row.vehicleno, 30),
-      getImmobilizerState(row.vehicleno),
+      getImmobilizerState(row.vehicleno, row.loan_application_id),
       getChargeEvents(row.vehicleno, 30),
       getOpenFaultCodes(row.vehicleno),
     ]);
@@ -159,7 +159,7 @@ export default async function BatteryRowDrawer({ row }: RowProps) {
               ) : null}
             </ul>
           ) : (
-            <NoData>battery_health_metrics not populated yet on the VPS.</NoData>
+            <NoData>No SOH telemetry recorded for this battery.</NoData>
           )}
         </Panel>
 
