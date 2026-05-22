@@ -283,6 +283,56 @@ export async function isSerialAuthorised(
 }
 
 /**
+ * Existence + authorisation for a battery serial — resilient to an empty
+ * `iot_devices` registry.
+ *
+ * The NBFC Battery Monitoring portal sources telemetry from the VPS and links
+ * a serial to a tenant purely through `nbfc_loans.vehicleno`. The local
+ * `iot_devices` table is a separate registry plane that the NBFC seed data
+ * does NOT populate, so resolving a serial through `getDeviceBySerial` alone
+ * 404s every battery in the portfolio. This helper treats a serial as
+ * existing if it is known to EITHER plane (loans or registry), and authorises
+ * an NBFC tenant via its `nbfc_loans` linkage — falling back to the
+ * registry-based `isSerialAuthorised` when an `iot_devices` row does exist.
+ *
+ * Returns: "ok" | "not_found" | "forbidden".
+ */
+export async function authoriseSerial(
+  serialNumber: string,
+  actor: BatteryScopeActor,
+): Promise<"ok" | "not_found" | "forbidden"> {
+  // Loan-plane linkage — which tenants finance this serial.
+  const loanRows = await db
+    .select({ tenant_id: nbfcLoans.tenant_id })
+    .from(nbfcLoans)
+    .where(eq(nbfcLoans.vehicleno, serialNumber));
+  const loanTenantIds = new Set(
+    loanRows.map((r) => r.tenant_id).filter((t): t is string => !!t),
+  );
+
+  // Registry-plane linkage — may be null in NBFC-seeded environments.
+  const device = await getDeviceBySerial(serialNumber);
+
+  if (loanTenantIds.size === 0 && !device) return "not_found";
+
+  if (actor.role === "admin" || actor.role === "ceo") return "ok";
+
+  if (actor.role === "nbfc") {
+    if (!actor.tenant_id) return "forbidden";
+    if (loanTenantIds.has(actor.tenant_id)) return "ok";
+    if (device && (await isSerialAuthorised(device, actor))) return "ok";
+    return "forbidden";
+  }
+
+  if (actor.role === "dealer") {
+    if (device && (await isSerialAuthorised(device, actor))) return "ok";
+    return "forbidden";
+  }
+
+  return "forbidden";
+}
+
+/**
  * 5-bucket data_freshness classifier (used by /state).
  *
  * Thresholds match the convention used elsewhere in this codebase:

@@ -24,6 +24,7 @@ import {
 import { classifyFreshness } from "@/lib/iot/freshness";
 import BatteryRowDrawer from "./_components/BatteryRowDrawer";
 import BatteriesTable, { type BatteryRow } from "./_components/BatteriesTable";
+import BatteriesCsvButton from "./_components/BatteriesCsvButton";
 
 export const dynamic = "force-dynamic";
 
@@ -258,16 +259,19 @@ export default async function BatteriesPage({
 
   return (
     <div className="space-y-6">
-      <header>
-        <p className="section-label-muted">Battery Monitoring</p>
-        <h1 className="mt-1 text-2xl font-semibold text-[color:var(--color-brand-navy)]">
-          Fleet telemetry — {tenant.display_name}
-        </h1>
-        <p className="mt-1 text-sm text-[color:var(--color-ink-muted)]">
-          Live SOC / SOH / GPS for every battery in your portfolio. Tap a row
-          for the per-battery detail drawer (history charts, alerts,
-          immobiliser state).
-        </p>
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0">
+          <p className="section-label-muted">Battery Monitoring</p>
+          <h1 className="mt-1 text-2xl font-semibold text-[color:var(--color-brand-navy)]">
+            Fleet telemetry — {tenant.display_name}
+          </h1>
+          <p className="mt-1 text-sm text-[color:var(--color-ink-muted)]">
+            Live SOC / SOH / GPS for every battery in your portfolio. Tap a row
+            for the per-battery detail drawer (history charts, alerts,
+            immobiliser state).
+          </p>
+        </div>
+        <BatteriesCsvButton rows={tableRows} />
       </header>
 
       {vpsError ? (

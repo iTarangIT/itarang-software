@@ -16,6 +16,7 @@
     "db:update-passwords": "node scripts/update-passwords.js",
     "db:seed-test": "tsx scripts/seed-test-data.ts",
     "db:seed-step4": "tsx scripts/seed-step4-inventory.ts",
+    "seed:nbfc-cc": "node --import tsx --env-file=.env.local scripts/seed-nbfc-command-centre.ts",
     "db:catalog": "tsx scripts/db-catalog.ts",
     "db:drift": "tsx scripts/db-drift.ts",
     "db:sandbox-excel": "tsx scripts/db-sandbox-excel.ts",

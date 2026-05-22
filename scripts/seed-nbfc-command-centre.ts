@@ -1,7 +1,8 @@
 /**
  * Seed realistic demo data for the NBFC Portfolio Command Centre.
  *
- * Run:  tsx scripts/seed-nbfc-command-centre.ts
+ * Run:  npm run seed:nbfc-cc
+ *       (applies migration E-117, then seeds — both idempotent)
  *
  * Prereq: scripts/seed-nbfc-loans-for-apoorv.ts has already created the 50
  * BAJAJ-LIVE loans + loan_sanctions for tenant nbfc-lm2qdk8y. This script
@@ -25,19 +26,25 @@
 import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { db } from "@/lib/db";
 import {
+  auctionBids,
+  auctionLots,
+  auctionSettlements,
   borrowerRiskScores,
   dealers,
   emiSchedules,
   leads,
   loanSanctions,
   nbfcBorrowerActions,
+  nbfcBuybackRequests,
   nbfcImmobilisationActions,
   nbfcLoans,
   nbfcRecoveryPipeline,
   nbfcRiskAlerts,
   nbfcTenants,
+  products,
   telemetryAlerts,
 } from "@/lib/db/schema";
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
@@ -48,9 +55,9 @@ const EXPECTED_TENANT_ID = "f725e9d3-8ccd-4709-9e03-fe5fab8858ff";
 const CITIES = ["Pune", "Nagpur", "Nashik", "Aurangabad", "Kolhapur", "Solapur"];
 const STATE = "Maharashtra";
 
-// Financed product models — round-robin so the Lead Intelligence Product
-// filter has a handful of real options.
-const ASSET_MODELS = [
+// Last-resort product names — used ONLY if the products catalog table is
+// empty. Normally the seed pulls real names from `products` at runtime.
+const FALLBACK_PRODUCT_NAMES = [
   "iTarang PowerPack 3.5 kWh",
   "iTarang City 2.5 kWh",
   "iTarang Cargo 5.0 kWh",
@@ -159,6 +166,22 @@ function buildEmis(loanId: string, i: number): EmiRow[] {
 async function main() {
   console.log(`Seeding NBFC Command Centre demo data for ${TARGET_SLUG}…\n`);
 
+  // 0. Apply the migrations the command-centre demo depends on. All are
+  //    idempotent (CREATE TABLE IF NOT EXISTS / guarded DDL); re-running is a
+  //    no-op. E-117 must precede the borrower_risk_scores / nbfc_risk_alerts
+  //    inserts keyed to the non-uuid BAJAJ-LIVE loan ids.
+  for (const file of [
+    "E-093_auction_auto_bids.sql", // auction marketplace auto-bid
+    "E-117_widen_score_loan_refs.sql", // varchar loan_sanction_id refs
+    "E-118_nbfc_buyback_requests.sql", // buyback requests table
+    "E-119_nbfc_battery_evaluations.sql", // 3-step battery evaluation table
+  ]) {
+    await db.execute(sql.raw(readFileSync(`drizzle/${file}`, "utf8")));
+  }
+  console.log(
+    "  Migrations E-093 / E-117 / E-118 / E-119 applied / verified.\n",
+  );
+
   // 1. Resolve tenant -----------------------------------------------------
   const [tenant] = await db
     .select({ id: nbfcTenants.id, name: nbfcTenants.display_name })
@@ -208,12 +231,50 @@ async function main() {
   }
   const uploaderId = uploaderRow.uid;
 
-  // Borrow an existing dealer so the leads table's Dealer column resolves.
-  const [dealerRow] = await db
-    .select({ id: dealers.dealer_id })
-    .from(dealers)
-    .limit(1);
-  const dealerId = dealerRow?.id ?? null;
+  // Borrow dealer_ids already used by real leads AND present in the dealers
+  // table — so they satisfy leads_dealer_id_fkey (which targets accounts) and
+  // the leads page's dealers join still resolves a company name. Round-robined.
+  const dealerRows = await db
+    .select({ id: leads.dealer_id })
+    .from(leads)
+    .innerJoin(dealers, eq(dealers.dealer_id, leads.dealer_id))
+    .where(isNotNull(leads.dealer_id))
+    .groupBy(leads.dealer_id)
+    .limit(6);
+  const dealerIds = dealerRows
+    .map((r) => r.id)
+    .filter((v): v is string => !!v);
+  if (dealerIds.length === 0) {
+    console.log("  (no FK-valid dealer found — Dealer column will stay blank)");
+  }
+
+  // Real product names from the catalog (products.name) for leads.asset_model
+  // — prefer battery-typed products (these are EV-battery finance loans), fall
+  // back to any active product if none are tagged 'battery'.
+  let productRows = await db
+    .select({ name: products.name })
+    .from(products)
+    .where(and(eq(products.is_active, true), eq(products.asset_type, "battery")))
+    .orderBy(products.sort_order, products.name)
+    .limit(12);
+  if (productRows.length === 0) {
+    productRows = await db
+      .select({ name: products.name })
+      .from(products)
+      .where(eq(products.is_active, true))
+      .orderBy(products.sort_order, products.name)
+      .limit(12);
+  }
+  const productNames = productRows
+    .map((r) => r.name)
+    .filter((v): v is string => !!v && v.trim().length > 0);
+  const catalogModels =
+    productNames.length > 0 ? productNames : FALLBACK_PRODUCT_NAMES;
+  console.log(
+    productNames.length > 0
+      ? `  Using ${productNames.length} real product name(s) from the products catalog.`
+      : "  products catalog empty — falling back to placeholder names.",
+  );
 
   // 2. Leads across 6 cities + loan→lead reassignment ---------------------
   console.log(`  Upserting ${loanIds.length} leads across ${CITIES.length} cities…`);
@@ -225,9 +286,9 @@ async function main() {
       full_name: ownerName,
       city: CITIES[i % CITIES.length],
       state: STATE,
-      asset_model: ASSET_MODELS[i % ASSET_MODELS.length],
+      asset_model: catalogModels[i % catalogModels.length],
       battery_type: "LFP",
-      dealer_id: dealerId,
+      dealer_id: dealerIds.length ? dealerIds[i % dealerIds.length] : null,
     };
     await db
       .insert(leads)
@@ -489,6 +550,120 @@ async function main() {
     ]);
   } else {
     console.log(`  Skipping nbfc_immobilisation_actions — ${immobCount} row(s) already present.`);
+  }
+
+  // 9. nbfc_buyback_requests (E-118) — customer buyback requests -----------
+  const [{ n: buybackCount }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(nbfcBuybackRequests)
+    .where(
+      and(
+        eq(nbfcBuybackRequests.tenant_id, tenantId),
+        sql`${nbfcBuybackRequests.battery_serial} LIKE 'CMDC-BBK-%'`,
+      ),
+    );
+  if (buybackCount === 0) {
+    console.log("  Inserting 4 nbfc_buyback_requests rows…");
+    await db.insert(nbfcBuybackRequests).values([
+      { tenant_id: tenantId, customer_name: NAMES[0], battery_serial: "CMDC-BBK-1", soh_percent: "82.00", evaluation_status: "completed", offer_amount: "54000", status: "offer_made", requested_at: daysAgo(3) },
+      { tenant_id: tenantId, customer_name: NAMES[5], battery_serial: "CMDC-BBK-2", soh_percent: "67.50", evaluation_status: "in_review", offer_amount: null, status: "pending_evaluation", requested_at: daysAgo(1) },
+      { tenant_id: tenantId, customer_name: NAMES[12], battery_serial: "CMDC-BBK-3", soh_percent: "91.00", evaluation_status: "completed", offer_amount: "71000", status: "accepted", requested_at: daysAgo(8) },
+      { tenant_id: tenantId, customer_name: NAMES[20], battery_serial: "CMDC-BBK-4", soh_percent: "44.00", evaluation_status: "completed", offer_amount: "18000", status: "rejected", requested_at: daysAgo(11) },
+    ]);
+  } else {
+    console.log(`  Skipping nbfc_buyback_requests — ${buybackCount} CMDC row(s) already present.`);
+  }
+
+  // 10. Auction marketplace (E-038/E-039) — live lots, bids, settlements --
+  const [{ n: lotCount }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(auctionLots)
+    .where(sql`${auctionLots.lot_code} LIKE 'LOT-2026-%'`);
+  if (lotCount === 0) {
+    const inMin = (m: number): Date => new Date(Date.now() + m * 60_000);
+    // Competing bidders / settlement winners — real non-Bajaj tenant ids.
+    const BIDDERS = [
+      "0d4f1b14-376d-4603-8475-d11fb5a66867",
+      "d12ef6a1-4716-4a9f-83ae-c5ff85b787f8",
+      "bafee342-3664-4794-b91e-d0cee9ebcdf3",
+      "3df3702a-e0da-4beb-a5f6-02e7a32650a3",
+      "b9ee1ac4-2b82-4b22-a66c-847d1b4b8ac8",
+      "429d9ed3-0975-43cd-8aeb-7afd95479bbc",
+      "9a41da41-9ef3-4faf-a899-632fe5929f85",
+      "3b0cc020-ec56-4e6b-8f7e-f261861fbeb4",
+    ];
+    // [code, capacity, soh, age, qty, base, increment, endsInMin, bidders]
+    const LIVE: [string, string, number, number, number, number, number, number, number][] = [
+      ["LOT-2026-041", "48V 100AH", 81, 15, 24, 245000, 5000, 35, 6],
+      ["LOT-2026-042", "60V 130AH", 76, 18, 18, 412000, 8000, 121, 4],
+      ["LOT-2026-043", "51V 132AH", 71, 21, 32, 384000, 6000, 313, 0],
+      ["LOT-2026-044", "72V 100AH", 85, 12, 12, 288000, 6000, 58, 8],
+      ["LOT-2026-045", "48V 130AH", 78, 16, 28, 322000, 6000, 176, 5],
+      ["LOT-2026-046", "60V 100AH", 74, 19, 22, 210000, 4000, 86, 7],
+      ["LOT-2026-047", "72V 232AH", 84, 10, 8, 720000, 10000, 256, 3],
+      ["LOT-2026-048", "51V 105AH", 68, 23, 34, 340000, 6000, 216, 4],
+    ];
+    // [code, capacity, soh, age, qty, base, final, winnerIdx, status, endedDaysAgo]
+    const ENDED: [string, string, number, number, number, number, number, number, string, number][] = [
+      ["LOT-2026-038", "48V 100AH", 79, 17, 20, 205000, 238000, 0, "delivered", 6],
+      ["LOT-2026-037", "60V 130AH", 75, 20, 14, 315000, 348000, 1, "in_transit", 4],
+      ["LOT-2026-036", "51V 132AH", 72, 22, 26, 302000, 312000, 2, "payment_pending", 3],
+      ["LOT-2026-035", "72V 232AH", 83, 11, 10, 880000, 965000, 0, "delivered", 9],
+      ["LOT-2026-034", "48V 130AH", 77, 18, 18, 238000, 260000, 3, "in_transit", 2],
+    ];
+    const liveLots = LIVE.map((l) => ({
+      id: randomUUID(),
+      lot_code: l[0],
+      capacity: l[1],
+      avg_soh: l[2].toFixed(2),
+      age_months: l[3],
+      quantity: l[4],
+      base_price: l[5].toFixed(2),
+      bid_increment: l[6].toFixed(2),
+      ends_at: inMin(l[7]),
+      status: "live",
+    }));
+    const endedLots = ENDED.map((l) => ({
+      id: randomUUID(),
+      lot_code: l[0],
+      capacity: l[1],
+      avg_soh: l[2].toFixed(2),
+      age_months: l[3],
+      quantity: l[4],
+      base_price: l[5].toFixed(2),
+      bid_increment: "5000.00",
+      ends_at: daysAgo(l[9]),
+      status: "ended",
+      created_at: daysAgo(l[9] + 6),
+    }));
+    await db.insert(auctionLots).values(liveLots);
+    await db.insert(auctionLots).values(endedLots);
+    const bids = LIVE.flatMap((l, idx) =>
+      Array.from({ length: l[8] }, (_, i) => ({
+        lot_id: liveLots[idx].id,
+        tenant_id: BIDDERS[i],
+        amount: (l[5] + (i + 1) * l[6]).toFixed(2),
+        placed_at: new Date(Date.now() - (l[8] - i) * 3_600_000),
+      })),
+    );
+    if (bids.length > 0) await db.insert(auctionBids).values(bids);
+    await db.insert(auctionSettlements).values(
+      ENDED.map((l, idx) => ({
+        id: randomUUID(),
+        lot_id: endedLots[idx].id,
+        seller_tenant_id: tenantId,
+        winner_tenant_id: BIDDERS[l[7]],
+        final_price: l[6].toFixed(2),
+        status: l[8],
+        created_at: daysAgo(l[9]),
+        updated_at: daysAgo(Math.max(0, l[9] - 1)),
+      })),
+    );
+    console.log(
+      `  Inserted ${liveLots.length} live + ${endedLots.length} ended auction_lots, ${bids.length} bids, ${ENDED.length} settlements.`,
+    );
+  } else {
+    console.log(`  Skipping auction marketplace — ${lotCount} LOT-2026-* row(s) already present.`);
   }
 
   console.log("\nDone. Open /nbfc/portfolio (logged in as the Bajaj NBFC partner).");
