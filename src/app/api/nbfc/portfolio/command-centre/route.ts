@@ -39,6 +39,15 @@ export async function GET(req: Request) {
       : msg.startsWith("FORBIDDEN")
         ? 403
         : 500;
+    if (status === 500) {
+      // Never surface raw exception text to the client — log it server-side
+      // and return a generic message.
+      console.error("[nbfc/portfolio/command-centre] unhandled error:", e);
+      return NextResponse.json(
+        { ok: false, error: "Internal server error" },
+        { status: 500 },
+      );
+    }
     return NextResponse.json({ ok: false, error: msg }, { status });
   }
 }

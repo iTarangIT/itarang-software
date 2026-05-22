@@ -12,21 +12,23 @@
  * presence check and skipped on a second run.
  *
  * What it seeds (tenant nbfc-lm2qdk8y only):
- *   1. 50 leads (CMDC-LEAD-XXXX) — distinct borrowers across 6 cities — and
- *      reassigns each loan_sanctions.lead_id so the portfolio spans regions.
- *   2. emi_schedules — 6 EMIs per loan with a realistic paid / late / overdue
- *      / recently-cured mix (drives delinquency, the MoM delta, weekly stats).
- *   3. telemetry_alerts — 18 rows (15 open, 3 resolved) on real vehiclenos.
- *   4. nbfc_risk_alerts — 14 rows (11 open, 3 resolved).
- *   5. nbfc_borrower_actions — 12 governed actions in the last 7 days.
- *   6. nbfc_recovery_pipeline — 3 rows added in the last 7 days.
- *   7. nbfc_immobilisation_actions — 2 rows executed in the last 7 days.
+ *   1. 50 leads (CMDC-LEAD-XXXX) — distinct borrowers, 6 cities, product model
+ *      + dealer — and reassigns each loan_sanctions.lead_id.
+ *   2. emi_schedules — 7 EMIs per loan (6 past + 1 upcoming) with a realistic
+ *      paid / late / overdue / cured mix; syncs nbfc_loans.current_dpd to it.
+ *   3. borrower_risk_scores — 50 CDS/PCI rows keyed to the real loan ids.
+ *   4. telemetry_alerts — 18 rows (15 open, 3 resolved) on real vehiclenos.
+ *   5. nbfc_risk_alerts — 14 rows keyed to real loan ids (11 open, 3 resolved).
+ *   6. nbfc_borrower_actions — 12 governed actions in the last 7 days.
+ *   7. nbfc_recovery_pipeline + nbfc_immobilisation_actions — recent rows.
  */
 import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 import { randomUUID } from "node:crypto";
 import { db } from "@/lib/db";
 import {
+  borrowerRiskScores,
+  dealers,
   emiSchedules,
   leads,
   loanSanctions,
@@ -45,6 +47,16 @@ const EXPECTED_TENANT_ID = "f725e9d3-8ccd-4709-9e03-fe5fab8858ff";
 
 const CITIES = ["Pune", "Nagpur", "Nashik", "Aurangabad", "Kolhapur", "Solapur"];
 const STATE = "Maharashtra";
+
+// Financed product models — round-robin so the Lead Intelligence Product
+// filter has a handful of real options.
+const ASSET_MODELS = [
+  "iTarang PowerPack 3.5 kWh",
+  "iTarang City 2.5 kWh",
+  "iTarang Cargo 5.0 kWh",
+  "iTarang Lite 1.8 kWh",
+  "iTarang Max 7.2 kWh",
+];
 
 // 50 distinct borrower names.
 const NAMES = [
@@ -84,7 +96,7 @@ interface EmiRow {
   days_overdue: number | null;
 }
 
-/** 6 monthly EMIs for one loan, shaped by its profile. */
+/** 7 EMIs for one loan: 6 past (shaped by profile) + 1 upcoming scheduled. */
 function buildEmis(loanId: string, i: number): EmiRow[] {
   const profile = profileOf(i);
   const base =
@@ -131,6 +143,16 @@ function buildEmis(loanId: string, i: number): EmiRow[] {
       days_overdue,
     });
   }
+
+  // The upcoming scheduled instalment (15–30 days out, unpaid) — gives every
+  // loan a real "next EMI" date for the Lead Intelligence EMI Status column.
+  rows.push({
+    loan_sanction_id: loanId,
+    due_date: dateStr(daysAgo(-(15 + (i % 16)))),
+    paid_at: null,
+    status: "scheduled",
+    days_overdue: null,
+  });
   return rows;
 }
 
@@ -186,21 +208,36 @@ async function main() {
   }
   const uploaderId = uploaderRow.uid;
 
+  // Borrow an existing dealer so the leads table's Dealer column resolves.
+  const [dealerRow] = await db
+    .select({ id: dealers.dealer_id })
+    .from(dealers)
+    .limit(1);
+  const dealerId = dealerRow?.id ?? null;
+
   // 2. Leads across 6 cities + loan→lead reassignment ---------------------
   console.log(`  Upserting ${loanIds.length} leads across ${CITIES.length} cities…`);
   for (let i = 0; i < loanIds.length; i++) {
     const leadId = `CMDC-LEAD-${String(i + 1).padStart(4, "0")}`;
+    const ownerName = NAMES[i % NAMES.length];
+    const leadFields = {
+      owner_name: ownerName,
+      full_name: ownerName,
+      city: CITIES[i % CITIES.length],
+      state: STATE,
+      asset_model: ASSET_MODELS[i % ASSET_MODELS.length],
+      battery_type: "LFP",
+      dealer_id: dealerId,
+    };
     await db
       .insert(leads)
       .values({
         id: leadId,
-        owner_name: NAMES[i % NAMES.length],
-        city: CITIES[i % CITIES.length],
-        state: STATE,
         lead_source: "command-centre-seed",
         uploader_id: uploaderId,
+        ...leadFields,
       })
-      .onConflictDoNothing({ target: leads.id });
+      .onConflictDoUpdate({ target: leads.id, set: leadFields });
     await db
       .update(loanSanctions)
       .set({ lead_id: leadId })
@@ -225,6 +262,59 @@ async function main() {
   for (let c = 0; c < emiRows.length; c += 200) {
     await db.insert(emiSchedules).values(emiRows.slice(c, c + 200));
   }
+
+  // Sync nbfc_loans.current_dpd to the ledger so the Lead Intelligence STATUS
+  // and EMI STATUS columns agree (and match the Command Centre delinquency).
+  const dpdByLoan = new Map<string, number>();
+  for (const e of emiRows) {
+    if (
+      (e.status === "overdue" || e.status === "missed") &&
+      e.days_overdue != null
+    ) {
+      dpdByLoan.set(
+        e.loan_sanction_id,
+        Math.max(dpdByLoan.get(e.loan_sanction_id) ?? 0, e.days_overdue),
+      );
+    }
+  }
+  for (const id of loanIds) {
+    await db
+      .update(nbfcLoans)
+      .set({ current_dpd: dpdByLoan.get(id) ?? 0 })
+      .where(eq(nbfcLoans.loan_application_id, id));
+  }
+  console.log("  nbfc_loans.current_dpd synced to the emi ledger.");
+
+  // 3b. borrower_risk_scores — replace the tenant's rows with CDS/PCI scores
+  //     keyed to the REAL loan ids (post-E-117 the column is varchar). Scores
+  //     are 0–100 (BRD §6.1.5) and correlate with each loan's profile.
+  await db
+    .delete(borrowerRiskScores)
+    .where(eq(borrowerRiskScores.tenant_id, tenantId));
+  const scoreRows = loanIds.map((id, i) => {
+    const profile = profileOf(i);
+    const cds =
+      profile === "delinquent"
+        ? 72 + i * 5 // 72,77,82,87,92 — High / Very High
+        : profile === "cured"
+          ? 50 + (i % 13) // ~50–62 — Medium
+          : profile === "mildlate"
+            ? 44 + (i % 22) // ~44–65 — Medium
+            : 10 + (i % 33); // ~10–42 — Low
+    const pci = Math.min(1, Math.max(0, (100 - cds) / 100));
+    const confidence = i % 11 === 4 ? "LOW" : i % 5 === 2 ? "MEDIUM" : "HIGH";
+    return {
+      tenant_id: tenantId,
+      borrower_id: randomUUID(),
+      loan_sanction_id: id,
+      cds_score: String(cds),
+      pci_score: pci.toFixed(3),
+      confidence,
+      computed_at: daysAgo(0.3),
+    };
+  });
+  console.log(`  Inserting ${scoreRows.length} borrower_risk_scores rows…`);
+  await db.insert(borrowerRiskScores).values(scoreRows);
 
   // 4. telemetry_alerts ---------------------------------------------------
   const vnos = vnoRows.map((r) => r.vno).filter((v): v is string => !!v);
@@ -286,12 +376,10 @@ async function main() {
     console.log(`  Skipping telemetry_alerts — ${telCount} row(s) already present.`);
   }
 
-  // 5. nbfc_risk_alerts ---------------------------------------------------
-  const [{ n: riskCount }] = await db
-    .select({ n: sql<number>`count(*)::int` })
-    .from(nbfcRiskAlerts)
-    .where(eq(nbfcRiskAlerts.tenant_id, tenantId));
-  if (riskCount === 0) {
+  // 5. nbfc_risk_alerts — keyed to REAL loan ids (post-E-117) so the Command
+  //    Centre alert feed resolves borrower names. Replace the tenant's rows.
+  await db.delete(nbfcRiskAlerts).where(eq(nbfcRiskAlerts.tenant_id, tenantId));
+  {
     type RiskSpec = {
       type: string;
       severity: string;
@@ -315,10 +403,10 @@ async function main() {
       { type: "pci_low", severity: "low", daysAgo: 11, payload: { pci_score: 0.38, threshold: 0.4 }, resolved: true },
       { type: "cds_high", severity: "medium", daysAgo: 13, payload: { cds_score: 71 }, resolved: true },
     ];
-    const riskRows = specs.map((s) => ({
+    const riskRows = specs.map((s, idx) => ({
       tenant_id: tenantId,
       borrower_id: randomUUID(),
-      loan_sanction_id: randomUUID(),
+      loan_sanction_id: loanIds[idx % loanIds.length],
       type: s.type,
       severity: s.severity,
       payload: s.payload,
@@ -327,8 +415,6 @@ async function main() {
     }));
     console.log(`  Inserting ${riskRows.length} nbfc_risk_alerts rows…`);
     await db.insert(nbfcRiskAlerts).values(riskRows);
-  } else {
-    console.log(`  Skipping nbfc_risk_alerts — ${riskCount} row(s) already present.`);
   }
 
   // 6. nbfc_borrower_actions — replace only this seed's own rows (tagged in
