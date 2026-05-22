@@ -412,15 +412,23 @@ export const leads = pgTable("leads", {
 // "Add Another Product" rows. The primary product stays on leads.primary_product_id;
 // this table holds only the additional selections. `category_slug` + `asset_type`
 // are stored so the 3-level cascade fully rehydrates in edit mode without probing.
-export const leadProducts = pgTable("lead_products", {
-  id: uuid("id").primaryKey().defaultRandom().notNull(),
-  lead_id: varchar("lead_id", { length: 255 }).notNull(),
-  product_id: uuid("product_id").notNull(),
-  product_category_id: varchar("product_category_id", { length: 255 }),
-  category_slug: varchar("category_slug", { length: 16 }),
-  asset_type: varchar("asset_type", { length: 20 }),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const leadProducts = pgTable(
+  "lead_products",
+  {
+    id: uuid("id").primaryKey().defaultRandom().notNull(),
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    product_id: uuid("product_id").notNull(),
+    product_category_id: varchar("product_category_id", { length: 255 }),
+    category_slug: varchar("category_slug", { length: 16 }),
+    asset_type: varchar("asset_type", { length: 20 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // Mirrors drizzle/E-116_lead_products.sql — one lookup per lead drives
+    // edit-mode rehydration of the extra-product rows.
+    leadIdx: index("lead_products_lead_idx").on(table.lead_id),
+  }),
+);
 
 // export const leads_commented = pgTable(
 //   "leads",
@@ -3034,7 +3042,9 @@ export const borrowerRiskScores = pgTable(
     id: uuid().defaultRandom().primaryKey().notNull(),
     tenant_id: uuid("tenant_id").notNull(),
     borrower_id: uuid("borrower_id").notNull(),
-    loan_sanction_id: uuid("loan_sanction_id").notNull(),
+    // E-117 — widened uuid → varchar so a score can be keyed to any
+    // loan_sanctions.id (which is varchar, often non-uuid e.g. 'BAJAJ-LIVE-…').
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
     cds_score: numeric("cds_score", { precision: 5, scale: 2 }),
     pci_score: numeric("pci_score", { precision: 4, scale: 3 }),
     confidence: varchar({ length: 16 }),
@@ -4669,7 +4679,9 @@ export const nbfcRiskAlerts = pgTable(
     id: uuid().primaryKey().defaultRandom(),
     tenant_id: uuid("tenant_id").notNull(),
     borrower_id: uuid("borrower_id").notNull(),
-    loan_sanction_id: uuid("loan_sanction_id").notNull(),
+    // E-117 — widened uuid → varchar so an alert can be keyed to any
+    // loan_sanctions.id (which is varchar, often non-uuid e.g. 'BAJAJ-LIVE-…').
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
     type: varchar({ length: 32 }).notNull(), // 'pci_low' | 'cds_high' | ...
     severity: varchar({ length: 16 }).notNull(), // 'low' | 'medium' | 'high' | 'critical'
     payload: jsonb("payload"),

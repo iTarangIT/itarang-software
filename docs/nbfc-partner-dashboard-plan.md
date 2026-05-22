@@ -57,7 +57,7 @@ This is the operating model the portal must support end-to-end.
 7. **Audit Log** — every action is immutably recorded (RBI DLD 2025); export with dual-approval when a regulator asks.
 
 ### 2.3 Data lifecycle (the engine behind the screens)
-```
+```text
 Loan sanctioned (loan_sanctions.nbfc_id FK)  ─┐
 EMI ledger (emi_schedules)  ───────────────────┤
 IoT telemetry every 15 min ──► iot_devices + telemetry_ingestion_log

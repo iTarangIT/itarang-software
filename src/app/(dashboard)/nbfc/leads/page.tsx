@@ -122,13 +122,14 @@ export default async function NbfcLeadsPage({
       sanctioned_at: loanSanctions.sanctioned_at,
       lead_id: loanSanctions.lead_id,
       reference_id: leads.reference_id,
-      full_name: leads.full_name,
+      // Fall back to owner_name — some lead rows carry only one of the two.
+      full_name: sql<string | null>`coalesce(${leads.full_name}, ${leads.owner_name})`,
       city: leads.city,
       state: leads.state,
       dealer_name: dealers.company_name,
-      product_model: productSelections.model_number,
-      next_emi_date: loanFiles.next_emi_date,
-      overdue_days: loanFiles.overdue_days,
+      // Financed product: the sanction's product_selection, else the lead's
+      // recorded asset model.
+      product_model: sql<string | null>`coalesce(${productSelections.model_number}, ${leads.asset_model})`,
       loan_files_status: loanFiles.loan_status,
     })
     .from(nbfcLoans)
@@ -160,8 +161,6 @@ export default async function NbfcLeadsPage({
     state: string | null;
     dealer_name: string | null;
     product_model: string | null;
-    next_emi_date: Date | null;
-    overdue_days: number | null;
     loan_files_status: string | null;
   }>;
 
@@ -182,6 +181,30 @@ export default async function NbfcLeadsPage({
     cdsRows.map((r) => [r.loan_sanction_id, r.cds_score]),
   );
 
+  // EMI status per loan, derived from the emi_schedules ledger:
+  // overdue_days = worst overdue/missed instalment; next_emi_date = the
+  // earliest upcoming scheduled instalment. emi_schedules.loan_sanction_id is
+  // varchar = loan_sanctions.id — a clean join, no cast.
+  const emiRows = (await db.execute(sql`
+    SELECT es.loan_sanction_id AS loan_sanction_id,
+           MAX(es.days_overdue) FILTER (WHERE es.status IN ('overdue', 'missed'))::int AS overdue_days,
+           MIN(es.due_date) FILTER (WHERE es.status = 'scheduled' AND es.due_date >= CURRENT_DATE)::text AS next_emi_date
+    FROM emi_schedules es
+    JOIN loan_sanctions ls ON ls.id = es.loan_sanction_id
+    WHERE ls.nbfc_id = ${tenant.id}
+    GROUP BY es.loan_sanction_id
+  `)) as unknown as Array<{
+    loan_sanction_id: string;
+    overdue_days: number | null;
+    next_emi_date: string | null;
+  }>;
+  const emiBySanction = new Map(
+    emiRows.map((r) => [
+      r.loan_sanction_id,
+      { overdue_days: r.overdue_days, next_emi_date: r.next_emi_date },
+    ]),
+  );
+
   const statusFilter = params.status?.toLowerCase();
   const bandFilter = params.band?.toLowerCase();
   const stateFilter = params.state?.trim() ?? "";
@@ -196,6 +219,7 @@ export default async function NbfcLeadsPage({
     const cds = r.sanction_id
       ? cdsBySanction.get(r.sanction_id) ?? null
       : null;
+    const emi = r.sanction_id ? emiBySanction.get(r.sanction_id) : undefined;
     const baseStatus = (
       r.sanction_status ??
       r.loan_files_status ??
@@ -220,8 +244,8 @@ export default async function NbfcLeadsPage({
       current_dpd: r.current_dpd,
       outstanding_amount:
         r.outstanding_amount != null ? Number(r.outstanding_amount) : null,
-      overdue_days: r.overdue_days,
-      next_emi_date: r.next_emi_date ? r.next_emi_date.toISOString() : null,
+      overdue_days: emi?.overdue_days ?? null,
+      next_emi_date: emi?.next_emi_date ?? null,
       created_at: r.sanctioned_at ? r.sanctioned_at.toISOString() : null,
       cds_score: cds,
       cds_band: cdsBand(cds, bands),
