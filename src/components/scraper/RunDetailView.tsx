@@ -3,15 +3,15 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
-  CheckCircle,
   XCircle,
   Loader2,
   Users,
-  SkipForward,
   Target,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrapedLeadsTable } from "./ScrapedLeadsTable";
+import { RawLeadsTable } from "./RawLeadsTable";
 import { RunStatusBadge } from "./ExplorationStatusBadge";
 import { useState } from "react";
 
@@ -37,7 +37,12 @@ interface RunDetail {
     duplicates_skipped: number;
     error_message: string | null;
     triggered_by_name: string | null;
-    search_queries: string[] | null;
+    // `search_queries` is stored as jsonb so the runtime shape varies:
+    // - markRunStarted (runStore.ts:14) writes a plain string
+    // - dealer-scraper-service.ts:114 writes an array of strings
+    // - older rows may be null or even a wrapped object
+    // We normalize to string[] in `normalizeQueries` before rendering.
+    search_queries: unknown;
   };
   leads: unknown[];
   dedup_logs: Array<{
@@ -49,6 +54,37 @@ interface RunDetail {
     skip_reason: string;
     created_at: string;
   }>;
+}
+
+function normalizeQueries(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.filter((x): x is string => typeof x === "string" && x.length > 0);
+  }
+  if (typeof raw === "string") {
+    // Some old rows stored an array as a JSON-encoded string; try to parse.
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(
+          (x): x is string => typeof x === "string" && x.length > 0,
+        );
+      }
+    } catch {
+      // not JSON — fall through and treat as a single query string
+    }
+    return raw ? [raw] : [];
+  }
+  if (typeof raw === "object" && raw !== null) {
+    // Defensive: a `{ queries: [...] }` shape would otherwise be unrendered.
+    const inner = (raw as any).queries;
+    if (Array.isArray(inner)) {
+      return inner.filter(
+        (x): x is string => typeof x === "string" && x.length > 0,
+      );
+    }
+  }
+  return [];
 }
 
 function StatCard({
@@ -81,7 +117,7 @@ interface RunDetailViewProps {
 }
 
 export function RunDetailView({ runId, onBack }: RunDetailViewProps) {
-  const [activeTab, setActiveTab] = useState<"leads" | "dupes">("leads");
+  const [activeTab, setActiveTab] = useState<"saved" | "total">("saved");
 
   const { data, isLoading, error } = useQuery<RunDetail>({
     queryKey: ["scraper-run-detail", runId],
@@ -98,14 +134,31 @@ export function RunDetailView({ runId, onBack }: RunDetailViewProps) {
   });
 
   if (isLoading) {
+    // Match the live layout so the page doesn't jump on data arrival:
+    // back+header line, stats trio, optional queries strip, tabs, table.
     return (
-      <div className="space-y-4">
-        <div className="h-8 w-48 bg-gray-100 animate-pulse rounded-lg" />
-        <div className="grid grid-cols-3 gap-4">
+      <div className="space-y-6">
+        <div className="flex items-start gap-4">
+          <div className="h-8 w-20 bg-gray-100 animate-pulse rounded-lg" />
+          <div className="space-y-2">
+            <div className="h-6 w-72 bg-gray-100 animate-pulse rounded-lg" />
+            <div className="h-4 w-48 bg-gray-100 animate-pulse rounded-lg" />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {[1, 2, 3].map((i) => (
             <div
               key={i}
               className="h-28 bg-gray-100 animate-pulse rounded-xl"
+            />
+          ))}
+        </div>
+        <div className="h-10 w-56 bg-gray-100 animate-pulse rounded-lg" />
+        <div className="space-y-2">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div
+              key={i}
+              className="h-12 bg-gray-100 animate-pulse rounded-xl"
             />
           ))}
         </div>
@@ -121,7 +174,8 @@ export function RunDetailView({ runId, onBack }: RunDetailViewProps) {
     );
   }
 
-  const { run, dedup_logs } = data;
+  const { run } = data;
+  const queries = normalizeQueries(run.search_queries);
 
   return (
     <div className="space-y-6">
@@ -167,8 +221,8 @@ export function RunDetailView({ runId, onBack }: RunDetailViewProps) {
         </div>
       )}
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {/* Stats — duplicate count still appears in the tab label below */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <StatCard
           icon={Target}
           label="Total Found"
@@ -181,22 +235,16 @@ export function RunDetailView({ runId, onBack }: RunDetailViewProps) {
           value={run.new_leads_saved ?? 0}
           color="bg-green-100 text-green-600"
         />
-        <StatCard
-          icon={SkipForward}
-          label="Duplicates Skipped"
-          value={run.duplicates_skipped ?? 0}
-          color="bg-orange-100 text-orange-600"
-        />
       </div>
 
       {/* Search queries used */}
-      {run.search_queries && run.search_queries.length > 0 && (
+      {queries.length > 0 && (
         <div className="bg-gray-50 border border-gray-100 rounded-xl p-4">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
             Queries Used
           </p>
           <ul className="space-y-1">
-            {run.search_queries.map((q, i) => (
+            {queries.map((q, i) => (
               <li
                 key={i}
                 className="text-sm text-gray-600 flex items-start gap-2"
@@ -209,77 +257,46 @@ export function RunDetailView({ runId, onBack }: RunDetailViewProps) {
         </div>
       )}
 
-      {/* Tabs */}
+      {/* Tabs — "Saved" mirrors the New Leads Saved stat,
+                  "Total" mirrors Total Found (i.e., every raw lead the
+                  scraper produced, including the ones that got de-duped). */}
       <div>
-        <div className="flex gap-1 border-b border-gray-100 mb-4">
-          {(["leads", "dupes"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setActiveTab(t)}
-              className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                activeTab === t
-                  ? "border-teal-600 text-teal-700"
-                  : "border-transparent text-gray-500 hover:text-gray-700"
-              }`}
+        <div className="flex items-center justify-between border-b border-gray-100 mb-4">
+          <div className="flex gap-1">
+            {(["saved", "total"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setActiveTab(t)}
+                className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                  activeTab === t
+                    ? "border-teal-600 text-teal-700"
+                    : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {t === "saved"
+                  ? `Saved (${run.new_leads_saved ?? 0})`
+                  : `Total (${run.total_found ?? 0})`}
+              </button>
+            ))}
+          </div>
+          {(run.total_found ?? 0) > 0 && (
+            <a
+              href={`/api/scraper/runs/${runId}/export.xlsx`}
+              // Plain anchor — the route sets Content-Disposition so the
+              // browser downloads the .xlsx file. Two sheets: "Total"
+              // (every raw lead, with was_saved flag) and "Saved" (the
+              // de-duped rows with the full upstream address).
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-teal-700 px-3 py-1.5 border border-gray-200 rounded-lg hover:border-teal-300 mb-2"
+              download
             >
-              {t === "leads"
-                ? `New Leads (${run.new_leads_saved ?? 0})`
-                : `Duplicates Skipped (${run.duplicates_skipped ?? 0})`}
-            </button>
-          ))}
+              <Download className="w-3.5 h-3.5" />
+              Export Excel
+            </a>
+          )}
         </div>
 
-        {activeTab === "leads" && (
-          <ScrapedLeadsTable runId={runId} showAssignButton />
-        )}
-
-        {activeTab === "dupes" && (
-          <div className="overflow-hidden rounded-xl border border-gray-100">
-            {dedup_logs.length === 0 ? (
-              <div className="text-center py-8 text-gray-400 text-sm">
-                <CheckCircle className="w-6 h-6 mx-auto mb-2 text-green-400" />
-                No duplicates were skipped in this run.
-              </div>
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
-                    <th className="px-4 py-3 text-left font-medium">
-                      Dealer Name
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium">Phone</th>
-                    <th className="px-4 py-3 text-left font-medium">
-                      Location
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium">
-                      Skip Reason
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {dedup_logs.map((log) => (
-                    <tr key={log.id} className="hover:bg-gray-50/50">
-                      <td className="px-4 py-3 text-gray-700">
-                        {log.raw_dealer_name ?? "—"}
-                      </td>
-                      <td className="px-4 py-3 text-gray-500 text-xs">
-                        {log.raw_phone ?? "—"}
-                      </td>
-                      <td className="px-4 py-3 text-gray-500 text-xs">
-                        {log.raw_location ?? "—"}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-xs font-medium">
-                          {log.skip_reason.replace(/_/g, " ")}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        )}
+        {activeTab === "saved" && <ScrapedLeadsTable runId={runId} />}
+        {activeTab === "total" && <RawLeadsTable runId={runId} />}
       </div>
     </div>
   );

@@ -23,6 +23,15 @@ import {
   CreditCard,
   Megaphone,
   Shield,
+  TrendingUp,
+  ListChecks,
+  MapPinned,
+  AlertTriangle,
+  Upload,
+  Settings,
+  BarChart3,
+  GitMerge,
+  UserMinus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -37,6 +46,29 @@ const roleNavigation: Record<string, any[]> = {
           label: "Dashboard",
           icon: LayoutDashboard,
           href: "/ceo",
+        },
+      ],
+    },
+    {
+      section: "PART 0 OVERSIGHT",
+      items: [
+        {
+          id: "ceo-admin-dashboard",
+          label: "Ops Dashboard",
+          icon: LayoutDashboard,
+          href: "/admin",
+        },
+        {
+          id: "ceo-escalations",
+          label: "Escalations",
+          icon: AlertTriangle,
+          href: "/admin/escalations",
+        },
+        {
+          id: "ceo-reports",
+          label: "Reports",
+          icon: BarChart3,
+          href: "/admin/reports",
         },
       ],
     },
@@ -128,6 +160,53 @@ const roleNavigation: Record<string, any[]> = {
           label: "Dashboard",
           icon: LayoutDashboard,
           href: "/sales-head",
+        },
+      ],
+    },
+    {
+      section: "LEAD MANAGEMENT",
+      items: [
+        {
+          id: "sh-admin-dashboard",
+          label: "Ops Dashboard",
+          icon: LayoutDashboard,
+          href: "/admin",
+        },
+        {
+          id: "sh-escalations",
+          label: "Escalations",
+          icon: AlertTriangle,
+          href: "/admin/escalations",
+        },
+        {
+          id: "sh-merge-requests",
+          label: "Merge Requests",
+          icon: GitMerge,
+          href: "/admin/merge-requests",
+        },
+        {
+          id: "sh-onboarding-dropouts",
+          label: "Onboarding Dropouts",
+          icon: UserMinus,
+          href: "/admin/onboarding-dropouts",
+        },
+        {
+          id: "sh-lead-upload",
+          label: "Bulk Lead Upload",
+          icon: Upload,
+          href: "/admin/upload",
+        },
+        {
+          id: "sh-reports",
+          label: "Reports",
+          icon: BarChart3,
+          href: "/admin/reports",
+        },
+        {
+          id: "sh-settings",
+          label: "Settings",
+          icon: Settings,
+          href: "/admin/settings",
         },
       ],
     },
@@ -326,6 +405,47 @@ const roleNavigation: Record<string, any[]> = {
           label: "Dashboard",
           icon: LayoutDashboard,
           href: "/admin",
+        },
+      ],
+    },
+    {
+      section: "LEAD MANAGEMENT",
+      items: [
+        {
+          id: "admin-escalations",
+          label: "Escalations",
+          icon: AlertTriangle,
+          href: "/admin/escalations",
+        },
+        {
+          id: "admin-merge-requests",
+          label: "Merge Requests",
+          icon: GitMerge,
+          href: "/admin/merge-requests",
+        },
+        {
+          id: "admin-onboarding-dropouts",
+          label: "Onboarding Dropouts",
+          icon: UserMinus,
+          href: "/admin/onboarding-dropouts",
+        },
+        {
+          id: "admin-lead-upload",
+          label: "Bulk Lead Upload",
+          icon: Upload,
+          href: "/admin/upload",
+        },
+        {
+          id: "admin-reports",
+          label: "Reports",
+          icon: BarChart3,
+          href: "/admin/reports",
+        },
+        {
+          id: "admin-settings",
+          label: "Settings",
+          icon: Settings,
+          href: "/admin/settings",
         },
       ],
     },
@@ -563,6 +683,48 @@ const roleNavigation: Record<string, any[]> = {
     },
   ],
 
+  sales_insight: [
+    {
+      section: "INSIGHTS",
+      items: [
+        {
+          id: "converted-leads",
+          label: "Converted Leads",
+          icon: TrendingUp,
+          href: "/sales-insight",
+        },
+      ],
+    },
+  ],
+
+  inside_sales_rep: [
+    {
+      section: "INSIDE SALES",
+      items: [
+        {
+          id: "my-queue",
+          label: "My Queue",
+          icon: ListChecks,
+          href: "/inside-sales",
+        },
+      ],
+    },
+  ],
+
+  asm: [
+    {
+      section: "FIELD WORK",
+      items: [
+        {
+          id: "my-visits",
+          label: "My Visits",
+          icon: MapPinned,
+          href: "/asm",
+        },
+      ],
+    },
+  ],
+
   dealer: [
     {
       section: "OVERVIEW",
@@ -682,6 +844,9 @@ export function Sidebar() {
     if (pathname.startsWith("/service-engineer")) return "service_engineer";
     if (pathname.startsWith("/sales-manager")) return "sales_manager";
     if (pathname.startsWith("/sales-executive")) return "sales_executive";
+    if (pathname.startsWith("/sales-insight")) return "sales_insight";
+    if (pathname.startsWith("/inside-sales")) return "inside_sales_rep";
+    if (pathname.startsWith("/asm")) return "asm";
     return "user";
   })();
 

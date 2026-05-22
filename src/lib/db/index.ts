@@ -10,6 +10,7 @@ if (!connectionString) {
 
 const globalForDb = globalThis as unknown as {
     pgClient: ReturnType<typeof postgres> | undefined;
+    dbHostLogged: boolean | undefined;
 };
 
 const queryClient = globalForDb.pgClient ?? postgres(connectionString, {
@@ -21,6 +22,21 @@ const queryClient = globalForDb.pgClient ?? postgres(connectionString, {
 
 if (process.env.NODE_ENV !== 'production') {
     globalForDb.pgClient = queryClient;
+    // Surface the target host once per dev-server start. Schema drift
+    // bugs ("page shows 0 leads") almost always come down to the dev
+    // server pointing at a DB where the latest E-NNN migration hasn't
+    // landed. Printing the host removes one round-trip of detective work.
+    if (!globalForDb.dbHostLogged) {
+        try {
+            const u = new URL(connectionString);
+            console.log(
+                `[DB] connected to ${u.hostname}${u.pathname} (apply E-NNN migrations against this host)`,
+            );
+        } catch {
+            console.log("[DB] DATABASE_URL set (unparseable URL)");
+        }
+        globalForDb.dbHostLogged = true;
+    }
 }
 
 export const db = drizzle(queryClient, { schema });

@@ -26,19 +26,42 @@ export async function POST(req: NextRequest) {
     event = await verifyWebhookEvent(rawBody, signature);
   } catch (err) {
     if (err instanceof WebhookSecretMissingError) {
-      console.error(
-        "[ELEVENLABS WEBHOOK] ELEVENLABS_WEBHOOK_SECRET is not configured — webhook rejected. Set this in Vercel env to enable verification.",
-      );
+      // Dev-friendly: accept unverified payloads on localhost so operators
+      // can test the call lifecycle through ngrok without configuring a
+      // shared secret. Production still hard-rejects.
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(
+          "[ELEVENLABS WEBHOOK] ELEVENLABS_WEBHOOK_SECRET missing — accepting in dev. " +
+            "Set the env var before deploying.",
+        );
+        try {
+          event = JSON.parse(rawBody);
+        } catch (parseErr) {
+          console.error(
+            "[ELEVENLABS WEBHOOK] body parse failed in dev-accept path:",
+            parseErr,
+          );
+          return NextResponse.json(
+            { success: false, error: "Bad payload" },
+            { status: 400 },
+          );
+        }
+      } else {
+        console.error(
+          "[ELEVENLABS WEBHOOK] ELEVENLABS_WEBHOOK_SECRET is not configured in production — webhook rejected.",
+        );
+        return NextResponse.json(
+          { success: false, error: "Webhook not configured" },
+          { status: 401 },
+        );
+      }
+    } else {
+      console.warn("[ELEVENLABS WEBHOOK] Signature verification failed", err);
       return NextResponse.json(
-        { success: false, error: "Webhook not configured" },
+        { success: false, error: "Invalid signature" },
         { status: 401 },
       );
     }
-    console.warn("[ELEVENLABS WEBHOOK] Signature verification failed", err);
-    return NextResponse.json(
-      { success: false, error: "Invalid signature" },
-      { status: 401 },
-    );
   }
 
   console.log("[ELEVENLABS WEBHOOK] HIT", {

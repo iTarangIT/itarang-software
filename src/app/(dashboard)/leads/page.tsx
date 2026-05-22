@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Plus,
   Phone,
@@ -28,23 +29,36 @@ import {
 } from "lucide-react";
 import { CallButton } from "@/components/leads/call-button";
 import { ScraperDashboard } from "@/components/scraper/ScraperDashboard";
-import { RunDetailView } from "@/components/scraper/RunDetailView";
 import { DownloadConvertedLeadsButton } from "@/components/leads/DownloadButton";
 import {
   DialerStartModal,
-  categoryMatcher,
   type DialerProvider,
   type DialerCategory,
+  type DialerStartPayload,
 } from "@/components/leads/dialer-start-modal";
 import {
   LeadCallStatus,
   type CallRowStatus,
 } from "@/components/leads/lead-call-status";
+import { CampaignBannerExpansion } from "@/components/leads/campaign-banner-expansion";
+import { CampaignsTable } from "@/components/leads/campaigns-table";
+import { CostAnalyticsView } from "@/components/leads/cost-analytics-view";
 
 const ENDED_VISIBLE_MS = 8000;
 const MANUAL_CALL_MAX_MS = 3 * 60 * 1000;
 
-type Tab = "leads" | "scraper" | "converted";
+type Tab = "leads" | "scraper" | "converted" | "campaigns" | "cost-analytics";
+
+// Roles allowed to see the Cost Analytics tab. Mirrors the server-side
+// gate in /api/campaigns/cost-analytics so the UI never surfaces a tab
+// that the API would refuse.
+const COST_ANALYTICS_ROLES = new Set([
+  "ceo",
+  "business_head",
+  "sales_head",
+  "finance_controller",
+  "admin",
+]);
 type DialerPhase = "idle" | "calling" | "countdown";
 type UploadStatus = "idle" | "parsing" | "uploading" | "done" | "error";
 
@@ -270,7 +284,14 @@ function normalizeRow(row: Record<string, string>) {
       "contact number",
       "number",
     ),
-    location: get("location", "city", "area", "address", "place", "state"),
+    // `location` stays for backwards compat with single-cell CSVs and is
+    // forwarded as the legacy dealer_leads.location text. The structured
+    // fields below feed the new region selector.
+    location: get("location", "city", "area", "address", "place"),
+    state: get("state", "province", "region"),
+    city: get("city", "town"),
+    area: get("area", "locality", "neighborhood"),
+    pincode: get("pincode", "pin", "postal_code", "zip", "zipcode"),
     language: get("language", "lang") ?? "hindi",
     current_status: get("status", "current_status", "lead status") ?? "new",
   };
@@ -637,6 +658,9 @@ function AiDialerBanner({
   onStop,
   onSkipCountdown,
   provider,
+  campaignId,
+  expanded,
+  onToggleExpanded,
 }: {
   phase: DialerPhase;
   currentLead: any | null;
@@ -647,6 +671,9 @@ function AiDialerBanner({
   onStop: () => void;
   onSkipCountdown: () => void;
   provider: DialerProvider;
+  campaignId: string | null;
+  expanded: boolean;
+  onToggleExpanded: () => void;
 }) {
   const providerLabel = provider === "elevenlabs" ? "ElevenLabs" : "Bolna";
   const providerChip =
@@ -654,17 +681,25 @@ function AiDialerBanner({
       ? "bg-violet-500/20 text-violet-300 border-violet-500/40"
       : "bg-blue-500/20 text-blue-300 border-blue-500/40";
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded-xl px-5 py-4 mb-4 flex items-center justify-between gap-4">
+    <div className="bg-gray-900 border border-gray-700 rounded-xl px-5 py-4 mb-4">
+      <div className="flex items-center justify-between gap-4">
       <div className="flex items-center gap-3 min-w-0 flex-1">
-        <div
-          className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${phase === "calling" ? "bg-emerald-500" : "bg-amber-500"}`}
+        <button
+          type="button"
+          onClick={onToggleExpanded}
+          disabled={!campaignId}
+          aria-expanded={expanded}
+          aria-label={expanded ? "Collapse campaign details" : "Expand campaign details"}
+          className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+            phase === "calling" ? "bg-emerald-500" : "bg-amber-500"
+          } ${campaignId ? "hover:brightness-110 cursor-pointer" : "cursor-default"}`}
         >
           {phase === "calling" ? (
             <PhoneCall className="w-4 h-4 text-white animate-pulse" />
           ) : (
             <Clock className="w-4 h-4 text-white" />
           )}
-        </div>
+        </button>
         <div className="min-w-0">
           {phase === "calling" && currentLead && (
             <>
@@ -742,7 +777,23 @@ function AiDialerBanner({
         >
           <StopCircle className="w-3.5 h-3.5" /> Stop
         </button>
+        {campaignId && (
+          <button
+            onClick={onToggleExpanded}
+            aria-expanded={expanded}
+            aria-label={expanded ? "Collapse" : "Expand"}
+            className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
+          >
+            <ChevronDown
+              className={`w-4 h-4 transition-transform ${expanded ? "rotate-180" : ""}`}
+            />
+          </button>
+        )}
       </div>
+      </div>
+      {expanded && campaignId && (
+        <CampaignBannerExpansion campaignId={campaignId} active={phase !== "idle"} />
+      )}
     </div>
   );
 }
@@ -913,15 +964,60 @@ function ConvertedLeadCard({
 // ─── Main Page ────────────────────────────────────────────────
 
 export default function LeadsUnifiedPage() {
-  const [tab, setTab] = useState<Tab>("leads");
+  const searchParams = useSearchParams();
+  // Honor `?tab=scraper` (or `?tab=converted`) on first render so the back
+  // button from /leads/scrape-runs/[id] lands on the Scraper tab the user
+  // came from, not the default Leads tab.
+  const initialTab: Tab = (() => {
+    const t = searchParams?.get("tab");
+    return t === "scraper" ||
+      t === "converted" ||
+      t === "campaigns" ||
+      t === "cost-analytics"
+      ? t
+      : "leads";
+  })();
+
+  // User role for cost-analytics tab visibility. Fetched once; failure
+  // leaves canSeeCostAnalytics=false so we never accidentally show a tab
+  // to an unauthorized user (the API would block them anyway).
+  const [canSeeCostAnalytics, setCanSeeCostAnalytics] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/user/profile")
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        const role = json?.data?.role as string | undefined;
+        if (role && COST_ANALYTICS_ROLES.has(role)) {
+          setCanSeeCostAnalytics(true);
+        }
+      })
+      .catch(() => {
+        // Silent failure — tab stays hidden.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [search, setSearch] = useState("");
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
 
   const [leads, setLeads] = useState<any[]>([]);
   const [leadsTotal, setLeadsTotal] = useState(0);
+  // Stats panel counters — server-side, computed across all matching leads
+  // (not just the current page). Default to zeros so the cards render before
+  // the first fetch lands.
+  const [leadsStats, setLeadsStats] = useState({
+    hot: 0,
+    warm: 0,
+    qualified: 0,
+    scheduled: 0,
+  });
   const [leadsPage, setLeadsPage] = useState(1);
   const [leadsLoading, setLeadsLoading] = useState(false);
+  const [leadsError, setLeadsError] = useState<string | null>(null);
 
   const [convertedLeads, setConvertedLeads] = useState<any[]>([]);
   const [convertedTotal, setConvertedTotal] = useState(0);
@@ -933,8 +1029,12 @@ export default function LeadsUnifiedPage() {
   const [dialerQueue, setDialerQueue] = useState<any[]>([]);
   const [dialerIndex, setDialerIndex] = useState(0);
   const [dialerModalOpen, setDialerModalOpen] = useState(false);
-  const [dialerEligible, setDialerEligible] = useState<any[]>([]);
   const [dialerProvider, setDialerProvider] = useState<DialerProvider>("bolna");
+  // Campaign id for the current dialer session; populated by /start response
+  // and reaffirmed by the /status poller. Drives the expandable banner panel
+  // and the link into the campaign detail page.
+  const [currentCampaignId, setCurrentCampaignId] = useState<string | null>(null);
+  const [bannerExpanded, setBannerExpanded] = useState(false);
 
   // Per-row call status (live indicator on each lead)
   const [callingLeadId, setCallingLeadId] = useState<string | null>(null);
@@ -1010,21 +1110,48 @@ export default function LeadsUnifiedPage() {
 
   const LIMIT = 10;
 
-  const fetchLeads = useCallback(async (page: number, q: string) => {
-    setLeadsLoading(true);
-    try {
-      const res = await fetch(
-        `/api/dealer-leads?page=${page}&limit=${LIMIT}&search=${encodeURIComponent(q)}`,
-      );
-      const data = await res.json();
-      if (data.success) {
-        setLeads(data.leads);
-        setLeadsTotal(data.total);
+  const fetchLeads = useCallback(
+    async (page: number, q: string, opts?: { silent?: boolean }) => {
+      // When the dialer is running we re-fetch every 2s to surface lead
+      // status transitions. `silent` skips the loading spinner so the
+      // table doesn't flash during background refreshes.
+      const silent = opts?.silent === true;
+      if (!silent) setLeadsLoading(true);
+      try {
+        const res = await fetch(
+          `/api/dealer-leads?page=${page}&limit=${LIMIT}&search=${encodeURIComponent(q)}`,
+        );
+        const data = await res.json();
+        if (data.success) {
+          setLeads(data.leads);
+          setLeadsTotal(data.total);
+          if (data.stats) setLeadsStats(data.stats);
+          setLeadsError(null);
+        } else {
+          // Surface API failures instead of rendering a silent empty state.
+          // Most commonly this fires when schema.ts and the live DB drift —
+          // e.g. a new E-NNN migration hasn't been applied to the host the
+          // dev server connects to (check the [DB] log on server start).
+          console.error("[leads] /api/dealer-leads failed:", data);
+          if (!silent) {
+            setLeads([]);
+            setLeadsTotal(0);
+          }
+          setLeadsError(data.error?.message ?? data.error ?? "Failed to load leads");
+        }
+      } catch (err: any) {
+        console.error("[leads] /api/dealer-leads network error:", err);
+        if (!silent) {
+          setLeads([]);
+          setLeadsTotal(0);
+        }
+        setLeadsError(err?.message ?? "Network error loading leads");
+      } finally {
+        if (!silent) setLeadsLoading(false);
       }
-    } finally {
-      setLeadsLoading(false);
-    }
-  }, []);
+    },
+    [],
+  );
 
   const fetchConvertedLeads = useCallback(async (page: number, q: string) => {
     setConvertedLoading(true);
@@ -1046,6 +1173,19 @@ export default function LeadsUnifiedPage() {
     if (tab === "leads") fetchLeads(leadsPage, search);
     if (tab === "converted") fetchConvertedLeads(convertedPage, search);
   }, [tab, leadsPage, convertedPage, search]);
+
+  // While the AI dialer is running, poll the leads list every 2s so the
+  // `current_status` column reflects lead transitions (pending → calling
+  // → completed) without forcing the user to refresh. Silent refresh —
+  // no loading flash. Polling stops the moment dialerOn flips back to
+  // false, so this costs nothing when no campaign is active.
+  useEffect(() => {
+    if (tab !== "leads" || !dialerOn) return;
+    const id = setInterval(() => {
+      fetchLeads(leadsPage, search, { silent: true });
+    }, 2000);
+    return () => clearInterval(id);
+  }, [tab, dialerOn, leadsPage, search, fetchLeads]);
 
   const handleSearch = (v: string) => {
     setSearch(v);
@@ -1111,7 +1251,9 @@ export default function LeadsUnifiedPage() {
         const res = await fetch("/api/ai-dialer/status");
         const status = await res.json();
         if (!status.active) {
-          // Session ended on the backend — queue exhausted
+          // Session ended on the backend — queue exhausted. Keep
+          // currentCampaignId so the user can still expand and see the
+          // final breakdown until they navigate away or click Stop.
           if (pollerRef.current) clearInterval(pollerRef.current);
           setDialerOn(false);
           setDialerPhase("idle");
@@ -1119,6 +1261,9 @@ export default function LeadsUnifiedPage() {
         }
         if (status.provider && status.provider !== dialerProvider) {
           setDialerProvider(status.provider as DialerProvider);
+        }
+        if (status.campaignId && status.campaignId !== currentCampaignId) {
+          setCurrentCampaignId(status.campaignId);
         }
         setDialerCallsMade(status.callsMade);
         // Track per-row calling status: if currentLeadId changed, transition
@@ -1141,36 +1286,21 @@ export default function LeadsUnifiedPage() {
     }, 2000);
   }, [dialerProvider, callingLeadId, startCallingLead]);
 
-  // Click on the toggle (when off): fetch the full lead list and open the
-  // provider/category picker modal. We don't dial until the user confirms.
-  // The modal sees ALL leads (so totals match the dashboard); at confirm
-  // time we apply the hard filter (must have phone, not DNC) — but NOT the
-  // "called today" filter, since the user explicitly chose to dial them.
-  const handleDialerOn = useCallback(async () => {
-    const res = await fetch(`/api/dealer-leads?page=1&limit=500&search=`);
-    const data = await res.json();
-    if (!data.success) return;
-    setDialerEligible(data.leads);
+  // Click on the toggle (when off): open the region/segment picker. We
+  // no longer pre-fetch the full lead list — /api/ai-dialer/preview
+  // serves the modal's live counts and returns the queue (id + phone)
+  // server-side, so the picker scales to lead sets larger than 500.
+  const handleDialerOn = useCallback(() => {
     setDialerModalOpen(true);
   }, []);
 
-  // Modal confirmed → narrow the pool by category, persist the chosen
-  // provider in the dialer session, tag dealer_leads, and fire the first
-  // call via the chosen provider's endpoint. Subsequent calls advance via
-  // each provider's webhook (advanceDialerToNextLead).
+  // Modal confirmed → persist the chosen provider in the dialer session,
+  // tag dealer_leads, and fire the first call via the chosen provider's
+  // endpoint. Subsequent calls advance via each provider's webhook
+  // (advanceDialerToNextLead). The modal already filtered the queue by
+  // region + segment server-side, so we use it directly.
   const confirmDialerStart = useCallback(
-    async (provider: DialerProvider, category: DialerCategory) => {
-      const matches = categoryMatcher(category);
-      const queue = dialerEligible
-        .filter((l) => l.phone && l.phone.trim() !== "")
-        .filter(
-          (l) => !NO_CALL_STATUSES.includes(l.current_status ?? ""),
-        )
-        .filter((l) => matches(l.current_status ?? null))
-        .sort(
-          (a, b) =>
-            (b.final_intent_score ?? 0) - (a.final_intent_score ?? 0),
-        );
+    async ({ provider, category, region, queue }: DialerStartPayload) => {
       if (queue.length === 0) return;
 
       stopRef.current = false;
@@ -1182,31 +1312,37 @@ export default function LeadsUnifiedPage() {
       setDialerOn(true);
       setDialerPhase("calling");
 
-      await fetch("/api/ai-dialer/start", {
+      const startRes = await fetch("/api/ai-dialer/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           queueIds: queue.map((l) => l.id),
           provider,
           category,
+          // Audit/telemetry only — the server still trusts queueIds as
+          // the authoritative list. See /api/ai-dialer/start/route.ts.
+          region,
         }),
       });
+      try {
+        const startJson = await startRes.json();
+        if (startJson?.campaignId) {
+          setCurrentCampaignId(startJson.campaignId);
+        }
+      } catch {
+        // Non-fatal; the /status poller will surface campaignId on the next tick.
+      }
 
-      const callEndpoint =
-        provider === "elevenlabs" ? "/api/elevenlabs/call" : "/api/bolna/call";
-      // Optimistically light up the row before the network round-trip so
-      // the user sees instant feedback on the lead card.
-      startCallingLead(queue[0].id);
-      await fetch(callEndpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: queue[0].phone, leadId: queue[0].id }),
-      });
-
+      // First call is now placed server-side by /api/ai-dialer/start via
+      // advanceCampaign. Just light up the row optimistically and start
+      // polling — the campaign-lead row's status='calling' from the DB
+      // is what /api/ai-dialer/status now reflects.
+      const head = queue[0];
+      startCallingLead(head.id);
       setDialerCallsMade(1);
       startDialerPoller();
     },
-    [dialerEligible, startDialerPoller, startCallingLead],
+    [startDialerPoller, startCallingLead],
   );
 
   const handleDialerOff = useCallback(() => {
@@ -1221,6 +1357,8 @@ export default function LeadsUnifiedPage() {
     if (callingLeadId) markEnded(callingLeadId);
     setCallingLeadId(null);
     setCallingLeadStartedAt(0);
+    setCurrentCampaignId(null);
+    setBannerExpanded(false);
     fetch("/api/ai-dialer/stop", { method: "POST" });
   }, [callingLeadId, markEnded]);
 
@@ -1243,12 +1381,16 @@ export default function LeadsUnifiedPage() {
     [],
   );
 
+  // Counts come from the server now (computed across ALL matching leads).
+  // The old client-side filter only saw the visible 10 rows on the current
+  // page, which is why Hot/Warm/Qualified always read 0 unless a high-intent
+  // lead happened to be on page 1.
   const stats = {
     total: leadsTotal,
-    hot: leads.filter((l) => l.current_status === "hot").length,
-    warm: leads.filter((l) => l.current_status === "warm").length,
-    qualified: leads.filter((l) => l.current_status === "qualified").length,
-    scheduled: leads.filter((l) => l.next_call_at).length,
+    hot: leadsStats.hot,
+    warm: leadsStats.warm,
+    qualified: leadsStats.qualified,
+    scheduled: leadsStats.scheduled,
   };
 
   const currentDialerLead = dialerQueue[dialerIndex] ?? null;
@@ -1267,7 +1409,6 @@ export default function LeadsUnifiedPage() {
         isOpen={dialerModalOpen}
         onClose={() => setDialerModalOpen(false)}
         onConfirm={confirmDialerStart}
-        eligibleLeads={dialerEligible}
       />
 
       {/* HEADER */}
@@ -1361,13 +1502,16 @@ export default function LeadsUnifiedPage() {
               { key: "scraper", label: "Scraper" },
               { key: "leads", label: "Leads" },
               { key: "converted", label: "My Converted Leads" },
+              { key: "campaigns", label: "Campaigns" },
+              ...(canSeeCostAnalytics
+                ? [{ key: "cost-analytics" as Tab, label: "Cost Analytics" }]
+                : []),
             ] as { key: Tab; label: string }[]
           ).map(({ key, label }) => (
             <button
               key={key}
               onClick={() => {
                 setTab(key);
-                setSelectedRunId(null);
               }}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab === key ? "bg-gray-900 text-white shadow-sm" : "text-gray-500 hover:text-gray-800"}`}
             >
@@ -1375,7 +1519,7 @@ export default function LeadsUnifiedPage() {
             </button>
           ))}
         </div>
-        {tab !== "scraper" && (
+        {tab !== "scraper" && tab !== "campaigns" && tab !== "cost-analytics" && (
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
@@ -1392,14 +1536,7 @@ export default function LeadsUnifiedPage() {
       {/* ── TAB: SCRAPER ── */}
       {tab === "scraper" && (
         <div>
-          {selectedRunId ? (
-            <RunDetailView
-              runId={selectedRunId}
-              onBack={() => setSelectedRunId(null)}
-            />
-          ) : (
-            <ScraperDashboard onSelectRun={(id) => setSelectedRunId(id)} />
-          )}
+          <ScraperDashboard />
         </div>
       )}
 
@@ -1417,7 +1554,27 @@ export default function LeadsUnifiedPage() {
               onStop={handleDialerOff}
               onSkipCountdown={handleSkipCountdown}
               provider={dialerProvider}
+              campaignId={currentCampaignId}
+              expanded={bannerExpanded}
+              onToggleExpanded={() => setBannerExpanded((v) => !v)}
             />
+          )}
+          {leadsError && !leadsLoading && (
+            <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+              <div className="font-semibold mb-0.5">
+                Couldn&apos;t load leads
+              </div>
+              <div className="text-[12px] text-rose-700 break-all">
+                {leadsError}
+              </div>
+              <div className="text-[11px] text-rose-600 mt-2">
+                If this says &quot;column … does not exist&quot;, a pending
+                migration (e.g. <code>drizzle/E-106_*</code>) hasn&apos;t been
+                applied to the DB this dev server connects to. Check the
+                <code> [DB] connected to …</code> line in the server log to
+                see which host needs the migration.
+              </div>
+            </div>
           )}
           {leadsLoading ? (
             <LoadingSkeleton />
@@ -1624,6 +1781,18 @@ export default function LeadsUnifiedPage() {
             </>
           )}
         </div>
+      )}
+
+      {/* ── TAB: CAMPAIGNS (AI dialer history) ── */}
+      {tab === "campaigns" && (
+        <div>
+          <CampaignsTable />
+        </div>
+      )}
+
+      {/* ── TAB: COST ANALYTICS (enterprise cost dashboard) ── */}
+      {tab === "cost-analytics" && canSeeCostAnalytics && (
+        <CostAnalyticsView />
       )}
     </div>
   );
