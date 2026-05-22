@@ -4887,6 +4887,42 @@ export const auctionAutoBids = pgTable(
 );
 
 // =============================================================================
+// E-118 — nbfc_buyback_requests (BRD §6.1.7 Recovery & Auction)
+// Customer-initiated battery buyback requests surfaced on the NBFC Recovery &
+// Auction page. Source of truth is the migration drizzle/E-118_*.sql.
+// =============================================================================
+export const nbfcBuybackRequests = pgTable(
+  "nbfc_buyback_requests",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    customer_name: varchar("customer_name", { length: 160 }).notNull(),
+    battery_serial: varchar("battery_serial", { length: 64 }).notNull(),
+    soh_percent: numeric("soh_percent", { precision: 5, scale: 2 }),
+    requested_at: timestamp("requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // 'pending' | 'in_review' | 'completed'
+    evaluation_status: varchar("evaluation_status", { length: 24 })
+      .notNull()
+      .default("pending"),
+    offer_amount: numeric("offer_amount", { precision: 12, scale: 2 }),
+    // 'pending_evaluation' | 'offer_made' | 'accepted' | 'rejected'
+    status: varchar({ length: 24 }).notNull().default("pending_evaluation"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_buyback_requests_tenant_idx").on(table.tenant_id),
+    statusIdx: index("nbfc_buyback_requests_status_idx").on(table.status),
+  }),
+);
+
+// =============================================================================
 // NBFC entity KYC verifications (CIN, PAN, GSTIN)
 // Sanchit (CEO) runs these from /admin/nbfc/[id]/kyc-review before the final
 // approval gate releases. The gate (E-001) requires at least one row with
