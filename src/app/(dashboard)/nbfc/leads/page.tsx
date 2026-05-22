@@ -26,6 +26,7 @@ import {
 } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import LeadsTable, { type LeadRow } from "./_components/LeadsTable";
+import LeadsCsvButton from "./_components/LeadsCsvButton";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,11 @@ interface SearchParams {
   band?: "low" | "mid" | "high" | string;
   state?: string;
   product?: string;
+  dealer?: string;
+  dpd?: string;
+  emi?: string;
+  amount_min?: string;
+  amount_max?: string;
   from?: string;
   to?: string;
   sort?: string;
@@ -54,6 +60,22 @@ const STAGES = [
 ];
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
+
+// DPD severity buckets for the filter bar. `current_dpd` comes from nbfc_loans;
+// a null DPD is treated as 0 (current / not delinquent).
+const DPD_BUCKETS = [
+  { id: "0", label: "Current (0 days)", test: (d: number) => d <= 0 },
+  { id: "1-30", label: "1–30 days", test: (d: number) => d >= 1 && d <= 30 },
+  { id: "31-60", label: "31–60 days", test: (d: number) => d >= 31 && d <= 60 },
+  { id: "60+", label: "60+ days", test: (d: number) => d > 60 },
+];
+
+// EMI status filter options, derived from the emi_schedules rollup.
+const EMI_STATUS_OPTIONS = [
+  { id: "overdue", label: "Overdue" },
+  { id: "upcoming", label: "Upcoming" },
+  { id: "none", label: "No schedule" },
+];
 
 interface CdsBands {
   low_mid: number;
@@ -88,6 +110,66 @@ function cdsBand(
   if (score < bands.low_mid) return "low";
   if (score < bands.mid_high) return "mid";
   return "high";
+}
+
+// Sort options for the filter bar. `created_desc` is the default.
+const SORT_OPTIONS = [
+  { id: "created_desc", label: "Newest first" },
+  { id: "created_asc", label: "Oldest first" },
+  { id: "amount_desc", label: "Loan amount: high → low" },
+  { id: "amount_asc", label: "Loan amount: low → high" },
+  { id: "cds_desc", label: "CDS score: high → low" },
+  { id: "cds_asc", label: "CDS score: low → high" },
+  { id: "name_asc", label: "Customer name: A → Z" },
+  { id: "overdue_desc", label: "Most overdue first" },
+  { id: "dpd_desc", label: "Current DPD: high → low" },
+  { id: "emi_date_asc", label: "Next EMI date: soonest first" },
+];
+
+function sortLeads(rows: LeadRow[], key: string): LeadRow[] {
+  const out = [...rows];
+  const ts = (r: LeadRow) =>
+    r.created_at ? new Date(r.created_at).getTime() : 0;
+  switch (key) {
+    case "created_asc":
+      return out.sort((a, b) => ts(a) - ts(b));
+    case "amount_desc":
+      return out.sort((a, b) => (b.loan_amount ?? -1) - (a.loan_amount ?? -1));
+    case "amount_asc":
+      return out.sort(
+        (a, b) =>
+          (a.loan_amount ?? Infinity) - (b.loan_amount ?? Infinity),
+      );
+    case "cds_desc":
+      return out.sort((a, b) => (b.cds_score ?? -1) - (a.cds_score ?? -1));
+    case "cds_asc":
+      return out.sort(
+        (a, b) => (a.cds_score ?? Infinity) - (b.cds_score ?? Infinity),
+      );
+    case "name_asc":
+      return out.sort((a, b) =>
+        (a.full_name ?? "").localeCompare(b.full_name ?? ""),
+      );
+    case "overdue_desc":
+      return out.sort((a, b) => (b.overdue_days ?? -1) - (a.overdue_days ?? -1));
+    case "dpd_desc":
+      return out.sort((a, b) => (b.current_dpd ?? -1) - (a.current_dpd ?? -1));
+    case "emi_date_asc": {
+      const emiTs = (r: LeadRow) =>
+        r.next_emi_date ? new Date(r.next_emi_date).getTime() : Infinity;
+      return out.sort((a, b) => emiTs(a) - emiTs(b));
+    }
+    case "created_desc":
+    default:
+      return out.sort((a, b) => ts(b) - ts(a));
+  }
+}
+
+/** Normalises the raw ?sort= param; `cds` is a legacy drill-through alias. */
+function resolveSortKey(raw: string | undefined): string {
+  if (raw === "cds") return "cds_desc";
+  if (raw && SORT_OPTIONS.some((o) => o.id === raw)) return raw;
+  return "created_desc";
 }
 
 const FIELD_LABEL =
@@ -209,6 +291,15 @@ export default async function NbfcLeadsPage({
   const bandFilter = params.band?.toLowerCase();
   const stateFilter = params.state?.trim() ?? "";
   const productFilter = params.product?.trim() ?? "";
+  const dealerFilter = params.dealer?.trim() ?? "";
+  const dpdFilter = params.dpd?.trim() ?? "";
+  const emiFilter = params.emi?.trim().toLowerCase() ?? "";
+  const amountMinRaw = Number(params.amount_min);
+  const amountMaxRaw = Number(params.amount_max);
+  const amountMin =
+    params.amount_min && !Number.isNaN(amountMinRaw) ? amountMinRaw : null;
+  const amountMax =
+    params.amount_max && !Number.isNaN(amountMaxRaw) ? amountMaxRaw : null;
   const q = params.q?.toLowerCase().trim() ?? "";
   const from = params.from ? new Date(params.from).getTime() : null;
   const to = params.to
@@ -264,6 +355,11 @@ export default async function NbfcLeadsPage({
       enriched.map((r) => r.product_model).filter((v): v is string => !!v),
     ),
   ).sort();
+  const dealerOptions = Array.from(
+    new Set(
+      enriched.map((r) => r.dealer_name).filter((v): v is string => !!v),
+    ),
+  ).sort();
 
   let filtered = enriched.filter((r) => {
     if (statusFilter) {
@@ -273,6 +369,23 @@ export default async function NbfcLeadsPage({
     if (bandFilter && r.cds_band !== bandFilter) return false;
     if (stateFilter && r.state !== stateFilter) return false;
     if (productFilter && r.product_model !== productFilter) return false;
+    if (dealerFilter && r.dealer_name !== dealerFilter) return false;
+    if (dpdFilter) {
+      const bucket = DPD_BUCKETS.find((b) => b.id === dpdFilter);
+      if (bucket && !bucket.test(r.current_dpd ?? 0)) return false;
+    }
+    // A null loan amount can't satisfy a min/max bound — exclude it when set.
+    if (amountMin != null && (r.loan_amount ?? -Infinity) < amountMin)
+      return false;
+    if (amountMax != null && (r.loan_amount ?? Infinity) > amountMax)
+      return false;
+    if (emiFilter) {
+      const isOverdue = r.overdue_days != null && r.overdue_days > 0;
+      const isUpcoming = !isOverdue && !!r.next_emi_date;
+      if (emiFilter === "overdue" && !isOverdue) return false;
+      if (emiFilter === "upcoming" && !isUpcoming) return false;
+      if (emiFilter === "none" && (isOverdue || isUpcoming)) return false;
+    }
     if (q) {
       const hay =
         `${r.reference_id ?? ""} ${r.loan_application_id} ${r.battery_serial ?? ""} ${r.full_name ?? ""} ${r.dealer_name ?? ""} ${r.loan_file_number ?? ""}`.toLowerCase();
@@ -284,12 +397,10 @@ export default async function NbfcLeadsPage({
     return true;
   });
 
-  // Optional sort (portfolio drill-through uses ?sort=cds).
-  if (params.sort === "cds") {
-    filtered = [...filtered].sort(
-      (a, b) => (b.cds_score ?? -1) - (a.cds_score ?? -1),
-    );
-  }
+  // Sort the full filtered set before pagination, so both the visible page
+  // and the CSV export honour the chosen order.
+  const sortKey = resolveSortKey(params.sort);
+  filtered = sortLeads(filtered, sortKey);
 
   const total = filtered.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -315,6 +426,11 @@ export default async function NbfcLeadsPage({
       params.band ||
       params.state ||
       params.product ||
+      params.dealer ||
+      params.dpd ||
+      params.emi ||
+      params.amount_min ||
+      params.amount_max ||
       params.q ||
       params.from ||
       params.to ||
@@ -323,16 +439,19 @@ export default async function NbfcLeadsPage({
 
   return (
     <div className="space-y-6">
-      <header>
-        <p className="section-label-muted">Lead Intelligence</p>
-        <h1 className="mt-1 text-2xl font-semibold text-[color:var(--color-brand-navy)]">
-          Leads referred via iTarang
-        </h1>
-        <p className="mt-1 text-sm text-[color:var(--color-ink-muted)]">
-          Status tracking from disbursal through closure — filter by status,
-          geography, product, CDS band and date. Tap any row for the full
-          read-only detail.
-        </p>
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0">
+          <p className="section-label-muted">Lead Intelligence</p>
+          <h1 className="mt-1 text-2xl font-semibold text-[color:var(--color-brand-navy)]">
+            Leads referred via iTarang
+          </h1>
+          <p className="mt-1 text-sm text-[color:var(--color-ink-muted)]">
+            Status tracking from disbursal through closure — filter by status,
+            geography, product, CDS band and date. Tap any row for the full
+            read-only detail.
+          </p>
+        </div>
+        <LeadsCsvButton rows={filtered} />
       </header>
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -394,6 +513,79 @@ export default async function NbfcLeadsPage({
           </select>
         </div>
         <div>
+          <label className={FIELD_LABEL}>Dealer</label>
+          <select
+            name="dealer"
+            defaultValue={params.dealer ?? ""}
+            className={FIELD_INPUT}
+          >
+            <option value="">All dealers</option>
+            {dealerOptions.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={FIELD_LABEL}>DPD bucket</label>
+          <select name="dpd" defaultValue={params.dpd ?? ""} className={FIELD_INPUT}>
+            <option value="">All DPD</option>
+            {DPD_BUCKETS.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={FIELD_LABEL}>EMI status</label>
+          <select name="emi" defaultValue={params.emi ?? ""} className={FIELD_INPUT}>
+            <option value="">All</option>
+            {EMI_STATUS_OPTIONS.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={FIELD_LABEL}>Loan amount (₹)</label>
+          <div className="flex items-center gap-1">
+            <input
+              type="number"
+              name="amount_min"
+              defaultValue={params.amount_min ?? ""}
+              placeholder="Min"
+              min={0}
+              className={`${FIELD_INPUT} w-24`}
+            />
+            <span className="text-[color:var(--color-ink-muted)]">–</span>
+            <input
+              type="number"
+              name="amount_max"
+              defaultValue={params.amount_max ?? ""}
+              placeholder="Max"
+              min={0}
+              className={`${FIELD_INPUT} w-24`}
+            />
+          </div>
+        </div>
+        <div>
+          <label className={FIELD_LABEL}>Sort by</label>
+          <select
+            name="sort"
+            defaultValue={resolveSortKey(params.sort)}
+            className={FIELD_INPUT}
+          >
+            {SORT_OPTIONS.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
           <label className={FIELD_LABEL}>Created from</label>
           <input
             type="date"
@@ -437,9 +629,6 @@ export default async function NbfcLeadsPage({
         </div>
         {params.status ? (
           <input type="hidden" name="status" value={params.status} />
-        ) : null}
-        {params.sort ? (
-          <input type="hidden" name="sort" value={params.sort} />
         ) : null}
         <button
           type="submit"

@@ -29,6 +29,8 @@ export interface AuctionLot {
 
 interface AuctionLotsGridProps {
   lots: AuctionLot[];
+  /** Tailwind grid-template-columns classes. Defaults to a 3-up grid. */
+  columnsClassName?: string;
 }
 
 function fmtINR(n: number): string {
@@ -61,7 +63,10 @@ function CountdownCell({ endsAt }: { endsAt: string }) {
   );
 }
 
-export function AuctionLotsGrid({ lots }: AuctionLotsGridProps) {
+export function AuctionLotsGrid({
+  lots,
+  columnsClassName = "grid-cols-1 md:grid-cols-2 lg:grid-cols-3",
+}: AuctionLotsGridProps) {
   const [activeLot, setActiveLot] = useState<AuctionLot | null>(null);
 
   if (lots.length === 0) {
@@ -74,7 +79,7 @@ export function AuctionLotsGrid({ lots }: AuctionLotsGridProps) {
 
   return (
     <>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className={`grid ${columnsClassName} gap-4`}>
         {lots.map((lot) => (
           <div
             key={lot.lot_id}
@@ -127,7 +132,7 @@ export function AuctionLotsGrid({ lots }: AuctionLotsGridProps) {
               onClick={() => setActiveLot(lot)}
               className="w-full mt-2 px-3 py-2 rounded-md bg-blue-600 text-white text-sm hover:bg-blue-700"
             >
-              Place Bid
+              Enter lot
             </button>
           </div>
         ))}
