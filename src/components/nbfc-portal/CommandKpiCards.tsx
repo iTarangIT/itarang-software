@@ -103,7 +103,7 @@ export default function CommandKpiCards({ kpis }: { kpis: CommandCentreKpis }) {
         testId="cc-kpi-at-risk"
         label="At-Risk Accounts"
         value={inr(kpis.at_risk.value)}
-        caption={`${kpis.at_risk.pct_of_book.toFixed(1)}% of the active book — 30+ days overdue or a critical telemetry alert.`}
+        caption={`${kpis.at_risk.pct_of_book.toFixed(1)}% of the active book — 30+ days overdue or a warning or critical telemetry alert.`}
         delta={null}
         Icon={AlertTriangle}
         tone="warning"

@@ -100,18 +100,23 @@ export default function RecoveryKanban({
     }
   }
 
-  const notice: BorrowerNoticeContent | null = immobiliseFor
-    ? {
-        lender_legal_name:
-          tenantLegal.legal_name ?? tenantLegal.display_name,
-        outstanding_amount: immobiliseFor.outstanding_amount ?? 0,
-        restoration_steps:
-          "Pay the outstanding EMI amount to restore battery mobility — service is re-mobilised within 2 hours of settlement.",
-        grievance_url:
-          tenantLegal.grievance_url ?? "https://itarang.com/grievance",
-        helpline: tenantLegal.grievance_helpline ?? "1800-000-0000",
-      }
-    : null;
+  // A §6.1.6 borrower notice must carry the real outstanding amount — defaulting
+  // an unknown amount to ₹0 would put a false figure into a legal notice. When
+  // the amount is unknown the notice is left null and the action is gated (the
+  // "Request immobilisation" button below is disabled in that case).
+  const notice: BorrowerNoticeContent | null =
+    immobiliseFor && immobiliseFor.outstanding_amount != null
+      ? {
+          lender_legal_name:
+            tenantLegal.legal_name ?? tenantLegal.display_name,
+          outstanding_amount: immobiliseFor.outstanding_amount,
+          restoration_steps:
+            "Pay the outstanding EMI amount to restore battery mobility — service is re-mobilised within 2 hours of settlement.",
+          grievance_url:
+            tenantLegal.grievance_url ?? "https://itarang.com/grievance",
+          helpline: tenantLegal.grievance_helpline ?? "1800-000-0000",
+        }
+      : null;
 
   return (
     <>
@@ -223,10 +228,12 @@ function Card({
         <div className="mt-2 flex flex-wrap gap-1">
           {next.map((n) => {
             // BRD §6.1.7 — Refurbishable requires SOH > 70%.
+            // Unknown SOH must fail the guard too — a missing reading is not
+            // evidence the battery clears the §6.1.7 threshold.
             const blocked =
               n === "refurbishable" &&
-              row.live_soh_pct != null &&
-              row.live_soh_pct <= REFURBISHABLE_MIN_SOH;
+              (row.live_soh_pct == null ||
+                row.live_soh_pct <= REFURBISHABLE_MIN_SOH);
             return (
               <button
                 key={n}
@@ -249,7 +256,12 @@ function Card({
       {row.imei && row.loan_application_id ? (
         <button
           onClick={onImmobilise}
-          disabled={busy}
+          disabled={busy || row.outstanding_amount == null}
+          title={
+            row.outstanding_amount == null
+              ? "Outstanding amount unknown — cannot raise a §6.1.6 borrower notice"
+              : undefined
+          }
           className="mt-2 w-full rounded bg-red-600 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-red-700 disabled:opacity-50"
         >
           Request immobilisation

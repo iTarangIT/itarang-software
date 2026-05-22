@@ -49,6 +49,9 @@ export default function BatteryHistoryCharts({
         if (!socRes.ok) {
           throw new Error(socJson?.error || `HTTP ${socRes.status}`);
         }
+        if (!sohRes.ok) {
+          throw new Error(sohJson?.error || `HTTP ${sohRes.status}`);
+        }
         const socPts = (socJson.points as HistoryPoint[] | undefined) ?? [];
         const sohPts = (sohJson.points as HistoryPoint[] | undefined) ?? [];
         setSoc(

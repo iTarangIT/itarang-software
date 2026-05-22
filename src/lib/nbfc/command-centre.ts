@@ -110,6 +110,18 @@ export interface CommandCentreData {
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const QUARTER_MS = 90 * 24 * 60 * 60 * 1000;
 
+/** Fallback summary used when computePortfolioSummary() fails — see settle(). */
+const EMPTY_PORTFOLIO_SUMMARY: PortfolioSummary = {
+  total_active_loans: 0,
+  portfolio_value: 0,
+  avg_emi: 0,
+  disbursement_this_month: 0,
+  delinquency_rate: 0,
+  avg_portfolio_cds: 0,
+  recovery_value_locked: 0,
+  computed_at: new Date(0).toISOString(),
+};
+
 // -----------------------------------------------------------------------------
 // Orchestrator
 // -----------------------------------------------------------------------------
@@ -127,11 +139,25 @@ export async function computeCommandCentre(
     }
   };
 
-  // Resolved once, threaded into every sub-block.
-  const activeRows = await getActiveLoanRows(tenantId);
+  // Resolved once, threaded into every sub-block. Each prefetch runs through
+  // settle() too, so one failed query degrades its dependent sections instead
+  // of rejecting the whole endpoint with a 500.
+  const activeRows = await settle(
+    "activeLoans",
+    getActiveLoanRows(tenantId),
+    [] as { id: string; city: string | null }[],
+  );
   const activeIds = activeRows.map((r) => r.id);
-  const summary = await computePortfolioSummary(tenantId);
-  const atRiskIds = await computeAtRiskIds(tenantId, activeIds);
+  const summary = await settle(
+    "portfolioSummary",
+    computePortfolioSummary(tenantId),
+    EMPTY_PORTFOLIO_SUMMARY,
+  );
+  const atRiskIds = await settle(
+    "atRiskIds",
+    computeAtRiskIds(tenantId, activeIds),
+    new Set<string>(),
+  );
 
   const [kpis, navCounts, alertFeed, weekly, recentActions] = await Promise.all([
     settle(

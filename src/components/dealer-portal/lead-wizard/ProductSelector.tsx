@@ -80,8 +80,14 @@ const SELECT_BASE =
     'w-full h-11 px-4 pr-10 bg-white border-2 rounded-xl outline-none appearance-none text-sm transition-all disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed';
 
 function productOptionLabel(p: ProductOption, outOfStock: boolean): string {
+    // voltage / capacity are often absent (e.g. paraphernalia) — only render
+    // the spec segment for the values that exist, never "nullV / nullAh".
+    const spec = [
+        p.voltage_v != null ? `${p.voltage_v}V` : null,
+        p.capacity_ah != null ? `${p.capacity_ah}Ah` : null,
+    ].filter(Boolean).join(' / ');
     return (
-        `${p.name} — ${p.voltage_v}V / ${p.capacity_ah}Ah | SKU: ${p.sku}` +
+        `${p.name}${spec ? ` — ${spec}` : ''} | SKU: ${p.sku}` +
         (p.warranty_months ? ` | ${p.warranty_months}mo warranty` : '') +
         (typeof p.available_quantity === 'number' ? ` · ${p.available_quantity} avail.` : '') +
         (outOfStock ? ' (Out of Stock)' : '')
@@ -348,6 +354,7 @@ export default function ProductSelector({
                         <button
                             type="button"
                             onClick={onRemove}
+                            aria-label={`Remove ${label}`}
                             className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
                         >
                             <X className="w-4 h-4" />

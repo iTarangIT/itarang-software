@@ -94,6 +94,18 @@ export default function ResponsiveTable<T>({
               <tr
                 key={rowKey(row, i)}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
+                role={onRowClick ? "button" : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
+                onKeyDown={
+                  onRowClick
+                    ? (e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onRowClick(row);
+                        }
+                      }
+                    : undefined
+                }
                 className={`border-b border-[color:var(--color-border)] last:border-none transition-colors ${
                   onRowClick
                     ? "cursor-pointer hover:bg-[color:var(--brand-sky-soft)]"
