@@ -16,6 +16,23 @@ function slugify(input: string): string {
     .slice(0, 200);
 }
 
+/**
+ * Classify an inventory row into one of the three asset kinds. `inventory_type`
+ * is the only reliable paraphernalia signal (`paraphernalia_lot`); battery /
+ * charger come from the `asset_type` column. Returns null for anything
+ * unrecognised so the caller can decide how to treat it.
+ */
+function classifyAssetKind(
+  inventoryType: string | null,
+  assetType: string | null,
+): "battery" | "charger" | "paraphernalia" | null {
+  if (inventoryType === "paraphernalia_lot") return "paraphernalia";
+  const at = (assetType || "").toLowerCase();
+  if (at === "battery") return "battery";
+  if (at === "charger") return "charger";
+  return null;
+}
+
 type SerialRow = {
   id: string;
   serial_number: string | null;
@@ -53,6 +70,18 @@ export const GET = withErrorHandler(async (req: Request) => {
   const { searchParams } = new URL(req.url);
   const categoryParam = (searchParams.get("category") || "").trim().toLowerCase();
   if (!categoryParam) return errorResponse("category is required", 400);
+
+  // Optional asset-kind filter (battery | charger | paraphernalia). When absent
+  // or unrecognised the endpoint returns every kind in the category (back-compat).
+  const assetTypeParam = (searchParams.get("assetType") || "")
+    .trim()
+    .toLowerCase();
+  const assetType =
+    assetTypeParam === "battery" ||
+    assetTypeParam === "charger" ||
+    assetTypeParam === "paraphernalia"
+      ? assetTypeParam
+      : null;
 
   const canonicalClass = vehicleClassFromSlug(categoryParam);
   if (!canonicalClass) return successResponse([]);
@@ -94,7 +123,10 @@ export const GET = withErrorHandler(async (req: Request) => {
   // lots from the Product-type list and made it disagree with the
   // "N in stock" total.
   const invRows = allInvRows.filter(
-    (r) => canonicalizeAssetCategory(r.asset_category) === canonicalClass,
+    (r) =>
+      canonicalizeAssetCategory(r.asset_category) === canonicalClass &&
+      (assetType === null ||
+        classifyAssetKind(r.inventory_type, r.asset_type) === assetType),
   );
 
   if (invRows.length === 0) return successResponse([]);

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { db } from '@/lib/db';
-import { leads, personalDetails, auditLogs, accounts } from '@/lib/db/schema';
+import { leads, personalDetails, auditLogs, accounts, leadProducts } from '@/lib/db/schema';
 import { successResponse, errorResponse, withErrorHandler, generateId } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
@@ -121,9 +121,17 @@ const step1Schema = z.object({
     commitStep: z.boolean().optional(),
     leadId: z.string().optional().nullable(),
     lead_score: z.number().optional().nullable(),
-    additional_products: z.array(z.any()).optional(),
+    additional_products: z.array(
+        z.object({
+            product_id: z.string(),
+            category_id: z.string().optional().nullable(),
+            category_slug: z.string().optional().nullable(),
+            asset_type: z.string().optional().nullable(),
+        }).passthrough(),
+    ).optional(),
     asset_model: z.string().optional().nullable(),
     asset_model_label: z.string().optional().nullable(),
+    asset_type: z.string().optional().nullable(),
     is_vehicle_category: z.boolean().optional(),
 }).passthrough();
 
@@ -395,6 +403,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                     product_category_id: data.product_category_id,
                     product_type_id: data.product_type_id,
                     primary_product_id: data.primary_product_id,
+                    asset_type: data.asset_type ?? null,
                     interest_level: data.interest_level!,
                     lead_score: score,
                     vehicle_rc: data.vehicle_rc?.toUpperCase().trim(),
@@ -419,6 +428,24 @@ export const POST = withErrorHandler(async (req: Request) => {
                     father_husband_name: data.father_or_husband_name?.trim(),
                     local_address: data.current_address?.trim()
                 }).where(eq(personalDetails.lead_id, data.leadId!));
+
+                // E-116 — replace the lead's extra ("Add Another Product") rows.
+                // delete + insert keeps re-commit / edit idempotent (no dupes).
+                await tx.delete(leadProducts).where(eq(leadProducts.lead_id, data.leadId!));
+                const extras = (data.additional_products ?? []).filter(
+                    (p) => typeof p.product_id === 'string' && p.product_id.length > 0,
+                );
+                if (extras.length > 0) {
+                    await tx.insert(leadProducts).values(
+                        extras.map((p) => ({
+                            lead_id: data.leadId!,
+                            product_id: p.product_id,
+                            product_category_id: p.category_id ?? null,
+                            category_slug: p.category_slug ?? null,
+                            asset_type: p.asset_type ?? null,
+                        })),
+                    );
+                }
 
                 await tx.insert(auditLogs).values({
                     id: `AUDIT-${Date.now()}`,
