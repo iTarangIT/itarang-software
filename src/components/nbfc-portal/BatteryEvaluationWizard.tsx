@@ -127,7 +127,9 @@ export function BatteryEvaluationWizard({
     <div className="rounded-md border border-slate-200 bg-white p-4">
       <header className="mb-3 flex items-center justify-between">
         <h2 className="text-lg font-semibold">Battery Evaluation</h2>
-        <span className="text-xs text-slate-500">Step {step} of 3</span>
+        <span className="text-xs text-slate-500">
+          {step <= 3 ? `Step ${step} of 3` : "Complete"}
+        </span>
       </header>
 
       {step === 1 && (

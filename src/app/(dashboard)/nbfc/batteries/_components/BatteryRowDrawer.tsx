@@ -16,6 +16,7 @@ import {
   getChargeEvents,
   getOpenFaultCodes,
 } from "@/lib/db/iot-queries";
+import BatteryHistoryCharts from "./BatteryHistoryCharts";
 
 interface RowProps {
   row: {
@@ -84,14 +85,14 @@ export default async function BatteryRowDrawer({ row }: RowProps) {
             {row.borrower_name ?? "—"} · loan {row.loan_application_id}
           </p>
         </div>
-        <div className="text-right text-xs text-slate-500 space-y-1">
+        <div className="w-full text-left text-xs text-slate-500 space-y-1 sm:w-auto sm:text-right">
           <div>DPD: <span className="font-bold text-slate-900">{row.current_dpd ?? 0}d</span></div>
           {row.outstanding_amount != null ? (
             <div>
               Outstanding: <span className="font-bold text-slate-900">₹{row.outstanding_amount.toLocaleString("en-IN")}</span>
             </div>
           ) : null}
-          <div className="flex items-center justify-end gap-1.5 pt-1">
+          <div className="flex items-center justify-start gap-1.5 pt-1 sm:justify-end">
             <span>CDS:</span>
             {row.cds_score != null ? (
               <>
@@ -104,7 +105,7 @@ export default async function BatteryRowDrawer({ row }: RowProps) {
               <span className="text-slate-400">—</span>
             )}
           </div>
-          <div className="flex items-center justify-end gap-1.5">
+          <div className="flex items-center justify-start gap-1.5 sm:justify-end">
             <span>PCI:</span>
             {row.pci_score != null ? (
               <>
@@ -282,11 +283,13 @@ export default async function BatteryRowDrawer({ row }: RowProps) {
         </Panel>
       </div>
 
-      <p className="text-xs text-slate-500">
-        Detail timeseries (SOC, SOH, GPS) available at{" "}
-        <code>/api/nbfc/iot/battery/{row.vehicleno}/history?metric=soc</code> &mdash; chart wiring lands
-        in a follow-up unit.
-      </p>
+      {/* SOC / SOH 30-day history charts (BRD §6.2.7). */}
+      <div>
+        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">
+          Telemetry history
+        </p>
+        <BatteryHistoryCharts serialNumber={row.vehicleno} />
+      </div>
     </section>
   );
 }

@@ -10,13 +10,19 @@
  * the same global search overlay as the admin header.
  */
 import React, { useState, useRef, useEffect } from "react";
-import { Search, Bell, LogOut, User, ChevronDown, Settings, CreditCard } from "lucide-react";
+import { Search, Bell, LogOut, User, ChevronDown, Settings, CreditCard, Menu } from "lucide-react";
 import Link from "next/link";
 import { GlobalSearchOverlay } from "@/components/search/GlobalSearchOverlay";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { toast } from "sonner";
 
-export default function NbfcPortalHeader({ tenantName }: { tenantName: string }) {
+export default function NbfcPortalHeader({
+    tenantName,
+    onMenuClick,
+}: {
+    tenantName: string;
+    onMenuClick?: () => void;
+}) {
     const { user } = useAuth();
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -61,7 +67,7 @@ export default function NbfcPortalHeader({ tenantName }: { tenantName: string })
 
     return (
         <header
-            className="sticky top-0 z-20 px-6 py-3 flex items-center justify-between"
+            className="sticky top-0 z-20 px-4 sm:px-6 py-3 flex items-center justify-between gap-3"
             style={{
                 background: "var(--color-surface)",
                 borderBottom: "1px solid var(--color-border)",
@@ -70,11 +76,19 @@ export default function NbfcPortalHeader({ tenantName }: { tenantName: string })
         >
             <GlobalSearchOverlay isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
             {/* Search Bar */}
-            <div className="flex items-center gap-4 flex-1 max-w-2xl">
+            <div className="flex items-center gap-3 flex-1 min-w-0 max-w-2xl">
+                <button
+                    type="button"
+                    onClick={onMenuClick}
+                    aria-label="Open navigation"
+                    className="md:hidden -ml-1 p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors shrink-0"
+                >
+                    <Menu className="w-5 h-5" />
+                </button>
                 <img
                     src="/itarang-logo.png"
                     alt="iTarang"
-                    className="h-10 w-auto object-contain md:hidden"
+                    className="h-9 w-auto object-contain md:hidden shrink-0"
                     draggable={false}
                 />
                 <h2 className="sr-only md:hidden">iTarang</h2>

@@ -4,16 +4,16 @@
  * Server-rendered fleet table for the current tenant. Joins the local
  * nbfc_loans portfolio (for borrower/loan context) with the VPS vehicle_state
  * table (for SOC/SOH/last_seen/online/lat-lon) and the VPS alerts table
- * (open-alert count per vehicleno). Row click reveals a drawer with deeper
- * telemetry — those endpoints already exist.
+ * (open-alert count per vehicleno). The list renders through the responsive
+ * `BatteriesTable`; a row tap opens the per-battery detail drawer.
  *
  * Filters are URL-driven: ?status=online|idle|stale|offline|never &severity=open
- * &q=<text> &serial=<one to auto-open>.
+ * &risk=high|low_pci &q=<text> &serial=<one to auto-open>.
  */
 import Link from "next/link";
 import { db } from "@/lib/db";
-import { and, eq } from "drizzle-orm";
-import { nbfcLoans, loanFiles, borrowerRiskScores } from "@/lib/db/schema";
+import { and, eq, inArray } from "drizzle-orm";
+import { nbfcLoans, loanFiles, borrowerRiskScores, nbfcRiskRules } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import {
   getFleetSummary,
@@ -23,6 +23,7 @@ import {
 } from "@/lib/db/iot-queries";
 import { classifyFreshness } from "@/lib/iot/freshness";
 import BatteryRowDrawer from "./_components/BatteryRowDrawer";
+import BatteriesTable, { type BatteryRow } from "./_components/BatteriesTable";
 
 export const dynamic = "force-dynamic";
 
@@ -41,32 +42,6 @@ interface RiskScoreRow {
   computed_at: Date | null;
 }
 
-// BRD §6.1.5 — CDS bands. Higher = riskier (0–100).
-function cdsBand(score: number | null): { label: string; tone: string } {
-  if (score == null) return { label: "—", tone: "bg-slate-100 text-slate-500" };
-  if (score >= 85) return { label: "Very High", tone: "bg-red-50 text-red-700" };
-  if (score >= 70) return { label: "High", tone: "bg-orange-50 text-orange-700" };
-  if (score >= 40) return { label: "Medium", tone: "bg-amber-50 text-amber-700" };
-  return { label: "Low", tone: "bg-emerald-50 text-emerald-700" };
-}
-
-// BRD §6.1.5 — PCI bands. Higher = healthier payer (0.0–1.0).
-function pciBand(score: number | null): { label: string; tone: string } {
-  if (score == null) return { label: "—", tone: "bg-slate-100 text-slate-500" };
-  if (score < 0.40) return { label: "Concern", tone: "bg-red-50 text-red-700" };
-  if (score <= 0.75) return { label: "Monitor", tone: "bg-amber-50 text-amber-700" };
-  return { label: "Healthy", tone: "bg-emerald-50 text-emerald-700" };
-}
-
-function confidenceTone(c: string | null): string {
-  if (c == null) return "text-slate-400";
-  const v = c.toUpperCase();
-  if (v === "HIGH") return "text-emerald-700";
-  if (v === "MEDIUM") return "text-amber-700";
-  if (v === "LOW") return "text-slate-500";
-  return "text-slate-500";
-}
-
 interface PortfolioRow {
   loan_application_id: string;
   vehicleno: string;
@@ -75,13 +50,30 @@ interface PortfolioRow {
   borrower_name: string | null;
 }
 
-const FRESHNESS_TONE: Record<string, string> = {
-  fresh: "bg-emerald-50 text-emerald-700",
-  idle: "bg-amber-50 text-amber-700",
-  stale: "bg-orange-50 text-orange-700",
-  offline: "bg-red-50 text-red-700",
-  never: "bg-gray-100 text-gray-500",
-};
+const FIELD_LABEL =
+  "block text-[10px] font-bold uppercase tracking-widest text-[color:var(--color-ink-muted)] mb-1";
+const FIELD_INPUT =
+  "border border-[color:var(--color-border)] rounded-lg px-2.5 py-1.5 text-sm bg-[color:var(--color-surface)]";
+
+async function loadCdsBands(): Promise<{ low_mid: number; mid_high: number }> {
+  const rows = await db
+    .select({
+      rule_key: nbfcRiskRules.rule_key,
+      current_value: nbfcRiskRules.current_value,
+    })
+    .from(nbfcRiskRules)
+    .where(
+      inArray(nbfcRiskRules.rule_key, [
+        "cds_low_mid_threshold",
+        "cds_mid_high_threshold",
+      ]),
+    );
+  const map = new Map(rows.map((r) => [r.rule_key, Number(r.current_value)]));
+  return {
+    low_mid: map.get("cds_low_mid_threshold") ?? 40,
+    mid_high: map.get("cds_mid_high_threshold") ?? 70,
+  };
+}
 
 export default async function BatteriesPage({
   searchParams,
@@ -91,6 +83,8 @@ export default async function BatteriesPage({
   const tenant = await getCurrentTenant();
   await requireNbfcAccess(tenant.id);
   const params = (await searchParams) ?? {};
+
+  const bands = await loadCdsBands();
 
   // 1. Portfolio rows — vehicleno + borrower context (left-joined to loan_files).
   const portfolio = (await db
@@ -102,8 +96,13 @@ export default async function BatteriesPage({
       borrower_name: loanFiles.borrower_name,
     })
     .from(nbfcLoans)
-    .leftJoin(loanFiles, eq(loanFiles.loan_application_id, nbfcLoans.loan_application_id))
-    .where(and(eq(nbfcLoans.tenant_id, tenant.id), eq(nbfcLoans.is_active, true)))) as Array<{
+    .leftJoin(
+      loanFiles,
+      eq(loanFiles.loan_application_id, nbfcLoans.loan_application_id),
+    )
+    .where(
+      and(eq(nbfcLoans.tenant_id, tenant.id), eq(nbfcLoans.is_active, true)),
+    )) as Array<{
     loan_application_id: string;
     vehicleno: string | null;
     current_dpd: number | null;
@@ -117,17 +116,14 @@ export default async function BatteriesPage({
       loan_application_id: r.loan_application_id,
       vehicleno: r.vehicleno,
       current_dpd: r.current_dpd,
-      outstanding_amount: r.outstanding_amount != null ? Number(r.outstanding_amount) : null,
+      outstanding_amount:
+        r.outstanding_amount != null ? Number(r.outstanding_amount) : null,
       borrower_name: r.borrower_name,
     }));
 
   const vehiclenos = portfolioRows.map((r) => r.vehicleno);
 
   // 2a. Borrower risk scores (CDS / PCI / confidence) — BRD §6.1.5.
-  // borrower_risk_scores is append-only (nightly), so we keep the latest row
-  // per loan_sanction_id by sorting computed_at DESC and skipping subsequent
-  // duplicates. Key is the string form of loan_sanction_id, which matches
-  // nbfcLoans.loan_application_id (== loanSanctions.id, see computeCds.ts).
   const riskRows = await db
     .select({
       loan_sanction_id: borrowerRiskScores.loan_sanction_id,
@@ -141,7 +137,8 @@ export default async function BatteriesPage({
 
   const riskByLoan = new Map<string, RiskScoreRow>();
   for (const r of riskRows.sort(
-    (a, b) => (b.computed_at?.getTime() ?? 0) - (a.computed_at?.getTime() ?? 0),
+    (a, b) =>
+      (b.computed_at?.getTime() ?? 0) - (a.computed_at?.getTime() ?? 0),
   )) {
     const key = String(r.loan_sanction_id);
     if (riskByLoan.has(key)) continue;
@@ -164,7 +161,8 @@ export default async function BatteriesPage({
       getVehicleStates(vehiclenos),
       getOpenAlerts(vehiclenos).then((alerts) => {
         const m = new Map<string, number>();
-        for (const a of alerts) m.set(a.vehicleno, (m.get(a.vehicleno) ?? 0) + 1);
+        for (const a of alerts)
+          m.set(a.vehicleno, (m.get(a.vehicleno) ?? 0) + 1);
         return m;
       }),
     ]);
@@ -207,18 +205,36 @@ export default async function BatteriesPage({
     if (statusFilter && r.freshness !== statusFilter) return false;
     if (severityFilter === "open" && r.open_alerts === 0) return false;
     if (riskFilter === "high") {
-      if (r.cds_score == null || r.cds_score < 70) return false;
+      if (r.cds_score == null || r.cds_score < bands.mid_high) return false;
     } else if (riskFilter === "low_pci") {
-      if (r.pci_score == null || r.pci_score >= 0.40) return false;
+      if (r.pci_score == null || r.pci_score >= 0.4) return false;
     }
     if (q) {
-      const hay = `${r.vehicleno} ${r.loan_application_id} ${r.borrower_name ?? ""}`.toLowerCase();
+      const hay =
+        `${r.vehicleno} ${r.loan_application_id} ${r.borrower_name ?? ""}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
   });
 
-  const drawerRow = params.serial ? enriched.find((r) => r.vehicleno === params.serial) : null;
+  const tableRows: BatteryRow[] = filtered.map((r) => ({
+    vehicleno: r.vehicleno,
+    loan_application_id: r.loan_application_id,
+    borrower_name: r.borrower_name,
+    soc_pct: r.soc_pct,
+    soh_pct: r.soh_pct,
+    pack_temp_c: r.pack_temp_c,
+    cds_score: r.cds_score,
+    pci_score: r.pci_score,
+    confidence: r.confidence,
+    last_seen: r.last_gps_at ? r.last_gps_at.toISOString() : null,
+    freshness: r.freshness,
+    open_alerts: r.open_alerts,
+  }));
+
+  const drawerRow = params.serial
+    ? enriched.find((r) => r.vehicleno === params.serial)
+    : null;
 
   // KPI roll-ups for the CDS / PCI cards (BRD §6.1.5).
   const cdsValues = enriched
@@ -231,9 +247,9 @@ export default async function BatteriesPage({
   const avgCdsTone =
     avgCds == null
       ? undefined
-      : avgCds >= 70
+      : avgCds >= bands.mid_high
         ? "red"
-        : avgCds >= 40
+        : avgCds >= bands.low_mid
           ? undefined
           : "green";
   const healthyCount = enriched.filter(
@@ -244,17 +260,18 @@ export default async function BatteriesPage({
     <div className="space-y-6">
       <header>
         <p className="section-label-muted">Battery Monitoring</p>
-        <h1 className="text-2xl font-semibold text-[color:var(--color-brand-navy)] mt-1">
+        <h1 className="mt-1 text-2xl font-semibold text-[color:var(--color-brand-navy)]">
           Fleet telemetry — {tenant.display_name}
         </h1>
-        <p className="text-sm text-[color:var(--color-ink-muted)] mt-1">
-          Live SOC / SOH / GPS for every battery in your portfolio. Click a row for the
-          per-battery detail drawer (history charts, alerts, immobiliser state).
+        <p className="mt-1 text-sm text-[color:var(--color-ink-muted)]">
+          Live SOC / SOH / GPS for every battery in your portfolio. Tap a row
+          for the per-battery detail drawer (history charts, alerts,
+          immobiliser state).
         </p>
       </header>
 
       {vpsError ? (
-        <div className="border border-amber-200 bg-amber-50 text-amber-900 text-sm rounded p-3">
+        <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           IoT VPS unreachable — showing portfolio rows only. ({vpsError})
         </div>
       ) : null}
@@ -271,7 +288,7 @@ export default async function BatteriesPage({
                 ...(params.q ? { q: params.q } : {}),
               }).toString()}`}
               scroll={false}
-              className="text-xs font-bold uppercase tracking-widest text-slate-500 hover:text-slate-900"
+              className="text-xs font-bold uppercase tracking-widest text-[color:var(--color-ink-muted)] hover:text-[color:var(--color-ink)]"
             >
               ✕ Close
             </Link>
@@ -281,20 +298,26 @@ export default async function BatteriesPage({
       ) : null}
 
       {/* KPI strip */}
-      <section className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
         <Kpi label="Total" value={summary?.total ?? portfolioRows.length} />
         <Kpi label="Online" value={summary?.online ?? 0} accent="green" />
         <Kpi label="Fresh ≤5m" value={summary?.fresh_5m ?? 0} />
         <Kpi
           label="Avg SOC"
-          value={summary?.avg_soc != null ? `${summary.avg_soc.toFixed(0)}%` : "—"}
+          value={
+            summary?.avg_soc != null ? `${summary.avg_soc.toFixed(0)}%` : "—"
+          }
         />
         <Kpi label="Open alerts" value={summary?.open_alerts ?? 0} accent="red" />
         <Kpi
           label="Avg CDS"
           value={avgCds != null ? avgCds.toFixed(0) : "—"}
           accent={avgCdsTone}
-          sub={cdsValues.length > 0 ? `${cdsValues.length} scored` : "no scores yet"}
+          sub={
+            cdsValues.length > 0
+              ? `${cdsValues.length} scored`
+              : "no scores yet"
+          }
         />
         <Kpi
           label="Healthy payers"
@@ -305,12 +328,14 @@ export default async function BatteriesPage({
       </section>
 
       {/* Filter bar */}
-      <form className="flex flex-wrap items-end gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3">
+      <form className="card-iTarang flex flex-wrap items-end gap-3 p-3">
         <div>
-          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-            Status
-          </label>
-          <select name="status" defaultValue={params.status ?? ""} className="border rounded px-2 py-1 text-sm">
+          <label className={FIELD_LABEL}>Status</label>
+          <select
+            name="status"
+            defaultValue={params.status ?? ""}
+            className={FIELD_INPUT}
+          >
             <option value="">All</option>
             <option value="fresh">Fresh</option>
             <option value="idle">Idle</option>
@@ -320,164 +345,57 @@ export default async function BatteriesPage({
           </select>
         </div>
         <div>
-          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-            Severity
-          </label>
-          <select name="severity" defaultValue={params.severity ?? ""} className="border rounded px-2 py-1 text-sm">
+          <label className={FIELD_LABEL}>Severity</label>
+          <select
+            name="severity"
+            defaultValue={params.severity ?? ""}
+            className={FIELD_INPUT}
+          >
             <option value="">All</option>
             <option value="open">Open alerts only</option>
           </select>
         </div>
         <div>
-          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-            Risk
-          </label>
-          <select name="risk" defaultValue={params.risk ?? ""} className="border rounded px-2 py-1 text-sm">
+          <label className={FIELD_LABEL}>Risk</label>
+          <select
+            name="risk"
+            defaultValue={params.risk ?? ""}
+            className={FIELD_INPUT}
+          >
             <option value="">All</option>
-            <option value="high">CDS ≥ 70 (High / Very High)</option>
+            <option value="high">
+              CDS ≥ {bands.mid_high} (High / Very High)
+            </option>
             <option value="low_pci">PCI &lt; 0.40 (Concern)</option>
           </select>
         </div>
-        <div className="flex-1 min-w-[200px]">
-          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-            Search
-          </label>
+        <div className="min-w-[200px] flex-1">
+          <label className={FIELD_LABEL}>Search</label>
           <input
             type="search"
             name="q"
             defaultValue={params.q ?? ""}
             placeholder="Serial, loan id, or borrower"
-            className="border rounded px-2 py-1 text-sm w-full"
+            className={`${FIELD_INPUT} w-full`}
           />
         </div>
         <button
           type="submit"
-          className="px-4 py-1.5 text-sm font-bold bg-[color:var(--color-brand-navy)] text-white rounded"
+          className="rounded-lg bg-[color:var(--color-brand-navy)] px-4 py-1.5 text-sm font-bold text-white"
         >
           Apply
         </button>
         {(params.status || params.severity || params.risk || params.q) && (
-          <Link href="/nbfc/batteries" className="text-xs underline text-slate-500 self-center">
+          <Link
+            href="/nbfc/batteries"
+            className="self-center text-xs text-[color:var(--color-ink-muted)] underline"
+          >
             Reset
           </Link>
         )}
       </form>
 
-      {/* Table */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-x-auto">
-        <table className="w-full text-sm min-w-[1100px]">
-          <thead className="bg-slate-50 dark:bg-slate-900 text-xs uppercase tracking-widest text-slate-500">
-            <tr>
-              <th className="px-3 py-2.5 text-left font-bold">Serial / Vehicle</th>
-              <th className="px-3 py-2.5 text-left font-bold">Borrower</th>
-              <th className="px-3 py-2.5 text-right font-bold">SOC</th>
-              <th className="px-3 py-2.5 text-right font-bold">SOH</th>
-              <th className="px-3 py-2.5 text-right font-bold">Temp</th>
-              <th className="px-3 py-2.5 text-left font-bold" title="Credit Default Score — 0–100, higher = riskier">CDS</th>
-              <th className="px-3 py-2.5 text-left font-bold" title="Payment Consistency Index — 0.0–1.0, higher = healthier">PCI</th>
-              <th className="px-3 py-2.5 text-left font-bold">Conf.</th>
-              <th className="px-3 py-2.5 text-left font-bold">Last seen</th>
-              <th className="px-3 py-2.5 text-left font-bold">Freshness</th>
-              <th className="px-3 py-2.5 text-right font-bold">Alerts</th>
-              <th className="px-3 py-2.5"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length === 0 ? (
-              <tr>
-                <td colSpan={12} className="px-3 py-12 text-center text-slate-500 text-sm">
-                  No batteries match these filters.
-                </td>
-              </tr>
-            ) : (
-              filtered.map((r) => {
-                const cds = cdsBand(r.cds_score);
-                const pci = pciBand(r.pci_score);
-                return (
-                <tr key={r.vehicleno} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <td className="px-3 py-2 font-mono text-xs">{r.vehicleno}</td>
-                  <td className="px-3 py-2">
-                    <div className="font-medium">{r.borrower_name ?? "—"}</div>
-                    <div className="text-xs text-slate-500">{r.loan_application_id}</div>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {r.soc_pct != null ? `${Math.round(r.soc_pct)}%` : "—"}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {r.soh_pct != null ? `${Math.round(r.soh_pct)}%` : "—"}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {r.pack_temp_c != null ? `${r.pack_temp_c.toFixed(0)}°C` : "—"}
-                  </td>
-                  <td className="px-3 py-2">
-                    {r.cds_score != null ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="tabular-nums font-semibold">{Math.round(r.cds_score)}</span>
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${cds.tone}`}>
-                          {cds.label}
-                        </span>
-                      </div>
-                    ) : (
-                      <span className="text-slate-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    {r.pci_score != null ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="tabular-nums font-semibold">{r.pci_score.toFixed(2)}</span>
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${pci.tone}`}>
-                          {pci.label}
-                        </span>
-                      </div>
-                    ) : (
-                      <span className="text-slate-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className={`text-[10px] font-bold uppercase tracking-widest ${confidenceTone(r.confidence)}`}>
-                      {r.confidence ?? "—"}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-xs text-slate-500 tabular-nums">
-                    {r.last_gps_at ? r.last_gps_at.toLocaleString() : "—"}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${FRESHNESS_TONE[r.freshness]}`}>
-                      {r.freshness}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    {r.open_alerts > 0 ? (
-                      <span className="px-2 py-0.5 rounded bg-red-50 text-red-700 text-xs font-bold tabular-nums">
-                        {r.open_alerts}
-                      </span>
-                    ) : (
-                      <span className="text-slate-400">0</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <Link
-                      href={`?${new URLSearchParams({
-                        ...(params.status ? { status: params.status } : {}),
-                        ...(params.severity ? { severity: params.severity } : {}),
-                        ...(params.risk ? { risk: params.risk } : {}),
-                        ...(params.q ? { q: params.q } : {}),
-                        serial: r.vehicleno,
-                      }).toString()}`}
-                      scroll={false}
-                      className="text-xs font-bold uppercase tracking-widest text-[color:var(--color-brand-navy)] hover:underline"
-                    >
-                      Open
-                    </Link>
-                  </td>
-                </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-
+      <BatteriesTable rows={tableRows} bands={bands} />
     </div>
   );
 }
@@ -495,15 +413,21 @@ function Kpi({
 }) {
   const tone =
     accent === "green"
-      ? "text-emerald-600"
+      ? "text-[color:var(--color-success)]"
       : accent === "red"
-        ? "text-red-600"
+        ? "text-[color:var(--color-danger)]"
         : "text-[color:var(--color-brand-navy)]";
   return (
     <div className="card-iTarang p-4">
       <p className="section-label-muted">{label}</p>
-      <p className={`mt-2 text-2xl font-semibold tabular-nums ${tone}`}>{value}</p>
-      {sub ? <p className="mt-1 text-[10px] uppercase tracking-widest text-slate-400">{sub}</p> : null}
+      <p className={`mt-2 text-2xl font-semibold tabular-nums ${tone}`}>
+        {value}
+      </p>
+      {sub ? (
+        <p className="mt-1 text-[10px] uppercase tracking-widest text-[color:var(--color-ink-muted)]">
+          {sub}
+        </p>
+      ) : null}
     </div>
   );
 }
