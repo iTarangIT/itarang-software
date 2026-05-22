@@ -89,7 +89,12 @@ export function getIotSql() {
 }
 
 export function getIotDb() {
+  // Call getIotSql() first, unconditionally: it sets cachedDb back to undefined
+  // when IOT_DATABASE_URL has changed. Returning cachedDb before this ran would
+  // never see that invalidation, so a stale drizzle wrapper could outlive the
+  // env-var change until a full process restart.
+  const client = getIotSql();
   if (cachedDb) return cachedDb;
-  cachedDb = drizzle(getIotSql());
+  cachedDb = drizzle(client);
   return cachedDb;
 }

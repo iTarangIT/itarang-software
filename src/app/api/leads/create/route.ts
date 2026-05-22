@@ -160,6 +160,12 @@ const normalizePhone = (phone?: string | null) => {
     return phone.startsWith('+') ? phone : `+91${clean}`;
 };
 
+// lead_products.product_id is a uuid column — a non-uuid value would abort the
+// whole Step-1 commit transaction with a Postgres 22P02. Extra-product rows
+// without a real product UUID are dropped, same as half-filled rows.
+const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // [E-105] Test-only auth bypass — mirrors src/app/api/admin/nbfc/route.ts
 // pattern (triple-guarded). Lets API tests stand up dealers + assignments and
 // exercise the dealer-status gate without spinning up a full Supabase session.
@@ -433,8 +439,8 @@ export const POST = withErrorHandler(async (req: Request) => {
                 // delete + insert keeps re-commit / edit idempotent (no dupes).
                 await tx.delete(leadProducts).where(eq(leadProducts.lead_id, data.leadId!));
                 const extras = (data.additional_products ?? []).filter(
-                    (p) => typeof p.product_id === 'string' && p.product_id.length > 0,
-                );
+                    (p) => typeof p.product_id === 'string' && UUID_RE.test(p.product_id.trim()),
+                ).map((p) => ({ ...p, product_id: p.product_id.trim() }));
                 if (extras.length > 0) {
                     await tx.insert(leadProducts).values(
                         extras.map((p) => ({
