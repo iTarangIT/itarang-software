@@ -22,12 +22,19 @@ interface Props {
     status: string;
     created_at: string;
   }) => void;
+  /**
+   * Optional entity context. When the reminder originates from the lead
+   * intelligence drawer the lead_id is threaded into the audit-log payload so
+   * the action appears in the unified audit feed under the lead's timeline.
+   */
+  context?: { entity_type: "lead" | "loan"; lead_id?: string };
 }
 
 export function SendPaymentReminderButton({
   loanSanctionId,
   defaultChannel = "sms",
   onSent,
+  context,
 }: Props) {
   const [channel, setChannel] = useState<Channel>(defaultChannel);
   const [submitting, setSubmitting] = useState(false);
@@ -44,6 +51,7 @@ export function SendPaymentReminderButton({
         body: JSON.stringify({
           loan_sanction_id: loanSanctionId,
           channel,
+          ...(context ? { context } : {}),
         }),
       });
       const body = await res.json().catch(() => ({}));
