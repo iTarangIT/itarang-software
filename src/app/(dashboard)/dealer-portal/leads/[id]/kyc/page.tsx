@@ -14,6 +14,7 @@ import {
 } from '@/components/dealer-portal/lead-wizard/shared';
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
 import OtherDocumentsSection, { type RequestedDoc } from '@/components/dealer-portal/lead-wizard/OtherDocumentsSection';
+import VideoKYCSection from '@/components/dealer-portal/lead-wizard/VideoKYCSection';
 
 type UploadedDoc = {
     id?: string;
@@ -266,13 +267,34 @@ export default function KYCPage() {
         [docStats],
     );
 
+    // Video KYC is required only for finance/NBFC leads — cash sales skip it.
+    // Mirror access-check's FINANCE_METHODS list so 'other_finance' and
+    // 'dealer_finance' both count, not just the literal 'finance'. (In practice
+    // every Step 2 KYC lead is one of these — access-check already blocks
+    // non-finance leads from reaching this page — but we keep the explicit
+    // check so a future cash path doesn't silently inherit a VKYC gate.)
+    const isFinanceLead = useMemo(() => {
+        const pm = (lead?.payment_method || '').toString().toLowerCase().trim();
+        return ['finance', 'other_finance', 'dealer_finance'].includes(pm);
+    }, [lead?.payment_method]);
+
+    const videoKycRow = useMemo(
+        () => verifications.find((v) => v.type === 'video_kyc'),
+        [verifications],
+    );
+    const videoKycVerified = useMemo(() => {
+        const s = (videoKycRow?.status || '').toLowerCase();
+        return ['verified', 'success', 'admin_verified', 'manual_verified'].includes(s);
+    }, [videoKycRow?.status]);
+
     const submitGate = useMemo(() => {
         const missing: string[] = [];
         if (!consentAdminVerified) missing.push('Wait for admin to verify customer consent');
         if (!allRequiredDocsUploaded) missing.push(`Upload ${docStats.pending.length || 'all'} required document${docStats.pending.length === 1 ? '' : 's'}`);
         if (lead?.coupon_status !== 'reserved') missing.push('Validate coupon');
+        if (isFinanceLead && !videoKycVerified) missing.push('Capture & wait for admin to verify Video KYC');
         return { ok: missing.length === 0, missing };
-    }, [consentAdminVerified, allRequiredDocsUploaded, docStats.pending.length, lead?.coupon_status]);
+    }, [consentAdminVerified, allRequiredDocsUploaded, docStats.pending.length, lead?.coupon_status, isFinanceLead, videoKycVerified]);
 
     // Surface dealer-uploaded additional documents inside the customer
     // verification table so admins/dealers see them alongside the standard
@@ -1074,6 +1096,21 @@ export default function KYCPage() {
                         proactively. These never gate Submit-for-Verification —
                         only the standard 9 required docs do. */}
                     <OtherDocumentsSection leadId={leadId} docFor="primary" scopeLabel="Primary Borrower (Customer)" onChanged={setAdditionalDocs} />
+
+                    {/* ─── Video KYC (finance leads only) ───────────────
+                        Passive liveness recording via Decentro Farsight.
+                        Capture happens here; admin reviews the recording
+                        from /admin/kyc-review/[leadId] before accepting. */}
+                    {isFinanceLead && (
+                        <VideoKYCSection
+                            leadId={leadId}
+                            customerName={lead?.name || lead?.full_name}
+                            status={videoKycRow?.status || 'pending'}
+                            failedReason={videoKycRow?.failed_reason || null}
+                            confidence={null}
+                            onSubmitted={() => loadPageData(true)}
+                        />
+                    )}
 
                     {/* ─── Verification Action ────────────────────────── */}
                     <SectionCard title="Verification Action" action={
