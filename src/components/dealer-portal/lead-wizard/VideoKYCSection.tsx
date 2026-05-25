@@ -104,8 +104,18 @@ export default function VideoKYCSection({
             if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
                 throw new Error('Camera access is not supported in this browser. Please use Chrome/Edge on a desktop or Safari on iOS 14.3+.');
             }
+            // Decentro Farsight rejects video below 800×600 with
+            // "Video resolution is lower than expected." Aim for 1280×720
+            // (HD, widely supported by webcams) and enforce 800×600 as a
+            // hard floor — if the device truly can't deliver that, fail
+            // here with a clear browser error instead of uploading a
+            // useless low-res clip that Decentro will reject after upload.
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+                video: {
+                    facingMode: 'user',
+                    width: { min: 800, ideal: 1280 },
+                    height: { min: 600, ideal: 720 },
+                },
                 audio: true,
             });
             mediaStreamRef.current = stream;
@@ -145,6 +155,7 @@ export default function VideoKYCSection({
                 name === 'NotAllowedError' ? 'Camera/microphone permission was denied. Allow access and try again.' :
                 name === 'NotFoundError' ? 'No camera or microphone was found on this device.' :
                 name === 'NotReadableError' ? 'The camera is already in use by another application.' :
+                name === 'OverconstrainedError' ? 'This camera cannot deliver the minimum required resolution (800×600). Try a different camera or device.' :
                 err?.message || 'Could not start recording.';
             setError(message);
             setPhase('error');
