@@ -88,6 +88,7 @@ export async function fetchKpis(f: DashboardFilters): Promise<AdminKpis> {
                     WHERE t.dealer_lead_id = dl.id
                       AND t.touchpoint_type = 'inside_sales_call'
                       AND t.call_status = 'connected'
+                      AND t.performed_at >= dl.assigned_at
                 ) ft ON TRUE
                 WHERE dl.assigned_at >= NOW() - INTERVAL '7 days'
                   AND ft.first_touch IS NOT NULL ${lf}
@@ -187,6 +188,7 @@ export async function fetchTeamPerformance(
                    WHERE t.dealer_lead_id = dl.id
                      AND t.touchpoint_type = 'inside_sales_call'
                      AND t.call_status = 'connected'
+                     AND t.performed_at >= dl.assigned_at
                ) ft ON TRUE
                WHERE dl.originator_id = u.id::text
                  AND ft.first_touch IS NOT NULL) AS avg_time_to_first_touch_hours,
