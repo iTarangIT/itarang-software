@@ -8,6 +8,7 @@ import PANCard from "./cards/PANCard";
 import BankCard from "./cards/BankCard";
 import CIBILCard from "./cards/CIBILCard";
 import RCCard from "./cards/RCCard";
+import VideoKYCCard from "./cards/VideoKYCCard";
 import ConsentPdfViewerModal from "./ConsentPdfViewerModal";
 import SupportingDocsPanel, {
   type SupportingDoc,
@@ -1207,6 +1208,24 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               adminAction: getVerification("rc")!.adminAction,
               adminActionNotes: getVerification("rc")!.adminActionNotes,
               apiResponse: getVerification("rc")!.apiResponse,
+            } : null}
+            onActionComplete={fetchData}
+          />
+
+          {/* Video KYC (Decentro passive liveness) */}
+          <VideoKYCCard
+            leadId={leadId}
+            applicant="primary"
+            existingVerification={getVerification("video_kyc") ? {
+              id: getVerification("video_kyc")!.id,
+              status: getVerification("video_kyc")!.status,
+              adminAction: getVerification("video_kyc")!.adminAction,
+              adminActionNotes: getVerification("video_kyc")!.adminActionNotes,
+              matchScore: getVerification("video_kyc")!.matchScore,
+              apiResponse: getVerification("video_kyc")!.apiResponse,
+              submittedAt: getVerification("video_kyc")!.submittedAt,
+              completedAt: getVerification("video_kyc")!.completedAt,
+              failedReason: getVerification("video_kyc")!.failedReason,
             } : null}
             onActionComplete={fetchData}
           />
