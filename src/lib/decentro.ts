@@ -15,6 +15,13 @@ const CLIENT_SECRET = process.env.DECENTRO_CLIENT_SECRET!;
 const MODULE_SECRET_KYC = process.env.DECENTRO_MODULE_SECRET_KYC;
 const MODULE_SECRET_BANKING = process.env.DECENTRO_MODULE_SECRET_BANKING;
 const MODULE_SECRET_CREDIT = process.env.DECENTRO_MODULE_SECRET_CREDIT;
+// Forensics module (face_match, video_liveness — /v2/kyc/forensics/*) lives on
+// a separate Decentro module from KYC OCR. Some tiers require an explicit
+// module_secret for it; others (e.g. the sandbox tier face_match is wired
+// against today) accept the call with no module_secret. Set this env var only
+// if Decentro tells you a Forensics-scoped secret is needed — otherwise leave
+// it unset so the videoLiveness() call mirrors faceMatch().
+const MODULE_SECRET_FORENSICS = process.env.DECENTRO_MODULE_SECRET_FORENSICS;
 const PROVIDER_SECRET = process.env.DECENTRO_PROVIDER_SECRET;
 
 function genRefId(): string {
@@ -247,16 +254,28 @@ export async function videoLiveness(
     form.append('consent_purpose', consentPurpose);
     form.append('video', video, filename);
 
+    // Forensics endpoints (face_match + video_liveness) authenticate with
+    // client_id + client_secret only on our tier — same as faceMatch() above.
+    // DO NOT fall back to MODULE_SECRET_KYC: that secret is scoped to the
+    // KYC OCR module, and sending it here makes Decentro reply with
+    // "Authentication failed for accessing the module".
+    // Only attach a module_secret if MODULE_SECRET_FORENSICS is explicitly
+    // configured (set this env var if Decentro tells you the Forensics
+    // module requires its own secret on your tier).
     const headers: Record<string, string> = {
         'client_id': CLIENT_ID,
         'client_secret': CLIENT_SECRET,
     };
-    if (isRealSecret(MODULE_SECRET_KYC)) {
-        headers['module_secret'] = MODULE_SECRET_KYC!;
+    if (isRealSecret(MODULE_SECRET_FORENSICS)) {
+        headers['module_secret'] = MODULE_SECRET_FORENSICS!;
     }
 
     const url = `${BASE_URL}/v2/kyc/forensics/video_liveness`;
-    console.log(`[Decentro VideoLiveness] POST ${url} size=${video.size}B file=${filename}`);
+    console.log(
+        `[Decentro VideoLiveness] POST ${url} size=${video.size}B file=${filename} module_secret=${
+            isRealSecret(MODULE_SECRET_FORENSICS) ? 'forensics' : 'none'
+        }`,
+    );
 
     const res = await fetch(url, { method: 'POST', headers, body: form });
     const json = await res.json();
