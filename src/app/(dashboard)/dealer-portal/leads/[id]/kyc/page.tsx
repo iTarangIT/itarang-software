@@ -14,7 +14,7 @@ import {
 } from '@/components/dealer-portal/lead-wizard/shared';
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
 import OtherDocumentsSection, { type RequestedDoc } from '@/components/dealer-portal/lead-wizard/OtherDocumentsSection';
-import VideoKYCSection from '@/components/dealer-portal/lead-wizard/VideoKYCSection';
+import ActiveVideoKYCSection from '@/components/dealer-portal/lead-wizard/ActiveVideoKYCSection';
 
 type UploadedDoc = {
     id?: string;
@@ -278,23 +278,23 @@ export default function KYCPage() {
         return ['finance', 'other_finance', 'dealer_finance'].includes(pm);
     }, [lead?.payment_method]);
 
-    const videoKycRow = useMemo(
-        () => verifications.find((v) => v.type === 'video_kyc'),
+    const activeVideoKycRow = useMemo(
+        () => verifications.find((v) => v.type === 'active_video_kyc'),
         [verifications],
     );
-    const videoKycVerified = useMemo(() => {
-        const s = (videoKycRow?.status || '').toLowerCase();
+    const activeVideoKycVerified = useMemo(() => {
+        const s = (activeVideoKycRow?.status || '').toLowerCase();
         return ['verified', 'success', 'admin_verified', 'manual_verified'].includes(s);
-    }, [videoKycRow?.status]);
+    }, [activeVideoKycRow?.status]);
 
     const submitGate = useMemo(() => {
         const missing: string[] = [];
         if (!consentAdminVerified) missing.push('Wait for admin to verify customer consent');
         if (!allRequiredDocsUploaded) missing.push(`Upload ${docStats.pending.length || 'all'} required document${docStats.pending.length === 1 ? '' : 's'}`);
         if (lead?.coupon_status !== 'reserved') missing.push('Validate coupon');
-        if (isFinanceLead && !videoKycVerified) missing.push('Capture & wait for admin to verify Video KYC');
+        if (isFinanceLead && !activeVideoKycVerified) missing.push('Send Video KYC link & wait for admin to verify');
         return { ok: missing.length === 0, missing };
-    }, [consentAdminVerified, allRequiredDocsUploaded, docStats.pending.length, lead?.coupon_status, isFinanceLead, videoKycVerified]);
+    }, [consentAdminVerified, allRequiredDocsUploaded, docStats.pending.length, lead?.coupon_status, isFinanceLead, activeVideoKycVerified]);
 
     // Surface dealer-uploaded additional documents inside the customer
     // verification table so admins/dealers see them alongside the standard
@@ -1098,17 +1098,15 @@ export default function KYCPage() {
                     <OtherDocumentsSection leadId={leadId} docFor="primary" scopeLabel="Primary Borrower (Customer)" onChanged={setAdditionalDocs} />
 
                     {/* ─── Video KYC (finance leads only) ───────────────
-                        Passive liveness recording via Decentro Farsight.
-                        Capture happens here; admin reviews the recording
-                        from /admin/kyc-review/[leadId] before accepting. */}
+                        Active liveness via Decentro Farsight. We SMS the
+                        customer a link to a Decentro-hosted interactive
+                        session. Admin reviews the per-image face match +
+                        liveliness / spoofing risk flags before accepting. */}
                     {isFinanceLead && (
-                        <VideoKYCSection
+                        <ActiveVideoKYCSection
                             leadId={leadId}
-                            customerName={lead?.name || lead?.full_name}
-                            status={videoKycRow?.status || 'pending'}
-                            failedReason={videoKycRow?.failed_reason || null}
-                            confidence={null}
-                            onSubmitted={() => loadPageData(true)}
+                            customerName={lead?.full_name || lead?.owner_name}
+                            customerPhone={lead?.phone || lead?.owner_contact}
                         />
                     )}
 

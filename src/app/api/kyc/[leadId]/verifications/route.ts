@@ -60,6 +60,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             cibil: 'CIBIL Score',
             photo: 'Photo Verification',
             video_kyc: 'Video KYC',
+            active_video_kyc: 'Video KYC',
             esign_consent: 'Customer Consent',
         };
 
@@ -73,6 +74,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
             cibil: 'Co-borrower CIBIL Score',
             photo: 'Co-borrower Photo Verification',
             video_kyc: 'Co-borrower Video KYC',
+            active_video_kyc: 'Co-borrower Video KYC',
             esign_consent: 'Co-borrower Consent',
             coborrower_aadhaar: 'Co-borrower Aadhaar Verification',
             coborrower_pan: 'Co-borrower PAN Verification',
