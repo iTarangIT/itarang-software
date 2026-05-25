@@ -194,16 +194,20 @@ export default function AdminKYCReviewPage() {
                                                 {lead.documents.map(doc => {
                                                     const isSignedConsent = doc.document_type === 'signed_consent';
                                                     const isVideoKyc = doc.document_type === 'video_kyc';
+                                                    const isActiveVideoKyc = doc.document_type === 'active_video_kyc';
                                                     const displayLabel = isSignedConsent
                                                         ? 'Signed Consent (DigiO)'
-                                                        : isVideoKyc
-                                                            ? 'Video KYC (Decentro)'
-                                                            : doc.document_type.replace(/_/g, ' ');
-                                                    // Both signed_consent and video_kyc are reviewed on the
-                                                    // per-lead case-review page (which renders the playback /
-                                                    // PDF + Accept/Reject buttons via dedicated cards). The
-                                                    // inline Review modal below only handles uploaded docs.
-                                                    const reviewOnCasePage = isSignedConsent || isVideoKyc;
+                                                        : isActiveVideoKyc
+                                                            ? 'Video KYC (Decentro · Active)'
+                                                            : isVideoKyc
+                                                                ? 'Video KYC (Decentro)'
+                                                                : doc.document_type.replace(/_/g, ' ');
+                                                    // signed_consent, video_kyc, and active_video_kyc are all
+                                                    // reviewed on the per-lead case-review page (which renders
+                                                    // playback / PDF / match table + Accept/Reject via
+                                                    // dedicated cards). The inline Review modal below only
+                                                    // handles uploaded docs.
+                                                    const reviewOnCasePage = isSignedConsent || isVideoKyc || isActiveVideoKyc;
                                                     return (
                                                     <tr key={doc.id} className="border-b border-gray-50">
                                                         <td className="py-3 px-3">
@@ -231,7 +235,7 @@ export default function AdminKYCReviewPage() {
                                                                             onClick={(e) => e.stopPropagation()}
                                                                             className="px-3 py-1 bg-[#0047AB] text-white rounded-lg text-[10px] font-bold hover:bg-[#003580]"
                                                                         >
-                                                                            {isVideoKyc ? 'Review Video' : 'Review Consent'}
+                                                                            {isActiveVideoKyc || isVideoKyc ? 'Review Video' : 'Review Consent'}
                                                                         </a>
                                                                     )
                                                                 ) : (
