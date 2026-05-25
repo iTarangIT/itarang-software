@@ -329,6 +329,95 @@ function videoKycToReviewDocument(v: VideoKycRow) {
   };
 }
 
+// Surface Decentro Active Video Liveness rows on the queue. Same shape as
+// video_kyc above — the case-review page is where the actual review happens;
+// the queue just needs to know the lead has something pending.
+async function fetchActiveVideoKycForFilter(filter: ReviewFilter) {
+  const baseQuery = db
+    .select({
+      id: kycVerifications.id,
+      lead_id: kycVerifications.lead_id,
+      applicant: kycVerifications.applicant,
+      status: kycVerifications.status,
+      admin_action: kycVerifications.admin_action,
+      api_response: kycVerifications.api_response,
+      submitted_at: kycVerifications.submitted_at,
+      completed_at: kycVerifications.completed_at,
+      created_at: kycVerifications.created_at,
+      updated_at: kycVerifications.updated_at,
+    })
+    .from(kycVerifications);
+
+  if (filter === "pending") {
+    return baseQuery
+      .where(
+        and(
+          eq(kycVerifications.verification_type, "active_video_kyc"),
+          eq(kycVerifications.status, "admin_review_pending"),
+          isNull(kycVerifications.admin_action),
+        ),
+      )
+      .orderBy(desc(kycVerifications.submitted_at))
+      .limit(200);
+  }
+
+  if (filter === "verified") {
+    return baseQuery
+      .where(
+        and(
+          eq(kycVerifications.verification_type, "active_video_kyc"),
+          eq(kycVerifications.admin_action, "accepted"),
+        ),
+      )
+      .orderBy(desc(kycVerifications.updated_at))
+      .limit(200);
+  }
+
+  if (filter === "rejected") {
+    return baseQuery
+      .where(
+        and(
+          eq(kycVerifications.verification_type, "active_video_kyc"),
+          eq(kycVerifications.admin_action, "rejected"),
+        ),
+      )
+      .orderBy(desc(kycVerifications.updated_at))
+      .limit(200);
+  }
+
+  return baseQuery
+    .where(eq(kycVerifications.verification_type, "active_video_kyc"))
+    .orderBy(desc(kycVerifications.updated_at))
+    .limit(200);
+}
+
+type ActiveVideoKycRow = Awaited<ReturnType<typeof fetchActiveVideoKycForFilter>>[number];
+
+function activeVideoKycToReviewDocument(v: ActiveVideoKycRow) {
+  let status: ApiDocumentStatus = "pending";
+  if (v.admin_action === "accepted") status = "verified";
+  else if (v.admin_action === "rejected") status = "rejected";
+
+  // No single playable URL — the per-image match images live inside
+  // api_response.results.videoFaceMatchResults. The queue's Eye button just
+  // opens the case-review page where the full table renders. Use an empty
+  // document_url so the queue UI doesn't try to render a broken video tag.
+  const uploadedAt = v.submitted_at ?? v.completed_at ?? v.created_at ?? new Date(0);
+  const reviewFor: ReviewFor =
+    v.applicant === "co_borrower" ? "co_borrower" : "primary";
+
+  return {
+    id: v.id,
+    lead_id: v.lead_id,
+    document_type: "active_video_kyc",
+    document_url: "",
+    status,
+    uploaded_at: uploadedAt,
+    ocr_data: null,
+    review_for: reviewFor,
+  };
+}
+
 function consentToReviewDocument(c: ConsentRow) {
   let status: ApiDocumentStatus = "pending";
   if (c.verified_at) status = "verified";
@@ -366,14 +455,16 @@ export async function GET(req: NextRequest) {
     const filter = parseReviewFilter(searchParams.get("status"));
     const search = searchParams.get("search")?.trim().toLowerCase() ?? "";
 
-    const [primaryDocumentRows, coBorrowerDocumentRows, pendingConsentRows, videoKycRows] = await Promise.all([
+    const [primaryDocumentRows, coBorrowerDocumentRows, pendingConsentRows, videoKycRows, activeVideoKycRows] = await Promise.all([
       fetchPrimaryDocuments(filter),
       fetchCoBorrowerDocuments(filter),
       fetchPendingConsentsForFilter(filter),
       fetchVideoKycForFilter(filter),
+      fetchActiveVideoKycForFilter(filter),
     ]);
 
     const videoKycReviewDocs = videoKycRows.map(videoKycToReviewDocument);
+    const activeVideoKycReviewDocs = activeVideoKycRows.map(activeVideoKycToReviewDocument);
 
     const allDocuments = [
       ...primaryDocumentRows.map((doc) => toReviewDocument(doc, "primary")),
@@ -382,6 +473,7 @@ export async function GET(req: NextRequest) {
       ),
       ...pendingConsentRows.map(consentToReviewDocument),
       ...videoKycReviewDocs,
+      ...activeVideoKycReviewDocs,
     ].sort(
       (left, right) =>
         new Date(right.uploaded_at ?? 0).getTime() -
@@ -410,9 +502,10 @@ export async function GET(req: NextRequest) {
       .where(inArray(adminVerificationQueue.lead_id, candidateLeadIds));
 
     const videoKycLeadIds = new Set(videoKycReviewDocs.map((d) => d.lead_id));
+    const activeVideoKycLeadIds = new Set(activeVideoKycReviewDocs.map((d) => d.lead_id));
     const submittedLeadIds = new Set(submittedRows.map((row) => row.lead_id));
     const leadIds = candidateLeadIds.filter(
-      (id) => submittedLeadIds.has(id) || videoKycLeadIds.has(id),
+      (id) => submittedLeadIds.has(id) || videoKycLeadIds.has(id) || activeVideoKycLeadIds.has(id),
     );
 
     if (leadIds.length === 0) {
