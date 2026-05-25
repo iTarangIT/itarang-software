@@ -1,8 +1,9 @@
 "use client";
 
-// BRD §0.11 Zone 1 — the KPI strip. 8 metric tiles + the logging-compliance
-// tile, rendered as StatCards with a staggered mount. Exception metrics
-// (escalations, dropouts, stale, compliance) tint when non-zero.
+// BRD §0.11 Zone 1 — the KPI strip. Split into two visually grouped tiers:
+//   • Activity: 5 primary throughput/conversion metrics (5-col grid)
+//   • Exceptions: 4 alert metrics that tint when non-zero (4-col grid)
+// Two clean rows beat a ragged 5+4 single grid on wide screens.
 
 import {
     Activity,
@@ -19,24 +20,31 @@ import type { AdminKpis } from "@/lib/admin/types";
 
 function fmtHours(h: number | null): string {
     if (h == null) return "—";
-    if (h < 1) return `${Math.round(h * 60)}m`;
-    return `${h.toFixed(1)}h`;
+    // Defensive: pre-assignment touchpoints used to leak a negative value here
+    // (fixed at the SQL layer). Clamp at zero so any future regression renders
+    // a harmless "0m" rather than a confusing "-238m".
+    const v = h < 0 ? 0 : h;
+    if (v < 1) return `${Math.round(v * 60)}m`;
+    return `${v.toFixed(1)}h`;
 }
 function fmtPct(r: number | null): string {
     if (r == null) return "—";
     return `${Math.round(r * 100)}%`;
 }
 
-export function KpiStrip({ kpis }: { kpis: AdminKpis }) {
-    const flag = (n: number, tone: StatTone): StatTone => (n > 0 ? tone : "neutral");
+type Tile = {
+    label: string;
+    value: string | number;
+    icon: React.ComponentType<{ className?: string }>;
+    tone: StatTone;
+    hint?: string;
+};
 
-    const tiles: {
-        label: string;
-        value: string | number;
-        icon: React.ComponentType<{ className?: string }>;
-        tone: StatTone;
-        hint?: string;
-    }[] = [
+export function KpiStrip({ kpis }: { kpis: AdminKpis }) {
+    const flag = (n: number, tone: StatTone): StatTone =>
+        n > 0 ? tone : "neutral";
+
+    const activity: Tile[] = [
         {
             label: "Unassigned Queue",
             value: kpis.unassigned_queue,
@@ -68,6 +76,9 @@ export function KpiStrip({ kpis }: { kpis: AdminKpis }) {
             icon: TrendingUp,
             tone: "neutral",
         },
+    ];
+
+    const exceptions: Tile[] = [
         {
             label: "Pending Escalations",
             value: kpis.pending_escalations,
@@ -96,18 +107,52 @@ export function KpiStrip({ kpis }: { kpis: AdminKpis }) {
     ];
 
     return (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            {tiles.map((t, i) => (
-                <StatCard
-                    key={t.label}
-                    index={i}
-                    label={t.label}
-                    value={t.value}
-                    icon={t.icon}
-                    tone={t.tone}
-                    hint={t.hint}
-                />
-            ))}
+        <div className="space-y-5">
+            <KpiSection
+                title="Activity"
+                tiles={activity}
+                cols="lg:grid-cols-3 xl:grid-cols-5"
+                offset={0}
+            />
+            <KpiSection
+                title="Exceptions"
+                tiles={exceptions}
+                cols="lg:grid-cols-2 xl:grid-cols-4"
+                offset={activity.length}
+            />
         </div>
+    );
+}
+
+function KpiSection({
+    title,
+    tiles,
+    cols,
+    offset,
+}: {
+    title: string;
+    tiles: Tile[];
+    cols: string;
+    offset: number;
+}) {
+    return (
+        <section>
+            <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                {title}
+            </h2>
+            <div className={`grid grid-cols-2 gap-3 sm:grid-cols-3 ${cols}`}>
+                {tiles.map((t, i) => (
+                    <StatCard
+                        key={t.label}
+                        index={offset + i}
+                        label={t.label}
+                        value={t.value}
+                        icon={t.icon}
+                        tone={t.tone}
+                        hint={t.hint}
+                    />
+                ))}
+            </div>
+        </section>
     );
 }

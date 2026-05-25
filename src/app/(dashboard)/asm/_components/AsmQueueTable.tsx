@@ -18,7 +18,13 @@ import { StatusChip } from "@/app/(dashboard)/inside-sales/_components/StatusChi
 import { IntentBadge } from "@/app/(dashboard)/inside-sales/_components/IntentBadge";
 import { InterestChip } from "@/app/(dashboard)/inside-sales/_components/InterestChip";
 import { OwnerIndicator } from "@/app/(dashboard)/inside-sales/_components/OwnerIndicator";
-import type { AsmQueueRow, AsmQueueTab, VisitStatus } from "@/lib/asm/types";
+import { VISIT_OUTCOME_LABELS } from "@/lib/asm/types";
+import type {
+    AsmQueueRow,
+    AsmQueueTab,
+    VisitOutcome,
+    VisitStatus,
+} from "@/lib/asm/types";
 
 type Props = {
     tab: AsmQueueTab;
@@ -47,6 +53,25 @@ function VisitStatusChip({ status }: { status: VisitStatus | null | undefined })
     return (
         <span className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide border ${c.bg} ${c.text} ${c.border}`}>
             {c.label}
+        </span>
+    );
+}
+
+const OUTCOME_META: Record<VisitOutcome, { bg: string; text: string; border: string }> = {
+    productive: { bg: "bg-emerald-50", text: "text-emerald-700", border: "border-emerald-200" },
+    commercials_progressed: { bg: "bg-sky-50", text: "text-sky-700", border: "border-sky-200" },
+    dealer_not_present: { bg: "bg-gray-50", text: "text-gray-600", border: "border-gray-200" },
+    dealer_uninterested: { bg: "bg-rose-50", text: "text-rose-700", border: "border-rose-200" },
+    scheduling_issue: { bg: "bg-amber-50", text: "text-amber-700", border: "border-amber-200" },
+    other: { bg: "bg-gray-50", text: "text-gray-600", border: "border-gray-200" },
+};
+
+function OutcomeChip({ outcome }: { outcome: VisitOutcome | null | undefined }) {
+    if (!outcome) return <span className="text-xs text-gray-400">—</span>;
+    const c = OUTCOME_META[outcome];
+    return (
+        <span className={`inline-flex items-center whitespace-nowrap rounded-md border px-1.5 py-0.5 text-[10px] font-semibold ${c.bg} ${c.text} ${c.border}`}>
+            {VISIT_OUTCOME_LABELS[outcome]}
         </span>
     );
 }
@@ -94,6 +119,7 @@ export function AsmQueueTable({
                             <th className="text-left px-4 py-3 font-semibold">Region</th>
                             <th className="text-left px-4 py-3 font-semibold">Lead Status</th>
                             <th className="text-left px-4 py-3 font-semibold">Visit</th>
+                            <th className="text-left px-4 py-3 font-semibold">Outcome</th>
                             <th className="text-left px-4 py-3 font-semibold">Scheduled</th>
                             <th className="text-left px-4 py-3 font-semibold">Interest / AI</th>
                             <th className="text-left px-4 py-3 font-semibold">Owner</th>
@@ -102,7 +128,7 @@ export function AsmQueueTable({
                     <tbody className="divide-y divide-gray-100">
                         {loading && rows.length === 0 && (
                             <tr>
-                                <td colSpan={8} className="px-4 py-12 text-center text-gray-400">
+                                <td colSpan={9} className="px-4 py-12 text-center text-gray-400">
                                     <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
                                     Loading queue…
                                 </td>
@@ -110,7 +136,7 @@ export function AsmQueueTable({
                         )}
                         {!loading && rows.length === 0 && (
                             <tr>
-                                <td colSpan={8} className="px-4 py-16 text-center text-gray-400">
+                                <td colSpan={9} className="px-4 py-16 text-center text-gray-400">
                                     <InboxIcon className="h-8 w-8 mx-auto mb-2" />
                                     {tab === "today"
                                         ? "No visits scheduled for today."
@@ -157,6 +183,9 @@ export function AsmQueueTable({
                                     </td>
                                     <td className="px-4 py-3 align-top">
                                         <VisitStatusChip status={row.visit_status} />
+                                    </td>
+                                    <td className="px-4 py-3 align-top">
+                                        <OutcomeChip outcome={row.visit_outcome} />
                                     </td>
                                     <td className="px-4 py-3 align-top text-xs text-gray-700">
                                         {row.scheduled_date ? (
