@@ -7,13 +7,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import {
-    TOUCHPOINT_TYPE,
     CALL_STATUS,
     type TouchpointType,
     type CallStatus,
 } from "@/lib/lifecycle/touchpointTypes";
 import { LEAD_STATUS, type LeadStatus } from "@/lib/lifecycle/transitions";
 import type { LeadDetailLead } from "@/lib/inside-sales/types";
+import {
+    useVisitForm,
+    VisitFields,
+} from "@/app/(dashboard)/asm/_components/VisitFields";
+import type { VisitNextAction } from "@/lib/asm/types";
 
 type Props = {
     open: boolean;
@@ -23,6 +27,15 @@ type Props = {
     onSuccess: () => void;
     onStaleConflict: (info: { currentOwnerName?: string | null; currentUpdatedAt?: string | null }) => void;
     updatedAt: string | null;
+    /**
+     * "asm" unlocks the "visit" touchpoint type, which swaps the body for the
+     * full visit form and saves a real lead_visits row. Defaults to
+     * "inside_sales" so the inside-sales lead detail is unchanged.
+     */
+    context?: "inside_sales" | "asm";
+    /** Called after a "visit"-type save so the caller can chain into the
+     *  Convert / Lost / Escalate modal (same contract as LogVisitModal). */
+    onVisitSuccess?: (result: { next_action: VisitNextAction }) => void;
 };
 
 const REP_TYPES: TouchpointType[] = [
@@ -31,7 +44,17 @@ const REP_TYPES: TouchpointType[] = [
     "status_change_note",
 ];
 
-export function LogTouchpointModal({ open, onClose, leadId, lead, onSuccess, onStaleConflict, updatedAt }: Props) {
+export function LogTouchpointModal({
+    open,
+    onClose,
+    leadId,
+    lead,
+    onSuccess,
+    onStaleConflict,
+    updatedAt,
+    context = "inside_sales",
+    onVisitSuccess,
+}: Props) {
     const [type, setType] = useState<TouchpointType>("inside_sales_call");
     const [callStatus, setCallStatus] = useState<CallStatus | "">("");
     const [duration, setDuration] = useState("");
@@ -41,6 +64,13 @@ export function LogTouchpointModal({ open, onClose, leadId, lead, onSuccess, onS
     const [toStatus, setToStatus] = useState<LeadStatus | "">("");
     const [followUpAt, setFollowUpAt] = useState("");
     const [submitting, setSubmitting] = useState(false);
+
+    // ASM-only "visit" branch — owns the visit form state independently.
+    const visitForm = useVisitForm(open);
+    const isVisit = type === "visit";
+
+    const typeOptions: TouchpointType[] =
+        context === "asm" ? [...REP_TYPES, "visit"] : REP_TYPES;
 
     // Every lead status except New_Unassigned — the initial, pre-assignment
     // state, which a lead can never transition back into. The server still
@@ -61,8 +91,10 @@ export function LogTouchpointModal({ open, onClose, leadId, lead, onSuccess, onS
         setSubmitting(false);
     };
 
+    const busy = submitting || visitForm.submitting;
+
     const handleClose = () => {
-        if (submitting) return;
+        if (busy) return;
         reset();
         onClose();
     };
@@ -113,26 +145,56 @@ export function LogTouchpointModal({ open, onClose, leadId, lead, onSuccess, onS
         }
     };
 
+    // Visit-type save posts a real lead_visits row via the visit API.
+    const handleVisitSave = async () => {
+        const result = await visitForm.submit(leadId);
+        if (result) {
+            reset();
+            onVisitSuccess?.(result);
+        }
+    };
+
     return (
         <Modal
             open={open}
             onClose={handleClose}
             title="Log Touchpoint"
             subtitle={lead.dealer_name ?? lead.shop_name ?? leadId}
-            width="md"
-            closeOnBackdrop={!submitting}
+            width={isVisit ? "lg" : "md"}
+            closeOnBackdrop={!busy}
             footer={
                 <>
-                    <Button type="button" variant="outline" onClick={handleClose} disabled={submitting}>
+                    <Button type="button" variant="outline" onClick={handleClose} disabled={busy}>
                         Cancel
                     </Button>
-                    <Button type="button" onClick={submit} disabled={submitting}>
-                        {submitting ? "Saving…" : "Save touchpoint"}
+                    <Button
+                        type="button"
+                        onClick={(e) => {
+                            if (isVisit) void handleVisitSave();
+                            else void submit(e);
+                        }}
+                        disabled={busy}
+                    >
+                        {busy
+                            ? "Saving…"
+                            : isVisit
+                                ? "Save visit"
+                                : "Save touchpoint"}
                     </Button>
                 </>
             }
         >
-            <form onSubmit={submit} className="space-y-4">
+            <form
+                onSubmit={(e) => {
+                    if (isVisit) {
+                        e.preventDefault();
+                        void handleVisitSave();
+                    } else {
+                        void submit(e);
+                    }
+                }}
+                className="space-y-4"
+            >
                 <div>
                     <Label>Touchpoint type</Label>
                     <select
@@ -140,96 +202,102 @@ export function LogTouchpointModal({ open, onClose, leadId, lead, onSuccess, onS
                         value={type}
                         onChange={(e) => setType(e.target.value as TouchpointType)}
                     >
-                        {(REP_TYPES.length ? REP_TYPES : TOUCHPOINT_TYPE).map((t) => (
+                        {typeOptions.map((t) => (
                             <option key={t} value={t}>{t.replaceAll("_", " ")}</option>
                         ))}
                     </select>
                 </div>
 
-                {type === "inside_sales_call" && (
-                    <div className="grid grid-cols-2 gap-3">
+                {isVisit ? (
+                    <VisitFields form={visitForm} />
+                ) : (
+                    <>
+                        {type === "inside_sales_call" && (
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <Label>Call status</Label>
+                                    <select
+                                        className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
+                                        value={callStatus}
+                                        onChange={(e) => setCallStatus(e.target.value as CallStatus | "")}
+                                    >
+                                        <option value="">— select —</option>
+                                        {CALL_STATUS.map((c) => (
+                                            <option key={c} value={c}>{c.replaceAll("_", " ")}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <Label>Duration (sec)</Label>
+                                    <Input
+                                        type="number"
+                                        min={0}
+                                        value={duration}
+                                        onChange={(e) => setDuration(e.target.value)}
+                                        className="mt-1"
+                                    />
+                                </div>
+                            </div>
+                        )}
+
                         <div>
-                            <Label>Call status</Label>
-                            <select
-                                className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
-                                value={callStatus}
-                                onChange={(e) => setCallStatus(e.target.value as CallStatus | "")}
-                            >
-                                <option value="">— select —</option>
-                                {CALL_STATUS.map((c) => (
-                                    <option key={c} value={c}>{c.replaceAll("_", " ")}</option>
-                                ))}
-                            </select>
+                            <Label>Remarks <span className="text-rose-600">*</span></Label>
+                            <textarea
+                                className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm min-h-[88px]"
+                                value={remarks}
+                                onChange={(e) => setRemarks(e.target.value)}
+                                placeholder="What happened in this interaction?"
+                            />
                         </div>
+
+                        <label className="flex items-center gap-2 text-sm text-gray-700">
+                            <input
+                                type="checkbox"
+                                checked={isEngaged}
+                                onChange={(e) => setIsEngaged(e.target.checked)}
+                            />
+                            Mark as engaged touchpoint
+                            <span className="text-[11px] text-gray-500">(qualifies a lead to advance from Assigned_Not_Contacted → Under_Discussion)</span>
+                        </label>
+
+                        <label className="flex items-center gap-2 text-sm text-gray-700 pt-1">
+                            <input
+                                type="checkbox"
+                                checked={changeStatus}
+                                onChange={(e) => setChangeStatus(e.target.checked)}
+                            />
+                            Update lead status with this touchpoint
+                        </label>
+                        {changeStatus && (
+                            <div>
+                                <Label>New status</Label>
+                                <select
+                                    className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
+                                    value={toStatus}
+                                    onChange={(e) => setToStatus(e.target.value as LeadStatus | "")}
+                                >
+                                    <option value="">— select —</option>
+                                    {statusTargets.map((s) => (
+                                        <option key={s} value={s}>{s}</option>
+                                    ))}
+                                </select>
+                                <p className="text-[11px] text-gray-500 mt-1">
+                                    Server validates against the transition map (BRD §0.7). Invalid transitions return an error.
+                                </p>
+                            </div>
+                        )}
+
                         <div>
-                            <Label>Duration (sec)</Label>
+                            <Label>Set next follow-up (optional)</Label>
                             <Input
-                                type="number"
-                                min={0}
-                                value={duration}
-                                onChange={(e) => setDuration(e.target.value)}
+                                type="datetime-local"
+                                value={followUpAt}
+                                onChange={(e) => setFollowUpAt(e.target.value)}
                                 className="mt-1"
                             />
                         </div>
-                    </div>
+                    </>
                 )}
-
-                <div>
-                    <Label>Remarks <span className="text-rose-600">*</span></Label>
-                    <textarea
-                        className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm min-h-[88px]"
-                        value={remarks}
-                        onChange={(e) => setRemarks(e.target.value)}
-                        placeholder="What happened in this interaction?"
-                    />
-                </div>
-
-                <label className="flex items-center gap-2 text-sm text-gray-700">
-                    <input
-                        type="checkbox"
-                        checked={isEngaged}
-                        onChange={(e) => setIsEngaged(e.target.checked)}
-                    />
-                    Mark as engaged touchpoint
-                    <span className="text-[11px] text-gray-500">(qualifies a lead to advance from Assigned_Not_Contacted → Under_Discussion)</span>
-                </label>
-
-                <label className="flex items-center gap-2 text-sm text-gray-700 pt-1">
-                    <input
-                        type="checkbox"
-                        checked={changeStatus}
-                        onChange={(e) => setChangeStatus(e.target.checked)}
-                    />
-                    Update lead status with this touchpoint
-                </label>
-                {changeStatus && (
-                    <div>
-                        <Label>New status</Label>
-                        <select
-                            className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
-                            value={toStatus}
-                            onChange={(e) => setToStatus(e.target.value as LeadStatus | "")}
-                        >
-                            <option value="">— select —</option>
-                            {statusTargets.map((s) => (
-                                <option key={s} value={s}>{s}</option>
-                            ))}
-                        </select>
-                        <p className="text-[11px] text-gray-500 mt-1">
-                            Server validates against the transition map (BRD §0.7). Invalid transitions return an error.
-                        </p>
-                    </div>
-                )}
-
-                <div>
-                    <Label>Set next follow-up (optional)</Label>
-                    <Input
-                        type="datetime-local"
-                        value={followUpAt}
-                        onChange={(e) => setFollowUpAt(e.target.value)}
-                        className="mt-1"
-                    />
-                </div>
             </form>
         </Modal>
     );

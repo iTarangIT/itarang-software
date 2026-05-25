@@ -173,6 +173,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin",
         },
         {
+          id: "sh-leads-info",
+          label: "Leads Info",
+          icon: ListChecks,
+          href: "/admin/leads-info",
+        },
+        {
           id: "sh-escalations",
           label: "Escalations",
           icon: AlertTriangle,
@@ -411,6 +417,12 @@ const roleNavigation: Record<string, any[]> = {
     {
       section: "LEAD MANAGEMENT",
       items: [
+        {
+          id: "admin-leads-info",
+          label: "Leads Info",
+          icon: ListChecks,
+          href: "/admin/leads-info",
+        },
         {
           id: "admin-escalations",
           label: "Escalations",

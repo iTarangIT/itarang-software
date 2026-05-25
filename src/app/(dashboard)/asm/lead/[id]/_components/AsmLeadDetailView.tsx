@@ -161,6 +161,8 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 onSuccess={onActionSuccess}
                 onStaleConflict={onStaleConflict}
                 updatedAt={updatedAt}
+                context="asm"
+                onVisitSuccess={onVisitSuccess}
             />
             <UpdateCommercialsModal
                 open={activeModal === "commercials"}

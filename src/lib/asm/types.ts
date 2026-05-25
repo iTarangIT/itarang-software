@@ -40,6 +40,18 @@ export const VISIT_OUTCOME = [
 ] as const;
 export type VisitOutcome = (typeof VISIT_OUTCOME)[number];
 
+// User-facing outcome labels. The auto-engage mechanics are an internal
+// implementation detail (see ENGAGED_OUTCOMES) and are deliberately not
+// surfaced in these labels.
+export const VISIT_OUTCOME_LABELS: Record<VisitOutcome, string> = {
+    productive: "Productive",
+    dealer_not_present: "Dealer not present",
+    dealer_uninterested: "Dealer uninterested",
+    commercials_progressed: "Commercials progressed",
+    scheduling_issue: "Scheduling issue",
+    other: "Other",
+};
+
 export const VISIT_NEXT_ACTION = [
     "next_visit",
     "convert",
@@ -68,6 +80,7 @@ export type AsmQueueRow = {
     last_touchpoint_at: string | null;
     assigned_at: string | null;
     visit_status: VisitStatus | null;
+    visit_outcome: VisitOutcome | null;
     scheduled_date: string | null;
     actual_visit_date: string | null;
     closed_at: string | null;
