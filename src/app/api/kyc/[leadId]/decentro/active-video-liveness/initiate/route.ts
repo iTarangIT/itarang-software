@@ -96,11 +96,32 @@ export async function POST(
         const decentroTxnId = decentroRes.decentroTxnId || '';
 
         if (!ok || !videoLivenessUrl || !decentroTxnId) {
+            const rawMsg = decentroRes.message || '';
+            const responseCode = decentroRes.responseCode || '';
+            // Decentro returns "Requested endpoint not found." when the SKU
+            // isn't provisioned on the account. Surface a more actionable
+            // message so the dealer/admin doesn't think the code is broken.
+            const isSkuMissing =
+                /requested endpoint not found/i.test(rawMsg) ||
+                responseCode === 'E00000' ||
+                responseCode === 'E00007';
+            const friendlyMessage = isSkuMissing
+                ? 'Decentro Active Video Liveness is not enabled on this account. Ask Decentro support to provision the Active Liveness SKU for your client_id, then retry. (Decentro response: "' + rawMsg + '")'
+                : (rawMsg || 'Decentro Active Liveness initiate failed');
+
+            console.error('[Active VKYC initiate] Decentro rejected:', {
+                responseCode,
+                status: decentroRes.status,
+                message: rawMsg,
+            });
+
             return NextResponse.json(
                 {
                     success: false,
                     error: {
-                        message: decentroRes.message || 'Decentro Active Liveness initiate failed',
+                        message: friendlyMessage,
+                        code: responseCode || null,
+                        sku_missing: isSkuMissing,
                         decentro: decentroRes,
                     },
                 },
