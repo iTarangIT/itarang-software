@@ -193,9 +193,17 @@ export default function AdminKYCReviewPage() {
                                             <tbody>
                                                 {lead.documents.map(doc => {
                                                     const isSignedConsent = doc.document_type === 'signed_consent';
+                                                    const isVideoKyc = doc.document_type === 'video_kyc';
                                                     const displayLabel = isSignedConsent
                                                         ? 'Signed Consent (DigiO)'
-                                                        : doc.document_type.replace(/_/g, ' ');
+                                                        : isVideoKyc
+                                                            ? 'Video KYC (Decentro)'
+                                                            : doc.document_type.replace(/_/g, ' ');
+                                                    // Both signed_consent and video_kyc are reviewed on the
+                                                    // per-lead case-review page (which renders the playback /
+                                                    // PDF + Accept/Reject buttons via dedicated cards). The
+                                                    // inline Review modal below only handles uploaded docs.
+                                                    const reviewOnCasePage = isSignedConsent || isVideoKyc;
                                                     return (
                                                     <tr key={doc.id} className="border-b border-gray-50">
                                                         <td className="py-3 px-3">
@@ -216,14 +224,14 @@ export default function AdminKYCReviewPage() {
                                                                         <Eye className="w-3.5 h-3.5" />
                                                                     </a>
                                                                 )}
-                                                                {isSignedConsent ? (
+                                                                {reviewOnCasePage ? (
                                                                     doc.status !== 'verified' && (
                                                                         <a
                                                                             href={`/admin/kyc-review/${lead.lead_id}`}
                                                                             onClick={(e) => e.stopPropagation()}
                                                                             className="px-3 py-1 bg-[#0047AB] text-white rounded-lg text-[10px] font-bold hover:bg-[#003580]"
                                                                         >
-                                                                            Review Consent
+                                                                            {isVideoKyc ? 'Review Video' : 'Review Consent'}
                                                                         </a>
                                                                     )
                                                                 ) : (
