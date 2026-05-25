@@ -58,7 +58,7 @@ function tabOrder(tab: AsmQueueTab) {
 // multiple visits.
 const LATEST_VISIT_JOIN = sql`
     LEFT JOIN LATERAL (
-        SELECT visit_status, scheduled_date, actual_visit_date
+        SELECT visit_status, visit_outcome, scheduled_date, actual_visit_date
         FROM lead_visits
         WHERE dealer_lead_id = dl.id
         ORDER BY COALESCE(actual_visit_date, scheduled_date, created_at) DESC
@@ -98,6 +98,7 @@ export async function fetchAsmQueueRows({
             dl.last_touchpoint_at,
             dl.assigned_at,
             lv.visit_status,
+            lv.visit_outcome,
             lv.scheduled_date::text AS scheduled_date,
             lv.actual_visit_date::text AS actual_visit_date,
             dl.closed_at

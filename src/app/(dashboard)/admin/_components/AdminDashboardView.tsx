@@ -65,7 +65,7 @@ export function AdminDashboardView({ readOnly }: { readOnly: boolean }) {
             {data && (
                 <>
                     <KpiStrip kpis={data.kpis} />
-                    <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[1.5fr_1fr]">
+                    <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[1.5fr_1fr]">
                         <TeamPerformanceTable rows={data.team} />
                         <AlertPanels
                             counts={data.alert_counts}
@@ -88,21 +88,28 @@ export function AdminDashboardView({ readOnly }: { readOnly: boolean }) {
 function DashboardSkeleton() {
     return (
         <div className="space-y-5">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                {Array.from({ length: 9 }).map((_, i) => (
-                    <div
-                        key={i}
-                        className="rounded-xl border border-border bg-surface p-4 shadow-card"
-                    >
-                        <Skeleton className="h-3 w-2/3" />
-                        <Skeleton className="mt-3 h-7 w-1/2" />
-                    </div>
-                ))}
-            </div>
-            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.5fr_1fr]">
+            <KpiSkeletonRow cols="xl:grid-cols-5" tiles={5} />
+            <KpiSkeletonRow cols="xl:grid-cols-4" tiles={4} />
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.5fr_1fr]">
                 <Skeleton className="h-80 rounded-xl" />
                 <Skeleton className="h-80 rounded-xl" />
             </div>
+        </div>
+    );
+}
+
+function KpiSkeletonRow({ cols, tiles }: { cols: string; tiles: number }) {
+    return (
+        <div className={`grid grid-cols-2 gap-3 sm:grid-cols-3 ${cols}`}>
+            {Array.from({ length: tiles }).map((_, i) => (
+                <div
+                    key={i}
+                    className="rounded-xl border border-border bg-surface p-4 shadow-card"
+                >
+                    <Skeleton className="h-3 w-2/3" />
+                    <Skeleton className="mt-3 h-7 w-1/2" />
+                </div>
+            ))}
         </div>
     );
 }
