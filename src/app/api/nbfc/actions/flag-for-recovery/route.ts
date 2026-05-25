@@ -24,6 +24,13 @@ const Body = z.object({
   loan_sanction_id: z.string().min(1),
   reason: z.string().min(20),
   battery_serial: z.string().optional(),
+  context: z
+    .object({
+      entity_type: z.enum(["lead", "loan"]),
+      lead_id: z.string().min(1).optional(),
+      note: z.string().max(500).optional(),
+    })
+    .optional(),
 });
 
 const RISK_HEAD_ROLES = new Set(["risk_head", "nbfc_risk_head"]);
@@ -74,6 +81,7 @@ export async function POST(req: NextRequest) {
       reason: parsed.data.reason,
       actor_user_id: actor.user_id ?? null,
       battery_serial: parsed.data.battery_serial ?? null,
+      context: parsed.data.context,
     });
 
     return NextResponse.json(result, { status: 200 });
