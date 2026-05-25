@@ -18,6 +18,7 @@ import ResponsiveTable, {
 import ScoreBadge from "@/components/nbfc-portal/ScoreBadge";
 import { SendPaymentReminderButton } from "@/components/nbfc-portal/SendPaymentReminderButton";
 import { FlagForRecoveryDialog } from "@/components/nbfc-portal/FlagForRecoveryDialog";
+import LeadAuditTimeline from "@/components/nbfc-portal/audit-log/LeadAuditTimeline";
 
 export type LeadRow = {
   loan_application_id: string;
@@ -234,7 +235,13 @@ function LeadDetailDrawer({
                     Payment reminder
                     <span className="font-normal"> · single approval (§6.1.6)</span>
                   </p>
-                  <SendPaymentReminderButton loanSanctionId={row.sanction_id} />
+                  <SendPaymentReminderButton
+                    loanSanctionId={row.sanction_id}
+                    context={{
+                      entity_type: "lead",
+                      lead_id: row.lead_id ?? row.loan_application_id,
+                    }}
+                  />
                 </div>
                 <div className="border-t border-[color:var(--color-border)] pt-3">
                   <p className="mb-1.5 text-xs font-semibold text-[color:var(--color-ink-muted)]">
@@ -252,6 +259,15 @@ function LeadDetailDrawer({
               </div>
             </section>
           ) : null}
+
+          {row.sanction_id ? (
+            <section>
+              <h3 className="section-label mb-2">Audit Timeline</h3>
+              <div className="rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-bg)] p-3">
+                <LeadAuditTimeline entityId={row.sanction_id} />
+              </div>
+            </section>
+          ) : null}
         </div>
       </aside>
     </div>
@@ -261,6 +277,10 @@ function LeadDetailDrawer({
           open={flagOpen}
           onClose={() => setFlagOpen(false)}
           batterySerial={row.battery_serial}
+          context={{
+            entity_type: "lead",
+            lead_id: row.lead_id ?? row.loan_application_id,
+          }}
         />
       ) : null}
     </>

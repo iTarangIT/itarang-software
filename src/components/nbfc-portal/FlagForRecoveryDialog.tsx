@@ -20,6 +20,8 @@ interface Props {
     flagged_at: string;
   }) => void;
   batterySerial?: string | null;
+  /** Optional entity context, threaded into the audit-log payload. */
+  context?: { entity_type: "lead" | "loan"; lead_id?: string };
 }
 
 export function FlagForRecoveryDialog({
@@ -28,6 +30,7 @@ export function FlagForRecoveryDialog({
   onClose,
   onFlagged,
   batterySerial,
+  context,
 }: Props) {
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -48,6 +51,7 @@ export function FlagForRecoveryDialog({
           loan_sanction_id: loanSanctionId,
           reason: reason.trim(),
           battery_serial: batterySerial ?? undefined,
+          ...(context ? { context } : {}),
         }),
       });
       const body = await res.json();

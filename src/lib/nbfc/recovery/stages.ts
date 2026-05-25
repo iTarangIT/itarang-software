@@ -18,6 +18,7 @@
 import { db } from "@/lib/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { nbfcAuditLog, nbfcRecoveryPipeline } from "@/lib/db/schema";
+import { publishLotFromRecovery } from "@/lib/nbfc/auction/createLot";
 
 // ---------------------------------------------------------------------------
 // Stage enum + transition graph
@@ -139,6 +140,13 @@ export interface TransitionResult {
   id: string;
   stage: string;
   updated_at: string;
+  /** Populated when target_stage='ready_for_auction' triggered a lot publish. */
+  published_lot?: {
+    lot_id: string;
+    lot_code: string;
+    base_price: number;
+    ends_at: string;
+  };
 }
 
 export async function transitionStage(
@@ -178,40 +186,55 @@ export async function transitionStage(
 
   const now = new Date();
 
-  // 3. Update the row.
-  const [updated] = await db
-    .update(nbfcRecoveryPipeline)
-    .set({ stage: input.target_stage, updated_at: now })
-    .where(
-      and(
-        eq(nbfcRecoveryPipeline.id, input.recovery_pipeline_id),
-        eq(nbfcRecoveryPipeline.tenant_id, input.tenant_id),
-      ),
-    )
-    .returning({
-      id: nbfcRecoveryPipeline.id,
-      stage: nbfcRecoveryPipeline.stage,
-      updated_at: nbfcRecoveryPipeline.updated_at,
+  // 3-5. Stage update + audit + (when promoting to auction) lot publish run
+  // inside a single transaction so the recovery pipeline never lands on
+  // "ready_for_auction" without a matching auction_lots row.
+  const { updated, publishedLot } = await db.transaction(async (tx) => {
+    const [updatedRow] = await tx
+      .update(nbfcRecoveryPipeline)
+      .set({ stage: input.target_stage, updated_at: now })
+      .where(
+        and(
+          eq(nbfcRecoveryPipeline.id, input.recovery_pipeline_id),
+          eq(nbfcRecoveryPipeline.tenant_id, input.tenant_id),
+        ),
+      )
+      .returning({
+        id: nbfcRecoveryPipeline.id,
+        stage: nbfcRecoveryPipeline.stage,
+        updated_at: nbfcRecoveryPipeline.updated_at,
+      });
+
+    let published: TransitionResult["published_lot"];
+    if (input.target_stage === "ready_for_auction") {
+      published = await publishLotFromRecovery({
+        tenant_id: input.tenant_id,
+        recovery_pipeline_id: input.recovery_pipeline_id,
+        executor: tx,
+      });
+    }
+
+    await tx.insert(nbfcAuditLog).values({
+      tenant_id: input.tenant_id,
+      user_id: input.actor_user_id,
+      action_type: "recovery_stage_transition",
+      action_id: row.id, // links audit entry back to pipeline row
+      before_state: {
+        recovery_pipeline_id: row.id,
+        battery_serial: row.battery_serial,
+        stage: row.stage,
+      },
+      after_state: {
+        recovery_pipeline_id: row.id,
+        battery_serial: row.battery_serial,
+        stage: input.target_stage,
+        note: input.note ?? null,
+        published_lot: published ?? null,
+      },
+      created_at: now,
     });
 
-  // 4. Append immutable audit-log row capturing before/after.
-  await db.insert(nbfcAuditLog).values({
-    tenant_id: input.tenant_id,
-    user_id: input.actor_user_id,
-    action_type: "recovery_stage_transition",
-    action_id: row.id, // links audit entry back to pipeline row
-    before_state: {
-      recovery_pipeline_id: row.id,
-      battery_serial: row.battery_serial,
-      stage: row.stage,
-    },
-    after_state: {
-      recovery_pipeline_id: row.id,
-      battery_serial: row.battery_serial,
-      stage: input.target_stage,
-      note: input.note ?? null,
-    },
-    created_at: now,
+    return { updated: updatedRow, publishedLot: published };
   });
 
   return {
@@ -221,5 +244,6 @@ export async function transitionStage(
       ? updated.updated_at
       : new Date(updated.updated_at as unknown as string)
     ).toISOString(),
+    published_lot: publishedLot,
   };
 }
