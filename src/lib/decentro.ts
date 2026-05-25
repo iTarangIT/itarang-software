@@ -286,6 +286,157 @@ export async function videoLiveness(
     return json;
 }
 
+// ─── Active Video Liveness (Farsight) ───────────────────────────────────────
+// Two-step Decentro flow:
+//   1. POST /v2/kyc/forensics/active_video_liveness/initiate
+//      → returns videoLivenessUrl + decentroTxnId
+//   2. POST /v2/kyc/forensics/active_video_liveness/:decentroTxnId
+//      → returns videoFaceMatchResults, audioMatchResults, staticRisk,
+//        prerecordedRisk, liveliness, geoLocation
+// Auth: client_id + client_secret only on our tier — Forensics module.
+// Set DECENTRO_MODULE_SECRET_FORENSICS only if Decentro tells you the
+// Forensics module requires its own secret on your tier.
+
+function forensicsHeaders(): Record<string, string> {
+    const h: Record<string, string> = {
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+        'Content-Type': 'application/json',
+        'accept': 'application/json',
+    };
+    if (isRealSecret(MODULE_SECRET_FORENSICS)) {
+        h['module_secret'] = MODULE_SECRET_FORENSICS!;
+    }
+    return h;
+}
+
+export interface ActiveLivenessInitiateParams {
+    reference_id: string;
+    redirect_url: string;
+    callback_url: string;
+    face_image_urls?: string[];
+    face_image_base64s?: string[];
+    consent_purpose?: string;
+}
+
+export interface ActiveLivenessInitiateResult {
+    decentroTxnId?: string;
+    status?: string;
+    responseStatus?: string;
+    responseCode?: string;
+    videoLivenessUrl?: string;
+    message?: string;
+    [k: string]: unknown;
+}
+
+export async function activeVideoLivenessInitiate(
+    p: ActiveLivenessInitiateParams,
+): Promise<ActiveLivenessInitiateResult> {
+    const totalImages =
+        (p.face_image_urls?.length || 0) + (p.face_image_base64s?.length || 0);
+    if (totalImages === 0) {
+        return {
+            status: 'FAILURE',
+            responseCode: 'CLIENT_ERROR',
+            message: 'At least one face_image_url or face_image_base64 is required',
+        };
+    }
+    if (totalImages > 4) {
+        return {
+            status: 'FAILURE',
+            responseCode: 'CLIENT_ERROR',
+            message: 'Total face images (urls + base64s) must not exceed 4',
+        };
+    }
+
+    const body: Record<string, unknown> = {
+        consent: true,
+        purpose: p.consent_purpose || 'Identity Verification',
+        reference_id: p.reference_id,
+        redirect_url: p.redirect_url,
+        callback_url: p.callback_url,
+    };
+    if (p.face_image_urls && p.face_image_urls.length > 0) {
+        body.face_image_urls = p.face_image_urls;
+    }
+    if (p.face_image_base64s && p.face_image_base64s.length > 0) {
+        body.face_image_base64s = p.face_image_base64s;
+    }
+
+    const url = `${BASE_URL}/v2/kyc/forensics/active_video_liveness/initiate`;
+    console.log(
+        `[Decentro ActiveLiveness Initiate] POST ${url} ref=${p.reference_id} urls=${p.face_image_urls?.length || 0} base64s=${p.face_image_base64s?.length || 0} module_secret=${
+            isRealSecret(MODULE_SECRET_FORENSICS) ? 'forensics' : 'none'
+        }`,
+    );
+
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: forensicsHeaders(),
+        body: JSON.stringify(body),
+    });
+    const json = await res.json();
+    console.log(
+        `[Decentro ActiveLiveness Initiate] Response status=${res.status}:`,
+        JSON.stringify(json).slice(0, 1200),
+    );
+    return json;
+}
+
+export interface ActiveLivenessResultData {
+    videoFaceMatchResults?: Array<{
+        originalImage?: string;
+        results?: { matchScore?: number; covariance?: number };
+        finalMatchImage?: string;
+    }>;
+    audioMatchResults?: { matchScore?: number };
+    staticRisk?: string | boolean;
+    prerecordedRisk?: string | boolean;
+    liveliness?: string;
+    geoLocation?: { latitude?: string; longitude?: string };
+}
+
+export interface ActiveLivenessResult {
+    decentroTxnId?: string;
+    status?: string;
+    responseStatus?: string;
+    responseCode?: string;
+    message?: string;
+    data?: ActiveLivenessResultData;
+    [k: string]: unknown;
+}
+
+export async function activeVideoLivenessResult(
+    decentroTxnId: string,
+    reference_id: string,
+    consent_purpose: string = 'Identity Verification Results',
+): Promise<ActiveLivenessResult> {
+    const body = {
+        consent: true,
+        purpose: consent_purpose,
+        reference_id,
+    };
+
+    const url = `${BASE_URL}/v2/kyc/forensics/active_video_liveness/${encodeURIComponent(decentroTxnId)}`;
+    console.log(
+        `[Decentro ActiveLiveness Result] POST ${url} ref=${reference_id} module_secret=${
+            isRealSecret(MODULE_SECRET_FORENSICS) ? 'forensics' : 'none'
+        }`,
+    );
+
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: forensicsHeaders(),
+        body: JSON.stringify(body),
+    });
+    const json = await res.json();
+    console.log(
+        `[Decentro ActiveLiveness Result] Response status=${res.status}:`,
+        JSON.stringify(json).slice(0, 1500),
+    );
+    return json;
+}
+
 // ─── Document Classification ──────────────────────────────────────────────────
 
 export type ClassificationDocType = 'PAN' | 'AADHAAR' | 'AADHAAR_BACK' | 'DRIVING_LICENSE' | 'VOTERID' | 'PASSPORT' | 'CHEQUE' | 'BANK_STATEMENT' | 'RC' | 'UNKNOWN';
