@@ -1066,21 +1066,58 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           the reserved coupon and flips metadata.couponStatus from 'reserved'
           to 'used'. Until then (no coupon, or coupon merely 'reserved' after
           validate-coupon), the admin sees a placeholder — early review of
-          documents the dealer might still be replacing is not allowed. */}
+          documents the dealer might still be replacing is not allowed.
+          Exception: Video KYC must be admin-verified BEFORE the dealer can
+          submit (it's a precondition in the dealer's submitGate). So if a
+          video_kyc verification row exists, render that one card here even
+          in the awaiting-dealer state; the rest of the cards stay hidden. */}
       {metadata?.couponStatus !== "used" ? (
-        <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-sm">
-          <div className="w-12 h-12 rounded-full bg-amber-50 ring-1 ring-amber-200 mx-auto mb-3 flex items-center justify-center">
-            <svg className="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
+        <>
+          <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-sm">
+            <div className="w-12 h-12 rounded-full bg-amber-50 ring-1 ring-amber-200 mx-auto mb-3 flex items-center justify-center">
+              <svg className="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <p className="text-sm font-bold text-gray-900">Awaiting Dealer Submission</p>
+            <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
+              {metadata?.couponStatus === "reserved"
+                ? "Dealer has validated the coupon but has not yet clicked Submit for Verification. Documents will appear here once the dealer formally submits."
+                : "Documents and verification cards will appear here once the dealer uploads documents, validates the coupon, and clicks Submit for Verification."}
+            </p>
           </div>
-          <p className="text-sm font-bold text-gray-900">Awaiting Dealer Submission</p>
-          <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
-            {metadata?.couponStatus === "reserved"
-              ? "Dealer has validated the coupon but has not yet clicked Submit for Verification. Documents will appear here once the dealer formally submits."
-              : "Documents and verification cards will appear here once the dealer uploads documents, validates the coupon, and clicks Submit for Verification."}
-          </p>
-        </div>
+
+          {getVerification("video_kyc") && (
+            <div className="mt-6">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xs font-bold uppercase tracking-wide text-gray-500">
+                  Pre-submission review required
+                </span>
+                <span className="text-[10px] text-gray-400">
+                  · Verify this before the dealer can submit
+                </span>
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
+                <VideoKYCCard
+                  leadId={leadId}
+                  applicant="primary"
+                  existingVerification={{
+                    id: getVerification("video_kyc")!.id,
+                    status: getVerification("video_kyc")!.status,
+                    adminAction: getVerification("video_kyc")!.adminAction,
+                    adminActionNotes: getVerification("video_kyc")!.adminActionNotes,
+                    matchScore: getVerification("video_kyc")!.matchScore,
+                    apiResponse: getVerification("video_kyc")!.apiResponse,
+                    submittedAt: getVerification("video_kyc")!.submittedAt,
+                    completedAt: getVerification("video_kyc")!.completedAt,
+                    failedReason: getVerification("video_kyc")!.failedReason,
+                  }}
+                  onActionComplete={fetchData}
+                />
+              </div>
+            </div>
+          )}
+        </>
       ) : (<>
       {/* Tab Navigation */}
       <div className="inline-flex gap-1 bg-gray-100 p-1.5 rounded-2xl border border-gray-200 shadow-sm">
