@@ -9,6 +9,7 @@ import {
   consentRecords,
   leads,
   kycDocuments,
+  kycVerifications,
   users,
 } from "@/lib/db/schema";
 import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
@@ -231,6 +232,103 @@ async function fetchPendingConsentsForFilter(filter: ReviewFilter) {
 
 type ConsentRow = Awaited<ReturnType<typeof fetchPendingConsentsForFilter>>[number];
 
+// Surface Video KYC recordings (kyc_verifications rows with verification_type
+// = 'video_kyc') on the admin queue the same way signed consents are surfaced.
+// The actual playback + accept/reject UI lives on /admin/kyc-review/[leadId];
+// this list view treats each row as a virtual "video_kyc" document so the
+// lead appears in the queue and the reviewer knows there's a recording to
+// review. Pending video_kyc must surface even when no admin_verification_queue
+// row exists — the dealer's Submit-for-Verification gate is blocked on
+// VKYC being admin-verified, so without bypassing the queue gate the admin
+// never sees the lead (chicken-and-egg).
+async function fetchVideoKycForFilter(filter: ReviewFilter) {
+  const baseQuery = db
+    .select({
+      id: kycVerifications.id,
+      lead_id: kycVerifications.lead_id,
+      applicant: kycVerifications.applicant,
+      status: kycVerifications.status,
+      admin_action: kycVerifications.admin_action,
+      api_response: kycVerifications.api_response,
+      submitted_at: kycVerifications.submitted_at,
+      completed_at: kycVerifications.completed_at,
+      created_at: kycVerifications.created_at,
+      updated_at: kycVerifications.updated_at,
+    })
+    .from(kycVerifications);
+
+  if (filter === "pending") {
+    return baseQuery
+      .where(
+        and(
+          eq(kycVerifications.verification_type, "video_kyc"),
+          eq(kycVerifications.status, "admin_review_pending"),
+          isNull(kycVerifications.admin_action),
+        ),
+      )
+      .orderBy(desc(kycVerifications.submitted_at))
+      .limit(200);
+  }
+
+  if (filter === "verified") {
+    return baseQuery
+      .where(
+        and(
+          eq(kycVerifications.verification_type, "video_kyc"),
+          eq(kycVerifications.admin_action, "accepted"),
+        ),
+      )
+      .orderBy(desc(kycVerifications.updated_at))
+      .limit(200);
+  }
+
+  if (filter === "rejected") {
+    return baseQuery
+      .where(
+        and(
+          eq(kycVerifications.verification_type, "video_kyc"),
+          eq(kycVerifications.admin_action, "rejected"),
+        ),
+      )
+      .orderBy(desc(kycVerifications.updated_at))
+      .limit(200);
+  }
+
+  // "all"
+  return baseQuery
+    .where(eq(kycVerifications.verification_type, "video_kyc"))
+    .orderBy(desc(kycVerifications.updated_at))
+    .limit(200);
+}
+
+type VideoKycRow = Awaited<ReturnType<typeof fetchVideoKycForFilter>>[number];
+
+function videoKycToReviewDocument(v: VideoKycRow) {
+  let status: ApiDocumentStatus = "pending";
+  if (v.admin_action === "accepted") status = "verified";
+  else if (v.admin_action === "rejected") status = "rejected";
+
+  const url =
+    typeof (v.api_response as { video_url?: unknown } | null)?.video_url === "string"
+      ? ((v.api_response as { video_url: string }).video_url)
+      : "";
+
+  const uploadedAt = v.submitted_at ?? v.completed_at ?? v.created_at ?? new Date(0);
+  const reviewFor: ReviewFor =
+    v.applicant === "co_borrower" ? "co_borrower" : "primary";
+
+  return {
+    id: v.id,
+    lead_id: v.lead_id,
+    document_type: "video_kyc",
+    document_url: url,
+    status,
+    uploaded_at: uploadedAt,
+    ocr_data: null,
+    review_for: reviewFor,
+  };
+}
+
 function consentToReviewDocument(c: ConsentRow) {
   let status: ApiDocumentStatus = "pending";
   if (c.verified_at) status = "verified";
@@ -268,11 +366,14 @@ export async function GET(req: NextRequest) {
     const filter = parseReviewFilter(searchParams.get("status"));
     const search = searchParams.get("search")?.trim().toLowerCase() ?? "";
 
-    const [primaryDocumentRows, coBorrowerDocumentRows, pendingConsentRows] = await Promise.all([
+    const [primaryDocumentRows, coBorrowerDocumentRows, pendingConsentRows, videoKycRows] = await Promise.all([
       fetchPrimaryDocuments(filter),
       fetchCoBorrowerDocuments(filter),
       fetchPendingConsentsForFilter(filter),
+      fetchVideoKycForFilter(filter),
     ]);
+
+    const videoKycReviewDocs = videoKycRows.map(videoKycToReviewDocument);
 
     const allDocuments = [
       ...primaryDocumentRows.map((doc) => toReviewDocument(doc, "primary")),
@@ -280,6 +381,7 @@ export async function GET(req: NextRequest) {
         toReviewDocument(doc, "co_borrower"),
       ),
       ...pendingConsentRows.map(consentToReviewDocument),
+      ...videoKycReviewDocs,
     ].sort(
       (left, right) =>
         new Date(right.uploaded_at ?? 0).getTime() -
@@ -297,13 +399,21 @@ export async function GET(req: NextRequest) {
     // row. Without this filter, drafts (uploaded docs / pending consents that
     // have not been submitted) leak onto the admin queue and reviewers waste
     // time triaging cases the dealer hasn't finalised yet.
+    //
+    // Exception: leads with a pending video_kyc bypass this gate. The dealer's
+    // Submit-for-Verification is itself blocked on VKYC being admin-verified
+    // first (chicken-and-egg). Surface these leads to the admin so they can
+    // review the recording and unblock the dealer.
     const submittedRows = await db
       .select({ lead_id: adminVerificationQueue.lead_id })
       .from(adminVerificationQueue)
       .where(inArray(adminVerificationQueue.lead_id, candidateLeadIds));
 
+    const videoKycLeadIds = new Set(videoKycReviewDocs.map((d) => d.lead_id));
     const submittedLeadIds = new Set(submittedRows.map((row) => row.lead_id));
-    const leadIds = candidateLeadIds.filter((id) => submittedLeadIds.has(id));
+    const leadIds = candidateLeadIds.filter(
+      (id) => submittedLeadIds.has(id) || videoKycLeadIds.has(id),
+    );
 
     if (leadIds.length === 0) {
       return NextResponse.json({ success: true, data: [] });

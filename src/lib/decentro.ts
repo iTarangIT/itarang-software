@@ -221,6 +221,52 @@ export async function faceMatch(image1: Blob, image2: Blob) {
     return res.json();
 }
 
+// ─── Video Liveness (Farsight Face Forensics) ───────────────────────────────
+// POST /v2/kyc/forensics/video_liveness — passive liveness check on a recorded
+// short selfie video. Returns { status: SUCCESS|FAILURE, confidence: 0.0-1.0 }.
+// Auth: client_id + client_secret + module_secret (KYC tier).
+
+export interface VideoLivenessResult {
+    decentroTxnId?: string;
+    status?: string;
+    responseStatus?: string;
+    responseCode?: string;
+    message?: string;
+    data?: { status?: string; confidence?: string | number };
+    responseKey?: string;
+}
+
+export async function videoLiveness(
+    video: Blob,
+    consentPurpose: string = 'Customer video liveness for loan KYC',
+    filename: string = 'liveness.webm',
+): Promise<VideoLivenessResult> {
+    const form = new FormData();
+    form.append('reference_id', genRefId());
+    form.append('consent', 'true');
+    form.append('consent_purpose', consentPurpose);
+    form.append('video', video, filename);
+
+    const headers: Record<string, string> = {
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+    };
+    if (isRealSecret(MODULE_SECRET_KYC)) {
+        headers['module_secret'] = MODULE_SECRET_KYC!;
+    }
+
+    const url = `${BASE_URL}/v2/kyc/forensics/video_liveness`;
+    console.log(`[Decentro VideoLiveness] POST ${url} size=${video.size}B file=${filename}`);
+
+    const res = await fetch(url, { method: 'POST', headers, body: form });
+    const json = await res.json();
+    console.log(
+        `[Decentro VideoLiveness] Response status=${res.status}:`,
+        JSON.stringify(json).slice(0, 1000),
+    );
+    return json;
+}
+
 // ─── Document Classification ──────────────────────────────────────────────────
 
 export type ClassificationDocType = 'PAN' | 'AADHAAR' | 'AADHAAR_BACK' | 'DRIVING_LICENSE' | 'VOTERID' | 'PASSPORT' | 'CHEQUE' | 'BANK_STATEMENT' | 'RC' | 'UNKNOWN';
