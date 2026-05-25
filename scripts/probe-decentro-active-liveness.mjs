@@ -150,4 +150,63 @@ if (MODULE_SECRET_KYC) {
     console.log('\n=== Attempt 3 (control): skipped (DECENTRO_MODULE_SECRET_KYC not set) ===');
 }
 
+// ─── Probe the RESULTS endpoint too ────────────────────────────────────────
+// /v2/kyc/forensics/active_video_liveness/:decentro_transaction_id
+// Use an obviously fake txn id. If the SKU is provisioned, Decentro will say
+// "transaction not found" or similar. If the SKU is unprovisioned, we'll get
+// the same E00000 / "Requested endpoint not found" we got on initiate —
+// proving the entire Active Liveness product line is not on this account.
+async function probeResults(label, headers) {
+    const fakeTxnId = 'PROBE000000000000000000000000FAKE';
+    const ref = genRef();
+    const body = {
+        consent: true,
+        purpose: 'Identity Verification Results',
+        reference_id: ref,
+    };
+    const url = `${BASE_URL}/v2/kyc/forensics/active_video_liveness/${fakeTxnId}`;
+    console.log(`\n=== ${label} ===`);
+    console.log('POST', url);
+    console.log('Headers (keys only):', Object.keys(headers));
+    console.log('Body.reference_id:  ', ref);
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', accept: 'application/json', ...headers },
+            body: JSON.stringify(body),
+        });
+        const text = await res.text();
+        console.log('HTTP status:', res.status);
+        console.log('Response headers:');
+        for (const [k, v] of res.headers.entries()) {
+            if (/^(x-decentro|kong|x-ratelimit|content-type|content-length)/i.test(k)) {
+                console.log(`  ${k}: ${v}`);
+            }
+        }
+        console.log('Response body (raw, first 2KB):');
+        console.log(text.slice(0, 2048));
+        try {
+            const json = JSON.parse(text);
+            const code = json?.responseCode || '';
+            const msg = (json?.message || '').toLowerCase();
+            if (code === 'E00000' || msg.includes('requested endpoint not found')) {
+                console.log('Verdict: SAME error as initiate — SKU is not provisioned account-wide.');
+            } else if (msg.includes('not found') || msg.includes('invalid') || msg.includes('transaction')) {
+                console.log('Verdict: DIFFERENT error — SKU is routed; "transaction not found" or similar is the expected response for a fake txn id, which means initiate failing with E00000 may be a separate, surprising bug.');
+            } else {
+                console.log(`Verdict: Other rejection — responseCode=${code} message="${json?.message}"`);
+            }
+        } catch {
+            console.log('Verdict: Body was not JSON.');
+        }
+    } catch (err) {
+        console.error('Network/fetch error:', err);
+    }
+}
+
+await probeResults('Attempt 4: results-fetch endpoint with fake txn id', {
+    client_id: CLIENT_ID,
+    client_secret: CLIENT_SECRET,
+});
+
 console.log('\nDone.');
