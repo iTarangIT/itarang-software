@@ -3,9 +3,8 @@ import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { coBorrowers, kycVerifications } from "@/lib/db/schema";
-import { fetchCibilReport } from "@/lib/decentro";
 import { interpretCibilScore } from "@/lib/kyc/cibil-interpreter";
-import { humanizeCibilError } from "@/lib/kyc/cibil-friendly-errors";
+import { getCreditBureauProvider } from "@/lib/credit-bureau";
 import {
   createWorkflowId,
   requireAdminAppUser,
@@ -59,7 +58,8 @@ export async function POST(
     const address = cb.address || cb.current_address || "";
     const pincode = address.match(/\b\d{6}\b/)?.[0] || "";
 
-    const decentroRes = await fetchCibilReport({
+    // Provider-routed (BRD Addendum §4.3). Null → Equifax via DEFAULT_PLATFORM_BUREAU.
+    const result = await getCreditBureauProvider(null).fetchReport({
       name,
       pan: cb.pan_no,
       dob,
@@ -68,46 +68,28 @@ export async function POST(
       pincode,
       address_type: "H",
     });
+    const decentroRes = result.raw as Record<string, any> | null;
 
     console.log("[Co-Borrower CIBIL Report] Response:", JSON.stringify(decentroRes));
 
     const now = new Date();
-    const responseData = decentroRes?.data || {};
+    const responseData = (decentroRes?.data as Record<string, any>) || {};
 
-    const responseKey = decentroRes?.responseKey || "";
-    const isErrorResponse = responseKey.startsWith("error_");
-    const apiCallSucceeded =
-      !isErrorResponse &&
-      (responseKey === "success_credit_report" ||
-        responseKey === "success" ||
-        decentroRes?.status === "SUCCESS");
+    const consumerNotFound = result.error?.category === 'consumer_not_found';
 
     const reportDataLst = responseData.cCRResponse?.cIRReportDataLst;
     const bureauError =
       Array.isArray(reportDataLst) && reportDataLst[0]?.error
         ? reportDataLst[0].error
         : null;
-    const consumerNotFound = bureauError?.errorDesc === "Consumer not found in bureau";
-
     const reportData =
       (Array.isArray(reportDataLst) && !bureauError && reportDataLst[0]?.cIRReportData) ||
       responseData.cCRResponse?.cIRReportData ||
       responseData.cCRResponse ||
       responseData;
 
-    const scoreDetails = reportData.scoreDetails || responseData.scoreDetails;
-    const rawScore =
-      (Array.isArray(scoreDetails) && scoreDetails.length > 0
-        ? scoreDetails[0]?.value
-        : null) ||
-      reportData.creditScore?.score ||
-      responseData.creditScore?.score ||
-      responseData.credit_score ||
-      responseData.score ||
-      null;
-    const score = rawScore !== null && rawScore !== undefined ? Number(rawScore) : null;
-
-    const overallSuccess = apiCallSucceeded && !consumerNotFound && score !== null && !isNaN(score);
+    const score = result.score;
+    const overallSuccess = result.error === null && score !== null;
     const interpretation = score !== null && !isNaN(score) ? interpretCibilScore(score) : null;
 
     const idContact = reportData.iDAndContactInfo || {};
@@ -283,16 +265,6 @@ export async function POST(
       });
     }
 
-    const friendly =
-      overallSuccess || consumerNotFound
-        ? null
-        : humanizeCibilError({
-            endpoint: "report",
-            responseKey,
-            rawMessage: decentroRes?.message ?? null,
-            bureauErrorDesc: bureauError?.errorDesc ?? null,
-          });
-
     return NextResponse.json({
       success: overallSuccess || consumerNotFound,
       data: {
@@ -307,12 +279,12 @@ export async function POST(
         generatedAt: now.toISOString(),
         rawResponse: decentroRes,
       },
-      ...(friendly
+      ...(result.error && !consumerNotFound
         ? {
             error: {
-              message: friendly.message,
-              suggestion: friendly.suggestion,
-              code: friendly.code,
+              message: result.error.message,
+              suggestion: result.error.suggestion,
+              code: result.error.category,
             },
           }
         : {}),

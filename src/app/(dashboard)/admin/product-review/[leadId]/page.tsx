@@ -380,23 +380,19 @@ export default function AdminProductReviewPage() {
           Download Profile is always available once Step 4 is submitted and never
           changes lead status. Sanction/Reject only appear while the lead is
           awaiting the loan decision. */}
+      {/* BRD Addendum V0.1 §5.1 — admin Loan Sanctioned / Loan Rejected
+          buttons are removed. Loan sanctioning is now an NBFC action inside
+          the Acquire workspace (Phase 4/5). Download Profile is kept; it's
+          an admin tool, not a product-decision action. */}
       {selection && mode === "idle" && (
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {leadStatus === "pending_final_approval" && (
-            <>
-              <button
-                onClick={() => setMode("sanction")}
-                className="px-5 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700"
-              >
-                Loan Sanctioned
-              </button>
-              <button
-                onClick={() => setMode("reject")}
-                className="px-5 py-2 bg-red-600 text-white rounded font-bold hover:bg-red-700"
-              >
-                Loan Rejected
-              </button>
-            </>
+            <div className="flex-1 min-w-[260px] px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg text-xs font-medium text-blue-800">
+              <strong>Loan decision moved to the NBFC.</strong> Sanction and
+              rejection are no longer admin actions — the selected lending
+              partner(s) will verify the customer and submit firm offers inside
+              the NBFC Acquire workspace (Addendum §5.1, §6).
+            </div>
           )}
           <a
             href={`/api/admin/lead/${leadId}/download-profile`}
