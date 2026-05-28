@@ -435,8 +435,21 @@ jobs:
             exec 2>&1
             cd "$APP_DIR"
 
-            # Web: reload, falling back to delete+start if reload errors.
-            if pm2 describe sandbox-web >/dev/null 2>&1; then
+            # Detect whether the pm2 daemon's IN-MEMORY config for sandbox-web
+            # still matches what's on disk. `pm2 reload` re-execs the process
+            # using the CACHED config from when it was originally started — it
+            # does NOT re-read ecosystem.sandbox.config.js. So any change to
+            # script/args/env in the ecosystem config requires delete+start,
+            # not reload. Without this guard, the first deploy under the new
+            # workflow would silently keep running with the old args
+            # (`.next/standalone/server.js`) and never pick up `current/...`.
+            DESIRED_HASH=$(node -e "const c=require('./ecosystem.sandbox.config.js'); const w=c.apps.find(a=>a.name==='sandbox-web'); console.log(JSON.stringify({script:w.script,args:w.args,env:w.env,cwd:w.cwd}))" | sha256sum | cut -d' ' -f1)
+            RUNNING_HASH=$(cat shared/.pm2-web-config-hash 2>/dev/null || echo "")
+            echo "DESIRED_HASH=$DESIRED_HASH"
+            echo "RUNNING_HASH=$RUNNING_HASH"
+
+            if pm2 describe sandbox-web >/dev/null 2>&1 && [ "$DESIRED_HASH" = "$RUNNING_HASH" ]; then
+              # In-memory config matches disk — safe to reload.
               if ! pm2 reload sandbox-web --update-env; then
                 echo "pm2 reload failed — falling back to delete+start"
                 pm2 delete sandbox-web 2>/dev/null || true
@@ -445,10 +458,15 @@ jobs:
                 pm2 start ecosystem.sandbox.config.js --only sandbox-web
               fi
             else
+              # Either pm2 has no sandbox-web yet, or the ecosystem config
+              # changed since last deploy — must delete+start to pick it up.
+              echo "Forcing delete+start (config changed or first-ever deploy)"
+              pm2 delete sandbox-web 2>/dev/null || true
               fuser -k "${SANDBOX_PORT}/tcp" 2>/dev/null || true
               sleep 2
               pm2 start ecosystem.sandbox.config.js --only sandbox-web
             fi
+            echo "$DESIRED_HASH" > shared/.pm2-web-config-hash
 
             # Worker: reload only if deps changed OR src/lib/queue/** changed
             # in this commit. Today's per-deploy delete+start was disrupting
