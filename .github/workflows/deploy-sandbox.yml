@@ -117,19 +117,27 @@ jobs:
           echo "standalone tree top-level:"
           ls -la .next/standalone | head -20
 
-      - name: Verify sharp native binary made it into the standalone trace
+      - name: Verify native binaries made it into the standalone trace
         run: |
-          # sharp is the only native dep. Standalone tracing copies it into
-          # .next/standalone/node_modules/sharp. If the .node file isn't
-          # there, the VPS will fail at require()-time. Fail-fast here.
-          SHARP_BIN=$(find .next/standalone/node_modules/sharp -name '*.node' 2>/dev/null | head -1 || true)
-          if [ -z "$SHARP_BIN" ]; then
-            echo "❌ no sharp .node binary in standalone tree — VPS would fail at require()"
-            find .next/standalone/node_modules/sharp -maxdepth 3 -type d 2>/dev/null || echo "(no sharp dir at all)"
+          # sharp is the only native dep in this repo. In sharp 0.34+ the
+          # binary lives in a SPLIT package — node_modules/@img/sharp-<plat>/
+          # — not in node_modules/sharp/ itself. Just check for any .node
+          # file anywhere under the standalone node_modules tree; if there's
+          # at least one, native bindings made it through.
+          NODE_BINS=$(find .next/standalone/node_modules -name '*.node' 2>/dev/null || true)
+          if [ -z "$NODE_BINS" ]; then
+            echo "❌ no .node binaries anywhere in standalone tree — VPS would fail at require()"
+            echo "--- standalone node_modules top level ---"
+            ls -la .next/standalone/node_modules/ 2>/dev/null | head -40
+            echo "--- @img/ contents (if any) ---"
+            ls -la .next/standalone/node_modules/@img/ 2>/dev/null || echo "(no @img dir)"
             exit 1
           fi
-          echo "sharp binary: $SHARP_BIN"
-          file "$SHARP_BIN" || true
+          echo "Native binaries in standalone tree:"
+          echo "$NODE_BINS"
+          echo ""
+          echo "--- file(1) on each ---"
+          echo "$NODE_BINS" | while read -r b; do file "$b" 2>/dev/null || true; done
 
       - name: Verify chunk manifest (runner tree)
         run: |
