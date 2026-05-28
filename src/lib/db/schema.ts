@@ -407,6 +407,14 @@ export const leads = pgTable("leads", {
   coupon_status: varchar("coupon_status", { length: 20 }),
   borrower_consent_status: varchar("borrower_consent_status", { length: 30 }).default('awaiting_signature'),
   sold_at: timestamp("sold_at", { withTimezone: true }),
+  // E-130 — Addendum V0.1 §3.2, §3.3. Captured at Step 1 for finance leads;
+  // resident_status feeds the BRE's Owned/Rented housing-variant match;
+  // insurance flags are informational (no BRE gate today). Required at the
+  // API layer for finance payment methods; nullable in DB so cash leads and
+  // legacy rows stay valid.
+  resident_status: varchar("resident_status", { length: 20 }),
+  has_health_insurance: boolean("has_health_insurance"),
+  has_life_insurance: boolean("has_life_insurance"),
 });
 
 // E-116 — extra products attached to a lead via the new-lead form's
@@ -3018,9 +3026,22 @@ export const productSelections = pgTable("product_selections", {
 
   // Lifecycle
   payment_mode: varchar("payment_mode", { length: 20 }), // cash, finance
-  admin_decision: varchar("admin_decision", { length: 30 }).default("pending"), // pending, dealer_confirmed, sanctioned, rejected
+  // DEPRECATED by Addendum V0.1 §5.1 (E-130). Admin no longer acts on product
+  // selection. Column kept until the new flow ships and is proven; a follow-up
+  // migration removes it after Phase 5 is live.
+  admin_decision: varchar("admin_decision", { length: 30 }).default("pending"),
   submitted_by: uuid("submitted_by"),
   submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow(),
+
+  // E-130 — Addendum V0.1 §5.1, §5.3. Battery/charger photos are dealer-captured
+  // at premises during Product Selection Sections B/C. selected_nbfcs holds the
+  // 1 or 2 NBFCs the customer picked at the new Section G; customer_disclosure_ack
+  // is the mandatory checkbox confirming the customer was told each NBFC verifies
+  // independently. All four are populated by the Phase 2 UI.
+  battery_photo_urls: jsonb("battery_photo_urls"),
+  charger_photo_urls: jsonb("charger_photo_urls"),
+  selected_nbfcs: jsonb("selected_nbfcs"),
+  customer_disclosure_ack: boolean("customer_disclosure_ack"),
 
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -3045,6 +3066,10 @@ export const loanSanctions = pgTable("loan_sanctions", {
   status: varchar({ length: 30 }).default('sanctioned').notNull(),
   rejection_reason: text("rejection_reason"),
   sanctioned_by: uuid("sanctioned_by"),
+  // E-130 — Addendum §10/10 reconcile. `sanctioned_by` previously implied an
+  // admin user; under the addendum NBFC users sanction too. Discriminator
+  // resolves which user table the uuid points at. NULL on legacy rows = admin.
+  sanctioned_by_type: varchar("sanctioned_by_type", { length: 20 }),
   sanctioned_at: timestamp("sanctioned_at", { withTimezone: true }).defaultNow(),
   dealer_approved: boolean("dealer_approved").default(false),
   dealer_approved_at: timestamp("dealer_approved_at", { withTimezone: true }),
@@ -3174,6 +3199,43 @@ export const nbfcUsers = pgTable(
   (table) => ({
     userTenantIdx: index("nbfc_users_user_tenant_idx").on(table.user_id, table.tenant_id),
     tenantIdx: index("nbfc_users_tenant_idx").on(table.tenant_id),
+  }),
+);
+
+// E-131 — Addendum V0.1 §6 (Competitive NBFC Routing). One row per
+// (lead × selected NBFC) created when the dealer submits Step 4 for a finance
+// lead. Drives the Acquire queue at /nbfc/acquire. tenant_id is denormalised
+// from nbfc.tenant_id for tenant-scoped index performance; see E-131.sql
+// header for the backfill query if an nbfc is ever repointed.
+export const nbfcLeadAssignments = pgTable(
+  "nbfc_lead_assignments",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    loan_product_id: integer("loan_product_id"),
+    // Lifecycle: pending → in_progress → offer_submitted → selected |
+    // not_selected | declined | withdrawn. A1 only writes 'pending'; later
+    // phases drive the rest. CHECK constraint lives on the DB side (E-131).
+    status: varchar({ length: 30 }).default("pending").notNull(),
+    assigned_at: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    decision_reason: text("decision_reason"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_lead_assignments_tenant_idx").on(
+      table.tenant_id,
+      table.status,
+      table.assigned_at,
+    ),
+    leadIdx: index("nbfc_lead_assignments_lead_idx").on(table.lead_id),
+    leadNbfcUnique: uniqueIndex("nbfc_lead_assignments_unique_lead_nbfc").on(
+      table.lead_id,
+      table.nbfc_id,
+    ),
   }),
 );
 
@@ -4124,6 +4186,10 @@ export const nbfcLoanProducts = pgTable("nbfc_loan_products", {
   // must be set (enforced by the API Zod refinement).
   cibil_required: boolean("cibil_required"),
   max_credit_score: integer("max_credit_score"),
+  // E-130 — Addendum V0.1 §4.3. Bureau-abstracted gate. Phase 1 ships the
+  // handle (default 'equifax'); Phase 3 swaps the live provider behind it.
+  // Reserved values: 'equifax' (default), 'cibil' (legacy), 'crif', 'experian'.
+  credit_bureau: varchar("credit_bureau", { length: 20 }).default('equifax'),
   eligibility_documents: jsonb("eligibility_documents")
     .$type<string[]>()
     .notNull()

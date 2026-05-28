@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, X, AlertCircle, Scan, Info, ChevronRight, ChevronDown, Loader2, ShieldCheck, UserPlus, ArrowRight } from 'lucide-react';
+import { State, City } from 'country-state-city';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { DatePicker } from '@/components/ui/date-picker';
 import {
@@ -28,6 +29,11 @@ const emptyFormData = {
     current_address: '',
     permanent_address: '',
     is_current_same: false,
+    // Structured location — feeds the BRE's geo match at Section G.
+    // Sourced from `country-state-city` (same package as NBFC loan-product
+    // active_locations) so string comparison stays exact.
+    state: '',
+    city: '',
     product_category_id: '',
     product_type_id: '',
     primary_product_id: '',
@@ -43,6 +49,10 @@ const emptyFormData = {
     is_vehicle_category: false,
     asset_type: '',
     product_name: '',
+    // E-130 / Addendum §3.2, §3.3 — required for finance leads only.
+    resident_status: '',           // 'owned' | 'rented'
+    has_health_insurance: null,    // boolean | null (null = unanswered)
+    has_life_insurance: null,      // boolean | null
 };
 
 function NewLeadWizardContent() {
@@ -255,6 +265,23 @@ function NewLeadWizardContent() {
         if (!formData.primary_product_id) e.primary_product_id = 'Required';
         if (!formData.current_address || formData.current_address.trim().length < 20) e.current_address = 'Minimum 20 characters required';
         if (formData.permanent_address && formData.permanent_address.trim().length < 20) e.permanent_address = 'Minimum 20 characters required';
+
+        // Addendum §3.2, §3.3 — three new fields required for finance leads.
+        // resident_status drives the BRE's Owned/Rented housing-variant match.
+        if (finFlow) {
+            if (!formData.resident_status) e.resident_status = 'Required for finance cases';
+            if (formData.has_health_insurance === null || formData.has_health_insurance === undefined) {
+                e.has_health_insurance = 'Required for finance cases';
+            }
+            if (formData.has_life_insurance === null || formData.has_life_insurance === undefined) {
+                e.has_life_insurance = 'Required for finance cases';
+            }
+            // Required for the BRE's Section G geo match. Without state/city,
+            // every product with any active_locations passes vacuously (the
+            // matcher treats a null customer attr as a wildcard).
+            if (!formData.state) e.state = 'State required for finance cases';
+            if (!formData.city) e.city = 'City required for finance cases';
+        }
 
         const isVehicle = formData.is_vehicle_category;
         if (isVehicle && formData.vehicle_rc?.trim()) {
@@ -582,6 +609,141 @@ function NewLeadWizardContent() {
                                 />
                                 {errors.permanent_address && <p className="text-[10px] text-red-500 font-bold px-1">{errors.permanent_address}</p>}
                             </div>
+
+                            {/* State + City — feeds the BRE's Section G geo match.
+                                Source is `country-state-city` so the string matches
+                                what NBFCs declare on nbfc_loan_products.active_locations. */}
+                            {finFlow && (
+                                <>
+                                    <SelectField
+                                        label="State"
+                                        value={formData.state}
+                                        onChange={(v) => {
+                                            updateField('state', v);
+                                            // Reset city when state changes — city list is state-scoped.
+                                            if (v !== formData.state) updateField('city', '');
+                                        }}
+                                        options={State.getStatesOfCountry('IN').map((s) => ({
+                                            value: s.name,
+                                            label: s.name,
+                                        }))}
+                                        error={errors.state}
+                                        placeholder="Select state"
+                                        required
+                                    />
+                                    <SelectField
+                                        label="City"
+                                        value={formData.city}
+                                        onChange={(v) => updateField('city', v)}
+                                        options={(() => {
+                                            const iso = State.getStatesOfCountry('IN').find(
+                                                (s) => s.name === formData.state,
+                                            )?.isoCode;
+                                            if (!iso) return [];
+                                            const seen = new Set<string>();
+                                            return City.getCitiesOfState('IN', iso)
+                                                .filter((c) => {
+                                                    if (seen.has(c.name)) return false;
+                                                    seen.add(c.name);
+                                                    return true;
+                                                })
+                                                .map((c) => ({ value: c.name, label: c.name }));
+                                        })()}
+                                        error={errors.city}
+                                        placeholder={formData.state ? 'Select city' : 'Pick a state first'}
+                                        required
+                                        disabled={!formData.state}
+                                    />
+                                </>
+                            )}
+
+                            {/* Addendum §3.2, §3.3 — resident status + existing insurance.
+                                Required for finance leads; hidden for cash. Feeds the BRE's
+                                Owned/Rented housing-variant match at Product Selection. */}
+                            {finFlow && (
+                                <>
+                                    <div className="md:col-span-2 space-y-2">
+                                        <label className="text-sm font-bold text-gray-900 px-1 block">
+                                            Resident Status <span className="text-red-500">*</span>
+                                        </label>
+                                        <p className="text-xs text-gray-500 px-1">Does the customer own or rent their current residence?</p>
+                                        <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5 mt-1">
+                                            {[
+                                                { value: 'owned', label: 'Owned' },
+                                                { value: 'rented', label: 'Rented' },
+                                            ].map((opt) => (
+                                                <button
+                                                    key={opt.value}
+                                                    type="button"
+                                                    onClick={() => updateField('resident_status', opt.value)}
+                                                    className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all tracking-tight ${
+                                                        formData.resident_status === opt.value
+                                                            ? 'bg-[#0047AB] text-white shadow-sm'
+                                                            : 'text-gray-500 hover:text-gray-800'
+                                                    }`}
+                                                >
+                                                    {opt.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {errors.resident_status && <p className="text-[10px] text-red-500 font-bold px-1">{errors.resident_status}</p>}
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-gray-900 px-1 block">
+                                            Existing Health Insurance <span className="text-red-500">*</span>
+                                        </label>
+                                        <p className="text-xs text-gray-500 px-1">Does the customer currently hold their own health insurance policy?</p>
+                                        <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5 mt-1">
+                                            {[
+                                                { value: true, label: 'Yes' },
+                                                { value: false, label: 'No' },
+                                            ].map((opt) => (
+                                                <button
+                                                    key={String(opt.value)}
+                                                    type="button"
+                                                    onClick={() => updateField('has_health_insurance', opt.value)}
+                                                    className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all tracking-tight ${
+                                                        formData.has_health_insurance === opt.value
+                                                            ? 'bg-[#0047AB] text-white shadow-sm'
+                                                            : 'text-gray-500 hover:text-gray-800'
+                                                    }`}
+                                                >
+                                                    {opt.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {errors.has_health_insurance && <p className="text-[10px] text-red-500 font-bold px-1">{errors.has_health_insurance}</p>}
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-gray-900 px-1 block">
+                                            Existing Life Insurance <span className="text-red-500">*</span>
+                                        </label>
+                                        <p className="text-xs text-gray-500 px-1">Does the customer currently hold their own life insurance policy?</p>
+                                        <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5 mt-1">
+                                            {[
+                                                { value: true, label: 'Yes' },
+                                                { value: false, label: 'No' },
+                                            ].map((opt) => (
+                                                <button
+                                                    key={String(opt.value)}
+                                                    type="button"
+                                                    onClick={() => updateField('has_life_insurance', opt.value)}
+                                                    className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all tracking-tight ${
+                                                        formData.has_life_insurance === opt.value
+                                                            ? 'bg-[#0047AB] text-white shadow-sm'
+                                                            : 'text-gray-500 hover:text-gray-800'
+                                                    }`}
+                                                >
+                                                    {opt.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {errors.has_life_insurance && <p className="text-[10px] text-red-500 font-bold px-1">{errors.has_life_insurance}</p>}
+                                    </div>
+                                </>
+                            )}
                         </div>
                     </SectionCard>
 

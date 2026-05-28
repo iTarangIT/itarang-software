@@ -8,9 +8,8 @@ import {
   kycVerifications,
   personalDetails,
 } from "@/lib/db/schema";
-import { fetchCibilScore } from "@/lib/decentro";
 import { interpretCibilScore } from "@/lib/kyc/cibil-interpreter";
-import { humanizeCibilError } from "@/lib/kyc/cibil-friendly-errors";
+import { getCreditBureauProvider } from "@/lib/credit-bureau";
 import {
   createWorkflowId,
   requireAdminAppUser,
@@ -73,44 +72,26 @@ export async function POST(
       : (lead.dob ? new Date(lead.dob).toISOString().slice(0, 10) : "");
     const address = personal?.local_address || lead.local_address || lead.current_address || "";
 
-    // Call Decentro Credit Score API (only needs mobile + name)
-    const decentroRes = await fetchCibilScore({
+    // Provider-routed (BRD Addendum §4.3 — Equifax platform-wide). Passing
+    // null lands on DEFAULT_PLATFORM_BUREAU = 'equifax'. KYC runs before
+    // Section G, so there is no matched product to read credit_bureau from
+    // at this point; the per-product column is reserved for future bureau
+    // policy and not consulted here.
+    const result = await getCreditBureauProvider(null).fetchScore({
       name,
       pan: personal?.pan_no || "",
       dob,
       phone,
       address,
     });
+    const decentroRes = result.raw as Record<string, any> | null;
 
     console.log("[CIBIL Score] Response:", JSON.stringify(decentroRes));
 
     const now = new Date();
-    const responseData = decentroRes?.data || {};
-    // /v2/bytes/credit-score returns score in data.scoreDetails[0].value
-    // Also check nested cCRResponse for some API versions
-    const scoreDetails =
-      responseData.scoreDetails ||
-      responseData.cCRResponse?.cIRReportData?.scoreDetails ||
-      responseData.cCRResponse?.scoreDetails;
-    const rawScore =
-      (Array.isArray(scoreDetails) && scoreDetails.length > 0
-        ? scoreDetails[0]?.value
-        : null) ||
-      responseData.creditScore?.score ||
-      responseData.credit_score ||
-      responseData.score ||
-      decentroRes?.data?.credit_score ||
-      null;
-    const score = rawScore !== null && rawScore !== undefined ? Number(rawScore) : null;
-    const responseKey = decentroRes?.responseKey || "";
-    const isErrorResponse = responseKey.startsWith("error_");
-    const overallSuccess =
-      !isErrorResponse &&
-      (responseKey === "success_credit_score" ||
-       responseKey === "success" ||
-       decentroRes?.status === "SUCCESS") &&
-      score !== null &&
-      !isNaN(score);
+    const responseData = (decentroRes?.data as Record<string, any>) || {};
+    const score = result.score;
+    const overallSuccess = result.error === null && score !== null;
 
     const interpretation = score !== null && !isNaN(score) ? interpretCibilScore(score) : null;
 
@@ -214,14 +195,6 @@ export async function POST(
         .where(eq(kycVerificationMetadata.lead_id, leadId));
     }
 
-    const friendly = overallSuccess
-      ? null
-      : humanizeCibilError({
-          endpoint: "score",
-          responseKey,
-          rawMessage: decentroRes?.message ?? null,
-        });
-
     return NextResponse.json({
       success: overallSuccess,
       data: {
@@ -232,12 +205,12 @@ export async function POST(
         generatedAt: now.toISOString(),
         rawResponse: decentroRes,
       },
-      ...(friendly
+      ...(result.error
         ? {
             error: {
-              message: friendly.message,
-              suggestion: friendly.suggestion,
-              code: friendly.code,
+              message: result.error.message,
+              suggestion: result.error.suggestion,
+              code: result.error.category,
             },
           }
         : {}),
