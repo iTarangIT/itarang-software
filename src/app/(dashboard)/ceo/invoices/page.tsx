@@ -112,7 +112,12 @@ export default function CEOInvoicesPage() {
     if (selectedStatuses.length > 0) p.set("status", selectedStatuses.join(","));
     if (customer.trim()) p.set("customer", customer.trim());
     p.set("format", "csv");
-    window.location.href = `/api/admin/zoho/invoices?${p.toString()}`;
+    const a = document.createElement("a");
+    a.href = `/api/admin/zoho/invoices?${p.toString()}`;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   };
 
   return (
@@ -135,6 +140,7 @@ export default function CEOInvoicesPage() {
               From
             </label>
             <input
+              data-testid="filter-from"
               type="date"
               value={from}
               onChange={(e) => {
@@ -149,6 +155,7 @@ export default function CEOInvoicesPage() {
               To
             </label>
             <input
+              data-testid="filter-to"
               type="date"
               value={to}
               onChange={(e) => {
@@ -165,6 +172,7 @@ export default function CEOInvoicesPage() {
             <div className="relative">
               <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
+                data-testid="filter-customer"
                 type="text"
                 value={customer}
                 onChange={(e) => {
@@ -188,6 +196,8 @@ export default function CEOInvoicesPage() {
               return (
                 <button
                   key={s}
+                  data-testid={`status-chip-${s}`}
+                  data-active={active ? "true" : "false"}
                   onClick={() => toggleStatus(s)}
                   className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border transition-colors ${
                     active
@@ -201,6 +211,7 @@ export default function CEOInvoicesPage() {
             })}
             {selectedStatuses.length > 0 && (
               <button
+                data-testid="clear-statuses"
                 onClick={() => {
                   setSelectedStatuses([]);
                   setPage(0);
@@ -213,6 +224,7 @@ export default function CEOInvoicesPage() {
           </div>
 
           <Button
+            data-testid="export-csv"
             variant="outline"
             onClick={exportCsv}
             className="flex items-center gap-2 border-brand-200 text-brand-700 hover:bg-brand-50"
@@ -229,13 +241,13 @@ export default function CEOInvoicesPage() {
           <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">
             Invoices in view
           </p>
-          <p className="text-2xl font-bold text-gray-900 mt-1">{summary?.count ?? "—"}</p>
+          <p data-testid="summary-count" data-count={summary?.count ?? ""} className="text-2xl font-bold text-gray-900 mt-1">{summary?.count ?? "—"}</p>
         </div>
         <div className="p-4 rounded-2xl bg-emerald-50/40 border border-emerald-100 shadow-sm">
           <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700/70">
             Total Invoiced
           </p>
-          <p className="text-2xl font-bold text-emerald-900 mt-1">
+          <p data-testid="summary-total" data-total={summary?.total ?? ""} className="text-2xl font-bold text-emerald-900 mt-1">
             {summary ? formatINR(summary.total) : "—"}
           </p>
         </div>
@@ -243,7 +255,7 @@ export default function CEOInvoicesPage() {
           <p className="text-[10px] font-bold uppercase tracking-wider text-amber-700/70">
             Outstanding Balance
           </p>
-          <p className="text-2xl font-bold text-amber-900 mt-1">
+          <p data-testid="summary-balance" data-balance={summary?.balance ?? ""} className="text-2xl font-bold text-amber-900 mt-1">
             {summary ? formatINR(summary.balance) : "—"}
           </p>
         </div>
@@ -252,21 +264,21 @@ export default function CEOInvoicesPage() {
       {/* Table */}
       <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
         {isLoading ? (
-          <div className="flex items-center justify-center py-12">
+          <div data-testid="loading-state" className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
           </div>
         ) : error ? (
-          <p className="text-sm text-rose-600 py-6 text-center">
+          <p data-testid="error-state" className="text-sm text-rose-600 py-6 text-center">
             {(error as Error).message}
           </p>
         ) : rows.length === 0 ? (
-          <p className="text-sm text-gray-400 italic py-6 text-center">
+          <p data-testid="empty-state" className="text-sm text-gray-400 italic py-6 text-center">
             No invoices match these filters.
           </p>
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table data-testid="invoice-table" className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
                     <th className="py-2 font-semibold">Invoice #</th>
@@ -279,7 +291,7 @@ export default function CEOInvoicesPage() {
                 </thead>
                 <tbody>
                   {rows.map((r) => (
-                    <tr key={r.id} className="border-b border-gray-50">
+                    <tr key={r.id} data-testid="invoice-row" data-status={r.status ?? ""} className="border-b border-gray-50">
                       <td className="py-3 text-xs font-semibold text-gray-900">
                         {r.invoice_number || "—"}
                       </td>
@@ -312,6 +324,7 @@ export default function CEOInvoicesPage() {
                 </p>
                 <div className="flex gap-2">
                   <Button
+                    data-testid="pagination-prev"
                     variant="outline"
                     size="sm"
                     disabled={page === 0}
@@ -320,6 +333,7 @@ export default function CEOInvoicesPage() {
                     Prev
                   </Button>
                   <Button
+                    data-testid="pagination-next"
                     variant="outline"
                     size="sm"
                     disabled={(page + 1) * PAGE_SIZE >= summary.count}

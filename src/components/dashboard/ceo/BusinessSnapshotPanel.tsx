@@ -64,37 +64,38 @@ export function BusinessSnapshotPanel({
       </div>
 
       <div className="grid grid-cols-3 gap-3">
-        <div className="p-3 rounded-xl bg-rose-50/60 border border-rose-100/60">
+        <div data-testid="tile-oem-purchases" className="p-3 rounded-xl bg-rose-50/60 border border-rose-100/60">
           <p className="text-[10px] uppercase tracking-wider font-bold text-rose-700/70">
             Purchases from OEM
           </p>
-          <p className="text-lg font-bold text-rose-900 mt-1">
+          <p data-testid="tile-oem-purchases-value" className="text-lg font-bold text-rose-900 mt-1">
             {formatINR(purchasesMtd)}
           </p>
         </div>
-        <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-100/60">
+        <div data-testid="tile-sales-to-dealer" className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-100/60">
           <p className="text-[10px] uppercase tracking-wider font-bold text-emerald-700/70">
             Sales to Dealer
           </p>
-          <p className="text-lg font-bold text-emerald-900 mt-1">
+          <p data-testid="tile-sales-to-dealer-value" className="text-lg font-bold text-emerald-900 mt-1">
             {formatINR(salesMtd)}
           </p>
         </div>
-        <div className="p-3 rounded-xl bg-amber-50/60 border border-amber-100/60">
+        <div data-testid="tile-other-expenses" className="p-3 rounded-xl bg-amber-50/60 border border-amber-100/60">
           <p className="text-[10px] uppercase tracking-wider font-bold text-amber-700/70">
             Other Expenses
           </p>
-          <p className="text-lg font-bold text-amber-900 mt-1">
+          <p data-testid="tile-other-expenses-value" className="text-lg font-bold text-amber-900 mt-1">
             {formatINR(otherExpensesMtd)}
           </p>
         </div>
       </div>
 
-      <div className="mt-4 p-3 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between">
+      <div data-testid="net-mtd" className="mt-4 p-3 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between">
         <span className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider">
           Net (MTD)
         </span>
         <span
+          data-testid="net-mtd-value"
           className={`text-base font-bold flex items-center gap-1 ${
             netMtd >= 0 ? "text-emerald-700" : "text-rose-700"
           }`}
@@ -114,9 +115,9 @@ export function BusinessSnapshotPanel({
             Recent Zoho Invoices
           </p>
           {recentInvoices.length === 0 ? (
-            <p className="text-[11px] text-gray-400 italic">No invoices synced yet.</p>
+            <p data-testid="recent-invoices-empty" className="text-[11px] text-gray-400 italic">No invoices synced yet.</p>
           ) : (
-            <ul className="divide-y divide-gray-50">
+            <ul data-testid="recent-invoices-list" className="divide-y divide-gray-50">
               {recentInvoices.map((inv) => (
                 <li
                   key={inv.id}
@@ -145,9 +146,9 @@ export function BusinessSnapshotPanel({
             Recent Approved Expenses
           </p>
           {recentExpenses.length === 0 ? (
-            <p className="text-[11px] text-gray-400 italic">No approved expenses yet.</p>
+            <p data-testid="recent-expenses-empty" className="text-[11px] text-gray-400 italic">No approved expenses yet.</p>
           ) : (
-            <ul className="divide-y divide-gray-50">
+            <ul data-testid="recent-expenses-list" className="divide-y divide-gray-50">
               {recentExpenses.map((exp) => (
                 <li
                   key={exp.id}

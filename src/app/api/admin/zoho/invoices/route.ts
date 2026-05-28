@@ -23,6 +23,16 @@ import { requireAuth } from "@/lib/auth-utils";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const KNOWN_STATUSES = new Set([
+  "draft",
+  "sent",
+  "overdue",
+  "paid",
+  "partially_paid",
+  "void",
+]);
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 function isCeo(user: { role?: string; email?: string }): boolean {
   const role = (user.role || "").toLowerCase();
   const email = (user.email || "").toLowerCase();
@@ -57,6 +67,15 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const from = url.searchParams.get("from") || startOfMonthISO();
     const to = url.searchParams.get("to") || todayISO();
+    if (!ISO_DATE_RE.test(from) || !ISO_DATE_RE.test(to)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: { message: "Invalid date format. Use YYYY-MM-DD." },
+        },
+        { status: 400 },
+      );
+    }
     const statusParam = url.searchParams.get("status");
     const customer = (url.searchParams.get("customer") || "").trim();
     const format = (url.searchParams.get("format") || "json").toLowerCase();
@@ -71,7 +90,7 @@ export async function GET(req: NextRequest) {
       const list = statusParam
         .split(",")
         .map((s) => s.trim().toLowerCase())
-        .filter(Boolean);
+        .filter((s) => KNOWN_STATUSES.has(s));
       if (list.length > 0) conds.push(inArray(zohoInvoices.status, list));
     } else {
       // Default: exclude void from totals (matches CEO MTD logic).

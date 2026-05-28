@@ -993,6 +993,7 @@ export function Sidebar() {
                   <Link
                     key={item.id}
                     href={item.href}
+                    data-testid={`nav-${item.id}`}
                     className={cn(
                       isActive ? "sidebar-nav-item-active" : "sidebar-nav-item",
                     )}
