@@ -3,9 +3,8 @@ import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { coBorrowers, kycVerifications } from "@/lib/db/schema";
-import { fetchCibilScore } from "@/lib/decentro";
 import { interpretCibilScore } from "@/lib/kyc/cibil-interpreter";
-import { humanizeCibilError } from "@/lib/kyc/cibil-friendly-errors";
+import { getCreditBureauProvider } from "@/lib/credit-bureau";
 import {
   createWorkflowId,
   requireAdminAppUser,
@@ -61,41 +60,22 @@ export async function POST(
     const dob = cb.dob ? new Date(cb.dob).toISOString().slice(0, 10) : "";
     const address = cb.address || cb.current_address || "";
 
-    const decentroRes = await fetchCibilScore({
+    // Provider-routed (BRD Addendum §4.3). Null → Equifax via DEFAULT_PLATFORM_BUREAU.
+    const result = await getCreditBureauProvider(null).fetchScore({
       name,
       pan: cb.pan_no || "",
       dob,
       phone,
       address,
     });
+    const decentroRes = result.raw as Record<string, any> | null;
 
     console.log("[Co-Borrower CIBIL Score] Response:", JSON.stringify(decentroRes));
 
     const now = new Date();
-    const responseData = decentroRes?.data || {};
-    const scoreDetails =
-      responseData.scoreDetails ||
-      responseData.cCRResponse?.cIRReportData?.scoreDetails ||
-      responseData.cCRResponse?.scoreDetails;
-    const rawScore =
-      (Array.isArray(scoreDetails) && scoreDetails.length > 0
-        ? scoreDetails[0]?.value
-        : null) ||
-      responseData.creditScore?.score ||
-      responseData.credit_score ||
-      responseData.score ||
-      decentroRes?.data?.credit_score ||
-      null;
-    const score = rawScore !== null && rawScore !== undefined ? Number(rawScore) : null;
-    const responseKey = decentroRes?.responseKey || "";
-    const isErrorResponse = responseKey.startsWith("error_");
-    const overallSuccess =
-      !isErrorResponse &&
-      (responseKey === "success_credit_score" ||
-        responseKey === "success" ||
-        decentroRes?.status === "SUCCESS") &&
-      score !== null &&
-      !isNaN(score);
+    const responseData = (decentroRes?.data as Record<string, any>) || {};
+    const score = result.score;
+    const overallSuccess = result.error === null && score !== null;
 
     const interpretation = score !== null && !isNaN(score) ? interpretCibilScore(score) : null;
 
@@ -167,14 +147,6 @@ export async function POST(
       });
     }
 
-    const friendly = overallSuccess
-      ? null
-      : humanizeCibilError({
-          endpoint: "score",
-          responseKey,
-          rawMessage: decentroRes?.message ?? null,
-        });
-
     return NextResponse.json({
       success: overallSuccess,
       data: {
@@ -185,12 +157,12 @@ export async function POST(
         generatedAt: now.toISOString(),
         rawResponse: decentroRes,
       },
-      ...(friendly
+      ...(result.error
         ? {
             error: {
-              message: friendly.message,
-              suggestion: friendly.suggestion,
-              code: friendly.code,
+              message: result.error.message,
+              suggestion: result.error.suggestion,
+              code: result.error.category,
             },
           }
         : {}),
