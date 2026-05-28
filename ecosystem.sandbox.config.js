@@ -9,8 +9,13 @@ module.exports = {
       // Next.js standalone output: run the bundled server.js directly.
       // `next start` is incompatible with output: "standalone" in next.config.ts
       // — it can't find the chunks/manifests the standalone build lays out.
+      //
+      // `current/` is a symlink maintained by .github/workflows/deploy-sandbox.yml
+      // pointing at the latest shipped release under releases/<sha>/standalone.
+      // Atomic symlink swap on deploy means pm2 reload re-execs server.js from
+      // the new release without ever seeing a broken state.
       script: "node",
-      args: ".next/standalone/server.js",
+      args: "current/server.js",
       instances: 1,
       exec_mode: "fork",
       env: {
