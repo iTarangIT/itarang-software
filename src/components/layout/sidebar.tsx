@@ -27,6 +27,22 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
 
+// Items appended to every role's sidebar — universal actions any logged-in
+// user can take (currently: submit a business expense → CEO approves).
+const COMMON_ITEMS = [
+  {
+    section: "EXPENSES",
+    items: [
+      {
+        id: "submit-expense",
+        label: "Submit Expense",
+        icon: Receipt,
+        href: "/expenses/submit",
+      },
+    ],
+  },
+];
+
 const roleNavigation: Record<string, any[]> = {
   ceo: [
     {
@@ -58,6 +74,12 @@ const roleNavigation: Record<string, any[]> = {
         },
         { id: "leads", label: "Leads", icon: Users, href: "/leads" },
         { id: "deals", label: "Deals", icon: FileCheck, href: "/deals" },
+        {
+          id: "sales-invoices",
+          label: "Sales Invoices",
+          icon: Receipt,
+          href: "/ceo/invoices",
+        },
       ],
     },
     {
@@ -114,6 +136,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "Product Review",
           icon: Package,
           href: "/admin/product-review",
+        },
+        {
+          id: "expense-approvals",
+          label: "Expense Approvals",
+          icon: ClipboardCheck,
+          href: "/ceo/expenses",
         },
       ],
     },
@@ -711,13 +739,18 @@ export function Sidebar() {
   }, [inferredRole]);
 
   const financeGatedItemIds = new Set(["loans", "loan-mgmt"]);
-  const menuItems =
+  const filteredMenuItems =
     inferredRole === "dealer" && dealerFinanceEnabled === false
       ? rawMenuItems.map((group: any) => ({
           ...group,
           items: group.items.filter((item: any) => !financeGatedItemIds.has(item.id)),
         }))
       : rawMenuItems;
+
+  // Universal nav items (e.g. Submit Expense) appended to every role except
+  // the "user" fallback (unauthenticated path-inferred view).
+  const menuItems =
+    inferredRole === "user" ? filteredMenuItems : [...filteredMenuItems, ...COMMON_ITEMS];
 
   // BRD §6.B sidebar — solid #02314e navy, 9px ALL CAPS section labels at
   // rgba(255,255,255,0.30), 13px DM Sans Medium nav items, 3px transparent
