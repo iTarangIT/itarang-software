@@ -114,6 +114,7 @@ export async function middleware(request: NextRequest) {
     path.startsWith("/orders") ||
     path.startsWith("/provisions") ||
     path.startsWith("/disputes") ||
+    path.startsWith("/expenses") ||
     path === "/" ||
     path === "/dashboard";
 
