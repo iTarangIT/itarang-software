@@ -75,6 +75,11 @@ async function requireAdmin(req: NextRequest) {
   return dbUser;
 }
 
+// Letters + space + . ' - so Indian names/places (St. Thomas Mount, D'Souza,
+// Jean-Paul) survive while digits and symbols are rejected.
+const ALPHA_NAME_RE = /^[A-Za-z\s.'\-]+$/;
+const ALPHA_NAME_MSG = "Letters only";
+
 const createSchema = z.object({
   legalName: z.string().min(1).max(200),
   shortName: z.string().min(1).max(100),
@@ -98,21 +103,26 @@ const createSchema = z.object({
   registeredAddress: z.object({
     line1: z.string().min(1),
     line2: z.string().optional(),
-    city: z.string().min(1),
-    district: z.string().min(1),
-    state: z.string().min(1),
+    city: z.string().min(1).regex(ALPHA_NAME_RE, ALPHA_NAME_MSG),
+    district: z.string().min(1).regex(ALPHA_NAME_RE, ALPHA_NAME_MSG),
+    state: z.string().min(1).regex(ALPHA_NAME_RE, ALPHA_NAME_MSG),
     pin: z.string().regex(/^\d{6}$/),
   }),
-  primaryContactName: z.string().min(1).max(200),
+  primaryContactName: z.string().min(1).max(200).regex(ALPHA_NAME_RE, ALPHA_NAME_MSG),
   primaryContactEmail: z.string().email(),
   primaryContactPhone: z.string().regex(/^\d{10}$/),
-  grievanceOfficerName: z.string().min(1).max(200),
+  grievanceOfficerName: z.string().min(1).max(200).regex(ALPHA_NAME_RE, ALPHA_NAME_MSG),
   grievanceHelpline: z.string().min(1).max(200),
   grievanceUrl: z.string().url(),
   nodalOfficer: z.string().max(200).optional(),
   partnershipDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   fldgTerms: z.string().optional(),
-  activeGeographies: z.array(z.string()).min(1),
+  activeGeographies: z
+    .array(z.string().transform((s) => s.trim().toUpperCase()))
+    .min(1)
+    .refine((arr) => arr.every((s) => /^[A-Z]{2}$/.test(s)), {
+      message: "Each geography must be a two-letter state code (e.g. MH, GJ)",
+    }),
 });
 
 function generateNbfcId() {
@@ -148,11 +158,23 @@ export async function POST(req: NextRequest) {
 
     const parsed = createSchema.safeParse(body);
     if (!parsed.success) {
+      // Walk issues into a flat path-keyed map so the client can highlight
+      // each offending input by name (incl. nested registeredAddress.*).
+      const fieldErrors: Record<string, string> = {};
+      const formErrors: string[] = [];
+      for (const issue of parsed.error.issues) {
+        if (issue.path.length === 0) {
+          formErrors.push(issue.message);
+          continue;
+        }
+        const key = issue.path.join(".");
+        if (!fieldErrors[key]) fieldErrors[key] = issue.message;
+      }
       return NextResponse.json(
         {
           success: false,
           error: "validation_failed",
-          details: parsed.error.flatten(),
+          details: { fieldErrors, formErrors },
         },
         { status: 422 },
       );
@@ -166,6 +188,10 @@ export async function POST(req: NextRequest) {
       typeof admin.id === "number"
         ? (admin.id as unknown as number)
         : 0;
+    // E-108 — the real ownership signal. Stored as uuid alongside the legacy
+    // integer column so /admin/nbfc?owner=me can scope drafts to the viewer.
+    const createdByAuthId =
+      typeof admin.id === "string" ? (admin.id as string) : null;
 
     // Try insert with retry-on-collision for nbfc_id (rare).
     let attempt = 0;
@@ -196,6 +222,7 @@ export async function POST(req: NextRequest) {
             fldg_terms: v.fldgTerms ?? null,
             status: "draft",
             created_by: createdBy,
+            created_by_auth_id: createdByAuthId,
           })
           .returning({
             id: nbfc.id,

@@ -1,0 +1,70 @@
+---
+title: Inventory Lifecycle (Upload, Single Item, Transfer, Write-off, Dispatch)
+---
+erDiagram
+    inventory ||--o{ inventory_events : "inventory_id / serial_number"
+    inventory ||--o{ inventory_write_offs : "inventory_id"
+    inventory }o..|| products : "product_id (legacy catalog FK)"
+    inventory_upload_reports }o..|| dealers : "dealer_id"
+    inventory_upload_reports }o..o{ inventory : "inserted_inventory_ids[]"
+    inventory_transfers }o..|| dealers : "source_dealer_id"
+    inventory_transfers }o..|| dealers : "target_dealer_id"
+    inventory_transfers }o..o{ inventory : "serials[] (string array)"
+    users ||--o{ inventory : "created_by / pdi_by"
+    users ||--o{ inventory_events : "performed_by"
+    users ||--o{ inventory_write_offs : "written_off_by / second_approved_by"
+    users ||--o{ inventory_upload_reports : "uploaded_by"
+    users ||--o{ inventory_transfers : "initiated_by / acknowledged_by / cancelled_by"
+    leads }o..o{ inventory : "linked_lead_id (reserved/dispatched)"
+
+    inventory {
+        varchar id PK
+        varchar serial_number UK
+        varchar oem_id
+        varchar dealer_id
+        varchar asset_category
+        varchar asset_type
+        varchar status "available|reserved|dispatched|sold|written_off"
+        varchar pdi_status
+        timestamp dispatch_date
+        timestamp sold_at
+        varchar linked_lead_id FK
+        varchar iot_imei_no UK
+    }
+    inventory_events {
+        varchar id PK
+        varchar inventory_id FK
+        varchar serial_number
+        varchar event_type
+        varchar from_status
+        varchar to_status
+        varchar lead_id FK
+        uuid performed_by
+    }
+    inventory_transfers {
+        varchar id PK
+        varchar source_dealer_id FK
+        varchar target_dealer_id FK
+        jsonb serials
+        varchar status "pending_acknowledgement|completed|cancelled"
+        uuid initiated_by
+    }
+    inventory_upload_reports {
+        varchar id PK
+        varchar dealer_id FK
+        varchar asset_type
+        varchar upload_method
+        integer total_rows
+        integer inserted_rows
+        integer skipped_rows
+        jsonb inserted_inventory_ids
+    }
+    inventory_write_offs {
+        varchar id PK
+        varchar inventory_id FK
+        varchar serial_number
+        varchar reason
+        numeric write_off_value
+        varchar approval_status
+        uuid written_off_by
+    }

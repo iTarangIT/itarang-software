@@ -13,6 +13,10 @@
       "schedule": "0 0 * * *"
     },
     {
+      "path": "/api/cron/nbfc/compute-pci",
+      "schedule": "15 0 * * *"
+    },
+    {
       "path": "/api/cron/nbfc/evaluate-anomaly-flags",
       "schedule": "10 0 * * *"
     },
@@ -31,6 +35,18 @@
     {
       "path": "/api/cron/zoho-sync",
       "schedule": "5 * * * *"
+    },
+    {
+      "path": "/api/cron/dialer-watchdog",
+      "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/dialer-poll",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/backfill-call-costs",
+      "schedule": "*/15 * * * *"
     }
   ],
   "functions": {

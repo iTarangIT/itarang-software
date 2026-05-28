@@ -23,6 +23,15 @@ import {
   CreditCard,
   Megaphone,
   Shield,
+  TrendingUp,
+  ListChecks,
+  MapPinned,
+  AlertTriangle,
+  Upload,
+  Settings,
+  BarChart3,
+  GitMerge,
+  UserMinus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -53,6 +62,29 @@ const roleNavigation: Record<string, any[]> = {
           label: "Dashboard",
           icon: LayoutDashboard,
           href: "/ceo",
+        },
+      ],
+    },
+    {
+      section: "PART 0 OVERSIGHT",
+      items: [
+        {
+          id: "ceo-admin-dashboard",
+          label: "Ops Dashboard",
+          icon: LayoutDashboard,
+          href: "/admin",
+        },
+        {
+          id: "ceo-escalations",
+          label: "Escalations",
+          icon: AlertTriangle,
+          href: "/admin/escalations",
+        },
+        {
+          id: "ceo-reports",
+          label: "Reports",
+          icon: BarChart3,
+          href: "/admin/reports",
         },
       ],
     },
@@ -156,6 +188,59 @@ const roleNavigation: Record<string, any[]> = {
           label: "Dashboard",
           icon: LayoutDashboard,
           href: "/sales-head",
+        },
+      ],
+    },
+    {
+      section: "LEAD MANAGEMENT",
+      items: [
+        {
+          id: "sh-admin-dashboard",
+          label: "Ops Dashboard",
+          icon: LayoutDashboard,
+          href: "/admin",
+        },
+        {
+          id: "sh-leads-info",
+          label: "Leads Info",
+          icon: ListChecks,
+          href: "/admin/leads-info",
+        },
+        {
+          id: "sh-escalations",
+          label: "Escalations",
+          icon: AlertTriangle,
+          href: "/admin/escalations",
+        },
+        {
+          id: "sh-merge-requests",
+          label: "Merge Requests",
+          icon: GitMerge,
+          href: "/admin/merge-requests",
+        },
+        {
+          id: "sh-onboarding-dropouts",
+          label: "Onboarding Dropouts",
+          icon: UserMinus,
+          href: "/admin/onboarding-dropouts",
+        },
+        {
+          id: "sh-lead-upload",
+          label: "Bulk Lead Upload",
+          icon: Upload,
+          href: "/admin/upload",
+        },
+        {
+          id: "sh-reports",
+          label: "Reports",
+          icon: BarChart3,
+          href: "/admin/reports",
+        },
+        {
+          id: "sh-settings",
+          label: "Settings",
+          icon: Settings,
+          href: "/admin/settings",
         },
       ],
     },
@@ -354,6 +439,53 @@ const roleNavigation: Record<string, any[]> = {
           label: "Dashboard",
           icon: LayoutDashboard,
           href: "/admin",
+        },
+      ],
+    },
+    {
+      section: "LEAD MANAGEMENT",
+      items: [
+        {
+          id: "admin-leads-info",
+          label: "Leads Info",
+          icon: ListChecks,
+          href: "/admin/leads-info",
+        },
+        {
+          id: "admin-escalations",
+          label: "Escalations",
+          icon: AlertTriangle,
+          href: "/admin/escalations",
+        },
+        {
+          id: "admin-merge-requests",
+          label: "Merge Requests",
+          icon: GitMerge,
+          href: "/admin/merge-requests",
+        },
+        {
+          id: "admin-onboarding-dropouts",
+          label: "Onboarding Dropouts",
+          icon: UserMinus,
+          href: "/admin/onboarding-dropouts",
+        },
+        {
+          id: "admin-lead-upload",
+          label: "Bulk Lead Upload",
+          icon: Upload,
+          href: "/admin/upload",
+        },
+        {
+          id: "admin-reports",
+          label: "Reports",
+          icon: BarChart3,
+          href: "/admin/reports",
+        },
+        {
+          id: "admin-settings",
+          label: "Settings",
+          icon: Settings,
+          href: "/admin/settings",
         },
       ],
     },
@@ -591,6 +723,48 @@ const roleNavigation: Record<string, any[]> = {
     },
   ],
 
+  sales_insight: [
+    {
+      section: "INSIGHTS",
+      items: [
+        {
+          id: "converted-leads",
+          label: "Converted Leads",
+          icon: TrendingUp,
+          href: "/sales-insight",
+        },
+      ],
+    },
+  ],
+
+  inside_sales_rep: [
+    {
+      section: "INSIDE SALES",
+      items: [
+        {
+          id: "my-queue",
+          label: "My Queue",
+          icon: ListChecks,
+          href: "/inside-sales",
+        },
+      ],
+    },
+  ],
+
+  asm: [
+    {
+      section: "FIELD WORK",
+      items: [
+        {
+          id: "my-visits",
+          label: "My Visits",
+          icon: MapPinned,
+          href: "/asm",
+        },
+      ],
+    },
+  ],
+
   dealer: [
     {
       section: "OVERVIEW",
@@ -710,6 +884,9 @@ export function Sidebar() {
     if (pathname.startsWith("/service-engineer")) return "service_engineer";
     if (pathname.startsWith("/sales-manager")) return "sales_manager";
     if (pathname.startsWith("/sales-executive")) return "sales_executive";
+    if (pathname.startsWith("/sales-insight")) return "sales_insight";
+    if (pathname.startsWith("/inside-sales")) return "inside_sales_rep";
+    if (pathname.startsWith("/asm")) return "asm";
     return "user";
   })();
 
@@ -749,8 +926,39 @@ export function Sidebar() {
 
   // Universal nav items (e.g. Submit Expense) appended to every role except
   // the "user" fallback (unauthenticated path-inferred view).
-  const menuItems =
+  let menuItems =
     inferredRole === "user" ? filteredMenuItems : [...filteredMenuItems, ...COMMON_ITEMS];
+
+  // NBFC Onboarding Plan §15.1 — count badge on the CEO "Pending NBFC
+  // Approvals" link, fetched once on mount. Polling is overkill for a queue
+  // that turns over a handful of times per week.
+  const [pendingNbfcCount, setPendingNbfcCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (inferredRole !== "ceo") return;
+    let cancelled = false;
+    fetch("/api/admin/nbfc/approvals/count", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((j) => {
+        if (!cancelled) setPendingNbfcCount(Number(j.count ?? 0));
+      })
+      .catch(() => {
+        /* silent — badge stays absent on failure */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inferredRole]);
+
+  if (pendingNbfcCount && pendingNbfcCount > 0) {
+    menuItems = menuItems.map((group: any) => ({
+      ...group,
+      items: group.items.map((item: any) =>
+        item.id === "nbfc-approvals"
+          ? { ...item, badge: pendingNbfcCount }
+          : item,
+      ),
+    }));
+  }
 
   // BRD §6.B sidebar — solid #02314e navy, 9px ALL CAPS section labels at
   // rgba(255,255,255,0.30), 13px DM Sans Medium nav items, 3px transparent
@@ -796,7 +1004,18 @@ export function Sidebar() {
                       )}
                       strokeWidth={1.75}
                     />
-                    <span className="truncate">{item.label}</span>
+                    <span className="truncate flex-1">{item.label}</span>
+                    {item.badge ? (
+                      <span
+                        className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold"
+                        style={{
+                          background: "var(--color-brand-sky)",
+                          color: "#fff",
+                        }}
+                      >
+                        {item.badge}
+                      </span>
+                    ) : null}
                   </Link>
                 );
               })}

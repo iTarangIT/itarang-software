@@ -43,7 +43,7 @@ interface ErrorResponse {
 }
 
 interface Props {
-  loanApplicationId: string;
+  loanSanctionId: string;
   scoreType: "cds" | "pci";
   open: boolean;
   onClose: () => void;
@@ -70,7 +70,7 @@ function formatAmount(n: number | null): string {
 }
 
 export function ScoreExplainabilityDrawer({
-  loanApplicationId,
+  loanSanctionId,
   scoreType,
   open,
   onClose,
@@ -84,8 +84,8 @@ export function ScoreExplainabilityDrawer({
     if (!open) return;
     let cancelled = false;
 
-    const url = `/api/nbfc/scores/explainability?loan_application_id=${encodeURIComponent(
-      loanApplicationId,
+    const url = `/api/nbfc/scores/explainability?loan_sanction_id=${encodeURIComponent(
+      loanSanctionId,
     )}&score_type=${scoreType}`;
 
     const run = async () => {
@@ -114,7 +114,7 @@ export function ScoreExplainabilityDrawer({
     return () => {
       cancelled = true;
     };
-  }, [open, loanApplicationId, scoreType]);
+  }, [open, loanSanctionId, scoreType]);
 
   if (!open) return null;
 
@@ -135,7 +135,7 @@ export function ScoreExplainabilityDrawer({
             <h2 className="text-lg font-semibold text-gray-900">
               {scoreType.toUpperCase()} Score · Explainability
             </h2>
-            <p className="text-xs text-gray-500">Loan {loanApplicationId}</p>
+            <p className="text-xs text-gray-500">Loan {loanSanctionId}</p>
           </div>
           <button
             type="button"

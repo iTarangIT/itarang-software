@@ -13,6 +13,7 @@ import { db } from "@/lib/db";
 import { nbfc, auditLogs } from "@/lib/db/schema";
 import { requireAdminOrTestBypass } from "@/lib/auth/adminTestBypass";
 import { evaluateApprovalReadiness } from "@/lib/nbfc/admin/approval-gate";
+import { triggerLspSigning } from "@/lib/nbfc/admin/lsp-agreement-trigger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -136,14 +137,54 @@ export async function POST(
     },
   });
 
-  // E-002 will pick up activation (portal credentials). For now we expose the
-  // approved state; the activation job can be enqueued by listening to this
-  // audit row or by a follow-up call.
+  // E-112 — if the agreement is sitting in PENDING_CEO_VERIFICATION, the CEO's
+  // approve click is what fires Digio. We do this synchronously so any Digio
+  // 4xx is surfaced back to the CEO UI; the NBFC stays `approved` regardless
+  // (the admin can hit the resend endpoint to retry). When the agreement is
+  // already COMPLETED, the webhook path owns activation — skip.
+  let digioTriggered: { documentId: string; signerCount: number } | null = null;
+  let digioError: string | null = null;
+  if (r.lspAgreementStatus === "PENDING_CEO_VERIFICATION") {
+    try {
+      const out = await triggerLspSigning(id);
+      digioTriggered = {
+        documentId: out.digioDocumentId,
+        signerCount: out.signerCount,
+      };
+      await db.insert(auditLogs).values({
+        id: randomUUID(),
+        entity_type: "nbfc",
+        entity_id: String(id),
+        action: "nbfc.lsp_agreement.digio_triggered",
+        performed_by: adminUserId,
+        new_data: {
+          digio_document_id: out.digioDocumentId,
+          signer_count: out.signerCount,
+        },
+      });
+    } catch (err) {
+      digioError = err instanceof Error ? err.message : String(err);
+      console.error(
+        "[nbfc.approve] Digio trigger failed — NBFC stays approved, admin can resend",
+        digioError,
+      );
+      await db.insert(auditLogs).values({
+        id: randomUUID(),
+        entity_type: "nbfc",
+        entity_id: String(id),
+        action: "nbfc.lsp_agreement.digio_trigger_failed",
+        performed_by: adminUserId,
+        new_data: { error: digioError },
+      });
+    }
+  }
 
   return NextResponse.json({
     ok: true,
     nbfcId: updated.id,
     status: updated.status,
     approvedAt: updated.approved_at,
+    digio: digioTriggered,
+    digioError,
   });
 }

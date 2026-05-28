@@ -20,16 +20,19 @@ export async function GET(
 ) {
   try {
     const user = await requireAuth();
+    // The `[serial]` segment accepts either an inventory id (INV-…) or a real
+    // serial number. Non-serialized items (e.g. Digital SOC) have a NULL serial,
+    // so callers pass the always-present primary key instead.
     const { serial } = await params;
 
     const [inv] = await db
       .select()
       .from(inventory)
-      .where(eq(inventory.serial_number, serial))
+      .where(or(eq(inventory.id, serial), eq(inventory.serial_number, serial)))
       .limit(1);
     if (!inv) {
       return NextResponse.json(
-        { success: false, error: { message: "Serial not found" } },
+        { success: false, error: { message: "Inventory item not found" } },
         { status: 404 },
       );
     }
@@ -130,20 +133,26 @@ export async function GET(
       : null;
 
     const warranty = await safe(
-      async () =>
-        (
-          await db
-            .select({
-              id: deployedAssets.id,
-              warranty_start_date: deployedAssets.warranty_start_date,
-              warranty_end_date: deployedAssets.warranty_end_date,
-              warranty_status: deployedAssets.warranty_status,
-              deployment_date: deployedAssets.deployment_date,
-            })
-            .from(deployedAssets)
-            .where(eq(deployedAssets.serial_number, serial))
-            .limit(1)
-        )[0] ?? null,
+      async () => {
+        // deployedAssets is keyed by the real serial; non-serialized items
+        // (NULL serial) never have a row here.
+        if (!inv.serial_number) return null;
+        return (
+          (
+            await db
+              .select({
+                id: deployedAssets.id,
+                warranty_start_date: deployedAssets.warranty_start_date,
+                warranty_end_date: deployedAssets.warranty_end_date,
+                warranty_status: deployedAssets.warranty_status,
+                deployment_date: deployedAssets.deployment_date,
+              })
+              .from(deployedAssets)
+              .where(eq(deployedAssets.serial_number, inv.serial_number))
+              .limit(1)
+          )[0] ?? null
+        );
+      },
       null as {
         id: string;
         warranty_start_date: Date | null;
@@ -191,7 +200,11 @@ export async function GET(
           .leftJoin(users, eq(users.id, inventoryEvents.performed_by))
           .where(
             or(
-              eq(inventoryEvents.serial_number, serial),
+              // Non-serialized items match on inventory_id only; serialized
+              // items also match their real serial.
+              ...(inv.serial_number
+                ? [eq(inventoryEvents.serial_number, inv.serial_number)]
+                : []),
               eq(inventoryEvents.inventory_id, inv.id),
             ),
           )

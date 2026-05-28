@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   XCircle,
 } from "lucide-react";
+import { useNbfcReadinessSignal } from "./NbfcReadinessSignal";
 
 type EntityRow = {
   id: number;
@@ -124,12 +125,20 @@ function RawResponseToggle({ raw }: { raw: unknown }) {
   );
 }
 
-export default function NbfcKycReviewPanel({ nbfcId }: { nbfcId: number }) {
+export default function NbfcKycReviewPanel({
+  nbfcId,
+  locked = false,
+}: {
+  nbfcId: number;
+  /** Read-only mode — disables every verify/OTP button + inputs. */
+  locked?: boolean;
+}) {
   const [data, setData] = useState<PageData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [aadhaarInput, setAadhaarInput] = useState("");
   const [rcInput, setRcInput] = useState("");
+  const { bump } = useNbfcReadinessSignal();
 
   const refresh = useCallback(async () => {
     try {
@@ -145,8 +154,10 @@ export default function NbfcKycReviewPanel({ nbfcId }: { nbfcId: number }) {
       setLoadError(null);
       const rcSeed = json.directors[0]?.rc_number ?? "";
       if (rcSeed && !rcInput) setRcInput(rcSeed);
+      return json;
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : "Network error");
+      return null;
     }
   }, [nbfcId, rcInput]);
 
@@ -161,12 +172,18 @@ export default function NbfcKycReviewPanel({ nbfcId }: { nbfcId: number }) {
         await fetch(`/api/admin/nbfc/${nbfcId}/kyc/${type}/verify`, {
           method: "POST",
         });
-        await refresh();
+        const fresh = await refresh();
+        if (
+          fresh &&
+          lastFor(fresh.entityVerifications, type)?.status === "success"
+        ) {
+          bump();
+        }
       } finally {
         setBusyKey(null);
       }
     },
-    [nbfcId, refresh],
+    [nbfcId, refresh, bump],
   );
 
   const runDirector = useCallback(
@@ -186,12 +203,19 @@ export default function NbfcKycReviewPanel({ nbfcId }: { nbfcId: number }) {
             body: JSON.stringify(payload ?? {}),
           },
         );
-        await refresh();
+        const fresh = await refresh();
+        const directorRow = fresh?.directors.find((d) => d.id === directorId);
+        if (
+          directorRow &&
+          lastFor(directorRow.verifications, type)?.status === "success"
+        ) {
+          bump();
+        }
       } finally {
         setBusyKey(null);
       }
     },
-    [nbfcId, refresh],
+    [nbfcId, refresh, bump],
   );
 
   const allEntityGreen = useMemo(() => {
@@ -231,6 +255,15 @@ export default function NbfcKycReviewPanel({ nbfcId }: { nbfcId: number }) {
   const director = data.directors[0];
 
   return (
+    <fieldset
+      disabled={locked}
+      inert={locked || undefined}
+      className={
+        locked
+          ? "block opacity-60 cursor-not-allowed select-none border-0 p-0 m-0"
+          : "contents"
+      }
+    >
     <div className="space-y-6">
       <header className="card-iTarang p-6 flex items-start gap-4">
         <div
@@ -536,5 +569,6 @@ export default function NbfcKycReviewPanel({ nbfcId }: { nbfcId: number }) {
         )}
       </section>
     </div>
+    </fieldset>
   );
 }

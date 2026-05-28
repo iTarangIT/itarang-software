@@ -1,0 +1,13 @@
+{
+  "id": "4620c75c-e74e-4ef8-8f82-c0707cb07aa1",
+  "status": "running",
+  "startedAt": "2026-05-12T13:57:41.513Z",
+  "updatedAt": "2026-05-12T13:57:41.514Z",
+  "agentPlugin": "claude",
+  "trackerPlugin": "json",
+  "currentIteration": 0,
+  "maxIterations": 5,
+  "totalTasks": 0,
+  "tasksCompleted": 0,
+  "cwd": "C:\\Users\\Aniket\\OneDrive\\Desktop\\Itarang_17_04_2026\\itarang-software"
+}

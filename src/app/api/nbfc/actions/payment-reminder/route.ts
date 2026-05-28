@@ -24,6 +24,13 @@ export const dynamic = "force-dynamic";
 const Body = z.object({
   loan_sanction_id: z.string().min(1),
   channel: z.enum(["sms", "whatsapp", "email"]).default("sms"),
+  context: z
+    .object({
+      entity_type: z.enum(["lead", "loan"]),
+      lead_id: z.string().min(1).optional(),
+      note: z.string().max(500).optional(),
+    })
+    .optional(),
 });
 
 function statusFromError(msg: string): number {
@@ -61,6 +68,7 @@ export async function POST(req: NextRequest) {
       loan_sanction_id: parsed.data.loan_sanction_id,
       channel: parsed.data.channel,
       actor_user_id: actor.user_id,
+      context: parsed.data.context,
     });
 
     return NextResponse.json(result, { status: 200 });

@@ -1,8 +1,12 @@
 import { db } from "@/lib/db";
-import { inventory, products, productCategories } from "@/lib/db/schema";
-import { and, eq, ilike, inArray, isNull } from "drizzle-orm";
+import { inventory, paraphernaliaStock, products, productCategories } from "@/lib/db/schema";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
+import {
+  canonicalizeAssetCategory,
+  vehicleClassFromSlug,
+} from "@/lib/inventory/vehicle-class";
 
 function slugify(input: string): string {
   return input
@@ -12,12 +16,22 @@ function slugify(input: string): string {
     .slice(0, 200);
 }
 
-// Map slug → canonical asset_category prefix used for ILIKE matching.
-const SLUG_TO_CLASS: Record<string, string> = {
-  "2w": "2W",
-  "3w": "3W",
-  "4w": "4W",
-};
+/**
+ * Classify an inventory row into one of the three asset kinds. `inventory_type`
+ * is the only reliable paraphernalia signal (`paraphernalia_lot`); battery /
+ * charger come from the `asset_type` column. Returns null for anything
+ * unrecognised so the caller can decide how to treat it.
+ */
+function classifyAssetKind(
+  inventoryType: string | null,
+  assetType: string | null,
+): "battery" | "charger" | "paraphernalia" | null {
+  if (inventoryType === "paraphernalia_lot") return "paraphernalia";
+  const at = (assetType || "").toLowerCase();
+  if (at === "battery") return "battery";
+  if (at === "charger") return "charger";
+  return null;
+}
 
 type SerialRow = {
   id: string;
@@ -57,7 +71,19 @@ export const GET = withErrorHandler(async (req: Request) => {
   const categoryParam = (searchParams.get("category") || "").trim().toLowerCase();
   if (!categoryParam) return errorResponse("category is required", 400);
 
-  const canonicalClass = SLUG_TO_CLASS[categoryParam];
+  // Optional asset-kind filter (battery | charger | paraphernalia). When absent
+  // or unrecognised the endpoint returns every kind in the category (back-compat).
+  const assetTypeParam = (searchParams.get("assetType") || "")
+    .trim()
+    .toLowerCase();
+  const assetType =
+    assetTypeParam === "battery" ||
+    assetTypeParam === "charger" ||
+    assetTypeParam === "paraphernalia"
+      ? assetTypeParam
+      : null;
+
+  const canonicalClass = vehicleClassFromSlug(categoryParam);
   if (!canonicalClass) return successResponse([]);
 
   // Step 1: pull the dealer's available inventory rows in this vehicle class.
@@ -67,12 +93,13 @@ export const GET = withErrorHandler(async (req: Request) => {
   // PATCH that writes lead.primary_product_id (uuid column) never receives a
   // SKU literal — that's what was producing the "Something went wrong"
   // toast on Step 4.
-  const invRows = await db
+  const allInvRows = await db
     .select({
       id: inventory.id,
       serial_number: inventory.serial_number,
       asset_type: inventory.asset_type,
       asset_category: inventory.asset_category,
+      inventory_type: inventory.inventory_type,
       model_type: inventory.model_type,
       voltage_v: inventory.voltage_v,
       capacity_ah: inventory.capacity_ah,
@@ -85,12 +112,37 @@ export const GET = withErrorHandler(async (req: Request) => {
       and(
         eq(inventory.dealer_id, dealerId),
         eq(inventory.status, "available"),
-        ilike(inventory.asset_category, `${canonicalClass}%`),
       ),
     )
     .orderBy(inventory.model_type, inventory.serial_number);
 
+  // Bucket each row into a vehicle class the same way the lead "categories"
+  // endpoint does (canonicalizeAssetCategory), instead of a brittle
+  // `asset_category ILIKE '3W%'`. The ILIKE prefix silently dropped messy
+  // values like "3 Wheeler" / "3-Wheeler", which hid whole paraphernalia
+  // lots from the Product-type list and made it disagree with the
+  // "N in stock" total.
+  const invRows = allInvRows.filter(
+    (r) =>
+      canonicalizeAssetCategory(r.asset_category) === canonicalClass &&
+      (assetType === null ||
+        classifyAssetKind(r.inventory_type, r.asset_type) === assetType),
+  );
+
   if (invRows.length === 0) return successResponse([]);
+
+  // Live paraphernalia ledger for this dealer. Paraphernalia availability is
+  // tracked here as a quantity per item_type — the `paraphernalia_lot` rows in
+  // `inventory` are invoice receipts and must NOT be counted one-per-row.
+  const paraStockRows = await db
+    .select({
+      item_type: paraphernaliaStock.item_type,
+      available_qty: paraphernaliaStock.available_qty,
+    })
+    .from(paraphernaliaStock)
+    .where(eq(paraphernaliaStock.dealer_id, dealerId));
+  const paraStockByType = new Map<string, number>();
+  for (const r of paraStockRows) paraStockByType.set(r.item_type, r.available_qty);
 
   // Step 2: collect product_ids and skus seen in inventory; load matching
   // products in one round-trip and index by both id and sku.
@@ -193,7 +245,7 @@ export const GET = withErrorHandler(async (req: Request) => {
           const voltageInt = Math.round(Number(inv.voltage_v) || 0);
           const capacityInt = Math.round(Number(inv.capacity_ah) || 0);
 
-          const [inserted] = await tx
+          let [inserted] = await tx
             .insert(products)
             .values({
               category_id: canonicalCategoryRow.id,
@@ -208,6 +260,17 @@ export const GET = withErrorHandler(async (req: Request) => {
               warranty_months: 0,
               status: "active",
             })
+            // The (category_id, voltage_v, capacity_ah) unique constraint can
+            // already be held by a different SKU — e.g. two paraphernalia items
+            // both at 0V/0Ah. Skip on conflict instead of aborting the whole
+            // transaction (that 23505 was 500-ing the route → empty dropdown).
+            .onConflictDoNothing({
+              target: [
+                products.category_id,
+                products.voltage_v,
+                products.capacity_ah,
+              ],
+            })
             .returning({
               id: products.id,
               name: products.name,
@@ -220,6 +283,33 @@ export const GET = withErrorHandler(async (req: Request) => {
               status: products.status,
               category_id: products.category_id,
             });
+
+          // Conflict skipped the insert — reuse the row already occupying that
+          // (category, voltage, capacity) slot so the SKU still resolves.
+          if (!inserted) {
+            [inserted] = await tx
+              .select({
+                id: products.id,
+                name: products.name,
+                slug: products.slug,
+                sku: products.sku,
+                hsn_code: products.hsn_code,
+                warranty_months: products.warranty_months,
+                is_serialized: products.is_serialized,
+                sort_order: products.sort_order,
+                status: products.status,
+                category_id: products.category_id,
+              })
+              .from(products)
+              .where(
+                and(
+                  eq(products.category_id, canonicalCategoryRow.id),
+                  eq(products.voltage_v, voltageInt),
+                  eq(products.capacity_ah, capacityInt),
+                ),
+              )
+              .limit(1);
+          }
 
           if (!inserted) continue;
 
@@ -258,6 +348,12 @@ export const GET = withErrorHandler(async (req: Request) => {
 
   // Step 3b: group inventory rows by their resolved product UUID.
   const grouped = new Map<string, ProductOption>();
+  // paraphernalia item_type -> the product UUID its lot rows resolve to (first
+  // match wins). Keyed by item_type, NOT by product id: several item_types can
+  // collapse onto one `products` row, and each item_type's ledger quantity must
+  // still be counted exactly once. Availability comes from paraphernalia_stock,
+  // never from counting `paraphernalia_lot` rows one-per-row.
+  const productIdByItemType = new Map<string, string>();
 
   for (const r of invRows) {
     const product =
@@ -291,6 +387,16 @@ export const GET = withErrorHandler(async (req: Request) => {
       grouped.set(product.id, entry);
     }
 
+    // Paraphernalia: defer the count to the paraphernalia_stock ledger (below).
+    // A `paraphernalia_lot` row is an invoice receipt, not one sellable unit.
+    if (r.inventory_type === "paraphernalia_lot") {
+      const itemType = r.asset_type ?? "";
+      if (itemType && !productIdByItemType.has(itemType)) {
+        productIdByItemType.set(itemType, product.id);
+      }
+      continue;
+    }
+
     entry.available_quantity += 1;
     entry.serials.push({
       id: r.id,
@@ -298,6 +404,18 @@ export const GET = withErrorHandler(async (req: Request) => {
       warehouse_location: r.warehouse_location,
       unit_price: r.final_amount != null ? Number(r.final_amount) : 0,
     });
+  }
+
+  // Set paraphernalia availability from the live ledger. Each item_type's
+  // quantity is added exactly once, to the product its lot rows resolve to —
+  // so when several item_types collapse onto one `products` row their
+  // quantities sum (instead of a last-write-wins map dropping all but one).
+  // Paraphernalia is qty-tracked, not serialized — it carries no serials here.
+  for (const [itemType, productId] of productIdByItemType) {
+    const entry = grouped.get(productId);
+    if (!entry) continue;
+    entry.available_quantity += paraStockByType.get(itemType) ?? 0;
+    entry.serials = [];
   }
 
   const result = Array.from(grouped.values()).sort((a, b) =>

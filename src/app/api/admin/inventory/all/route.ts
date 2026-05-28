@@ -4,6 +4,7 @@ import { and, asc, count, desc, eq, ilike, lte, or, sql, SQL } from "drizzle-orm
 import { requireInventoryAdmin } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { normalizeInventoryStatus } from "@/lib/inventory/status";
+import { getInventorySummary } from "@/lib/inventory/summary";
 
 function hasPgCode(error: unknown, code: string): boolean {
   let curr: unknown = error;
@@ -267,16 +268,9 @@ export const GET = withErrorHandler(async (req: Request) => {
   }
 
   const activeWhereExpr = useLegacyColumns ? legacyWhereExpr : whereExpr;
-  let total = items.length;
-  const kpis = {
-    totalUnits: 0,
-    availableUnits: 0,
-    reservedUnits: 0,
-    soldUnits: 0,
-    writtenOffUnits: 0,
-    totalInvoiceValue: 0,
-  };
 
+  // Pagination count — number of inventory rows matching the table filters.
+  let total = items.length;
   try {
     const [countRow] = await db
       .select({ total: count() })
@@ -284,37 +278,43 @@ export const GET = withErrorHandler(async (req: Request) => {
       .leftJoin(accounts, eq(accounts.id, inventory.dealer_id))
       .where(activeWhereExpr);
     total = countRow?.total ?? items.length;
-
-    const kpiRows = await db
-      .select({
-        status: inventory.status,
-        units: sql<number>`count(*)::int`,
-        value: sql<number>`coalesce(sum(${inventory.inventory_amount}),0)::float`,
-      })
-      .from(inventory)
-      .where(activeWhereExpr)
-      .groupBy(inventory.status);
-
-    for (const r of kpiRows) {
-      kpis.totalUnits += r.units;
-      kpis.totalInvoiceValue += Number(r.value || 0);
-      if (r.status === "available") kpis.availableUnits = r.units;
-      if (r.status === "reserved") kpis.reservedUnits = r.units;
-      if (r.status === "sold") kpis.soldUnits = r.units;
-      if (r.status === "written_off") kpis.writtenOffUnits = r.units;
-    }
   } catch (error) {
     if (!hasPgCode(error, "42703")) throw error;
     total = items.length;
-    for (const row of items) {
-      kpis.totalUnits += 1;
-      kpis.totalInvoiceValue += Number(row.invoiceValue || 0);
-      if (row.status === "available") kpis.availableUnits += 1;
-      if (row.status === "reserved") kpis.reservedUnits += 1;
-      if (row.status === "sold") kpis.soldUnits += 1;
-      if (row.status === "written_off") kpis.writtenOffUnits += 1;
-    }
   }
+
+  // Headline KPIs — computed by the shared canonical aggregator so the admin
+  // dashboard and the dealer dashboard always report the same numbers for the
+  // same dealer + category. Paraphernalia is counted from the live
+  // `paraphernalia_stock` ledger, never from `paraphernalia_lot` invoice rows.
+  //
+  // The cards ARE the per-status breakdown (Total = Available + Reserved +
+  // Sold), so the `status` filter — like the `q` and `minAge` filters — narrows
+  // the table list only and never re-scopes the KPI cards. "Total units"
+  // therefore stays fixed as the user changes the status dropdown.
+  const sc = (subCategory || "").toLowerCase();
+  const summaryCategory: "battery" | "charger" | "paraphernalia" | undefined =
+    sc === "battery"
+      ? "battery"
+      : sc === "charger"
+        ? "charger"
+        : sc
+          ? "paraphernalia"
+          : undefined;
+
+  const summary = await getInventorySummary({
+    dealerId: dealerId ?? undefined,
+    category: summaryCategory,
+  });
+
+  const kpis = {
+    totalUnits: summary.totalUnits,
+    availableUnits: summary.availableUnits,
+    reservedUnits: summary.reservedUnits,
+    soldUnits: summary.soldUnits,
+    writtenOffUnits: summary.writtenOffUnits,
+    totalInvoiceValue: summary.stockValue,
+  };
 
   return successResponse({
     total,

@@ -6,28 +6,32 @@ import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
-import { desc } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
 import ExcelJS from "exceljs";
 
 export const GET = withErrorHandler(async () => {
   await requireRole(["sales_manager", "sales_head", "ceo", "business_head"]);
 
-  // Fetch all dealer leads (same as the UI — no status filter)
-  const allLeads = await db
+  // Same SQL-level filter as the /converted view: last follow_up_history
+  // entry's analysis.intent_score >= 75. Filtering in SQL guarantees the
+  // download matches what the UI shows even when there are thousands of
+  // leads (the previous in-memory approach worked but was wasteful).
+  const leads = await db
     .select()
     .from(dealerLeads)
+    .where(sql`
+      ${dealerLeads.follow_up_history} IS NOT NULL
+      AND jsonb_array_length(${dealerLeads.follow_up_history}) > 0
+      AND COALESCE(
+        ((${dealerLeads.follow_up_history} ->
+          (jsonb_array_length(${dealerLeads.follow_up_history}) - 1))
+          -> 'analysis' ->> 'intent_score')::int,
+        0
+      ) >= 75
+    `)
     .orderBy(desc(dealerLeads.created_at));
 
-  // Apply the exact same filter the UI uses:
-  // last follow-up history entry has intent_score >= 80
-  const leads = allLeads.filter((lead: any) => {
-    const history = lead.follow_up_history || [];
-    if (!history.length) return false;
-    const lastAttempt = history[history.length - 1];
-    return lastAttempt?.analysis?.intent_score >= 80;
-  });
-
-  console.log(`[DOWNLOAD] Converted leads (intent >= 80): ${leads.length}`);
+  console.log(`[DOWNLOAD] Converted leads (intent >= 75): ${leads.length}`);
 
   // ── Build Excel ───────────────────────────────────────────
   const workbook = new ExcelJS.Workbook();

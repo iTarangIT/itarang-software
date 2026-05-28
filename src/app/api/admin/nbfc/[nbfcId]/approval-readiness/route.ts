@@ -51,5 +51,6 @@ export async function GET(
     missingDirectorKyc: r.missingDirectorKyc,
     reason: r.reason,
     currentStatus: r.currentStatus ?? null,
+    pendingCorrections: r.pendingCorrections,
   });
 }

@@ -85,6 +85,9 @@ export async function middleware(request: NextRequest) {
     sales_head: "/sales-head",
     sales_manager: "/sales-manager",
     sales_executive: "/sales-executive",
+    sales_insight: "/sales-insight",
+    inside_sales_rep: "/inside-sales",
+    asm: "/asm",
     finance_controller: "/finance-controller",
     inventory_manager: "/inventory-manager",
     service_engineer: "/service-engineer",
@@ -167,6 +170,25 @@ export async function middleware(request: NextRequest) {
     path,
   });
 
+  // First-login forced password reset for NBFC partners. Activation route sets
+  // users.must_change_password=true; /api/auth/change-password clears it.
+  if (
+    role === "nbfc_partner" &&
+    path.startsWith("/nbfc") &&
+    path !== "/change-password"
+  ) {
+    const { data: mustChange } = await supabase
+      .from("users")
+      .select("must_change_password")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (mustChange?.must_change_password) {
+      return addNoStoreHeaders(
+        NextResponse.redirect(new URL("/change-password", request.url)),
+      );
+    }
+  }
+
   if (path === "/login" || path === "/" || path === "/dashboard") {
     if (myDashboard !== "/") {
       return addNoStoreHeaders(
@@ -202,6 +224,11 @@ export async function middleware(request: NextRequest) {
       "ceo",
       "sales_head",
     ],
+    // Part 0 Module 3 — the admin / ops workspace. The Ops-Manager persona is
+    // held by the sales_head account, so sales_head gets full access (admin +
+    // CEO too). This bare "/admin" prefix is LAST so the specific entries
+    // above are matched first by the prefix find().
+    "/admin": ["admin", "sales_head", "ceo"],
   };
 
   const allowedSharedRoles = Object.entries(sharedRouteAccess).find(
@@ -230,6 +257,10 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    // Skip Next internals, favicon, image assets, and uploaded PDFs served
+    // from public/nbfc-uploads/. Without `.pdf` in this list, PDF iframes
+    // hit the auth middleware and get redirected to the user's role
+    // dashboard instead of returning the file.
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf)$).*)",
   ],
 };

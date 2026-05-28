@@ -19,6 +19,7 @@ import {
   Plus,
   ArrowRightLeft,
   FileBarChart2,
+  Download,
   X,
 } from "lucide-react";
 
@@ -97,12 +98,46 @@ export default function AdminInventoryDashboard() {
   const [rows, setRows] = useState<InventoryRow[]>([]);
   const [kpis, setKpis] = useState<KPIs | null>(null);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeSerial, setActiveSerial] = useState<string | null>(null);
+  const [activeInventoryId, setActiveInventoryId] = useState<string | null>(
+    null,
+  );
 
   const updateFilters = (patch: Partial<InventoryFilters>) => {
     setPage(1);
     setFilters((f) => ({ ...f, ...patch }));
+  };
+
+  // Export the full filtered result set as CSV. The /all endpoint honours the
+  // same filters as the table and returns up to 5000 rows when format=csv —
+  // so the download reflects the active Dealer/Status/Sub-category/Search,
+  // not just the current page.
+  const handleDownloadCsv = async () => {
+    setExporting(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      Object.entries(filters).forEach(([k, v]) => {
+        if (v) params.set(k, v);
+      });
+      params.set("format", "csv");
+      const res = await fetch(`/api/admin/inventory/all?${params.toString()}`);
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `inventory-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "CSV export failed");
+    } finally {
+      setExporting(false);
+    }
   };
 
   useEffect(() => {
@@ -209,6 +244,19 @@ export default function AdminInventoryDashboard() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleDownloadCsv}
+              disabled={exporting || loading || total === 0}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-800 rounded-xl text-sm font-bold hover:bg-gray-50 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {exporting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+              {exporting ? "Exporting…" : "Download CSV"}
+            </button>
             <Link
               href="/admin/inventory/upload"
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-colors shadow-sm"
@@ -259,7 +307,7 @@ export default function AdminInventoryDashboard() {
           />
           <KpiCard
             icon={<Banknote className="w-5 h-5" />}
-            label="Network value"
+            label="Stock value"
             value={totalValueFmt}
             tone="indigo"
           />
@@ -433,9 +481,7 @@ export default function AdminInventoryDashboard() {
                     <tr
                       key={r.id}
                       className="hover:bg-blue-50/30 cursor-pointer transition-colors"
-                      onClick={() =>
-                        r.serialNumber && setActiveSerial(r.serialNumber)
-                      }
+                      onClick={() => setActiveInventoryId(r.id)}
                     >
                       <td className="px-3 py-2.5 font-mono text-[#0047AB] font-bold">
                         {r.serialNumber || "—"}
@@ -500,10 +546,10 @@ export default function AdminInventoryDashboard() {
       </div>
 
       {/* ─── Detail Card Modal ─────────────────────────────────────────── */}
-      {activeSerial && (
+      {activeInventoryId && (
         <div
           className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 overflow-auto"
-          onClick={() => setActiveSerial(null)}
+          onClick={() => setActiveInventoryId(null)}
         >
           <div
             className="bg-white rounded-2xl max-w-3xl w-full shadow-2xl my-8"
@@ -514,13 +560,13 @@ export default function AdminInventoryDashboard() {
                 Inventory Detail
               </h2>
               <button
-                onClick={() => setActiveSerial(null)}
+                onClick={() => setActiveInventoryId(null)}
                 className="p-1 rounded-lg hover:bg-gray-100"
               >
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
-            <InventoryDetailCard serial={activeSerial} />
+            <InventoryDetailCard inventoryId={activeInventoryId} />
           </div>
         </div>
       )}

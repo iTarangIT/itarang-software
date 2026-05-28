@@ -1,0 +1,116 @@
+"use client";
+
+import Link from "next/link";
+import { ArrowLeft, Phone, MapPin, AlarmCheck, AlertCircle, RotateCcw, ShieldAlert } from "lucide-react";
+import type { LeadDetailBundle } from "@/lib/inside-sales/types";
+import { StatusChip } from "../../../_components/StatusChip";
+import { IntentBadge } from "../../../_components/IntentBadge";
+import { InterestChip } from "../../../_components/InterestChip";
+import { OwnerIndicator } from "../../../_components/OwnerIndicator";
+
+type Props = {
+    bundle: LeadDetailBundle;
+    viewerId: string;
+};
+
+function daysAgo(iso: string | null): string {
+    if (!iso) return "never";
+    const ms = Date.now() - new Date(iso).getTime();
+    const days = Math.floor(ms / 86_400_000);
+    if (days <= 0) return "today";
+    if (days === 1) return "1 day ago";
+    return `${days} days ago`;
+}
+
+export function LeadDetailHeader({ bundle, viewerId }: Props) {
+    const lead = bundle.lead;
+    const isOwner = lead.current_owner_id === viewerId;
+    const isUnassigned = !lead.current_owner_id;
+    const isEscalated = lead.escalation_status === "pending_review";
+    const wasReactivated = Boolean(lead.previous_lost_reason);
+
+    return (
+        <div className="border-b border-gray-200 bg-white sticky top-0 z-10">
+            <div className="px-6 py-4 flex items-start justify-between gap-6">
+                <div className="min-w-0 flex-1">
+                    <Link href="/inside-sales" className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 mb-2">
+                        <ArrowLeft className="h-3 w-3" />
+                        Back to queue
+                    </Link>
+                    <div className="flex items-center gap-3 flex-wrap">
+                        <h1 className="text-xl font-semibold text-gray-900 truncate">
+                            {lead.dealer_name || lead.shop_name || "(unnamed dealer)"}
+                        </h1>
+                        <StatusChip status={lead.lead_status} />
+                        <InterestChip level={lead.interest_level} />
+                        <IntentBadge score={lead.final_intent_score} />
+                    </div>
+                    {lead.shop_name && lead.dealer_name && (
+                        <div className="text-xs text-gray-500 mt-0.5">{lead.shop_name}</div>
+                    )}
+                    <div className="flex items-center gap-4 mt-2 text-xs text-gray-600 flex-wrap">
+                        <span className="inline-flex items-center gap-1">
+                            <Phone className="h-3 w-3 text-gray-400" />
+                            {lead.phone || "—"}
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                            <MapPin className="h-3 w-3 text-gray-400" />
+                            {[lead.city, lead.state].filter(Boolean).join(", ") || "—"}
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                            <AlarmCheck className="h-3 w-3 text-gray-400" />
+                            Last touch: {daysAgo(lead.last_touchpoint_at)}
+                        </span>
+                        <OwnerIndicator
+                            currentOwnerId={lead.current_owner_id}
+                            currentOwnerName={lead.current_owner_name}
+                            viewerId={viewerId}
+                            asmName={lead.asm_name}
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* Conditional banners (BRD §0.5) */}
+            <div className="px-6 pb-3 space-y-2">
+                {!isOwner && !isUnassigned && (
+                    <Banner tone="gray" icon={ShieldAlert}>
+                        You are not the current owner — view only.
+                    </Banner>
+                )}
+                {isEscalated && (
+                    <Banner tone="amber" icon={AlertCircle}>
+                        Escalated — pending admin review.
+                    </Banner>
+                )}
+                {wasReactivated && (
+                    <Banner tone="sky" icon={RotateCcw}>
+                        Reactivated from Lost{lead.previous_lost_reason ? ` (was ${lead.previous_lost_reason})` : ""}. Review prior history before calling.
+                    </Banner>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function Banner({
+    children,
+    icon: Icon,
+    tone,
+}: {
+    children: React.ReactNode;
+    icon: React.ComponentType<{ className?: string }>;
+    tone: "gray" | "amber" | "sky";
+}) {
+    const tones: Record<string, string> = {
+        gray: "border-gray-200 bg-gray-50 text-gray-700",
+        amber: "border-amber-200 bg-amber-50 text-amber-800",
+        sky: "border-sky-200 bg-sky-50 text-sky-800",
+    };
+    return (
+        <div className={`rounded-md border px-3 py-2 text-xs flex items-center gap-2 ${tones[tone]}`}>
+            <Icon className="h-3.5 w-3.5 shrink-0" />
+            <span>{children}</span>
+        </div>
+    );
+}
