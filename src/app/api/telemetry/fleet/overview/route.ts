@@ -2,7 +2,10 @@ import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth-utils';
 import { fetchFleetDashboardCEO } from '@/lib/telemetry/queries';
 
-export const revalidate = 60;
+// requireRole() reads cookies → route is inherently dynamic and cannot be
+// statically prerendered. The previous `revalidate = 60` conflicted with that
+// and made static generation throw DYNAMIC_SERVER_USAGE on every deploy.
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
     try {

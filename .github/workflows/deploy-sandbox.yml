@@ -20,7 +20,10 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Build alone takes ~13 min; on cold deploys sysdeps + npm ci add another
+    # 15-20 min. 45 min gives enough room for primary build + rollback build
+    # in the worst case without GitHub killing the runner mid-flight.
+    timeout-minutes: 45
     steps:
       # ──────────────────────────────────────────────────────────────────
       # 1. Slack notify start
@@ -163,7 +166,11 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
-          command_timeout: 15m
+          # Codebase has grown; cold next-build (webpack) now takes ~13 min
+          # (compile + 196 static pages + traces). 15m left no margin and
+          # caused SSH "Run Command Timeout" → false-positive rollback.
+          # 25m matches production's overall budget (20m) plus headroom.
+          command_timeout: 25m
           script_stop: false
           envs: APP_DIR,LOG_DIR
           script: |
@@ -411,7 +418,9 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
-          command_timeout: 15m
+          # Rollback rebuilds from PREV_SHA, so it pays the same ~13 min
+          # next-build cost as the primary build step. Keep these in sync.
+          command_timeout: 25m
           script_stop: false
           envs: APP_DIR,LOG_DIR
           script: |
