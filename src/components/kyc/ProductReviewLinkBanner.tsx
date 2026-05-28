@@ -8,6 +8,11 @@ import { Package, ArrowRight } from "lucide-react";
 // on the product selection (sanction / reject the loan). Those actions live
 // at /admin/product-review/[leadId]. Surface a one-click banner from the KYC
 // review page so the admin doesn't have to leave the case to find them.
+//
+// BRD Addendum V0.1 §5.1 — admin Loan Sanctioned / Loan Rejected actions are
+// REMOVED in Phase 2. The product-review page still renders (read-only product
+// + customer profile download), so this banner still links there for context,
+// but the wording is updated to make clear no decision is owed.
 
 interface ProductReviewSummary {
   leadStatus: string | null;
@@ -22,9 +27,10 @@ const TRIGGER_STATES = new Set([
 ]);
 
 const STATE_COPY: Record<string, { label: string; tone: "amber" | "blue" | "red" }> = {
+  // Addendum §5.1 — admin no longer decides; lead is routed to NBFC(s) for FI + VKYC.
   pending_final_approval: {
-    label: "Step 4 submitted — awaiting your loan decision",
-    tone: "amber",
+    label: "Step 4 submitted — routed to selected lending partner(s)",
+    tone: "blue",
   },
   loan_sanctioned: {
     label: "Loan sanctioned — dealer is finalising dispatch",

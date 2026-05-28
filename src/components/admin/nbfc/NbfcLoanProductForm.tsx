@@ -13,7 +13,8 @@
  */
 import { useState } from "react";
 import dynamic from "next/dynamic";
-import { Loader2, AlertCircle, Plus, X } from "lucide-react";
+import Link from "next/link";
+import { Loader2, AlertCircle, CheckCircle2, Plus, X } from "lucide-react";
 import type { LocationPair } from "./StateCityPicker";
 
 // Lazy-load the picker so the ~150 kB India states/cities dataset only ships
@@ -79,6 +80,46 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<
+    | {
+        productId: number;
+        productName: string;
+        status: "active" | "inactive";
+      }
+    | null
+  >(null);
+
+  function resetForm() {
+    setProductName("");
+    setCategories([]);
+    setLoanAmountMin("");
+    setLoanAmountMax("");
+    setTenureMin("");
+    setTenureMax("");
+    setMinRoi("");
+    setMaxRoi("");
+    setDownPayment("");
+    setSubventionAvailable(false);
+    setFileChargeFixed("");
+    setFileChargePct("");
+    setDisbursement("direct_to_dealer");
+    setStatus("active");
+    setActiveLocations([]);
+    setOwnedApplicable(true);
+    setRentedApplicable(false);
+    setProcessingFeeOwned("");
+    setProcessingFeeRented("");
+    setOwnedHealthLifeApplicable(false);
+    setRentedHealthLifeApplicable(false);
+    setHealthLifeInsuranceOwned("");
+    setHealthLifeInsuranceRented("");
+    setDisbursementTatHours("");
+    setCibilRequired(true);
+    setMinCreditScore("");
+    setMaxCreditScore("");
+    setEligibilityDocs([]);
+    setError(null);
+  }
 
   const toggleCategory = (cat: BatteryCategory) =>
     setCategories((prev) =>
@@ -98,6 +139,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
+    setSuccess(null);
 
     const body: Record<string, unknown> = {
       productName,
@@ -161,6 +203,16 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
       if (!res.ok) {
         setError(data?.message ?? `Request failed (${res.status})`);
       } else {
+        setSuccess({
+          productId: data.id,
+          productName: data.productName ?? productName,
+          status: (data.status as "active" | "inactive") ?? status,
+        });
+        // Scroll the success banner into view since the button is at the
+        // bottom and the banner renders just above it.
+        if (typeof window !== "undefined") {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }
         onCreated?.(data.id);
       }
     } catch (err) {
@@ -176,6 +228,60 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
       className="space-y-6"
       data-testid="nbfc-loan-product-form"
     >
+      {success && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-start gap-3 rounded-xl px-4 py-3 border"
+          style={{
+            background: "rgba(34, 197, 94, 0.08)",
+            borderColor: "rgba(34, 197, 94, 0.35)",
+            color: "rgb(21, 128, 61)",
+          }}
+          data-testid="loan-product-success"
+        >
+          <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
+          <div className="text-sm flex-1">
+            <p className="font-semibold">Loan product created</p>
+            <p className="opacity-90 mt-0.5">
+              <span className="font-medium">{success.productName}</span>{" "}
+              <span className="opacity-80">(id #{success.productId})</span> is
+              now{" "}
+              <span className="font-semibold uppercase">{success.status}</span>
+              {success.status === "active"
+                ? " — it will appear in dealer Section G for any lead that matches its battery category and geography."
+                : " — flip status to Active when you want it to show in dealer Section G."}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  resetForm();
+                  setSuccess(null);
+                }}
+                className="text-xs font-semibold underline underline-offset-2 hover:opacity-80"
+              >
+                Create another
+              </button>
+              <Link
+                href={`/admin/nbfc/${nbfcId}/edit`}
+                className="text-xs font-semibold underline underline-offset-2 hover:opacity-80"
+              >
+                Back to NBFC
+              </Link>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSuccess(null)}
+            aria-label="Dismiss success message"
+            className="p-1 -m-1 hover:opacity-70 transition-opacity"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       <Section eyebrow="Product" title="Identity & Status">
         <Field label="Product name" full>
           <input
@@ -259,7 +365,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
       <Section
         eyebrow="Scheme highlights"
         title="Housing variants, insurance & bureau gate"
-        helper="Turn on each housing variant the NBFC underwrites. Health + Life Insurance is opt-in per variant. CIBIL/CRIF can be waived for the whole scheme."
+        helper="Turn on each housing variant the NBFC underwrites. Health + Life Insurance is opt-in per variant. Equifax can be waived for the whole scheme."
       >
         <div className="md:col-span-3 space-y-5">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -327,7 +433,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
               />
               <span>
                 <span className="block text-sm font-semibold text-[color:var(--color-ink)]">
-                  CIBIL / CRIF score required for all borrowers
+                  Equifax score required for all borrowers
                 </span>
                 <span className="block text-xs text-[color:var(--color-ink-muted)] mt-0.5">
                   When off, the bureau score check is waived for this scheme and

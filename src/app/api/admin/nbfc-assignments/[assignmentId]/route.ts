@@ -1,11 +1,19 @@
 // [E-012] PATCH /api/admin/nbfc-assignments/{assignmentId}
 //
-// BRD §6.0.8 — update an existing dealer-NBFC assignment.
-// Supports status change and notes update.
-// Status transitions:
+// Routing model: A + D (auto-enroll, admin only blocks exceptions).
+// Status semantics on dealer_nbfc_assignments:
+//   active     -> no-op (un-blocked; NBFC will auto-enroll if geo matches)
+//   suspended  -> reversible block ("exception")
+//   terminated -> permanent block (terminal; cannot transition out)
+//
+// Transitions allowed:
 //   active <-> suspended
 //   active|suspended -> terminated  (terminal — cannot move out)
 //   terminated -> *                 -> 422
+//
+// The Excluded-NBFCs admin UI uses:
+//   PATCH ... { status: 'active' }     -> remove exception
+//   PATCH ... { status: 'terminated' } -> lock permanently
 //
 // Auth: admin (requireAdminOrTestBypass for the loop test plumbing).
 

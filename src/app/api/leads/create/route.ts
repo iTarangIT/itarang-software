@@ -32,12 +32,11 @@ function gateError(
  *  1. dealer.onboarding_status === 'active' (always)
  *  2. dealer.finance_enabled === true        (finance-path only)
  *
- * NBFC assignment is intentionally NOT checked here. A lead doesn't need an
- * NBFC to be captured / KYC'd — the NBFC is only chosen at loan-sanction
- * time (Step 5), where the existing LenderDropdown already surfaces a
- * "No lenders assigned to this dealer" empty state if the assignment is
- * missing. Gating at lead-create contradicted the wizard's Hot+Finance →
- * Step 2 KYC routing and stopped admin-approved dealers from progressing.
+ * NBFC routing is intentionally NOT checked here. A lead doesn't need an
+ * NBFC to be captured / KYC'd — under the auto-enroll routing model, NBFC
+ * candidates are computed at Section G from `nbfc_loan_products` geography
+ * declarations minus any admin exclusions; there is no per-dealer enabling
+ * gate to pre-check.
  *
  * paymentMethod is treated as finance-path when it is anything other than the
  * cash-equivalent values ('cash' / legacy 'upfront'). When paymentMethod is
@@ -107,6 +106,11 @@ const step1Schema = z.object({
     current_address: z.string().optional().nullable(),
     permanent_address: z.string().optional().nullable(),
     is_current_same: z.boolean().optional(),
+    // Structured location — feeds the BRE's Section G geo match.
+    // Strings are sourced client-side from `country-state-city` so they
+    // align with nbfc_loan_products.active_locations declarations.
+    state: z.string().max(100).optional().nullable(),
+    city: z.string().max(100).optional().nullable(),
     primary_product_id: z.string().optional().nullable(),
     product_category_id: z.string().optional().nullable(),
     product_type_id: z.string().optional().nullable(),
@@ -117,6 +121,11 @@ const step1Schema = z.object({
     vehicle_owner_phone: z.string().optional().nullable(),
     interested_in: z.array(z.string()).optional(),
     payment_method: z.enum(['upfront', 'finance', 'cash', 'other_finance', 'dealer_finance']).optional().nullable(),
+    // E-130 / Addendum §3.2, §3.3 — captured at Step 1 for finance leads;
+    // strict 'required for finance' check runs in the commitStep block below.
+    resident_status: z.enum(['owned', 'rented']).optional().nullable(),
+    has_health_insurance: z.boolean().optional().nullable(),
+    has_life_insurance: z.boolean().optional().nullable(),
     initializeDraft: z.boolean().optional(),
     commitStep: z.boolean().optional(),
     leadId: z.string().optional().nullable(),
@@ -315,6 +324,8 @@ export const POST = withErrorHandler(async (req: Request) => {
                             current_address: existing.current_address,
                             permanent_address: existing.permanent_address,
                             is_current_same: existing.is_current_same,
+                            state: existing.state ?? '',
+                            city: existing.city ?? '',
                             product_category_id: existing.product_category_id,
                             product_type_id: existing.product_type_id,
                             primary_product_id: existing.primary_product_id,
@@ -325,7 +336,12 @@ export const POST = withErrorHandler(async (req: Request) => {
                             vehicle_ownership: existing.vehicle_ownership,
                             vehicle_owner_name: existing.vehicle_owner_name,
                             vehicle_owner_phone: existing.vehicle_owner_phone,
-                            interested_in: existing.interested_in || []
+                            interested_in: existing.interested_in || [],
+                            payment_method: existing.payment_method,
+                            // Addendum §3.2, §3.3 — surface saved finance-only fields on draft resume.
+                            resident_status: existing.resident_status || '',
+                            has_health_insurance: existing.has_health_insurance,
+                            has_life_insurance: existing.has_life_insurance,
                         }
                     });
                 }
@@ -385,6 +401,28 @@ export const POST = withErrorHandler(async (req: Request) => {
             }
         }
 
+        // Addendum §3.2, §3.3 — three new fields are required for finance leads.
+        const _isFinanceLead = data.payment_method === 'finance'
+            || data.payment_method === 'other_finance'
+            || data.payment_method === 'dealer_finance';
+        if (_isFinanceLead) {
+            if (data.resident_status !== 'owned' && data.resident_status !== 'rented') {
+                return errorResponse('Resident status required for finance cases', 400);
+            }
+            if (typeof data.has_health_insurance !== 'boolean') {
+                return errorResponse('Existing Health Insurance answer required for finance cases', 400);
+            }
+            if (typeof data.has_life_insurance !== 'boolean') {
+                return errorResponse('Existing Life Insurance answer required for finance cases', 400);
+            }
+            if (!data.state?.trim()) {
+                return errorResponse('State required for finance cases', 400);
+            }
+            if (!data.city?.trim()) {
+                return errorResponse('City required for finance cases', 400);
+            }
+        }
+
         const normPhone = normalizePhone(data.phone)!;
         const normOwnerPhone = normalizePhone(data.vehicle_owner_phone);
         const score = data.interest_level === 'hot' ? 90 : data.interest_level === 'warm' ? 60 : 30;
@@ -404,6 +442,8 @@ export const POST = withErrorHandler(async (req: Request) => {
                     current_address: data.current_address?.trim(),
                     permanent_address: data.is_current_same ? data.current_address?.trim() : data.permanent_address?.trim(),
                     is_current_same: data.is_current_same || false,
+                    state: data.state?.trim() || null,
+                    city: data.city?.trim() || null,
                     dob: new Date(data.dob!),
                     father_or_husband_name: data.father_or_husband_name?.trim(),
                     product_category_id: data.product_category_id,
@@ -418,6 +458,10 @@ export const POST = withErrorHandler(async (req: Request) => {
                     vehicle_owner_phone: normOwnerPhone,
                     interested_in: data.interested_in || [],
                     payment_method: data.payment_method || 'finance',
+                    // Addendum §3.2, §3.3 — null for cash leads, validated above for finance.
+                    resident_status: _isFinanceLead ? data.resident_status : null,
+                    has_health_insurance: _isFinanceLead ? data.has_health_insurance : null,
+                    has_life_insurance: _isFinanceLead ? data.has_life_insurance : null,
                     kyc_status: isCashLike ? 'not_required' : 'not_started',
                     // Post-Step-1 routing matrix (BRD §2.1):
                     //   Hot + Cash         → workflow_step 4 (auto-nav to Product Selection)

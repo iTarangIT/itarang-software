@@ -8,9 +8,8 @@ import {
   kycVerifications,
   personalDetails,
 } from "@/lib/db/schema";
-import { fetchCibilReport } from "@/lib/decentro";
 import { interpretCibilScore } from "@/lib/kyc/cibil-interpreter";
-import { humanizeCibilError } from "@/lib/kyc/cibil-friendly-errors";
+import { getCreditBureauProvider } from "@/lib/credit-bureau";
 import {
   createWorkflowId,
   requireAdminAppUser,
@@ -72,7 +71,8 @@ export async function POST(
     // Extract 6-digit Indian pincode — Decentro CIBIL needs it for bureau match.
     const pincode = address.match(/\b\d{6}\b/)?.[0] || "";
 
-    const decentroRes = await fetchCibilReport({
+    // Provider-routed (BRD Addendum §4.3). Null → Equifax via DEFAULT_PLATFORM_BUREAU.
+    const result = await getCreditBureauProvider(null).fetchReport({
       name,
       pan: personal.pan_no,
       dob,
@@ -81,53 +81,34 @@ export async function POST(
       pincode,
       address_type: "H",
     });
+    const decentroRes = result.raw as Record<string, any> | null;
 
     console.log("[CIBIL Report] Response:", JSON.stringify(decentroRes));
 
     const now = new Date();
-    const responseData = decentroRes?.data || {};
+    const responseData = (decentroRes?.data as Record<string, any>) || {};
 
-    // /v2/financial_services/credit_bureau/credit_report/summary
-    const responseKey = decentroRes?.responseKey || "";
-    const isErrorResponse = responseKey.startsWith("error_");
-    const apiCallSucceeded =
-      !isErrorResponse &&
-      (responseKey === "success_credit_report" ||
-       responseKey === "success" ||
-       decentroRes?.status === "SUCCESS");
+    // Consumer-not-found is a bureau-level result (cIRReportDataLst[0].error.errorDesc),
+    // not an API failure — the provider surfaces it as error.category='consumer_not_found'.
+    // Treated as success with no score; downstream UI shows the no-history path.
+    const consumerNotFound = result.error?.category === 'consumer_not_found';
 
-    // Check for bureau-level "Consumer not found" error inside cIRReportDataLst
+    // Keep the raw bureauError for the response body so CIBILCard can surface
+    // the verbatim bureau message. The deep field extraction below also needs
+    // the report data location distinct from the error envelope.
     const reportDataLst = responseData.cCRResponse?.cIRReportDataLst;
     const bureauError =
       Array.isArray(reportDataLst) && reportDataLst[0]?.error
         ? reportDataLst[0].error
         : null;
-    const consumerNotFound = bureauError?.errorDesc === "Consumer not found in bureau";
-
-    // The actual report data may be in cIRReportDataLst[0].cIRReportData or at cCRResponse level
     const reportData =
       (Array.isArray(reportDataLst) && !bureauError && reportDataLst[0]?.cIRReportData) ||
       responseData.cCRResponse?.cIRReportData ||
       responseData.cCRResponse ||
       responseData;
 
-    // Extract score — credit report summary may return score in various locations
-    const scoreDetails =
-      reportData.scoreDetails ||
-      responseData.scoreDetails;
-    const rawScore =
-      (Array.isArray(scoreDetails) && scoreDetails.length > 0
-        ? scoreDetails[0]?.value
-        : null) ||
-      reportData.creditScore?.score ||
-      responseData.creditScore?.score ||
-      responseData.credit_score ||
-      responseData.score ||
-      null;
-    const score = rawScore !== null && rawScore !== undefined ? Number(rawScore) : null;
-
-    const overallSuccess = apiCallSucceeded && !consumerNotFound && score !== null && !isNaN(score);
-
+    const score = result.score;
+    const overallSuccess = result.error === null && score !== null;
     const interpretation = score !== null && !isNaN(score) ? interpretCibilScore(score) : null;
 
     // Build summary from credit report summary response.
@@ -361,16 +342,6 @@ export async function POST(
         .where(eq(kycVerificationMetadata.lead_id, leadId));
     }
 
-    const friendly =
-      overallSuccess || consumerNotFound
-        ? null
-        : humanizeCibilError({
-            endpoint: "report",
-            responseKey,
-            rawMessage: decentroRes?.message ?? null,
-            bureauErrorDesc: bureauError?.errorDesc ?? null,
-          });
-
     return NextResponse.json({
       success: overallSuccess || consumerNotFound,
       data: {
@@ -385,12 +356,12 @@ export async function POST(
         generatedAt: now.toISOString(),
         rawResponse: decentroRes,
       },
-      ...(friendly
+      ...(result.error && !consumerNotFound
         ? {
             error: {
-              message: friendly.message,
-              suggestion: friendly.suggestion,
-              code: friendly.code,
+              message: result.error.message,
+              suggestion: result.error.suggestion,
+              code: result.error.category,
             },
           }
         : {}),

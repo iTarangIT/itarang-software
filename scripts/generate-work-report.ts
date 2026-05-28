@@ -769,6 +769,27 @@ const DEALER_DASHBOARD: Compartment = {
           ],
         },
         {
+          heading: "A-3a. Razorpay Down Payment Collection (PENDING INTEGRATION — to be added on Step 5)",
+          rows: [
+            { label: "Status", detail: "PENDING — design + plan complete (see Razorpay-Integration-Plan.pdf in Downloads). Implementation not yet started." },
+            { label: "Where it plugs in", detail: "Inside Step 5 page, between the Loan Sanctioned panel and the OTP send card. OTP dispatch will be gated on payment status = PAID." },
+            { label: "Why it's needed", detail: "Currently down payment (loan_sanctions.down_payment) is sanctioned by admin in Step 4 but never collected before dispatch — no enforcement that the customer actually paid the down payment before goods leave the warehouse." },
+            { label: "Recommended approach", detail: "Razorpay Standard Checkout (modal). Not another UPI QR — down payments are ₹10K-₹50K and the customer needs choice of method (UPI / Card / Netbanking / Wallet / EMI)." },
+            { label: "What's already in place", detail: "Razorpay SDK installed (src/lib/razorpay.ts) · RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET / RAZORPAY_WEBHOOK_SECRET env vars set · webhook handler exists (/api/payments/razorpay/webhook — currently only handles qr_code.credited from facilitation-fee QR flow). Reusing the same Razorpay account." },
+            { label: "New endpoints to add", detail: "POST /api/leads/{id}/down-payment/create-order (calls Razorpay POST /v1/orders) · POST /api/leads/{id}/down-payment/verify (HMAC-SHA256 signature check) · GET /api/leads/{id}/down-payment/status (polling) · extend existing webhook to handle payment.captured / payment.failed / order.paid.", mono: true },
+            { label: "New schema (additive migration)", detail: "down_payments table: id · lead_id · loan_sanction_id · amount_inr · amount_paise · razorpay_order_id · razorpay_payment_id · razorpay_signature · payment_method · status (PENDING|ORDER_CREATED|PAID|FAILED|REFUNDED) · paid_at · refunded_at · webhook_event_ids (jsonb audit) · created_at · updated_at." },
+            { label: "Payment methods supported", detail: "UPI · Cards (Visa/MC/RuPay/Amex credit+debit) · Netbanking (~60 banks) · Wallets (Paytm/PhonePe/Mobikwik/Amazon Pay) · EMI on credit cards. All enabled by default on a verified Razorpay account." },
+            { label: "Credentials & env vars (no new ones)", detail: "RAZORPAY_KEY_ID (server + client) · RAZORPAY_KEY_SECRET (server only — never exposed) · RAZORPAY_WEBHOOK_SECRET (HMAC for inbound webhooks). All already configured for sandbox + prod." },
+            { label: "Razorpay endpoints we'll call", detail: "POST https://api.razorpay.com/v1/orders (create) · GET .../orders/{id} · GET .../payments/{id} · POST .../payments/{id}/refund · client SDK https://checkout.razorpay.com/v1/checkout.js.", mono: true },
+            { label: "Dashboard config (one-time)", detail: "Razorpay Dashboard → Webhooks → extend subscribed events to include payment.captured + payment.failed + order.paid (currently only qr_code.credited). Webhook URL stays the same: /api/payments/razorpay/webhook." },
+            { label: "End-to-end flow", detail: "1. Dealer hits Collect Down Payment → 2. Server creates Razorpay Order with amount=loan_sanctions.down_payment → 3. Razorpay Checkout modal opens → 4. Customer pays via preferred method → 5. Front-end POSTs verify route → server checks HMAC-SHA256(order_id|payment_id, KEY_SECRET) === signature → 6. Webhook payment.captured arrives (idempotent merge) → 7. status flips to PAID → 8. OTP dispatch card unlocks → 9. Existing OTP flow proceeds." },
+            { label: "Files to create / modify", detail: "NEW: src/app/api/leads/{id}/down-payment/{create-order,verify,status}/route.ts · src/components/dealer-portal/step-5/DownPaymentSection.tsx · drizzle/E-XXX_down_payments.sql · MODIFY: src/lib/razorpay.ts (add createOrder + verifyPaymentSignature) · src/app/api/payments/razorpay/webhook/route.ts (add 3 event handlers) · src/app/(dashboard)/dealer-portal/leads/{id}/step-5/page.tsx (mount section + gate OTP).", mono: true },
+            { label: "Edge cases handled", detail: "Customer closes modal without paying (order reusable) · Network drops between Razorpay & front-end (webhook still resolves) · Webhook before verify (idempotent) · Signature mismatch (reject 400) · Payment fails (failed_reason logged, retry allowed) · Cash leads (section never renders — no Step 5)." },
+            { label: "Out of scope for v1", detail: "Partial / instalment down payments · EMI on the down payment itself · Subscription/autopay for loan EMIs (NBFC bank mandate / e-NACH — separate flow) · Multi-currency (INR only)." },
+            { label: "Reference plan", detail: "Full 14-section plan: C:\\Users\\Aniket\\Downloads\\Razorpay-Integration-Plan.pdf (generated 2026-05-25)." },
+          ],
+        },
+        {
           heading: "A-4. My Drafts (/dealer-portal/leads/drafts)",
           rows: [
             { label: "Purpose", detail: "Save-points for KYC forms in progress (Steps 1–4) — auto-saved every 2 minutes." },
@@ -1436,6 +1457,93 @@ const NBFC_DASHBOARD: Compartment = {
             { label: "Invite / Remove Users", detail: "owner ONLY." },
             { label: "Edit Notification Preferences", detail: "All roles — self-service (each user manages their own)." },
             { label: "Edit Risk Rules", detail: "owner + admin (via /admin/nbfc/risk-rules with dual-approval; not editable from this page)." },
+          ],
+        },
+      ],
+    },
+    {
+      title: "8. Loan Products (/admin/nbfc/[nbfcId]/loan-products) — Per-NBFC Product Catalogue",
+      sections: [
+        {
+          heading: "Purpose & gating",
+          rows: [
+            { label: "Page purpose", detail: "Per-NBFC loan product catalogue (BRD §6.0.5). iTarang admins create + manage the underwriting parameters each NBFC offers — only products with status='active' appear in the dealer's Step 4 loan-sanction dropdown." },
+            { label: "Page", detail: "src/app/(dashboard)/admin/nbfc/[nbfcId]/loan-products/page.tsx", mono: true },
+            { label: "Access gate", detail: "NBFC tenant must be in 'active' status — otherwise the page redirects to /admin/nbfc/[nbfcId]/review. Locked behind requireAdmin()." },
+            { label: "Backing table", detail: "nbfc_loan_products (src/lib/db/schema.ts:4077-4137).", mono: true },
+            { label: "Schema migrations", detail: "drizzle/E-113_loan_products_scheme_highlights.sql (processing fees, insurance, TAT, eligibility docs) · E-114_loan_products_active_locations.sql (structured {state, city} pairs) · E-115_loan_products_cibil_range.sql (cibil_required flag + min/max score).", mono: true },
+          ],
+        },
+        {
+          heading: "Form sections (create / edit)",
+          rows: [
+            { label: "Product identity & status", detail: "product_name (varchar 120, required) · status (active | inactive)." },
+            { label: "Eligibility — battery categories", detail: "eligible_battery_categories (multi-select jsonb array): 3W, 2W, 4W, INVERTER, SOLAR (min 1 required)." },
+            { label: "Geography", detail: "active_locations (jsonb array of {state, city} pairs) — queryable via @> JSONB containment. GIN-indexed." },
+            { label: "Scheme highlights — Owned house", detail: "owned_applicable (toggle) → processing_fee_owned_rupees (integer) → owned_health_life_applicable (toggle) → health_life_insurance_owned_rupees (integer)." },
+            { label: "Scheme highlights — Rented house", detail: "rented_applicable (toggle) → processing_fee_rented_rupees (integer) → rented_health_life_applicable (toggle) → health_life_insurance_rented_rupees (integer)." },
+            { label: "Disbursement", detail: "disbursement_tat_hours (integer) · disbursement_method (direct_to_dealer | rtgs_to_dealer | escrow)." },
+            { label: "CIBIL / CRIF gate", detail: "cibil_required (boolean, default true) · min_credit_score (300-900) · max_credit_score (300-900, >= min). CHECK constraint enforces 300-900 or NULL." },
+            { label: "Borrower eligibility docs", detail: "eligibility_documents (jsonb array of freeform strings, each ≤ 500 chars) — rendered verbatim to dealer/borrower at sanction time." },
+            { label: "Loan term sheet", detail: "loan_amount_min (integer ≥ 0) · loan_amount_max (integer > min) · tenure_months_min (integer > 0) · tenure_months_max (integer ≥ min) · min_roi_pct (numeric 5,2) · max_roi_pct (numeric 5,2, ≥ min) · down_payment_pct (numeric 5,2, 0-100) · file_charge_fixed (numeric 12,2, optional) · file_charge_pct (numeric 5,2, optional) · subvention_available (boolean, default false)." },
+          ],
+        },
+        {
+          heading: "Listing view",
+          rows: [
+            { label: "Columns shown", detail: "id · product_name · loan_amount_min · loan_amount_max · status." },
+            { label: "Status filter", detail: "?status=active or ?status=inactive query param on the GET endpoint. No UI search box — filtering is backend-only." },
+            { label: "Sorted by", detail: "Listing returns in DB default order (id ascending); UI may impose its own sort." },
+          ],
+        },
+        {
+          heading: "API endpoints",
+          rows: [
+            { label: "Create", detail: "POST /api/admin/nbfc/[nbfcId]/loan-products — validates NBFC status (must be 'approved' or 'active'), validates cross-field invariants (loanAmountMax > loanAmountMin, tenure / ROI ranges, CIBIL score range).", mono: true },
+            { label: "List", detail: "GET /api/admin/nbfc/[nbfcId]/loan-products?status= — returns id, productName, loanAmountMin, loanAmountMax, status.", mono: true },
+            { label: "Update", detail: "PATCH /api/admin/nbfc/loan-products/[productId] — partial update; same cross-field validation as create.", mono: true },
+            { label: "Auth", detail: "requireAdmin() on all routes. Test bypass via triple-guard: NODE_ENV !== 'production' + NBFC_E009_TEST_BYPASS_AUTH=1 + matching x-nbfc-e009-test-bypass header." },
+          ],
+        },
+        {
+          heading: "Schema columns (nbfc_loan_products)",
+          rows: [
+            { label: "Primary key", detail: "id (serial) · nbfc_id (integer FK → nbfc.id)." },
+            { label: "Identity", detail: "product_name (varchar 120) · status (varchar 16, default 'active')." },
+            { label: "Eligibility / geo", detail: "eligible_battery_categories (jsonb) · active_locations (jsonb, default '[]') · active_cities (jsonb, default '[]' — deprecated, replaced by active_locations in E-114)." },
+            { label: "Term sheet", detail: "loan_amount_min/max (integer) · tenure_months_min/max (integer) · min_roi_pct / max_roi_pct (numeric 5,2) · down_payment_pct (numeric 5,2) · subvention_available (boolean, default false) · file_charge_fixed (numeric 12,2, nullable) · file_charge_pct (numeric 5,2, nullable)." },
+            { label: "Disbursement", detail: "disbursement_method (varchar 32) · disbursement_tat_hours (integer, nullable)." },
+            { label: "Scheme highlights", detail: "processing_fee_owned_rupees · processing_fee_rented_rupees · health_life_insurance_owned_rupees · health_life_insurance_rented_rupees (all integer, nullable)." },
+            { label: "CIBIL gate", detail: "cibil_required (boolean, nullable — null = legacy unknown) · min_credit_score (integer 300-900, nullable) · max_credit_score (integer 300-900, nullable; CHECK 300-900 or NULL)." },
+            { label: "Docs", detail: "eligibility_documents (jsonb, default '[]')." },
+            { label: "Audit", detail: "created_at (timestamptz, default now()) · updated_at (timestamptz, default now())." },
+            { label: "Indexes", detail: "nbfc_loan_products_active_cities_gin (GIN on active_cities) · nbfc_loan_products_active_locations_gin (GIN on active_locations).", mono: true },
+          ],
+        },
+        {
+          heading: "Lifecycle & downstream usage",
+          rows: [
+            { label: "Lifecycle", detail: "status='active' (created/inserted) ↔ status='inactive' (toggled off). No formal state machine — just an active/inactive flag." },
+            { label: "Used by", detail: "Dealer's Step 4 (Product Selection / Loan Sanction) reads active products matching the dealer's city via active_locations + battery category + CIBIL band. Drives the loan offers the dealer can present to the customer." },
+            { label: "Restrictions", detail: "Inactive products do NOT appear in dealer sanction UI. Existing loans on a deactivated product remain unaffected." },
+          ],
+        },
+        {
+          heading: "Permissions",
+          rows: [
+            { label: "View page", detail: "iTarang admin role only (requireAdmin)." },
+            { label: "Create / edit", detail: "iTarang admin only — POST + PATCH gated server-side. No dealer or customer access." },
+            { label: "View resulting products", detail: "Dealers see only active products that match their city + battery category at Step 4." },
+          ],
+        },
+        {
+          heading: "Key Workflows",
+          rows: [
+            { bullet: "W1.", label: "Onboard a new loan product for an NBFC", detail: "Admin opens NBFC directory → clicks 'Loan products' on an active NBFC tenant → fills form: product_name='Bajaj E-Rickshaw Finance 2026', battery_categories=[3W, 4W], loan_amount_min=₹50K / max=₹500K, tenure 12-36 months, ROI 14%-22%, owned/rented house variants with processing fees + insurance, CIBIL gate 650-850, active_locations=[{state:'Karnataka', city:'Bangalore'}, …], eligibility_documents=['Latest 3 months bank statement', 'PAN', …] → Submit → POST /api/admin/nbfc/[nbfcId]/loan-products → product saved with status='active' → appears in dealer Step 4 dropdown immediately." },
+            { bullet: "W2.", label: "Deactivate a product", detail: "NBFC stops underwriting a product. Admin opens loan-products page → finds product → PATCH /api/admin/nbfc/loan-products/[productId] with {status: 'inactive'} → product disappears from dealer Step 4 dropdown on next refresh. Existing loans untouched." },
+            { bullet: "W3.", label: "Expand geographic coverage", detail: "Product was Bangalore-only; NBFC wants to roll out to Hyderabad too. Admin PATCHes active_locations append {state:'Telangana', city:'Hyderabad'} → dealers in Hyderabad now see this product at Step 4 → no other config change needed." },
+            { bullet: "W4.", label: "Adjust ROI band for market conditions", detail: "Repo rate rises. Admin PATCHes min_roi_pct and max_roi_pct upward → next dealer sanction picks up the new band → existing loans unaffected (their ROI is locked at sanction time)." },
+            { bullet: "W5.", label: "Toggle CIBIL requirement", detail: "Tighten lending criteria — set cibil_required=true on a previously open product → set min_credit_score=720 → dealers can now only sanction this product to borrowers with CIBIL ≥ 720." },
           ],
         },
       ],
