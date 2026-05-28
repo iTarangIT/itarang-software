@@ -33,9 +33,12 @@ import { db } from "@/lib/db";
 import {
   iotDevices,
   inventory,
+  nbfcLoans,
   telemetryEvents,
   telemetryDailySummary,
+  telemetryIngestionLog,
 } from "@/lib/db/schema";
+import { evaluatePacketAlerts } from "@/lib/iot/alerts/evaluatePacketAlerts";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -357,7 +360,58 @@ export async function POST(req: NextRequest) {
       },
     });
 
-  // 8. Alert-rule evaluation (E-049) is a downstream unit, not in scope here.
+  // 7.5 Telemetry ingestion log (BRD §6.1.3) — stamp data-freshness per NBFC
+  //     tenant. A battery is attributed to a tenant when it's the financed
+  //     vehicle on an nbfc_loans row (vehicleno = serial). Without this the
+  //     portfolio freshness badge sees no telemetry and stays permanently
+  //     amber ("Data may be outdated — IoT sync issue"). Best-effort: the
+  //     packet is already persisted, so a failure here must not 5xx the
+  //     device and make it retry (which would duplicate telemetry_events).
+  try {
+    const tenantRows = await db
+      .selectDistinct({ tenant_id: nbfcLoans.tenant_id })
+      .from(nbfcLoans)
+      .where(eq(nbfcLoans.vehicleno, data.serialNumber));
+    if (tenantRows.length > 0) {
+      await db.insert(telemetryIngestionLog).values(
+        tenantRows.map((t) => ({
+          tenant_id: t.tenant_id,
+          battery_serial: data.serialNumber,
+          ingested_at: new Date(),
+        })),
+      );
+    }
+  } catch (e) {
+    console.warn("[ingest] telemetry_ingestion_log write failed", {
+      serial: data.serialNumber,
+      err: e instanceof Error ? e.message : String(e),
+    });
+  }
+
+  // 8. Alert-rule evaluation (BRD §6.2.6). Per-packet rules only; the two
+  //    absence-of-packet rules (Battery Offline / Extended) fire from the
+  //    /api/cron/iot/scan-offline-batteries cron, not here. Failure is logged
+  //    but swallowed — the packet has already been persisted, and returning
+  //    a non-200 here would make the device retry and create duplicate rows.
+  try {
+    await evaluatePacketAlerts({
+      serial_number: data.serialNumber,
+      bms_status: data.bms_status,
+      temperature_c: data.temperature_c,
+      soc_percent: data.soc_percent,
+      soh_percent: data.soh_percent,
+      charger_connected: data.charger_connected,
+      daily_km: data.daily_km,
+      gps_lat: data.gps.lat,
+      gps_lng: data.gps.lng,
+      device_time: new Date(deviceTs),
+    });
+  } catch (e) {
+    console.warn("[ingest] alert-eval failed", {
+      serial: data.serialNumber,
+      err: e instanceof Error ? e.message : String(e),
+    });
+  }
 
   return NextResponse.json({
     accepted: true,

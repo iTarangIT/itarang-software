@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { dealerOnboardingApplications, users, accounts } from "@/lib/db/schema";
+import { dealerOnboardingApplications, users, accounts, dealers } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword";
 import { hashPassword } from "@/lib/auth/hashPassword";
@@ -347,6 +347,44 @@ export async function POST(req: NextRequest, context: RouteContext) {
           updated_at: new Date(),
         })
         .where(eq(dealerOnboardingApplications.id, dealerId));
+
+      // Canonical dealers row — the E-105 lead-creation gate reads from here
+      // (src/app/api/leads/create/route.ts). Without this, an admin-approved
+      // dealer hits "DEALER_NOT_ACTIVE / not_onboarded" the moment they try
+      // to create a lead. Branch dealers also get their own dealers row
+      // keyed by their own dealer_code (unlike accounts, which is shared).
+      const financeEnabled = application.finance_enabled ?? false;
+      await tx
+        .insert(dealers)
+        .values({
+          dealer_id: dealerCode,
+          company_name: application.company_name,
+          company_type: application.company_type ?? "individual",
+          gst_number: application.gst_number ?? null,
+          pan_number: application.pan_number ?? null,
+          registered_address: application.registered_address ?? null,
+          bank_name: application.bank_name ?? null,
+          bank_account_number: application.account_number ?? null,
+          bank_ifsc: application.ifsc_code ?? null,
+          bank_beneficiary: application.beneficiary_name ?? null,
+          owner_name: application.owner_name ?? null,
+          owner_phone: application.owner_phone ?? null,
+          owner_email: application.owner_email ?? null,
+          finance_enabled: financeEnabled,
+          onboarding_status: "active",
+          application_id: application.id,
+          activated_at: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: dealers.dealer_id,
+          set: {
+            onboarding_status: "active",
+            finance_enabled: financeEnabled,
+            application_id: application.id,
+            activated_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
 
       // Branch dealers reuse the existing accounts row — skip the insert
       // entirely (a new insert would violate UNIQUE(gstin) + UNIQUE(id)).

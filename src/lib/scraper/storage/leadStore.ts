@@ -3,6 +3,8 @@ import { dealerLeads, scrapedDealerLeads } from "@/lib/db/schema";
 import { inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { toTenDigits } from "@/lib/ai/phone";
+import { normalizeRegion } from "@/lib/locations/normalize";
+import type { PlaceComponents } from "@/lib/scraper/query/sources/googlePlaces";
 
 const CHUNK_SIZE = 100;
 
@@ -24,7 +26,14 @@ export interface PromotionResult {
 // Returns counters for each filter step so the caller (finalizeChunkedRun)
 // can persist them and the UI can show "5 scraped, 0 promoted (5 duplicates)".
 export async function promoteLeadsToDealerLeads(
-  leads: { name?: string | null; phone?: string | null; city?: string | null }[],
+  leads: {
+    name?: string | null;
+    phone?: string | null;
+    city?: string | null;
+    state?: string | null;
+    address?: string | null;
+    components?: PlaceComponents;
+  }[],
 ): Promise<PromotionResult> {
   const rows: {
     id: string;
@@ -32,6 +41,11 @@ export async function promoteLeadsToDealerLeads(
     shop_name: string | null;
     phone: string;
     location: string | null;
+    state: string | null;
+    city: string | null;
+    area: string | null;
+    pincode: string | null;
+    country: string;
     language: string;
     current_status: string;
     total_attempts: number;
@@ -62,12 +76,33 @@ export async function promoteLeadsToDealerLeads(
     }
     seenPhones.add(phone);
 
+    // Region hierarchy resolution via the central normalizeRegion service,
+    // which prefers Google addressComponents (when present), then alias
+    // lookups against the DB-backed cities/city_aliases tables, then
+    // legacy regex parsing as a last resort. When normalizeRegion finds a
+    // Google-validated city that isn't in cities yet, it auto-inserts the
+    // row with source='google_places' so the AI dialer region tree picks
+    // it up immediately.
+    const region = await normalizeRegion({
+      components: lead.components,
+      rawCity: lead.city ?? null,
+      rawState: lead.state ?? null,
+      address: lead.address ?? null,
+    });
+
     rows.push({
       id: `L-${nanoid(8)}`,
       dealer_name: lead.name?.trim() || null,
       shop_name: lead.name?.trim() || null,
       phone,
-      location: lead.city?.trim() || null,
+      // Keep `location` populated for the legacy /api/dealer-leads/locations
+      // endpoint and any code still reading it. New code reads city/state.
+      location: region.city,
+      state: region.state,
+      city: region.city,
+      area: region.area,
+      pincode: region.pincode,
+      country: region.country,
       language: "hindi",
       current_status: "new",
       total_attempts: 0,
@@ -154,7 +189,15 @@ export async function saveCleanLeads(leads: any[], runId: string): Promise<numbe
             email: lead.email ?? null,
             website: lead.website ?? null,
             location_city: lead.city ?? null,
+            location_state: lead.state ?? null,
             source_url: lead.source ?? null,
+            // Persist the full upstream address (Google Places
+            // `formattedAddress`, Apify `address`) into raw_data so the
+            // leads UI / xlsx export can show "Shop No 1,2,3, …, Nashik
+            // Road, Nashik, Maharashtra 422101, India" instead of just the
+            // parsed city. Older rows have NULL here; the leads API
+            // falls back to scraper_raw via COALESCE.
+            raw_data: lead.address ? { address: lead.address } : null,
             exploration_status: "unassigned",
             created_at: new Date(),
             updated_at: new Date(),

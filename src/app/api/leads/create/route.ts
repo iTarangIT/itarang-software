@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { db } from '@/lib/db';
-import { leads, personalDetails, auditLogs, accounts } from '@/lib/db/schema';
+import { leads, personalDetails, auditLogs, accounts, leadProducts } from '@/lib/db/schema';
 import { successResponse, errorResponse, withErrorHandler, generateId } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 import { z } from 'zod';
@@ -9,14 +9,13 @@ import { eq, and, sql, desc } from 'drizzle-orm';
 import {
     dealerOnboardingApplications,
     dealers,
-    dealerNbfcAssignments,
 } from '@/lib/db/schema';
 
 // [E-105] Lead-creation dealer-status gate (Sync Audit G-10).
 // Returns a structured 403 response with a stable string error code so the
 // dealer-portal UI can localise messages without parsing message text.
 function gateError(
-    code: 'DEALER_NOT_ACTIVE' | 'FINANCE_NOT_ENABLED' | 'NO_ACTIVE_NBFC',
+    code: 'DEALER_NOT_ACTIVE' | 'FINANCE_NOT_ENABLED',
     message: string,
     extra: Record<string, unknown> = {}
 ) {
@@ -29,15 +28,22 @@ function gateError(
 /**
  * [E-105] Validate that the calling dealer is permitted to create a lead.
  *
- * Three pre-insert guards (BRD §F.1):
+ * Two pre-insert guards (BRD §F.1):
  *  1. dealer.onboarding_status === 'active' (always)
  *  2. dealer.finance_enabled === true        (finance-path only)
- *  3. ≥1 active dealer_nbfc_assignments row (finance-path only)
+ *
+ * NBFC assignment is intentionally NOT checked here. A lead doesn't need an
+ * NBFC to be captured / KYC'd — the NBFC is only chosen at loan-sanction
+ * time (Step 5), where the existing LenderDropdown already surfaces a
+ * "No lenders assigned to this dealer" empty state if the assignment is
+ * missing. Gating at lead-create contradicted the wizard's Hot+Finance →
+ * Step 2 KYC routing and stopped admin-approved dealers from progressing.
  *
  * paymentMethod is treated as finance-path when it is anything other than the
  * cash-equivalent values ('cash' / legacy 'upfront'). When paymentMethod is
  * undefined (e.g. initializeDraft mode where payment hasn't been chosen yet)
- * only the onboarding_status guard runs — the finance guards apply at commit.
+ * only the onboarding_status guard runs — the finance-enabled guard applies
+ * at commit.
  *
  * Returns null on pass, or a NextResponse with the structured 403 body on
  * fail.
@@ -90,23 +96,6 @@ async function checkDealerStatusGate(
         );
     }
 
-    const [{ count: activeAssignments } = { count: 0 }] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(dealerNbfcAssignments)
-        .where(
-            and(
-                eq(dealerNbfcAssignments.dealer_id, dealer.id),
-                eq(dealerNbfcAssignments.status, 'active')
-            )
-        );
-
-    if (!activeAssignments || activeAssignments === 0) {
-        return gateError(
-            'NO_ACTIVE_NBFC',
-            'No active lending partner is assigned to your account. Please contact iTarang admin.'
-        );
-    }
-
     return null;
 }
 
@@ -132,9 +121,17 @@ const step1Schema = z.object({
     commitStep: z.boolean().optional(),
     leadId: z.string().optional().nullable(),
     lead_score: z.number().optional().nullable(),
-    additional_products: z.array(z.any()).optional(),
+    additional_products: z.array(
+        z.object({
+            product_id: z.string(),
+            category_id: z.string().optional().nullable(),
+            category_slug: z.string().optional().nullable(),
+            asset_type: z.string().optional().nullable(),
+        }).passthrough(),
+    ).optional(),
     asset_model: z.string().optional().nullable(),
     asset_model_label: z.string().optional().nullable(),
+    asset_type: z.string().optional().nullable(),
     is_vehicle_category: z.boolean().optional(),
 }).passthrough();
 
@@ -162,6 +159,12 @@ const normalizePhone = (phone?: string | null) => {
     if (clean.length === 10) return `+91${clean}`;
     return phone.startsWith('+') ? phone : `+91${clean}`;
 };
+
+// lead_products.product_id is a uuid column — a non-uuid value would abort the
+// whole Step-1 commit transaction with a Postgres 22P02. Extra-product rows
+// without a real product UUID are dropped, same as half-filled rows.
+const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // [E-105] Test-only auth bypass — mirrors src/app/api/admin/nbfc/route.ts
 // pattern (triple-guarded). Lets API tests stand up dealers + assignments and
@@ -406,6 +409,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                     product_category_id: data.product_category_id,
                     product_type_id: data.product_type_id,
                     primary_product_id: data.primary_product_id,
+                    asset_type: data.asset_type ?? null,
                     interest_level: data.interest_level!,
                     lead_score: score,
                     vehicle_rc: data.vehicle_rc?.toUpperCase().trim(),
@@ -430,6 +434,24 @@ export const POST = withErrorHandler(async (req: Request) => {
                     father_husband_name: data.father_or_husband_name?.trim(),
                     local_address: data.current_address?.trim()
                 }).where(eq(personalDetails.lead_id, data.leadId!));
+
+                // E-116 — replace the lead's extra ("Add Another Product") rows.
+                // delete + insert keeps re-commit / edit idempotent (no dupes).
+                await tx.delete(leadProducts).where(eq(leadProducts.lead_id, data.leadId!));
+                const extras = (data.additional_products ?? []).filter(
+                    (p) => typeof p.product_id === 'string' && UUID_RE.test(p.product_id.trim()),
+                ).map((p) => ({ ...p, product_id: p.product_id.trim() }));
+                if (extras.length > 0) {
+                    await tx.insert(leadProducts).values(
+                        extras.map((p) => ({
+                            lead_id: data.leadId!,
+                            product_id: p.product_id,
+                            product_category_id: p.category_id ?? null,
+                            category_slug: p.category_slug ?? null,
+                            asset_type: p.asset_type ?? null,
+                        })),
+                    );
+                }
 
                 await tx.insert(auditLogs).values({
                     id: `AUDIT-${Date.now()}`,

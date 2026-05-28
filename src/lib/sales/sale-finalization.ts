@@ -39,7 +39,9 @@ export interface FinalizeSaleInput {
   tx: TxLike;
   leadId: string;
   batterySerial: string;
-  chargerSerial: string;
+  // Charger is optional — battery-only sales skip every charger-specific
+  // inventory / event-log write below.
+  chargerSerial: string | null;
   dealerId: string;
   customerName: string | null;
   customerPhone: string | null;
@@ -94,13 +96,16 @@ export async function finalizeSale(
   const battery = batteryRows[0];
   if (!battery) throw new Error(`Battery ${batterySerial} not found`);
 
-  const chargerRows = await tx
-    .select({ id: inventory.id })
-    .from(inventory)
-    .where(eq(inventory.serial_number, chargerSerial))
-    .limit(1);
-  const charger = chargerRows[0];
-  if (!charger) throw new Error(`Charger ${chargerSerial} not found`);
+  let charger: { id: string } | undefined;
+  if (chargerSerial) {
+    const chargerRows = await tx
+      .select({ id: inventory.id })
+      .from(inventory)
+      .where(eq(inventory.serial_number, chargerSerial))
+      .limit(1);
+    charger = chargerRows[0];
+    if (!charger) throw new Error(`Charger ${chargerSerial} not found`);
+  }
 
   // 2. Update inventory.
   //    - phase='dispatched': inventory enters the 'dispatched' state. sold_at
@@ -117,15 +122,17 @@ export async function finalizeSale(
         updated_at: soldAt,
       })
       .where(eq(inventory.id, battery.id));
-    await tx
-      .update(inventory)
-      .set({
-        status: "dispatched",
-        dispatch_date: soldAt,
-        linked_lead_id: leadId,
-        updated_at: soldAt,
-      })
-      .where(eq(inventory.id, charger.id));
+    if (chargerSerial && charger) {
+      await tx
+        .update(inventory)
+        .set({
+          status: "dispatched",
+          dispatch_date: soldAt,
+          linked_lead_id: leadId,
+          updated_at: soldAt,
+        })
+        .where(eq(inventory.id, charger.id));
+    }
 
     await logInventoryEvent({
       tx,
@@ -139,18 +146,20 @@ export async function finalizeSale(
       notes: "Finance dispatch confirmed",
       performedAt: soldAt,
     });
-    await logInventoryEvent({
-      tx,
-      serialNumber: chargerSerial,
-      inventoryId: charger.id,
-      eventType: "edited",
-      fromStatus: "reserved",
-      toStatus: "dispatched",
-      leadId,
-      performedBy,
-      notes: "Finance dispatch confirmed",
-      performedAt: soldAt,
-    });
+    if (chargerSerial && charger) {
+      await logInventoryEvent({
+        tx,
+        serialNumber: chargerSerial,
+        inventoryId: charger.id,
+        eventType: "edited",
+        fromStatus: "reserved",
+        toStatus: "dispatched",
+        leadId,
+        performedBy,
+        notes: "Finance dispatch confirmed",
+        performedAt: soldAt,
+      });
+    }
   } else {
     await sellInventorySerial({
       tx,
@@ -161,15 +170,17 @@ export async function finalizeSale(
       soldAt,
       notes: `Finalized sale (${input.paymentMode})`,
     });
-    await sellInventorySerial({
-      tx,
-      serial: chargerSerial,
-      leadId,
-      dealerId,
-      performedBy,
-      soldAt,
-      notes: `Finalized sale (${input.paymentMode})`,
-    });
+    if (chargerSerial) {
+      await sellInventorySerial({
+        tx,
+        serial: chargerSerial,
+        leadId,
+        dealerId,
+        performedBy,
+        soldAt,
+        notes: `Finalized sale (${input.paymentMode})`,
+      });
+    }
   }
 
   // 3. Warranty record — one row per deployment, anchored on the battery.
@@ -249,7 +260,8 @@ export interface MarkDispatchedSoldInput {
   tx: TxLike;
   leadId: string;
   batterySerial: string;
-  chargerSerial: string;
+  // Charger is optional — battery-only deployments have no charger to flip.
+  chargerSerial: string | null;
   performedBy: string;
   soldAt: Date;
 }
@@ -280,7 +292,7 @@ export async function markDispatchedAsSold(
 
   const [batteryId, chargerId] = await Promise.all([
     flip(batterySerial),
-    flip(chargerSerial),
+    chargerSerial ? flip(chargerSerial) : Promise.resolve(null),
   ]);
   const changed = Boolean(batteryId || chargerId);
 
@@ -298,7 +310,7 @@ export async function markDispatchedAsSold(
       performedAt: soldAt,
     });
   }
-  if (chargerId) {
+  if (chargerSerial && chargerId) {
     await logInventoryEvent({
       tx,
       serialNumber: chargerSerial,

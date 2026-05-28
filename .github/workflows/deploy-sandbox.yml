@@ -189,6 +189,20 @@ jobs:
             # Force non-interactive output and disable Next.js telemetry banner
             export CI=1
             export NEXT_TELEMETRY_DISABLED=1
+            # next build (webpack) for an app this size peaks past Node's
+            # default ~2 GB old-space heap — the build worker SIGABRTs with
+            # "Reached heap limit / heap out of memory" without this. 4 GB
+            # fits the 8 GB VPS alongside the running production app.
+            export NODE_OPTIONS="--max-old-space-size=4096"
+
+            echo "--- cleaning prior build state ---"
+            # Forces deterministic builds. Without this, .next/standalone/.next/server,
+            # .next/cache/turbopack, and leftover .next/static remnants from the prior
+            # deploy can leak chunk references that the current build doesn't re-emit.
+            # That's what caused 19 NOT-ON-DISK chunks (incl. a turbopack-*.js residue)
+            # on the deploy immediately after switching package.json to --webpack.
+            # Keeps node_modules; only nukes Next's build outputs.
+            rm -rf .next
 
             time npm run build
 
@@ -201,6 +215,25 @@ jobs:
             echo "standalone tree:"
             ls -la .next/standalone/.next/static | head -3
             ls -la .next/standalone/public 2>/dev/null | head -3 || echo "(no public dir)"
+
+            echo "--- verifying chunk manifest ---"
+            # Walks every .next/ manifest and fails the deploy if any
+            # referenced chunk is missing on disk. Catches the silent
+            # failure mode where a build emits manifest entries pointing at
+            # chunks that didn't get written — the deploy looks healthy
+            # via /api/health, but every dashboard route ChunkLoadErrors.
+            # Same verifier production uses (deploy-production.yml:101).
+            node scripts/verify-chunk-manifest.js
+
+            echo "--- verifying standalone static tree is non-empty ---"
+            # Defense in depth: the cp -r above could partially succeed
+            # (disk pressure, interrupted run). Sanity-check the count.
+            CHUNK_COUNT=$(find .next/standalone/.next/static/chunks -type f 2>/dev/null | wc -l)
+            if [ "$CHUNK_COUNT" -lt 5 ]; then
+              echo "❌ standalone chunks dir has only $CHUNK_COUNT files — copy failed"
+              exit 1
+            fi
+            echo "standalone has $CHUNK_COUNT chunk files"
 
             echo "Free mem after build:"; free -m || true
             echo "<<< [$(date -u +%H:%M:%S)] Build done"
@@ -297,6 +330,35 @@ jobs:
             echo "<<< [$(date -u +%H:%M:%S)] Healthy"
 
       # ──────────────────────────────────────────────────────────────────
+      # 2g. Verify the running app actually serves every asset its HTML
+      #     references. /api/health only proves the process is up — it
+      #     does not prove chunks are reachable. Without this, the
+      #     standalone-static-missing failure mode silently ships and
+      #     real users hit ChunkLoadError on every page.
+      # ──────────────────────────────────────────────────────────────────
+      - name: Verify served assets
+        id: served
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-served.log"
+            exec > >(tee -a "$LOG_FILE") 2>&1
+
+            echo ">>> [$(date -u +%H:%M:%S)] Served-asset verification"
+            cd "$APP_DIR"
+            PORT=3003 node scripts/verify-served-assets.js
+            echo "<<< [$(date -u +%H:%M:%S)] Served assets reachable"
+
+      # ──────────────────────────────────────────────────────────────────
       # 3. On failure: dump everything useful to the GitHub Actions log
       #    (recent deploy logs, pm2 status, pm2 logs, disk, memory)
       # ──────────────────────────────────────────────────────────────────
@@ -376,6 +438,15 @@ jobs:
             export GITHUB_SHA=$(git rev-parse HEAD)
             export CI=1
             export NEXT_TELEMETRY_DISABLED=1
+            # Same heap bump as the primary build — without it the rollback
+            # rebuild SIGABRTs with "Reached heap limit" on this 8 GB VPS.
+            export NODE_OPTIONS="--max-old-space-size=4096"
+
+            # Same clean-slate requirement as the primary build above.
+            # Without this, the rollback inherits the failed-build's
+            # polluted .next/ and reproduces the broken state.
+            rm -rf .next
+
             time npm run build
 
             echo "--- staging standalone bundle (rollback) ---"

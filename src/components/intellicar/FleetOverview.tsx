@@ -14,28 +14,39 @@ interface KPI {
     color: string;
 }
 
+interface FleetEnvelope<T> {
+    data: T;
+    degraded?: boolean;
+    reason?: string;
+}
+
 export function FleetOverview() {
-    const { data, isLoading, error } = useQuery({
+    const { data: envelope, isLoading, error } = useQuery<FleetEnvelope<unknown>>({
         queryKey: ['intellicar-fleet-dashboard'],
         queryFn: async () => {
             const res = await fetch('/api/telemetry/fleet/dashboard');
             if (!res.ok) throw new Error('Failed to fetch fleet data');
             const json = await res.json();
-            return json.data;
+            return { data: json.data, degraded: json.degraded, reason: json.reason };
         },
         refetchInterval: 60000,
     });
 
-    const { data: mapData } = useQuery({
+    const { data: mapEnvelope } = useQuery<FleetEnvelope<unknown[]>>({
         queryKey: ['intellicar-fleet-map'],
         queryFn: async () => {
             const res = await fetch('/api/telemetry/fleet/map');
             if (!res.ok) throw new Error('Failed to fetch map data');
             const json = await res.json();
-            return json.data;
+            return { data: json.data, degraded: json.degraded, reason: json.reason };
         },
         refetchInterval: 30000,
     });
+
+    const data = envelope?.data as { kpis?: Record<string, number> } | undefined;
+    const mapData = mapEnvelope?.data;
+    const degraded = Boolean(envelope?.degraded || mapEnvelope?.degraded);
+    const degradedReason = envelope?.reason ?? mapEnvelope?.reason ?? '';
 
     const [page, setPage] = useState(1);
 
@@ -51,7 +62,7 @@ export function FleetOverview() {
         return (
             <div className="p-6 bg-red-50 rounded-xl text-center">
                 <AlertTriangle className="w-8 h-8 text-red-500 mx-auto mb-2" />
-                <p className="text-sm text-red-700">Failed to load fleet data. The telemetry tables may not be configured yet.</p>
+                <p className="text-sm text-red-700">Failed to load fleet data. Check the server logs for the underlying error.</p>
             </div>
         );
     }
@@ -74,6 +85,13 @@ export function FleetOverview() {
 
     return (
         <div className="space-y-6">
+            {degraded ? (
+                <div className="flex items-start gap-2 p-3 rounded-lg border border-amber-200 bg-amber-50 text-amber-900 text-sm">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 flex-none text-amber-600" />
+                    <p>{degradedReason || 'IoT VPS unreachable — fleet KPIs show zeros until the tunnel is up.'}</p>
+                </div>
+            ) : null}
+
             {/* KPI Cards */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 {kpiCards.map((kpi) => (

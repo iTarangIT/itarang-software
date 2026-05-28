@@ -17,8 +17,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
-import { nbfc, users } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import {
+  nbfc,
+  nbfcComplianceDocuments,
+  nbfcCorExpiryAlerts,
+  nbfcDirectorKycVerifications,
+  nbfcDirectors,
+  nbfcEntityKycVerifications,
+  nbfcLspAgreements,
+  nbfcStatusHistory,
+  users,
+} from "@/lib/db/schema";
+import { eq, inArray } from "drizzle-orm";
 
 const ADMIN_ROLES = [
   "admin",
@@ -247,11 +257,21 @@ export async function PATCH(
     }
     const parsed = patchSchema.safeParse(body);
     if (!parsed.success) {
+      const fieldErrors: Record<string, string> = {};
+      const formErrors: string[] = [];
+      for (const issue of parsed.error.issues) {
+        if (issue.path.length === 0) {
+          formErrors.push(issue.message);
+          continue;
+        }
+        const key = issue.path.join(".");
+        if (!fieldErrors[key]) fieldErrors[key] = issue.message;
+      }
       return NextResponse.json(
         {
           success: false,
           error: "validation_failed",
-          details: parsed.error.flatten(),
+          details: { fieldErrors, formErrors },
         },
         { status: 422 },
       );
@@ -298,16 +318,141 @@ export async function PATCH(
       .update(nbfc)
       .set(update)
       .where(eq(nbfc.id, id))
-      .returning({ id: nbfc.id, updated_at: nbfc.updated_at });
+      .returning({
+        id: nbfc.id,
+        nbfc_id: nbfc.nbfc_id,
+        status: nbfc.status,
+        updated_at: nbfc.updated_at,
+      });
 
     const row = updated[0];
     return NextResponse.json({
       success: true,
       id: row.id,
+      nbfcId: row.nbfc_id,
+      status: row.status,
       updatedAt: row.updated_at,
     });
   } catch (err) {
     console.error("PATCH /api/admin/nbfc/[nbfcId] error:", err);
+    return NextResponse.json(
+      { success: false, error: "server_error" },
+      { status: 500 },
+    );
+  }
+}
+
+/**
+ * DELETE /api/admin/nbfc/{id} — hard-delete a draft NBFC.
+ *
+ * Constraints (per the My Submitted Drafts UX):
+ *   - Status must be `draft` (409 otherwise — submitted/approved/active rows
+ *     are part of downstream flows and must not vanish).
+ *   - Only the creator (matched on `created_by_auth_id` UUID = viewer auth
+ *     id) may delete. The Admin role gate from requireAdmin still applies.
+ *   - Cascades inside a transaction: status history → LSP agreements →
+ *     compliance documents → directors → nbfc row. A draft never has loan
+ *     sanctions or dealer assignments referencing it, so no other tables
+ *     need cleanup.
+ */
+export async function DELETE(
+  req: NextRequest,
+  context: { params: Promise<{ nbfcId: string }> },
+) {
+  try {
+    const admin = await requireAdmin(req);
+    if (!admin) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized" },
+        { status: 403 },
+      );
+    }
+    const { nbfcId: rawId } = await context.params;
+    const id = parseId(rawId);
+    if (id === null) {
+      return NextResponse.json(
+        { success: false, error: "invalid_id" },
+        { status: 400 },
+      );
+    }
+
+    const [existing] = await db
+      .select({
+        id: nbfc.id,
+        status: nbfc.status,
+        created_by_auth_id: nbfc.created_by_auth_id,
+      })
+      .from(nbfc)
+      .where(eq(nbfc.id, id))
+      .limit(1);
+
+    if (!existing) {
+      return NextResponse.json(
+        { success: false, error: "not_found" },
+        { status: 404 },
+      );
+    }
+
+    if (existing.status !== "draft") {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "INVALID_STATE",
+          message:
+            "Only drafts can be deleted. Submitted/approved NBFCs are part of downstream flows.",
+          currentStatus: existing.status,
+        },
+        { status: 409 },
+      );
+    }
+
+    if (
+      !existing.created_by_auth_id ||
+      String(existing.created_by_auth_id) !== String(admin.id)
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "not_owner",
+          message: "Only the creator of this draft can delete it.",
+        },
+        { status: 403 },
+      );
+    }
+
+    await db.transaction(async (tx) => {
+      // Director KYC rows reference nbfcDirectors.id — clear them first so
+      // the nbfcDirectors delete below doesn't trip the FK.
+      const directorIds = (
+        await tx
+          .select({ id: nbfcDirectors.id })
+          .from(nbfcDirectors)
+          .where(eq(nbfcDirectors.nbfc_id, id))
+      ).map((r) => r.id);
+      if (directorIds.length > 0) {
+        await tx
+          .delete(nbfcDirectorKycVerifications)
+          .where(inArray(nbfcDirectorKycVerifications.director_id, directorIds));
+      }
+
+      await tx
+        .delete(nbfcEntityKycVerifications)
+        .where(eq(nbfcEntityKycVerifications.nbfc_id, id));
+      await tx
+        .delete(nbfcCorExpiryAlerts)
+        .where(eq(nbfcCorExpiryAlerts.nbfc_id, id));
+      await tx.delete(nbfcStatusHistory).where(eq(nbfcStatusHistory.nbfc_id, id));
+      await tx.delete(nbfcLspAgreements).where(eq(nbfcLspAgreements.nbfc_id, id));
+      await tx
+        .delete(nbfcComplianceDocuments)
+        .where(eq(nbfcComplianceDocuments.nbfc_id, id));
+      await tx.delete(nbfcDirectors).where(eq(nbfcDirectors.nbfc_id, id));
+      await tx.delete(nbfc).where(eq(nbfc.id, id));
+    });
+
+    return NextResponse.json({ success: true, deletedId: id });
+  } catch (err) {
+    console.error("DELETE /api/admin/nbfc/[nbfcId] error:", err);
     return NextResponse.json(
       { success: false, error: "server_error" },
       { status: 500 },

@@ -151,6 +151,41 @@ export async function startChunkedRun(runId: string, baseQuery: string) {
         .where(eq(scrapeRuns.id, runId));
     }
 
+    // Local-dev safety net: QStash callbacks can't reach `localhost:3000`,
+    // so when running outside production (and the user hasn't explicitly
+    // opted out) we also kick off chunks inline. The QStash publish above
+    // is harmless when ignored; this guarantees the run actually makes
+    // progress without depending on an ngrok / preview tunnel being live.
+    // Production keeps the original behavior — chunks only run via QStash.
+    if (
+      process.env.NODE_ENV !== "production" &&
+      process.env.SCRAPER_DISABLE_LOCAL_BYPASS !== "1"
+    ) {
+      const queue = chunkRows
+        .filter((c) => !failedChunkIds.includes(c.id))
+        .map((c) => c.id);
+      // Limit concurrency so we don't burst Google Places into a 429 on
+      // every dev run. 3 is conservative — Places' default quota tolerates
+      // it and a 15-chunk run still finishes in ~30-60s.
+      const CONCURRENCY = 3;
+      const drain = async () => {
+        while (queue.length) {
+          const batch = queue.splice(0, CONCURRENCY);
+          await Promise.allSettled(batch.map((id) => executeChunk(id)));
+        }
+      };
+      // Detach so the originating request returns instantly. We log
+      // unhandled drains because they'd otherwise vanish into the void.
+      setImmediate(() =>
+        drain().catch((e) =>
+          console.error(`[SCRAPER][${runId}] local-bypass drain failed`, e),
+        ),
+      );
+      console.log(
+        `[SCRAPER][${runId}] local-bypass: draining ${queue.length} chunks in-process (concurrency=${CONCURRENCY})`,
+      );
+    }
+
     return {
       totalChunks: combinations.length,
       failedPublishes: failedChunkIds.length,

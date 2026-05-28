@@ -1,5 +1,5 @@
 import { db } from '@/lib/db';
-import { leads, personalDetails, auditLogs, kycDocuments, kycVerifications, consentRecords } from '@/lib/db/schema';
+import { leads, personalDetails, auditLogs, kycDocuments, kycVerifications, consentRecords, productCategories, products, leadProducts } from '@/lib/db/schema';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 import { eq, and, sql } from 'drizzle-orm';
@@ -50,6 +50,58 @@ export const GET = withErrorHandler(async (_req: Request, { params }: { params: 
         return errorResponse('Forbidden: You do not have permission to view this lead', 403);
     }
 
+    // E-116 — resolve the primary product's category slug/name + the saved
+    // "Add Another Product" rows so the new-lead wizard's 3-level cascade
+    // (Asset Type → Category → Product) fully rehydrates when the lead is edited.
+    let assetModel = '';
+    let assetModelLabel = '';
+    if (lead.product_category_id) {
+        const [cat] = await db
+            .select({ slug: productCategories.slug, name: productCategories.name })
+            .from(productCategories)
+            .where(sql`${productCategories.id}::text = ${lead.product_category_id}`)
+            .limit(1);
+        assetModel = cat?.slug || '';
+        assetModelLabel = cat?.name || '';
+    }
+
+    let primaryProductName = '';
+    if (lead.primary_product_id) {
+        const [prod] = await db
+            .select({ name: products.name })
+            .from(products)
+            .where(eq(products.id, lead.primary_product_id))
+            .limit(1);
+        primaryProductName = prod?.name || '';
+    }
+
+    const extraRows = await db
+        .select({
+            product_id: leadProducts.product_id,
+            product_category_id: leadProducts.product_category_id,
+            category_slug: leadProducts.category_slug,
+            asset_type: leadProducts.asset_type,
+            product_name: products.name,
+            category_name: productCategories.name,
+        })
+        .from(leadProducts)
+        .leftJoin(products, eq(products.id, leadProducts.product_id))
+        .leftJoin(
+            productCategories,
+            sql`${productCategories.id}::text = ${leadProducts.product_category_id}`,
+        )
+        .where(eq(leadProducts.lead_id, id));
+
+    const additional_products = extraRows.map((r) => ({
+        asset_type: r.asset_type || '',
+        category_id: r.product_category_id || '',
+        category_slug: r.category_slug || '',
+        category_name: r.category_name || '',
+        is_vehicle_category: true,
+        product_id: r.product_id,
+        product_name: r.product_name || '',
+    }));
+
     return successResponse({
         leadId: lead.id,
         referenceId: lead.reference_id,
@@ -63,7 +115,12 @@ export const GET = withErrorHandler(async (_req: Request, { params }: { params: 
             is_current_same: !!lead.is_current_same,
             product_category_id: lead.product_category_id || '',
             product_type_id: lead.product_type_id || '',
-            primary_product_id: (lead as any).primary_product_id || '',
+            primary_product_id: lead.primary_product_id || '',
+            asset_type: lead.asset_type || '',
+            asset_model: assetModel,
+            asset_model_label: assetModelLabel,
+            is_vehicle_category: !!assetModel,
+            product_name: primaryProductName,
             interested_in: lead.interested_in || [],
             vehicle_rc: lead.vehicle_rc || '',
             vehicle_ownership: lead.vehicle_ownership || '',
@@ -72,6 +129,7 @@ export const GET = withErrorHandler(async (_req: Request, { params }: { params: 
             interest_level: lead.interest_level || 'cold',
             payment_method: lead.payment_method || '',
         },
+        additional_products,
     });
 });
 
@@ -192,6 +250,7 @@ export const DELETE = withErrorHandler(async (req: Request, { params }: { params
             await tx.execute(sql`DELETE FROM kyc_verifications WHERE lead_id = ${id}`);
             await tx.execute(sql`DELETE FROM consent_records WHERE lead_id = ${id}`);
             await tx.execute(sql`DELETE FROM personal_details WHERE lead_id = ${id}`);
+            await tx.execute(sql`DELETE FROM lead_products WHERE lead_id = ${id}`);
             await tx.execute(sql`DELETE FROM co_borrower_documents WHERE lead_id = ${id}`);
             await tx.execute(sql`DELETE FROM co_borrowers WHERE lead_id = ${id}`);
             await tx.execute(sql`DELETE FROM admin_kyc_reviews WHERE lead_id = ${id}`);
