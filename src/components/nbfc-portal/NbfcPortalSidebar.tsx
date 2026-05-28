@@ -15,6 +15,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Briefcase,
   ChartLine,
   ClipboardList,
   Cog,
@@ -31,6 +32,15 @@ const NAV_ITEMS: Array<{
   label: string;
   icon: React.ComponentType<{ className?: string }>;
 }> = [
+  // Addendum V0.1 §7.1 — Acquire is the pre-disbursal origination workspace.
+  // Sits above Monitor (Portfolio Overview) since it is the primary surface
+  // for an NBFC user under the addendum's competing-NBFC routing model.
+  {
+    id: "acquire",
+    href: "/nbfc/acquire",
+    label: "Acquire",
+    icon: Briefcase,
+  },
   {
     id: "portfolio",
     href: "/nbfc/portfolio",

@@ -23,6 +23,10 @@ const updateSchema = z.object({
     vehicle_owner_name: z.string().optional().nullable(),
     vehicle_owner_phone: z.string().optional().nullable(),
     interested_in: z.array(z.string()).optional(),
+    // E-130 / Addendum §3.2, §3.3 — finance-only fields; passthrough allowed.
+    resident_status: z.enum(['owned', 'rented']).optional().nullable(),
+    has_health_insurance: z.boolean().optional().nullable(),
+    has_life_insurance: z.boolean().optional().nullable(),
     commitStep: z.boolean().optional()
 });
 
@@ -128,6 +132,10 @@ export const GET = withErrorHandler(async (_req: Request, { params }: { params: 
             vehicle_owner_phone: lead.vehicle_owner_phone || '',
             interest_level: lead.interest_level || 'cold',
             payment_method: lead.payment_method || '',
+            // Addendum §3.2, §3.3 — finance-only fields surfaced for edit mode.
+            resident_status: lead.resident_status || '',
+            has_health_insurance: lead.has_health_insurance,
+            has_life_insurance: lead.has_life_insurance,
         },
         additional_products,
     });
@@ -191,7 +199,7 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
             if (data.vehicle_rc !== undefined) leadUpdates.vehicle_rc = data.vehicle_rc?.toUpperCase().trim();
             if (data.vehicle_owner_phone !== undefined) leadUpdates.vehicle_owner_phone = normalizePhone(data.vehicle_owner_phone);
 
-            const fields = ['father_or_husband_name', 'current_address', 'permanent_address', 'is_current_same', 'primary_product_id', 'product_category_id', 'product_type_id', 'vehicle_ownership', 'vehicle_owner_name', 'interested_in', 'payment_method'];
+            const fields = ['father_or_husband_name', 'current_address', 'permanent_address', 'is_current_same', 'primary_product_id', 'product_category_id', 'product_type_id', 'vehicle_ownership', 'vehicle_owner_name', 'interested_in', 'payment_method', 'resident_status', 'has_health_insurance', 'has_life_insurance'];
             fields.forEach(f => {
                 if ((data as any)[f] !== undefined) leadUpdates[f] = (data as any)[f];
             });

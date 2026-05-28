@@ -12,13 +12,35 @@ import { InventoryLifecycleError, releaseInventorySerial } from "@/lib/inventory
 // BRD V2 §2.8 — admin Step 4 "Loan Rejected" action.
 // Records the rejection, releases reserved inventory, advances lead to
 // 'loan_rejected'. Dealer Step 5 opens in read-only rejection view.
+//
+// DEPRECATED by BRD Addendum V0.1 §5.1 (Phase 2). Admin no longer acts on
+// product selection. Returns 410 Gone. Original implementation retained
+// below for Phase-5 revert; never invoked.
+
+export async function POST(
+  _req: NextRequest,
+  _ctx: { params: Promise<{ id: string }> },
+) {
+  return NextResponse.json(
+    {
+      success: false,
+      error: {
+        code: "ENDPOINT_GONE",
+        message:
+          "Admin loan-rejection is no longer available. Lead disposition for declined loans is now handled in the NBFC Acquire workspace, with Manual Handoff as fallback (BRD Addendum V0.1 §5.1, §6, §9.7).",
+      },
+    },
+    { status: 410 },
+  );
+}
 
 const BodySchema = z.object({
   rejectionReason: z.string().min(10, "Rejection reason must be at least 10 characters"),
   lenderName: z.string().optional(),
 });
 
-export async function POST(
+// Original handler — kept intact for Phase-5 revert. Not exported.
+async function _POST_ORIGINAL_IMPL(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
