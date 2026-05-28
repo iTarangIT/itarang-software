@@ -11,6 +11,34 @@ import { notifyLoanSanctioned } from "@/lib/notifications";
 // BRD V2 §2.7 — admin Step 4 "Loan Sanctioned" action.
 // Inserts a loan_sanctions row and advances lead to 'loan_sanctioned' so the
 // dealer Step 5 screen unlocks. Inventory stays reserved until dispatch.
+//
+// DEPRECATED by BRD Addendum V0.1 §5.1 (Phase 2). The admin no longer
+// sanctions loans — that authority moves to the NBFC inside the Acquire
+// workspace (Phase 4/5). This handler returns 410 Gone. The implementation
+// below is kept intact (untouched) so it can be revived during Phase 5
+// rollback if needed, then removed in a follow-up cleanup once the new
+// flow is proven in production.
+
+export async function POST_DEPRECATED(
+  _req: NextRequest,
+  _ctx: { params: Promise<{ id: string }> },
+) {
+  return NextResponse.json(
+    {
+      success: false,
+      error: {
+        code: "ENDPOINT_GONE",
+        message:
+          "Admin loan-sanction is no longer available. Loan sanctioning is now performed by the NBFC inside the Acquire workspace (BRD Addendum V0.1 §5.1, §6).",
+      },
+    },
+    { status: 410 },
+  );
+}
+
+export const POST = POST_DEPRECATED;
+
+// ── Original handler retained below for Phase-5 revert; never invoked ────
 
 const BodySchema = z.object({
   loanAmount: z.number().min(0),
@@ -25,7 +53,9 @@ const BodySchema = z.object({
   loanFileNumber: z.string().min(1),
 });
 
-export async function POST(
+// Original handler — kept intact for Phase-5 revert. Not exported.
+// Function signature is the stub from above.
+async function _POST_ORIGINAL_IMPL(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { inventory, leads, productSelections } from "@/lib/db/schema";
+import { inventory, leads, nbfc, nbfcLeadAssignments, productSelections } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { generateId } from "@/lib/api-utils";
 import { notifyProductSelectionSubmitted } from "@/lib/notifications";
@@ -56,6 +56,17 @@ const BodySchema = z.object({
   // E-103: was subCategory; renamed to modelNumber to mirror the
   // product_selections.model_number column (Sync Audit G-05).
   modelNumber: z.string().optional(),
+  // E-130 / Addendum V0.1 §5.1, §5.3 — dealer-captured product photos and
+  // the Section G picks. All four columns are nullable in DB; the API does
+  // not enforce "photos required" at this stage (Phase 2 ships the plumbing;
+  // a downstream phase can tighten validation per legal/ops review).
+  batteryPhotoUrls: z.array(z.string().url()).optional(),
+  chargerPhotoUrls: z.array(z.string().url()).optional(),
+  selectedNbfcs: z.array(z.object({
+    nbfc_id: z.string(),
+    loan_product_id: z.union([z.string(), z.number()]).optional(),
+  })).max(2).optional(),
+  customerDisclosureAck: z.boolean().optional(),
 });
 
 const FINANCE_UNLOCKED = new Set(["step_3_cleared", "kyc_approved"]);
@@ -141,6 +152,11 @@ export async function POST(
         net_subtotal: body.netSubtotal?.toString(),
         payment_mode: "finance",
         admin_decision: "pending",
+        // E-130 / Addendum V0.1 §5.1, §5.3
+        battery_photo_urls: body.batteryPhotoUrls ?? [],
+        charger_photo_urls: body.chargerPhotoUrls ?? [],
+        selected_nbfcs: body.selectedNbfcs ?? [],
+        customer_disclosure_ack: body.customerDisclosureAck ?? false,
         submitted_by: user.id,
         submitted_at: now,
         created_at: now,
@@ -174,6 +190,69 @@ export async function POST(
         .update(leads)
         .set({ kyc_status: "pending_final_approval", updated_at: now })
         .where(eq(leads.id, leadId));
+
+      // E-131 / Addendum V0.1 §6 — fan out to NBFC Acquire queues. One row
+      // per picked NBFC. tenant_id is denormalised from nbfc.tenant_id so
+      // the queue page is a single tenant-scoped index hit. selected_nbfcs
+      // stores nbfc.id (integer PK) as a stringified integer per the Section
+      // G writer; we parseInt and drop anything non-numeric or referencing
+      // an nbfc row without a tenant binding (legacy / E-026B-style rows).
+      // onConflictDoNothing on (lead_id, nbfc_id) makes re-submits safe.
+      if (body.selectedNbfcs && body.selectedNbfcs.length > 0) {
+        const picks = body.selectedNbfcs
+          .map((p) => ({
+            nbfc_id: Number(p.nbfc_id),
+            loan_product_id:
+              p.loan_product_id == null ? null : Number(p.loan_product_id),
+          }))
+          .filter(
+            (p) =>
+              Number.isFinite(p.nbfc_id) &&
+              (p.loan_product_id == null || Number.isFinite(p.loan_product_id)),
+          );
+
+        if (picks.length > 0) {
+          const nbfcRows = await tx
+            .select({ id: nbfc.id, tenant_id: nbfc.tenant_id })
+            .from(nbfc)
+            .where(inArray(nbfc.id, picks.map((p) => p.nbfc_id)));
+
+          const tenantByNbfc = new Map(
+            nbfcRows.map((r) => [r.id, r.tenant_id] as const),
+          );
+
+          const assignmentRows = picks
+            .map((p) => {
+              const tenantId = tenantByNbfc.get(p.nbfc_id);
+              if (!tenantId) {
+                console.warn(
+                  `[submit-product-selection] skipping Acquire fan-out for nbfc.id=${p.nbfc_id} — no tenant_id binding. Lead ${leadId} will not surface in this NBFC's Acquire queue until the nbfc row is repointed.`,
+                );
+                return null;
+              }
+              return {
+                lead_id: leadId,
+                nbfc_id: p.nbfc_id,
+                tenant_id: tenantId,
+                loan_product_id: p.loan_product_id,
+                status: "pending" as const,
+              };
+            })
+            .filter((r): r is NonNullable<typeof r> => r !== null);
+
+          if (assignmentRows.length > 0) {
+            await tx
+              .insert(nbfcLeadAssignments)
+              .values(assignmentRows)
+              .onConflictDoNothing({
+                target: [
+                  nbfcLeadAssignments.lead_id,
+                  nbfcLeadAssignments.nbfc_id,
+                ],
+              });
+          }
+        }
+      }
 
       return { productSelectionId };
     });

@@ -56,6 +56,11 @@ const BodySchema = z.object({
   // E-103: was subCategory; renamed to modelNumber to mirror the
   // product_selections.model_number column (Sync Audit G-05).
   modelNumber: z.string().optional(),
+  // E-130 / Addendum V0.1 §5.1 — battery/charger photos apply to cash too
+  // (Sections B/C are shared). Section G fields are finance-only and ignored
+  // here, but accepted for forwards-compat.
+  batteryPhotoUrls: z.array(z.string().url()).optional(),
+  chargerPhotoUrls: z.array(z.string().url()).optional(),
 });
 
 export async function POST(
@@ -178,6 +183,9 @@ export async function POST(
         net_subtotal: body.netSubtotal?.toString(),
         payment_mode: "cash",
         admin_decision: "dealer_confirmed",
+        // E-130 / Addendum V0.1 §5.1 — dealer-captured photos (cash path).
+        battery_photo_urls: body.batteryPhotoUrls ?? [],
+        charger_photo_urls: body.chargerPhotoUrls ?? [],
         submitted_by: user.id,
         submitted_at: now,
         created_at: now,
