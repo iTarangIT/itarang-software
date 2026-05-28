@@ -202,14 +202,32 @@ jobs:
             # fits the 8 GB VPS alongside the running production app.
             export NODE_OPTIONS="--max-old-space-size=4096"
 
-            echo "--- cleaning prior build state ---"
-            # Forces deterministic builds. Without this, .next/standalone/.next/server,
-            # .next/cache/turbopack, and leftover .next/static remnants from the prior
-            # deploy can leak chunk references that the current build doesn't re-emit.
-            # That's what caused 19 NOT-ON-DISK chunks (incl. a turbopack-*.js residue)
-            # on the deploy immediately after switching package.json to --webpack.
-            # Keeps node_modules; only nukes Next's build outputs.
-            rm -rf .next
+            echo "--- cleaning prior build state (preserving webpack cache) ---"
+            # Nuke Next's build OUTPUTS so a fresh build can't inherit stale
+            # chunk references (this is what caused 19 NOT-ON-DISK chunks +
+            # turbopack-*.js residue on the deploy immediately after switching
+            # package.json to --webpack):
+            #   - .next/standalone/.next/server, .next/static remnants
+            #   - .next/cache/turbopack (we now build with webpack, not turbo)
+            #   - per-build manifests + BUILD_ID + trace
+            #
+            # But PRESERVE .next/cache/webpack — that's webpack's incremental
+            # COMPILE cache, not output. Without it, every deploy pays the
+            # full cold-build cost (~13 min for this app). Keeping it drops
+            # warm rebuilds to ~3-5 min and silences Next's "No build cache
+            # found" warning. The cache is just compilation memoization;
+            # webpack always re-emits chunks from current sources.
+            if [ -d .next ]; then
+              if [ -d .next/cache/webpack ]; then
+                mv .next/cache/webpack /tmp/itarang-webpack-cache-stash
+              fi
+              rm -rf .next
+              if [ -d /tmp/itarang-webpack-cache-stash ]; then
+                mkdir -p .next/cache
+                mv /tmp/itarang-webpack-cache-stash .next/cache/webpack
+                echo "Preserved webpack cache: $(du -sh .next/cache/webpack 2>/dev/null | cut -f1)"
+              fi
+            fi
 
             time npm run build
 
@@ -451,10 +469,20 @@ jobs:
             # rebuild SIGABRTs with "Reached heap limit" on this 8 GB VPS.
             export NODE_OPTIONS="--max-old-space-size=4096"
 
-            # Same clean-slate requirement as the primary build above.
-            # Without this, the rollback inherits the failed-build's
-            # polluted .next/ and reproduces the broken state.
-            rm -rf .next
+            # Same clean-slate-with-cache-preservation as the primary build.
+            # Nuke outputs so we don't inherit the failed-build's polluted
+            # .next/, but keep webpack's incremental compile cache so the
+            # rollback rebuild doesn't pay another full ~13 min cold cost.
+            if [ -d .next ]; then
+              if [ -d .next/cache/webpack ]; then
+                mv .next/cache/webpack /tmp/itarang-webpack-cache-stash
+              fi
+              rm -rf .next
+              if [ -d /tmp/itarang-webpack-cache-stash ]; then
+                mkdir -p .next/cache
+                mv /tmp/itarang-webpack-cache-stash .next/cache/webpack
+              fi
+            fi
 
             time npm run build
 
