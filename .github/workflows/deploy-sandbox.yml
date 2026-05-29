@@ -182,9 +182,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sandbox-build-${{ github.sha }}
+          # ecosystem.sandbox.config.js MUST ship in the artifact: the deploy
+          # job uses it to overwrite the VPS-side copy. Before this change,
+          # the VPS held whatever ecosystem file was on its last `git pull`,
+          # which silently drifted from main — and on 2026-05-28 caused pm2
+          # to keep launching `.next/standalone/server.js` (the pre-arch
+          # path) even after main switched to `current/server.js`. The
+          # symptom was a sandbox-web restart loop with MODULE_NOT_FOUND.
           path: |
             build.tar.gz
             build.meta.json
+            ecosystem.sandbox.config.js
           retention-days: 7
           if-no-files-found: error
 
@@ -195,10 +203,36 @@ jobs:
     name: Deploy (SSH)
     runs-on: ubuntu-latest
     needs: build
-    timeout-minutes: 15
+    # 15m was too tight — the SSH steps + 60s health-check window plus the
+    # always-run failure-collector left no headroom. A timeout-killed run
+    # also skips `if: failure()` handlers, so we got zero post-mortem logs.
+    timeout-minutes: 25
     outputs:
       prev_sha: ${{ steps.capture-prev.outputs.prev_sha }}
     steps:
+      # ────────────────────────────────────────────────────────────────
+      # Preflight — wait until the VPS SSH port answers before any
+      # appleboy/ssh-action step runs. appleboy/ssh-action has no native
+      # retry, so a transient `dial tcp ... i/o timeout` (VPS rebooting /
+      # brief network blip) would otherwise fail the whole deploy on the
+      # first SSH step. This retry-with-backoff loop absorbs that; on a
+      # persistent failure it emits a clear error (VPS down / firewall)
+      # instead of a cryptic per-step dial timeout.
+      # ────────────────────────────────────────────────────────────────
+      - name: Wait for VPS SSH to be reachable
+        run: |
+          for i in $(seq 1 8); do
+            if nc -z -w 10 "$HOST" "$PORT"; then
+              echo "VPS SSH reachable on attempt $i"; exit 0
+            fi
+            echo "attempt $i: $HOST:$PORT not reachable, retrying in 20s"; sleep 20
+          done
+          echo "::error::VPS SSH $HOST:$PORT unreachable after 8 attempts (~3.5 min) — VPS down or firewall blocking the runner"
+          exit 1
+        env:
+          HOST: ${{ secrets.SANDBOX_VPS_HOST }}
+          PORT: ${{ secrets.SANDBOX_VPS_PORT }}
+
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
@@ -217,6 +251,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 2m
           script_stop: false
           envs: APP_DIR
@@ -244,6 +279,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 3m
           script_stop: false
           envs: APP_DIR,LOG_DIR
@@ -280,6 +316,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 10m
           script_stop: false
           envs: APP_DIR,CHROMIUM_MARKER
@@ -305,6 +342,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 2m
           script_stop: false
           envs: APP_DIR
@@ -338,6 +376,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 5m
           script_stop: false
           envs: APP_DIR
@@ -368,6 +407,91 @@ jobs:
             node "$APP_DIR/scripts/verify-chunk-manifest.js"
 
       # ────────────────────────────────────────────────────────────────
+      # B.6b — pre-flight: shared/.env must exist with DATABASE_URL.
+      # Without it, src/lib/db/index.ts throws at module load and pm2
+      # silently restart-loops for ~3 minutes before going errored. We
+      # learnt this the hard way in run 26577303733 — a fresh VPS missing
+      # shared/.env turned into a 15m timeout with zero post-mortem logs.
+      # Check it explicitly so the failure is loud and instant.
+      # ────────────────────────────────────────────────────────────────
+      - name: Pre-flight shared/.env check
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 1m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            if [ ! -s "$APP_DIR/shared/.env" ]; then
+              echo "❌ $APP_DIR/shared/.env is missing or empty."
+              echo "   current/.env is a symlink to this file; standalone server.js"
+              echo "   loads it via Next.js loadEnvConfig. Without it, app throws"
+              echo "   'DATABASE_URL is not set' at module load and never binds 3003."
+              echo "   Fix: SSH to the VPS and run scripts/sandbox-bootstrap.sh (one-time)."
+              exit 1
+            fi
+            if ! grep -q '^DATABASE_URL=' "$APP_DIR/shared/.env"; then
+              echo "❌ $APP_DIR/shared/.env exists but has no DATABASE_URL= line."
+              exit 1
+            fi
+            echo "✓ shared/.env present ($(wc -l < $APP_DIR/shared/.env) lines, DATABASE_URL set)"
+
+      # ────────────────────────────────────────────────────────────────
+      # B.6c — ship ecosystem.sandbox.config.js to the VPS root so pm2
+      # always launches from the version that matches main, not whatever
+      # was on the last manual `git pull`. The VPS doesn't run git pull
+      # under this arch, so without this step the pm2 config silently
+      # drifts behind. On 2026-05-28 the VPS had the pre-arch-change
+      # `args: ".next/standalone/server.js"` while main had
+      # `args: "current/server.js"` — pm2 restart-looped with
+      # MODULE_NOT_FOUND.
+      #
+      # The hash-guard step (B.9) already picks up script/args changes
+      # and forces pm2 delete+start, so a new config takes effect
+      # immediately.
+      # ────────────────────────────────────────────────────────────────
+      - name: Ship ecosystem.sandbox.config.js to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          source: "ecosystem.sandbox.config.js"
+          target: "${{ env.APP_DIR }}/"
+          overwrite: true
+          timeout: 2m
+
+      # Sanity check: confirm the file we just shipped actually has the
+      # current/server.js args — defense in depth against an SCP that
+      # silently writes the wrong thing.
+      - name: Verify shipped ecosystem.sandbox.config.js args
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 1m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            if ! grep -q 'args: "current/server.js"' "$APP_DIR/ecosystem.sandbox.config.js"; then
+              echo "❌ ecosystem.sandbox.config.js on VPS is missing args: \"current/server.js\""
+              echo "--- current args lines ---"
+              grep -n 'args:' "$APP_DIR/ecosystem.sandbox.config.js" || true
+              exit 1
+            fi
+            echo "✓ ecosystem.sandbox.config.js args is current/server.js"
+
+      # ────────────────────────────────────────────────────────────────
       # B.7 — worker deps refresh (conditional). The sandbox-worker pm2
       # app runs `tsx` on raw src/, so node_modules at the repo root must
       # match the lock file. Skip when nothing changed.
@@ -379,6 +503,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 10m
           script_stop: false
           envs: APP_DIR
@@ -413,6 +538,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 2m
           script_stop: false
           envs: APP_DIR
@@ -435,6 +561,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 5m
           script_stop: false
           envs: APP_DIR,SANDBOX_PORT
@@ -507,8 +634,24 @@ jobs:
             pm2 save
             pm2 ls
 
+            # Fail loudly before the 60s health-check window if pm2 didn't
+            # actually bring sandbox-web online. Saves us 60s of curl=000
+            # polling and surfaces the crash logs in this step's output
+            # (instead of relying on the failure-collector at the very end).
+            STATUS=$(pm2 jlist | node -e "const j=JSON.parse(require('fs').readFileSync(0,'utf8')); const w=j.find(p=>p.name==='sandbox-web'); console.log(w?w.pm2_env.status:'missing')")
+            echo "sandbox-web pm2 status: $STATUS"
+            if [ "$STATUS" != "online" ]; then
+              echo "❌ sandbox-web is '$STATUS' — dumping recent stderr and aborting"
+              pm2 logs sandbox-web --lines 120 --nostream --err || true
+              exit 1
+            fi
+
       # ────────────────────────────────────────────────────────────────
-      # B.10 — health check. 60-second 1Hz poll, gates rollback.
+      # B.10 — health check. 180-second 1Hz poll, gates rollback.
+      # Bumped from 60s after observing Next.js 16 standalone takes ~40s
+      # to reach "Ready" on this VPS, plus DB cold-connect can push the
+      # first-200 well past 60s. 180s gives ~3x headroom; the pm2 status
+      # guard above (B.9) is what catches the actual restart-loop case.
       # ────────────────────────────────────────────────────────────────
       - name: Health check
         uses: appleboy/ssh-action@v1.2.0
@@ -517,17 +660,22 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
-          command_timeout: 3m
+          timeout: 60s
+          command_timeout: 5m
           script_stop: false
           envs: APP_DIR,HEALTH_URL
           script: |
             set -eo pipefail
             exec 2>&1
             HTTP=000
-            for i in $(seq 1 60); do
+            for i in $(seq 1 180); do
               sleep 1
-              HTTP=$(curl -s -o /dev/null -m 5 -w "%{http_code}" "$HEALTH_URL" || echo 000)
-              if [ $((i % 5)) -eq 0 ] || [ "$HTTP" = "200" ]; then
+              # Don't `|| echo 000` here: curl already writes "000" via -w on
+              # connection failure, and the `|| echo` would concatenate to
+              # "000000" which is unreadable in logs. Use a separate guard.
+              HTTP=$(curl -s -o /dev/null -m 5 -w "%{http_code}" "$HEALTH_URL")
+              [ -z "$HTTP" ] && HTTP=000
+              if [ $((i % 10)) -eq 0 ] || [ "$HTTP" = "200" ]; then
                 echo "  t=${i}s http=$HTTP"
               fi
               if [ "$HTTP" = "200" ]; then
@@ -536,7 +684,7 @@ jobs:
               fi
             done
             if [ "$HTTP" != "200" ]; then
-              echo "❌ $HEALTH_URL returned $HTTP after 60s"
+              echo "❌ $HEALTH_URL returned $HTTP after 180s"
               pm2 ls || true
               pm2 logs sandbox-web --lines 80 --nostream || true
               exit 1
@@ -557,6 +705,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 5m
           script_stop: false
           envs: APP_DIR,SANDBOX_PORT
@@ -578,6 +727,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 2m
           script_stop: false
           envs: APP_DIR
@@ -601,13 +751,17 @@ jobs:
       # Stage C — failure handlers. Run only on deploy failure.
       # ────────────────────────────────────────────────────────────────
       - name: Collect failure logs from VPS
-        if: failure()
+        # Also run on cancellation (job-level timeout shows up as `cancelled`,
+        # not `failure`) — that's the failure mode that left run 26577303733
+        # with zero post-mortem logs.
+        if: failure() || cancelled()
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SANDBOX_VPS_HOST }}
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 3m
           script_stop: false
           envs: APP_DIR,LOG_DIR
@@ -632,13 +786,14 @@ jobs:
             echo ">>> Memory:"; free -m || true
 
       - name: Rollback (symlink swap only — no rebuild)
-        if: failure()
+        if: failure() || cancelled()
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SANDBOX_VPS_HOST }}
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 3m
           script_stop: false
           envs: APP_DIR,SANDBOX_PORT,HEALTH_URL

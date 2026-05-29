@@ -36,6 +36,22 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
 
+// Items appended to every role's sidebar — universal actions any logged-in
+// user can take (currently: submit a business expense → CEO approves).
+const COMMON_ITEMS = [
+  {
+    section: "EXPENSES",
+    items: [
+      {
+        id: "submit-expense",
+        label: "Submit Expense",
+        icon: Receipt,
+        href: "/expenses/submit",
+      },
+    ],
+  },
+];
+
 const roleNavigation: Record<string, any[]> = {
   ceo: [
     {
@@ -90,6 +106,12 @@ const roleNavigation: Record<string, any[]> = {
         },
         { id: "leads", label: "Leads", icon: Users, href: "/leads" },
         { id: "deals", label: "Deals", icon: FileCheck, href: "/deals" },
+        {
+          id: "sales-invoices",
+          label: "Sales Invoices",
+          icon: Receipt,
+          href: "/ceo/invoices",
+        },
       ],
     },
     {
@@ -146,6 +168,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "Product Review",
           icon: Package,
           href: "/admin/product-review",
+        },
+        {
+          id: "expense-approvals",
+          label: "Expense Approvals",
+          icon: ClipboardCheck,
+          href: "/ceo/expenses",
         },
       ],
     },
@@ -888,13 +916,18 @@ export function Sidebar() {
   }, [inferredRole]);
 
   const financeGatedItemIds = new Set(["loans", "loan-mgmt"]);
-  let menuItems =
+  const filteredMenuItems =
     inferredRole === "dealer" && dealerFinanceEnabled === false
       ? rawMenuItems.map((group: any) => ({
           ...group,
           items: group.items.filter((item: any) => !financeGatedItemIds.has(item.id)),
         }))
       : rawMenuItems;
+
+  // Universal nav items (e.g. Submit Expense) appended to every role except
+  // the "user" fallback (unauthenticated path-inferred view).
+  let menuItems =
+    inferredRole === "user" ? filteredMenuItems : [...filteredMenuItems, ...COMMON_ITEMS];
 
   // NBFC Onboarding Plan §15.1 — count badge on the CEO "Pending NBFC
   // Approvals" link, fetched once on mount. Polling is overkill for a queue
@@ -960,6 +993,7 @@ export function Sidebar() {
                   <Link
                     key={item.id}
                     href={item.href}
+                    data-testid={`nav-${item.id}`}
                     className={cn(
                       isActive ? "sidebar-nav-item-active" : "sidebar-nav-item",
                     )}
