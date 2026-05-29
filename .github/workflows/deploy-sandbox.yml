@@ -210,6 +210,29 @@ jobs:
     outputs:
       prev_sha: ${{ steps.capture-prev.outputs.prev_sha }}
     steps:
+      # ────────────────────────────────────────────────────────────────
+      # Preflight — wait until the VPS SSH port answers before any
+      # appleboy/ssh-action step runs. appleboy/ssh-action has no native
+      # retry, so a transient `dial tcp ... i/o timeout` (VPS rebooting /
+      # brief network blip) would otherwise fail the whole deploy on the
+      # first SSH step. This retry-with-backoff loop absorbs that; on a
+      # persistent failure it emits a clear error (VPS down / firewall)
+      # instead of a cryptic per-step dial timeout.
+      # ────────────────────────────────────────────────────────────────
+      - name: Wait for VPS SSH to be reachable
+        run: |
+          for i in $(seq 1 8); do
+            if nc -z -w 10 "$HOST" "$PORT"; then
+              echo "VPS SSH reachable on attempt $i"; exit 0
+            fi
+            echo "attempt $i: $HOST:$PORT not reachable, retrying in 20s"; sleep 20
+          done
+          echo "::error::VPS SSH $HOST:$PORT unreachable after 8 attempts (~3.5 min) — VPS down or firewall blocking the runner"
+          exit 1
+        env:
+          HOST: ${{ secrets.SANDBOX_VPS_HOST }}
+          PORT: ${{ secrets.SANDBOX_VPS_PORT }}
+
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
@@ -228,6 +251,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 2m
           script_stop: false
           envs: APP_DIR
@@ -255,6 +279,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 3m
           script_stop: false
           envs: APP_DIR,LOG_DIR
@@ -291,6 +316,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 10m
           script_stop: false
           envs: APP_DIR,CHROMIUM_MARKER
@@ -316,6 +342,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 2m
           script_stop: false
           envs: APP_DIR
@@ -349,6 +376,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 5m
           script_stop: false
           envs: APP_DIR
@@ -393,6 +421,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 1m
           script_stop: false
           envs: APP_DIR
@@ -448,6 +477,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 1m
           script_stop: false
           envs: APP_DIR
@@ -473,6 +503,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 10m
           script_stop: false
           envs: APP_DIR
@@ -507,6 +538,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 2m
           script_stop: false
           envs: APP_DIR
@@ -529,6 +561,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 5m
           script_stop: false
           envs: APP_DIR,SANDBOX_PORT
@@ -627,6 +660,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 5m
           script_stop: false
           envs: APP_DIR,HEALTH_URL
@@ -671,6 +705,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 5m
           script_stop: false
           envs: APP_DIR,SANDBOX_PORT
@@ -692,6 +727,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 2m
           script_stop: false
           envs: APP_DIR
@@ -725,6 +761,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 3m
           script_stop: false
           envs: APP_DIR,LOG_DIR
@@ -756,6 +793,7 @@ jobs:
           username: ${{ secrets.SANDBOX_VPS_USER }}
           port: ${{ secrets.SANDBOX_VPS_PORT }}
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          timeout: 60s
           command_timeout: 3m
           script_stop: false
           envs: APP_DIR,SANDBOX_PORT,HEALTH_URL
