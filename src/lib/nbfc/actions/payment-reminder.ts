@@ -27,11 +27,24 @@ import {
 
 export type PaymentReminderChannel = "sms" | "whatsapp" | "email";
 
+/**
+ * Optional caller-supplied entity context. When the reminder is triggered from
+ * the lead-intelligence drawer rather than the loan workspace, the lead_id is
+ * threaded through `payload.context` so the unified audit-log feed
+ * (/api/nbfc/audit-log) can show the row under the lead's timeline.
+ */
+export interface PaymentReminderContext {
+  entity_type: "lead" | "loan";
+  lead_id?: string;
+  note?: string;
+}
+
 export interface SendPaymentReminderInput {
   tenant_id: string;
   loan_sanction_id: string;
   channel: PaymentReminderChannel;
   actor_user_id: string;
+  context?: PaymentReminderContext;
 }
 
 export interface SendPaymentReminderResult {
@@ -88,6 +101,7 @@ export async function sendPaymentReminder(
         //    consumes auto_approved rows of action_type='payment_reminder' and
         //    dispatches via the existing notification channel.
         queued_at: now.toISOString(),
+        ...(input.context ? { context: input.context } : {}),
       },
       created_at: now,
     })
@@ -111,6 +125,7 @@ export async function sendPaymentReminder(
       reminder_sent: true,
       channel: input.channel,
       action_id: actionRow.id,
+      ...(input.context ? { context: input.context } : {}),
     },
     created_at: now,
   });

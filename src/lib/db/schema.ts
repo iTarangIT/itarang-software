@@ -19,6 +19,7 @@ import {
   primaryKey,
   unique,
   customType,
+  doublePrecision,
 } from "drizzle-orm/pg-core";
 
 import { relations, sql } from "drizzle-orm";
@@ -327,6 +328,9 @@ export const leads = pgTable("leads", {
   is_current_same: boolean("is_current_same").default(false).notNull(),
   product_category_id: varchar("product_category_id", { length: 255 }),
   product_type_id: varchar("product_type_id", { length: 255 }),
+  // E-116 — primary product's asset kind (battery | charger | paraphernalia);
+  // lets the new-lead "Product Details" cascade reload when a lead is edited.
+  asset_type: varchar("asset_type", { length: 20 }),
   vehicle_owner_name: text("vehicle_owner_name"),
   vehicle_owner_phone: varchar("vehicle_owner_phone", { length: 20 }),
   auto_filled: boolean("auto_filled").default(false).notNull(),
@@ -403,7 +407,37 @@ export const leads = pgTable("leads", {
   coupon_status: varchar("coupon_status", { length: 20 }),
   borrower_consent_status: varchar("borrower_consent_status", { length: 30 }).default('awaiting_signature'),
   sold_at: timestamp("sold_at", { withTimezone: true }),
+  // E-130 — Addendum V0.1 §3.2, §3.3. Captured at Step 1 for finance leads;
+  // resident_status feeds the BRE's Owned/Rented housing-variant match;
+  // insurance flags are informational (no BRE gate today). Required at the
+  // API layer for finance payment methods; nullable in DB so cash leads and
+  // legacy rows stay valid.
+  resident_status: varchar("resident_status", { length: 20 }),
+  has_health_insurance: boolean("has_health_insurance"),
+  has_life_insurance: boolean("has_life_insurance"),
 });
+
+// E-116 — extra products attached to a lead via the new-lead form's
+// "Add Another Product" rows. The primary product stays on leads.primary_product_id;
+// this table holds only the additional selections. `category_slug` + `asset_type`
+// are stored so the 3-level cascade fully rehydrates in edit mode without probing.
+export const leadProducts = pgTable(
+  "lead_products",
+  {
+    id: uuid("id").primaryKey().defaultRandom().notNull(),
+    lead_id: varchar("lead_id", { length: 255 }).notNull(),
+    product_id: uuid("product_id").notNull(),
+    product_category_id: varchar("product_category_id", { length: 255 }),
+    category_slug: varchar("category_slug", { length: 16 }),
+    asset_type: varchar("asset_type", { length: 20 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    // Mirrors drizzle/E-116_lead_products.sql — one lookup per lead drives
+    // edit-mode rehydration of the extra-product rows.
+    leadIdx: index("lead_products_lead_idx").on(table.lead_id),
+  }),
+);
 
 // export const leads_commented = pgTable(
 //   "leads",
@@ -925,11 +959,24 @@ export const aiCallLogs = pgTable(
     call_duration: integer("call_duration"),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
     call_id: varchar("call_id", { length: 255 }).notNull(),
+    // E-110: per-call cost capture from provider APIs. All integer INR paise
+    // (E-125) — providers are normalized to INR at fetch time, so the display
+    // layer applies no FX conversion.
+    total_cost_cents: integer("total_cost_cents"),
+    llm_cost_cents: integer("llm_cost_cents"),
+    tts_cost_cents: integer("tts_cost_cents"),
+    stt_cost_cents: integer("stt_cost_cents"),
+    telephony_cost_cents: integer("telephony_cost_cents"),
+    platform_cost_cents: integer("platform_cost_cents"),
+    cost_currency: varchar("cost_currency", { length: 3 }).default("INR"),
+    cost_source: varchar("cost_source", { length: 20 }),
+    cost_fetched_at: timestamp("cost_fetched_at", { withTimezone: true }),
   },
   (table) => {
     return {
       aiCallLogsLeadIdIdx: index("ai_call_logs_lead_id_idx").on(table.lead_id),
       aiCallLogsCallIdIdx: index("ai_call_logs_call_id_idx").on(table.call_id),
+      aiCallLogsStartedAtIdx: index("ai_call_logs_started_at_idx").on(table.started_at),
     };
   },
 );
@@ -2505,6 +2552,25 @@ export const dealerOnboardingApplications = pgTable(
     agreement_language: varchar("agreement_language", { length: 30 }).default('english').notNull(),
     is_branch_dealer: boolean("is_branch_dealer").default(false).notNull(),
     stamp_certificate_ids: jsonb("stamp_certificate_ids").default([]),
+    // ---- Part 0 BRD §0.13 Point A — Conversion → Onboarding (E-127).
+    originating_dealer_lead_id: text("originating_dealer_lead_id"),
+    sponsoring_asm_id: text("sponsoring_asm_id"),
+    owner_id: text("owner_id"),
+    field_verification_status: jsonb("field_verification_status").default({}),
+    source_ai_session_id: text("source_ai_session_id"),
+    source_ai_intent_score: integer("source_ai_intent_score"),
+    source_ai_recording_url: text("source_ai_recording_url"),
+    payment_intent_note: text("payment_intent_note"),
+    communication_language: varchar("communication_language", { length: 40 }),
+    business_segments: jsonb("business_segments").default([]),
+    proposed_deal_value: numeric("proposed_deal_value", { precision: 14, scale: 2 }),
+    proposed_credit_terms: text("proposed_credit_terms"),
+    proposed_delivery_terms: text("proposed_delivery_terms"),
+    proposed_warranty_terms: text("proposed_warranty_terms"),
+    proposed_terms_notes: text("proposed_terms_notes"),
+    payment_method: varchar("payment_method", { length: 20 }),
+    deal_notes: text("deal_notes"),
+    quote_document_url: text("quote_document_url"),
   },
 );
 
@@ -2676,6 +2742,17 @@ export const dealerLeads = pgTable("dealer_leads", {
   final_intent_score: integer("final_intent_score").default(0),
   created_at: timestamp("created_at").defaultNow(),
   location: text(),
+  // Structured region hierarchy — see drizzle/E-106. `location` stays for
+  // legacy callers (free-form city string); state/city/area/pincode power
+  // the region selector and the /api/ai-dialer/preview hot path. Indexes
+  // on (state, city) and a partial index on (state, city, current_status)
+  // WHERE phone IS NOT NULL live in the migration, not here.
+  state: text(),
+  city: text(),
+  area: text(),
+  pincode: text(),
+  country: text().default("IN"),
+  timezone: text(),
   memory: jsonb(),
   next_call_at: timestamp("next_call_at"),
   shop_name: text("shop_name"),
@@ -2685,7 +2762,178 @@ export const dealerLeads = pgTable("dealer_leads", {
   rejected_by: text("rejected_by"),
   dealer_id: text("dealer_id"),
   provider: text("provider").default("bolna"),
+  // Lead-acquisition source (E-126). ai_dialer_lead / manual_upload_lead /
+  // reference / trade_show / other. Drives BRD §0.11 Report 5.
+  source: varchar("source", { length: 40 }),
+  // ---- Part 0 BRD additions (E-112). See drizzle/E-112_dealer_leads_part0_columns.sql.
+  // Lifecycle / status (BRD §0.7)
+  lead_status: varchar("lead_status", { length: 50 }),
+  ai_recall_status: varchar("ai_recall_status", { length: 30 }),
+  lost_reason: varchar("lost_reason", { length: 100 }),
+  lost_reason_notes: text("lost_reason_notes"),
+  previous_lost_reason: varchar("previous_lost_reason", { length: 100 }),
+  onboarding_dropout_reason: varchar("onboarding_dropout_reason", { length: 50 }),
+  onboarding_dropout_notes: text("onboarding_dropout_notes"),
+  interest_level: varchar("interest_level", { length: 20 }),
+  preliminary_payment_intent: text("preliminary_payment_intent"),
+  pre_transfer_status: varchar("pre_transfer_status", { length: 50 }),
+  brochure_sent_at: timestamp("brochure_sent_at", { withTimezone: true }),
+  // Ownership / attribution (BRD §0.3) — text matches dealer_leads.id type
+  originator_id: text("originator_id"),
+  current_owner_id: text("current_owner_id"),
+  closing_owner_id: text("closing_owner_id"),
+  closing_role: varchar("closing_role", { length: 50 }),
+  ai_session_id: text("ai_session_id"),
+  asm_id: text("asm_id"),
+  assigned_at: timestamp("assigned_at", { withTimezone: true }),
+  closed_at: timestamp("closed_at", { withTimezone: true }),
+  last_touchpoint_at: timestamp("last_touchpoint_at", { withTimezone: true }),
+  next_follow_up_at: timestamp("next_follow_up_at", { withTimezone: true }),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  // Escalation (BRD §0.6)
+  escalation_status: varchar("escalation_status", { length: 30 }),
+  escalation_count: integer("escalation_count").default(0),
+  last_escalation_id: uuid("last_escalation_id"),
+  // Cross-table links (BRD §0.4, §0.11)
+  upload_batch_id: uuid("upload_batch_id"),
+  dealer_onboarding_application_id: uuid("dealer_onboarding_application_id"),
+  // Business profile (BRD §0.4)
+  segments: jsonb("segments").default([]),
+  address_history: jsonb("address_history").default([]),
+  address_notes: text("address_notes"),
+  // Soft delete (BRD §0.13)
+  is_active: boolean("is_active").default(true),
+  deleted_at: timestamp("deleted_at", { withTimezone: true }),
 });
+
+// Org-wide saved region groups for the AI dialer modal. `regions` is a
+// JSONB array of { state, cities[] } — empty cities = "all cities in this
+// state, resolved at query time". Created by E-106 migration.
+export const regionGroups = pgTable("region_groups", {
+  id: text().primaryKey().notNull(),
+  name: text().notNull(),
+  description: text(),
+  regions: jsonb().notNull().default([]),
+  created_by: text("created_by"),
+  created_at: timestamp("created_at").defaultNow(),
+  updated_at: timestamp("updated_at").defaultNow(),
+});
+
+// Canonical location reference tables, created by E-108. Replace the
+// hardcoded CITY_ALIASES / CITY_TO_STATE maps in scraper-enrichment.ts
+// with DB-backed lookups consumed by src/lib/locations/normalize.ts. Source
+// of truth is the migration; this TS mirror exists for type checking only.
+export const states = pgTable("states", {
+  code: text().primaryKey().notNull(),
+  name: text().notNull().unique(),
+  country: text().notNull().default("IN"),
+  is_ut: boolean("is_ut").notNull().default(false),
+  created_at: timestamp("created_at").defaultNow(),
+});
+
+export const cities = pgTable(
+  "cities",
+  {
+    id: text().primaryKey().notNull(),
+    name: text().notNull(),
+    state_code: text("state_code")
+      .notNull()
+      .references(() => states.code),
+    lat: doublePrecision(),
+    lng: doublePrecision(),
+    // 'seed' for migration-seeded rows, 'google_places' for rows
+    // auto-grown at promote time when Google addressComponents yields
+    // a new city in a known state.
+    source: text().default("seed"),
+    created_at: timestamp("created_at").defaultNow(),
+  },
+  (t) => ({
+    uq_name_state: unique("cities_name_state_unique").on(t.name, t.state_code),
+  }),
+);
+
+export const cityAliases = pgTable("city_aliases", {
+  alias_lower: text("alias_lower").primaryKey().notNull(),
+  city_id: text("city_id")
+    .notNull()
+    .references(() => cities.id),
+  created_at: timestamp("created_at").defaultNow(),
+});
+
+// E-109 — persisted AI dialer campaigns. region_filter is the RegionSelection
+// JSON emitted by DialerStartModal, stored verbatim so a historical campaign's
+// scope is reproducible. Counters (calls_made / completed_leads / failed_leads)
+// are bumped by the webhook handler as each call ends; status flips to
+// 'completed' when the queue exhausts or 'stopped' when the user hits Stop.
+export const dialerCampaigns = pgTable(
+  "dialer_campaigns",
+  {
+    id: text().primaryKey().notNull(),
+    name: text().notNull(),
+    triggered_by: uuid("triggered_by"),
+    provider: text().notNull(),
+    category: text(),
+    region_filter: jsonb("region_filter"),
+    status: text().notNull().default("running"),
+    total_leads: integer("total_leads").notNull().default(0),
+    calls_made: integer("calls_made").notNull().default(0),
+    completed_leads: integer("completed_leads").notNull().default(0),
+    failed_leads: integer("failed_leads").notNull().default(0),
+    started_at: timestamp("started_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    stopped_by: uuid("stopped_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    statusIdx: index("idx_dialer_campaigns_status").on(t.status),
+    triggeredByStartedIdx: index(
+      "idx_dialer_campaigns_triggered_by_started",
+    ).on(t.triggered_by, t.started_at),
+    startedAtIdx: index("idx_dialer_campaigns_started_at").on(t.started_at),
+  }),
+);
+
+// E-109 — one row per (campaign, lead). lead_id is a soft FK to
+// dealer_leads.id (no DB-level FK; see migration comment). The webhook
+// handler resolves an active row for a lead via the partial index
+// idx_dialer_campaign_leads_active when the Redis session is stale.
+export const dialerCampaignLeads = pgTable(
+  "dialer_campaign_leads",
+  {
+    id: text().primaryKey().notNull(),
+    campaign_id: text("campaign_id")
+      .notNull()
+      .references(() => dialerCampaigns.id, { onDelete: "cascade" }),
+    lead_id: text("lead_id").notNull(),
+    queue_position: integer("queue_position").notNull(),
+    status: text().notNull().default("pending"),
+    bolna_call_id: text("bolna_call_id"),
+    call_outcome: text("call_outcome"),
+    intent_score: integer("intent_score"),
+    started_at: timestamp("started_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    campaignStatusIdx: index("idx_dialer_campaign_leads_campaign_status").on(
+      t.campaign_id,
+      t.status,
+    ),
+    campaignPositionIdx: index(
+      "idx_dialer_campaign_leads_campaign_position",
+    ).on(t.campaign_id, t.queue_position),
+    leadStatusIdx: index("idx_dialer_campaign_leads_lead_status").on(
+      t.lead_id,
+      t.status,
+    ),
+  }),
+);
 
 export const scraperLeadsDuplicates = pgTable("scraper_leads_duplicates", {
   id: text().primaryKey().notNull(),
@@ -2778,9 +3026,22 @@ export const productSelections = pgTable("product_selections", {
 
   // Lifecycle
   payment_mode: varchar("payment_mode", { length: 20 }), // cash, finance
-  admin_decision: varchar("admin_decision", { length: 30 }).default("pending"), // pending, dealer_confirmed, sanctioned, rejected
+  // DEPRECATED by Addendum V0.1 §5.1 (E-130). Admin no longer acts on product
+  // selection. Column kept until the new flow ships and is proven; a follow-up
+  // migration removes it after Phase 5 is live.
+  admin_decision: varchar("admin_decision", { length: 30 }).default("pending"),
   submitted_by: uuid("submitted_by"),
   submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow(),
+
+  // E-130 — Addendum V0.1 §5.1, §5.3. Battery/charger photos are dealer-captured
+  // at premises during Product Selection Sections B/C. selected_nbfcs holds the
+  // 1 or 2 NBFCs the customer picked at the new Section G; customer_disclosure_ack
+  // is the mandatory checkbox confirming the customer was told each NBFC verifies
+  // independently. All four are populated by the Phase 2 UI.
+  battery_photo_urls: jsonb("battery_photo_urls"),
+  charger_photo_urls: jsonb("charger_photo_urls"),
+  selected_nbfcs: jsonb("selected_nbfcs"),
+  customer_disclosure_ack: boolean("customer_disclosure_ack"),
 
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -2805,6 +3066,10 @@ export const loanSanctions = pgTable("loan_sanctions", {
   status: varchar({ length: 30 }).default('sanctioned').notNull(),
   rejection_reason: text("rejection_reason"),
   sanctioned_by: uuid("sanctioned_by"),
+  // E-130 — Addendum §10/10 reconcile. `sanctioned_by` previously implied an
+  // admin user; under the addendum NBFC users sanction too. Discriminator
+  // resolves which user table the uuid points at. NULL on legacy rows = admin.
+  sanctioned_by_type: varchar("sanctioned_by_type", { length: 20 }),
   sanctioned_at: timestamp("sanctioned_at", { withTimezone: true }).defaultNow(),
   dealer_approved: boolean("dealer_approved").default(false),
   dealer_approved_at: timestamp("dealer_approved_at", { withTimezone: true }),
@@ -2937,6 +3202,43 @@ export const nbfcUsers = pgTable(
   }),
 );
 
+// E-131 — Addendum V0.1 §6 (Competitive NBFC Routing). One row per
+// (lead × selected NBFC) created when the dealer submits Step 4 for a finance
+// lead. Drives the Acquire queue at /nbfc/acquire. tenant_id is denormalised
+// from nbfc.tenant_id for tenant-scoped index performance; see E-131.sql
+// header for the backfill query if an nbfc is ever repointed.
+export const nbfcLeadAssignments = pgTable(
+  "nbfc_lead_assignments",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    loan_product_id: integer("loan_product_id"),
+    // Lifecycle: pending → in_progress → offer_submitted → selected |
+    // not_selected | declined | withdrawn. A1 only writes 'pending'; later
+    // phases drive the rest. CHECK constraint lives on the DB side (E-131).
+    status: varchar({ length: 30 }).default("pending").notNull(),
+    assigned_at: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    decision_reason: text("decision_reason"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_lead_assignments_tenant_idx").on(
+      table.tenant_id,
+      table.status,
+      table.assigned_at,
+    ),
+    leadIdx: index("nbfc_lead_assignments_lead_idx").on(table.lead_id),
+    leadNbfcUnique: uniqueIndex("nbfc_lead_assignments_unique_lead_nbfc").on(
+      table.lead_id,
+      table.nbfc_id,
+    ),
+  }),
+);
+
 // Bridges existing loan_applications to a tenant + the IoT vehicleno that loan
 // is financing. One loan belongs to one NBFC.
 export const nbfcLoans = pgTable(
@@ -3017,7 +3319,9 @@ export const borrowerRiskScores = pgTable(
     id: uuid().defaultRandom().primaryKey().notNull(),
     tenant_id: uuid("tenant_id").notNull(),
     borrower_id: uuid("borrower_id").notNull(),
-    loan_sanction_id: uuid("loan_sanction_id").notNull(),
+    // E-117 — widened uuid → varchar so a score can be keyed to any
+    // loan_sanctions.id (which is varchar, often non-uuid e.g. 'BAJAJ-LIVE-…').
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
     cds_score: numeric("cds_score", { precision: 5, scale: 2 }),
     pci_score: numeric("pci_score", { precision: 4, scale: 3 }),
     confidence: varchar({ length: 16 }),
@@ -3616,6 +3920,10 @@ export const nbfc = pgTable("nbfc", {
   // re-approving an already-approved NBFC.
   approved_by: uuid("approved_by"),
   approved_at: timestamp("approved_at", { withTimezone: true }),
+  // E-107 — Step 2.5 mid-flow CEO verification stamping. docs_verified_at
+  // is read by the LSP signer-form gate to unlock Step 3 for the Admin.
+  docs_verified_at: timestamp("docs_verified_at", { withTimezone: true }),
+  docs_verified_by: uuid("docs_verified_by"),
   // E-002 — activation timestamp. Distinct from approved_at: approved_at fires
   // when the final-approval gate releases (status='approved'); activated_at
   // fires when portal credentials are dispatched (status='active').
@@ -3625,6 +3933,10 @@ export const nbfc = pgTable("nbfc", {
   // legal_name match in the E-026B migration.
   tenant_id: uuid("tenant_id").references(() => nbfcTenants.id),
   created_by: integer("created_by").notNull(),
+  // E-108 — Supabase auth uuid of the user who created the row. Nullable for
+  // legacy rows (pre-E-108). New inserts always populate this so the "My
+  // Submitted Drafts" sidebar entry (/admin/nbfc?owner=me) can scope.
+  created_by_auth_id: uuid("created_by_auth_id"),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -3751,6 +4063,11 @@ export const nbfcLspAgreements = pgTable(
     itarang_signatory_2_email: varchar("itarang_signatory_2_email", { length: 200 }),
     signed_pdf_url: text("signed_pdf_url"),
     audit_trail_url: text("audit_trail_url"),
+    // E-110 — admin-uploaded blank template (the file Digio will eventually
+    // paint with signer fields). Filled at Step 3 "Send to CEO" and read by
+    // the CEO approval gate.
+    agreement_template_url: text("agreement_template_url"),
+    agreement_template_size: integer("agreement_template_size"),
     expires_at: timestamp("expires_at", { withTimezone: true }),
     created_by: integer("created_by"),
     initiated_by: integer("initiated_by"),
@@ -3764,6 +4081,52 @@ export const nbfcLspAgreements = pgTable(
     nbfcIdx: index("nbfc_lsp_agreements_nbfc_id_idx").on(table.nbfc_id),
     statusIdx: index("nbfc_lsp_agreements_status_idx").on(table.agreement_status),
     agreementIdIdx: index("nbfc_lsp_agreements_agreement_id_idx").on(table.agreement_id),
+  }),
+);
+
+// =============================================================================
+// E-109 — Per-signer rows for an NBFC LSP agreement (N signers, designation,
+// identity-document URL). Replaces the legacy 3 hardcoded signer columns on
+// nbfc_lsp_agreements for new initiations; old columns stay nullable for
+// backward compat. See drizzle/E-109_nbfc_lsp_agreement_signers.sql.
+// =============================================================================
+export const nbfcLspAgreementSigners = pgTable(
+  "nbfc_lsp_agreement_signers",
+  {
+    id: serial("id").primaryKey().notNull(),
+    nbfc_lsp_agreement_id: integer("nbfc_lsp_agreement_id")
+      .notNull()
+      .references(() => nbfcLspAgreements.id),
+    signer_order: integer("signer_order").notNull(),
+    party: varchar("party", { length: 20 }).notNull(),
+    full_name: varchar("full_name", { length: 200 }).notNull(),
+    email: varchar("email", { length: 200 }).notNull(),
+    designation: varchar("designation", { length: 120 }).notNull(),
+    identity_document_url: text("identity_document_url").notNull(),
+    identity_document_size: integer("identity_document_size"),
+    // E-112 — per-signer Digio signing status. See drizzle/E-112_*.sql.
+    digio_signer_identifier: varchar("digio_signer_identifier", { length: 200 }),
+    signing_status: varchar("signing_status", { length: 32 })
+      .notNull()
+      .default("pending"),
+    signed_at: timestamp("signed_at", { withTimezone: true }),
+    signing_url: text("signing_url"),
+    last_status_event_at: timestamp("last_status_event_at", {
+      withTimezone: true,
+    }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    agreementIdx: index("idx_nbfc_lsp_agreement_signers_agreement").on(
+      table.nbfc_lsp_agreement_id,
+      table.signer_order,
+    ),
+    statusIdx: index("idx_nbfc_lsp_signers_status").on(
+      table.nbfc_lsp_agreement_id,
+      table.signing_status,
+    ),
   }),
 );
 
@@ -3801,6 +4164,36 @@ export const nbfcLoanProducts = pgTable("nbfc_loan_products", {
     length: 32,
   }).notNull(),
   status: varchar("status", { length: 16 }).default("active").notNull(),
+  // E-113 — Scheme highlights, geography, and eligibility checklist.
+  // Deprecated by E-114 — replaced by active_locations. Kept for additive-migration policy.
+  active_cities: jsonb("active_cities")
+    .$type<string[]>()
+    .notNull()
+    .default(sql`'[]'::jsonb`),
+  // E-114 — Structured state+city pairs, queryable via JSONB @> for dealer filter.
+  active_locations: jsonb("active_locations")
+    .$type<{ state: string; city: string }[]>()
+    .notNull()
+    .default(sql`'[]'::jsonb`),
+  processing_fee_owned_rupees: integer("processing_fee_owned_rupees"),
+  processing_fee_rented_rupees: integer("processing_fee_rented_rupees"),
+  health_life_insurance_owned_rupees: integer("health_life_insurance_owned_rupees"),
+  health_life_insurance_rented_rupees: integer("health_life_insurance_rented_rupees"),
+  disbursement_tat_hours: integer("disbursement_tat_hours"),
+  min_credit_score: integer("min_credit_score"),
+  // E-115 — CIBIL/CRIF applicability + upper bound. cibil_required = null means
+  // "legacy row, unknown"; false = bureau check waived; true = both min and max
+  // must be set (enforced by the API Zod refinement).
+  cibil_required: boolean("cibil_required"),
+  max_credit_score: integer("max_credit_score"),
+  // E-130 — Addendum V0.1 §4.3. Bureau-abstracted gate. Phase 1 ships the
+  // handle (default 'equifax'); Phase 3 swaps the live provider behind it.
+  // Reserved values: 'equifax' (default), 'cibil' (legacy), 'crif', 'experian'.
+  credit_bureau: varchar("credit_bureau", { length: 20 }).default('equifax'),
+  eligibility_documents: jsonb("eligibility_documents")
+    .$type<string[]>()
+    .notNull()
+    .default(sql`'[]'::jsonb`),
   created_at: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -3852,6 +4245,87 @@ export const nbfcStatusHistory = pgTable(
     nbfcIdx: index("nbfc_status_history_nbfc_id_idx").on(table.nbfc_id),
     occurredAtIdx: index("nbfc_status_history_occurred_at_idx").on(
       table.occurred_at,
+    ),
+  }),
+);
+
+// =============================================================================
+// E-111 — CEO per-item correction request rounds (BRD §6.0.6 Step 4)
+// Each CEO "Request Corrections" submission writes one row to
+// nbfc_correction_rounds and one row per flagged item to
+// nbfc_correction_items. Round + item state machine:
+//   round:  open → resolved | superseded
+//   item:   pending → resolved | dismissed
+// When admin transitions request_correction → pending_admin_review, the
+// transition route auto-snapshots the new value/file_url into each pending
+// item and flips the round to resolved. See
+// `src/app/api/admin/nbfc/[nbfcId]/transition/route.ts`.
+// =============================================================================
+export const nbfcCorrectionRounds = pgTable(
+  "nbfc_correction_rounds",
+  {
+    id: serial("id").primaryKey(),
+    nbfc_id: integer("nbfc_id")
+      .notNull()
+      .references(() => nbfc.id, { onDelete: "cascade" }),
+    round_number: integer("round_number").notNull(),
+    status: varchar("status", { length: 20 }).default("open").notNull(),
+    requested_by: uuid("requested_by").notNull(),
+    summary_remarks: text("summary_remarks"),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    resolved_by: uuid("resolved_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    uniqueRound: uniqueIndex("nbfc_correction_rounds_unique").on(
+      table.nbfc_id,
+      table.round_number,
+    ),
+    nbfcStatusIdx: index("idx_nbfc_correction_rounds_nbfc_status").on(
+      table.nbfc_id,
+      table.status,
+    ),
+  }),
+);
+
+export const nbfcCorrectionItems = pgTable(
+  "nbfc_correction_items",
+  {
+    id: serial("id").primaryKey(),
+    round_id: integer("round_id")
+      .notNull()
+      .references(() => nbfcCorrectionRounds.id, { onDelete: "cascade" }),
+    kind: varchar("kind", { length: 24 }).notNull(),
+    target_key: varchar("target_key", { length: 120 }).notNull(),
+    target_ref_id: integer("target_ref_id"),
+    previous_value: text("previous_value"),
+    previous_file_url: text("previous_file_url"),
+    remark: text("remark"),
+    resolution_status: varchar("resolution_status", { length: 20 })
+      .default("pending")
+      .notNull(),
+    new_value: text("new_value"),
+    new_file_url: text("new_file_url"),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    resolved_by: uuid("resolved_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    uniqueItem: uniqueIndex("nbfc_correction_items_unique").on(
+      table.round_id,
+      table.kind,
+      table.target_key,
+    ),
+    roundStatusIdx: index("idx_nbfc_correction_items_round_status").on(
+      table.round_id,
+      table.resolution_status,
     ),
   }),
 );
@@ -4486,7 +4960,9 @@ export const nbfcRiskAlerts = pgTable(
     id: uuid().primaryKey().defaultRandom(),
     tenant_id: uuid("tenant_id").notNull(),
     borrower_id: uuid("borrower_id").notNull(),
-    loan_sanction_id: uuid("loan_sanction_id").notNull(),
+    // E-117 — widened uuid → varchar so an alert can be keyed to any
+    // loan_sanctions.id (which is varchar, often non-uuid e.g. 'BAJAJ-LIVE-…').
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
     type: varchar({ length: 32 }).notNull(), // 'pci_low' | 'cds_high' | ...
     severity: varchar({ length: 16 }).notNull(), // 'low' | 'medium' | 'high' | 'critical'
     payload: jsonb("payload"),
@@ -4663,6 +5139,67 @@ export const auctionSettlements = pgTable(
       table.winner_tenant_id,
     ),
     statusIdx: index("auction_settlements_status_idx").on(table.status),
+  }),
+);
+
+// E-093 — auction_auto_bids (BRD §6.1.7 Auto-Bid).
+// Persists the bidder's standing-order maximum for a lot. Only one row per
+// (lot_id, tenant_id) may be 'active' (enforced by a partial-unique index in
+// the migration); cancelled rows remain for audit.
+export const auctionAutoBids = pgTable(
+  "auction_auto_bids",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lot_id: uuid("lot_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    max_amount: numeric("max_amount", { precision: 12, scale: 2 }).notNull(),
+    status: varchar({ length: 16 }).notNull().default("active"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    lotIdx: index("auction_auto_bids_lot_idx").on(table.lot_id),
+    tenantIdx: index("auction_auto_bids_tenant_idx").on(table.tenant_id),
+  }),
+);
+
+// =============================================================================
+// E-118 — nbfc_buyback_requests (BRD §6.1.7 Recovery & Auction)
+// Customer-initiated battery buyback requests surfaced on the NBFC Recovery &
+// Auction page. Source of truth is the migration drizzle/E-118_*.sql.
+// =============================================================================
+export const nbfcBuybackRequests = pgTable(
+  "nbfc_buyback_requests",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    customer_name: varchar("customer_name", { length: 160 }).notNull(),
+    battery_serial: varchar("battery_serial", { length: 64 }).notNull(),
+    soh_percent: numeric("soh_percent", { precision: 5, scale: 2 }),
+    requested_at: timestamp("requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // 'pending' | 'in_review' | 'completed'
+    evaluation_status: varchar("evaluation_status", { length: 24 })
+      .notNull()
+      .default("pending"),
+    offer_amount: numeric("offer_amount", { precision: 12, scale: 2 }),
+    // 'pending_evaluation' | 'offer_made' | 'accepted' | 'rejected'
+    status: varchar({ length: 24 }).notNull().default("pending_evaluation"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_buyback_requests_tenant_idx").on(table.tenant_id),
+    statusIdx: index("nbfc_buyback_requests_status_idx").on(table.status),
   }),
 );
 
@@ -4928,5 +5465,427 @@ export const paraphernaliaStock = pgTable(
       table.item_type,
     ),
     paraStockDealerIdx: index("paraphernalia_stock_dealer_idx").on(table.dealer_id),
+  }),
+);
+
+// --- E-105: Zoho Invoice mirror + universal expense submissions ---
+
+export const zohoInvoices = pgTable(
+  "zoho_invoices",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    zoho_invoice_id: varchar("zoho_invoice_id", { length: 64 }).notNull(),
+    invoice_number: varchar("invoice_number", { length: 64 }),
+    customer_id: varchar("customer_id", { length: 64 }),
+    customer_name: text("customer_name"),
+    invoice_date: date("invoice_date"),
+    due_date: date("due_date"),
+    currency_code: varchar("currency_code", { length: 8 }),
+    total: numeric("total", { precision: 14, scale: 2 }),
+    balance: numeric("balance", { precision: 14, scale: 2 }),
+    status: varchar({ length: 32 }),
+    raw_json: jsonb("raw_json"),
+    synced_at: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    zohoInvoicesZohoIdUnique: uniqueIndex("zoho_invoices_zoho_id_unique").on(
+      table.zoho_invoice_id,
+    ),
+    zohoInvoicesInvoiceDateIdx: index("zoho_invoices_invoice_date_idx").on(
+      table.invoice_date,
+    ),
+    zohoInvoicesStatusIdx: index("zoho_invoices_status_idx").on(table.status),
+  }),
+);
+
+export const expenseSubmissions = pgTable(
+  "expense_submissions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    submitted_by: uuid("submitted_by").notNull(),
+    category: varchar({ length: 64 }).notNull(),
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+    description: text(),
+    bill_url: text("bill_url"),
+    bill_storage_path: text("bill_storage_path"),
+    status: varchar({ length: 16 }).default("pending").notNull(),
+    approved_by: uuid("approved_by"),
+    approved_at: timestamp("approved_at", { withTimezone: true }),
+    rejection_reason: text("rejection_reason"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    expenseSubmissionsStatusIdx: index("expense_submissions_status_idx").on(
+      table.status,
+    ),
+    expenseSubmissionsSubmittedByIdx: index(
+      "expense_submissions_submitted_by_idx",
+    ).on(table.submitted_by),
+    expenseSubmissionsApprovedAtIdx: index(
+      "expense_submissions_approved_at_idx",
+    ).on(table.approved_at),
+  }),
+);
+
+export const zohoSyncState = pgTable("zoho_sync_state", {
+  id: integer().default(1).primaryKey().notNull(),
+  last_invoice_modified_at: timestamp("last_invoice_modified_at", {
+    withTimezone: true,
+  }),
+  last_run_at: timestamp("last_run_at", { withTimezone: true }),
+  last_status: varchar("last_status", { length: 16 }),
+  last_error: text("last_error"),
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Part 0 BRD support tables (E-113 .. E-124).
+// dealer_lead_id columns are text — matches dealer_leads.id (legacy text PK,
+// flagged for Phase 0 reconciliation in BRD §0.13). All other id columns are
+// uuid. No `.references()` — follows the audit_logs / aiCallLogs convention;
+// integrity is enforced at the app layer.
+// ─────────────────────────────────────────────────────────────────────────
+
+// E-113 — Per-interaction history. Single writer in src/lib/touchpoints/write.ts.
+export const leadTouchpoints = pgTable(
+  "lead_touchpoints",
+  {
+    touchpoint_id: uuid("touchpoint_id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    touchpoint_type: varchar("touchpoint_type", { length: 50 }).notNull(),
+    performed_by: text("performed_by"),
+    performed_at: timestamp("performed_at", { withTimezone: true }).notNull(),
+    call_status: varchar("call_status", { length: 30 }),
+    call_duration_sec: integer("call_duration_sec"),
+    is_engaged: boolean("is_engaged").default(false),
+    remarks: text(),
+    attachments: jsonb().default([]),
+    next_action: varchar("next_action", { length: 50 }),
+    next_action_at: timestamp("next_action_at", { withTimezone: true }),
+    external_system: varchar("external_system", { length: 50 }),
+    external_event_id: text("external_event_id"),
+    sync_method: varchar("sync_method", { length: 30 }).default("manual"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    leadPerfIdx: index("lead_touchpoints_lead_perf_idx").on(
+      t.dealer_lead_id,
+      t.performed_at,
+    ),
+    typeCallIdx: index("lead_touchpoints_type_call_idx").on(
+      t.touchpoint_type,
+      t.call_status,
+    ),
+    performerIdx: index("lead_touchpoints_performer_idx").on(
+      t.performed_by,
+      t.performed_at,
+    ),
+    externalUniq: uniqueIndex("lead_touchpoints_external_uniq").on(
+      t.external_system,
+      t.external_event_id,
+    ),
+  }),
+);
+
+// E-114 — ASM ground visits (BRD §0.8).
+export const leadVisits = pgTable(
+  "lead_visits",
+  {
+    visit_id: uuid("visit_id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    asm_id: text("asm_id").notNull(),
+    scheduled_date: date("scheduled_date"),
+    actual_visit_date: date("actual_visit_date"),
+    visit_status: varchar("visit_status", { length: 30 }).notNull(),
+    visit_outcome: varchar("visit_outcome", { length: 30 }),
+    visit_remarks: text("visit_remarks"),
+    photos: jsonb().default([]),
+    gps_check_in_lat: numeric("gps_check_in_lat", { precision: 10, scale: 6 }),
+    gps_check_in_lng: numeric("gps_check_in_lng", { precision: 10, scale: 6 }),
+    next_action: varchar("next_action", { length: 30 }),
+    next_visit_date: date("next_visit_date"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    leadSchedIdx: index("lead_visits_lead_sched_idx").on(
+      t.dealer_lead_id,
+      t.scheduled_date,
+    ),
+    asmStatusIdx: index("lead_visits_asm_status_idx").on(
+      t.asm_id,
+      t.visit_status,
+    ),
+  }),
+);
+
+// E-115 — Escalation events + resolution (BRD §0.6).
+export const leadEscalations = pgTable(
+  "lead_escalations",
+  {
+    escalation_id: uuid("escalation_id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    raised_by: text("raised_by").notNull(),
+    raised_at: timestamp("raised_at", { withTimezone: true }).notNull(),
+    escalation_reason: varchar("escalation_reason", { length: 50 }).notNull(),
+    escalation_notes: text("escalation_notes").notNull(),
+    suggested_action: text("suggested_action"),
+    urgency: varchar("urgency", { length: 20 }).notNull(),
+    status: varchar("status", { length: 30 }).notNull().default("pending_review"),
+    ceo_comment: text("ceo_comment"),
+    ceo_recommendation: text("ceo_recommendation"),
+    ceo_recommended_at: timestamp("ceo_recommended_at", { withTimezone: true }),
+    resolved_by: text("resolved_by"),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    resolution_action: varchar("resolution_action", { length: 30 }),
+    resolution_notes: text("resolution_notes"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    statusUrgIdx: index("lead_escalations_status_urg_idx").on(
+      t.status,
+      t.urgency,
+      t.raised_at,
+    ),
+    leadRaisedIdx: index("lead_escalations_lead_raised_idx").on(
+      t.dealer_lead_id,
+      t.raised_at,
+    ),
+  }),
+);
+
+// E-116 — Versioned commercials (BRD §0.10).
+export const dealerLeadCommercials = pgTable(
+  "dealer_lead_commercials",
+  {
+    commercial_id: uuid("commercial_id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    version_no: integer("version_no").notNull(),
+    is_current: boolean("is_current").default(false),
+    event_type: varchar("event_type", { length: 30 }).notNull(),
+    price_quoted: numeric("price_quoted", { precision: 14, scale: 2 }),
+    quote_document_url: text("quote_document_url"),
+    brochure_url: text("brochure_url"),
+    brochure_sent_at: timestamp("brochure_sent_at", { withTimezone: true }),
+    credit_terms: text("credit_terms"),
+    delivery_terms: text("delivery_terms"),
+    warranty_terms: text("warranty_terms"),
+    final_price: numeric("final_price", { precision: 14, scale: 2 }),
+    payment_method: varchar("payment_method", { length: 20 }),
+    deal_notes: text("deal_notes"),
+    // Structured product line-items (E-128): array of
+    // { asset_type, product_id, product_name, model_id, unit_price, quantity }
+    // sourced from the product_master_* tables.
+    product_lines: jsonb("product_lines").default([]),
+    notes: text(),
+    created_by: text("created_by").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+    withdrawn_at: timestamp("withdrawn_at", { withTimezone: true }),
+  },
+  (t) => ({
+    leadVersionUniq: uniqueIndex(
+      "dealer_lead_commercials_lead_version_uniq",
+    ).on(t.dealer_lead_id, t.version_no),
+    leadVersionDescIdx: index(
+      "dealer_lead_commercials_lead_version_desc_idx",
+    ).on(t.dealer_lead_id, t.version_no),
+    currentIdx: index("dealer_lead_commercials_current_idx").on(
+      t.dealer_lead_id,
+    ),
+  }),
+);
+
+// E-117 — Full status change audit (BRD §0.7).
+export const dealerLeadStatusHistory = pgTable(
+  "dealer_lead_status_history",
+  {
+    history_id: uuid("history_id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    from_status: varchar("from_status", { length: 50 }),
+    to_status: varchar("to_status", { length: 50 }).notNull(),
+    from_lost_reason: varchar("from_lost_reason", { length: 100 }),
+    to_lost_reason: varchar("to_lost_reason", { length: 100 }),
+    changed_by: text("changed_by").notNull(),
+    changed_at: timestamp("changed_at", { withTimezone: true }).notNull(),
+    reason_notes: text("reason_notes"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    leadChangedIdx: index(
+      "dealer_lead_status_history_lead_changed_idx",
+    ).on(t.dealer_lead_id, t.changed_at),
+    changedAtIdx: index("dealer_lead_status_history_changed_at_idx").on(
+      t.changed_at,
+    ),
+  }),
+);
+
+// E-118 — ASM territory mapping (BRD §0.8).
+export const asmTerritories = pgTable(
+  "asm_territories",
+  {
+    territory_id: uuid("territory_id").primaryKey().defaultRandom(),
+    asm_id: text("asm_id").notNull(),
+    state: varchar("state", { length: 100 }).notNull(),
+    city: varchar("city", { length: 100 }),
+    active_from: date("active_from"),
+    active_to: date("active_to"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    stateCityIdx: index("asm_territories_state_city_idx").on(t.state, t.city),
+    asmIdx: index("asm_territories_asm_idx").on(t.asm_id),
+  }),
+);
+
+// E-119 — Bulk upload audit + 24h rollback (BRD §0.4).
+export const uploadBatches = pgTable(
+  "upload_batches",
+  {
+    batch_id: uuid("batch_id").primaryKey().defaultRandom(),
+    uploaded_by: text("uploaded_by").notNull(),
+    file_name: text("file_name").notNull(),
+    total_rows: integer("total_rows").default(0),
+    valid_rows: integer("valid_rows").default(0),
+    errored_rows: integer("errored_rows").default(0),
+    duplicate_rows: integer("duplicate_rows").default(0),
+    routing_to_ai: boolean("routing_to_ai").default(false),
+    source_label: text("source_label"),
+    status: varchar("status", { length: 30 }).default("pending"),
+    rollback_window_until: timestamp("rollback_window_until", {
+      withTimezone: true,
+    }),
+    rolled_back_at: timestamp("rolled_back_at", { withTimezone: true }),
+    rolled_back_by: text("rolled_back_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    uploaderCreatedIdx: index("upload_batches_uploader_created_idx").on(
+      t.uploaded_by,
+      t.created_at,
+    ),
+    rollbackPendingIdx: index("upload_batches_rollback_pending_idx").on(
+      t.rollback_window_until,
+    ),
+  }),
+);
+
+// E-120 — Admin-tunable assignment config (single-row table) (BRD §0.2, §0.1).
+export const assignmentConfig = pgTable("assignment_config", {
+  config_id: uuid("config_id").primaryKey().defaultRandom(),
+  intent_score_threshold: integer("intent_score_threshold").default(60),
+  working_hours_start: varchar("working_hours_start", { length: 8 }).default("09:00"),
+  working_hours_end: varchar("working_hours_end", { length: 8 }).default("19:00"),
+  working_days: jsonb("working_days").default([
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri",
+    "sat",
+  ]),
+  updated_by: text("updated_by"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+// E-121 — Working-day calendar (BRD §0.1 Glossary).
+export const holidayCalendar = pgTable(
+  "holiday_calendar",
+  {
+    holiday_id: uuid("holiday_id").primaryKey().defaultRandom(),
+    holiday_date: date("holiday_date").notNull(),
+    holiday_name: varchar("holiday_name", { length: 200 }).notNull(),
+    is_active: boolean("is_active").default(true),
+    created_by: text("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    dateUniq: uniqueIndex("holiday_calendar_date_uniq").on(t.holiday_date),
+    activeIdx: index("holiday_calendar_active_idx").on(
+      t.is_active,
+      t.holiday_date,
+    ),
+  }),
+);
+
+// E-122 — Phone collision + address mismatch merge requests (BRD §0.4).
+export const duplicateMergeRequests = pgTable(
+  "duplicate_merge_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    request_type: varchar("request_type", { length: 50 }).notNull(),
+    source_lead_id: text("source_lead_id"),
+    target_lead_id: text("target_lead_id").notNull(),
+    requested_by: text("requested_by"),
+    request_notes: text("request_notes"),
+    status: varchar("status", { length: 30 }).notNull().default("pending"),
+    resolution_action: varchar("resolution_action", { length: 50 }),
+    admin_resolution_notes: text("admin_resolution_notes"),
+    resolved_by: text("resolved_by"),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    statusCreatedIdx: index("duplicate_merge_requests_status_created_idx").on(
+      t.status,
+      t.created_at,
+    ),
+    targetIdx: index("duplicate_merge_requests_target_idx").on(
+      t.target_lead_id,
+    ),
+  }),
+);
+
+// E-123 — Manual interest_level override audit (BRD §0.7).
+export const interestLevelOverrides = pgTable(
+  "interest_level_overrides",
+  {
+    override_id: uuid("override_id").primaryKey().defaultRandom(),
+    dealer_lead_id: text("dealer_lead_id").notNull(),
+    from_value: varchar("from_value", { length: 20 }),
+    to_value: varchar("to_value", { length: 20 }).notNull(),
+    reason: text().notNull(),
+    changed_by: text("changed_by").notNull(),
+    changed_at: timestamp("changed_at", { withTimezone: true }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    leadChangedIdx: index("interest_level_overrides_lead_changed_idx").on(
+      t.dealer_lead_id,
+      t.changed_at,
+    ),
+    changerIdx: index("interest_level_overrides_changer_idx").on(
+      t.changed_by,
+      t.changed_at,
+    ),
+  }),
+);
+
+// E-124 — Per-rep saved filters / defaults (BRD §0.13).
+export const userPreferences = pgTable(
+  "user_preferences",
+  {
+    pref_id: uuid("pref_id").primaryKey().defaultRandom(),
+    user_id: text("user_id").notNull(),
+    pref_key: varchar("pref_key", { length: 100 }).notNull(),
+    pref_value: jsonb("pref_value").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => ({
+    userKeyUniq: uniqueIndex("user_preferences_user_key_uniq").on(
+      t.user_id,
+      t.pref_key,
+    ),
   }),
 );

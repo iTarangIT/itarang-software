@@ -107,6 +107,40 @@ interface ParaRow {
   unit_net?: number | null;
 }
 
+/** Classify a product option by its inventory asset_type. */
+function productClass(
+  assetType: string | null | undefined,
+): "battery" | "charger" | "paraphernalia" {
+  const t = (assetType ?? "").trim().toLowerCase();
+  if (t === "battery") return "battery";
+  if (t === "charger") return "charger";
+  return "paraphernalia";
+}
+
+/** Normalise a SKU / type string for tolerant comparison. */
+function normKey(s: string | null | undefined): string {
+  return (s ?? "").trim().toLowerCase();
+}
+
+/** Dropdown label for a product type — mirrors Step 1, with the avail count. */
+function productOptionLabel(p: {
+  name: string;
+  sku: string;
+  voltage_v: number | null;
+  capacity_ah: number | null;
+  available_quantity?: number;
+}): string {
+  const base =
+    `${p.name}${p.voltage_v ? ` — ${p.voltage_v}V` : ""}` +
+    `${p.capacity_ah ? ` / ${p.capacity_ah}Ah` : ""} | SKU: ${p.sku}`;
+  const avail =
+    typeof p.available_quantity === "number"
+      ? ` · ${p.available_quantity} avail.`
+      : "";
+  const oos = p.available_quantity === 0 ? " (Out of Stock)" : "";
+  return base + avail + oos;
+}
+
 interface PriorSelection {
   id: string;
   battery_serial: string | null;
@@ -206,12 +240,17 @@ export default function ProductSelectionPage() {
     id: string;
     name: string;
     sku: string;
+    asset_type: string;
     voltage_v: number | null;
     capacity_ah: number | null;
     warranty_months?: number | null;
+    available_quantity?: number;
   };
   const [categories, setCategories] = useState<CatOption[]>([]);
   const [productsList, setProductsList] = useState<ProdOption[]>([]);
+  // Extra "Add Another Product" rows — narrow the inventory card sections to
+  // the chosen product types. Client-side filter scope (localStorage-persisted).
+  const [extraProductIds, setExtraProductIds] = useState<string[]>([]);
   const [savingCategory, setSavingCategory] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
@@ -225,7 +264,44 @@ export default function ProductSelectionPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
 
+  // E-130 / Addendum V0.1 §5.1 — dealer-captured product photos. Each upload
+  // returns a public URL that's pushed into the corresponding array; the
+  // arrays are sent with the submit payload. Stored as JSON on
+  // product_selections.battery_photo_urls / charger_photo_urls.
+  const [batteryPhotoUrls, setBatteryPhotoUrls] = useState<string[]>([]);
+  const [chargerPhotoUrls, setChargerPhotoUrls] = useState<string[]>([]);
+  const [photoUploading, setPhotoUploading] = useState<string | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+
+  // E-130 / Addendum V0.1 §5.2 — Section G Financing Options (finance only).
+  // The customer picks 1 or 2 NBFCs from the BRE-matched list (stub returns
+  // all assigned NBFCs in Phase 2). disclosureAck is the mandatory checkbox
+  // confirming the customer was told each picked NBFC verifies independently.
+  type SectionGProduct = {
+    id: number;
+    productName: string;
+    loanAmountMin: number;
+    loanAmountMax: number;
+    tenureMonthsMin: number;
+    tenureMonthsMax: number;
+    minRoiPct: string;
+    maxRoiPct: string;
+    downPaymentPct: string;
+  };
+  type SectionGNbfc = {
+    nbfcId: number;
+    shortName: string;
+    legalName: string;
+    activeLoanProducts: SectionGProduct[];
+  };
+  const [sectionGOptions, setSectionGOptions] = useState<SectionGNbfc[]>([]);
+  const [sectionGLoading, setSectionGLoading] = useState(false);
+  const [sectionGError, setSectionGError] = useState<string | null>(null);
+  const [selectedNbfcs, setSelectedNbfcs] = useState<{ nbfc_id: string; loan_product_id: number }[]>([]);
+  const [customerDisclosureAck, setCustomerDisclosureAck] = useState(false);
+
   const draftRestoredRef = useRef(false);
+  const extraProductsRestoredRef = useRef(false);
 
   // ── Load access + dealer id ─────────────────────────────────────────
   useEffect(() => {
@@ -391,8 +467,9 @@ export default function ProductSelectionPage() {
     try {
       const batQs = new URLSearchParams();
       if (access.category) batQs.set("category", access.category);
-      // Filter batteries to the exact product the dealer picked at Step 1.
-      if (access.productId) batQs.set("productId", access.productId);
+      // Step 4 lists every available battery in the category so the dealer can
+      // pick — it is NOT narrowed to the Step-1 product type (which may be a
+      // charger/paraphernalia).
       const paraQs = new URLSearchParams();
       if (access.category) paraQs.set("category", access.category);
 
@@ -485,6 +562,36 @@ export default function ProductSelectionPage() {
       draftRestoredRef.current = true;
     }
   }, [batteries, access, leadId]);
+
+  // ── Restore / persist the Step-4 additional product-type filter ──────
+  // Client-side only (localStorage) — same as Step 1's "Add Another Product".
+  useEffect(() => {
+    if (extraProductsRestoredRef.current) return;
+    try {
+      const raw = localStorage.getItem(`step4-extra-products:${leadId}`);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          setExtraProductIds(arr.filter((x): x is string => typeof x === "string"));
+        }
+      }
+    } catch {
+      // ignore corrupted value
+    }
+    extraProductsRestoredRef.current = true;
+  }, [leadId]);
+
+  useEffect(() => {
+    if (!extraProductsRestoredRef.current) return;
+    try {
+      localStorage.setItem(
+        `step4-extra-products:${leadId}`,
+        JSON.stringify(extraProductIds),
+      );
+    } catch {
+      // ignore storage quota / private-mode errors
+    }
+  }, [extraProductIds, leadId]);
 
   // ── Load chargers once a battery is selected ────────────────────────
   useEffect(() => {
@@ -612,6 +719,75 @@ export default function ProductSelectionPage() {
 
   const finalPrice = netSubtotal + Number(dealerMargin || 0);
 
+  // ── Product-type scope ──────────────────────────────────────────────
+  // The primary Product Type + any "Add Another Product" rows narrow the
+  // Battery / Charger / Paraphernalia card sections to just those products'
+  // available stock. Empty scope ⇒ no narrowing (every section lists all).
+  const selectedProducts = useMemo(() => {
+    const ids = [access?.productId, ...extraProductIds].filter(
+      (id): id is string => !!id,
+    );
+    const seen = new Set<string>();
+    const out: ProdOption[] = [];
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const p = productsList.find((x) => x.id === id);
+      if (p) out.push(p);
+    }
+    return out;
+  }, [access?.productId, extraProductIds, productsList]);
+
+  const batterySkus = useMemo(
+    () =>
+      new Set(
+        selectedProducts
+          .filter((p) => productClass(p.asset_type) === "battery")
+          .map((p) => normKey(p.sku)),
+      ),
+    [selectedProducts],
+  );
+  const chargerSkus = useMemo(
+    () =>
+      new Set(
+        selectedProducts
+          .filter((p) => productClass(p.asset_type) === "charger")
+          .map((p) => normKey(p.sku)),
+      ),
+    [selectedProducts],
+  );
+  const paraTypes = useMemo(
+    () =>
+      new Set(
+        selectedProducts
+          .filter((p) => productClass(p.asset_type) === "paraphernalia")
+          .map((p) => normKey(p.asset_type)),
+      ),
+    [selectedProducts],
+  );
+
+  const scopedBatteries = useMemo(
+    () =>
+      batterySkus.size === 0
+        ? batteries
+        : batteries.filter((b) => batterySkus.has(normKey(b.model_type))),
+    [batteries, batterySkus],
+  );
+  const scopedChargers = useMemo(
+    () =>
+      chargerSkus.size === 0
+        ? chargers
+        : chargers.filter((c) => chargerSkus.has(normKey(c.model_type))),
+    [chargers, chargerSkus],
+  );
+  const scopedParaphernalia = useMemo(
+    () =>
+      paraTypes.size === 0
+        ? paraphernalia
+        : paraphernalia.filter((p) => paraTypes.has(normKey(p.asset_type))),
+    [paraphernalia, paraTypes],
+  );
+
   // ── Filter battery list ─────────────────────────────────────────────
   // Apply age-bucket filter first, then case-insensitive substring search
   // against serial / model / model_type. Pagination slices the result.
@@ -619,13 +795,13 @@ export default function ProductSelectionPage() {
     const byBucket = (() => {
       switch (batteryFilter) {
         case "recommended":
-          return batteries.filter((b) => b.recommended);
+          return scopedBatteries.filter((b) => b.recommended);
         case "ageing":
-          return batteries.filter((b) => b.age_badge === "ageing");
+          return scopedBatteries.filter((b) => b.age_badge === "ageing");
         case "old":
-          return batteries.filter((b) => b.age_badge === "old");
+          return scopedBatteries.filter((b) => b.age_badge === "old");
         default:
-          return batteries;
+          return scopedBatteries;
       }
     })();
     const q = deferredBatterySearch.trim().toLowerCase();
@@ -637,24 +813,24 @@ export default function ProductSelectionPage() {
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [batteries, batteryFilter, deferredBatterySearch]);
+  }, [scopedBatteries, batteryFilter, deferredBatterySearch]);
 
-  const ageingCount = batteries.filter((b) => b.age_badge === "ageing").length;
-  const oldCount = batteries.filter((b) => b.age_badge === "old").length;
-  const recommendedCount = batteries.filter((b) => b.recommended).length;
+  const ageingCount = scopedBatteries.filter((b) => b.age_badge === "ageing").length;
+  const oldCount = scopedBatteries.filter((b) => b.age_badge === "old").length;
+  const recommendedCount = scopedBatteries.filter((b) => b.recommended).length;
 
   // ── Filter charger list (mirrors battery: chips + search) ────────────
   const filteredChargers = useMemo(() => {
     const byBucket = (() => {
       switch (chargerFilter) {
         case "recommended":
-          return chargers.filter((c) => c.recommended);
+          return scopedChargers.filter((c) => c.recommended);
         case "ageing":
-          return chargers.filter((c) => c.age_badge === "ageing");
+          return scopedChargers.filter((c) => c.age_badge === "ageing");
         case "old":
-          return chargers.filter((c) => c.age_badge === "old");
+          return scopedChargers.filter((c) => c.age_badge === "old");
         default:
-          return chargers;
+          return scopedChargers;
       }
     })();
     const q = deferredChargerSearch.trim().toLowerCase();
@@ -666,11 +842,11 @@ export default function ProductSelectionPage() {
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [chargers, chargerFilter, deferredChargerSearch]);
+  }, [scopedChargers, chargerFilter, deferredChargerSearch]);
 
-  const chargerAgeingCount = chargers.filter((c) => c.age_badge === "ageing").length;
-  const chargerOldCount = chargers.filter((c) => c.age_badge === "old").length;
-  const chargerRecommendedCount = chargers.filter((c) => c.recommended).length;
+  const chargerAgeingCount = scopedChargers.filter((c) => c.age_badge === "ageing").length;
+  const chargerOldCount = scopedChargers.filter((c) => c.age_badge === "old").length;
+  const chargerRecommendedCount = scopedChargers.filter((c) => c.recommended).length;
 
   // ── Pagination slices ───────────────────────────────────────────────
   const batteryPageCount = Math.max(1, Math.ceil(filteredBatteries.length / PAGE_SIZE));
@@ -697,24 +873,57 @@ export default function ProductSelectionPage() {
   // Reset to page 1 when filters/search change or the underlying list reloads.
   useEffect(() => {
     setBatteryPage(1);
-  }, [batteryFilter, deferredBatterySearch, batteries.length]);
+  }, [batteryFilter, deferredBatterySearch, scopedBatteries.length]);
   useEffect(() => {
     setChargerPage(1);
-  }, [chargerFilter, deferredChargerSearch, chargers.length]);
+  }, [chargerFilter, deferredChargerSearch, scopedChargers.length]);
+
+  // Drop a battery/charger pick that the active product-type scope excludes.
+  useEffect(() => {
+    if (
+      batterySkus.size > 0 &&
+      selectedBattery &&
+      !scopedBatteries.some((b) => b.id === selectedBattery.id)
+    ) {
+      setSelectedBattery(null);
+    }
+  }, [scopedBatteries, batterySkus, selectedBattery]);
+  useEffect(() => {
+    if (
+      chargerSkus.size > 0 &&
+      selectedCharger &&
+      !scopedChargers.some((c) => c.id === selectedCharger.id)
+    ) {
+      setSelectedCharger(null);
+    }
+  }, [scopedChargers, chargerSkus, selectedCharger]);
 
   // ── Submit gating ───────────────────────────────────────────────────
+  // Charger is optional — a battery-only sale (with or without paraphernalia)
+  // is a valid order. Inventory-side guards still enforce that any charger
+  // serial submitted has to be a real available row.
+  // Addendum V0.1 §5.2 — Section G applies to finance leads only.
+  const isFinanceLead = access?.paymentMode === "finance";
+  const sectionGSatisfied = useMemo(() => {
+    if (!isFinanceLead) return true;
+    if (selectedNbfcs.length < 1 || selectedNbfcs.length > 2) return false;
+    if (!customerDisclosureAck) return false;
+    return true;
+  }, [isFinanceLead, selectedNbfcs.length, customerDisclosureAck]);
+
   const pendingRequirements = useMemo(() => {
     const list: string[] = [];
     if (!selectedBattery) list.push("Battery serial");
-    if (!selectedCharger) list.push("Charger serial");
+    if (isFinanceLead && selectedNbfcs.length < 1) list.push("Pick 1 or 2 NBFCs in Section G");
+    if (isFinanceLead && !customerDisclosureAck) list.push("Confirm the customer disclosure in Section G");
     return list;
-  }, [selectedBattery, selectedCharger]);
+  }, [selectedBattery, isFinanceLead, selectedNbfcs.length, customerDisclosureAck]);
 
   const canSubmit =
     !!selectedBattery &&
-    !!selectedCharger &&
     !submitting &&
-    !access?.readOnly;
+    !access?.readOnly &&
+    sectionGSatisfied;
 
   const paramList = useMemo(() => {
     const result: Record<string, number | string> = {};
@@ -725,9 +934,98 @@ export default function ProductSelectionPage() {
     return result;
   }, [paraphernalia, paraQty]);
 
+  // ── Section G — load BRE-matched NBFCs (Addendum §5.2). Stub returns all
+  //    of the dealer's assigned NBFCs with active loan products. Phase 3
+  //    swaps this for a real customer-attribute BRE match. Re-runs are
+  //    cheap so we fetch once when finance access is confirmed.
+  useEffect(() => {
+    if (!access || access.paymentMode !== "finance" || access.readOnly) return;
+    let cancelled = false;
+    setSectionGLoading(true);
+    setSectionGError(null);
+    (async () => {
+      try {
+        const res = await fetch(`/api/lead/${leadId}/section-g-options`);
+        const json = await res.json();
+        if (cancelled) return;
+        if (!res.ok || !json.success) {
+          throw new Error(json?.error?.message || "Failed to load financing options");
+        }
+        setSectionGOptions(json.data.items as SectionGNbfc[]);
+      } catch (err: unknown) {
+        if (!cancelled) {
+          const message = err instanceof Error ? err.message : "Failed to load financing options";
+          setSectionGError(message);
+        }
+      } finally {
+        if (!cancelled) setSectionGLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [access, leadId]);
+
+  const toggleNbfcPick = useCallback(
+    (nbfcId: number, loanProductId: number) => {
+      setSelectedNbfcs((prev) => {
+        const idStr = String(nbfcId);
+        const idx = prev.findIndex((p) => p.nbfc_id === idStr);
+        if (idx >= 0) {
+          // Already picked — remove (toggle off).
+          return prev.filter((_, i) => i !== idx);
+        }
+        if (prev.length >= 2) {
+          // Cap at 2 per §6.2; replace the oldest pick so dealer can swap easily.
+          return [...prev.slice(1), { nbfc_id: idStr, loan_product_id: loanProductId }];
+        }
+        return [...prev, { nbfc_id: idStr, loan_product_id: loanProductId }];
+      });
+    },
+    [],
+  );
+
+  // ── Product photo upload (Addendum §5.1) ─────────────────────────────
+  // POSTs the file to /api/lead/[id]/product-photo; on success appends the
+  // returned URL to the right array. label is a short slug used in the
+  // storage path so admins/NBFCs can tell serial vs unit photos apart.
+  const uploadProductPhoto = useCallback(
+    async (kind: "battery" | "charger", label: string, file: File) => {
+      setPhotoError(null);
+      const tag = `${kind}:${label}`;
+      setPhotoUploading(tag);
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("kind", kind);
+        fd.append("label", label);
+        const res = await fetch(`/api/lead/${leadId}/product-photo`, {
+          method: "POST",
+          body: fd,
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          throw new Error(json?.error?.message || "Upload failed");
+        }
+        const url = json.data.url as string;
+        if (kind === "battery") {
+          setBatteryPhotoUrls((prev) => [...prev, url]);
+        } else {
+          setChargerPhotoUrls((prev) => [...prev, url]);
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Upload failed";
+        setPhotoError(message);
+      } finally {
+        setPhotoUploading(null);
+      }
+    },
+    [leadId],
+  );
+
   // ── Handlers ────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!canSubmit || !selectedBattery || !selectedCharger) return;
+    if (!canSubmit || !selectedBattery) return;
     if (access?.paymentMode === "cash") {
       setConfirmOpen(true);
       return;
@@ -741,7 +1039,7 @@ export default function ProductSelectionPage() {
     try {
       const body = {
         batterySerial: selectedBattery!.serial_number,
-        chargerSerial: selectedCharger!.serial_number,
+        chargerSerial: selectedCharger?.serial_number ?? null,
         paraphernalia: paramList,
         paraphernaliaLines: paraLines,
         dealerMargin: Number(dealerMargin || 0),
@@ -763,6 +1061,19 @@ export default function ProductSelectionPage() {
         netSubtotal,
         category: access?.category ?? undefined,
         productId: access?.productId ?? undefined,
+        // E-130 / Addendum V0.1 §5.1
+        batteryPhotoUrls,
+        chargerPhotoUrls,
+        // E-130 / Addendum V0.1 §5.2, §5.3 — finance-only.
+        ...(mode === "finance"
+          ? {
+              selectedNbfcs: selectedNbfcs.map((s) => ({
+                nbfc_id: s.nbfc_id,
+                loan_product_id: s.loan_product_id,
+              })),
+              customerDisclosureAck,
+            }
+          : {}),
       };
       const endpoint =
         mode === "cash"
@@ -1047,7 +1358,7 @@ export default function ProductSelectionPage() {
                     value={access.productId ?? ""}
                     options={productsList.map((p) => ({
                       value: p.id,
-                      label: `${p.name}${p.voltage_v ? ` — ${p.voltage_v}V` : ""}${p.capacity_ah ? ` / ${p.capacity_ah}Ah` : ""} | SKU: ${p.sku}`,
+                      label: productOptionLabel(p),
                     }))}
                     onChange={handleProductChange}
                     saving={savingCategory}
@@ -1060,10 +1371,65 @@ export default function ProductSelectionPage() {
                   />
                 )}
               </div>
+
+              {!access.readOnly && (
+                <div className="mt-4 space-y-3">
+                  {extraProductIds.map((pid, idx) => (
+                    <div key={idx} className="flex items-end gap-2">
+                      <div className="flex-1">
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">
+                          Additional Product {idx + 1}
+                        </label>
+                        <div className="mt-1.5 relative">
+                          <select
+                            value={pid}
+                            onChange={(e) =>
+                              setExtraProductIds((prev) =>
+                                prev.map((v, i) => (i === idx ? e.target.value : v)),
+                              )
+                            }
+                            disabled={!productsList.length}
+                            className="w-full h-11 px-4 pr-10 bg-white border-2 border-[#EBEBEB] rounded-xl text-sm font-bold outline-none appearance-none text-gray-900 focus:border-[#1D4ED8] focus:ring-4 focus:ring-blue-50/50 disabled:bg-gray-50 disabled:text-gray-400"
+                          >
+                            <option value="">Select a product type…</option>
+                            {productsList.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {productOptionLabel(p)}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExtraProductIds((prev) =>
+                            prev.filter((_, i) => i !== idx),
+                          )
+                        }
+                        className="h-11 px-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                        aria-label={`Remove additional product ${idx + 1}`}
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setExtraProductIds((prev) => [...prev, ""])}
+                    disabled={!productsList.length}
+                    className="flex items-center gap-2 text-sm font-bold text-[#0047AB] hover:text-[#003580] disabled:opacity-40 disabled:cursor-not-allowed px-1"
+                  >
+                    <Plus className="w-4 h-4" /> Add Another Product
+                  </button>
+                </div>
+              )}
+
               <p className="text-[11px] text-gray-400 mt-3">
                 {access.readOnly
                   ? "Category and product type were set in Step 1. Inventory below is filtered to match."
-                  : "Edits here also update Step 1. Switching category clears the chosen battery, charger, and paraphernalia."}
+                  : "Pick one or more product types — the Battery, Charger and Paraphernalia lists below show only the available stock for those products. Switching category clears the chosen battery, charger, and paraphernalia."}
               </p>
             </SectionCard>
 
@@ -1073,7 +1439,7 @@ export default function ProductSelectionPage() {
               action={
                 <div className="flex items-center gap-2 flex-wrap">
                   <FilterChip
-                    label={`All ${batteries.length}`}
+                    label={`All ${scopedBatteries.length}`}
                     active={batteryFilter === "all"}
                     onClick={() => setBatteryFilter("all")}
                   />
@@ -1159,14 +1525,30 @@ export default function ProductSelectionPage() {
               />
             )}
 
+            {/* Section B (cont.) — dealer-captured battery photos.
+                Addendum V0.1 §5.1: serial close-up + unit photo. */}
+            {selectedBattery && !access.readOnly && (
+              <ProductPhotoSection
+                title="Battery Photos"
+                subtitle="Take a clear photo of the battery serial sticker and the battery itself, at your premises."
+                kind="battery"
+                urls={batteryPhotoUrls}
+                onAdd={(label, file) => uploadProductPhoto("battery", label, file)}
+                onRemove={(idx) =>
+                  setBatteryPhotoUrls((prev) => prev.filter((_, i) => i !== idx))
+                }
+                uploadingTag={photoUploading}
+              />
+            )}
+
             {/* Section C — Charger */}
             <SectionCard
               title="Charger"
               action={
-                selectedBattery && chargers.length > 0 ? (
+                selectedBattery && scopedChargers.length > 0 ? (
                   <div className="flex items-center gap-2 flex-wrap">
                     <FilterChip
-                      label={`All ${chargers.length}`}
+                      label={`All ${scopedChargers.length}`}
                       active={chargerFilter === "all"}
                       onClick={() => setChargerFilter("all")}
                     />
@@ -1258,17 +1640,44 @@ export default function ProductSelectionPage() {
               )}
             </SectionCard>
 
+            {/* Section C (cont.) — dealer-captured charger photos.
+                Addendum V0.1 §5.1: serial close-up + unit photo. */}
+            {selectedCharger && !access.readOnly && (
+              <ProductPhotoSection
+                title="Charger Photos"
+                subtitle="Take a clear photo of the charger serial sticker and the charger itself, at your premises."
+                kind="charger"
+                urls={chargerPhotoUrls}
+                onAdd={(label, file) => uploadProductPhoto("charger", label, file)}
+                onRemove={(idx) =>
+                  setChargerPhotoUrls((prev) => prev.filter((_, i) => i !== idx))
+                }
+                uploadingTag={photoUploading}
+              />
+            )}
+
+            {photoError && (
+              <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-xs font-medium text-red-700 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>{photoError}</span>
+              </div>
+            )}
+
             {/* Section D — Paraphernalia */}
             <SectionCard title="Paraphernalia">
-              {paraphernalia.length === 0 ? (
+              {scopedParaphernalia.length === 0 ? (
                 <EmptyState
                   icon={<Package className="w-10 h-10 text-gray-300" />}
                   title="No paraphernalia available"
-                  hint="No add-on items in this category for your inventory."
+                  hint={
+                    paraphernalia.length > 0
+                      ? "No paraphernalia matches the selected product types."
+                      : "No add-on items in this category for your inventory."
+                  }
                 />
               ) : (
                 <ParaphernaliaList
-                  items={paraphernalia}
+                  items={scopedParaphernalia}
                   paraQty={paraQty}
                   onChangeQty={(k, n, max) =>
                     setParaQty((prev) => ({
@@ -1280,6 +1689,25 @@ export default function ProductSelectionPage() {
                 />
               )}
             </SectionCard>
+
+            {/* Section G — Financing Options (Addendum V0.1 §5.2).
+                Finance leads only. The customer picks 1 or 2 NBFCs from the
+                BRE-matched list (Phase 2 stub returns all assigned NBFCs);
+                each selected NBFC will independently run FI + Active Video
+                KYC after submit, then submit firm financing conditions for
+                customer winner-pick. Mandatory disclosure checkbox confirms
+                the customer was told this. */}
+            {isFinanceLead && !access.readOnly && (
+              <SectionG
+                options={sectionGOptions}
+                loading={sectionGLoading}
+                error={sectionGError}
+                selected={selectedNbfcs}
+                onTogglePick={toggleNbfcPick}
+                disclosureAck={customerDisclosureAck}
+                onDisclosureChange={setCustomerDisclosureAck}
+              />
+            )}
           </div>
 
           {/* Right rail — Pricing summary (sticky on desktop) */}
@@ -2806,4 +3234,278 @@ function formatShortDate(iso: string): string {
     month: "short",
     year: "numeric",
   });
+}
+
+// Addendum V0.1 §5.2 — Section G Financing Options.
+// Renders the BRE-matched NBFCs with indicative ranges (ROI, EMI band,
+// tenure, DP) labelled "indicative — subject to verification" and lets the
+// dealer record the customer's pick of 1 or 2 NBFCs. The final winner is
+// chosen later (Phase 5) after each picked NBFC submits firm conditions.
+function SectionG({
+  options,
+  loading,
+  error,
+  selected,
+  onTogglePick,
+  disclosureAck,
+  onDisclosureChange,
+}: {
+  options: Array<{
+    nbfcId: number;
+    shortName: string;
+    legalName: string;
+    activeLoanProducts: Array<{
+      id: number;
+      productName: string;
+      loanAmountMin: number;
+      loanAmountMax: number;
+      tenureMonthsMin: number;
+      tenureMonthsMax: number;
+      minRoiPct: string;
+      maxRoiPct: string;
+      downPaymentPct: string;
+    }>;
+  }>;
+  loading: boolean;
+  error: string | null;
+  selected: Array<{ nbfc_id: string; loan_product_id: number }>;
+  onTogglePick: (nbfcId: number, loanProductId: number) => void;
+  disclosureAck: boolean;
+  onDisclosureChange: (next: boolean) => void;
+}) {
+  const isPicked = (nbfcId: number) =>
+    selected.some((s) => s.nbfc_id === String(nbfcId));
+  const pickCount = selected.length;
+
+  return (
+    <SectionCard title="Financing Options">
+      <div className="mb-3 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
+        <p className="text-[11px] text-amber-800 leading-relaxed">
+          <strong>Indicative — subject to verification.</strong> Final terms are
+          confirmed by the lender after Field Investigation and Active Video
+          KYC. The customer may select <strong>up to two</strong> lending partners;
+          each verifies independently and submits a firm offer.
+        </p>
+      </div>
+
+      {loading ? (
+        <div className="py-6 text-center text-xs text-gray-400">Loading lender options…</div>
+      ) : error ? (
+        <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-xs font-medium text-red-700 flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      ) : options.length === 0 ? (
+        <div className="py-6 text-center text-xs text-gray-500">
+          No lending partners are currently available for this dealer. The
+          lead will be routed to Manual Handoff after submit.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {options.map((opt) => {
+            const picked = isPicked(opt.nbfcId);
+            // Phase 2 stub: use the first active product's bands as the
+            // indicative range. Phase 3 will pick the right product after
+            // amount-aware BRE re-evaluation.
+            const product = opt.activeLoanProducts[0];
+            const disablePick = !picked && pickCount >= 2;
+            return (
+              <button
+                key={opt.nbfcId}
+                type="button"
+                onClick={() => product && onTogglePick(opt.nbfcId, product.id)}
+                disabled={!product || disablePick}
+                className={`w-full text-left p-4 rounded-2xl border-2 transition-all ${
+                  picked
+                    ? "border-[#0047AB] bg-blue-50/60 shadow-sm"
+                    : disablePick
+                      ? "border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed"
+                      : "border-gray-200 bg-white hover:border-[#0047AB] hover:shadow-sm"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-bold text-gray-900 truncate">
+                      {opt.shortName || opt.legalName}
+                    </div>
+                    {product && (
+                      <div className="text-[11px] text-gray-500 mt-0.5 truncate">
+                        {product.productName}
+                      </div>
+                    )}
+                  </div>
+                  <div
+                    className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
+                      picked
+                        ? "border-[#0047AB] bg-[#0047AB]"
+                        : "border-gray-300"
+                    }`}
+                  >
+                    {picked && <CheckCircle2 className="w-3 h-3 text-white" />}
+                  </div>
+                </div>
+                {product && (
+                  <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <RangeStat label="ROI" value={`${product.minRoiPct}% – ${product.maxRoiPct}%`} />
+                    <RangeStat
+                      label="Tenure"
+                      value={`${product.tenureMonthsMin} – ${product.tenureMonthsMax} mo`}
+                    />
+                    <RangeStat label="Down payment" value={`${product.downPaymentPct}%`} />
+                    <RangeStat
+                      label="Loan amount"
+                      value={`₹${product.loanAmountMin.toLocaleString("en-IN")} – ₹${product.loanAmountMax.toLocaleString("en-IN")}`}
+                    />
+                  </div>
+                )}
+              </button>
+            );
+          })}
+          <p className="text-[11px] text-gray-400 px-1">
+            {pickCount === 0
+              ? "Pick the lender(s) the customer wants to apply with."
+              : `Selected: ${pickCount} of 2 lender${pickCount === 1 ? "" : "s"}.`}
+          </p>
+        </div>
+      )}
+
+      <label className="mt-4 flex items-start gap-3 px-3 py-3 rounded-xl border-2 border-gray-200 bg-gray-50 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={disclosureAck}
+          onChange={(e) => onDisclosureChange(e.target.checked)}
+          className="mt-0.5 w-4 h-4 rounded border-gray-300 text-[#0047AB] focus:ring-[#0047AB]"
+        />
+        <span className="text-xs text-gray-700 leading-relaxed">
+          I confirm I have <strong>informed the customer</strong> that each
+          selected lending partner will independently verify them (including
+          Field Investigation and Active Video KYC), and that final terms may
+          differ from the indicative ranges shown above.
+        </span>
+      </label>
+    </SectionCard>
+  );
+}
+
+function RangeStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="px-2 py-1.5 bg-white border border-gray-100 rounded-lg">
+      <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400">{label}</div>
+      <div className="text-xs font-bold text-gray-900 mt-0.5 truncate">{value}</div>
+    </div>
+  );
+}
+
+// Addendum V0.1 §5.1 — battery/charger photo upload block. Two named slots
+// (serial close-up + unit photo) plus an "Add Another" option for extra
+// shots. Uploads happen one at a time; URLs come back from
+// /api/lead/[id]/product-photo and are tracked by the parent.
+function ProductPhotoSection({
+  title,
+  subtitle,
+  kind,
+  urls,
+  onAdd,
+  onRemove,
+  uploadingTag,
+}: {
+  title: string;
+  subtitle: string;
+  kind: "battery" | "charger";
+  urls: string[];
+  onAdd: (label: string, file: File) => Promise<void> | void;
+  onRemove: (idx: number) => void;
+  uploadingTag: string | null;
+}) {
+  const slots = [
+    { label: "serial", caption: "Serial close-up" },
+    { label: "unit", caption: "Unit photo" },
+  ];
+  return (
+    <SectionCard title={title}>
+      <p className="text-[11px] text-gray-400 mb-4 px-1">{subtitle}</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {slots.map((slot) => {
+          const isUploading = uploadingTag === `${kind}:${slot.label}`;
+          return (
+            <label
+              key={slot.label}
+              className={`flex flex-col items-center justify-center h-32 border-2 border-dashed rounded-xl cursor-pointer transition-all px-3 ${
+                isUploading
+                  ? "border-blue-300 bg-blue-50 cursor-wait"
+                  : "border-gray-200 hover:border-[#0047AB] hover:bg-blue-50/30"
+              }`}
+            >
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/jpg"
+                className="hidden"
+                disabled={isUploading}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) onAdd(slot.label, file);
+                  e.currentTarget.value = "";
+                }}
+              />
+              {isUploading ? (
+                <span className="text-xs font-bold text-blue-700">Uploading…</span>
+              ) : (
+                <>
+                  <Plus className="w-5 h-5 text-gray-400 mb-1" />
+                  <span className="text-xs font-bold text-gray-700">{slot.caption}</span>
+                  <span className="text-[10px] text-gray-400 mt-0.5">JPG/PNG · 5 MB max</span>
+                </>
+              )}
+            </label>
+          );
+        })}
+        <label
+          className={`flex flex-col items-center justify-center h-32 border-2 border-dashed rounded-xl cursor-pointer transition-all px-3 ${
+            uploadingTag?.startsWith(`${kind}:extra_`)
+              ? "border-blue-300 bg-blue-50 cursor-wait"
+              : "border-gray-200 hover:border-[#0047AB] hover:bg-blue-50/30"
+          }`}
+        >
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/jpg"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onAdd(`extra_${Date.now()}`, file);
+              e.currentTarget.value = "";
+            }}
+          />
+          <Plus className="w-5 h-5 text-gray-400 mb-1" />
+          <span className="text-xs font-bold text-gray-700">Add another</span>
+          <span className="text-[10px] text-gray-400 mt-0.5">Optional</span>
+        </label>
+      </div>
+      {urls.length > 0 && (
+        <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+          {urls.map((url, idx) => (
+            <div
+              key={`${url}-${idx}`}
+              className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-50 group"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={url}
+                alt={`${title} ${idx + 1}`}
+                className="w-full h-full object-cover"
+              />
+              <button
+                type="button"
+                onClick={() => onRemove(idx)}
+                className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                aria-label="Remove"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </SectionCard>
+  );
 }

@@ -55,7 +55,7 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Recency multiplier: most recent EMI weighted strongest. */
-function recencyMultiplier(positionFromMostRecent: number): number {
+export function recencyMultiplier(positionFromMostRecent: number): number {
   // 0 (newest) -> 1.0, 1 -> 0.85, ... bottoming out at 0.4
   return Math.max(0.4, 1.0 - positionFromMostRecent * 0.12);
 }
@@ -64,7 +64,7 @@ function recencyMultiplier(positionFromMostRecent: number): number {
  * Map an EMI row's status (and days_overdue) to its 0..1 weight in the
  * CDS sum. 0 = perfectly paid, 1 = full miss.
  */
-function emiWeight(status: string, daysOverdue: number | null): number {
+export function emiWeight(status: string, daysOverdue: number | null): number {
   const s = (status || "").toLowerCase();
   if (s === "paid") return 0;
   if (s === "paid_late") {

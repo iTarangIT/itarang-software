@@ -24,6 +24,17 @@ import {
   auditLogs,
 } from "@/lib/db/schema";
 
+/**
+ * Optional caller-supplied entity context — set when the flag is raised from
+ * the lead-intelligence drawer rather than the battery case workspace, so the
+ * unified NBFC audit-log feed can resolve the source as a Lead.
+ */
+export interface FlagForRecoveryContext {
+  entity_type: "lead" | "loan";
+  lead_id?: string;
+  note?: string;
+}
+
 export interface FlagForRecoveryInput {
   tenant_id: string;
   loan_sanction_id: string;
@@ -31,6 +42,7 @@ export interface FlagForRecoveryInput {
   actor_user_id: string | null;
   /** Optional battery serial to enroll in the recovery pipeline. */
   battery_serial?: string | null;
+  context?: FlagForRecoveryContext;
 }
 
 export interface FlagForRecoveryResult {
@@ -109,7 +121,10 @@ export async function flagLoanForRecovery(
       action_type: "flag_for_recovery",
       status: "approved",
       requested_by: input.actor_user_id ?? null,
-      payload: { reason: input.reason },
+      payload: {
+        reason: input.reason,
+        ...(input.context ? { context: input.context } : {}),
+      },
       created_at: now,
     })
     .returning({ id: nbfcBorrowerActions.id });

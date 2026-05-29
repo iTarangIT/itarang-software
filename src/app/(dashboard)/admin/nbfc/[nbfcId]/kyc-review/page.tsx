@@ -1,15 +1,24 @@
-"use client";
-
-import { use } from "react";
+import { redirect } from "next/navigation";
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { nbfc } from "@/lib/db/schema";
 import NbfcKycReviewPanel from "@/components/admin/nbfc/NbfcKycReviewPanel";
+import NbfcReadOnlyBanner from "@/components/admin/nbfc/NbfcReadOnlyBanner";
 import { PageShell, buildNbfcSteps } from "@/components/layout/PageShell";
+import { getStepNavHref } from "@/lib/nbfc/admin/progress";
+import { isNbfcLocked } from "@/lib/nbfc/admin/editability";
+import { requireAuth } from "@/lib/auth-utils";
 
-export default function NbfcKycReviewPage({
+export const dynamic = "force-dynamic";
+
+const CEO_EMAIL = "sanchit@itarang.com";
+
+export default async function NbfcKycReviewPage({
   params,
 }: {
   params: Promise<{ nbfcId: string }>;
 }) {
-  const { nbfcId } = use(params);
+  const { nbfcId } = await params;
   const id = Number.parseInt(nbfcId, 10);
 
   if (!Number.isInteger(id) || id <= 0) {
@@ -24,6 +33,24 @@ export default function NbfcKycReviewPage({
       </PageShell>
     );
   }
+
+  // CEO does not run KYC dial-outs — they review and approve. Route them to
+  // the review page where the final-approval panel lives.
+  const user = await requireAuth();
+  const role = (user.role ?? "").toLowerCase();
+  const email = (user.email ?? "").toLowerCase();
+  if (role === "ceo" || email === CEO_EMAIL) {
+    redirect(`/admin/nbfc/${id}/review`);
+  }
+
+  // Resolve current NBFC status so we can lock the panel for approved/active
+  // NBFCs (no further KYC dial-outs are meaningful once the deal is final).
+  const [statusRow] = await db
+    .select({ status: nbfc.status })
+    .from(nbfc)
+    .where(eq(nbfc.id, id))
+    .limit(1);
+  const locked = isNbfcLocked(statusRow?.status);
 
   return (
     <PageShell
@@ -40,8 +67,12 @@ export default function NbfcKycReviewPage({
         active: "approval",
         done: ["master", "documents", "lsp"],
       })}
+      hrefForStep={(step) => getStepNavHref(step, id, statusRow?.status)}
     >
-      <NbfcKycReviewPanel nbfcId={id} />
+      <div className="space-y-6">
+        {locked && <NbfcReadOnlyBanner />}
+        <NbfcKycReviewPanel nbfcId={id} locked={locked} />
+      </div>
     </PageShell>
   );
 }

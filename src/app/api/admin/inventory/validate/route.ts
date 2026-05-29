@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { inventory } from "@/lib/db/schema";
-import { inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { requireInventoryAdmin } from "@/lib/auth-utils";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
 import Papa from "papaparse";
@@ -131,6 +131,46 @@ export const POST = withErrorHandler(async (req: Request) => {
       ? await loadProductMasterBatch("paraphernalia", masterKeys)
       : null;
 
+  // ── Invoice consistency + per-asset-type uniqueness ──────────────────────
+  // Every row of the file must carry the same invoice_number (battery/charger:
+  // also the same invoice_value). That invoice_number must not already exist
+  // for the SAME asset type — one supplier invoice can span a battery upload
+  // AND a charger upload, but the same asset type can't reuse it.
+  const refInvoiceNumber = String(rawRows[0]?.invoice_number || "").trim();
+  const refInvoiceValue =
+    assetType === "paraphernalia" ? null : Number(rawRows[0]?.invoice_value);
+  const inventoryTypeForAsset =
+    assetType === "paraphernalia" ? "paraphernalia_lot" : assetType;
+  const invoiceNumberAlreadyUsed =
+    refInvoiceNumber.length > 0 &&
+    (
+      await db
+        .select({ id: inventory.id })
+        .from(inventory)
+        .where(
+          and(
+            eq(inventory.oem_invoice_number, refInvoiceNumber),
+            eq(inventory.inventory_type, inventoryTypeForAsset),
+          ),
+        )
+        .limit(1)
+    ).length > 0;
+  const invoiceValueAlreadyUsed =
+    refInvoiceValue != null &&
+    !Number.isNaN(refInvoiceValue) &&
+    (
+      await db
+        .select({ id: inventory.id })
+        .from(inventory)
+        .where(
+          and(
+            eq(inventory.inventory_amount, String(refInvoiceValue)),
+            eq(inventory.inventory_type, inventoryTypeForAsset),
+          ),
+        )
+        .limit(1)
+    ).length > 0;
+
   const seenSerialsInBatch = new Set<string>();
   const seenImeisInBatch = new Set<string>();
   const validated: ValidatedRow[] = [];
@@ -162,18 +202,29 @@ export const POST = withErrorHandler(async (req: Request) => {
         }
         seenSerialsInBatch.add(serial);
       }
+    }
 
-      const masterKey =
-        assetType === "paraphernalia"
-          ? String(data.item_type_code || "").trim()
-          : String(data.model_id || "").trim();
-      const lookup = masterKey.toLowerCase();
+    // model_id / item_type_code Product Master check — runs on the RAW row
+    // even when the row failed Zod validation, so a model that is out of
+    // Product Master is always surfaced and never hidden behind other errors.
+    const masterKey =
+      assetType === "paraphernalia"
+        ? String(rawRows[i].item_type_code || "").trim()
+        : String(rawRows[i].model_id || "").trim();
+    const lookup = masterKey.toLowerCase();
 
+    if (masterKey) {
       if (assetType === "battery") {
         const master = batteryMaster?.get(lookup);
         if (!master) {
           errors.push(`model_id: '${masterKey}' is not in active battery Product Master`);
-        } else {
+        } else if (data) {
+          const oemWm = Number(data.oem_warranty_months);
+          if (master.warrantyMonths > 0 && oemWm !== master.warrantyMonths) {
+            errors.push(
+              `oem_warranty_months: ${oemWm} must match the Product Master warranty (${master.warrantyMonths} months) for ${master.modelId}`,
+            );
+          }
           const cat = String(data.category || "");
           if (
             master.compatibleCategories.length &&
@@ -199,6 +250,13 @@ export const POST = withErrorHandler(async (req: Request) => {
         const master = chargerMaster?.get(lookup);
         if (!master) {
           errors.push(`model_id: '${masterKey}' is not in active charger Product Master`);
+        } else if (data) {
+          const oemWm = Number(data.oem_warranty_months);
+          if (master.warrantyMonths > 0 && oemWm !== master.warrantyMonths) {
+            errors.push(
+              `oem_warranty_months: ${oemWm} must match the Product Master warranty (${master.warrantyMonths} months) for ${master.modelId}`,
+            );
+          }
         }
       } else {
         const master = paraMaster?.get(lookup);
@@ -206,7 +264,7 @@ export const POST = withErrorHandler(async (req: Request) => {
           errors.push(
             `item_type_code: '${masterKey}' is not in active paraphernalia Product Master`,
           );
-        } else {
+        } else if (data) {
           const cat = String(data.category || "");
           if (
             master.compatibleCategories.length &&
@@ -216,7 +274,41 @@ export const POST = withErrorHandler(async (req: Request) => {
               `category: '${cat}' is not compatible with ${master.itemTypeCode}. Compatible: ${master.compatibleCategories.join(", ")}`,
             );
           }
+          const qty = Number(data.quantity);
+          if (master.maxQtyPerLead > 0 && qty > master.maxQtyPerLead) {
+            errors.push(
+              `quantity: ${qty} exceeds the Product Master max quantity per lead (${master.maxQtyPerLead}) for ${master.itemTypeCode}`,
+            );
+          }
         }
+      }
+    }
+
+    // Invoice — one file = one invoice, and that invoice must be brand-new.
+    if (refInvoiceNumber) {
+      const rowInvoiceNumber = String(rawRows[i].invoice_number || "").trim();
+      if (rowInvoiceNumber && rowInvoiceNumber !== refInvoiceNumber) {
+        errors.push(
+          `invoice_number: must be identical on every row of one upload (expected '${refInvoiceNumber}')`,
+        );
+      }
+      if (invoiceNumberAlreadyUsed) {
+        errors.push(
+          `invoice_number: '${refInvoiceNumber}' was already used by a previous ${assetType} upload — use a new invoice number for this asset type`,
+        );
+      }
+    }
+    if (refInvoiceValue != null && !Number.isNaN(refInvoiceValue)) {
+      const rowInvoiceValue = Number(rawRows[i].invoice_value);
+      if (!Number.isNaN(rowInvoiceValue) && rowInvoiceValue !== refInvoiceValue) {
+        errors.push(
+          `invoice_value: must be identical on every row of one upload (expected ${refInvoiceValue})`,
+        );
+      }
+      if (invoiceValueAlreadyUsed) {
+        errors.push(
+          `invoice_value: ${refInvoiceValue} was already used by a previous ${assetType} upload — use a new invoice value for this asset type`,
+        );
       }
     }
 

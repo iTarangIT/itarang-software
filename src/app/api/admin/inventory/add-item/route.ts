@@ -15,6 +15,7 @@ import { formatZodErrors, getRowSchema } from "@/lib/inventory/validation";
 import { notifyInventoryAssigned } from "@/lib/notifications";
 import { logInventoryEvent } from "@/lib/inventory/events";
 import { resolveProductMaster } from "@/lib/inventory/product-master";
+import { registerIotDevice } from "@/lib/iot/registerDevice";
 
 const bodySchema = z.object({
   dealerId: z.string().min(1),
@@ -99,6 +100,17 @@ export const POST = withErrorHandler(async (req: Request) => {
     }
   }
 
+  // Paraphernalia: quantity must not exceed the Product Master max per lead.
+  if (master.kind === "paraphernalia") {
+    const qty = Number(row.quantity);
+    if (master.maxQtyPerLead > 0 && qty > master.maxQtyPerLead) {
+      return errorResponse(
+        `Quantity ${qty} exceeds the Product Master max quantity per lead (${master.maxQtyPerLead}) for item '${master.itemTypeCode}'.`,
+        400,
+      );
+    }
+  }
+
   // Battery: enforce IoT compatibility — admin cannot mark iot_enabled when
   // the underlying battery model isn't IoT-capable.
   if (master.kind === "battery" && row.iot_enabled === true && !master.iotCompatible) {
@@ -135,6 +147,52 @@ export const POST = withErrorHandler(async (req: Request) => {
       .where(eq(inventory.iot_imei_no, imei))
       .limit(1);
     if (dupImei) return errorResponse(`IMEI ${imei} already exists`, 409);
+  }
+
+  // Invoice — invoice_number and invoice_value must not already exist for this
+  // asset type (per-asset-type uniqueness; one supplier invoice can still span
+  // different asset types). Mirrors the bulk upload.
+  const inventoryTypeForAsset =
+    assetType === "paraphernalia" ? "paraphernalia_lot" : assetType;
+  const invoiceNumber = String(row.invoice_number || "").trim();
+  if (invoiceNumber) {
+    const [dupInvoice] = await db
+      .select({ id: inventory.id })
+      .from(inventory)
+      .where(
+        and(
+          eq(inventory.oem_invoice_number, invoiceNumber),
+          eq(inventory.inventory_type, inventoryTypeForAsset),
+        ),
+      )
+      .limit(1);
+    if (dupInvoice) {
+      return errorResponse(
+        `invoice_number '${invoiceNumber}' was already used by a previous ${assetType} upload — use a new invoice number for this asset type.`,
+        400,
+      );
+    }
+  }
+  if (assetType !== "paraphernalia") {
+    const invoiceValue = Number(row.invoice_value);
+    if (!Number.isNaN(invoiceValue)) {
+      const [dupValue] = await db
+        .select({ id: inventory.id })
+        .from(inventory)
+        .where(
+          and(
+            eq(inventory.inventory_amount, String(invoiceValue)),
+            eq(inventory.inventory_type, inventoryTypeForAsset),
+          ),
+        )
+        .limit(1);
+      if (dupValue) {
+        return errorResponse(
+          `invoice_value '${invoiceValue}' was already used by a previous ${assetType} upload — use a new invoice value for this asset type.`,
+          400,
+        );
+      }
+    }
   }
 
   // Legacy products.sku lookup is preserved for back-compat with downstream
@@ -212,8 +270,37 @@ export const POST = withErrorHandler(async (req: Request) => {
         created_at: now,
         updated_at: now,
       });
+
+      // BRD §6.2.2 — auto-register the IoT device when iot_enabled is set on
+      // upload. Best-effort: a failure here does not roll back the inventory
+      // insert (the ingest handler has a fallback path that creates the
+      // iot_devices row on first packet).
+      if (iotEnabled && iotImei) {
+        try {
+          await registerIotDevice(
+            {
+              serialNumber: serial,
+              imeiId: iotImei,
+              dealerId,
+              model: master.modelName,
+              category,
+            },
+            tx,
+          );
+        } catch (e) {
+          console.warn("[inventory/add-item] iot register failed", {
+            serial,
+            imei: iotImei,
+            err: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
     } else if (assetType === "charger" && master.kind === "charger") {
-      const invoiceDate = new Date(String(row.invoice_date));
+      const soldDate = new Date(String(row.sold_date));
+      const warrantyDate = new Date(String(row.oem_warranty_date));
+      const oemWarrantyMonths = Number(row.oem_warranty_months);
+      const expiry = new Date(warrantyDate);
+      expiry.setMonth(expiry.getMonth() + oemWarrantyMonths);
       const value = Number(row.invoice_value);
       const gstPercent = row.gst_percent != null ? Number(row.gst_percent) : 0;
       const gstAmount = value * (gstPercent / 100);
@@ -243,7 +330,14 @@ export const POST = withErrorHandler(async (req: Request) => {
         gst_percent: gstPercent ? gstPercent.toFixed(2) : null,
         gst_amount: gstPercent ? gstAmount.toFixed(2) : null,
         oem_invoice_number: String(row.invoice_number || ""),
-        oem_invoice_date: invoiceDate,
+        oem_invoice_date: soldDate,
+        oem_warranty_date: warrantyDate.toISOString().slice(0, 10),
+        oem_warranty_months: oemWarrantyMonths,
+        oem_warranty_expiry: expiry.toISOString().slice(0, 10),
+        oem_warranty_clauses: row.oem_warranty_clauses
+          ? String(row.oem_warranty_clauses)
+          : null,
+        batch_number: row.batch_reference ? String(row.batch_reference) : null,
         inventory_amount: value.toString(),
         final_amount: finalAmount.toFixed(2),
         oem_name: String(row.supplier_name || ""),
@@ -262,6 +356,9 @@ export const POST = withErrorHandler(async (req: Request) => {
       const invoiceDate = new Date(String(row.invoice_date));
       const value = Number(row.unit_cost);
       const qty = Number(row.quantity);
+      const gstPercent = row.gst_percent != null ? Number(row.gst_percent) : 0;
+      const gstAmount = value * (gstPercent / 100);
+      const finalAmount = value + gstAmount;
       const itemType = master.itemTypeCode;
       const compatible = master.compatibleCategories;
       const label = master.displayLabel;
@@ -276,10 +373,12 @@ export const POST = withErrorHandler(async (req: Request) => {
         sub_category: category,
         model_type: label,
         quantity: qty,
+        gst_percent: gstPercent ? gstPercent.toFixed(2) : null,
+        gst_amount: gstPercent ? gstAmount.toFixed(2) : null,
         oem_invoice_number: String(row.invoice_number || ""),
         oem_invoice_date: invoiceDate,
         inventory_amount: value.toString(),
-        final_amount: value.toString(),
+        final_amount: finalAmount.toFixed(2),
         oem_name: row.supplier ? String(row.supplier) : null,
         warehouse_location: row.warehouse_location ? String(row.warehouse_location) : null,
         is_serialized: false,

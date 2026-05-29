@@ -41,6 +41,20 @@ async function resolveBaseUrl(request: Request): Promise<URL> {
     const isProd = process.env.NODE_ENV === 'production';
     const hdrs = await headers();
 
+    // 0. Local dev: there is no reverse proxy, and NEXT_PUBLIC_APP_URL may
+    //    legitimately point at a deployed environment (e.g. sandbox) for
+    //    third-party callback URLs. Logout must return the developer to
+    //    wherever they actually are — the request URL (localhost) — not
+    //    bounce them onto that deployed host. This branch never runs in
+    //    production, so the prod redirect logic below is untouched.
+    if (!isProd) {
+        try {
+            return new URL(request.url);
+        } catch {
+            /* fall through to the normal resolution */
+        }
+    }
+
     // 1. Trust the reverse proxy's forwarded-host header first — that's
     //    the public URL the user actually typed (sandbox.itarang.com /
     //    crm.itarang.com), before nginx proxied to Node.

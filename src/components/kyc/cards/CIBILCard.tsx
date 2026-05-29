@@ -145,7 +145,7 @@ export default function CIBILCard({
         } else {
           // Fallback if an older deploy returns the bare raw message
           const rawMsg = data.data?.rawResponse?.message || "";
-          setError(rawMsg || "Failed to fetch CIBIL data");
+          setError(rawMsg || "Failed to fetch credit bureau data");
           setErrorSuggestion("");
         }
         setStatus("failed");
@@ -177,7 +177,7 @@ export default function CIBILCard({
           });
       const data = await res.json();
       if (data.success) {
-        setActionResult({ success: true, message: action === "accept" ? "CIBIL verification accepted successfully" : "CIBIL verification rejected" });
+        setActionResult({ success: true, message: action === "accept" ? "Credit verification accepted successfully" : "Credit verification rejected" });
         onActionComplete?.();
       } else {
         setError(data.error?.message || "Action failed");
@@ -223,9 +223,9 @@ export default function CIBILCard({
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-purple-50 to-white">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-purple-600 flex items-center justify-center text-white font-bold text-sm">C</div>
+          <div className="w-9 h-9 rounded-lg bg-purple-600 flex items-center justify-center text-white font-bold text-sm">E</div>
           <div>
-            <h3 className="text-base font-semibold text-gray-900">CIBIL Credit Score</h3>
+            <h3 className="text-base font-semibold text-gray-900">Equifax Credit Score</h3>
             <p className="text-xs text-gray-500">via Decentro</p>
           </div>
         </div>
@@ -348,7 +348,7 @@ export default function CIBILCard({
               </div>
 
               <div className="text-sm text-amber-700 space-y-1 pl-[52px]">
-                <p>This person has no credit history with CIBIL/TransUnion. This typically means:</p>
+                <p>This person has no credit history with Equifax. This typically means:</p>
                 <ul className="list-disc list-inside space-y-0.5 text-amber-600">
                   <li>No previous loans or credit cards</li>
                   <li>First-time borrower (NTC - New to Credit)</li>
@@ -372,7 +372,7 @@ export default function CIBILCard({
             </div>
 
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">
-              <span className="font-semibold">Recommendation:</span> Since no CIBIL score exists, consider requiring a co-borrower with established credit history, or proceed with alternative assessment.
+              <span className="font-semibold">Recommendation:</span> Since no credit score exists, consider requiring a co-borrower with established credit history, or proceed with alternative assessment.
             </div>
 
             {/* Request Co-Borrower — contextual to the no-credit-history
@@ -395,7 +395,7 @@ export default function CIBILCard({
             <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
               {/* Score */}
               <div className="flex items-baseline gap-3">
-                <span className="text-sm text-gray-500 font-semibold">CIBIL SCORE:</span>
+                <span className="text-sm text-gray-500 font-semibold">EQUIFAX SCORE:</span>
                 <span className={`text-3xl font-bold ${scoreColor}`}>{score}</span>
               </div>
 
@@ -525,7 +525,7 @@ export default function CIBILCard({
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Admin Notes</p>
             <textarea value={adminNotes} onChange={(e) => setAdminNotes(e.target.value)} rows={2}
-              placeholder="CIBIL verification remarks..."
+              placeholder="Credit verification remarks..."
               className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none" />
           </div>
           <div className="flex gap-2">

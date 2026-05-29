@@ -22,10 +22,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { eq, or } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { iotDevices } from "@/lib/db/schema";
 import { requireAdminOrTestBypass } from "@/lib/auth/adminTestBypass";
+import { registerIotDevice } from "@/lib/iot/registerDevice";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,82 +62,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { serialNumber, imeiId, dealerId, model, category } = parsed.data;
-  const deviceId = `IOT-${imeiId}`;
-
   try {
-    // Idempotency check — match on serial_number OR imei_id (either uniquely
-    // identifies an already-registered device).
-    const existing = await db
-      .select({
-        device_id: iotDevices.device_id,
-        device_status: iotDevices.device_status,
-      })
-      .from(iotDevices)
-      .where(
-        or(
-          eq(iotDevices.serial_number, serialNumber),
-          eq(iotDevices.imei_id, imeiId),
-        ),
-      )
-      .limit(1);
-
-    if (existing.length > 0) {
-      return NextResponse.json({
-        deviceId: existing[0].device_id,
-        status: existing[0].device_status ?? "registered",
-      });
-    }
-
-    const [inserted] = await db
-      .insert(iotDevices)
-      .values({
-        device_id: deviceId,
-        serial_number: serialNumber,
-        imei_id: imeiId,
-        dealer_id: dealerId,
-        model,
-        category,
-        device_status: "registered",
-      })
-      .returning({
-        device_id: iotDevices.device_id,
-        device_status: iotDevices.device_status,
-      });
-
     // SIM activation hook — no-op stub. When SIMs are iTarang-managed, wire
     // this up to the SIM provider; otherwise keep it as an audit-log marker.
     // (Audit log integration is a follow-up unit; deferred per non_functional.)
-
+    const result = await registerIotDevice(parsed.data);
     return NextResponse.json({
-      deviceId: inserted.device_id,
-      status: inserted.device_status ?? "registered",
+      deviceId: result.deviceId,
+      status: result.status,
     });
   } catch (e) {
-    // Unique-constraint race — another concurrent call raced us. Re-read and
-    // return the winning row (still idempotent from the caller's perspective).
     const msg = e instanceof Error ? e.message : String(e);
-    if (/duplicate key|unique constraint/i.test(msg)) {
-      const existing = await db
-        .select({
-          device_id: iotDevices.device_id,
-          device_status: iotDevices.device_status,
-        })
-        .from(iotDevices)
-        .where(
-          or(
-            eq(iotDevices.serial_number, serialNumber),
-            eq(iotDevices.imei_id, imeiId),
-          ),
-        )
-        .limit(1);
-      if (existing.length > 0) {
-        return NextResponse.json({
-          deviceId: existing[0].device_id,
-          status: existing[0].device_status ?? "registered",
-        });
-      }
-    }
     return NextResponse.json(
       { ok: false, message: "Failed to register device", error: msg },
       { status: 500 },

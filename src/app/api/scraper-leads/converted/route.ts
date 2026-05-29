@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
-import { desc, ilike, or, sql } from "drizzle-orm";
+import { and, desc, ilike, or, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(req: NextRequest) {
@@ -12,13 +12,34 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get("search")?.trim() ?? "";
     const offset = (page - 1) * limit;
 
-    const where = search
+    // Filter is "the last entry in follow_up_history has analysis.intent_score
+    // >= 75". This MUST run in SQL — the previous implementation filtered
+    // after pagination, so if a converted lead wasn't in the first page of
+    // newest leads it disappeared from the UI even though the data existed.
+    // We use jsonb_array_length to skip empty histories cheaply, then read
+    // the last element via the negative index supported by postgres jsonb.
+    const convertedFilter = sql`
+      ${dealerLeads.follow_up_history} IS NOT NULL
+      AND jsonb_array_length(${dealerLeads.follow_up_history}) > 0
+      AND COALESCE(
+        ((${dealerLeads.follow_up_history} ->
+          (jsonb_array_length(${dealerLeads.follow_up_history}) - 1))
+          -> 'analysis' ->> 'intent_score')::int,
+        0
+      ) >= 75
+    `;
+
+    const searchFilter = search
       ? or(
           ilike(dealerLeads.shop_name, `%${search}%`),
           ilike(dealerLeads.phone, `%${search}%`),
           ilike(dealerLeads.location, `%${search}%`),
         )
       : undefined;
+
+    const where = searchFilter
+      ? and(convertedFilter, searchFilter)
+      : convertedFilter;
 
     const [rows, countResult] = await Promise.all([
       db
@@ -35,20 +56,10 @@ export async function GET(req: NextRequest) {
         .where(where),
     ]);
 
-    const filteredLeads = rows.filter((lead: any) => {
-      const history = lead.follow_up_history || [];
-
-      if (!history.length) return false;
-
-      const lastAttempt = history[history.length - 1];
-
-      return lastAttempt?.analysis?.intent_score >= 80;
-    });
-
     return NextResponse.json({
       success: true,
-      leads: filteredLeads,
-      total: filteredLeads.length,
+      leads: rows,
+      total: Number(countResult[0].count),
     });
   } catch (err: any) {
     return NextResponse.json(

@@ -19,6 +19,14 @@ export interface CsvTemplate {
   // are emitted as ="YYYY-MM-DD" text formulas so Excel doesn't reformat them
   // when opening the CSV. Stripped on parse via unwrapCsvCell().
   dateColumnIndexes: number[];
+  // Column indexes (0-based) of plain integer fields (e.g. quantities, star
+  // rating). Emitted with an explicit "0" number format.
+  integerColumnIndexes: number[];
+  // Column indexes (0-based) locked to Text format ("@"). Use for numeric
+  // count fields Excel keeps mis-coercing to a date (e.g. oem_warranty_months
+  // — typing 6 became 1/6/1900). Text is the only format Excel never
+  // date-coerces; the upload validation runs the value through z.coerce.number.
+  textColumnIndexes: number[];
 }
 
 const BATTERY_HEADERS = [
@@ -48,11 +56,15 @@ const CHARGER_HEADERS = [
   "serial_number",
   "category",
   "invoice_number",
-  "invoice_date",
+  "sold_date",
   "invoice_value",
   "hsn_code",
   "gst_percent",
   "supplier_name",
+  "oem_warranty_date",
+  "oem_warranty_months",
+  "oem_warranty_clauses",
+  "batch_reference",
   "physical_condition",
   "warehouse_location",
 ];
@@ -62,6 +74,7 @@ const PARAPHERNALIA_HEADERS = [
   "category",
   "quantity",
   "unit_cost",
+  "gst_percent",
   "invoice_number",
   "invoice_date",
   "supplier",
@@ -73,7 +86,7 @@ const PARAPHERNALIA_HEADERS = [
 // stay in lockstep when headers move.
 export const DATE_FIELDS_BY_TYPE: Record<AssetType, string[]> = {
   battery: ["sold_date", "oem_warranty_date"],
-  charger: ["invoice_date"],
+  charger: ["sold_date", "oem_warranty_date"],
   paraphernalia: ["invoice_date"],
 };
 
@@ -85,6 +98,8 @@ export const CSV_TEMPLATES: Record<AssetType, CsvTemplate> = {
     headers: BATTERY_HEADERS,
     samples: [],
     dateColumnIndexes: [8, 13], // sold_date, oem_warranty_date
+    integerColumnIndexes: [6], // star_rating
+    textColumnIndexes: [14], // oem_warranty_months
   },
   charger: {
     type: "charger",
@@ -92,7 +107,9 @@ export const CSV_TEMPLATES: Record<AssetType, CsvTemplate> = {
       "Serialized charger upload template. model_id must exist in Product Master (active). output voltage/current and compatible battery models are auto-filled from the master.",
     headers: CHARGER_HEADERS,
     samples: [],
-    dateColumnIndexes: [4], // invoice_date
+    dateColumnIndexes: [4, 9], // sold_date, oem_warranty_date
+    integerColumnIndexes: [], // (none)
+    textColumnIndexes: [10], // oem_warranty_months
   },
   paraphernalia: {
     type: "paraphernalia",
@@ -100,7 +117,9 @@ export const CSV_TEMPLATES: Record<AssetType, CsvTemplate> = {
       "Quantity-tracked paraphernalia template. item_type_code must exist in Product Master (active). compatible categories are auto-filled from the master.",
     headers: PARAPHERNALIA_HEADERS,
     samples: [],
-    dateColumnIndexes: [5], // invoice_date
+    dateColumnIndexes: [6], // invoice_date
+    integerColumnIndexes: [2], // quantity
+    textColumnIndexes: [], // (none)
   },
 };
 

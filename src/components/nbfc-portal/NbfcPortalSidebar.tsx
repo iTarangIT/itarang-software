@@ -7,10 +7,15 @@
  * surface reads as the same product as the admin surface. The navy
  * background, sky accent, ALL CAPS section labels, and 13px nav typography
  * all carry over via the shared `.sidebar-shell` and friends.
+ *
+ * Renders twice:
+ *  - Desktop (≥ md): a fixed 256px sidebar.
+ *  - Mobile (< md): a slide-in drawer with backdrop, driven by `mobileOpen`.
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Briefcase,
   ChartLine,
   ClipboardList,
   Cog,
@@ -18,6 +23,7 @@ import {
   Layers,
   Search,
   Siren,
+  X,
 } from "lucide-react";
 
 const NAV_ITEMS: Array<{
@@ -26,6 +32,15 @@ const NAV_ITEMS: Array<{
   label: string;
   icon: React.ComponentType<{ className?: string }>;
 }> = [
+  // Addendum V0.1 §7.1 — Acquire is the pre-disbursal origination workspace.
+  // Sits above Monitor (Portfolio Overview) since it is the primary surface
+  // for an NBFC user under the addendum's competing-NBFC routing model.
+  {
+    id: "acquire",
+    href: "/nbfc/acquire",
+    label: "Acquire",
+    icon: Briefcase,
+  },
   {
     id: "portfolio",
     href: "/nbfc/portfolio",
@@ -73,19 +88,22 @@ const NAV_ITEMS: Array<{
 const inr = (n: number) =>
   new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(n);
 
-export default function NbfcPortalSidebar({
+/** Shared inner content rendered by both the desktop sidebar and mobile drawer. */
+function SidebarBody({
   tenantName,
   activeLoans,
   aumInr,
+  pathname,
+  onNavigate,
 }: {
   tenantName: string;
   activeLoans: number;
   aumInr: number | null;
+  pathname: string;
+  onNavigate?: () => void;
 }) {
-  const pathname = usePathname() ?? "";
-
   return (
-    <div className="sidebar-shell w-64 h-screen flex-col fixed left-0 top-0 z-10 hidden md:flex">
+    <>
       <div className="px-5 h-[68px] flex items-center border-b border-white/[0.07]">
         <img
           src="/itarang-logo-white.png"
@@ -124,6 +142,7 @@ export default function NbfcPortalSidebar({
               <Link
                 key={item.id}
                 href={item.href}
+                onClick={onNavigate}
                 data-testid={`nbfc-portal-nav-${item.id}`}
                 className={
                   isActive ? "sidebar-nav-item-active" : "sidebar-nav-item"
@@ -141,6 +160,77 @@ export default function NbfcPortalSidebar({
         RBI Digital Lending Directions 2025 — every action you take here is
         written to the immutable audit log.
       </div>
-    </div>
+    </>
+  );
+}
+
+export default function NbfcPortalSidebar({
+  tenantName,
+  activeLoans,
+  aumInr,
+  mobileOpen = false,
+  onClose,
+}: {
+  tenantName: string;
+  activeLoans: number;
+  aumInr: number | null;
+  mobileOpen?: boolean;
+  onClose?: () => void;
+}) {
+  const pathname = usePathname() ?? "";
+
+  return (
+    <>
+      {/* Desktop sidebar — fixed, always visible from md up. */}
+      <aside className="sidebar-shell w-64 h-screen flex-col fixed left-0 top-0 z-10 hidden md:flex">
+        <SidebarBody
+          tenantName={tenantName}
+          activeLoans={activeLoans}
+          aumInr={aumInr}
+          pathname={pathname}
+        />
+      </aside>
+
+      {/* Mobile drawer — slide-in overlay below md. */}
+      <div
+        className={`md:hidden fixed inset-0 z-50 ${
+          mobileOpen ? "" : "pointer-events-none"
+        }`}
+        aria-hidden={!mobileOpen}
+      >
+        {/* Backdrop */}
+        <div
+          onClick={onClose}
+          className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${
+            mobileOpen ? "opacity-100" : "opacity-0"
+          }`}
+        />
+        {/* Panel */}
+        <aside
+          role="dialog"
+          aria-modal="true"
+          aria-label="NBFC portal navigation"
+          className={`sidebar-shell absolute left-0 top-0 h-full w-72 max-w-[85vw] flex flex-col transition-transform duration-200 ${
+            mobileOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
+        >
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close navigation"
+            className="absolute right-3 top-4 z-10 p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <SidebarBody
+            tenantName={tenantName}
+            activeLoans={activeLoans}
+            aumInr={aumInr}
+            pathname={pathname}
+            onNavigate={onClose}
+          />
+        </aside>
+      </div>
+    </>
   );
 }

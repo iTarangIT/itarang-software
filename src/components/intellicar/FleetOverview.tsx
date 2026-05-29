@@ -1,8 +1,11 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Battery, Activity, AlertTriangle, Wifi, WifiOff, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+const PAGE_SIZE = 50;
 
 interface KPI {
     label: string;
@@ -11,28 +14,41 @@ interface KPI {
     color: string;
 }
 
+interface FleetEnvelope<T> {
+    data: T;
+    degraded?: boolean;
+    reason?: string;
+}
+
 export function FleetOverview() {
-    const { data, isLoading, error } = useQuery({
+    const { data: envelope, isLoading, error } = useQuery<FleetEnvelope<unknown>>({
         queryKey: ['intellicar-fleet-dashboard'],
         queryFn: async () => {
             const res = await fetch('/api/telemetry/fleet/dashboard');
             if (!res.ok) throw new Error('Failed to fetch fleet data');
             const json = await res.json();
-            return json.data;
+            return { data: json.data, degraded: json.degraded, reason: json.reason };
         },
         refetchInterval: 60000,
     });
 
-    const { data: mapData } = useQuery({
+    const { data: mapEnvelope } = useQuery<FleetEnvelope<unknown[]>>({
         queryKey: ['intellicar-fleet-map'],
         queryFn: async () => {
             const res = await fetch('/api/telemetry/fleet/map');
             if (!res.ok) throw new Error('Failed to fetch map data');
             const json = await res.json();
-            return json.data;
+            return { data: json.data, degraded: json.degraded, reason: json.reason };
         },
         refetchInterval: 30000,
     });
+
+    const data = envelope?.data as { kpis?: Record<string, number> } | undefined;
+    const mapData = mapEnvelope?.data;
+    const degraded = Boolean(envelope?.degraded || mapEnvelope?.degraded);
+    const degradedReason = envelope?.reason ?? mapEnvelope?.reason ?? '';
+
+    const [page, setPage] = useState(1);
 
     if (isLoading) {
         return (
@@ -46,7 +62,7 @@ export function FleetOverview() {
         return (
             <div className="p-6 bg-red-50 rounded-xl text-center">
                 <AlertTriangle className="w-8 h-8 text-red-500 mx-auto mb-2" />
-                <p className="text-sm text-red-700">Failed to load fleet data. The telemetry tables may not be configured yet.</p>
+                <p className="text-sm text-red-700">Failed to load fleet data. Check the server logs for the underlying error.</p>
             </div>
         );
     }
@@ -61,9 +77,21 @@ export function FleetOverview() {
     ];
 
     const devices = Array.isArray(mapData) ? mapData : [];
+    const totalPages = Math.max(1, Math.ceil(devices.length / PAGE_SIZE));
+    const currentPage = Math.min(page, totalPages);
+    const pageDevices = devices.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+    const rangeStart = devices.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+    const rangeEnd = Math.min(currentPage * PAGE_SIZE, devices.length);
 
     return (
         <div className="space-y-6">
+            {degraded ? (
+                <div className="flex items-start gap-2 p-3 rounded-lg border border-amber-200 bg-amber-50 text-amber-900 text-sm">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 flex-none text-amber-600" />
+                    <p>{degradedReason || 'IoT VPS unreachable — fleet KPIs show zeros until the tunnel is up.'}</p>
+                </div>
+            ) : null}
+
             {/* KPI Cards */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 {kpiCards.map((kpi) => (
@@ -101,7 +129,7 @@ export function FleetOverview() {
                                     <td colSpan={6} className="px-4 py-8 text-center text-gray-400">No devices found</td>
                                 </tr>
                             ) : (
-                                devices.slice(0, 20).map((d: Record<string, unknown>, i: number) => (
+                                pageDevices.map((d: Record<string, unknown>, i: number) => (
                                     <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/50">
                                         <td className="px-4 py-3 font-medium text-gray-900">{String(d.device_id || '-')}</td>
                                         <td className="px-4 py-3 text-gray-600">{String(d.vehicle_number || '-')}</td>
@@ -127,6 +155,34 @@ export function FleetOverview() {
                         </tbody>
                     </table>
                 </div>
+                {devices.length > PAGE_SIZE && (
+                    <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
+                        <span>
+                            Showing {rangeStart}&ndash;{rangeEnd} of {devices.length}
+                        </span>
+                        <div className="flex items-center gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                                disabled={currentPage === 1}
+                                className="px-3 py-1 rounded-md border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                Prev
+                            </button>
+                            <span className="text-gray-600">
+                                Page {currentPage} of {totalPages}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                                disabled={currentPage === totalPages}
+                                className="px-3 py-1 rounded-md border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                Next
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Dealer Performance */}

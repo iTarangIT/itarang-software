@@ -15,6 +15,13 @@ const CLIENT_SECRET = process.env.DECENTRO_CLIENT_SECRET!;
 const MODULE_SECRET_KYC = process.env.DECENTRO_MODULE_SECRET_KYC;
 const MODULE_SECRET_BANKING = process.env.DECENTRO_MODULE_SECRET_BANKING;
 const MODULE_SECRET_CREDIT = process.env.DECENTRO_MODULE_SECRET_CREDIT;
+// Forensics module (face_match, video_liveness — /v2/kyc/forensics/*) lives on
+// a separate Decentro module from KYC OCR. Some tiers require an explicit
+// module_secret for it; others (e.g. the sandbox tier face_match is wired
+// against today) accept the call with no module_secret. Set this env var only
+// if Decentro tells you a Forensics-scoped secret is needed — otherwise leave
+// it unset so the videoLiveness() call mirrors faceMatch().
+const MODULE_SECRET_FORENSICS = process.env.DECENTRO_MODULE_SECRET_FORENSICS;
 const PROVIDER_SECRET = process.env.DECENTRO_PROVIDER_SECRET;
 
 function genRefId(): string {
@@ -219,6 +226,215 @@ export async function faceMatch(image1: Blob, image2: Blob) {
         body: form,
     });
     return res.json();
+}
+
+// ─── Video Liveness (Farsight Face Forensics) ───────────────────────────────
+// POST /v2/kyc/forensics/video_liveness — passive liveness check on a recorded
+// short selfie video. Returns { status: SUCCESS|FAILURE, confidence: 0.0-1.0 }.
+// Auth: client_id + client_secret + module_secret (KYC tier).
+
+export interface VideoLivenessResult {
+    decentroTxnId?: string;
+    status?: string;
+    responseStatus?: string;
+    responseCode?: string;
+    message?: string;
+    data?: { status?: string; confidence?: string | number };
+    responseKey?: string;
+}
+
+export async function videoLiveness(
+    video: Blob,
+    consentPurpose: string = 'Customer video liveness for loan KYC',
+    filename: string = 'liveness.webm',
+): Promise<VideoLivenessResult> {
+    const form = new FormData();
+    form.append('reference_id', genRefId());
+    form.append('consent', 'true');
+    form.append('consent_purpose', consentPurpose);
+    form.append('video', video, filename);
+
+    // Forensics endpoints (face_match + video_liveness) authenticate with
+    // client_id + client_secret only on our tier — same as faceMatch() above.
+    // DO NOT fall back to MODULE_SECRET_KYC: that secret is scoped to the
+    // KYC OCR module, and sending it here makes Decentro reply with
+    // "Authentication failed for accessing the module".
+    // Only attach a module_secret if MODULE_SECRET_FORENSICS is explicitly
+    // configured (set this env var if Decentro tells you the Forensics
+    // module requires its own secret on your tier).
+    const headers: Record<string, string> = {
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+    };
+    if (isRealSecret(MODULE_SECRET_FORENSICS)) {
+        headers['module_secret'] = MODULE_SECRET_FORENSICS!;
+    }
+
+    const url = `${BASE_URL}/v2/kyc/forensics/video_liveness`;
+    console.log(
+        `[Decentro VideoLiveness] POST ${url} size=${video.size}B file=${filename} module_secret=${
+            isRealSecret(MODULE_SECRET_FORENSICS) ? 'forensics' : 'none'
+        }`,
+    );
+
+    const res = await fetch(url, { method: 'POST', headers, body: form });
+    const json = await res.json();
+    console.log(
+        `[Decentro VideoLiveness] Response status=${res.status}:`,
+        JSON.stringify(json).slice(0, 1000),
+    );
+    return json;
+}
+
+// ─── Active Video Liveness (Farsight) ───────────────────────────────────────
+// Two-step Decentro flow:
+//   1. POST /v2/kyc/forensics/active_video_liveness/initiate
+//      → returns videoLivenessUrl + decentroTxnId
+//   2. POST /v2/kyc/forensics/active_video_liveness/:decentroTxnId
+//      → returns videoFaceMatchResults, audioMatchResults, staticRisk,
+//        prerecordedRisk, liveliness, geoLocation
+// Auth: client_id + client_secret only on our tier — Forensics module.
+// Set DECENTRO_MODULE_SECRET_FORENSICS only if Decentro tells you the
+// Forensics module requires its own secret on your tier.
+
+function forensicsHeaders(): Record<string, string> {
+    const h: Record<string, string> = {
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+        'Content-Type': 'application/json',
+        'accept': 'application/json',
+    };
+    if (isRealSecret(MODULE_SECRET_FORENSICS)) {
+        h['module_secret'] = MODULE_SECRET_FORENSICS!;
+    }
+    return h;
+}
+
+export interface ActiveLivenessInitiateParams {
+    reference_id: string;
+    redirect_url: string;
+    callback_url: string;
+    face_image_urls?: string[];
+    face_image_base64s?: string[];
+    consent_purpose?: string;
+}
+
+export interface ActiveLivenessInitiateResult {
+    decentroTxnId?: string;
+    status?: string;
+    responseStatus?: string;
+    responseCode?: string;
+    videoLivenessUrl?: string;
+    message?: string;
+    [k: string]: unknown;
+}
+
+export async function activeVideoLivenessInitiate(
+    p: ActiveLivenessInitiateParams,
+): Promise<ActiveLivenessInitiateResult> {
+    const totalImages =
+        (p.face_image_urls?.length || 0) + (p.face_image_base64s?.length || 0);
+    if (totalImages === 0) {
+        return {
+            status: 'FAILURE',
+            responseCode: 'CLIENT_ERROR',
+            message: 'At least one face_image_url or face_image_base64 is required',
+        };
+    }
+    if (totalImages > 4) {
+        return {
+            status: 'FAILURE',
+            responseCode: 'CLIENT_ERROR',
+            message: 'Total face images (urls + base64s) must not exceed 4',
+        };
+    }
+
+    const body: Record<string, unknown> = {
+        consent: true,
+        purpose: p.consent_purpose || 'Identity Verification',
+        reference_id: p.reference_id,
+        redirect_url: p.redirect_url,
+        callback_url: p.callback_url,
+    };
+    if (p.face_image_urls && p.face_image_urls.length > 0) {
+        body.face_image_urls = p.face_image_urls;
+    }
+    if (p.face_image_base64s && p.face_image_base64s.length > 0) {
+        body.face_image_base64s = p.face_image_base64s;
+    }
+
+    const url = `${BASE_URL}/v2/kyc/forensics/active_video_liveness/initiate`;
+    console.log(
+        `[Decentro ActiveLiveness Initiate] POST ${url} ref=${p.reference_id} urls=${p.face_image_urls?.length || 0} base64s=${p.face_image_base64s?.length || 0} module_secret=${
+            isRealSecret(MODULE_SECRET_FORENSICS) ? 'forensics' : 'none'
+        }`,
+    );
+
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: forensicsHeaders(),
+        body: JSON.stringify(body),
+    });
+    const json = await res.json();
+    console.log(
+        `[Decentro ActiveLiveness Initiate] Response status=${res.status}:`,
+        JSON.stringify(json).slice(0, 1200),
+    );
+    return json;
+}
+
+export interface ActiveLivenessResultData {
+    videoFaceMatchResults?: Array<{
+        originalImage?: string;
+        results?: { matchScore?: number; covariance?: number };
+        finalMatchImage?: string;
+    }>;
+    audioMatchResults?: { matchScore?: number };
+    staticRisk?: string | boolean;
+    prerecordedRisk?: string | boolean;
+    liveliness?: string;
+    geoLocation?: { latitude?: string; longitude?: string };
+}
+
+export interface ActiveLivenessResult {
+    decentroTxnId?: string;
+    status?: string;
+    responseStatus?: string;
+    responseCode?: string;
+    message?: string;
+    data?: ActiveLivenessResultData;
+    [k: string]: unknown;
+}
+
+export async function activeVideoLivenessResult(
+    decentroTxnId: string,
+    reference_id: string,
+    consent_purpose: string = 'Identity Verification Results',
+): Promise<ActiveLivenessResult> {
+    const body = {
+        consent: true,
+        purpose: consent_purpose,
+        reference_id,
+    };
+
+    const url = `${BASE_URL}/v2/kyc/forensics/active_video_liveness/${encodeURIComponent(decentroTxnId)}`;
+    console.log(
+        `[Decentro ActiveLiveness Result] POST ${url} ref=${reference_id} module_secret=${
+            isRealSecret(MODULE_SECRET_FORENSICS) ? 'forensics' : 'none'
+        }`,
+    );
+
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: forensicsHeaders(),
+        body: JSON.stringify(body),
+    });
+    const json = await res.json();
+    console.log(
+        `[Decentro ActiveLiveness Result] Response status=${res.status}:`,
+        JSON.stringify(json).slice(0, 1500),
+    );
+    return json;
 }
 
 // ─── Document Classification ──────────────────────────────────────────────────

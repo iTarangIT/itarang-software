@@ -34,6 +34,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+dev.log
+
+# Microsoft Office lock files — Excel/Word/PowerPoint write ~$prefixed
+# placeholders while a file is open. On Windows these are file-locked and
+# `git add .` fails with "Permission denied" when one is around.
+~$*
 
 # env files (can opt-in for committing if needed)
 .env*

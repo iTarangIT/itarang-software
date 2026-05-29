@@ -1035,6 +1035,14 @@ export default function DealerReviewPage() {
             <StatusBadge value={data.onboardingStatus} />
             <StatusBadge value={data.reviewStatus} />
             {data.financeEnabled ? <AgreementBadge value={agreementStatusForUi} /> : null}
+            <a
+              href={`/admin/dealer-verification/${dealerId}/nbfcs`}
+              className="inline-flex items-center gap-1.5 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+              title="NBFCs explicitly blocked for this dealer. By default, all geo-matched NBFCs auto-enroll into Section G."
+            >
+              <Landmark className="h-3.5 w-3.5" />
+              Excluded NBFCs
+            </a>
           </div>
         </div>
 

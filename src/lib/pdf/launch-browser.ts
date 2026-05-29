@@ -58,18 +58,66 @@ async function tryLaunchServerless() {
   });
 }
 
-async function launchBrowserOnce() {
-  const isServerless =
-    !!process.env.VERCEL ||
-    !!process.env.AWS_LAMBDA_FUNCTION_NAME ||
-    process.env.USE_SPARTICUZ_CHROMIUM === "1";
+// VPS / self-hosted path: use a system-installed Chromium with puppeteer-core.
+// Set PUPPETEER_EXECUTABLE_PATH to the absolute path of the chromium binary
+// (e.g. /usr/bin/chromium-browser or /usr/bin/google-chrome-stable).
+async function tryLaunchSystemChromium(executablePath: string) {
+  const { default: puppeteerCore } = await import("puppeteer-core");
+  return puppeteerCore.launch({
+    executablePath,
+    headless: true,
+    args: FAST_FLAGS,
+  });
+}
 
-  if (isServerless) {
-    return await tryLaunchServerless();
-  }
-
+async function tryLaunchLocal() {
   const { default: puppeteer } = await import("puppeteer");
   return puppeteer.launch({ headless: true, args: FAST_FLAGS });
+}
+
+// Self-healing launch order. We don't return on the first *configured* path —
+// we return on the first path that actually launches. A single misconfigured
+// env var or a missing binary then degrades to the next working path instead
+// of hard-failing the whole PDF/agreement flow.
+//
+//   1. System Chrome  — PUPPETEER_EXECUTABLE_PATH (the VPS path). Skipped if the
+//      env var is unset or points at a file that doesn't exist on disk.
+//   2. @sparticuz     — self-contained Chromium bundled in node_modules. The
+//      deploy copies node_modules/@sparticuz/chromium (incl. bin/) into the
+//      standalone output, since Next.js file-tracing drops the binary dir.
+//   3. Local puppeteer — dev fallback (full puppeteer, system-downloaded Chrome).
+async function launchBrowserOnce() {
+  const errors: string[] = [];
+
+  const systemChromePath = process.env.PUPPETEER_EXECUTABLE_PATH?.trim();
+  if (systemChromePath) {
+    const { existsSync } = await import("node:fs");
+    if (existsSync(systemChromePath)) {
+      try {
+        return await tryLaunchSystemChromium(systemChromePath);
+      } catch (err) {
+        errors.push(`system Chrome (${systemChromePath}): ${(err as Error).message}`);
+      }
+    } else {
+      errors.push(`system Chrome: PUPPETEER_EXECUTABLE_PATH "${systemChromePath}" does not exist`);
+    }
+  }
+
+  try {
+    return await tryLaunchServerless();
+  } catch (err) {
+    errors.push(`@sparticuz/chromium: ${(err as Error).message}`);
+  }
+
+  try {
+    return await tryLaunchLocal();
+  } catch (err) {
+    errors.push(`local puppeteer: ${(err as Error).message}`);
+  }
+
+  throw new Error(
+    `launchBrowser: every Chromium launch path failed:\n - ${errors.join("\n - ")}`,
+  );
 }
 
 export async function launchBrowser() {

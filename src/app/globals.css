@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+/* iTarang is a light-only theme (see brand-system comment below). Some NBFC
+ * portal pages were authored with `dark:bg-slate-900` / `dark:text-slate-*`
+ * variants that flip the UI to a near-unreadable dark surface whenever the
+ * viewer's OS reports prefers-color-scheme: dark. We redirect the `dark`
+ * variant to a selector that never matches so every `dark:*` class becomes a
+ * no-op portal-wide. Cheaper and safer than scrubbing 60+ call sites. */
+@custom-variant dark (&:where(.__itarang_dark_disabled *));
+
 /* ==========================================================================
  * iTarang Brand System — BRD §6.B
  * Single source of truth for color, typography, and component primitives.
@@ -70,6 +78,14 @@
   --gradient-dark:    linear-gradient(145deg, #02314e 0%, #0a3d5c 100%);
   --brand-sky-soft:   rgba(19, 143, 198, 0.10);
   --brand-sky-glow:   rgba(19, 143, 198, 0.30);
+
+  /* Font family vars — previously injected by next/font/google, now defined
+   * statically because the sandbox VPS can't reach fonts.googleapis.com at
+   * build time. layout.tsx loads the Google Fonts stylesheet via <link>,
+   * the browser fetches the woff2 files, and these vars resolve to the
+   * loaded families (with system-font fallbacks if loading fails). */
+  --font-dm-sans: "DM Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-dm-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 @layer base {
