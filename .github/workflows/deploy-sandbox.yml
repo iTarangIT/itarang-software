@@ -670,10 +670,14 @@ jobs:
             HTTP=000
             for i in $(seq 1 180); do
               sleep 1
-              # Don't `|| echo 000` here: curl already writes "000" via -w on
-              # connection failure, and the `|| echo` would concatenate to
-              # "000000" which is unreadable in logs. Use a separate guard.
-              HTTP=$(curl -s -o /dev/null -m 5 -w "%{http_code}" "$HEALTH_URL")
+              # `|| true` is required: under `set -e`, an assignment from a
+              # failing command substitution aborts the whole script — so the
+              # first time curl exits non-zero (timeout/refused while the app
+              # is still booting) the retry loop would die instead of retrying.
+              # We use `|| true` rather than `|| echo 000` because curl already
+              # writes "000" via -w on connection failure; `|| echo` would
+              # concatenate to "000000". The guard below covers the empty case.
+              HTTP=$(curl -s -o /dev/null -m 5 -w "%{http_code}" "$HEALTH_URL" || true)
               [ -z "$HTTP" ] && HTTP=000
               if [ $((i % 10)) -eq 0 ] || [ "$HTTP" = "200" ]; then
                 echo "  t=${i}s http=$HTTP"
