@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, X, AlertCircle, Scan, Info, ChevronRight, ChevronDown, Loader2, ShieldCheck, UserPlus, ArrowRight } from 'lucide-react';
+import { State, City } from 'country-state-city';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { DatePicker } from '@/components/ui/date-picker';
 import {
@@ -15,6 +16,10 @@ import {
     INTEREST_LEVELS, PAYMENT_METHODS, VEHICLE_OWNERSHIP_OPTIONS,
     VEHICLE_CATEGORIES, isFinanceMethod, isCashMethod,
 } from '@/components/dealer-portal/lead-wizard/constants';
+import ProductSelector, {
+    EMPTY_PRODUCT_SELECTION,
+    type ProductSelectorValue,
+} from '@/components/dealer-portal/lead-wizard/ProductSelector';
 
 const emptyFormData = {
     full_name: '',
@@ -24,6 +29,11 @@ const emptyFormData = {
     current_address: '',
     permanent_address: '',
     is_current_same: false,
+    // Structured location — feeds the BRE's geo match at Section G.
+    // Sourced from `country-state-city` (same package as NBFC loan-product
+    // active_locations) so string comparison stays exact.
+    state: '',
+    city: '',
     product_category_id: '',
     product_type_id: '',
     primary_product_id: '',
@@ -37,6 +47,12 @@ const emptyFormData = {
     asset_model: '',
     asset_model_label: '',
     is_vehicle_category: false,
+    asset_type: '',
+    product_name: '',
+    // E-130 / Addendum §3.2, §3.3 — required for finance leads only.
+    resident_status: '',           // 'owned' | 'rented'
+    has_health_insurance: null,    // boolean | null (null = unanswered)
+    has_life_insurance: null,      // boolean | null
 };
 
 function NewLeadWizardContent() {
@@ -59,14 +75,11 @@ function NewLeadWizardContent() {
     const [isModified, setIsModified] = useState(false);
 
     const [formData, setFormData] = useState<any>(emptyFormData);
-    const [additionalProducts, setAdditionalProducts] = useState<{ category_id: string; product_id: string; category_name: string }[]>([]);
-    const [outOfStockProducts, setOutOfStockProducts] = useState<string[]>([]);
+    const [additionalProducts, setAdditionalProducts] = useState<ProductSelectorValue[]>([]);
 
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [apiError, setApiError] = useState<string | null>(null);
     const [duplicateMatch, setDuplicateMatch] = useState<any>(null);
-    const [categories, setCategories] = useState<any[]>([]);
-    const [products, setProducts] = useState<any[]>([]);
     const [showOCR, setShowOCR] = useState(false);
     const [showHelp, setShowHelp] = useState(false);
     const [showConfirm, setShowConfirm] = useState(false);
@@ -74,6 +87,14 @@ function NewLeadWizardContent() {
     const [hasDraft, setHasDraft] = useState(false);
 
     // ─── Draft Init ─────────────────────────────────────────────────────────
+
+    // The lead-create API uses two error shapes:
+    //   errorResponse → { error: { message } }
+    //   gateError     → { error: '<CODE>', message }   (e.g. DEALER_NOT_ACTIVE)
+    // Read both so structured gate errors surface their human message instead
+    // of falling back to a generic "retry" string.
+    const readApiError = (r: any, fallback: string) =>
+        r?.error?.message || r?.message || (typeof r?.error === 'string' ? r.error : null) || fallback;
 
     const initDraft = async (fresh = false) => {
         setInitLoading(true);
@@ -101,7 +122,7 @@ function NewLeadWizardContent() {
                     }
                 }
             } else {
-                setApiError(result.error?.message || 'Initialization failed. Please retry.');
+                setApiError(readApiError(result, 'Initialization failed. Please retry.'));
             }
         } catch {
             setApiError('Connection lost. Please try again.');
@@ -131,9 +152,10 @@ function NewLeadWizardContent() {
                 setLeadId(result.data.leadId);
                 setReferenceId(result.data.referenceId);
                 setFormData((prev: any) => ({ ...prev, ...result.data.formData }));
+                setAdditionalProducts(result.data.additional_products ?? []);
                 setLastSaved('Loaded for editing');
             } else {
-                setApiError(result.error?.message || 'Could not load lead.');
+                setApiError(readApiError(result, 'Could not load lead.'));
             }
         } catch {
             setApiError('Could not load lead.');
@@ -163,34 +185,8 @@ function NewLeadWizardContent() {
         }
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // ─── Categories & Products ──────────────────────────────────────────────
-
-    useEffect(() => {
-        fetch('/api/dealer/leads/categories')
-            .then(r => r.json())
-            .then(d => {
-                console.log('[LeadWizard] categories response:', d);
-                if (d.success) setCategories(d.data);
-                else console.error('[LeadWizard] categories fetch failed:', d.error);
-            })
-            .catch(err => console.error('[LeadWizard] categories fetch error:', err));
-    }, []);
-
-    useEffect(() => {
-        if (formData.asset_model) {
-            fetch(`/api/dealer/leads/products?category=${encodeURIComponent(formData.asset_model)}`)
-                .then(r => r.json())
-                .then(d => {
-                    if (d.success) {
-                        setProducts(d.data);
-                        setOutOfStockProducts(d.data.filter((p: any) => p.available_quantity === 0).map((p: any) => p.id));
-                    }
-                });
-        } else {
-            setProducts([]);
-            setOutOfStockProducts([]);
-        }
-    }, [formData.asset_model]);
+    // Categories & products are fetched inside <ProductSelector>, scoped to the
+    // chosen asset kind — see the Product Details card below.
 
     // ─── Field Handlers ─────────────────────────────────────────────────────
 
@@ -270,6 +266,23 @@ function NewLeadWizardContent() {
         if (!formData.current_address || formData.current_address.trim().length < 20) e.current_address = 'Minimum 20 characters required';
         if (formData.permanent_address && formData.permanent_address.trim().length < 20) e.permanent_address = 'Minimum 20 characters required';
 
+        // Addendum §3.2, §3.3 — three new fields required for finance leads.
+        // resident_status drives the BRE's Owned/Rented housing-variant match.
+        if (finFlow) {
+            if (!formData.resident_status) e.resident_status = 'Required for finance cases';
+            if (formData.has_health_insurance === null || formData.has_health_insurance === undefined) {
+                e.has_health_insurance = 'Required for finance cases';
+            }
+            if (formData.has_life_insurance === null || formData.has_life_insurance === undefined) {
+                e.has_life_insurance = 'Required for finance cases';
+            }
+            // Required for the BRE's Section G geo match. Without state/city,
+            // every product with any active_locations passes vacuously (the
+            // matcher treats a null customer attr as a wildcard).
+            if (!formData.state) e.state = 'State required for finance cases';
+            if (!formData.city) e.city = 'City required for finance cases';
+        }
+
         const isVehicle = formData.is_vehicle_category;
         if (isVehicle && formData.vehicle_rc?.trim()) {
             if (!formData.vehicle_ownership) e.vehicle_ownership = 'Required';
@@ -305,7 +318,7 @@ function NewLeadWizardContent() {
                     leadId,
                     commitStep: true,
                     lead_score: leadScoreMap[formData.interest_level] || 30,
-                    additional_products: additionalProducts,
+                    additional_products: additionalProducts.filter(p => p.product_id),
                 })
             });
             const result = await res.json();
@@ -337,7 +350,7 @@ function NewLeadWizardContent() {
                 }
             } else {
                 const details = result.error?.details?.map((d: any) => `${d.path}: ${d.message}`).join(', ');
-                setApiError(details ? `Validation error — ${details}` : (result.error?.message || 'Server Error'));
+                setApiError(details ? `Validation error — ${details}` : readApiError(result, 'Server Error'));
             }
         } catch {
             setApiError('Connection failed. Please retry.');
@@ -596,6 +609,141 @@ function NewLeadWizardContent() {
                                 />
                                 {errors.permanent_address && <p className="text-[10px] text-red-500 font-bold px-1">{errors.permanent_address}</p>}
                             </div>
+
+                            {/* State + City — feeds the BRE's Section G geo match.
+                                Source is `country-state-city` so the string matches
+                                what NBFCs declare on nbfc_loan_products.active_locations. */}
+                            {finFlow && (
+                                <>
+                                    <SelectField
+                                        label="State"
+                                        value={formData.state}
+                                        onChange={(v) => {
+                                            updateField('state', v);
+                                            // Reset city when state changes — city list is state-scoped.
+                                            if (v !== formData.state) updateField('city', '');
+                                        }}
+                                        options={State.getStatesOfCountry('IN').map((s) => ({
+                                            value: s.name,
+                                            label: s.name,
+                                        }))}
+                                        error={errors.state}
+                                        placeholder="Select state"
+                                        required
+                                    />
+                                    <SelectField
+                                        label="City"
+                                        value={formData.city}
+                                        onChange={(v) => updateField('city', v)}
+                                        options={(() => {
+                                            const iso = State.getStatesOfCountry('IN').find(
+                                                (s) => s.name === formData.state,
+                                            )?.isoCode;
+                                            if (!iso) return [];
+                                            const seen = new Set<string>();
+                                            return City.getCitiesOfState('IN', iso)
+                                                .filter((c) => {
+                                                    if (seen.has(c.name)) return false;
+                                                    seen.add(c.name);
+                                                    return true;
+                                                })
+                                                .map((c) => ({ value: c.name, label: c.name }));
+                                        })()}
+                                        error={errors.city}
+                                        placeholder={formData.state ? 'Select city' : 'Pick a state first'}
+                                        required
+                                        disabled={!formData.state}
+                                    />
+                                </>
+                            )}
+
+                            {/* Addendum §3.2, §3.3 — resident status + existing insurance.
+                                Required for finance leads; hidden for cash. Feeds the BRE's
+                                Owned/Rented housing-variant match at Product Selection. */}
+                            {finFlow && (
+                                <>
+                                    <div className="md:col-span-2 space-y-2">
+                                        <label className="text-sm font-bold text-gray-900 px-1 block">
+                                            Resident Status <span className="text-red-500">*</span>
+                                        </label>
+                                        <p className="text-xs text-gray-500 px-1">Does the customer own or rent their current residence?</p>
+                                        <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5 mt-1">
+                                            {[
+                                                { value: 'owned', label: 'Owned' },
+                                                { value: 'rented', label: 'Rented' },
+                                            ].map((opt) => (
+                                                <button
+                                                    key={opt.value}
+                                                    type="button"
+                                                    onClick={() => updateField('resident_status', opt.value)}
+                                                    className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all tracking-tight ${
+                                                        formData.resident_status === opt.value
+                                                            ? 'bg-[#0047AB] text-white shadow-sm'
+                                                            : 'text-gray-500 hover:text-gray-800'
+                                                    }`}
+                                                >
+                                                    {opt.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {errors.resident_status && <p className="text-[10px] text-red-500 font-bold px-1">{errors.resident_status}</p>}
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-gray-900 px-1 block">
+                                            Existing Health Insurance <span className="text-red-500">*</span>
+                                        </label>
+                                        <p className="text-xs text-gray-500 px-1">Does the customer currently hold their own health insurance policy?</p>
+                                        <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5 mt-1">
+                                            {[
+                                                { value: true, label: 'Yes' },
+                                                { value: false, label: 'No' },
+                                            ].map((opt) => (
+                                                <button
+                                                    key={String(opt.value)}
+                                                    type="button"
+                                                    onClick={() => updateField('has_health_insurance', opt.value)}
+                                                    className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all tracking-tight ${
+                                                        formData.has_health_insurance === opt.value
+                                                            ? 'bg-[#0047AB] text-white shadow-sm'
+                                                            : 'text-gray-500 hover:text-gray-800'
+                                                    }`}
+                                                >
+                                                    {opt.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {errors.has_health_insurance && <p className="text-[10px] text-red-500 font-bold px-1">{errors.has_health_insurance}</p>}
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-gray-900 px-1 block">
+                                            Existing Life Insurance <span className="text-red-500">*</span>
+                                        </label>
+                                        <p className="text-xs text-gray-500 px-1">Does the customer currently hold their own life insurance policy?</p>
+                                        <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5 mt-1">
+                                            {[
+                                                { value: true, label: 'Yes' },
+                                                { value: false, label: 'No' },
+                                            ].map((opt) => (
+                                                <button
+                                                    key={String(opt.value)}
+                                                    type="button"
+                                                    onClick={() => updateField('has_life_insurance', opt.value)}
+                                                    className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all tracking-tight ${
+                                                        formData.has_life_insurance === opt.value
+                                                            ? 'bg-[#0047AB] text-white shadow-sm'
+                                                            : 'text-gray-500 hover:text-gray-800'
+                                                    }`}
+                                                >
+                                                    {opt.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {errors.has_life_insurance && <p className="text-[10px] text-red-500 font-bold px-1">{errors.has_life_insurance}</p>}
+                                    </div>
+                                </>
+                            )}
                         </div>
                     </SectionCard>
 
@@ -605,142 +753,62 @@ function NewLeadWizardContent() {
                         <div className="lg:col-span-2">
                             <SectionCard title="Product Details">
                                 <div className="space-y-6">
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-bold text-gray-900 px-1">Product Category <span className="text-red-500">*</span></label>
-                                        <div className="relative">
-                                            <select
-                                                value={formData.asset_model ?? ''}
-                                                onChange={e => {
-                                                    const cat = categories.find((c: any) => c.slug === e.target.value);
-                                                    setFormData((p: any) => ({
-                                                        ...p,
-                                                        asset_model: cat?.slug || e.target.value,
-                                                        asset_model_label: cat?.name || e.target.value,
-                                                        is_vehicle_category: cat?.isVehicleCategory || false,
-                                                        product_category_id: cat?.id || '',
-                                                        primary_product_id: '',
-                                                    }));
-                                                    setIsModified(true);
-                                                }}
-                                                className={`w-full h-11 px-4 pr-10 bg-white border-2 rounded-xl outline-none appearance-none text-sm transition-all ${
-                                                    errors.product_category_id ? 'border-red-400' : 'border-[#EBEBEB] focus:border-[#1D4ED8]'
-                                                } ${!formData.asset_model ? 'text-gray-400' : 'text-gray-900'}`}
-                                            >
-                                                <option value="" disabled={categories.length === 0}>
-                                                    {categories.length === 0
-                                                        ? 'No inventory available — add stock to enable lead creation'
-                                                        : 'Select from Current Inventory'}
-                                                </option>
-                                                {categories.map((c: any) => (
-                                                    <option key={c.id} value={c.slug}>
-                                                        {c.name}
-                                                        {typeof c.available_count === 'number' ? ` (${c.available_count} in stock)` : ''}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                                        </div>
-                                        {errors.product_category_id && <p className="text-[10px] text-red-500 font-bold px-1">{errors.product_category_id}</p>}
-                                    </div>
+                                    {/* Primary product — 3-level cascade: Asset Type → Category → Product. */}
+                                    <ProductSelector
+                                        showSerials
+                                        value={{
+                                            asset_type: formData.asset_type ?? '',
+                                            category_id: formData.product_category_id ?? '',
+                                            category_slug: formData.asset_model ?? '',
+                                            category_name: formData.asset_model_label ?? '',
+                                            is_vehicle_category: !!formData.is_vehicle_category,
+                                            product_id: formData.primary_product_id ?? '',
+                                            product_name: formData.product_name ?? '',
+                                        }}
+                                        onChange={v => {
+                                            setFormData((p) => ({
+                                                ...p,
+                                                asset_type: v.asset_type,
+                                                product_category_id: v.category_id,
+                                                asset_model: v.category_slug,
+                                                asset_model_label: v.category_name,
+                                                is_vehicle_category: v.is_vehicle_category,
+                                                primary_product_id: v.product_id,
+                                                product_name: v.product_name,
+                                            }));
+                                            setErrors(prev => {
+                                                const n = { ...prev };
+                                                delete n.product_category_id;
+                                                delete n.primary_product_id;
+                                                return n;
+                                            });
+                                            setIsModified(true);
+                                        }}
+                                        errors={{ category: errors.product_category_id, product: errors.primary_product_id }}
+                                        onOrderFromOem={() => router.push('/dealer-portal/oem-orders/new')}
+                                    />
 
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-bold text-gray-900 px-1">Product Type</label>
-                                        <div className="relative">
-                                            <select
-                                                value={formData.primary_product_id ?? ''}
-                                                onChange={e => updateField('primary_product_id', e.target.value)}
-                                                className={`w-full h-11 px-4 pr-10 bg-white border-2 rounded-xl outline-none appearance-none text-sm transition-all ${
-                                                    errors.primary_product_id ? 'border-red-400' : 'border-[#EBEBEB] focus:border-[#1D4ED8]'
-                                                } ${!formData.primary_product_id ? 'text-gray-400' : 'text-gray-900'}`}
-                                            >
-                                                <option value="" disabled={products.length === 0}>
-                                                    {products.length === 0
-                                                        ? formData.asset_model
-                                                            ? 'No stock available in this category'
-                                                            : 'Select Product type'
-                                                        : 'Select Product type'}
-                                                </option>
-                                                {products.map((p: any) => (
-                                                    <option key={p.id} value={p.id}>
-                                                        {p.name} — {p.voltage_v}V / {p.capacity_ah}Ah | SKU: {p.sku}{p.warranty_months ? ` | ${p.warranty_months}mo warranty` : ''}{typeof p.available_quantity === 'number' ? ` · ${p.available_quantity} avail.` : ''}{outOfStockProducts.includes(p.id) ? ' (Out of Stock)' : ''}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                                        </div>
-                                        {outOfStockProducts.includes(formData.primary_product_id) && (
-                                            <div className="flex items-center justify-between gap-3 px-3 py-3 bg-amber-50 border border-amber-200 rounded-lg mt-2">
-                                                <div className="flex items-center gap-2">
-                                                    <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                                                    <span className="text-xs font-medium text-amber-700">Product out of stock</span>
-                                                </div>
-                                                <button onClick={() => router.push('/dealer-portal/oem-orders/new')} className="px-3 py-1 text-xs font-bold bg-amber-600 text-white rounded-lg hover:bg-amber-700">Order from OEM</button>
-                                            </div>
-                                        )}
-                                        {(() => {
-                                            const selected = products.find((p: any) => p.id === formData.primary_product_id);
-                                            const serials: any[] = selected?.serials ?? [];
-                                            if (!selected || serials.length === 0) return null;
-                                            const visible = serials.slice(0, 6);
-                                            const extra = serials.length - visible.length;
-                                            return (
-                                                <div className="mt-2 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
-                                                    <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 mb-2">
-                                                        Available serials ({selected.available_quantity})
-                                                    </div>
-                                                    <div className="flex flex-wrap gap-1.5">
-                                                        {visible.map((s: any) => (
-                                                            <span
-                                                                key={s.id}
-                                                                title={s.warehouse_location ? `${s.serial_number || s.id} · ${s.warehouse_location}` : s.serial_number || s.id}
-                                                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border border-emerald-200 text-[11px] font-mono text-emerald-900"
-                                                            >
-                                                                {s.serial_number || s.id}
-                                                                {s.warehouse_location && (
-                                                                    <span className="text-[10px] text-emerald-600/80 font-sans">· {s.warehouse_location}</span>
-                                                                )}
-                                                            </span>
-                                                        ))}
-                                                        {extra > 0 && (
-                                                            <span className="inline-flex items-center px-2 py-1 rounded-lg bg-emerald-100 border border-emerald-200 text-[11px] font-bold text-emerald-800">
-                                                                +{extra} more
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            );
-                                        })()}
-                                        {errors.primary_product_id && <p className="text-[10px] text-red-500 font-bold px-1">{errors.primary_product_id}</p>}
-                                    </div>
-
-                                    {/* Additional products */}
+                                    {/* Additional products — each row is its own independent cascade. */}
                                     {additionalProducts.map((ap, idx) => (
-                                        <div key={idx} className="flex items-end gap-3 bg-gray-50 p-4 rounded-xl border border-gray-100">
-                                            <div className="flex-1">
-                                                <label className="text-xs font-bold text-gray-600 px-1 mb-1 block">Additional Product {idx + 1}</label>
-                                                <select
-                                                    value={ap.product_id}
-                                                    onChange={e => {
-                                                        const updated = [...additionalProducts];
-                                                        updated[idx].product_id = e.target.value;
-                                                        setAdditionalProducts(updated);
-                                                        setIsModified(true);
-                                                    }}
-                                                    className="w-full h-10 px-4 bg-white border-2 border-[#EBEBEB] rounded-xl text-sm outline-none focus:border-[#1D4ED8]"
-                                                >
-                                                    <option value="">Select product</option>
-                                                    {products.map((p: any) => <option key={p.id} value={p.id}>{p.name} — {p.voltage_v}V / {p.capacity_ah}Ah | SKU: {p.sku}</option>)}
-                                                </select>
-                                            </div>
-                                            <button onClick={() => { setAdditionalProducts(prev => prev.filter((_, i) => i !== idx)); setIsModified(true); }} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
-                                                <X className="w-4 h-4" />
-                                            </button>
-                                        </div>
+                                        <ProductSelector
+                                            key={idx}
+                                            label={`Additional Product ${idx + 1}`}
+                                            value={ap}
+                                            onChange={v => {
+                                                setAdditionalProducts(prev => prev.map((row, i) => (i === idx ? v : row)));
+                                                setIsModified(true);
+                                            }}
+                                            onRemove={() => {
+                                                setAdditionalProducts(prev => prev.filter((_, i) => i !== idx));
+                                                setIsModified(true);
+                                            }}
+                                        />
                                     ))}
 
                                     <button
+                                        type="button"
                                         onClick={() => {
-                                            setAdditionalProducts(prev => [...prev, { category_id: formData.product_category_id, product_id: '', category_name: formData.asset_model }]);
+                                            setAdditionalProducts(prev => [...prev, { ...EMPTY_PRODUCT_SELECTION }]);
                                             setIsModified(true);
                                         }}
                                         className="flex items-center gap-2 text-sm font-bold text-[#0047AB] hover:text-[#003580] transition-colors px-1"

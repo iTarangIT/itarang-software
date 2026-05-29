@@ -1,0 +1,86 @@
+---
+title: Product Selection (Step 4) & Coupon Flow
+---
+erDiagram
+    leads ||--o{ product_selections : "lead_id CASCADE"
+    product_categories ||--o{ products : "category_id"
+    product_master_batteries }o..o{ product_master_chargers : "compatible_charger_models[]"
+    product_master_batteries }o..o{ product_master_paraphernalia : "compatible_categories[]"
+    product_selections }o..|| product_master_batteries : "model_number → model_id"
+    product_selections }o..|| product_master_chargers : "charger_serial / model"
+    product_selections }o..o{ product_master_paraphernalia : "paraphernalia.lines[]"
+    coupon_batches ||--o{ coupon_codes : "batch_id"
+    coupon_codes ||--o{ coupon_audit_log : "coupon_id"
+    leads }o..o{ coupon_codes : "leads.coupon_code = coupon_codes.code; reserved_for_lead_id"
+    coupon_audit_log }o..|| leads : "lead_id"
+
+    product_selections {
+        varchar id PK
+        varchar lead_id FK
+        varchar battery_serial
+        varchar charger_serial
+        jsonb paraphernalia
+        decimal final_price
+        varchar payment_mode
+        varchar admin_decision
+    }
+    products {
+        uuid id PK
+        uuid category_id FK
+        text name
+        integer voltage_v
+        integer capacity_ah
+        text sku
+        varchar hsn_code
+    }
+    product_categories {
+        uuid id PK
+        text name
+        text slug
+    }
+    product_master_batteries {
+        uuid id PK
+        varchar model_id UK
+        decimal voltage_v
+        decimal capacity_ah
+        jsonb compatible_charger_models
+        integer warranty_months
+    }
+    product_master_chargers {
+        uuid id PK
+        varchar model_id UK
+        decimal output_voltage_v
+        decimal output_current_a
+        jsonb compatible_battery_models
+    }
+    product_master_paraphernalia {
+        uuid id PK
+        varchar item_type_code UK
+        varchar display_label
+        integer max_qty_per_lead
+    }
+    coupon_batches {
+        varchar id PK
+        varchar name
+        varchar dealer_id
+        varchar prefix
+        integer total_quantity
+        timestamp expiry_date
+    }
+    coupon_codes {
+        varchar id PK
+        varchar code
+        varchar batch_id FK
+        varchar dealer_id
+        boolean is_used
+        varchar used_by_lead_id FK
+        varchar reserved_for_lead_id
+        varchar status
+    }
+    coupon_audit_log {
+        varchar id PK
+        varchar coupon_id FK
+        varchar action
+        varchar lead_id FK
+        uuid performed_by
+    }

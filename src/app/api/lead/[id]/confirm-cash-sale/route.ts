@@ -31,7 +31,9 @@ const ParaLineSchema = z.object({
 
 const BodySchema = z.object({
   batterySerial: z.string().min(1),
-  chargerSerial: z.string().min(1),
+  // Charger is optional — battery-only sales (with or without paraphernalia)
+  // are a valid order. When null/undefined, charger inventory is left alone.
+  chargerSerial: z.string().min(1).nullable().optional(),
   paraphernalia: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
   paraphernaliaLines: z.array(ParaLineSchema).optional(),
   dealerMargin: z.number().min(0),
@@ -54,6 +56,11 @@ const BodySchema = z.object({
   // E-103: was subCategory; renamed to modelNumber to mirror the
   // product_selections.model_number column (Sync Audit G-05).
   modelNumber: z.string().optional(),
+  // E-130 / Addendum V0.1 §5.1 — battery/charger photos apply to cash too
+  // (Sections B/C are shared). Section G fields are finance-only and ignored
+  // here, but accepted for forwards-compat.
+  batteryPhotoUrls: z.array(z.string().url()).optional(),
+  chargerPhotoUrls: z.array(z.string().url()).optional(),
 });
 
 export async function POST(
@@ -122,18 +129,20 @@ export async function POST(
       if (!battery || battery.status !== "available") {
         throw new Error(`Battery ${body.batterySerial} is not available`);
       }
-      const [charger] = await tx
-        .select()
-        .from(inventory)
-        .where(
-          and(
-            eq(inventory.serial_number, body.chargerSerial),
-            eq(inventory.dealer_id, user.dealer_id!),
-          ),
-        )
-        .limit(1);
-      if (!charger || charger.status !== "available") {
-        throw new Error(`Charger ${body.chargerSerial} is not available`);
+      if (body.chargerSerial) {
+        const [charger] = await tx
+          .select()
+          .from(inventory)
+          .where(
+            and(
+              eq(inventory.serial_number, body.chargerSerial),
+              eq(inventory.dealer_id, user.dealer_id!),
+            ),
+          )
+          .limit(1);
+        if (!charger || charger.status !== "available") {
+          throw new Error(`Charger ${body.chargerSerial} is not available`);
+        }
       }
 
       // Clear any existing draft so this lead disappears from /My Drafts.
@@ -174,6 +183,9 @@ export async function POST(
         net_subtotal: body.netSubtotal?.toString(),
         payment_mode: "cash",
         admin_decision: "dealer_confirmed",
+        // E-130 / Addendum V0.1 §5.1 — dealer-captured photos (cash path).
+        battery_photo_urls: body.batteryPhotoUrls ?? [],
+        charger_photo_urls: body.chargerPhotoUrls ?? [],
         submitted_by: user.id,
         submitted_at: now,
         created_at: now,
@@ -190,7 +202,7 @@ export async function POST(
         tx,
         leadId,
         batterySerial: body.batterySerial,
-        chargerSerial: body.chargerSerial,
+        chargerSerial: body.chargerSerial ?? null,
         dealerId: user.dealer_id!,
         customerName: lead.full_name || lead.owner_name || null,
         customerPhone: lead.phone || lead.mobile || null,

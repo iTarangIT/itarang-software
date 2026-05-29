@@ -85,7 +85,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         .where(eq(productSelections.lead_id, lead.id))
         .orderBy(desc(productSelections.created_at))
         .limit(1);
-      if (!selection || !selection.battery_serial || !selection.charger_serial) {
+      if (!selection || !selection.battery_serial) {
         continue;
       }
 
@@ -94,7 +94,7 @@ export const GET = withErrorHandler(async (req: Request) => {
           tx,
           leadId: lead.id,
           batterySerial: selection.battery_serial!,
-          chargerSerial: selection.charger_serial!,
+          chargerSerial: selection.charger_serial ?? null,
           performedBy: lead.dealer_id ?? "cron",
           soldAt: now,
         });

@@ -57,9 +57,23 @@ jobs:
               echo "No previous BUILD_ID/.next/static — first build or clean checkout"
             fi
 
+            echo "=== Cleaning prior build state ==="
+            # Forces deterministic builds. The archive ring above already
+            # snapshot the prior .next/static into $ARCHIVE_DIR/$OLD_BUILD_ID,
+            # so the stale-tab grace period is preserved. Without this nuke,
+            # .next/standalone/.next/server + .next/cache/turbopack can carry
+            # references the new build doesn't re-emit, surfacing as
+            # NOT-ON-DISK chunks at the served-asset verification step.
+            rm -rf .next
+
             echo "=== Building Next.js (standalone) ==="
             export GITHUB_SHA=$(git rev-parse HEAD)
             echo "Building with GITHUB_SHA=$GITHUB_SHA"
+            # next build (webpack) for an app this size peaks past Node's
+            # default ~2 GB old-space heap — the build worker SIGABRTs with
+            # "Reached heap limit / heap out of memory" without this. 4 GB
+            # fits the 8 GB VPS alongside the running app.
+            export NODE_OPTIONS="--max-old-space-size=4096"
             npm run build
 
             echo "=== Merge archived chunks into new build (stale-tab grace period) ==="
@@ -107,6 +121,29 @@ jobs:
             cp -r .next/static .next/standalone/.next/static
             rm -rf .next/standalone/public
             if [ -d public ]; then cp -r public .next/standalone/public; fi
+
+            echo "=== Copy @sparticuz/chromium (incl bin/) into standalone ==="
+            # Next.js standalone file-tracing resolves @sparticuz/chromium's
+            # binary by runtime path, not require(), so it drops the bin/ dir —
+            # which makes the @sparticuz launch path fail with "input directory
+            # .../@sparticuz/chromium/bin does not exist". Copy the full package
+            # (npm ci --include=dev above guarantees it's on disk) so the
+            # bundled-Chromium fallback in launch-browser.ts actually works.
+            if [ -d node_modules/@sparticuz/chromium ]; then
+              mkdir -p .next/standalone/node_modules/@sparticuz
+              rm -rf .next/standalone/node_modules/@sparticuz/chromium
+              cp -r node_modules/@sparticuz/chromium .next/standalone/node_modules/@sparticuz/chromium
+            fi
+            # puppeteer-core is normally traced, but copy defensively if missing.
+            if [ ! -d .next/standalone/node_modules/puppeteer-core ] && [ -d node_modules/puppeteer-core ]; then
+              cp -r node_modules/puppeteer-core .next/standalone/node_modules/puppeteer-core
+            fi
+
+            echo "=== Ensure Google Chrome is installed (PDF/agreement rendering) ==="
+            # Primary Chromium path for launch-browser.ts on the VPS
+            # (PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable). Idempotent:
+            # fast-paths out when Chrome is already present.
+            bash scripts/prod-system-setup.sh
 
             echo "=== Stop pm2 + guarantee port 3002 is free ==="
             # Previous "poll for port free" logic was unreliable — the ss

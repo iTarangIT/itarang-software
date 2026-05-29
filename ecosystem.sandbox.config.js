@@ -9,8 +9,13 @@ module.exports = {
       // Next.js standalone output: run the bundled server.js directly.
       // `next start` is incompatible with output: "standalone" in next.config.ts
       // — it can't find the chunks/manifests the standalone build lays out.
+      //
+      // `current/` is a symlink maintained by .github/workflows/deploy-sandbox.yml
+      // pointing at the latest shipped release under releases/<sha>/standalone.
+      // Atomic symlink swap on deploy means pm2 reload re-execs server.js from
+      // the new release without ever seeing a broken state.
       script: "node",
-      args: ".next/standalone/server.js",
+      args: "current/server.js",
       instances: 1,
       exec_mode: "fork",
       env: {
@@ -42,6 +47,13 @@ module.exports = {
       env: {
         NODE_ENV: "production",
       },
+      // The worker is intentionally dormant: callWorker.ts gates its BullMQ
+      // loop behind ENABLE_CALL_WORKER (unset here), so it logs "disabled" and
+      // exits in <1s. With autorestart on, pm2 treated every exit as a crash
+      // and relaunched it every ~3s — 1136 restarts in one log. Disable
+      // autorestart so pm2 starts it once and leaves it stopped. Flip
+      // ENABLE_CALL_WORKER=1 (and re-enable autorestart) to actually run it.
+      autorestart: false,
       max_memory_restart: "500M",
       kill_timeout: 8000,
       restart_delay: 3000,

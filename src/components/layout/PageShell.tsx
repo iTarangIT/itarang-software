@@ -7,7 +7,8 @@
  *
  * iTarang BRD §6.B: H1 52/700 navy, eyebrow 11/600 ALL CAPS 0.12em teal.
  * Step indicator covers the NBFC onboarding journey (master → docs → LSP →
- * approval → activation → loan products) with active/done states.
+ * approval → activation) with active/done states. Loan-product management
+ * is a post-onboarding tool and lives outside this ribbon.
  *
  * Used by every NBFC admin page so the role's view stays consistent.
  */
@@ -19,8 +20,7 @@ export type StepKey =
   | "documents"
   | "lsp"
   | "approval"
-  | "activation"
-  | "loan-products";
+  | "activation";
 
 export interface PageShellStep {
   key: StepKey;
@@ -31,10 +31,9 @@ export interface PageShellStep {
 const NBFC_STEPS: ReadonlyArray<{ key: StepKey; label: string }> = [
   { key: "master", label: "Master" },
   { key: "documents", label: "Documents" },
-  { key: "lsp", label: "LSP Agreement" },
+  { key: "lsp", label: "Agreement" },
   { key: "approval", label: "Approval" },
   { key: "activation", label: "Activation" },
-  { key: "loan-products", label: "Loan Products" },
 ];
 
 /**
@@ -63,6 +62,14 @@ export interface PageShellProps {
   subtitle?: string;
   breadcrumb?: BreadcrumbItem[];
   steps?: PageShellStep[];
+  /**
+   * When provided, every step in the ribbon becomes a clickable link
+   * pointing at the URL this callback returns. Return `null` to leave a
+   * specific step non-navigable. When the prop is omitted entirely the
+   * ribbon stays purely visual (backward-compatible with pages outside
+   * the NBFC admin flow).
+   */
+  hrefForStep?: (key: StepKey) => string | null;
   actions?: React.ReactNode;
   children: React.ReactNode;
 }
@@ -73,6 +80,7 @@ export function PageShell({
   subtitle,
   breadcrumb,
   steps,
+  hrefForStep,
   actions,
   children,
 }: PageShellProps) {
@@ -113,14 +121,22 @@ export function PageShell({
         {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
       </header>
 
-      {steps && steps.length > 0 && <StepRibbon steps={steps} />}
+      {steps && steps.length > 0 && (
+        <StepRibbon steps={steps} hrefForStep={hrefForStep} />
+      )}
 
       <div>{children}</div>
     </div>
   );
 }
 
-function StepRibbon({ steps }: { steps: PageShellStep[] }) {
+function StepRibbon({
+  steps,
+  hrefForStep,
+}: {
+  steps: PageShellStep[];
+  hrefForStep?: (key: StepKey) => string | null;
+}) {
   return (
     <ol className="flex items-center gap-1 overflow-x-auto py-2">
       {steps.map((s, i) => {
@@ -134,12 +150,28 @@ function StepRibbon({ steps }: { steps: PageShellStep[] }) {
           s.state === "todo"
             ? "text-[color:var(--color-ink-muted)]"
             : "text-[color:var(--color-brand-navy)] font-semibold";
-        return (
-          <li key={s.key} className="flex items-center gap-1 shrink-0">
+        const href = hrefForStep ? hrefForStep(s.key) : null;
+        const inner = (
+          <>
             <div className={dotClass}>{s.state === "done" ? "✓" : i + 1}</div>
             <span className={`text-xs whitespace-nowrap ${labelClass}`}>
               {s.label}
             </span>
+          </>
+        );
+        return (
+          <li key={s.key} className="flex items-center gap-1 shrink-0">
+            {href ? (
+              <Link
+                href={href}
+                className="flex items-center gap-1 rounded-md px-1 py-0.5 transition-colors hover:bg-[color:var(--color-bg)] focus:outline-none focus:ring-2 focus:ring-[color:var(--color-brand-sky)]"
+                aria-current={s.state === "active" ? "step" : undefined}
+              >
+                {inner}
+              </Link>
+            ) : (
+              <div className="flex items-center gap-1">{inner}</div>
+            )}
             {i < steps.length - 1 && (
               <span
                 className="mx-1 inline-block h-px w-6"

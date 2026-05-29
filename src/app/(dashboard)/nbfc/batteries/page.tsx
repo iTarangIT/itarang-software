@@ -1,19 +1,34 @@
 /**
- * /nbfc/batteries — Battery Monitoring (BRD §6.2)
+ * /nbfc/batteries — Battery Monitoring (BRD §6.2).
  *
- * Server-rendered fleet table for the current tenant. Joins the local
- * nbfc_loans portfolio (for borrower/loan context) with the VPS vehicle_state
- * table (for SOC/SOH/last_seen/online/lat-lon) and the VPS alerts table
- * (open-alert count per vehicleno). Row click reveals a drawer with deeper
- * telemetry — those endpoints already exist.
+ * Server-rendered fleet table for the current tenant. Joins:
+ *   - nbfc_loans                → vehicleno + DPD + outstanding
+ *   - loan_files (left)         → borrower_name + dealer_id + lead_id
+ *   - leads (left)              → city
+ *   - dealers (left)            → company_name
+ *   - borrower_risk_scores      → latest CDS / PCI / confidence
+ *   - VPS vehicle_state         → SOC / SOH / pack_temp / last_gps / online
+ *   - VPS alerts                → open alert count per vehicleno
+ *   - nbfc_borrower_actions     → most recent action badge per loan
  *
- * Filters are URL-driven: ?status=online|idle|stale|offline|never &severity=open
- * &q=<text> &serial=<one to auto-open>.
+ * Clicking a row opens the CaseWorkspaceSheet (right-side drawer with action
+ * modals) — defined in _components/CaseWorkspaceSheet.tsx. The legacy
+ * `?serial=` inline drawer has been removed.
  */
 import Link from "next/link";
 import { db } from "@/lib/db";
-import { and, eq } from "drizzle-orm";
-import { nbfcLoans, loanFiles } from "@/lib/db/schema";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import {
+  nbfcLoans,
+  loanFiles,
+  loanApplications,
+  leads,
+  dealers,
+  borrowerRiskScores,
+  nbfcRiskRules,
+  nbfcBorrowerActions,
+  inventory,
+} from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import {
   getFleetSummary,
@@ -22,32 +37,84 @@ import {
   type VehicleStateRow,
 } from "@/lib/db/iot-queries";
 import { classifyFreshness } from "@/lib/iot/freshness";
-import BatteryRowDrawer from "./_components/BatteryRowDrawer";
+import BatteriesTable, { type BatteryRow } from "./_components/BatteriesTable";
+import BatteriesCsvButton from "./_components/BatteriesCsvButton";
 
 export const dynamic = "force-dynamic";
 
 interface SearchParams {
   status?: string;
   severity?: string;
+  risk?: string;
   q?: string;
-  serial?: string;
+  city?: string;
+  emi?: string;
+}
+
+interface RiskScoreRow {
+  cds_score: number | null;
+  pci_score: number | null;
+  confidence: string | null;
+  computed_at: Date | null;
 }
 
 interface PortfolioRow {
   loan_application_id: string;
   vehicleno: string;
+  imei: string | null;
   current_dpd: number | null;
   outstanding_amount: number | null;
+  emi_amount: number | null;
   borrower_name: string | null;
+  dealer_name: string | null;
+  city: string | null;
 }
 
-const FRESHNESS_TONE: Record<string, string> = {
-  fresh: "bg-emerald-50 text-emerald-700",
-  idle: "bg-amber-50 text-amber-700",
-  stale: "bg-orange-50 text-orange-700",
-  offline: "bg-red-50 text-red-700",
-  never: "bg-gray-100 text-gray-500",
+const FIELD_LABEL =
+  "block text-[10px] font-bold uppercase tracking-widest text-[color:var(--color-ink-muted)] mb-1";
+const FIELD_INPUT =
+  "border border-[color:var(--color-border)] rounded-lg px-2.5 py-1.5 text-sm bg-[color:var(--color-surface)]";
+
+const ACTION_BADGE_LABEL: Record<string, string> = {
+  immobilisation: "Immobilization Pending",
+  // After approval/rejection §6.1.6 action.status is updated; we surface those
+  // distinctly so users can see the rejected/force-majeure callouts the
+  // prototype shows.
 };
+
+function badgeFromAction(
+  status: string | null,
+  actionType: string | null,
+): string | null {
+  if (!actionType) return null;
+  if (actionType === "immobilisation") {
+    if (status === "rejected") return "Immobilization Rejected";
+    if (status === "reversed") return "Force Majeure";
+    if (status === "approved") return "Immobilised";
+    if (status === "pending_dual_approval") return "Immobilization Pending";
+  }
+  return ACTION_BADGE_LABEL[actionType] ?? null;
+}
+
+async function loadCdsBands(): Promise<{ low_mid: number; mid_high: number }> {
+  const rows = await db
+    .select({
+      rule_key: nbfcRiskRules.rule_key,
+      current_value: nbfcRiskRules.current_value,
+    })
+    .from(nbfcRiskRules)
+    .where(
+      inArray(nbfcRiskRules.rule_key, [
+        "cds_low_mid_threshold",
+        "cds_mid_high_threshold",
+      ]),
+    );
+  const map = new Map(rows.map((r) => [r.rule_key, Number(r.current_value)]));
+  return {
+    low_mid: map.get("cds_low_mid_threshold") ?? 40,
+    mid_high: map.get("cds_mid_high_threshold") ?? 70,
+  };
+}
 
 export default async function BatteriesPage({
   searchParams,
@@ -58,38 +125,189 @@ export default async function BatteriesPage({
   await requireNbfcAccess(tenant.id);
   const params = (await searchParams) ?? {};
 
-  // 1. Portfolio rows — vehicleno + borrower context (left-joined to loan_files).
+  const bands = await loadCdsBands();
+
+  // 1. Portfolio rows + borrower context + dealer name + city (lead.city).
+  // `loan_files` is populated for real iTarang-originated disbursements, but
+  // NBFC-direct seeded loans (e.g. BAJAJ-LIVE-*) only land in `loan_applications`.
+  // We fall back: borrower_name/dealer_id/lead_id ← loan_files else loan_applications.
   const portfolio = (await db
     .select({
       loan_application_id: nbfcLoans.loan_application_id,
       vehicleno: nbfcLoans.vehicleno,
       current_dpd: nbfcLoans.current_dpd,
       outstanding_amount: nbfcLoans.outstanding_amount,
-      borrower_name: loanFiles.borrower_name,
+      emi_amount: nbfcLoans.emi_amount,
+      borrower_name_file: loanFiles.borrower_name,
+      borrower_name_app: loanApplications.applicant_name,
+      dealer_id_file: loanFiles.dealer_id,
+      dealer_id_app: loanApplications.dealer_id,
+      lead_id_file: loanFiles.lead_id,
+      lead_id_app: loanApplications.lead_id,
     })
     .from(nbfcLoans)
-    .leftJoin(loanFiles, eq(loanFiles.loan_application_id, nbfcLoans.loan_application_id))
-    .where(and(eq(nbfcLoans.tenant_id, tenant.id), eq(nbfcLoans.is_active, true)))) as Array<{
+    .leftJoin(
+      loanFiles,
+      eq(loanFiles.loan_application_id, nbfcLoans.loan_application_id),
+    )
+    .leftJoin(
+      loanApplications,
+      eq(loanApplications.id, nbfcLoans.loan_application_id),
+    )
+    .where(
+      and(eq(nbfcLoans.tenant_id, tenant.id), eq(nbfcLoans.is_active, true)),
+    )) as Array<{
     loan_application_id: string;
     vehicleno: string | null;
     current_dpd: number | null;
     outstanding_amount: string | null;
-    borrower_name: string | null;
+    emi_amount: string | null;
+    borrower_name_file: string | null;
+    borrower_name_app: string | null;
+    dealer_id_file: string | null;
+    dealer_id_app: string | null;
+    lead_id_file: string | null;
+    lead_id_app: string | null;
   }>;
+
+  const dealerIds = Array.from(
+    new Set(
+      portfolio
+        .map((r) => r.dealer_id_file ?? r.dealer_id_app)
+        .filter((d): d is string => !!d),
+    ),
+  );
+  const leadIds = Array.from(
+    new Set(
+      portfolio
+        .map((r) => r.lead_id_file ?? r.lead_id_app)
+        .filter((l): l is string => !!l),
+    ),
+  );
+
+  const dealerNameById = new Map<string, string>();
+  if (dealerIds.length > 0) {
+    const dealerRows = await db
+      .select({
+        dealer_id: dealers.dealer_id,
+        company_name: dealers.company_name,
+      })
+      .from(dealers)
+      .where(inArray(dealers.dealer_id, dealerIds));
+    for (const d of dealerRows) {
+      if (d.dealer_id) dealerNameById.set(d.dealer_id, d.company_name);
+    }
+  }
+
+  const cityByLeadId = new Map<string, string | null>();
+  if (leadIds.length > 0) {
+    const leadRows = await db
+      .select({ id: leads.id, city: leads.city })
+      .from(leads)
+      .where(inArray(leads.id, leadIds));
+    for (const l of leadRows) cityByLeadId.set(l.id, l.city ?? null);
+  }
+
+  // IMEI lookup: nbfc_loans.vehicleno is the device serial (TK-XXXX), the
+  // actual IMEI is stored separately on inventory.iot_imei_no keyed by
+  // inventory.serial_number. Resolve in a single batch query.
+  const serials = Array.from(
+    new Set(
+      portfolio
+        .map((r) => r.vehicleno)
+        .filter((v): v is string => !!v),
+    ),
+  );
+  const imeiBySerial = new Map<string, string | null>();
+  if (serials.length > 0) {
+    const invRows = await db
+      .select({
+        serial_number: inventory.serial_number,
+        iot_imei_no: inventory.iot_imei_no,
+      })
+      .from(inventory)
+      .where(inArray(inventory.serial_number, serials));
+    for (const i of invRows) {
+      if (i.serial_number) imeiBySerial.set(i.serial_number, i.iot_imei_no);
+    }
+  }
 
   const portfolioRows: PortfolioRow[] = portfolio
     .filter((r): r is typeof r & { vehicleno: string } => !!r.vehicleno)
-    .map((r) => ({
-      loan_application_id: r.loan_application_id,
-      vehicleno: r.vehicleno,
-      current_dpd: r.current_dpd,
-      outstanding_amount: r.outstanding_amount != null ? Number(r.outstanding_amount) : null,
-      borrower_name: r.borrower_name,
-    }));
+    .map((r) => {
+      const dealerId = r.dealer_id_file ?? r.dealer_id_app;
+      const leadId = r.lead_id_file ?? r.lead_id_app;
+      return {
+        loan_application_id: r.loan_application_id,
+        vehicleno: r.vehicleno,
+        imei: imeiBySerial.get(r.vehicleno) ?? null,
+        current_dpd: r.current_dpd,
+        outstanding_amount:
+          r.outstanding_amount != null ? Number(r.outstanding_amount) : null,
+        emi_amount: r.emi_amount != null ? Number(r.emi_amount) : null,
+        borrower_name: r.borrower_name_file ?? r.borrower_name_app,
+        dealer_name: dealerId ? dealerNameById.get(dealerId) ?? null : null,
+        city: leadId ? cityByLeadId.get(leadId) ?? null : null,
+      };
+    });
 
   const vehiclenos = portfolioRows.map((r) => r.vehicleno);
+  const loanIds = portfolioRows.map((r) => r.loan_application_id);
 
-  // 2. Live state + open alerts from the VPS — wrapped to degrade if VPS down.
+  // 2a. Borrower risk scores (CDS / PCI / confidence) — BRD §6.1.5.
+  const riskRows = await db
+    .select({
+      loan_sanction_id: borrowerRiskScores.loan_sanction_id,
+      cds_score: borrowerRiskScores.cds_score,
+      pci_score: borrowerRiskScores.pci_score,
+      confidence: borrowerRiskScores.confidence,
+      computed_at: borrowerRiskScores.computed_at,
+    })
+    .from(borrowerRiskScores)
+    .where(eq(borrowerRiskScores.tenant_id, tenant.id));
+
+  const riskByLoan = new Map<string, RiskScoreRow>();
+  for (const r of riskRows.sort(
+    (a, b) =>
+      (b.computed_at?.getTime() ?? 0) - (a.computed_at?.getTime() ?? 0),
+  )) {
+    const key = String(r.loan_sanction_id);
+    if (riskByLoan.has(key)) continue;
+    riskByLoan.set(key, {
+      cds_score: r.cds_score != null ? Number(r.cds_score) : null,
+      pci_score: r.pci_score != null ? Number(r.pci_score) : null,
+      confidence: r.confidence,
+      computed_at: r.computed_at,
+    });
+  }
+
+  // 2b. Most recent §6.1.6 action per loan — used to render row badges
+  // ("Immobilization Rejected", "Force Majeure", etc.).
+  const actionBadgeByLoan = new Map<string, string>();
+  if (loanIds.length > 0) {
+    const actionRows = await db
+      .select({
+        loan_sanction_id: nbfcBorrowerActions.loan_sanction_id,
+        action_type: nbfcBorrowerActions.action_type,
+        status: nbfcBorrowerActions.status,
+        created_at: nbfcBorrowerActions.created_at,
+      })
+      .from(nbfcBorrowerActions)
+      .where(
+        and(
+          eq(nbfcBorrowerActions.tenant_id, tenant.id),
+          inArray(nbfcBorrowerActions.loan_sanction_id, loanIds),
+        ),
+      )
+      .orderBy(desc(nbfcBorrowerActions.created_at));
+    for (const r of actionRows) {
+      if (actionBadgeByLoan.has(r.loan_sanction_id)) continue;
+      const badge = badgeFromAction(r.status, r.action_type);
+      if (badge) actionBadgeByLoan.set(r.loan_sanction_id, badge);
+    }
+  }
+
+  // 3. Live state + open alerts from the VPS — wrapped to degrade if VPS down.
   let summary: Awaited<ReturnType<typeof getFleetSummary>> | null = null;
   let states: VehicleStateRow[] = [];
   let alertsByVehicle = new Map<string, number>();
@@ -100,7 +318,8 @@ export default async function BatteriesPage({
       getVehicleStates(vehiclenos),
       getOpenAlerts(vehiclenos).then((alerts) => {
         const m = new Map<string, number>();
-        for (const a of alerts) m.set(a.vehicleno, (m.get(a.vehicleno) ?? 0) + 1);
+        for (const a of alerts)
+          m.set(a.vehicleno, (m.get(a.vehicleno) ?? 0) + 1);
         return m;
       }),
     ]);
@@ -110,10 +329,11 @@ export default async function BatteriesPage({
 
   const stateByVehicle = new Map(states.map((s) => [s.vehicleno, s]));
 
-  // 3. Hydrate + filter.
+  // 4. Hydrate + filter.
   const enriched = portfolioRows.map((p) => {
     const s = stateByVehicle.get(p.vehicleno);
     const freshness = classifyFreshness(s?.last_gps_at ?? null);
+    const risk = riskByLoan.get(p.loan_application_id);
     return {
       ...p,
       online: s?.online ?? false,
@@ -126,83 +346,194 @@ export default async function BatteriesPage({
       freshness: freshness.freshness,
       freshness_badge: freshness.badge,
       open_alerts: alertsByVehicle.get(p.vehicleno) ?? 0,
+      cds_score: risk?.cds_score ?? null,
+      pci_score: risk?.pci_score ?? null,
+      confidence: risk?.confidence ?? null,
+      risk_computed_at: risk?.computed_at ?? null,
+      last_action_badge:
+        actionBadgeByLoan.get(p.loan_application_id) ?? null,
     };
   });
 
   const statusFilter = params.status?.toLowerCase();
   const severityFilter = params.severity?.toLowerCase();
+  const riskFilter = params.risk?.toLowerCase();
+  const cityFilter = params.city?.toLowerCase();
+  const emiFilter = params.emi?.toLowerCase();
   const q = params.q?.toLowerCase().trim() ?? "";
 
   const filtered = enriched.filter((r) => {
     if (statusFilter && r.freshness !== statusFilter) return false;
     if (severityFilter === "open" && r.open_alerts === 0) return false;
+    if (riskFilter === "critical") {
+      // Critical = severity high (open alerts AND high CDS).
+      if (r.open_alerts === 0) return false;
+      if (r.cds_score == null || r.cds_score < bands.mid_high) return false;
+    } else if (riskFilter === "warning") {
+      if (r.cds_score == null || r.cds_score < bands.low_mid) return false;
+      if (r.cds_score >= bands.mid_high && r.open_alerts > 0) return false;
+    } else if (riskFilter === "info") {
+      if ((r.cds_score ?? 0) >= bands.low_mid) return false;
+    } else if (riskFilter === "geo") {
+      if (r.lat == null || r.lon == null) return false;
+    }
+    if (cityFilter && (r.city ?? "").toLowerCase() !== cityFilter) return false;
+    if (emiFilter === "overdue" && (r.current_dpd ?? 0) === 0) return false;
+    if (emiFilter === "ontime" && (r.current_dpd ?? 0) > 0) return false;
     if (q) {
-      const hay = `${r.vehicleno} ${r.loan_application_id} ${r.borrower_name ?? ""}`.toLowerCase();
+      const hay =
+        `${r.vehicleno} ${r.loan_application_id} ${r.borrower_name ?? ""}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
   });
 
-  const drawerRow = params.serial ? enriched.find((r) => r.vehicleno === params.serial) : null;
+  const tableRows: BatteryRow[] = filtered.map((r) => ({
+    vehicleno: r.vehicleno,
+    loan_application_id: r.loan_application_id,
+    borrower_name: r.borrower_name,
+    dealer_name: r.dealer_name,
+    city: r.city,
+    imei: r.imei,
+    emi_amount: r.emi_amount,
+    current_dpd: r.current_dpd,
+    soc_pct: r.soc_pct,
+    soh_pct: r.soh_pct,
+    pack_temp_c: r.pack_temp_c,
+    cds_score: r.cds_score,
+    pci_score: r.pci_score,
+    confidence: r.confidence,
+    last_seen: r.last_gps_at ? r.last_gps_at.toISOString() : null,
+    freshness: r.freshness,
+    open_alerts: r.open_alerts,
+    last_action_badge: r.last_action_badge,
+  }));
+
+  // KPI tiles — prototype's four: Critical / Warning / Info / Geo Variation.
+  const criticalCount = enriched.filter(
+    (r) =>
+      r.open_alerts > 0 &&
+      r.cds_score != null &&
+      r.cds_score >= bands.mid_high,
+  ).length;
+  const warningCount = enriched.filter(
+    (r) =>
+      r.cds_score != null &&
+      r.cds_score >= bands.low_mid &&
+      (r.cds_score < bands.mid_high || r.open_alerts === 0),
+  ).length;
+  const infoCount = enriched.filter(
+    (r) => r.cds_score == null || r.cds_score < bands.low_mid,
+  ).length;
+  const geoCount = enriched.filter(
+    (r) => r.lat != null && r.lon != null,
+  ).length;
+
+  // City list for the dropdown (unique, non-null, sorted).
+  const cityOptions = Array.from(
+    new Set(enriched.map((r) => r.city).filter((c): c is string => !!c)),
+  ).sort();
 
   return (
     <div className="space-y-6">
-      <header>
-        <p className="section-label-muted">Battery Monitoring</p>
-        <h1 className="text-2xl font-semibold text-[color:var(--color-brand-navy)] mt-1">
-          Fleet telemetry — {tenant.display_name}
-        </h1>
-        <p className="text-sm text-[color:var(--color-ink-muted)] mt-1">
-          Live SOC / SOH / GPS for every battery in your portfolio. Click a row for the
-          per-battery detail drawer (history charts, alerts, immobiliser state).
-        </p>
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0">
+          <p className="section-label-muted">Battery Monitoring</p>
+          <h1 className="mt-1 text-2xl font-semibold text-[color:var(--color-brand-navy)]">
+            Fleet telemetry — {tenant.display_name}
+          </h1>
+          <p className="mt-1 text-sm text-[color:var(--color-ink-muted)]">
+            Post-disbursement control · tiles and headers filter + sort the
+            master table. Tap any row to open the case workspace.
+          </p>
+        </div>
+        <BatteriesCsvButton rows={tableRows} />
       </header>
 
       {vpsError ? (
-        <div className="border border-amber-200 bg-amber-50 text-amber-900 text-sm rounded p-3">
+        <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           IoT VPS unreachable — showing portfolio rows only. ({vpsError})
         </div>
       ) : null}
 
-      {drawerRow ? (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="section-label-muted">Selected battery</p>
-            <Link
-              href={`?${new URLSearchParams({
-                ...(params.status ? { status: params.status } : {}),
-                ...(params.severity ? { severity: params.severity } : {}),
-                ...(params.q ? { q: params.q } : {}),
-              }).toString()}`}
-              scroll={false}
-              className="text-xs font-bold uppercase tracking-widest text-slate-500 hover:text-slate-900"
-            >
-              ✕ Close
-            </Link>
-          </div>
-          <BatteryRowDrawer row={drawerRow} />
+      {/* Real-time alerts — 4 prototype tiles. Each is a filter link. */}
+      <section>
+        <p className="section-label-muted">Real-time alerts</p>
+        <p className="mt-1 text-xs text-[color:var(--color-ink-muted)]">
+          Live from telemetry · click a tile to filter the table below
+        </p>
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <KpiTile
+            label="Critical"
+            value={criticalCount}
+            tone="red"
+            icon="⚠"
+            href={qs(params, { risk: "critical" })}
+            active={riskFilter === "critical"}
+          />
+          <KpiTile
+            label="Warning"
+            value={warningCount}
+            tone="amber"
+            icon="⚠"
+            href={qs(params, { risk: "warning" })}
+            active={riskFilter === "warning"}
+          />
+          <KpiTile
+            label="Info"
+            value={infoCount}
+            tone="sky"
+            icon="ⓘ"
+            href={qs(params, { risk: "info" })}
+            active={riskFilter === "info"}
+          />
+          <KpiTile
+            label="Geo Variation"
+            value={geoCount}
+            tone="red"
+            icon="📍"
+            href={qs(params, { risk: "geo" })}
+            active={riskFilter === "geo"}
+          />
         </div>
-      ) : null}
-
-      {/* KPI strip */}
-      <section className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <Kpi label="Total" value={summary?.total ?? portfolioRows.length} />
-        <Kpi label="Online" value={summary?.online ?? 0} accent="green" />
-        <Kpi label="Fresh ≤5m" value={summary?.fresh_5m ?? 0} />
-        <Kpi
-          label="Avg SOC"
-          value={summary?.avg_soc != null ? `${summary.avg_soc.toFixed(0)}%` : "—"}
-        />
-        <Kpi label="Open alerts" value={summary?.open_alerts ?? 0} accent="red" />
       </section>
 
       {/* Filter bar */}
-      <form className="flex flex-wrap items-end gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3">
+      <form className="card-iTarang flex flex-wrap items-end gap-3 p-3">
         <div>
-          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-            Status
-          </label>
-          <select name="status" defaultValue={params.status ?? ""} className="border rounded px-2 py-1 text-sm">
+          <label className={FIELD_LABEL}>EMI</label>
+          <select
+            name="emi"
+            defaultValue={params.emi ?? ""}
+            className={FIELD_INPUT}
+          >
+            <option value="">All</option>
+            <option value="ontime">On time</option>
+            <option value="overdue">Overdue</option>
+          </select>
+        </div>
+        <div>
+          <label className={FIELD_LABEL}>City</label>
+          <select
+            name="city"
+            defaultValue={params.city ?? ""}
+            className={FIELD_INPUT}
+          >
+            <option value="">All</option>
+            {cityOptions.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={FIELD_LABEL}>Status</label>
+          <select
+            name="status"
+            defaultValue={params.status ?? ""}
+            className={FIELD_INPUT}
+          >
             <option value="">All</option>
             <option value="fresh">Fresh</option>
             <option value="idle">Idle</option>
@@ -211,141 +542,120 @@ export default async function BatteriesPage({
             <option value="never">Never reported</option>
           </select>
         </div>
-        <div>
-          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-            Severity
-          </label>
-          <select name="severity" defaultValue={params.severity ?? ""} className="border rounded px-2 py-1 text-sm">
-            <option value="">All</option>
-            <option value="open">Open alerts only</option>
-          </select>
-        </div>
-        <div className="flex-1 min-w-[200px]">
-          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-            Search
-          </label>
+        <div className="min-w-[200px] flex-1">
+          <label className={FIELD_LABEL}>Search</label>
           <input
             type="search"
             name="q"
             defaultValue={params.q ?? ""}
-            placeholder="Serial, loan id, or borrower"
-            className="border rounded px-2 py-1 text-sm w-full"
+            placeholder="Battery / IMEI / name"
+            className={`${FIELD_INPUT} w-full`}
           />
         </div>
+        {/* Preserve the risk filter set by tile clicks. */}
+        {params.risk ? (
+          <input type="hidden" name="risk" value={params.risk} />
+        ) : null}
         <button
           type="submit"
-          className="px-4 py-1.5 text-sm font-bold bg-[color:var(--color-brand-navy)] text-white rounded"
+          className="rounded-lg bg-[color:var(--color-brand-navy)] px-4 py-1.5 text-sm font-bold text-white"
         >
           Apply
         </button>
-        {(params.status || params.severity || params.q) && (
-          <Link href="/nbfc/batteries" className="text-xs underline text-slate-500 self-center">
+        {(params.status ||
+          params.severity ||
+          params.risk ||
+          params.q ||
+          params.city ||
+          params.emi) && (
+          <Link
+            href="/nbfc/batteries"
+            className="self-center text-xs text-[color:var(--color-ink-muted)] underline"
+          >
             Reset
           </Link>
         )}
       </form>
 
-      {/* Table */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-900 text-xs uppercase tracking-widest text-slate-500">
-            <tr>
-              <th className="px-3 py-2.5 text-left font-bold">Serial / Vehicle</th>
-              <th className="px-3 py-2.5 text-left font-bold">Borrower</th>
-              <th className="px-3 py-2.5 text-right font-bold">SOC</th>
-              <th className="px-3 py-2.5 text-right font-bold">SOH</th>
-              <th className="px-3 py-2.5 text-right font-bold">Temp</th>
-              <th className="px-3 py-2.5 text-left font-bold">Last seen</th>
-              <th className="px-3 py-2.5 text-left font-bold">Freshness</th>
-              <th className="px-3 py-2.5 text-right font-bold">Alerts</th>
-              <th className="px-3 py-2.5"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length === 0 ? (
-              <tr>
-                <td colSpan={9} className="px-3 py-12 text-center text-slate-500 text-sm">
-                  No batteries match these filters.
-                </td>
-              </tr>
-            ) : (
-              filtered.map((r) => (
-                <tr key={r.vehicleno} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <td className="px-3 py-2 font-mono text-xs">{r.vehicleno}</td>
-                  <td className="px-3 py-2">
-                    <div className="font-medium">{r.borrower_name ?? "—"}</div>
-                    <div className="text-xs text-slate-500">{r.loan_application_id}</div>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {r.soc_pct != null ? `${Math.round(r.soc_pct)}%` : "—"}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {r.soh_pct != null ? `${Math.round(r.soh_pct)}%` : "—"}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {r.pack_temp_c != null ? `${r.pack_temp_c.toFixed(0)}°C` : "—"}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-slate-500 tabular-nums">
-                    {r.last_gps_at ? r.last_gps_at.toLocaleString() : "—"}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${FRESHNESS_TONE[r.freshness]}`}>
-                      {r.freshness}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    {r.open_alerts > 0 ? (
-                      <span className="px-2 py-0.5 rounded bg-red-50 text-red-700 text-xs font-bold tabular-nums">
-                        {r.open_alerts}
-                      </span>
-                    ) : (
-                      <span className="text-slate-400">0</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <Link
-                      href={`?${new URLSearchParams({
-                        ...(params.status ? { status: params.status } : {}),
-                        ...(params.severity ? { severity: params.severity } : {}),
-                        ...(params.q ? { q: params.q } : {}),
-                        serial: r.vehicleno,
-                      }).toString()}`}
-                      scroll={false}
-                      className="text-xs font-bold uppercase tracking-widest text-[color:var(--color-brand-navy)] hover:underline"
-                    >
-                      Open
-                    </Link>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
+      <section>
+        <p className="section-label-muted">Battery risk master table</p>
+        <p className="mt-1 text-xs text-[color:var(--color-ink-muted)]">
+          {tableRows.length} of {enriched.length} batteries · click any row to
+          open case workspace · click headers to sort
+        </p>
+        <div className="mt-3">
+          <BatteriesTable rows={tableRows} bands={bands} />
+        </div>
+        {summary ? (
+          <p className="mt-2 text-[11px] text-[color:var(--color-ink-muted)]">
+            Fleet aggregates: {summary.total} total · {summary.online} online ·
+            {" "}
+            {summary.fresh_5m} fresh ≤5m · avg SOC{" "}
+            {summary.avg_soc != null ? `${summary.avg_soc.toFixed(0)}%` : "—"}
+          </p>
+        ) : null}
+      </section>
     </div>
   );
 }
 
-function Kpi({
+function qs(
+  current: SearchParams,
+  next: Partial<SearchParams>,
+): string {
+  const sp = new URLSearchParams();
+  const merged = { ...current, ...next };
+  for (const [k, v] of Object.entries(merged)) {
+    if (v) sp.set(k, String(v));
+  }
+  const s = sp.toString();
+  return s ? `/nbfc/batteries?${s}` : "/nbfc/batteries";
+}
+
+function KpiTile({
   label,
   value,
-  accent,
+  tone,
+  icon,
+  href,
+  active,
 }: {
   label: string;
-  value: number | string;
-  accent?: "green" | "red";
+  value: number;
+  tone: "red" | "amber" | "sky";
+  icon: string;
+  href: string;
+  active: boolean;
 }) {
-  const tone =
-    accent === "green"
-      ? "text-emerald-600"
-      : accent === "red"
-        ? "text-red-600"
-        : "text-[color:var(--color-brand-navy)]";
+  const toneText =
+    tone === "red"
+      ? "text-red-600"
+      : tone === "amber"
+        ? "text-amber-600"
+        : "text-sky-600";
+  const toneBg =
+    tone === "red"
+      ? "bg-red-50"
+      : tone === "amber"
+        ? "bg-amber-50"
+        : "bg-sky-50";
   return (
-    <div className="card-iTarang p-4">
-      <p className="section-label-muted">{label}</p>
-      <p className={`mt-2 text-2xl font-semibold tabular-nums ${tone}`}>{value}</p>
-    </div>
+    <Link
+      href={href}
+      className={`card-iTarang block p-4 transition ${
+        active ? `${toneBg} ring-2 ring-offset-1` : ""
+      }`}
+    >
+      <div className={`flex items-center gap-2 text-xs font-bold uppercase tracking-widest ${toneText}`}>
+        <span aria-hidden>{icon}</span>
+        <span>{label}</span>
+      </div>
+      <p className={`mt-2 text-3xl font-semibold tabular-nums ${toneText}`}>
+        {value}
+      </p>
+      <p className="mt-1 text-[10px] uppercase tracking-widest text-[color:var(--color-ink-muted)]">
+        {active ? "Filtered" : "Click to filter"}
+      </p>
+    </Link>
   );
 }

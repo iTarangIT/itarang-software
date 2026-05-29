@@ -18,6 +18,11 @@ const isProd = /crm\.itarang\.com/i.test(baseURL);
 const sandboxRoles = [
   { role: 'sales_head', email: 'anirudh@itarang.com', password: process.env.E2E_TEST_PASSWORD },
   { role: 'dealer', email: 'dealer@itarang.com', password: 'password' },
+  {
+    role: 'ceo',
+    email: process.env.E2E_CEO_EMAIL ?? 'ceo.itarang@gmail.com',
+    password: process.env.E2E_CEO_PASSWORD ?? 'password',
+  },
 ];
 
 const prodRoles = [
@@ -32,6 +37,12 @@ const prodRoles = [
     email: process.env.E2E_PROD_DEALER_EMAIL,
     password: process.env.E2E_PROD_DEALER_PASSWORD,
     stateFile: 'prod-dealer.json',
+  },
+  {
+    role: 'ceo',
+    email: process.env.E2E_PROD_CEO_EMAIL,
+    password: process.env.E2E_PROD_CEO_PASSWORD,
+    stateFile: 'prod-ceo.json',
   },
 ];
 

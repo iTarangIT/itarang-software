@@ -13,8 +13,16 @@
  *   approve-button, approved-at, submit-error.
  */
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, AlertCircle, Loader2, ShieldCheck } from "lucide-react";
+import {
+  CheckCircle2,
+  AlertCircle,
+  Flag,
+  Loader2,
+  ShieldCheck,
+} from "lucide-react";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { useOptionalCorrectionFlagContext } from "./correction-flag-context";
+import { useNbfcReadinessSignal } from "./NbfcReadinessSignal";
 
 export type ReadinessPayload = {
   canApprove: boolean;
@@ -24,6 +32,11 @@ export type ReadinessPayload = {
   currentStatus: string | null;
   missingEntityKyc?: string[];
   missingDirectorKyc?: string[];
+  pendingCorrections?: {
+    roundId: number;
+    roundNumber: number;
+    openItemCount: number;
+  } | null;
 };
 
 type Props = {
@@ -32,7 +45,7 @@ type Props = {
 };
 
 const TOOLTIP_NOT_READY =
-  "Cannot activate until LSP Agreement is fully signed and downloaded from Digio.";
+  "Cannot activate until the Agreement is fully signed and downloaded from Digio.";
 
 const CEO_EMAIL = "sanchit@itarang.com";
 
@@ -46,6 +59,7 @@ const STATUS_CHAIN: ReadonlyArray<{ label: string; lspKey?: string }> = [
 export default function NbfcFinalApprovalPanel({ nbfcId, fetcher }: Props) {
   const fx = fetcher ?? fetch;
   const { user } = useAuth();
+  const { version: readinessSignalVersion } = useNbfcReadinessSignal();
   const [readiness, setReadiness] = useState<ReadinessPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -87,6 +101,7 @@ export default function NbfcFinalApprovalPanel({ nbfcId, fetcher }: Props) {
         missingDirectorKyc: Array.isArray(b.missingDirectorKyc)
           ? b.missingDirectorKyc
           : [],
+        pendingCorrections: b.pendingCorrections ?? null,
       };
       setReadiness(safe);
     } finally {
@@ -96,7 +111,7 @@ export default function NbfcFinalApprovalPanel({ nbfcId, fetcher }: Props) {
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, readinessSignalVersion]);
 
   const onTransition = useCallback(
     async (to: "request_correction" | "rejected", reason: string) => {
@@ -178,15 +193,54 @@ export default function NbfcFinalApprovalPanel({ nbfcId, fetcher }: Props) {
     readiness && !readiness.canApprove ? TOOLTIP_NOT_READY : undefined;
 
   // Lifecycle step is now driven by the canonical status from the server.
+  // When CEO has approved AND all signers have completed (agreement is
+  // COMPLETED), we advance the stepper into the "Active" phase — the only
+  // thing left is the admin clicking "Activate Account", and showing
+  // Active as the current step makes that next action visually obvious.
+  const lspAgreementStatus = readiness?.lspAgreementStatus ?? "";
   const stepIndex = (() => {
     if (currentStatus === "active") return 3;
-    if (currentStatus === "approved") return 2;
+    if (currentStatus === "approved") {
+      return lspAgreementStatus === "COMPLETED" ? 3 : 2;
+    }
     if (isPendingReview) return 1;
     if (isAwaitingFix) return 1; // sales-head fix loop, still pre-approval
     if (isTerminalState) return 1;
     if (currentStatus === "draft") return 0;
     if (approvedAt) return 3; // optimistic update from a just-fired approve
     return 0;
+  })();
+
+  const ceoCorrectionsBanner = (() => {
+    if (
+      !readiness?.pendingCorrections ||
+      readiness.pendingCorrections.openItemCount === 0
+    ) {
+      return null;
+    }
+    const n = readiness.pendingCorrections.openItemCount;
+    return (
+      <div
+        data-testid="pending-corrections-banner"
+        className="flex items-start gap-3 rounded-xl px-4 py-3 border"
+        style={{
+          background: "var(--color-warning-bg)",
+          borderColor: "rgba(234, 179, 8, 0.3)",
+          color: "var(--color-warning)",
+        }}
+      >
+        <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+        <div className="text-sm">
+          <p className="font-semibold">
+            {n} CEO-flagged correction{n === 1 ? "" : "s"} still pending
+          </p>
+          <p className="opacity-90">
+            Admin must address every flagged item and resubmit before
+            approval can be released.
+          </p>
+        </div>
+      </div>
+    );
   })();
 
   return (
@@ -196,26 +250,73 @@ export default function NbfcFinalApprovalPanel({ nbfcId, fetcher }: Props) {
     >
       <header>
         <p className="section-label">Step 4 — Final Approval</p>
-        <h2 className="text-2xl font-semibold text-[color:var(--color-brand-navy)] mt-1">
-          CEO sign-off
-        </h2>
+        <div className="flex items-center gap-3 mt-1 flex-wrap">
+          <h2 className="text-2xl font-semibold text-[color:var(--color-brand-navy)]">
+            CEO sign-off
+          </h2>
+          {isAlreadyApproved && (
+            <span
+              className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full"
+              style={{
+                background: "var(--color-success-bg)",
+                color: "var(--color-success)",
+              }}
+            >
+              <CheckCircle2 className="w-3 h-3" />
+              {currentStatus === "active" ? "Active" : "Approved"}
+            </span>
+          )}
+        </div>
         <p className="text-sm text-[color:var(--color-ink-muted)] mt-1 max-w-2xl">
-          Approval requires every required compliance document to be verified
-          and the LSP agreement to be COMPLETED. Only{" "}
-          <span className="font-semibold text-[color:var(--color-brand-navy)]">
-            CEO Sanchit
-          </span>{" "}
-          may approve.
+          {isAlreadyApproved ? (
+            currentStatus === "active" ? (
+              <>
+                NBFC is live. Portal credentials have been issued to the
+                primary contact.
+              </>
+            ) : (
+              <>
+                CEO has approved this NBFC. The admin can review the signed
+                agreement and audit trail above, then click{" "}
+                <span className="font-semibold text-[color:var(--color-brand-navy)]">
+                  Activate Account
+                </span>{" "}
+                to issue portal credentials.
+              </>
+            )
+          ) : (
+            <>
+              Approval triggers the Digio Aadhaar e-sign request to the
+              configured signers. After both signers complete, the admin
+              manually activates the NBFC. Only{" "}
+              <span className="font-semibold text-[color:var(--color-brand-navy)]">
+                CEO Sanchit
+              </span>{" "}
+              may approve.
+            </>
+          )}
         </p>
       </header>
+
+      {ceoCorrectionsBanner}
 
       {/* Status chain */}
       <div className="card-iTarang p-5">
         <p className="section-label-muted mb-3">Lifecycle</p>
         <ol className="flex items-center gap-1 overflow-x-auto">
           {STATUS_CHAIN.map((s, i) => {
+            // Once the NBFC is `active` the whole lifecycle has run — the
+            // final "Active" pip should render as ✓ done, not as the
+            // current step (there's no next step to advance to).
+            const isLifecycleComplete = currentStatus === "active";
             const state =
-              i < stepIndex ? "done" : i === stepIndex ? "active" : "todo";
+              i < stepIndex
+                ? "done"
+                : i === stepIndex
+                ? isLifecycleComplete
+                  ? "done"
+                  : "active"
+                : "todo";
             const dotClass =
               state === "active"
                 ? "step-dot-active"
@@ -246,76 +347,22 @@ export default function NbfcFinalApprovalPanel({ nbfcId, fetcher }: Props) {
         </ol>
       </div>
 
-      {/* Readiness card */}
-      <div className="card-iTarang p-5 space-y-4">
-        <p className="section-label-muted">Readiness</p>
-        {loading ? (
-          <p className="text-sm text-[color:var(--color-ink-muted)]">
-            Loading readiness…
-          </p>
-        ) : loadError ? (
-          <p
-            data-testid="readiness-load-error"
-            className="text-sm rounded-lg px-3 py-2"
-            style={{
-              background: "var(--color-danger-bg)",
-              color: "var(--color-danger)",
-            }}
-          >
-            {loadError}
-          </p>
-        ) : readiness ? (
-          <div className="space-y-3 text-sm">
-            <div className="flex items-center gap-2">
-              <span className="text-[color:var(--color-ink-muted)]">
-                LSP Agreement:
-              </span>
-              <span
-                data-testid="lsp-agreement-status"
-                className={
-                  readiness.lspAgreementStatus === "COMPLETED"
-                    ? "status-pill-success"
-                    : "status-pill-info"
-                }
-              >
-                {readiness.lspAgreementStatus}
-              </span>
-            </div>
-            {readiness.missingDocs.length > 0 && (
-              <div data-testid="missing-docs" className="space-y-1">
-                <p className="text-[color:var(--color-ink-muted)]">
-                  Missing verified documents:
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {readiness.missingDocs.map((d) => (
-                    <span key={d} className="status-pill-warning">
-                      {d}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {readiness.reason && (
-              <p
-                data-testid="reason"
-                className="text-[13px] rounded-lg px-3 py-2"
-                style={{
-                  background: "var(--color-warning-bg)",
-                  color: "var(--color-warning)",
-                }}
-              >
-                {readiness.reason}
-              </p>
-            )}
-            {readiness.canApprove && (
-              <div className="flex items-center gap-2 text-[color:var(--color-success)]">
-                <CheckCircle2 className="w-4 h-4" />
-                <span className="font-semibold">All gates green</span>
-              </div>
-            )}
-          </div>
-        ) : null}
-      </div>
+      {/* Readiness card removed — KYC verification is handled out-of-band by
+          admin on /admin/nbfc/[id]/kyc-review; the CEO surface no longer
+          renders that gate. Load errors are still surfaced inline so the CEO
+          knows when readiness couldn't be fetched. */}
+      {loadError && (
+        <p
+          data-testid="readiness-load-error"
+          className="text-sm rounded-lg px-3 py-2"
+          style={{
+            background: "var(--color-danger-bg)",
+            color: "var(--color-danger)",
+          }}
+        >
+          {loadError}
+        </p>
+      )}
 
       {/* Action region — status-aware (BRD §6.0.6). The CEO sees one of:
           (a) Approve when status=pending_admin_review AND canApprove,
@@ -370,6 +417,12 @@ function ApprovalActions(props: {
     onTransition,
   } = props;
 
+  // E-111 — if the page wraps us in CorrectionFlagProvider, the "Request
+  // corrections" button toggles per-item flag mode (the floating tray then
+  // takes over). When no provider is mounted we fall back to the legacy
+  // freeform-reason flow so other surfaces stay unchanged.
+  const flagCtx = useOptionalCorrectionFlagContext();
+
   const [openForm, setOpenForm] = useState<
     null | "request_correction" | "rejected"
   >(null);
@@ -384,30 +437,56 @@ function ApprovalActions(props: {
     currentStatus === "pending_admin_review" ||
     currentStatus === "pending_review";
 
-  // Already approved / active — collapse the action surface entirely.
+  // Already approved / active — collapse the action surface entirely. While
+  // signing is in flight (status='approved', agreement SENT_FOR_SIGNATURE /
+  // SIGN_PENDING / PARTIALLY_SIGNED), the banner reads "Awaiting signers" so
+  // the CEO understands what's left.
   if (isApproved) {
+    const lspStatus = readiness?.lspAgreementStatus ?? "";
+    const isSigningInFlight =
+      currentStatus === "approved" &&
+      [
+        "SENT_FOR_SIGNATURE",
+        "SIGN_PENDING",
+        "PARTIALLY_SIGNED",
+        "SIGNED",
+      ].includes(lspStatus);
+
+    const heading = isSigningInFlight
+      ? "Awaiting signers"
+      : currentStatus === "active"
+        ? "NBFC active"
+        : "NBFC approved";
+    const subline = isSigningInFlight
+      ? "Digio has emailed the agreement to the signers in order. The NBFC will auto-activate once all signers complete and the signed PDF is downloaded."
+      : currentStatus === "active"
+        ? "Portal credentials have been issued and the NBFC is live."
+        : "Approval has been recorded. Activation will issue portal credentials next.";
+
     return (
       <div
         data-testid="already-approved-banner"
         className="flex items-start gap-3 rounded-xl px-4 py-3 border"
         style={{
-          background: "var(--color-success-bg)",
-          borderColor: "rgba(16, 185, 129, 0.3)",
-          color: "var(--color-success)",
+          background: isSigningInFlight
+            ? "var(--color-info-bg)"
+            : "var(--color-success-bg)",
+          borderColor: isSigningInFlight
+            ? "rgba(19, 143, 198, 0.3)"
+            : "rgba(16, 185, 129, 0.3)",
+          color: isSigningInFlight
+            ? "var(--color-info)"
+            : "var(--color-success)",
         }}
       >
-        <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
+        {isSigningInFlight ? (
+          <Loader2 className="w-5 h-5 shrink-0 mt-0.5 animate-spin" />
+        ) : (
+          <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
+        )}
         <div className="text-sm">
-          <p className="font-semibold">
-            {currentStatus === "active"
-              ? "NBFC active"
-              : "NBFC approved"}
-          </p>
-          <p className="opacity-90">
-            {currentStatus === "active"
-              ? "Portal credentials have been issued and the NBFC is live."
-              : "Approval has been recorded. Activation will issue portal credentials next."}
-          </p>
+          <p className="font-semibold">{heading}</p>
+          <p className="opacity-90">{subline}</p>
         </div>
         {/* Keep the data-testid the existing headed test reads. */}
         <span data-testid="approved-at" className="sr-only">
@@ -445,6 +524,7 @@ function ApprovalActions(props: {
   }
 
   if (isAwaitingFix) {
+    const pending = readiness?.pendingCorrections;
     return (
       <div
         data-testid="awaiting-fix-banner"
@@ -458,11 +538,16 @@ function ApprovalActions(props: {
         <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
         <div className="text-sm">
           <p className="font-semibold">
-            Awaiting sales-head corrections
+            {pending && pending.openItemCount > 0
+              ? `Awaiting admin corrections — ${pending.openItemCount} item${
+                  pending.openItemCount === 1 ? "" : "s"
+                } flagged`
+              : "Awaiting admin corrections"}
           </p>
           <p className="opacity-90">
-            Sales head has been notified by email and must address the
-            flagged items before resubmitting for review.
+            Admin must address every flagged item and resubmit before the
+            CEO can approve or reject. Open the admin approval page to see
+            the outstanding-corrections panel.
           </p>
         </div>
       </div>
@@ -511,7 +596,9 @@ function ApprovalActions(props: {
           )}
           {submitting && openForm === null
             ? "Approving…"
-            : "Approve & Activate NBFC"}
+            : readiness?.lspAgreementStatus === "PENDING_CEO_VERIFICATION"
+              ? "Approve & Send Agreement for Signing"
+              : "Approve & Activate NBFC"}
         </button>
 
         {/* Request correction + Reject — only meaningful when there's a
@@ -524,6 +611,13 @@ function ApprovalActions(props: {
               data-testid="request-correction-button"
               disabled={submitting}
               onClick={() => {
+                if (flagCtx) {
+                  // E-111 — flip into per-item flag mode; the floating tray
+                  // takes over from here.
+                  flagCtx.setFlagMode(!flagCtx.flagMode);
+                  setOpenForm(null);
+                  return;
+                }
                 setReasonText("");
                 setOpenForm(
                   openForm === "request_correction"
@@ -533,7 +627,10 @@ function ApprovalActions(props: {
               }}
               className="inline-flex items-center justify-center gap-2 h-11 px-4 rounded-xl text-sm font-semibold border border-[color:var(--color-warning)] text-[color:var(--color-warning)] hover:bg-[color:var(--color-warning-bg)] transition-colors disabled:opacity-50"
             >
-              Send back to sales head
+              <Flag className="w-4 h-4" />
+              {flagCtx?.flagMode
+                ? "Exit flag mode"
+                : "Request corrections"}
             </button>
             <button
               type="button"

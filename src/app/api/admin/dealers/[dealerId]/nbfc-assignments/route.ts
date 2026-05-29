@@ -1,8 +1,13 @@
 // [E-012] /api/admin/dealers/{dealerId}/nbfc-assignments  (POST + GET)
 //
-// BRD §6.0.8 — junction table dealer_nbfc_assignments (Sync Audit G-05).
-// Links finance-enabled dealers to their approved NBFCs. Only NBFCs in this
-// table appear in a given dealer's loan-sanction dropdown (consumed by E-013).
+// Routing model: A + D (auto-enroll, admin only blocks exceptions).
+// `dealer_nbfc_assignments` is now an EXCLUSION list:
+//   - status='suspended'  -> reversible block (admin can remove)
+//   - status='terminated' -> permanent block (terminal)
+//   - status='active'     -> no-op (legacy admin pairings; ignored by the BRE)
+// The Excluded-NBFCs admin UI posts with status='suspended'. Legacy callers
+// that omit `status` still get the old default ('active') — they create a
+// no-op row, not a block.
 //
 // Rules:
 //   - Linking allowed only when nbfc.status IN ('approved','active') -> 422.
@@ -32,6 +37,7 @@ const NBFC_LINK_ELIGIBLE_STATUSES = new Set(["approved", "active"]);
 
 const postBodySchema = z.object({
   nbfcId: z.number().int().positive(),
+  status: z.enum(["active", "suspended", "terminated"]).optional(),
   notes: z.string().max(2000).optional(),
 });
 
@@ -43,18 +49,40 @@ function isNumericId(value: string): boolean {
   return /^\d+$/.test(value);
 }
 
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    value,
+  );
+}
+
+// Tri-keyed dealer resolution. Accepts:
+//   - integer PK         (e.g. 33)
+//   - varchar dealer_id  (e.g. "DLR-001", set post-activation)
+//   - UUID application_id from dealer_onboarding_applications (used by
+//     /admin/dealer-verification/[dealerId] pages — the UUID is the
+//     application, not the dealer; we resolve via dealers.application_id).
 async function resolveDealer(dealerIdParam: string) {
-  const [row] = isNumericId(dealerIdParam)
-    ? await db
-        .select()
-        .from(dealers)
-        .where(eq(dealers.id, Number(dealerIdParam)))
-        .limit(1)
-    : await db
-        .select()
-        .from(dealers)
-        .where(eq(dealers.dealer_id, dealerIdParam))
-        .limit(1);
+  if (isNumericId(dealerIdParam)) {
+    const [row] = await db
+      .select()
+      .from(dealers)
+      .where(eq(dealers.id, Number(dealerIdParam)))
+      .limit(1);
+    return row ?? null;
+  }
+  if (isUuid(dealerIdParam)) {
+    const [row] = await db
+      .select()
+      .from(dealers)
+      .where(eq(dealers.application_id, dealerIdParam))
+      .limit(1);
+    return row ?? null;
+  }
+  const [row] = await db
+    .select()
+    .from(dealers)
+    .where(eq(dealers.dealer_id, dealerIdParam))
+    .limit(1);
   return row ?? null;
 }
 
@@ -176,7 +204,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
           dealer_id: dealerRow.id,
           nbfc_id: nbfcRow.id,
           enabled_by: enabledBy,
-          status: "active",
+          status: parsed.data.status ?? "active",
           notes: parsed.data.notes ?? null,
         })
         .returning();

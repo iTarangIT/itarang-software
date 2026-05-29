@@ -5,10 +5,11 @@
  * spinning up a Next.js server. The route handler in
  * src/app/api/nbfc/portfolio/summary/route.ts is a thin wrapper around this.
  */
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   borrowerRiskScores,
+  emiSchedules,
   loanSanctions,
   nbfcRecoveryPipeline,
 } from "@/lib/db/schema";
@@ -16,6 +17,7 @@ import {
 export interface PortfolioSummary {
   total_active_loans: number;
   portfolio_value: number;
+  avg_emi: number;
   disbursement_this_month: number;
   delinquency_rate: number;
   avg_portfolio_cds: number;
@@ -39,6 +41,7 @@ export async function computePortfolioSummary(tenantId: string): Promise<Portfol
     .select({
       id: loanSanctions.id,
       loan_amount: loanSanctions.loan_amount,
+      emi: loanSanctions.emi,
     })
     .from(loanSanctions)
     .where(
@@ -54,6 +57,17 @@ export async function computePortfolioSummary(tenantId: string): Promise<Portfol
     (acc, r) => acc + (r.loan_amount != null ? Number(r.loan_amount) : 0),
     0,
   );
+
+  // Avg EMI (BRD §6.1.2) — mean of loan_sanctions.emi across the active book.
+  // Skip rows where emi is null so a row with missing EMI doesn't drag the mean
+  // toward zero.
+  const emiValues = activeLoans
+    .map((r) => (r.emi != null ? Number(r.emi) : null))
+    .filter((v): v is number => typeof v === "number" && !Number.isNaN(v));
+  const avg_emi =
+    emiValues.length === 0
+      ? 0
+      : Math.round(emiValues.reduce((a, b) => a + b, 0) / emiValues.length);
 
   // Disbursement this month (IST calendar month).
   const monthStart = startOfCurrentMonthIST();
@@ -72,19 +86,23 @@ export async function computePortfolioSummary(tenantId: string): Promise<Portfol
     0,
   );
 
-  // Delinquency rate — until a per-EMI table exists, derive from nbfc_loans.current_dpd
-  // for the same tenant. Tenant-scoped: nbfc_loans.tenant_id = tenantId.
+  // Delinquency rate (BRD §6.1.3) — active loans carrying at least one EMI
+  // overdue by more than 30 days, derived from the per-EMI ledger
+  // (emi_schedules) rather than the denormalised nbfc_loans.current_dpd proxy.
   let overdue_count = 0;
   if (total_active_loans > 0) {
-    const overdueRows = await db.execute<{ overdue: number }>(sql`
-      SELECT COUNT(*)::int AS overdue
-      FROM nbfc_loans
-      WHERE tenant_id = ${tenantId}::uuid
-        AND current_dpd > 30
-        AND is_active = true
-    `);
-    const arr = overdueRows as unknown as Array<{ overdue: number }>;
-    overdue_count = arr[0]?.overdue ?? 0;
+    const activeIds = activeLoans.map((r) => r.id);
+    const overdueRows = await db
+      .selectDistinct({ loan_sanction_id: emiSchedules.loan_sanction_id })
+      .from(emiSchedules)
+      .where(
+        and(
+          inArray(emiSchedules.loan_sanction_id, activeIds),
+          inArray(emiSchedules.status, ["overdue", "missed"]),
+          sql`COALESCE(${emiSchedules.days_overdue}, 0) > 30`,
+        ),
+      );
+    overdue_count = overdueRows.length;
   }
   const delinquency_rate =
     total_active_loans === 0
@@ -130,6 +148,7 @@ export async function computePortfolioSummary(tenantId: string): Promise<Portfol
   return {
     total_active_loans,
     portfolio_value,
+    avg_emi,
     disbursement_this_month,
     delinquency_rate,
     avg_portfolio_cds,

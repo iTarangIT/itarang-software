@@ -222,6 +222,9 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       leadId,
       consentId,
       generatedDate,
+      // BRD Addendum V0.1 §3.1 — biometric + multi-NBFC clauses + Page 3.
+      // Gated by env flag CONSENT_V2_ENABLED until legal sign-off (Open §10/9).
+      includeBiometricVKYCConsent: process.env.CONSENT_V2_ENABLED === '1',
     });
 
     const pdfBuffer = await renderPdfFromHtml(html);

@@ -6,12 +6,13 @@
  *      the dealer's onboarding_status when status != 'active'.
  * AC2: POST with paymentMethod='Other finance' returns 403 / FINANCE_NOT_ENABLED
  *      when the active dealer has finance_enabled=false.
- * AC3: POST with paymentMethod='Dealer finance' returns 403 / NO_ACTIVE_NBFC
- *      when finance_enabled=true but no active dealer_nbfc_assignments rows.
  * AC4: POST with paymentMethod='Cash' for an active dealer succeeds even when
  *      finance_enabled=false and no NBFC assignments exist.
  * AC5: POST with paymentMethod='Other finance' succeeds for an active dealer
- *      with finance_enabled=true and an active dealer_nbfc_assignments row.
+ *      with finance_enabled=true even when no dealer_nbfc_assignments rows
+ *      exist — NBFC linkage is validated at loan-sanction time, not at
+ *      lead-creation time, so the wizard's Hot+Finance → Step 2 KYC routing
+ *      can proceed unblocked.
  *
  * Auth uses an x-test-dealer-code / x-test-admin-secret bypass mirroring the
  * pattern used by the admin NBFC routes.
@@ -251,36 +252,7 @@ test.describe("E-105 — Lead creation dealer-status gate", () => {
     expect(rows.length).toBe(0);
   });
 
-  test("AC3: finance-path lead blocked when no active NBFC assigned", async ({
-    request,
-  }) => {
-    const { dealerCode } = await insertTestDealer({
-      onboardingStatus: "active",
-      financeEnabled: true,
-    });
-
-    const res = await request.post("/api/leads/create", {
-      headers: dealerHeaders(dealerCode),
-      data: {
-        initializeDraft: true,
-        fresh: true,
-        payment_method: "dealer_finance",
-      },
-    });
-
-    expect(res.status(), await res.text().catch(() => "")).toBe(403);
-    const body = await res.json();
-    expect(body.error).toBe("NO_ACTIVE_NBFC");
-    expect(typeof body.message).toBe("string");
-
-    const rows = await db
-      .select({ id: schema.leads.id })
-      .from(schema.leads)
-      .where(eq(schema.leads.dealer_id, dealerCode));
-    expect(rows.length).toBe(0);
-  });
-
-  test("AC4: cash-path lead skips finance and NBFC checks", async ({
+  test("AC4: cash-path lead skips finance checks", async ({
     request,
   }) => {
     const { dealerCode } = await insertTestDealer({
@@ -312,13 +284,14 @@ test.describe("E-105 — Lead creation dealer-status gate", () => {
     expect(rows[0].status).toBe("INCOMPLETE");
   });
 
-  test("AC5: all guards pass — finance lead created", async ({ request }) => {
-    const { id: dealerInternalId, dealerCode } = await insertTestDealer({
+  test("AC5: finance lead created when dealer is active + finance_enabled (no NBFC assignment required at this step)", async ({ request }) => {
+    const { dealerCode } = await insertTestDealer({
       onboardingStatus: "active",
       financeEnabled: true,
     });
-    const nbfcId = await insertTestNbfc();
-    await insertActiveAssignment(dealerInternalId, nbfcId);
+    // Intentionally no insertTestNbfc / insertActiveAssignment — the gate
+    // no longer requires an active assignment at lead-creation time. NBFC
+    // selection happens at loan-sanction time (Step 5).
 
     const res = await request.post("/api/leads/create", {
       headers: dealerHeaders(dealerCode),

@@ -8,18 +8,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Activity,
   AlertOctagon,
+  ArrowRight,
   CircleDollarSign,
   Gauge,
   Layers3,
+  Receipt,
   TrendingUp,
 } from "lucide-react";
 
 interface SummaryResponse {
   total_active_loans: number;
   portfolio_value: number;
+  avg_emi: number;
   disbursement_this_month: number;
   delinquency_rate: number;
   avg_portfolio_cds: number;
@@ -37,6 +41,8 @@ type CardSpec = {
   caption: string;
   Icon: React.ComponentType<{ className?: string }>;
   tone: "neutral" | "success" | "warning";
+  /** When set, the card becomes a drill-through link to a related screen. */
+  href?: string;
 };
 
 function toneStyles(tone: CardSpec["tone"]) {
@@ -66,7 +72,16 @@ export default function PortfolioSummaryCards() {
     let cancelled = false;
     fetch("/api/nbfc/portfolio/summary", { cache: "no-store" })
       .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+          let detail = `HTTP ${r.status}`;
+          try {
+            const body = await r.json();
+            if (body?.error) detail = `${detail} — ${body.error}`;
+          } catch {
+            // non-JSON body (e.g. Next.js 404 HTML) — keep status only
+          }
+          throw new Error(detail);
+        }
         return r.json();
       })
       .then((json) => {
@@ -97,7 +112,7 @@ export default function PortfolioSummaryCards() {
         className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
         data-testid="portfolio-summary-loading"
       >
-        {Array.from({ length: 6 }).map((_, i) => (
+        {Array.from({ length: 7 }).map((_, i) => (
           <div key={i} className="card-iTarang p-5 animate-pulse">
             <div className="h-3 w-24 bg-[color:var(--color-border)] rounded" />
             <div className="h-7 w-32 bg-[color:var(--color-border)] rounded mt-3" />
@@ -116,6 +131,7 @@ export default function PortfolioSummaryCards() {
       caption: "Disbursed and not yet closed.",
       Icon: Layers3,
       tone: "neutral",
+      href: "/nbfc/leads",
     },
     {
       key: "portfolio_value",
@@ -123,6 +139,14 @@ export default function PortfolioSummaryCards() {
       value: `₹${inr(data.portfolio_value)}`,
       caption: "Sum of loan_amount across active book.",
       Icon: CircleDollarSign,
+      tone: "neutral",
+    },
+    {
+      key: "avg_emi",
+      label: "Avg EMI",
+      value: `₹${inr(data.avg_emi)}`,
+      caption: "Mean EMI across active loans.",
+      Icon: Receipt,
       tone: "neutral",
     },
     {
@@ -140,6 +164,7 @@ export default function PortfolioSummaryCards() {
       caption: "Active loans with EMI overdue > 30 days.",
       Icon: AlertOctagon,
       tone: data.delinquency_rate > 5 ? "warning" : "neutral",
+      href: "/nbfc/leads?status=overdue",
     },
     {
       key: "avg_portfolio_cds",
@@ -148,6 +173,7 @@ export default function PortfolioSummaryCards() {
       caption: "Borrower credit score, refreshed daily.",
       Icon: Gauge,
       tone: "neutral",
+      href: "/nbfc/leads?sort=cds",
     },
     {
       key: "recovery_value_locked",
@@ -156,6 +182,7 @@ export default function PortfolioSummaryCards() {
       caption: "Estimated value in recovery pipeline.",
       Icon: Activity,
       tone: "neutral",
+      href: "/nbfc/recovery",
     },
   ];
 
@@ -166,22 +193,15 @@ export default function PortfolioSummaryCards() {
     >
       {cards.map((c) => {
         const tone = toneStyles(c.tone);
-        return (
-          <div
-            key={c.key}
-            data-testid={`portfolio-card-${c.key}`}
-            className="card-iTarang p-5 transition-shadow hover:shadow-md"
-          >
+        const inner = (
+          <>
             <div className="flex items-start justify-between gap-3">
               <p className="section-label-muted">{c.label}</p>
               <span
                 className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
                 style={tone.iconWrap}
               >
-                <c.Icon
-                  className="w-4 h-4"
-                  style={{ color: tone.iconColor }}
-                />
+                <c.Icon className="w-4 h-4" style={{ color: tone.iconColor }} />
               </span>
             </div>
             <p className="mt-3 text-[28px] leading-tight font-semibold text-[color:var(--color-brand-navy)] tabular-nums">
@@ -190,6 +210,31 @@ export default function PortfolioSummaryCards() {
             <p className="mt-2 text-[12px] text-[color:var(--color-ink-muted)]">
               {c.caption}
             </p>
+            {c.href ? (
+              <span className="mt-3 inline-flex items-center gap-1 text-[12px] font-semibold text-[color:var(--color-brand-sky)]">
+                View details
+                <ArrowRight className="w-3.5 h-3.5" />
+              </span>
+            ) : null}
+          </>
+        );
+        const cardClass = "card-iTarang p-5 transition-shadow hover:shadow-md";
+        return c.href ? (
+          <Link
+            key={c.key}
+            href={c.href}
+            data-testid={`portfolio-card-${c.key}`}
+            className={`${cardClass} block focus:outline-none focus:ring-2 focus:ring-[color:var(--color-brand-sky)]`}
+          >
+            {inner}
+          </Link>
+        ) : (
+          <div
+            key={c.key}
+            data-testid={`portfolio-card-${c.key}`}
+            className={cardClass}
+          >
+            {inner}
           </div>
         );
       })}

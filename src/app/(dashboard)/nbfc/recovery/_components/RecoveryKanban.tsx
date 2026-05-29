@@ -1,9 +1,25 @@
 "use client";
 
+/**
+ * RecoveryKanban — BRD §6.1.7 recovery stage board.
+ *
+ * Stage transitions enforce the §6.1.7 SOH guardrail (a battery may only be
+ * marked Refurbishable when SOH exceeds 70%). The "Request immobilisation"
+ * action routes through ImmobilisationRequestDialog, which renders the
+ * mandatory §6.1.6 Borrower Notice Preview (5 elements + reversibility +
+ * "I confirm" gate) before any request can be submitted.
+ */
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import ImmobilisationRequestDialog from "@/components/nbfc-portal/ImmobilisationRequestDialog";
+import type { BorrowerNoticeContent } from "@/components/nbfc-portal/BorrowerNoticePreview";
 
-type Stage = "needs_inspection" | "refurbishable" | "ready_for_auction" | "resold" | "scrap";
+type Stage =
+  | "needs_inspection"
+  | "refurbishable"
+  | "ready_for_auction"
+  | "resold"
+  | "scrap";
 
 interface Row {
   id: string;
@@ -19,10 +35,18 @@ interface Row {
   age_days: number;
 }
 
+interface TenantLegal {
+  legal_name: string | null;
+  display_name: string;
+  grievance_url: string | null;
+  grievance_helpline: string | null;
+}
+
 interface Props {
   stages: Stage[];
   stageLabels: Record<Stage, string>;
   rows: Row[];
+  tenantLegal: TenantLegal;
 }
 
 // BRD §6.1.7 — allowed stage transitions.
@@ -34,6 +58,9 @@ const ALLOWED_NEXT: Record<Stage, Stage[]> = {
   scrap: [],
 };
 
+// BRD §6.1.7 — a battery may only enter Refurbishable above this SOH.
+const REFURBISHABLE_MIN_SOH = 70;
+
 const STAGE_TONE: Record<Stage, string> = {
   needs_inspection: "bg-amber-50 border-amber-200",
   refurbishable: "bg-sky-50 border-sky-200",
@@ -42,7 +69,12 @@ const STAGE_TONE: Record<Stage, string> = {
   scrap: "bg-slate-100 border-slate-200",
 };
 
-export default function RecoveryKanban({ stages, stageLabels, rows }: Props) {
+export default function RecoveryKanban({
+  stages,
+  stageLabels,
+  rows,
+  tenantLegal,
+}: Props) {
   const router = useRouter();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -68,27 +100,47 @@ export default function RecoveryKanban({ stages, stageLabels, rows }: Props) {
     }
   }
 
+  // A §6.1.6 borrower notice must carry the real outstanding amount — defaulting
+  // an unknown amount to ₹0 would put a false figure into a legal notice. When
+  // the amount is unknown the notice is left null and the action is gated (the
+  // "Request immobilisation" button below is disabled in that case).
+  const notice: BorrowerNoticeContent | null =
+    immobiliseFor && immobiliseFor.outstanding_amount != null
+      ? {
+          lender_legal_name:
+            tenantLegal.legal_name ?? tenantLegal.display_name,
+          outstanding_amount: immobiliseFor.outstanding_amount,
+          restoration_steps:
+            "Pay the outstanding EMI amount to restore battery mobility — service is re-mobilised within 2 hours of settlement.",
+          grievance_url:
+            tenantLegal.grievance_url ?? "https://itarang.com/grievance",
+          helpline: tenantLegal.grievance_helpline ?? "1800-000-0000",
+        }
+      : null;
+
   return (
     <>
       {error ? (
-        <div className="bg-red-50 text-red-700 text-sm rounded p-3 mb-2">{error}</div>
+        <div className="mb-2 rounded bg-red-50 p-3 text-sm text-red-700">
+          {error}
+        </div>
       ) : null}
 
-      <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
-        {stages.map((s) => (
-          <div key={s} className={`border rounded-lg p-2 ${STAGE_TONE[s]}`}>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-bold uppercase tracking-widest text-slate-700">
-                {stageLabels[s]}
-              </h3>
-              <span className="text-xs tabular-nums text-slate-500">
-                {rows.filter((r) => r.stage === s).length}
-              </span>
-            </div>
-            <div className="space-y-2">
-              {rows
-                .filter((r) => r.stage === s)
-                .map((r) => (
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        {stages.map((s) => {
+          const laneRows = rows.filter((r) => r.stage === s);
+          return (
+            <div key={s} className={`rounded-lg border p-2 ${STAGE_TONE[s]}`}>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-widest text-slate-700">
+                  {stageLabels[s]}
+                </h3>
+                <span className="text-xs tabular-nums text-slate-500">
+                  {laneRows.length}
+                </span>
+              </div>
+              <div className="space-y-2">
+                {laneRows.map((r) => (
                   <Card
                     key={r.id}
                     row={r}
@@ -97,19 +149,24 @@ export default function RecoveryKanban({ stages, stageLabels, rows }: Props) {
                     onImmobilise={() => setImmobiliseFor(r)}
                   />
                 ))}
-              {rows.filter((r) => r.stage === s).length === 0 ? (
-                <p className="text-xs text-slate-400 italic px-1 py-2">Empty</p>
-              ) : null}
+                {laneRows.length === 0 ? (
+                  <p className="px-1 py-2 text-xs italic text-slate-400">
+                    Empty
+                  </p>
+                ) : null}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </section>
 
-      {immobiliseFor ? (
-        <ImmobilisationRequestModal
-          row={immobiliseFor}
+      {immobiliseFor && notice && immobiliseFor.loan_application_id ? (
+        <ImmobilisationRequestDialog
+          loanSanctionId={immobiliseFor.loan_application_id}
+          notice={notice}
+          open
           onClose={() => setImmobiliseFor(null)}
-          onSuccess={() => {
+          onRequested={() => {
             setImmobiliseFor(null);
             router.refresh();
           }}
@@ -132,21 +189,27 @@ function Card({
 }) {
   const next = ALLOWED_NEXT[row.stage];
   return (
-    <div className="bg-white border border-slate-200 rounded-md p-2.5 shadow-sm">
+    <div className="rounded-md border border-slate-200 bg-white p-2.5 shadow-sm">
       <div className="flex items-start justify-between gap-2">
-        <div>
-          <p className="font-mono text-[11px] text-slate-500">{row.battery_serial}</p>
-          <p className="font-medium text-sm">{row.borrower_name ?? "—"}</p>
-          <p className="text-[11px] text-slate-500">{row.loan_application_id ?? "—"}</p>
+        <div className="min-w-0">
+          <p className="font-mono text-[11px] text-slate-500">
+            {row.battery_serial}
+          </p>
+          <p className="truncate text-sm font-medium">
+            {row.borrower_name ?? "—"}
+          </p>
+          <p className="truncate text-[11px] text-slate-500">
+            {row.loan_application_id ?? "—"}
+          </p>
         </div>
         <div className="text-right">
           {row.live_soh_pct != null ? (
-            <p className="text-[11px] font-bold text-slate-700 tabular-nums">
+            <p className="text-[11px] font-bold tabular-nums text-slate-700">
               SOH {Math.round(row.live_soh_pct)}%
             </p>
           ) : null}
           {row.estimated_recovery_value != null ? (
-            <p className="text-[11px] text-emerald-700 tabular-nums">
+            <p className="text-[11px] tabular-nums text-emerald-700">
               ₹{row.estimated_recovery_value.toLocaleString("en-IN")}
             </p>
           ) : null}
@@ -155,7 +218,7 @@ function Card({
       <div className="mt-1 flex items-center gap-2 text-[10px] text-slate-500">
         <span>{row.age_days}d in stage</span>
         {row.current_dpd != null && row.current_dpd > 0 ? (
-          <span className="px-1.5 py-0.5 rounded bg-red-50 text-red-700 font-bold">
+          <span className="rounded bg-red-50 px-1.5 py-0.5 font-bold text-red-700">
             DPD {row.current_dpd}
           </span>
         ) : null}
@@ -163,152 +226,47 @@ function Card({
 
       {next.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1">
-          {next.map((n) => (
-            <button
-              key={n}
-              disabled={busy}
-              onClick={() => onMove(row.id, n)}
-              className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-            >
-              → {n.replace(/_/g, " ")}
-            </button>
-          ))}
+          {next.map((n) => {
+            // BRD §6.1.7 — Refurbishable requires SOH > 70%.
+            // Unknown SOH must fail the guard too — a missing reading is not
+            // evidence the battery clears the §6.1.7 threshold.
+            const blocked =
+              n === "refurbishable" &&
+              (row.live_soh_pct == null ||
+                row.live_soh_pct <= REFURBISHABLE_MIN_SOH);
+            return (
+              <button
+                key={n}
+                disabled={busy || blocked}
+                title={
+                  blocked
+                    ? `SOH must exceed ${REFURBISHABLE_MIN_SOH}% to mark Refurbishable (BRD §6.1.7)`
+                    : undefined
+                }
+                onClick={() => onMove(row.id, n)}
+                className="rounded border border-slate-300 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                → {n.replace(/_/g, " ")}
+              </button>
+            );
+          })}
         </div>
       ) : null}
 
       {row.imei && row.loan_application_id ? (
         <button
           onClick={onImmobilise}
-          disabled={busy}
-          className="mt-2 w-full px-2 py-1 text-[10px] font-bold uppercase tracking-widest rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+          disabled={busy || row.outstanding_amount == null}
+          title={
+            row.outstanding_amount == null
+              ? "Outstanding amount unknown — cannot raise a §6.1.6 borrower notice"
+              : undefined
+          }
+          className="mt-2 w-full rounded bg-red-600 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-red-700 disabled:opacity-50"
         >
-          Initiate immobilisation
+          Request immobilisation
         </button>
       ) : null}
-    </div>
-  );
-}
-
-function ImmobilisationRequestModal({
-  row,
-  onClose,
-  onSuccess,
-}: {
-  row: Row;
-  onClose: () => void;
-  onSuccess: () => void;
-}) {
-  const [reason, setReason] = useState<"dpd_60" | "dpd_90" | "fraud_flag" | "manual">("manual");
-  const [imei, setImei] = useState(row.imei ?? "");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit() {
-    if (!row.loan_application_id || !imei.trim()) {
-      setError("Loan and IMEI are both required.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/nbfc/actions/battery-immobilisation/initiate", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          loan_application_id: row.loan_application_id,
-          imei: imei.trim(),
-          reason_code: reason,
-          reviewed_evidence_ack: true,
-        }),
-      });
-      if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error ?? `HTTP ${res.status}`);
-      }
-      onSuccess();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4">
-        <div>
-          <h3 className="text-lg font-bold">Initiate immobilisation</h3>
-          <p className="text-sm text-slate-500">
-            iTarang sales_head must approve before the device is immobilised.
-          </p>
-        </div>
-
-        <dl className="text-sm space-y-1 bg-slate-50 rounded p-3">
-          <Row2 k="Borrower" v={row.borrower_name ?? "—"} />
-          <Row2 k="Loan" v={row.loan_application_id ?? "—"} />
-          <Row2 k="Battery" v={row.battery_serial} />
-          {row.current_dpd != null ? <Row2 k="DPD" v={`${row.current_dpd}d`} /> : null}
-          {row.outstanding_amount != null ? (
-            <Row2 k="Outstanding" v={`₹${row.outstanding_amount.toLocaleString("en-IN")}`} />
-          ) : null}
-        </dl>
-
-        <div>
-          <label className="block text-xs font-bold uppercase tracking-widest text-slate-500 mb-1">
-            IMEI
-          </label>
-          <input
-            value={imei}
-            onChange={(e) => setImei(e.target.value)}
-            disabled={busy}
-            className="w-full border border-slate-300 rounded px-2 py-1 text-sm font-mono"
-          />
-        </div>
-
-        <div>
-          <label className="block text-xs font-bold uppercase tracking-widest text-slate-500 mb-1">
-            Reason
-          </label>
-          <select
-            value={reason}
-            onChange={(e) => setReason(e.target.value as typeof reason)}
-            disabled={busy}
-            className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
-          >
-            <option value="dpd_60">DPD ≥ 60</option>
-            <option value="dpd_90">DPD ≥ 90</option>
-            <option value="fraud_flag">Fraud flag</option>
-            <option value="manual">Manual</option>
-          </select>
-        </div>
-
-        {error ? <div className="bg-red-50 text-red-700 text-xs rounded p-2">{error}</div> : null}
-
-        <div className="flex justify-end gap-2 pt-2">
-          <button
-            onClick={onClose}
-            disabled={busy}
-            className="px-4 py-1.5 text-sm font-bold text-slate-600 hover:text-slate-900"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={submit}
-            disabled={busy}
-            className="px-4 py-1.5 text-sm font-bold rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
-          >
-            {busy ? "Submitting…" : "Send to sales_head"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Row2({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="flex justify-between gap-2">
-      <dt className="text-slate-500">{k}</dt>
-      <dd className="font-medium">{v}</dd>
     </div>
   );
 }
