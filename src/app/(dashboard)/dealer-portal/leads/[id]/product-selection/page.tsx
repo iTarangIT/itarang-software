@@ -43,6 +43,7 @@ import {
   ErrorBanner,
   FullPageLoader,
 } from "@/components/dealer-portal/lead-wizard/shared";
+import FinancingOffersSection from "./FinancingOffersSection";
 
 // BRD V2 Part E §2.2 — Step 4 Product Selection (dealer side)
 // Sections:
@@ -1310,6 +1311,9 @@ export default function ProductSelectionPage() {
             </span>
           </div>
         )}
+
+        {/* §6.1/§6.2 — firm offers from picked NBFCs + winner selection. Self-hides for cash / un-routed leads. */}
+        <FinancingOffersSection leadId={leadId} />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-8 space-y-6">

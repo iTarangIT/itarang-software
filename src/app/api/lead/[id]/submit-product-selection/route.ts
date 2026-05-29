@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { inventory, leads, nbfc, nbfcLeadAssignments, productSelections } from "@/lib/db/schema";
+import { inventory, leads, nbfc, nbfcLeadAssignments, nbfcServiceConfig, productSelections } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { generateId } from "@/lib/api-utils";
 import { notifyProductSelectionSubmitted } from "@/lib/notifications";
@@ -70,6 +70,27 @@ const BodySchema = z.object({
 });
 
 const FINANCE_UNLOCKED = new Set(["step_3_cleared", "kyc_approved"]);
+
+// E-133 / Addendum V0.2 §7.4 — freeze the NBFC's service-opt-in toggles at the
+// moment the lead binds, so a later config edit cannot retroactively change an
+// in-flight lead. Endpoint URLs/integration secrets are intentionally NOT
+// snapshotted — only the behavioural toggles that decide which tracks run.
+type ServiceConfigRow = typeof nbfcServiceConfig.$inferSelect;
+function buildServiceSnapshot(cfg: ServiceConfigRow | undefined, capturedAt: Date) {
+  return {
+    fi_enabled: cfg?.fi_enabled ?? false,
+    vkyc_enabled: cfg?.vkyc_enabled ?? false,
+    vkyc_mode: cfg?.vkyc_mode ?? null,
+    enach_enabled: cfg?.enach_enabled ?? false,
+    enach_handoff_method: cfg?.enach_handoff_method ?? null,
+    doc_agreement_method: cfg?.doc_agreement_method ?? null,
+    store_sanction_letter: cfg?.store_sanction_letter ?? false,
+    store_loan_agreement: cfg?.store_loan_agreement ?? false,
+    track_completion_gate: cfg?.track_completion_gate ?? true,
+    track_failure_halts: cfg?.track_failure_halts ?? false,
+    captured_at: capturedAt.toISOString(),
+  };
+}
 
 export async function POST(
   req: NextRequest,
@@ -221,6 +242,23 @@ export async function POST(
             nbfcRows.map((r) => [r.id, r.tenant_id] as const),
           );
 
+          // E-133 / Addendum V0.2 §7.4 — load each bound NBFC's current
+          // service-opt-in config so we can freeze a per-lead snapshot.
+          const tenantIds = [
+            ...new Set(
+              nbfcRows
+                .map((r) => r.tenant_id)
+                .filter((t): t is string => Boolean(t)),
+            ),
+          ];
+          const cfgRows = tenantIds.length
+            ? await tx
+                .select()
+                .from(nbfcServiceConfig)
+                .where(inArray(nbfcServiceConfig.tenant_id, tenantIds))
+            : [];
+          const cfgByTenant = new Map(cfgRows.map((c) => [c.tenant_id, c] as const));
+
           const assignmentRows = picks
             .map((p) => {
               const tenantId = tenantByNbfc.get(p.nbfc_id);
@@ -236,6 +274,10 @@ export async function POST(
                 tenant_id: tenantId,
                 loan_product_id: p.loan_product_id,
                 status: "pending" as const,
+                service_config_snapshot: buildServiceSnapshot(
+                  cfgByTenant.get(tenantId),
+                  now,
+                ),
               };
             })
             .filter((r): r is NonNullable<typeof r> => r !== null);

@@ -5,8 +5,6 @@ import { and, eq, inArray } from "drizzle-orm";
 import {
   ArrowLeft,
   AlertTriangle,
-  CircleDashed,
-  Clock,
 } from "lucide-react";
 import {
   dealers,
@@ -17,6 +15,11 @@ import {
   productSelections,
 } from "@/lib/db/schema";
 import { getCurrentTenant } from "@/lib/nbfc/tenant";
+import EnachTrackPanel from "../_components/EnachTrackPanel";
+import VkycTrackPanel from "../_components/VkycTrackPanel";
+import FiTrackPanel from "../_components/FiTrackPanel";
+import OfferPanel from "../_components/OfferPanel";
+import SanctionPanel from "../_components/SanctionPanel";
 
 // Acquire lead detail — Addendum V0.1 §6 / §7.
 // READ-ONLY in A1. Action surfaces (FI / Video KYC / E-NACH / Offer) land
@@ -372,28 +375,15 @@ export default async function AcquireLeadDetailPage({
               Verification Tracks
             </h2>
             <div className="space-y-3">
-              <TrackPlaceholder title="Field Investigation" phase="A3" />
-              <TrackPlaceholder title="Active Video KYC" phase="A3" />
-              <TrackPlaceholder title="E-NACH (winner only)" phase="A6" />
+              <FiTrackPanel leadId={leadId} />
+              <VkycTrackPanel leadId={leadId} />
+              <EnachTrackPanel leadId={leadId} />
             </div>
           </section>
 
-          <section className="border border-slate-200 rounded-xl bg-white p-5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">
-              Financing Offer
-            </h2>
-            <div className="rounded-lg border-2 border-dashed border-slate-200 p-4 text-center">
-              <CircleDashed className="w-5 h-5 text-slate-400 mx-auto" />
-              <p className="text-xs font-semibold text-slate-600 mt-2">
-                Offer submission lands in A4
-              </p>
-              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                Once verification tracks complete, Credit / Underwriting will
-                submit firm financing conditions. The customer compares offers
-                across selected NBFCs and picks the winner.
-              </p>
-            </div>
-          </section>
+          <OfferPanel leadId={leadId} />
+
+          <SanctionPanel leadId={leadId} />
         </div>
       </div>
     </div>
@@ -445,16 +435,3 @@ function PhotoStrip({ title, urls }: { title: string; urls: string[] }) {
   );
 }
 
-function TrackPlaceholder({ title, phase }: { title: string; phase: string }) {
-  return (
-    <div className="rounded-lg border border-slate-200 p-3">
-      <div className="flex items-center gap-2">
-        <Clock className="w-4 h-4 text-slate-400" />
-        <span className="text-sm font-semibold text-slate-800">{title}</span>
-      </div>
-      <p className="text-[11px] text-slate-500 mt-1">
-        Not started · arrives in phase {phase}
-      </p>
-    </div>
-  );
-}

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { NBFC_ORIGINATION_ROLES, NBFC_ROLE_LABELS } from "@/lib/nbfc/origination-roles";
 
 interface Member {
   user_id: string;
@@ -17,14 +18,11 @@ interface Props {
   members: Member[];
 }
 
-const ROLE_OPTIONS = [
-  "viewer",
-  "nbfc_risk_manager",
-  "nbfc_risk_head",
-  "nbfc_ops_head",
-  "nbfc_credit_manager",
-  "nbfc_compliance_officer",
-];
+// Addendum V0.2 §7.2 — five origination roles.
+const ROLE_OPTIONS = NBFC_ORIGINATION_ROLES;
+function roleLabel(role: string): string {
+  return (NBFC_ROLE_LABELS as Record<string, string>)[role] ?? role;
+}
 
 export default function UsersSection({ currentUserId, members }: Props) {
   const router = useRouter();
@@ -110,7 +108,7 @@ export default function UsersSection({ currentUserId, members }: Props) {
                   <div className="font-medium">{m.name ?? m.email ?? m.user_id}</div>
                   <div className="text-xs text-slate-500">{m.email ?? ""}</div>
                 </td>
-                <td className="px-3 py-2 text-xs uppercase font-bold">{m.role}</td>
+                <td className="px-3 py-2 text-xs font-bold">{roleLabel(m.role)}</td>
                 <td className="px-3 py-2 text-xs text-slate-500 tabular-nums">
                   {m.created_at ? new Date(m.created_at).toLocaleDateString() : "—"}
                 </td>
@@ -163,7 +161,7 @@ export default function UsersSection({ currentUserId, members }: Props) {
             >
               {ROLE_OPTIONS.map((r) => (
                 <option key={r} value={r}>
-                  {r}
+                  {roleLabel(r)}
                 </option>
               ))}
             </select>

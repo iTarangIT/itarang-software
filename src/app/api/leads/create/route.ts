@@ -144,20 +144,22 @@ const step1Schema = z.object({
     is_vehicle_category: z.boolean().optional(),
 }).passthrough();
 
-async function generateLeadReference() {
-    const year = new Date().getFullYear();
-    const prefix = `#IT-${year}`;
-    const [lastRecord] = await db.select({ reference_id: leads.reference_id })
+// Compute the next reference sequence by taking the NUMERIC max of the trailing
+// segment — not a lexical sort. Lexical `ORDER BY reference_id DESC` is unsafe:
+// any historical row whose suffix isn't exactly 7 zero-padded digits can make
+// the "last" row differ from the numerically-highest, resetting the counter to
+// a value that already exists (→ duplicate key on leads_reference_id_key).
+async function nextReferenceSequence(prefix: string): Promise<number> {
+    const [row] = await db
+        .select({
+            maxSeq: sql<number | null>`MAX(CAST(NULLIF(REGEXP_REPLACE(SPLIT_PART(${leads.reference_id}, '-', 3), '[^0-9]', '', 'g'), '') AS INTEGER))`,
+        })
         .from(leads)
-        .where(sql`${leads.reference_id} LIKE ${prefix + '-%'}`)
-        .orderBy(desc(leads.reference_id))
-        .limit(1);
+        .where(sql`${leads.reference_id} LIKE ${prefix + '-%'}`);
+    return (row?.maxSeq ?? 0) + 1;
+}
 
-    let sequenceNum = 1;
-    if (lastRecord?.reference_id) {
-        const lastSeq = lastRecord.reference_id.split('-').pop();
-        if (lastSeq) sequenceNum = parseInt(lastSeq) + 1;
-    }
+function formatReference(prefix: string, sequenceNum: number) {
     return `${prefix}-${sequenceNum.toString().padStart(7, '0')}`;
 }
 
