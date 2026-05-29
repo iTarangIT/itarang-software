@@ -11,11 +11,38 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { getCurrentTenant, getSessionUser } from "@/lib/nbfc/tenant";
-import { nbfcUsers, nbfcRiskRules, users as usersTable } from "@/lib/db/schema";
+import {
+  nbfcUsers,
+  nbfcRiskRules,
+  nbfcServiceConfig,
+  nbfcStepOwners,
+  users as usersTable,
+} from "@/lib/db/schema";
+import { publicOrigin } from "@/lib/public-origin";
+import { NBFC_OWNER_STEPS, type NbfcOwnerStep } from "@/lib/nbfc/origination-roles";
 import UsersSection from "./_components/UsersSection";
 import NotificationPrefsSection from "./_components/NotificationPrefsSection";
+import ServiceOptInSection, {
+  type ServiceConfig,
+} from "./_components/ServiceOptInSection";
+import StepOwnersSection from "./_components/StepOwnersSection";
+import WalletSection from "./_components/WalletSection";
 
 export const dynamic = "force-dynamic";
+
+const SERVICE_CONFIG_DEFAULTS: ServiceConfig = {
+  fi_enabled: false,
+  vkyc_enabled: false,
+  vkyc_mode: null,
+  enach_enabled: false,
+  enach_handoff_method: null,
+  enach_endpoint_url: null,
+  doc_agreement_method: null,
+  store_sanction_letter: false,
+  store_loan_agreement: false,
+  track_completion_gate: true,
+  track_failure_halts: false,
+};
 
 export default async function SettingsPage() {
   const tenant = await getCurrentTenant();
@@ -35,6 +62,53 @@ export default async function SettingsPage() {
     .where(eq(nbfcUsers.tenant_id, tenant.id));
 
   const myMembership = memberships.find((m) => m.user_id === session?.id);
+  const canEdit = myMembership?.role === "nbfc_admin";
+
+  // Addendum V0.2 §7.4 / §7.2 — Service Opt-In config + step owners.
+  const [serviceCfgRow] = await db
+    .select()
+    .from(nbfcServiceConfig)
+    .where(eq(nbfcServiceConfig.tenant_id, tenant.id))
+    .limit(1);
+
+  const serviceConfig: ServiceConfig = serviceCfgRow
+    ? {
+        fi_enabled: serviceCfgRow.fi_enabled,
+        vkyc_enabled: serviceCfgRow.vkyc_enabled,
+        vkyc_mode: serviceCfgRow.vkyc_mode as ServiceConfig["vkyc_mode"],
+        enach_enabled: serviceCfgRow.enach_enabled,
+        enach_handoff_method:
+          serviceCfgRow.enach_handoff_method as ServiceConfig["enach_handoff_method"],
+        enach_endpoint_url: serviceCfgRow.enach_endpoint_url,
+        doc_agreement_method:
+          serviceCfgRow.doc_agreement_method as ServiceConfig["doc_agreement_method"],
+        store_sanction_letter: serviceCfgRow.store_sanction_letter,
+        store_loan_agreement: serviceCfgRow.store_loan_agreement,
+        track_completion_gate: serviceCfgRow.track_completion_gate,
+        track_failure_halts: serviceCfgRow.track_failure_halts,
+      }
+    : SERVICE_CONFIG_DEFAULTS;
+
+  const stepOwnerRows = await db
+    .select()
+    .from(nbfcStepOwners)
+    .where(eq(nbfcStepOwners.tenant_id, tenant.id));
+
+  const ownerSteps = new Set<string>(NBFC_OWNER_STEPS);
+  const stepOwners = stepOwnerRows
+    .filter((o) => ownerSteps.has(o.step))
+    .map((o) => ({
+      step: o.step as NbfcOwnerStep,
+      city: o.city,
+      user_id: o.user_id,
+    }));
+
+  let callbackBase = "";
+  try {
+    callbackBase = publicOrigin();
+  } catch {
+    callbackBase = "";
+  }
 
   const thresholdRules = await db.select().from(nbfcRiskRules);
 
@@ -75,6 +149,27 @@ export default async function SettingsPage() {
           name: m.name,
           created_at: m.created_at?.toISOString() ?? null,
         }))}
+      />
+
+      {/* Wallet — prepaid balance, auto-NACH config, transaction history (§8.1) */}
+      <WalletSection canEdit={canEdit} />
+
+      {/* Service Opt-In + document/track config (§7.4) */}
+      <ServiceOptInSection
+        initialConfig={serviceConfig}
+        canEdit={canEdit}
+        callbackBase={callbackBase}
+      />
+
+      {/* Step owners (§7.2) */}
+      <StepOwnersSection
+        members={memberships.map((m) => ({
+          user_id: m.user_id,
+          email: m.email,
+          name: m.name,
+        }))}
+        initialOwners={stepOwners}
+        canEdit={canEdit}
       />
 
       {/* Notification preferences (only show if the current viewer has a membership) */}
