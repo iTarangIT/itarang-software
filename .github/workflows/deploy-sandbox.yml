@@ -354,17 +354,40 @@ jobs:
       # ────────────────────────────────────────────────────────────────
       # B.5 — ship tarball to the VPS.
       # ────────────────────────────────────────────────────────────────
+      # Native scp instead of appleboy/scp-action@v0.1.7: that action's
+      # `timeout`/`command_timeout` only cover the SSH dial, not a transfer
+      # that stalls AFTER the connection is up. On 2026-05-29 the upload hung
+      # on a dead socket for ~24m until the 25m job timeout killed the run.
+      # SSH keepalives (ServerAliveInterval/CountMax) tear a dead connection
+      # down in ~60s, the step-level timeout-minutes is a hard ceiling, and
+      # the loop retries transient stalls instead of failing the whole deploy.
       - name: SCP tarball to VPS
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SANDBOX_VPS_HOST }}
-          username: ${{ secrets.SANDBOX_VPS_USER }}
-          port: ${{ secrets.SANDBOX_VPS_PORT }}
-          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
-          source: "build.tar.gz,build.meta.json"
-          target: "${{ env.APP_DIR }}/releases/${{ github.sha }}"
-          strip_components: 0
-          timeout: 5m
+        timeout-minutes: 8
+        env:
+          SSH_KEY: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          HOST: ${{ secrets.SANDBOX_VPS_HOST }}
+          VPS_USER: ${{ secrets.SANDBOX_VPS_USER }}
+          PORT: ${{ secrets.SANDBOX_VPS_PORT }}
+          TARGET: ${{ env.APP_DIR }}/releases/${{ github.sha }}
+        run: |
+          set -eo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/sandbox_key
+          chmod 600 ~/.ssh/sandbox_key
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          # -P (uppercase) is scp's port flag; ssh/ssh-keyscan use -p.
+          SSH_OPTS="-i $HOME/.ssh/sandbox_key -P $PORT \
+            -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            -o StrictHostKeyChecking=accept-new"
+          for attempt in 1 2 3; do
+            echo "Upload attempt $attempt…"
+            if scp $SSH_OPTS build.tar.gz build.meta.json "$VPS_USER@$HOST:$TARGET/"; then
+              echo "Upload succeeded on attempt $attempt"; exit 0
+            fi
+            echo "attempt $attempt failed; retrying in $((attempt * 10))s"; sleep $((attempt * 10))
+          done
+          echo "::error::scp of build tarball failed after 3 attempts"; exit 1
 
       # ────────────────────────────────────────────────────────────────
       # B.6 — extract, validate, wire .env symlink.
@@ -455,17 +478,37 @@ jobs:
       # and forces pm2 delete+start, so a new config takes effect
       # immediately.
       # ────────────────────────────────────────────────────────────────
+      # Same native-scp pattern as "SCP tarball to VPS" above (see that
+      # step's comment). Reuses the key file written there — same runner,
+      # same job — but re-writes it defensively in case step ordering changes.
       - name: Ship ecosystem.sandbox.config.js to VPS
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SANDBOX_VPS_HOST }}
-          username: ${{ secrets.SANDBOX_VPS_USER }}
-          port: ${{ secrets.SANDBOX_VPS_PORT }}
-          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
-          source: "ecosystem.sandbox.config.js"
-          target: "${{ env.APP_DIR }}/"
-          overwrite: true
-          timeout: 2m
+        timeout-minutes: 5
+        env:
+          SSH_KEY: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          HOST: ${{ secrets.SANDBOX_VPS_HOST }}
+          VPS_USER: ${{ secrets.SANDBOX_VPS_USER }}
+          PORT: ${{ secrets.SANDBOX_VPS_PORT }}
+          TARGET: ${{ env.APP_DIR }}/
+        run: |
+          set -eo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          if [ ! -f ~/.ssh/sandbox_key ]; then
+            printf '%s\n' "$SSH_KEY" > ~/.ssh/sandbox_key
+            chmod 600 ~/.ssh/sandbox_key
+          fi
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          SSH_OPTS="-i $HOME/.ssh/sandbox_key -P $PORT \
+            -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            -o StrictHostKeyChecking=accept-new"
+          for attempt in 1 2 3; do
+            echo "Upload attempt $attempt…"
+            if scp $SSH_OPTS ecosystem.sandbox.config.js "$VPS_USER@$HOST:$TARGET"; then
+              echo "Upload succeeded on attempt $attempt"; exit 0
+            fi
+            echo "attempt $attempt failed; retrying in $((attempt * 10))s"; sleep $((attempt * 10))
+          done
+          echo "::error::scp of ecosystem.sandbox.config.js failed after 3 attempts"; exit 1
 
       # Sanity check: confirm the file we just shipped actually has the
       # current/server.js args — defense in depth against an SCP that
