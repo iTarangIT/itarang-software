@@ -4,6 +4,7 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { KPICard } from '@/components/shared/kpi-card';
 import { MetricsChart } from '@/components/shared/charts';
+import { BusinessSnapshotPanel } from '@/components/dashboard/ceo/BusinessSnapshotPanel';
 import {
     TrendingUp,
     DollarSign,
@@ -80,12 +81,13 @@ export default function CEODashboard() {
 
             {/* KPI Section */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <KPICard
-                    title="Revenue (MTD)"
-                    value={`₹${(Number(m.revenue ?? 0) / 100000).toFixed(1)}L`}
-                    change={{ value: 12.5, period: 'vs last month', isPositive: true }}
-                    icon={DollarSign}
-                />
+                <div data-testid="kpi-revenue-mtd">
+                    <KPICard
+                        title="Revenue (MTD)"
+                        value={`₹${(Number(m.revenue_mtd ?? m.revenue ?? 0) / 100000).toFixed(1)}L`}
+                        icon={DollarSign}
+                    />
+                </div>
                 <KPICard
                     title="Conversion Rate"
                     value={`${Number(m.conversionRate ?? 0).toFixed(1)}%`}
@@ -119,6 +121,16 @@ export default function CEODashboard() {
                 </div>
 
                 <div className="space-y-6">
+                    <div data-testid="business-snapshot-panel-wrapper">
+                        <BusinessSnapshotPanel
+                            purchasesMtd={Number(m.purchases_mtd ?? 0)}
+                            salesMtd={Number(m.revenue_mtd ?? 0)}
+                            otherExpensesMtd={Number(m.other_expenses_mtd ?? 0)}
+                            recentInvoices={m.recent_invoices || []}
+                            recentExpenses={m.recent_expenses || []}
+                        />
+                    </div>
+
                     <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
                         <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
                             <Briefcase className="w-4 h-4 text-brand-600" />

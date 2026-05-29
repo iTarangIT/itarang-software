@@ -33,6 +33,10 @@
       "schedule": "0 4 * * *"
     },
     {
+      "path": "/api/cron/zoho-sync",
+      "schedule": "5 * * * *"
+    },
+    {
       "path": "/api/cron/dialer-watchdog",
       "schedule": "*/2 * * * *"
     },

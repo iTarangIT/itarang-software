@@ -5468,6 +5468,78 @@ export const paraphernaliaStock = pgTable(
   }),
 );
 
+// --- E-105: Zoho Invoice mirror + universal expense submissions ---
+
+export const zohoInvoices = pgTable(
+  "zoho_invoices",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    zoho_invoice_id: varchar("zoho_invoice_id", { length: 64 }).notNull(),
+    invoice_number: varchar("invoice_number", { length: 64 }),
+    customer_id: varchar("customer_id", { length: 64 }),
+    customer_name: text("customer_name"),
+    invoice_date: date("invoice_date"),
+    due_date: date("due_date"),
+    currency_code: varchar("currency_code", { length: 8 }),
+    total: numeric("total", { precision: 14, scale: 2 }),
+    balance: numeric("balance", { precision: 14, scale: 2 }),
+    status: varchar({ length: 32 }),
+    raw_json: jsonb("raw_json"),
+    synced_at: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    zohoInvoicesZohoIdUnique: uniqueIndex("zoho_invoices_zoho_id_unique").on(
+      table.zoho_invoice_id,
+    ),
+    zohoInvoicesInvoiceDateIdx: index("zoho_invoices_invoice_date_idx").on(
+      table.invoice_date,
+    ),
+    zohoInvoicesStatusIdx: index("zoho_invoices_status_idx").on(table.status),
+  }),
+);
+
+export const expenseSubmissions = pgTable(
+  "expense_submissions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    submitted_by: uuid("submitted_by").notNull(),
+    category: varchar({ length: 64 }).notNull(),
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+    description: text(),
+    bill_url: text("bill_url"),
+    bill_storage_path: text("bill_storage_path"),
+    status: varchar({ length: 16 }).default("pending").notNull(),
+    approved_by: uuid("approved_by"),
+    approved_at: timestamp("approved_at", { withTimezone: true }),
+    rejection_reason: text("rejection_reason"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    expenseSubmissionsStatusIdx: index("expense_submissions_status_idx").on(
+      table.status,
+    ),
+    expenseSubmissionsSubmittedByIdx: index(
+      "expense_submissions_submitted_by_idx",
+    ).on(table.submitted_by),
+    expenseSubmissionsApprovedAtIdx: index(
+      "expense_submissions_approved_at_idx",
+    ).on(table.approved_at),
+  }),
+);
+
+export const zohoSyncState = pgTable("zoho_sync_state", {
+  id: integer().default(1).primaryKey().notNull(),
+  last_invoice_modified_at: timestamp("last_invoice_modified_at", {
+    withTimezone: true,
+  }),
+  last_run_at: timestamp("last_run_at", { withTimezone: true }),
+  last_status: varchar("last_status", { length: 16 }),
+  last_error: text("last_error"),
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // Part 0 BRD support tables (E-113 .. E-124).
 // dealer_lead_id columns are text — matches dealer_leads.id (legacy text PK,
