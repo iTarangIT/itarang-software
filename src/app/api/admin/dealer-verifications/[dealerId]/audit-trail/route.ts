@@ -283,9 +283,9 @@ async function renderAuditTrailPdf(
   });
 
   const browser = await launchBrowser();
+  const page = await browser.newPage();
 
   try {
-    const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "networkidle0" });
     const pdf = await page.pdf({
       format: "A4",
@@ -294,7 +294,10 @@ async function renderAuditTrailPdf(
     });
     return Buffer.from(pdf);
   } finally {
-    await browser.close();
+    // Close only the PAGE — launchBrowser() returns a SHARED, long-lived
+    // browser reused across requests; closing it would break concurrent
+    // renders and force an expensive relaunch.
+    await page.close().catch(() => {});
   }
 }
 
