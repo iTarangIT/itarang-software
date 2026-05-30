@@ -21,7 +21,13 @@ jobs:
           port: ${{ secrets.PROD_VPS_PORT }}
           key: ${{ secrets.PROD_VPS_SSH_KEY }}
           script_stop: true
-          command_timeout: 20m
+          # 20m was too tight: `npm ci` alone takes ~19-20 min on this thrashing
+          # 8 GB box (worse when the sandbox deploy runs concurrently — both fire
+          # on push to main), so the build never started before the timeout fired
+          # (run 26680354069: "Run Command Timeout" at 20m). 45m covers npm ci +
+          # build + pm2 + health with headroom. The GitHub job timeout (default
+          # 360m) is the only outer bound.
+          command_timeout: 45m
           script: |
             set -eo pipefail
             APP_DIR=/home/itarang-crm/htdocs/crm.itarang.com
@@ -38,10 +44,12 @@ jobs:
 
             echo "=== Installing dependencies ==="
             # Plain npm ci — known-good (run 26678229305 installed 852 packages
-            # this way). A prior "skip when lock unchanged" optimization aborted
-            # the deploy twice (runs 26679305288, 26679886848) under drone-ssh's
-            # remote bash, so it was removed. Reliability over the ~19-min cost.
-            npm ci --no-audit --no-fund --include=dev
+            # this way). A "skip when lock unchanged" optimization aborted the
+            # deploy twice under drone-ssh's remote bash, so it was removed.
+            # --prefer-offline reuses the on-box package cache instead of
+            # re-downloading ~850 packages, cutting a big chunk off the ~19-min
+            # install; it falls back to the network for anything not cached.
+            npm ci --no-audit --no-fund --include=dev --prefer-offline
 
             echo "=== Preparing logs directory ==="
             mkdir -p logs
