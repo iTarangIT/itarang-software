@@ -29,7 +29,6 @@ concurrency:
 env:
   APP_DIR: /home/itarang-sandbox/htdocs/sandbox.itarang.com
   LOG_DIR: /home/itarang-sandbox/deploy-logs
-  CHROMIUM_MARKER: /home/itarang-sandbox/.chromium-libs-installed
   HEALTH_URL: http://127.0.0.1:3003/api/health
   SANDBOX_PORT: "3003"
 
@@ -193,6 +192,7 @@ jobs:
             build.tar.gz
             build.meta.json
             ecosystem.sandbox.config.js
+            scripts/sandbox-system-setup.sh
           retention-days: 7
           if-no-files-found: error
 
@@ -305,11 +305,36 @@ jobs:
             ls -la shared logs releases | head -20
 
       # ────────────────────────────────────────────────────────────────
-      # B.3 — Chromium libs (puppeteer-core runtime deps). Stays on VPS
-      # because puppeteer uses these at runtime, not build time. Cheap
-      # marker-file check; runs only on cold hosts.
+      # B.2b — ship the provisioning script. The sandbox box never runs
+      # `git pull` under this arch, so without this it would execute whatever
+      # stale scripts/sandbox-system-setup.sh was last manually pulled — the
+      # same drift class that bit ecosystem.sandbox.config.js. SCP the current
+      # copy (it ships in the build artifact) so B.3 runs the right version.
       # ────────────────────────────────────────────────────────────────
-      - name: Install system deps (Chromium libs)
+      - name: Ship provisioning script to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SANDBOX_VPS_HOST }}
+          username: ${{ secrets.SANDBOX_VPS_USER }}
+          port: ${{ secrets.SANDBOX_VPS_PORT }}
+          key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
+          source: "scripts/sandbox-system-setup.sh"
+          target: "${{ env.APP_DIR }}/"
+          overwrite: true
+          timeout: 2m
+
+      # ────────────────────────────────────────────────────────────────
+      # B.3 — Provision headless Chromium: the GTK/NSS libs AND the
+      # google-chrome-stable binary that PUPPETEER_EXECUTABLE_PATH points at.
+      # Runs every deploy: the script self-skips apt when everything is already
+      # present, then runs a launch preflight. The preflight is the whole point
+      # — it makes a missing/broken browser fail THIS deploy loudly (B.3 runs
+      # before the release is swapped, so the old release keeps serving)
+      # instead of surfacing as "Failed to launch the browser process ...
+      # ENOENT" the first time a user clicks a PDF button. script_stop:true so
+      # a non-zero preflight aborts the deploy.
+      # ────────────────────────────────────────────────────────────────
+      - name: Provision Chromium (libs + browser) and preflight
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SANDBOX_VPS_HOST }}
@@ -318,19 +343,16 @@ jobs:
           key: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
           timeout: 60s
           command_timeout: 10m
-          script_stop: false
-          envs: APP_DIR,CHROMIUM_MARKER
+          script_stop: true
+          envs: APP_DIR
           script: |
             set -eo pipefail
             cd "$APP_DIR"
-            if [ -f "$CHROMIUM_MARKER" ]; then
-              echo "Marker present at $CHROMIUM_MARKER — skipping"
-              exit 0
-            fi
-            echo "Marker missing — running sandbox-system-setup.sh"
-            chmod +x scripts/sandbox-system-setup.sh
-            time ./scripts/sandbox-system-setup.sh
-            touch "$CHROMIUM_MARKER"
+            # B.2b SCPs the script in; tolerate either landing path.
+            SETUP=scripts/sandbox-system-setup.sh
+            [ -f "$SETUP" ] || SETUP=sandbox-system-setup.sh
+            chmod +x "$SETUP"
+            time ./"$SETUP"
 
       # ────────────────────────────────────────────────────────────────
       # B.4 — create release dir on the VPS so SCP has a target.
