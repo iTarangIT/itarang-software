@@ -101,6 +101,9 @@ async function checkDealerStatusGate(
 const step1Schema = z.object({
     full_name: z.string().optional().nullable(),
     phone: z.string().optional().nullable(),
+    // Customer email → leads.owner_email. Required for finance leads (the Digio
+    // loan-agreement e-sign signer id, §11.3); enforced in the commit block.
+    email: z.string().optional().nullable(),
     father_or_husband_name: z.string().optional().nullable(),
     dob: z.string().optional().nullable(),
     current_address: z.string().optional().nullable(),
@@ -323,6 +326,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                         formData: {
                             full_name: existing.full_name,
                             phone: existing.phone,
+                            email: existing.owner_email ?? '',
                             current_address: existing.current_address,
                             permanent_address: existing.permanent_address,
                             is_current_same: existing.is_current_same,
@@ -408,6 +412,13 @@ export const POST = withErrorHandler(async (req: Request) => {
             || data.payment_method === 'other_finance'
             || data.payment_method === 'dealer_finance';
         if (_isFinanceLead) {
+            const email = data.email?.trim();
+            if (!email) {
+                return errorResponse('Customer email required for finance cases', 400);
+            }
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                return errorResponse('Enter a valid customer email address', 400);
+            }
             if (data.resident_status !== 'owned' && data.resident_status !== 'rented') {
                 return errorResponse('Resident status required for finance cases', 400);
             }
@@ -440,6 +451,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                     phone: normPhone,
                     owner_name: data.full_name?.trim()!,
                     owner_contact: normPhone,
+                    owner_email: data.email?.trim() || null,
                     mobile: normPhone,
                     current_address: data.current_address?.trim(),
                     permanent_address: data.is_current_same ? data.current_address?.trim() : data.permanent_address?.trim(),

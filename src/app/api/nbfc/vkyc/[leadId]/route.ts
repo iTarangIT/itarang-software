@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { videoKycAttempts, videoKycVerifications } from "@/lib/db/schema";
+import { nbfcServiceConfig, videoKycAttempts, videoKycVerifications } from "@/lib/db/schema";
 import { activeVideoLivenessResult } from "@/lib/decentro";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment, getVkycTrack } from "@/lib/nbfc/vkyc";
@@ -59,9 +59,24 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
     if (!assignment) {
       return NextResponse.json({ ok: true, track: null, reason: "No assignment for this tenant." });
     }
+
+    // Opt-in state (mirrors the initiate route): per-lead snapshot first, live
+    // config fallback when the snapshot carries no mode (§7.4). Lets the UI show
+    // a clear "not opted in" notice rather than a button that 400s on click.
+    let enabled = assignment.snapshot.vkyc_enabled ?? false;
+    if (!assignment.snapshot.vkyc_mode) {
+      const cfg = await db
+        .select({ enabled: nbfcServiceConfig.vkyc_enabled, mode: nbfcServiceConfig.vkyc_mode })
+        .from(nbfcServiceConfig)
+        .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
+        .limit(1);
+      enabled = cfg[0]?.enabled ?? false;
+    }
+    const canAct = actor.role === "operations" || actor.role === "nbfc_admin";
+
     let track = await getVkycTrack(leadId, assignment.nbfc_id);
     if (!track) {
-      return NextResponse.json({ ok: true, track: null, can_act: actor.role === "operations" || actor.role === "nbfc_admin" });
+      return NextResponse.json({ ok: true, track: null, can_act: canAct, enabled });
     }
 
     // Lazy Decentro result fetch (iTarang mode): callback landed, not yet decoded.
@@ -115,7 +130,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
     return NextResponse.json({
       ok: true,
       track,
-      can_act: actor.role === "operations" || actor.role === "nbfc_admin",
+      can_act: canAct,
+      enabled,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

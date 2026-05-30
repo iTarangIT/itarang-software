@@ -9,8 +9,13 @@
  * (NODE_ENV != production AND server NBFC_TEST_BYPASS_SECRET AND request
  * x-nbfc-test-bypass header).
  *
- * Caller must hold the 'risk_head' role (also accepted: 'nbfc_risk_head' for
- * back-compat with E-082's role naming).
+ * AuthZ note: the telemetry BRD §6.1.6 specified a 'risk_head' approver, but
+ * Addendum V0.2 §7.1 defers the whole Monitor/Recover surface and §7.2 redefines
+ * NBFC RBAC to five origination roles with NO 'risk_head' — and states "NBFC
+ * Admin … can act on every step." Gating on 'risk_head' alone therefore made
+ * this action unreachable (no user in the current model can hold that role).
+ * We accept 'nbfc_admin' per V0.2 §7.2, and keep 'risk_head'/'nbfc_risk_head'
+ * for back-compat with any legacy nbfc_users rows still carrying it.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -33,7 +38,13 @@ const Body = z.object({
     .optional(),
 });
 
-const RISK_HEAD_ROLES = new Set(["risk_head", "nbfc_risk_head"]);
+// V0.2 §7.2: NBFC Admin can act on every step. risk_head/nbfc_risk_head kept
+// for back-compat with legacy telemetry-era rows.
+const FLAG_RECOVERY_ROLES = new Set([
+  "nbfc_admin",
+  "risk_head",
+  "nbfc_risk_head",
+]);
 
 function statusFromError(msg: string): number {
   if (msg.startsWith("UNAUTHORIZED")) return 401;
@@ -48,11 +59,11 @@ export async function POST(req: NextRequest) {
   try {
     const actor = await resolveActor(req.headers);
 
-    if (!RISK_HEAD_ROLES.has(actor.role)) {
+    if (!FLAG_RECOVERY_ROLES.has(actor.role)) {
       return NextResponse.json(
         {
           ok: false,
-          error: `FORBIDDEN: caller role '${actor.role}' is not authorised; risk_head required`,
+          error: `FORBIDDEN: caller role '${actor.role}' is not authorised; nbfc_admin required`,
         },
         { status: 403 },
       );

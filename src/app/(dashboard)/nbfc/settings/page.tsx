@@ -19,7 +19,11 @@ import {
   users as usersTable,
 } from "@/lib/db/schema";
 import { publicOrigin } from "@/lib/public-origin";
-import { NBFC_OWNER_STEPS, type NbfcOwnerStep } from "@/lib/nbfc/origination-roles";
+import {
+  NBFC_OWNER_STEPS,
+  normalizeNbfcRole,
+  type NbfcOwnerStep,
+} from "@/lib/nbfc/origination-roles";
 import UsersSection from "./_components/UsersSection";
 import NotificationPrefsSection from "./_components/NotificationPrefsSection";
 import ServiceOptInSection, {
@@ -62,7 +66,9 @@ export default async function SettingsPage() {
     .where(eq(nbfcUsers.tenant_id, tenant.id));
 
   const myMembership = memberships.find((m) => m.user_id === session?.id);
-  const canEdit = myMembership?.role === "nbfc_admin";
+  // Normalise the legacy 'admin' seed → 'nbfc_admin' so the account owner can
+  // edit (mirrors resolveActor; the server PUT routes apply the same mapping).
+  const canEdit = normalizeNbfcRole(myMembership?.role) === "nbfc_admin";
 
   // Addendum V0.2 §7.4 / §7.2 — Service Opt-In config + step owners.
   const [serviceCfgRow] = await db
