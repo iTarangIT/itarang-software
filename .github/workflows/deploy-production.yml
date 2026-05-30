@@ -70,33 +70,30 @@ jobs:
             ARCHIVE_KEEP=10
 
             echo "=== Snapshot previous .next/static into archive ring ==="
-            mkdir -p "$ARCHIVE_DIR" 2>/dev/null || true
-            # This shared 8 GB box runs tight: run 26678229305 died HERE when
-            # `cp -a .next/static` hit ENOSPC after a 19-min npm ci. The archive
-            # ring is only a stale-tab optimization (serves old chunks during the
-            # swap window) — it must NEVER abort the deploy, and duplicating
-            # static/ is the wrong move when disk is low. So: reclaim old
-            # snapshots first, show disk, then snapshot only if there's headroom,
-            # and never let a failure here stop the build (rm -rf .next below
-            # frees the old build's space regardless of what we do here).
-            ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf || true
-            df -h "$APP_DIR" | tail -1 || true
-            AVAIL_KB=$(df -P "$APP_DIR" 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)
-            OLD_BUILD_ID=""
-            if [ -f .next/BUILD_ID ]; then OLD_BUILD_ID=$(cat .next/BUILD_ID); fi
-            if [ "${AVAIL_KB:-0}" -lt 1572864 ]; then
-              echo "::warning::only $(( ${AVAIL_KB:-0} / 1024 )) MB free in $APP_DIR — skipping archive snapshot to protect the build"
-            elif [ -n "$OLD_BUILD_ID" ] && [ -d .next/static ]; then
-              rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID"
-              if cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"; then
-                echo "Archived $OLD_BUILD_ID ($(find "$ARCHIVE_DIR/$OLD_BUILD_ID" -type f | wc -l) files)"
-              else
-                echo "::warning::archive snapshot failed (disk?) — continuing without it"
-                rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID" 2>/dev/null || true
+            # The archive ring is a NON-CRITICAL stale-tab optimization (serves
+            # old chunks during the symlink swap). It has aborted the prod deploy
+            # at this exact spot several times under `set -eo pipefail` for subtle
+            # reasons (runs 26678229305 / 26680904559), so the WHOLE best-effort
+            # block runs with errexit OFF — it must never stop the build. Disk is
+            # not a concern here (box has tens of GB free); `rm -rf .next` below
+            # reclaims the old build anyway. errexit is restored right after.
+            set +e
+            mkdir -p "$ARCHIVE_DIR"
+            ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf
+            if [ -f .next/BUILD_ID ] && [ -d .next/static ]; then
+              OLD_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null)
+              if [ -n "$OLD_BUILD_ID" ]; then
+                rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID"
+                if cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"; then
+                  echo "Archived $OLD_BUILD_ID"
+                else
+                  echo "::warning::archive snapshot failed — non-fatal, continuing"
+                fi
               fi
             else
-              echo "No previous BUILD_ID/.next/static — first build or clean checkout"
+              echo "No previous .next to archive (first build or clean tree)"
             fi
+            set -e
 
             echo "=== Cleaning prior build state ==="
             # Forces deterministic builds. The archive ring above already
