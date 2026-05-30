@@ -36,8 +36,22 @@ jobs:
             echo "${{ secrets.PROD_ENV_FILE_B64 }}" | base64 -d > .env.production
             chmod 600 .env.production
 
-            echo "=== Installing dependencies ==="
-            npm ci --no-audit --no-fund --include=dev
+            echo "=== Installing dependencies (conditional on package-lock) ==="
+            # npm ci wipes and reinstalls node_modules from scratch every deploy —
+            # ~19 min of RAM/IO thrash on this shared 8 GB box (run 26678229305)
+            # and a major disk-churn source. Skip it when package-lock.json is
+            # unchanged and node_modules is already present. The hash lives
+            # OUTSIDE the repo so the `git reset --hard` above can't wipe it.
+            LOCK_HASH=$(sha256sum package-lock.json | cut -d' ' -f1)
+            HASH_FILE="$HOME/.itarang-prod-lock-hash"
+            LAST_HASH=$(cat "$HASH_FILE" 2>/dev/null || echo "")
+            if [ "$LOCK_HASH" = "$LAST_HASH" ] && [ -d node_modules ]; then
+              echo "package-lock.json unchanged ($LOCK_HASH) — skipping npm ci"
+            else
+              echo "Lock changed (was ${LAST_HASH:-none}, now $LOCK_HASH) — running npm ci"
+              npm ci --no-audit --no-fund --include=dev
+              echo "$LOCK_HASH" > "$HASH_FILE"
+            fi
 
             echo "=== Preparing logs directory ==="
             mkdir -p logs
@@ -58,13 +72,30 @@ jobs:
             ARCHIVE_KEEP=10
 
             echo "=== Snapshot previous .next/static into archive ring ==="
-            mkdir -p "$ARCHIVE_DIR"
+            mkdir -p "$ARCHIVE_DIR" 2>/dev/null || true
+            # This shared 8 GB box runs tight: run 26678229305 died HERE when
+            # `cp -a .next/static` hit ENOSPC after a 19-min npm ci. The archive
+            # ring is only a stale-tab optimization (serves old chunks during the
+            # swap window) — it must NEVER abort the deploy, and duplicating
+            # static/ is the wrong move when disk is low. So: reclaim old
+            # snapshots first, show disk, then snapshot only if there's headroom,
+            # and never let a failure here stop the build (rm -rf .next below
+            # frees the old build's space regardless of what we do here).
+            ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf || true
+            df -h "$APP_DIR" | tail -1 || true
+            AVAIL_KB=$(df -P "$APP_DIR" 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)
             OLD_BUILD_ID=""
             if [ -f .next/BUILD_ID ]; then OLD_BUILD_ID=$(cat .next/BUILD_ID); fi
-            if [ -n "$OLD_BUILD_ID" ] && [ -d .next/static ]; then
+            if [ "${AVAIL_KB:-0}" -lt 1572864 ]; then
+              echo "::warning::only $(( ${AVAIL_KB:-0} / 1024 )) MB free in $APP_DIR — skipping archive snapshot to protect the build"
+            elif [ -n "$OLD_BUILD_ID" ] && [ -d .next/static ]; then
               rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID"
-              cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"
-              echo "Archived $OLD_BUILD_ID ($(find "$ARCHIVE_DIR/$OLD_BUILD_ID" -type f | wc -l) files)"
+              if cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"; then
+                echo "Archived $OLD_BUILD_ID ($(find "$ARCHIVE_DIR/$OLD_BUILD_ID" -type f | wc -l) files)"
+              else
+                echo "::warning::archive snapshot failed (disk?) — continuing without it"
+                rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID" 2>/dev/null || true
+              fi
             else
               echo "No previous BUILD_ID/.next/static — first build or clean checkout"
             fi
