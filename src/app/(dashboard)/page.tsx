@@ -16,3 +16,6 @@ export default function DashboardPage() {
 
   return <DealerDashboardPage dealer={user as unknown as { full_name: string; dealer_id?: string; company_type?: string; gst_number?: string; finance_enabled?: boolean; submitted_at?: string; onboarding_status?: 'draft' | 'submitted' | 'under_review' | 'rejected' | 'succeed' }} />;
 }
+
+
+// hello

@@ -16,8 +16,16 @@ const globalForDb = globalThis as unknown as {
 const queryClient = globalForDb.pgClient ?? postgres(connectionString, {
     ssl: 'require',
     prepare: false,
-    max: 10,
+    // Sandbox/prod RDS (`database-1`/`database-2`) is a small instance
+    // (~79 max_connections) with NO pooler in front. Each app/worker/script
+    // process opens its own pool, so a deploy-time burst of processes can
+    // crowd the cap and trip `53300` — which fails /api/health and rolls the
+    // deploy back. 5 halves each process's footprint with no downside at
+    // sandbox traffic. connect_timeout bounds a stalled/unreachable RDS so
+    // the attempt errors fast (~10s) instead of hanging on the default.
+    max: 5,
     idle_timeout: 20,
+    connect_timeout: 10,
 });
 
 if (process.env.NODE_ENV !== 'production') {
