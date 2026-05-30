@@ -42,6 +42,18 @@ jobs:
             echo "=== Preparing logs directory ==="
             mkdir -p logs
 
+            echo "=== Provision headless Chromium (libs + browser) + preflight ==="
+            # Installs google-chrome-stable (the binary PUPPETEER_EXECUTABLE_PATH
+            # points at) plus the GTK/NSS libs Chromium links against, then runs a
+            # launch preflight. Without this, PDF rendering (Initiate Agreement,
+            # KYC consent, audit trail) throws "Failed to launch the browser
+            # process ... ENOENT" because nothing in the pipeline ever installed
+            # the browser. Idempotent: skips apt when already present. Runs under
+            # the block's `set -eo pipefail` + script_stop, so a failed preflight
+            # aborts the deploy here — before pm2 is restarted onto the new build.
+            chmod +x scripts/sandbox-system-setup.sh
+            ./scripts/sandbox-system-setup.sh
+
             ARCHIVE_DIR=/home/itarang-crm/static_archive
             ARCHIVE_KEEP=10
 
