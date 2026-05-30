@@ -374,47 +374,75 @@ jobs:
             mkdir -p "releases/${{ github.sha }}/standalone"
 
       # ────────────────────────────────────────────────────────────────
-      # B.5 — ship tarball to the VPS.
+      # B.5 — ship the build to the VPS via rsync delta upload.
+      #
+      # Replaces a full-tarball SCP that re-sent the ENTIRE standalone tree
+      # (≈ all of node_modules) over the slow shared-VPS link on every deploy
+      # and started timing out at ~8 min (run 26676914904). rsync with
+      # --link-dest=current uses the live release as a basis: byte-identical
+      # files (node_modules barely changes between deploys) are hardlinked on
+      # the VPS and never cross the network, so only genuinely-changed files
+      # transfer — seconds instead of minutes. Hardlinking also stops each
+      # kept release from duplicating node_modules, which matters on the
+      # disk-constrained 8 GB box.
+      #
+      # --checksum is required: every build runs a fresh `npm ci`, so
+      # node_modules mtimes differ each time even when contents are identical
+      # — an mtime quick-check would re-send everything. We compare by content
+      # instead. The `current` symlink still points at the live (previous)
+      # release here; the swap happens later (B.7). First-ever deploy:
+      # `current` is absent and rsync simply copies everything.
       # ────────────────────────────────────────────────────────────────
-      # Native scp instead of appleboy/scp-action@v0.1.7: that action's
-      # `timeout`/`command_timeout` only cover the SSH dial, not a transfer
-      # that stalls AFTER the connection is up. On 2026-05-29 the upload hung
-      # on a dead socket for ~24m until the 25m job timeout killed the run.
-      # SSH keepalives (ServerAliveInterval/CountMax) tear a dead connection
-      # down in ~60s, the step-level timeout-minutes is a hard ceiling, and
-      # the loop retries transient stalls instead of failing the whole deploy.
-      - name: SCP tarball to VPS
-        timeout-minutes: 8
+      - name: Rsync build to VPS (delta upload)
+        # Step-level cap (not job-level): a job timeout-kill skips the
+        # if:failure() rollback/log steps; a step timeout fails cleanly and
+        # lets them run. Delta uploads are seconds-to-low-minutes; 12m is slack.
+        timeout-minutes: 12
         env:
           SSH_KEY: ${{ secrets.SANDBOX_VPS_SSH_KEY }}
           HOST: ${{ secrets.SANDBOX_VPS_HOST }}
           VPS_USER: ${{ secrets.SANDBOX_VPS_USER }}
           PORT: ${{ secrets.SANDBOX_VPS_PORT }}
-          TARGET: ${{ env.APP_DIR }}/releases/${{ github.sha }}
+          DEST: ${{ env.APP_DIR }}/releases/${{ github.sha }}/standalone/
         run: |
           set -eo pipefail
           umask 077
+          # rsync needs the real file tree (the artifact ships a tarball).
+          mkdir -p release_tree
+          tar -xzf build.tar.gz -C release_tree
+          echo "Unpacked $(find release_tree -type f | wc -l) files for rsync"
+
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/sandbox_key
           chmod 600 ~/.ssh/sandbox_key
           ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-          # -P (uppercase) is scp's port flag; ssh/ssh-keyscan use -p.
-          SSH_OPTS="-i $HOME/.ssh/sandbox_key -P $PORT \
+          # Kept from the native-scp fix (1fceb25): keepalives tear a dead
+          # socket down in ~60s. ssh (rsync's transport) uses -p (lowercase).
+          SSH_CMD="ssh -i $HOME/.ssh/sandbox_key -p $PORT \
             -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
             -o StrictHostKeyChecking=accept-new"
+
+          # -rlptDz = -a minus owner/group (the deploy user can't chown), plus
+          # compression for the changed text chunks. --link-dest resolves on
+          # the VPS against the still-live `current` release. rsync is
+          # idempotent, so a retry just resumes where it stalled.
           for attempt in 1 2 3; do
-            echo "Upload attempt $attempt…"
-            if scp $SSH_OPTS build.tar.gz build.meta.json "$VPS_USER@$HOST:$TARGET/"; then
-              echo "Upload succeeded on attempt $attempt"; exit 0
+            echo "Rsync attempt $attempt…"
+            if rsync -rlptDz --checksum --delete \
+                --link-dest="$APP_DIR/current/" \
+                -e "$SSH_CMD" \
+                release_tree/ \
+                "$VPS_USER@$HOST:$DEST"; then
+              echo "rsync delta upload succeeded on attempt $attempt"; exit 0
             fi
             echo "attempt $attempt failed; retrying in $((attempt * 10))s"; sleep $((attempt * 10))
           done
-          echo "::error::scp of build tarball failed after 3 attempts"; exit 1
+          echo "::error::rsync of build failed after 3 attempts"; exit 1
 
       # ────────────────────────────────────────────────────────────────
-      # B.6 — extract, validate, wire .env symlink.
+      # B.6 — validate the rsync'd release, wire .env symlink.
       # ────────────────────────────────────────────────────────────────
-      - name: Extract & validate release
+      - name: Validate release
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SANDBOX_VPS_HOST }}
@@ -429,15 +457,14 @@ jobs:
             set -eo pipefail
             exec 2>&1
             cd "$APP_DIR/releases/${{ github.sha }}"
-            tar -xzf build.tar.gz -C standalone
-            rm build.tar.gz
+            # Files arrived already-unpacked via rsync (B.5) — nothing to extract.
 
             # Assertions
             [ -f standalone/server.js ] || { echo "❌ standalone/server.js missing"; exit 1; }
             [ -f standalone/.next/BUILD_ID ] || { echo "❌ standalone/.next/BUILD_ID missing"; exit 1; }
             CHUNKS=$(find standalone/.next/static/chunks -type f 2>/dev/null | wc -l)
             if [ "$CHUNKS" -lt 5 ]; then
-              echo "❌ chunk count $CHUNKS < 5 — tarball was incomplete"
+              echo "❌ chunk count $CHUNKS < 5 — rsync upload was incomplete"
               exit 1
             fi
             echo "Release has $CHUNKS chunks, BUILD_ID=$(cat standalone/.next/BUILD_ID)"
