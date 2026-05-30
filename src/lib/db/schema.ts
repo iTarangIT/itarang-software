@@ -3297,7 +3297,7 @@ export const nbfcServiceConfig = pgTable(
     vkyc_enabled: boolean("vkyc_enabled").default(false).notNull(),
     vkyc_mode: varchar("vkyc_mode", { length: 16 }), // 'own' | 'itarang'
     enach_enabled: boolean("enach_enabled").default(false).notNull(),
-    enach_handoff_method: varchar("enach_handoff_method", { length: 16 }), // 'redirect' | 'webhook'
+    enach_handoff_method: varchar("enach_handoff_method", { length: 16 }), // 'redirect' | 'webhook' | 'itarang_razorpay'
     enach_endpoint_url: text("enach_endpoint_url"),
     doc_agreement_method: varchar("doc_agreement_method", { length: 24 }), // 'upload' | 'digio' | 'api_autofetch'
     store_sanction_letter: boolean("store_sanction_letter").default(false).notNull(),
@@ -3357,7 +3357,13 @@ export const enachMandates = pgTable(
     provider_name: varchar("provider_name", { length: 80 }),
     provider_raw_status: varchar("provider_raw_status", { length: 120 }),
     provider_raw_payload: jsonb("provider_raw_payload"),
-    registration_method: varchar("registration_method", { length: 16 }), // 'callback' | 'manual'
+    registration_method: varchar("registration_method", { length: 16 }), // 'callback' | 'manual' | 'razorpay'
+    // E-145 — "iTarang Razorpay (managed)" variant: iTarang creates + tracks the
+    // e-mandate itself via Razorpay Orders + Tokens. Correlation handles only;
+    // canonical `status` (above) still drives every gate (§9.3).
+    razorpay_order_id: varchar("razorpay_order_id", { length: 64 }),
+    razorpay_customer_id: varchar("razorpay_customer_id", { length: 64 }),
+    razorpay_token_id: varchar("razorpay_token_id", { length: 64 }),
     proof_url: text("proof_url"),
     failure_reason: text("failure_reason"),
     stale_risk: boolean("stale_risk").default(false).notNull(),
@@ -3375,6 +3381,43 @@ export const enachMandates = pgTable(
     refUnique: uniqueIndex("enach_mandates_ref_unique").on(table.enach_ref),
     leadNbfcIdx: index("enach_mandates_lead_nbfc_idx").on(table.lead_id, table.nbfc_id),
     tenantStatusIdx: index("enach_mandates_tenant_status_idx").on(table.tenant_id, table.status),
+  }),
+);
+
+// E-146 — Addendum V0.2 §11. Sanction-letter / loan-agreement signing for the
+// WINNING NBFC. iTarang facilitates + files but is never a party (§11.1). One
+// row per attempt; canonical `status` drives the stepper sub-label. NOT a
+// disbursal gate — §11.5 Step-5 OTP is. Storage optional (§11.4): when
+// store_loan_agreement is false iTarang keeps only the §11.6 audit record.
+export const nbfcLoanAgreements = pgTable(
+  "nbfc_loan_agreements",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    agreement_ref: varchar("agreement_ref", { length: 64 }).notNull(),
+    method: varchar({ length: 16 }), // 'upload' | 'digio' | 'api_autofetch'
+    // 'pending' | 'in_progress' | 'signed' | 'failed' | 'skipped'
+    status: varchar({ length: 20 }).default("pending").notNull(),
+    digio_document_id: varchar("digio_document_id", { length: 120 }),
+    signed_document_url: text("signed_document_url"),
+    audit_trail_url: text("audit_trail_url"),
+    provider_raw_status: varchar("provider_raw_status", { length: 120 }),
+    provider_raw_payload: jsonb("provider_raw_payload"),
+    store_sanction_letter: boolean("store_sanction_letter").default(false).notNull(),
+    store_loan_agreement: boolean("store_loan_agreement").default(false).notNull(),
+    failure_reason: text("failure_reason"),
+    initiated_by: uuid("initiated_by"),
+    initiated_at: timestamp("initiated_at", { withTimezone: true }),
+    signed_at: timestamp("signed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    refUnique: uniqueIndex("nbfc_loan_agreements_ref_unique").on(table.agreement_ref),
+    leadNbfcIdx: index("nbfc_loan_agreements_lead_nbfc_idx").on(table.lead_id, table.nbfc_id),
+    digioDocIdx: index("nbfc_loan_agreements_digio_doc_idx").on(table.digio_document_id),
   }),
 );
 
@@ -3588,8 +3631,11 @@ export const manualHandoffs = pgTable(
   }),
 );
 
-// Bridges existing loan_applications to a tenant + the IoT vehicleno that loan
-// is financing. One loan belongs to one NBFC.
+// NBFC servicing ledger keyed by loan_application_id (the PK). That id comes
+// from one of: an NBFC's own loan id (CSV import), or a loan_sanctions.id
+// projected by the disbursement bridge (projectDisbursedLoan, §6.1.3). It is
+// therefore NOT a FK to loan_applications — that legacy FK was dropped in E-144
+// because the bridge keys it to loan_sanctions.id. One loan belongs to one NBFC.
 export const nbfcLoans = pgTable(
   "nbfc_loans",
   {

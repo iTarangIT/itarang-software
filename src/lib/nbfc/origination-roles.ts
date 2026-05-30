@@ -19,6 +19,19 @@ export const NBFC_ORIGINATION_ROLES = [
 
 export type NbfcOriginationRole = (typeof NBFC_ORIGINATION_ROLES)[number];
 
+/**
+ * Normalises a raw `nbfc_users.role` to the canonical origination role. The NBFC
+ * activation flow seeds the primary partner-owner with the legacy role 'admin'
+ * (see /api/admin/nbfc/[nbfcId]/activate), but the origination RBAC layer (§7.2)
+ * uses 'nbfc_admin' as the admin role across every action gate and the settings
+ * page. Map the legacy value here so the account owner is recognised as admin
+ * everywhere; absent/unknown roles fall back to the least-privileged 'viewer'.
+ */
+export function normalizeNbfcRole(role: string | null | undefined): string {
+  if (!role) return "viewer";
+  return role === "admin" ? "nbfc_admin" : role;
+}
+
 export const NBFC_ROLE_LABELS: Record<NbfcOriginationRole, string> = {
   nbfc_admin: "NBFC Admin",
   credit_underwriting: "Credit / Underwriting",

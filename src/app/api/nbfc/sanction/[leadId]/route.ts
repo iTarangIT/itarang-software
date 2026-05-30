@@ -35,6 +35,21 @@ function statusFromError(msg: string): number {
   return 500;
 }
 
+/**
+ * Drizzle wraps driver errors as `Failed query: …`; the real Postgres message
+ * (constraint name, etc.) lives on the `.cause` chain. Surface the deepest one
+ * so the UI shows the actual reason instead of the opaque wrapper.
+ */
+function unwrapDbError(e: unknown): string {
+  let cur: unknown = e;
+  let msg = e instanceof Error ? e.message : String(e);
+  while (cur instanceof Error && (cur as { cause?: unknown }).cause) {
+    cur = (cur as { cause?: unknown }).cause;
+    if (cur instanceof Error && cur.message) msg = cur.message;
+  }
+  return msg;
+}
+
 async function loadContext(leadId: string, tenantId: string) {
   const assignment = await getActiveAssignment(leadId, tenantId);
   const [lead] = await db
@@ -65,7 +80,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
       lead_status: lead?.kyc_status ?? null,
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = unwrapDbError(e);
     return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
   }
 }
@@ -138,7 +153,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         loan_approved_by: me?.legal_name ?? me?.short_name ?? null,
         status: "sanctioned",
         sanctioned_by: actor.user_id,
-        sanctioned_by_type: "nbfc",
+        // Discriminator for the sanctioned_by uuid (§E-130). The DB CHECK
+        // (loan_sanctions_sanctioned_by_type_check) allows only 'admin' |
+        // 'nbfc_user' — an NBFC user sanctions here, so it's 'nbfc_user'.
+        sanctioned_by_type: "nbfc_user",
         sanctioned_at: now,
         disbursed_at: now,
         created_at: now,
@@ -184,7 +202,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       charged_ledger_ids: ledgerIds,
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = unwrapDbError(e);
     console.error("[NBFC sanction] error:", e);
     return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
   }

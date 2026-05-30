@@ -24,6 +24,21 @@ function statusFromError(msg: string): number {
   return 500;
 }
 
+/**
+ * Drizzle wraps driver errors as `Failed query: …`; the real Postgres message
+ * (and code) live on the `.cause` chain. Surface the deepest cause so the UI
+ * shows the actual reason instead of the opaque wrapper.
+ */
+function unwrapDbError(e: unknown): string {
+  let cur: unknown = e;
+  let msg = e instanceof Error ? e.message : String(e);
+  while (cur instanceof Error && (cur as { cause?: unknown }).cause) {
+    cur = (cur as { cause?: unknown }).cause;
+    if (cur instanceof Error && cur.message) msg = cur.message;
+  }
+  return msg;
+}
+
 export async function PUT(req: NextRequest) {
   try {
     const tenant = await getCurrentTenant();
@@ -65,7 +80,7 @@ export async function PUT(req: NextRequest) {
 
     return NextResponse.json({ ok: true });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = unwrapDbError(e);
     return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
   }
 }

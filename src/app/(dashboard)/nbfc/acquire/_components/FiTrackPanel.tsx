@@ -17,7 +17,7 @@ type Track = {
   agent_notes: string | null;
 };
 
-type Resp = { ok: boolean; track: Track | null; can_act?: boolean; error?: string };
+type Resp = { ok: boolean; track: Track | null; can_act?: boolean; enabled?: boolean; error?: string };
 
 const BADGE: Record<string, string> = {
   completed: "bg-emerald-100 text-emerald-700",
@@ -72,6 +72,7 @@ export default function FiTrackPanel({ leadId }: { leadId: string }) {
   const track = data?.track ?? null;
   const status = track?.status ?? "pending";
   const canAct = data?.can_act ?? false;
+  const enabled = data?.enabled ?? true;
   const terminal = status === "completed" || status === "failed";
 
   return (
@@ -100,7 +101,17 @@ export default function FiTrackPanel({ leadId }: { leadId: string }) {
 
       {error && <p className="text-[11px] text-red-600">{error}</p>}
 
-      {canAct && !terminal && (
+      {canAct && !enabled && (
+        <p className="text-[11px] text-slate-500">
+          Not opted in for this lead. Enable Field Investigation in{" "}
+          <a href="/nbfc/settings" className="underline text-[color:var(--color-brand-sky)]">
+            Settings → Service Opt-In
+          </a>
+          .
+        </p>
+      )}
+
+      {canAct && enabled && !terminal && (
         <div className="space-y-2">
           {!track || status === "pending" ? (
             <div className="flex gap-2">

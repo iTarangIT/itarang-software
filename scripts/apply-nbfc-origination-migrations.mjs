@@ -30,6 +30,7 @@ function readDatabaseUrl() {
 }
 
 const FILES = [
+  "drizzle/E-133_nbfc_service_config_and_rbac.sql",
   "drizzle/E-134_enach_mandates.sql",
   "drizzle/E-135_video_kyc.sql",
   "drizzle/E-136_field_investigations.sql",
@@ -38,6 +39,9 @@ const FILES = [
   "drizzle/E-139_backfill_nbfc_tenant_binding.sql",
   "drizzle/E-140_nbfc_financing_offers.sql",
   "drizzle/E-141_financing_dead_end.sql",
+  "drizzle/E-142_nbfc_users_notification_prefs.sql",
+  "drizzle/E-143_nbfc_users_role_normalise.sql",
+  "drizzle/E-144_nbfc_loans_drop_loan_application_fk.sql",
 ];
 
 const connectionString = readDatabaseUrl();

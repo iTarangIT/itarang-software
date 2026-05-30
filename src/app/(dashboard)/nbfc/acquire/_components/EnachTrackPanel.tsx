@@ -8,6 +8,41 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
+type RzpCheckout = {
+  order_id: string;
+  key_id: string;
+  customer_id: string;
+  amount: number;
+  currency?: string;
+  name?: string | null;
+  email?: string | null;
+  contact?: string | null;
+};
+
+// Lazily inject Razorpay Checkout.js (managed e-mandate variant). The project
+// loads third-party <script> tags via the document head deliberately (the VPS
+// can't use bundled next/font); same pattern here.
+function loadRazorpayCheckout(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (typeof window === "undefined") return resolve(false);
+    const w = window as unknown as { Razorpay?: unknown };
+    if (w.Razorpay) return resolve(true);
+    const existing = document.querySelector<HTMLScriptElement>(
+      'script[src="https://checkout.razorpay.com/v1/checkout.js"]',
+    );
+    if (existing) {
+      existing.addEventListener("load", () => resolve(true));
+      existing.addEventListener("error", () => resolve(false));
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = "https://checkout.razorpay.com/v1/checkout.js";
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.body.appendChild(s);
+  });
+}
+
 type Attempt = {
   id: string;
   status: string;
@@ -70,6 +105,38 @@ export default function EnachTrackPanel({ leadId }: { leadId: string }) {
     void load();
   }, [load]);
 
+  async function openRazorpayCheckout(checkout: RzpCheckout) {
+    const ok = await loadRazorpayCheckout();
+    if (!ok) {
+      setError("Could not load Razorpay Checkout. Check your connection and retry.");
+      return;
+    }
+    const w = window as unknown as { Razorpay: new (opts: Record<string, unknown>) => { open: () => void } };
+    const rzp = new w.Razorpay({
+      key: checkout.key_id,
+      order_id: checkout.order_id,
+      customer_id: checkout.customer_id,
+      recurring: 1,
+      name: "iTarang",
+      description: "E-NACH mandate authorisation",
+      prefill: {
+        name: checkout.name ?? undefined,
+        email: checkout.email ?? undefined,
+        contact: checkout.contact ?? undefined,
+      },
+      // The webhook is the source of truth; these just refresh the panel.
+      handler: () => {
+        void load();
+      },
+      modal: {
+        ondismiss: () => {
+          void load();
+        },
+      },
+    });
+    rzp.open();
+  }
+
   async function post(path: string, body?: unknown) {
     setBusy(true);
     setError(null);
@@ -79,8 +146,16 @@ export default function EnachTrackPanel({ leadId }: { leadId: string }) {
         headers: { "content-type": "application/json" },
         body: body ? JSON.stringify(body) : "{}",
       });
-      const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; handoff?: { redirect_url?: string } };
+      const j = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        handoff?: { method?: string; redirect_url?: string; checkout?: RzpCheckout };
+      };
       if (!res.ok || j.ok === false) throw new Error(j.error ?? `HTTP ${res.status}`);
+      // Managed Razorpay → open Checkout for the customer to authorise.
+      if (j.handoff?.method === "itarang_razorpay" && j.handoff.checkout) {
+        await openRazorpayCheckout(j.handoff.checkout);
+      }
       // Redirect handoff → open the NBFC's deep-link in a new tab.
       if (j.handoff?.redirect_url) window.open(j.handoff.redirect_url, "_blank", "noopener");
       setShowWaive(false);

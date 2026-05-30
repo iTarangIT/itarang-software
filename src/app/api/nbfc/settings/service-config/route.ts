@@ -24,7 +24,7 @@ const DEFAULTS = {
   vkyc_enabled: false,
   vkyc_mode: null as "own" | "itarang" | null,
   enach_enabled: false,
-  enach_handoff_method: null as "redirect" | "webhook" | null,
+  enach_handoff_method: null as "redirect" | "webhook" | "itarang_razorpay" | null,
   enach_endpoint_url: null as string | null,
   doc_agreement_method: null as "upload" | "digio" | "api_autofetch" | null,
   store_sanction_letter: false,
@@ -38,7 +38,7 @@ const Body = z.object({
   vkyc_enabled: z.boolean(),
   vkyc_mode: z.enum(["own", "itarang"]).nullable().optional(),
   enach_enabled: z.boolean(),
-  enach_handoff_method: z.enum(["redirect", "webhook"]).nullable().optional(),
+  enach_handoff_method: z.enum(["redirect", "webhook", "itarang_razorpay"]).nullable().optional(),
   enach_endpoint_url: z.string().url().max(2048).nullable().optional(),
   doc_agreement_method: z.enum(["upload", "digio", "api_autofetch"]).nullable().optional(),
   store_sanction_letter: z.boolean(),
@@ -104,9 +104,21 @@ export async function PUT(req: NextRequest) {
         { status: 400 },
       );
     }
-    if (d.enach_enabled && (!d.enach_handoff_method || !d.enach_endpoint_url)) {
+    if (d.enach_enabled && !d.enach_handoff_method) {
       return NextResponse.json(
-        { ok: false, error: "BAD_REQUEST: enach_handoff_method and enach_endpoint_url are required when E-NACH is enabled" },
+        { ok: false, error: "BAD_REQUEST: enach_handoff_method is required when E-NACH is enabled" },
+        { status: 400 },
+      );
+    }
+    // The B2-B handoff modes hand off to the NBFC's own app, so they need its
+    // endpoint URL. The managed Razorpay mode owns the rail and needs none.
+    if (
+      d.enach_enabled &&
+      (d.enach_handoff_method === "redirect" || d.enach_handoff_method === "webhook") &&
+      !d.enach_endpoint_url
+    ) {
+      return NextResponse.json(
+        { ok: false, error: "BAD_REQUEST: enach_endpoint_url is required for the redirect/webhook handoff" },
         { status: 400 },
       );
     }

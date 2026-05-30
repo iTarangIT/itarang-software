@@ -12,7 +12,7 @@ export interface ServiceConfig {
   vkyc_enabled: boolean;
   vkyc_mode: "own" | "itarang" | null;
   enach_enabled: boolean;
-  enach_handoff_method: "redirect" | "webhook" | null;
+  enach_handoff_method: "redirect" | "webhook" | "itarang_razorpay" | null;
   enach_endpoint_url: string | null;
   doc_agreement_method: "upload" | "digio" | "api_autofetch" | null;
   store_sanction_letter: boolean;
@@ -46,8 +46,16 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
       setError("Pick a Video KYC mode (Own or iTarang) before saving.");
       return;
     }
-    if (cfg.enach_enabled && (!cfg.enach_handoff_method || !cfg.enach_endpoint_url)) {
-      setError("E-NACH needs a handoff method and the NBFC endpoint URL before saving.");
+    if (cfg.enach_enabled && !cfg.enach_handoff_method) {
+      setError("Pick an E-NACH handoff method before saving.");
+      return;
+    }
+    if (
+      cfg.enach_enabled &&
+      (cfg.enach_handoff_method === "redirect" || cfg.enach_handoff_method === "webhook") &&
+      !cfg.enach_endpoint_url
+    ) {
+      setError("This E-NACH handoff method needs the NBFC endpoint URL before saving.");
       return;
     }
     setBusy(true);
@@ -72,6 +80,8 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
   }
 
   const callbackUrl = `${callbackBase}/api/nbfc/enach/callback`;
+  const razorpayWebhookUrl = `${callbackBase}/api/payments/razorpay/emandate-webhook`;
+  const isManagedRzp = cfg.enach_handoff_method === "itarang_razorpay";
 
   return (
     <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-5">
@@ -137,28 +147,48 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
               disabled={!canEdit || busy}
               onChange={(v) => set("enach_handoff_method", v as ServiceConfig["enach_handoff_method"])}
               options={[
-                { value: "redirect", label: "Redirect / deep-link" },
-                { value: "webhook", label: "Webhook" },
+                { value: "itarang_razorpay", label: "iTarang Razorpay (managed)", hint: "iTarang creates + tracks the e-mandate on Razorpay. The customer authorises in-flow; no endpoint of yours is needed." },
+                { value: "redirect", label: "Redirect / deep-link", hint: "Hand off to your own app via a deep-link; your app posts the result back." },
+                { value: "webhook", label: "Webhook", hint: "iTarang POSTs the handoff to your endpoint; your app posts the result back." },
               ]}
             />
-            <LabelledInput
-              label={cfg.enach_handoff_method === "webhook" ? "Your webhook endpoint" : "Your app URL"}
-              placeholder="https://nbfc.example.com/enach"
-              value={cfg.enach_endpoint_url ?? ""}
-              disabled={!canEdit || busy}
-              onChange={(v) => set("enach_endpoint_url", v || null)}
-            />
-            <div>
-              <span className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-                Result callback URL (read-only)
-              </span>
-              <code className="block text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 break-all">
-                {callbackUrl}
-              </code>
-              <p className="text-[11px] text-slate-500 mt-1">
-                Map your provider&apos;s statuses to iTarang&apos;s canonical states and POST here.
-              </p>
-            </div>
+            {!isManagedRzp ? (
+              <LabelledInput
+                label={cfg.enach_handoff_method === "webhook" ? "Your webhook endpoint" : "Your app URL"}
+                placeholder="https://nbfc.example.com/enach"
+                value={cfg.enach_endpoint_url ?? ""}
+                disabled={!canEdit || busy}
+                onChange={(v) => set("enach_endpoint_url", v || null)}
+              />
+            ) : null}
+            {isManagedRzp ? (
+              <div>
+                <span className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+                  Razorpay webhook URL (read-only)
+                </span>
+                <code className="block text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 break-all">
+                  {razorpayWebhookUrl}
+                </code>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Register this URL in your Razorpay Dashboard → Webhooks for the
+                  events <code>token.confirmed</code>, <code>token.rejected</code>,{" "}
+                  <code>order.paid</code>, <code>payment.failed</code>. iTarang
+                  verifies the signature and updates the mandate automatically.
+                </p>
+              </div>
+            ) : (
+              <div>
+                <span className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+                  Result callback URL (read-only)
+                </span>
+                <code className="block text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 break-all">
+                  {callbackUrl}
+                </code>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Map your provider&apos;s statuses to iTarang&apos;s canonical states and POST here.
+                </p>
+              </div>
+            )}
           </ConfigurePanel>
         ) : null}
       </Toggle>

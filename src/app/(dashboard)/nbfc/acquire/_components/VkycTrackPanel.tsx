@@ -19,7 +19,7 @@ type Track = {
   admin_action: string | null;
 };
 
-type Resp = { ok: boolean; track: Track | null; can_act?: boolean; error?: string };
+type Resp = { ok: boolean; track: Track | null; can_act?: boolean; enabled?: boolean; error?: string };
 
 const BADGE: Record<string, string> = {
   verified: "bg-emerald-100 text-emerald-700",
@@ -93,6 +93,7 @@ export default function VkycTrackPanel({ leadId }: { leadId: string }) {
   }
 
   const canAct = data?.can_act ?? false;
+  const enabled = data?.enabled ?? true;
   const track = data?.track ?? null;
   const status = track?.status ?? "pending";
 
@@ -126,7 +127,17 @@ export default function VkycTrackPanel({ leadId }: { leadId: string }) {
 
       {error && <p className="text-[11px] text-red-600">{error}</p>}
 
-      {canAct && (
+      {canAct && !enabled && (
+        <p className="text-[11px] text-slate-500">
+          Not opted in for this lead. Enable Video KYC in{" "}
+          <a href="/nbfc/settings" className="underline text-[color:var(--color-brand-sky)]">
+            Settings → Service Opt-In
+          </a>
+          .
+        </p>
+      )}
+
+      {canAct && enabled && (
         <div className="flex flex-wrap gap-2">
           {(!track || status === "failed" || status === "not_applicable") && (
             <button onClick={() => post("/initiate")} disabled={busy} className="px-3 py-1.5 rounded-md bg-[color:var(--color-brand-navy)] text-white text-xs font-semibold disabled:opacity-50">
