@@ -37,20 +37,22 @@ jobs:
             chmod 600 .env.production
 
             echo "=== Installing dependencies (conditional on package-lock) ==="
-            # npm ci wipes and reinstalls node_modules from scratch every deploy —
-            # ~19 min of RAM/IO thrash on this shared 8 GB box (run 26678229305)
-            # and a major disk-churn source. Skip it when package-lock.json is
-            # unchanged and node_modules is already present. The hash lives
-            # OUTSIDE the repo so the `git reset --hard` above can't wipe it.
-            LOCK_HASH=$(sha256sum package-lock.json | cut -d' ' -f1)
+            # Skip npm ci's ~19-min wipe+reinstall (run 26678229305) when the lock
+            # is unchanged. EVERY step here is guarded with `|| VAR=""` so the hash
+            # logic can NEVER abort the deploy: an UNGUARDED sha256sum aborted run
+            # 26679305288 in 17s under `set -eo pipefail`. Worst case we simply
+            # fall through to a normal npm ci. The hash lives outside the repo so
+            # the `git reset --hard` above can't wipe it.
             HASH_FILE="$HOME/.itarang-prod-lock-hash"
-            LAST_HASH=$(cat "$HASH_FILE" 2>/dev/null || echo "")
-            if [ "$LOCK_HASH" = "$LAST_HASH" ] && [ -d node_modules ]; then
-              echo "package-lock.json unchanged ($LOCK_HASH) — skipping npm ci"
+            LOCK_HASH=$(sha256sum package-lock.json 2>/dev/null | cut -d' ' -f1) || LOCK_HASH=""
+            LAST_HASH=$(cat "$HASH_FILE" 2>/dev/null) || LAST_HASH=""
+            echo "lock hash=${LOCK_HASH:-<none>} last=${LAST_HASH:-<none>} node_modules=$([ -d node_modules ] && echo yes || echo no)"
+            if [ -n "$LOCK_HASH" ] && [ "$LOCK_HASH" = "$LAST_HASH" ] && [ -d node_modules ]; then
+              echo "package-lock.json unchanged — skipping npm ci"
             else
-              echo "Lock changed (was ${LAST_HASH:-none}, now $LOCK_HASH) — running npm ci"
+              echo "running npm ci"
               npm ci --no-audit --no-fund --include=dev
-              echo "$LOCK_HASH" > "$HASH_FILE"
+              if [ -n "$LOCK_HASH" ]; then printf '%s\n' "$LOCK_HASH" > "$HASH_FILE" 2>/dev/null || true; fi
             fi
 
             echo "=== Preparing logs directory ==="
