@@ -47,6 +47,17 @@ async function tryLaunchServerless() {
     import("node:fs/promises"),
   ]);
   const executablePath = await chromium.executablePath();
+  // Fail with a self-explaining message instead of a raw spawn ENOENT when the
+  // @sparticuz/chromium binary isn't on disk — typically because it wasn't
+  // traced into the standalone/serverless bundle (serverExternalPackages
+  // marks it external; outputFileTracingIncludes would be needed to ship it).
+  if (!executablePath || !(await fs.access(executablePath).then(() => true).catch(() => false))) {
+    throw new Error(
+      `@sparticuz/chromium executable not found at "${executablePath}". ` +
+        `It was not bundled into this build. On a VPS prefer system Chrome: set ` +
+        `PUPPETEER_EXECUTABLE_PATH and run scripts/sandbox-system-setup.sh.`,
+    );
+  }
   // Belt-and-suspenders: Vercel's file tracer occasionally drops the +x bit
   // off bundled binaries. chmod is a no-op when the bit is already set.
   await fs.chmod(executablePath, 0o755).catch(() => {});
@@ -62,7 +73,21 @@ async function tryLaunchServerless() {
 // Set PUPPETEER_EXECUTABLE_PATH to the absolute path of the chromium binary
 // (e.g. /usr/bin/chromium-browser or /usr/bin/google-chrome-stable).
 async function tryLaunchSystemChromium(executablePath: string) {
-  const { default: puppeteerCore } = await import("puppeteer-core");
+  const [{ default: puppeteerCore }, { existsSync }] = await Promise.all([
+    import("puppeteer-core"),
+    import("node:fs"),
+  ]);
+  // Turn the recurring "spawn <path> ENOENT" into a one-line, actionable error
+  // in the pm2 logs. This is the VPS failure mode: PUPPETEER_EXECUTABLE_PATH
+  // points at /usr/bin/google-chrome-stable but nothing installed the binary.
+  if (!existsSync(executablePath)) {
+    throw new Error(
+      `Chromium executable not found at "${executablePath}" (from PUPPETEER_EXECUTABLE_PATH). ` +
+        `VPS provisioning is broken — run scripts/sandbox-system-setup.sh to install ` +
+        `google-chrome-stable, or set PUPPETEER_EXECUTABLE_PATH to a real Chrome/Chromium ` +
+        `binary for this host (on Windows: C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe).`,
+    );
+  }
   return puppeteerCore.launch({
     executablePath,
     headless: true,

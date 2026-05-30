@@ -22,6 +22,13 @@ module.exports = {
         NODE_ENV: "production",
         PORT: "3003",
         HOSTNAME: "127.0.0.1",
+        // Headless-Chromium PDF rendering (Initiate Agreement, KYC consent,
+        // audit trail) launches this binary via puppeteer-core. Pinned here so
+        // the runtime path is explicit and matches what scripts/sandbox-system-
+        // setup.sh installs — instead of silently depending on the deployed
+        // .env, and instead of falling back to a bundled Chromium the
+        // standalone build never ships. Production sets the same value.
+        PUPPETEER_EXECUTABLE_PATH: "/usr/bin/google-chrome-stable",
       },
       max_memory_restart: "700M",
       // Give Next 8s to close its listener gracefully before SIGKILL. The

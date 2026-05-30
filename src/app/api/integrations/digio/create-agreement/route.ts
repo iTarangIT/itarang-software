@@ -145,9 +145,9 @@ function buildSignerCoordinatesList(
 
 async function renderPdfFromHtml(html: string) {
   const browser = await launchBrowser();
+  const page = await browser.newPage();
 
   try {
-    const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "networkidle0" });
 
     const pdf = await page.pdf({
@@ -163,7 +163,11 @@ async function renderPdfFromHtml(html: string) {
 
     return Buffer.from(pdf);
   } finally {
-    await browser.close();
+    // Close only the PAGE. launchBrowser() returns a SHARED, long-lived browser
+    // reused across requests — closing it would break concurrent renders and
+    // force an expensive relaunch (and was a source of intermittent
+    // "Target closed" errors on the shared VPS).
+    await page.close().catch(() => {});
   }
 }
 
