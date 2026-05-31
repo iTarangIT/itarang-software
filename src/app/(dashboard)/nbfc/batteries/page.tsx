@@ -22,6 +22,7 @@ import {
   nbfcLoans,
   loanFiles,
   loanApplications,
+  loanSanctions,
   leads,
   dealers,
   borrowerRiskScores,
@@ -144,6 +145,11 @@ export default async function BatteriesPage({
       dealer_id_app: loanApplications.dealer_id,
       lead_id_file: loanFiles.lead_id,
       lead_id_app: loanApplications.lead_id,
+      // Origination-flow loans (LS-*) live in loan_sanctions, not
+      // loan_files/loan_applications. loan_sanctions only links to the lead
+      // (its sole identity/dealer source) — customer + dealer resolve via
+      // leads → dealers below, the same way lead-intelligence.ts does it.
+      sanction_lead_id: loanSanctions.lead_id,
     })
     .from(nbfcLoans)
     .leftJoin(
@@ -153,6 +159,10 @@ export default async function BatteriesPage({
     .leftJoin(
       loanApplications,
       eq(loanApplications.id, nbfcLoans.loan_application_id),
+    )
+    .leftJoin(
+      loanSanctions,
+      eq(loanSanctions.id, nbfcLoans.loan_application_id),
     )
     .where(
       and(eq(nbfcLoans.tenant_id, tenant.id), eq(nbfcLoans.is_active, true)),
@@ -168,20 +178,57 @@ export default async function BatteriesPage({
     dealer_id_app: string | null;
     lead_id_file: string | null;
     lead_id_app: string | null;
+    sanction_lead_id: string | null;
   }>;
 
-  const dealerIds = Array.from(
-    new Set(
-      portfolio
-        .map((r) => r.dealer_id_file ?? r.dealer_id_app)
-        .filter((d): d is string => !!d),
-    ),
-  );
+  // Resolve lead ids from loan_files / loan_applications, falling back to the
+  // loan_sanctions link (origination-flow LS-* loans only exist there).
   const leadIds = Array.from(
     new Set(
       portfolio
-        .map((r) => r.lead_id_file ?? r.lead_id_app)
+        .map((r) => r.lead_id_file ?? r.lead_id_app ?? r.sanction_lead_id)
         .filter((l): l is string => !!l),
+    ),
+  );
+
+  // Lead context (name + dealer + city). Fetched first so lead.dealer_id can
+  // feed the dealer-name lookup below.
+  interface LeadInfo {
+    full_name: string | null;
+    owner_name: string | null;
+    dealer_id: string | null;
+    city: string | null;
+  }
+  const leadInfoById = new Map<string, LeadInfo>();
+  if (leadIds.length > 0) {
+    const leadRows = await db
+      .select({
+        id: leads.id,
+        full_name: leads.full_name,
+        owner_name: leads.owner_name,
+        dealer_id: leads.dealer_id,
+        city: leads.city,
+      })
+      .from(leads)
+      .where(inArray(leads.id, leadIds));
+    for (const l of leadRows) {
+      leadInfoById.set(l.id, {
+        full_name: l.full_name,
+        owner_name: l.owner_name,
+        dealer_id: l.dealer_id,
+        city: l.city ?? null,
+      });
+    }
+  }
+
+  // Dealer ids come from file/application rows and the resolved lead —
+  // mirroring lead-intelligence.ts's customer/dealer join.
+  const dealerIds = Array.from(
+    new Set(
+      [
+        ...portfolio.map((r) => r.dealer_id_file ?? r.dealer_id_app),
+        ...Array.from(leadInfoById.values()).map((l) => l.dealer_id),
+      ].filter((d): d is string => !!d),
     ),
   );
 
@@ -197,15 +244,6 @@ export default async function BatteriesPage({
     for (const d of dealerRows) {
       if (d.dealer_id) dealerNameById.set(d.dealer_id, d.company_name);
     }
-  }
-
-  const cityByLeadId = new Map<string, string | null>();
-  if (leadIds.length > 0) {
-    const leadRows = await db
-      .select({ id: leads.id, city: leads.city })
-      .from(leads)
-      .where(inArray(leads.id, leadIds));
-    for (const l of leadRows) cityByLeadId.set(l.id, l.city ?? null);
   }
 
   // IMEI lookup: nbfc_loans.vehicleno is the device serial (TK-XXXX), the
@@ -235,8 +273,10 @@ export default async function BatteriesPage({
   const portfolioRows: PortfolioRow[] = portfolio
     .filter((r): r is typeof r & { vehicleno: string } => !!r.vehicleno)
     .map((r) => {
-      const dealerId = r.dealer_id_file ?? r.dealer_id_app;
-      const leadId = r.lead_id_file ?? r.lead_id_app;
+      const leadId = r.lead_id_file ?? r.lead_id_app ?? r.sanction_lead_id;
+      const lead = leadId ? leadInfoById.get(leadId) : undefined;
+      const dealerId =
+        r.dealer_id_file ?? r.dealer_id_app ?? lead?.dealer_id ?? null;
       return {
         loan_application_id: r.loan_application_id,
         vehicleno: r.vehicleno,
@@ -245,9 +285,16 @@ export default async function BatteriesPage({
         outstanding_amount:
           r.outstanding_amount != null ? Number(r.outstanding_amount) : null,
         emi_amount: r.emi_amount != null ? Number(r.emi_amount) : null,
-        borrower_name: r.borrower_name_file ?? r.borrower_name_app,
+        // loan_files/loan_applications are absent for origination-flow (LS-*)
+        // loans; fall back to the linked lead's name.
+        borrower_name:
+          r.borrower_name_file ??
+          r.borrower_name_app ??
+          lead?.full_name ??
+          lead?.owner_name ??
+          null,
         dealer_name: dealerId ? dealerNameById.get(dealerId) ?? null : null,
-        city: leadId ? cityByLeadId.get(leadId) ?? null : null,
+        city: lead?.city ?? null,
       };
     });
 

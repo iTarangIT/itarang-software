@@ -11,7 +11,7 @@
 //     `src/lib/bre/match.ts` against the loan product's own declarations
 //     (`active_locations`, `eligible_battery_categories`, etc.).
 
-import { and, eq, inArray, notInArray } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, notInArray } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { dealerNbfcAssignments, nbfc, nbfcLoanProducts } from '@/lib/db/schema';
 import type { LoanProductRow } from './match';
@@ -69,9 +69,18 @@ export async function loadActiveProductsForDealer(
     .from(nbfcLoanProducts)
     .innerJoin(nbfc, eq(nbfc.id, nbfcLoanProducts.nbfc_id));
 
-  const rows = await (blockedNbfcIds.length > 0
-    ? baseSelect.where(notInArray(nbfcLoanProducts.nbfc_id, blockedNbfcIds))
-    : baseSelect);
+  // Competitive routing can only deliver a lead to NBFCs bound to a portal
+  // tenant. An unbound nbfc row (tenant_id IS NULL) can never receive the
+  // lead — the submit-product-selection fan-out silently skips it — so it must
+  // not be offered as a pickable Section G candidate. After the activation fix
+  // (nbfc.tenant_id set on activate) + the E-139 backfill, every active NBFC is
+  // bound, so this hides only broken / not-yet-activated rows.
+  const conditions = [isNotNull(nbfc.tenant_id)];
+  if (blockedNbfcIds.length > 0) {
+    conditions.push(notInArray(nbfcLoanProducts.nbfc_id, blockedNbfcIds));
+  }
+
+  const rows = await baseSelect.where(and(...conditions));
 
   return rows.map((r) => ({
     id: r.id,

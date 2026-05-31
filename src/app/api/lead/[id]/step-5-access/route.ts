@@ -4,6 +4,7 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { leads, loanSanctions } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
+import { evaluateEnachGate } from "@/lib/nbfc/enach";
 
 // BRD V2 §4.0 — access gate for Step 5 (Loan Review + OTP + Dispatch).
 //   loan_sanctioned → scenario A (OTP + dispatch)
@@ -72,6 +73,11 @@ export async function GET(
         .orderBy(desc(loanSanctions.created_at))
         .limit(1);
 
+      // Addendum V0.2 §9.4 — E-NACH is a HARD disbursal gate for the winning
+      // NBFC when opted in and not waived. Surface it so the dispatch action
+      // can block until a mandate is registered (or the Credit officer waives).
+      const enachGate = await evaluateEnachGate(leadId);
+
       return NextResponse.json({
         success: true,
         data: {
@@ -80,6 +86,8 @@ export async function GET(
           loanSanctionId: loan?.id ?? null,
           sanctionedAt: loan?.sanctioned_at ?? null,
           sanctionedBy: loan?.loan_approved_by ?? null,
+          enachGate,
+          dispatchBlocked: enachGate.required && !enachGate.satisfied,
         },
       });
     }
