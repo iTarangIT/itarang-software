@@ -25,6 +25,29 @@ const nextConfig: NextConfig = {
       "./node_modules/.cache/puppeteer/**/*",
     ],
   },
+  // Runtime-uploaded files under public/nbfc-uploads/ (compliance docs, LSP
+  // agreement templates, signer identity docs) are written to
+  // process.cwd()/public/nbfc-uploads — a DIFFERENT directory than the
+  // `output: "standalone"` server's bundled public/. So the static handler
+  // can't find them and the request falls through to the catch-all 404 page
+  // (the "Page Not Found" cards in the LSP agreement panel + every doc View
+  // link). `afterFiles` runs AFTER the public/static check, so build-time
+  // assets still serve directly from public/ and only the missing runtime
+  // uploads route to /api/nbfc-uploads, which reads from the same
+  // cwd-relative dir the upload routes write to. Existing stored URLs stay
+  // `/nbfc-uploads/...` — no DB migration needed.
+  async rewrites() {
+    return {
+      afterFiles: [
+        {
+          source: "/nbfc-uploads/:path*",
+          destination: "/api/nbfc-uploads/:path*",
+        },
+      ],
+      beforeFiles: [],
+      fallback: [],
+    };
+  },
   // Stop browsers and any reverse proxy from holding onto stale HTML across
   // deploys. Cached HTML pins references to a previous BUILD_ID's chunks,
   // which the next deploy wipes — that was the ChunkLoadError loop. Static
