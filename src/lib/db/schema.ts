@@ -415,6 +415,11 @@ export const leads = pgTable("leads", {
   resident_status: varchar("resident_status", { length: 20 }),
   has_health_insurance: boolean("has_health_insurance"),
   has_life_insurance: boolean("has_life_insurance"),
+  // E-141 — Addendum V0.2 §12.1. Terminal "Financing Unavailable" state. Set
+  // when admin confirms all financing avenues are exhausted. The category-level
+  // decline reason is retained even after §12.3 finance-data purge.
+  financing_decline_category: varchar("financing_decline_category", { length: 40 }), // 'all_declined' | 'no_match' | 'handoff_unanswered'
+  financing_unavailable_at: timestamp("financing_unavailable_at", { withTimezone: true }),
 });
 
 // E-116 — extra products attached to a lead via the new-lead form's
@@ -3222,6 +3227,11 @@ export const nbfcLeadAssignments = pgTable(
     assigned_at: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
     decided_at: timestamp("decided_at", { withTimezone: true }),
     decision_reason: text("decision_reason"),
+    // E-133 / Addendum V0.2 §7.4 — frozen copy of the NBFC's service-opt-in
+    // toggles at the moment this lead bound to the NBFC. Config edits apply to
+    // NEW leads only; in-flight leads read this snapshot. Nullable for rows
+    // created before E-133.
+    service_config_snapshot: jsonb("service_config_snapshot"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -3239,8 +3249,393 @@ export const nbfcLeadAssignments = pgTable(
   }),
 );
 
-// Bridges existing loan_applications to a tenant + the IoT vehicleno that loan
-// is financing. One loan belongs to one NBFC.
+// E-140 — Addendum V0.2 §6.1 (Competitive Routing, Stage 1). Firm financing
+// conditions an NBFC submits for a routed lead. One operative row per
+// nbfcLeadAssignments (unique on assignment_id); resubmission updates it. The
+// dealer compares offers across picked NBFCs and selects the winner, which
+// flips nbfcLeadAssignments.status to selected/not_selected.
+export const nbfcFinancingOffers = pgTable(
+  "nbfc_financing_offers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    assignment_id: uuid("assignment_id").notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    roi_pct: numeric("roi_pct", { precision: 5, scale: 2 }),
+    emi_amount: numeric("emi_amount", { precision: 14, scale: 2 }),
+    tenure_months: integer("tenure_months"),
+    loan_amount: numeric("loan_amount", { precision: 14, scale: 2 }),
+    down_payment: numeric("down_payment", { precision: 14, scale: 2 }),
+    processing_fee: numeric("processing_fee", { precision: 14, scale: 2 }),
+    conditions: text("conditions"),
+    valid_until: date("valid_until"),
+    status: varchar({ length: 16 }).default("active").notNull(), // 'active' | 'withdrawn'
+    submitted_by: uuid("submitted_by"),
+    submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    assignmentUnique: uniqueIndex("nbfc_financing_offers_assignment_unique").on(table.assignment_id),
+    leadIdx: index("nbfc_financing_offers_lead_idx").on(table.lead_id),
+    tenantIdx: index("nbfc_financing_offers_tenant_idx").on(table.tenant_id),
+  }),
+);
+
+// E-133 — Addendum V0.2 §7.4. Per-NBFC Service Opt-In + document/track config.
+// One row per tenant; an absent row means every service is off (the NBFC runs
+// each step off-platform its own way). vkyc_mode / enach_* / doc_agreement_method
+// CHECK constraints live on the DB side (E-133). Edits apply to NEW leads only —
+// in-flight leads read nbfcLeadAssignments.service_config_snapshot.
+export const nbfcServiceConfig = pgTable(
+  "nbfc_service_config",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    fi_enabled: boolean("fi_enabled").default(false).notNull(),
+    vkyc_enabled: boolean("vkyc_enabled").default(false).notNull(),
+    vkyc_mode: varchar("vkyc_mode", { length: 16 }), // 'own' | 'itarang'
+    enach_enabled: boolean("enach_enabled").default(false).notNull(),
+    enach_handoff_method: varchar("enach_handoff_method", { length: 16 }), // 'redirect' | 'webhook' | 'itarang_razorpay'
+    enach_endpoint_url: text("enach_endpoint_url"),
+    doc_agreement_method: varchar("doc_agreement_method", { length: 24 }), // 'upload' | 'digio' | 'api_autofetch'
+    store_sanction_letter: boolean("store_sanction_letter").default(false).notNull(),
+    store_loan_agreement: boolean("store_loan_agreement").default(false).notNull(),
+    track_completion_gate: boolean("track_completion_gate").default(true).notNull(),
+    track_failure_halts: boolean("track_failure_halts").default(false).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantUnique: uniqueIndex("nbfc_service_config_tenant_unique").on(table.tenant_id),
+  }),
+);
+
+// E-133 — Addendum V0.2 §7.2. Per-NBFC step ownership: a default owner per step
+// (city IS NULL) plus optional city-wise overrides. Owner is notified +
+// accountable; any user with the role may act so work doesn't stall. The
+// partial unique indexes (default-per-step, city-per-step) live on the DB side.
+export const nbfcStepOwners = pgTable(
+  "nbfc_step_owners",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    step: varchar("step", { length: 16 }).notNull(), // 'fi' | 'vkyc' | 'enach'
+    city: varchar("city", { length: 120 }),
+    user_id: uuid("user_id").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_step_owners_tenant_idx").on(table.tenant_id),
+  }),
+);
+
+// E-134 — Addendum V0.2 §9. E-NACH mandate registration (Model B2-B): the
+// WINNING NBFC owns the mandate on its own credentials; iTarang triggers +
+// records only. One row per attempt (§9.6) — retries create new rows, latest
+// (by created_at) is operative. `status` is the canonical state all gates read;
+// provider_raw_* is display/audit only and is never branched on (§9.3). The
+// status / registration_method CHECK constraints live on the DB side (E-134).
+export const enachMandates = pgTable(
+  "enach_mandates",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    enach_ref: varchar("enach_ref", { length: 64 }).notNull(),
+    // 'not_applicable' | 'pending' | 'in_progress' | 'registered' | 'failed' | 'skipped'
+    status: varchar({ length: 20 }).default("pending").notNull(),
+    umrn: varchar({ length: 64 }),
+    bank_name: varchar("bank_name", { length: 120 }),
+    account_masked: varchar("account_masked", { length: 64 }),
+    max_amount: numeric("max_amount", { precision: 14, scale: 2 }),
+    valid_from: date("valid_from"),
+    valid_to: date("valid_to"),
+    provider_name: varchar("provider_name", { length: 80 }),
+    provider_raw_status: varchar("provider_raw_status", { length: 120 }),
+    provider_raw_payload: jsonb("provider_raw_payload"),
+    registration_method: varchar("registration_method", { length: 16 }), // 'callback' | 'manual' | 'razorpay'
+    // E-145 — "iTarang Razorpay (managed)" variant: iTarang creates + tracks the
+    // e-mandate itself via Razorpay Orders + Tokens. Correlation handles only;
+    // canonical `status` (above) still drives every gate (§9.3).
+    razorpay_order_id: varchar("razorpay_order_id", { length: 64 }),
+    razorpay_customer_id: varchar("razorpay_customer_id", { length: 64 }),
+    razorpay_token_id: varchar("razorpay_token_id", { length: 64 }),
+    proof_url: text("proof_url"),
+    failure_reason: text("failure_reason"),
+    stale_risk: boolean("stale_risk").default(false).notNull(),
+    registration_date: timestamp("registration_date", { withTimezone: true }),
+    triggered_by: uuid("triggered_by"),
+    triggered_at: timestamp("triggered_at", { withTimezone: true }),
+    registered_at: timestamp("registered_at", { withTimezone: true }),
+    skip_reason: text("skip_reason"),
+    skipped_by: uuid("skipped_by"),
+    skipped_at: timestamp("skipped_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    refUnique: uniqueIndex("enach_mandates_ref_unique").on(table.enach_ref),
+    leadNbfcIdx: index("enach_mandates_lead_nbfc_idx").on(table.lead_id, table.nbfc_id),
+    tenantStatusIdx: index("enach_mandates_tenant_status_idx").on(table.tenant_id, table.status),
+  }),
+);
+
+// E-146 — Addendum V0.2 §11. Sanction-letter / loan-agreement signing for the
+// WINNING NBFC. iTarang facilitates + files but is never a party (§11.1). One
+// row per attempt; canonical `status` drives the stepper sub-label. NOT a
+// disbursal gate — §11.5 Step-5 OTP is. Storage optional (§11.4): when
+// store_loan_agreement is false iTarang keeps only the §11.6 audit record.
+export const nbfcLoanAgreements = pgTable(
+  "nbfc_loan_agreements",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    agreement_ref: varchar("agreement_ref", { length: 64 }).notNull(),
+    method: varchar({ length: 16 }), // 'upload' | 'digio' | 'api_autofetch'
+    // 'pending' | 'in_progress' | 'signed' | 'failed' | 'skipped'
+    status: varchar({ length: 20 }).default("pending").notNull(),
+    digio_document_id: varchar("digio_document_id", { length: 120 }),
+    signed_document_url: text("signed_document_url"),
+    audit_trail_url: text("audit_trail_url"),
+    provider_raw_status: varchar("provider_raw_status", { length: 120 }),
+    provider_raw_payload: jsonb("provider_raw_payload"),
+    store_sanction_letter: boolean("store_sanction_letter").default(false).notNull(),
+    store_loan_agreement: boolean("store_loan_agreement").default(false).notNull(),
+    failure_reason: text("failure_reason"),
+    initiated_by: uuid("initiated_by"),
+    initiated_at: timestamp("initiated_at", { withTimezone: true }),
+    signed_at: timestamp("signed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    refUnique: uniqueIndex("nbfc_loan_agreements_ref_unique").on(table.agreement_ref),
+    leadNbfcIdx: index("nbfc_loan_agreements_lead_nbfc_idx").on(table.lead_id, table.nbfc_id),
+    digioDocIdx: index("nbfc_loan_agreements_digio_doc_idx").on(table.digio_document_id),
+  }),
+);
+
+// E-135 — Addendum V0.2 §10. Video KYC track (Active Video Liveness), per
+// (lead × NBFC). mode 'own' = B2-B trigger+record (NBFC's vendor); 'itarang' =
+// iTarang's Decentro Active Liveness. Canonical `status` drives all logic;
+// provider_raw_* is display/audit only. status/mode CHECKs live on the DB side.
+export const videoKycVerifications = pgTable(
+  "video_kyc_verifications",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    vkyc_ref: varchar("vkyc_ref", { length: 64 }).notNull(),
+    mode: varchar({ length: 16 }).notNull(), // 'own' | 'itarang'
+    // 'not_applicable' | 'pending' | 'in_progress' | 'verified' | 'failed'
+    status: varchar({ length: 20 }).default("pending").notNull(),
+    match_score: numeric("match_score", { precision: 5, scale: 2 }),
+    liveliness: varchar({ length: 16 }),
+    static_risk: boolean("static_risk"),
+    prerecorded_risk: boolean("prerecorded_risk"),
+    face_match_score: numeric("face_match_score", { precision: 5, scale: 2 }),
+    geo_location: jsonb("geo_location"),
+    provider_name: varchar("provider_name", { length: 80 }),
+    provider_raw_status: varchar("provider_raw_status", { length: 120 }),
+    provider_raw_payload: jsonb("provider_raw_payload"),
+    failure_reason: text("failure_reason"),
+    triggered_by: uuid("triggered_by"),
+    triggered_at: timestamp("triggered_at", { withTimezone: true }),
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+    admin_action: varchar("admin_action", { length: 16 }), // 'accepted' | 'rejected'
+    admin_action_by: uuid("admin_action_by"),
+    admin_action_at: timestamp("admin_action_at", { withTimezone: true }),
+    admin_action_notes: text("admin_action_notes"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    leadNbfcUnique: uniqueIndex("video_kyc_verifications_lead_nbfc_unique").on(table.lead_id, table.nbfc_id),
+    refUnique: uniqueIndex("video_kyc_verifications_ref_unique").on(table.vkyc_ref),
+    tenantStatusIdx: index("video_kyc_verifications_tenant_status_idx").on(table.tenant_id, table.status),
+  }),
+);
+
+// E-135 — Addendum V0.2 §10/§8.2. One row per VKYC SESSION RUN — the billing
+// unit for the iTarang VKYC flat fee (charged on every run, incl. losing/failed).
+export const videoKycAttempts = pgTable(
+  "video_kyc_attempts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    verification_id: uuid("verification_id").notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    attempt_ref: varchar("attempt_ref", { length: 80 }),
+    provider_txn_id: varchar("provider_txn_id", { length: 120 }),
+    session_url: text("session_url"),
+    status: varchar({ length: 20 }).default("in_progress").notNull(),
+    provider_raw_status: varchar("provider_raw_status", { length: 120 }),
+    provider_raw_payload: jsonb("provider_raw_payload"),
+    charged: boolean("charged").default(false).notNull(),
+    charged_ledger_id: uuid("charged_ledger_id"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    verificationIdx: index("video_kyc_attempts_verification_idx").on(table.verification_id),
+    txnIdx: index("video_kyc_attempts_txn_idx").on(table.provider_txn_id),
+  }),
+);
+
+// E-136 — Addendum V0.2 §6.3. Field Investigation track, one row per
+// (lead × NBFC). Internal workflow (no external provider). Address = text match
+// + physical visit + GPS (~50 m supporting only); 48h SLA from assignment;
+// no per-lead skip. status/outcome CHECKs live on the DB side (E-136).
+export const fieldInvestigations = pgTable(
+  "field_investigations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    // 'not_applicable' | 'pending' | 'assigned' | 'in_progress' | 'completed' | 'failed'
+    status: varchar({ length: 20 }).default("pending").notNull(),
+    assigned_to: varchar("assigned_to", { length: 200 }),
+    assigned_by: uuid("assigned_by"),
+    assigned_at: timestamp("assigned_at", { withTimezone: true }),
+    sla_due_at: timestamp("sla_due_at", { withTimezone: true }),
+    sla_breached: boolean("sla_breached").default(false).notNull(),
+    visited_at: timestamp("visited_at", { withTimezone: true }),
+    address_text_match: boolean("address_text_match"),
+    gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
+    gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
+    gps_accuracy_m: numeric("gps_accuracy_m", { precision: 8, scale: 2 }),
+    agent_notes: text("agent_notes"),
+    outcome: varchar({ length: 10 }), // 'pass' | 'fail'
+    proof_urls: jsonb("proof_urls"),
+    reviewed_by: uuid("reviewed_by"),
+    reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    leadNbfcUnique: uniqueIndex("field_investigations_lead_nbfc_unique").on(table.lead_id, table.nbfc_id),
+    tenantStatusIdx: index("field_investigations_tenant_status_idx").on(table.tenant_id, table.status),
+  }),
+);
+
+// E-137 — Addendum V0.2 §8.1. NBFC prepaid wallet (Model 1). One per tenant.
+// An empty wallet blocks initiation of new chargeable activity; recharge via
+// manual top-up or auto-NACH (NBFC sets threshold + recharge amount).
+export const nbfcWallets = pgTable(
+  "nbfc_wallets",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    balance: numeric("balance", { precision: 14, scale: 2 }).default("0").notNull(),
+    currency: varchar({ length: 8 }).default("INR").notNull(),
+    auto_nach_enabled: boolean("auto_nach_enabled").default(false).notNull(),
+    auto_nach_threshold: numeric("auto_nach_threshold", { precision: 14, scale: 2 }),
+    auto_nach_recharge_amount: numeric("auto_nach_recharge_amount", { precision: 14, scale: 2 }),
+    auto_nach_mandate_ref: varchar("auto_nach_mandate_ref", { length: 120 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantUnique: uniqueIndex("nbfc_wallets_tenant_unique").on(table.tenant_id),
+  }),
+);
+
+// E-137 — Addendum V0.2 §8.2. Admin-maintained chargeable-item catalogue.
+// tenant_id NULL = a global default item; non-null = a per-NBFC override.
+// type / trigger / status CHECKs live on the DB side (E-137).
+export const nbfcChargeCatalogue = pgTable(
+  "nbfc_charge_catalogue",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id"),
+    name: varchar({ length: 160 }).notNull(),
+    type: varchar({ length: 20 }).notNull(), // service_usage | platform_fee | disbursal_fee | other
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+    trigger: varchar({ length: 24 }).notNull(), // on_api_execution | on_vkyc_run | on_disbursal | monthly | manual
+    status: varchar({ length: 12 }).default("active").notNull(), // active | inactive
+    commercial_doc_url: text("commercial_doc_url"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantTriggerIdx: index("nbfc_charge_catalogue_tenant_trigger_idx").on(table.tenant_id, table.trigger, table.status),
+  }),
+);
+
+// E-137 — Addendum V0.2 §8.2. Append-only wallet ledger. amount < 0 = debit,
+// > 0 = credit (top-up). balance_after snapshots the running balance; `month`
+// (YYYY-MM) groups the monthly GST statement. kind CHECK lives on the DB side.
+export const nbfcWalletLedger = pgTable(
+  "nbfc_wallet_ledger",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    catalogue_item_id: uuid("catalogue_item_id"),
+    kind: varchar({ length: 20 }).notNull(), // charge | manual_deduction | topup | adjustment
+    type: varchar({ length: 20 }),
+    description: text("description").notNull(),
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+    balance_after: numeric("balance_after", { precision: 14, scale: 2 }).notNull(),
+    lead_id: varchar("lead_id", { length: 50 }),
+    nbfc_id: integer("nbfc_id"),
+    trigger_rule: varchar("trigger_rule", { length: 24 }),
+    posted_by: uuid("posted_by"),
+    month: varchar({ length: 7 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantMonthIdx: index("nbfc_wallet_ledger_tenant_month_idx").on(table.tenant_id, table.month),
+    leadIdx: index("nbfc_wallet_ledger_lead_idx").on(table.lead_id),
+  }),
+);
+
+// E-138 — Addendum V0.2 §11.7. Manual Handoff (Model M2): routes a lead to
+// off-platform NBFC(s) by email. Competitive; Sent → Outcome only (no
+// intermediate status); a 24h recurring admin nudge runs until an outcome is
+// recorded or the admin declares it exhausted. One row per lead. status CHECK
+// lives on the DB side (E-138).
+export const manualHandoffs = pgTable(
+  "manual_handoffs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    lead_id: varchar("lead_id", { length: 50 }).notNull(),
+    tenant_id: uuid("tenant_id"),
+    // 'sent' | 'outcome_accepted' | 'outcome_declined' | 'exhausted'
+    status: varchar({ length: 24 }).default("sent").notNull(),
+    sent_to_emails: jsonb("sent_to_emails").notNull(),
+    sent_by: uuid("sent_by"),
+    sent_at: timestamp("sent_at", { withTimezone: true }).defaultNow().notNull(),
+    last_nudge_at: timestamp("last_nudge_at", { withTimezone: true }),
+    nudge_count: integer("nudge_count").default(0).notNull(),
+    outcome: text("outcome"),
+    winning_nbfc_name: varchar("winning_nbfc_name", { length: 200 }),
+    declining_nbfcs: jsonb("declining_nbfcs"),
+    outcome_recorded_by: uuid("outcome_recorded_by"),
+    outcome_recorded_at: timestamp("outcome_recorded_at", { withTimezone: true }),
+    agreement_doc_url: text("agreement_doc_url"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    leadUnique: uniqueIndex("manual_handoffs_lead_unique").on(table.lead_id),
+    statusNudgeIdx: index("manual_handoffs_status_nudge_idx").on(table.status, table.last_nudge_at),
+  }),
+);
+
+// NBFC servicing ledger keyed by loan_application_id (the PK). That id comes
+// from one of: an NBFC's own loan id (CSV import), or a loan_sanctions.id
+// projected by the disbursement bridge (projectDisbursedLoan, §6.1.3). It is
+// therefore NOT a FK to loan_applications — that legacy FK was dropped in E-144
+// because the bridge keys it to loan_sanctions.id. One loan belongs to one NBFC.
 export const nbfcLoans = pgTable(
   "nbfc_loans",
   {

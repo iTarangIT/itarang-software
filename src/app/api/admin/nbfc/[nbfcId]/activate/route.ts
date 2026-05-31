@@ -373,9 +373,13 @@ export async function POST(
 
   // nbfc_users has no PK on (user_id, tenant_id); guard the duplicate via a
   // raw NOT EXISTS check so a resend doesn't pile up rows.
+  // Role must be a canonical origination role (nbfc_users_role_check, §7.2) —
+  // 'nbfc_admin' is the account owner. The legacy 'admin' value is NOT in the
+  // CHECK set, so seeding it made the row un-updatable (any later UPDATE re-runs
+  // the NOT VALID constraint on the new row and fails).
   await db.execute(sql`
     INSERT INTO nbfc_users (user_id, tenant_id, role)
-    SELECT ${supabaseUserId}::uuid, ${tenantId}::uuid, 'admin'
+    SELECT ${supabaseUserId}::uuid, ${tenantId}::uuid, 'nbfc_admin'
     WHERE NOT EXISTS (
       SELECT 1 FROM nbfc_users
       WHERE user_id = ${supabaseUserId}::uuid AND tenant_id = ${tenantId}::uuid

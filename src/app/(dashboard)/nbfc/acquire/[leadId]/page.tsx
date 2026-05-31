@@ -2,12 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { and, eq, inArray } from "drizzle-orm";
-import {
-  ArrowLeft,
-  AlertTriangle,
-  CircleDashed,
-  Clock,
-} from "lucide-react";
+import { ArrowLeft, AlertTriangle } from "lucide-react";
 import {
   dealers,
   leads,
@@ -17,13 +12,39 @@ import {
   productSelections,
 } from "@/lib/db/schema";
 import { getCurrentTenant } from "@/lib/nbfc/tenant";
+import { getFiTrack } from "@/lib/nbfc/fi";
+import { getVkycTrack } from "@/lib/nbfc/vkyc";
+import { evaluateEnachGate } from "@/lib/nbfc/enach";
+import { getCustomerDossier } from "@/lib/nbfc/dossier";
+import CustomerDossierPanel from "../_components/CustomerDossierPanel";
+import EnachTrackPanel from "../_components/EnachTrackPanel";
+import AgreementTrackPanel from "../_components/AgreementTrackPanel";
+import VkycTrackPanel from "../_components/VkycTrackPanel";
+import FiTrackPanel from "../_components/FiTrackPanel";
+import OfferPanel from "../_components/OfferPanel";
+import SanctionPanel from "../_components/SanctionPanel";
+import LeadStageStepper, {
+  type NextAction,
+  type StepperStage,
+} from "../_components/LeadStageStepper";
 
-// Acquire lead detail — Addendum V0.1 §6 / §7.
-// READ-ONLY in A1. Action surfaces (FI / Video KYC / E-NACH / Offer) land
-// in A3/A4/A6 once the supporting tables and per-track storage migrations
-// are written.
+// Acquire lead detail — Addendum V0.2 §6 / §7 / §9 / §10 / §11.
+// Guided origination workspace: a stage stepper + next-action banner derived
+// server-side from the assignment status and this NBFC's own verification
+// tracks, then the live action panels grouped into Stage 1 (parallel, all
+// picked NBFCs) and Stage 2 (winner-only: E-NACH + disbursal).
 
 export const dynamic = "force-dynamic";
+
+const STATUS_LABEL: Record<string, string> = {
+  pending: "Pending",
+  in_progress: "In progress",
+  offer_submitted: "Offer submitted",
+  selected: "Selected",
+  not_selected: "Not selected",
+  declined: "Declined",
+  withdrawn: "Withdrawn",
+};
 
 function fmtInr(v: string | number | null | undefined): string {
   if (v == null) return "—";
@@ -89,7 +110,6 @@ export default async function AcquireLeadDetailPage({
         .select({
           dealer_id: dealers.dealer_id,
           company_name: dealers.company_name,
-          city: dealers.city,
         })
         .from(dealers)
         .where(eq(dealers.dealer_id, lead.dealer_id))
@@ -134,6 +154,240 @@ export default async function AcquireLeadDetailPage({
 
   const batteryPhotos = (ps?.battery_photo_urls as string[] | null) ?? [];
   const chargerPhotos = (ps?.charger_photo_urls as string[] | null) ?? [];
+
+  // ── Lifecycle derivation (Addendum V0.2 §6/§9/§10) ───────────────────────
+  // Stage-1 tracks run across EVERY picked NBFC, so read THIS NBFC's own rows
+  // (assignment.nbfc_id). E-NACH is winner-only, so its gate is winner-centric.
+  const snap = (assignment.service_config_snapshot ?? {}) as {
+    fi_enabled?: boolean;
+    vkyc_enabled?: boolean;
+    enach_enabled?: boolean;
+  };
+  const status = assignment.status;
+
+  const fiRequired = snap.fi_enabled ?? false;
+  const fiRow = fiRequired ? await getFiTrack(leadId, assignment.nbfc_id) : null;
+  const fiComplete =
+    !fiRequired || (fiRow?.status === "completed" && fiRow?.outcome === "pass");
+  const fiFailed =
+    fiRequired && (fiRow?.status === "failed" || fiRow?.outcome === "fail");
+
+  const vkycRequired = snap.vkyc_enabled ?? false;
+  const vkycRow = vkycRequired
+    ? await getVkycTrack(leadId, assignment.nbfc_id)
+    : null;
+  const vkycComplete = !vkycRequired || vkycRow?.status === "verified";
+  const vkycFailed = vkycRequired && vkycRow?.status === "failed";
+
+  const enachGate = await evaluateEnachGate(leadId);
+
+  // Full customer dossier (Steps 1–3 + product selection) for the Verification
+  // step. `lead` already exists (guarded above), so this is non-null.
+  const dossier = await getCustomerDossier(leadId);
+
+  const offerSubmitted = ["offer_submitted", "selected", "not_selected"].includes(
+    status,
+  );
+  const won = status === "selected";
+  const lost = status === "not_selected";
+  const closed = status === "declined" || status === "withdrawn";
+
+  const verificationRequired = fiRequired || vkycRequired;
+  const verificationComplete = fiComplete && vkycComplete;
+  const verificationFailed = fiFailed || vkycFailed;
+  const disbursalReady = won && enachGate.satisfied && verificationComplete;
+
+  function nodeOffer(): StepperStage["state"] {
+    if (offerSubmitted) return "done";
+    if (verificationComplete && !closed) return "active";
+    return "locked";
+  }
+  function nodeWinner(): StepperStage["state"] {
+    if (won) return "done";
+    if (lost) return "failed";
+    if (status === "offer_submitted") return "active";
+    return "locked";
+  }
+  function nodeEnach(): StepperStage["state"] {
+    if (!won) return "locked";
+    return enachGate.satisfied ? "done" : "active";
+  }
+
+  // ── Per-step accordion content (Addendum V0.2 §6/§9/§10/§11) ─────────────
+  // Each step's action panel is status-aware and self-locks once the step
+  // succeeds (FI/VKYC hide inputs on terminal, Offer renders read-only terms,
+  // E-NACH hides inputs once registered/waived, Sanction shows "disbursed").
+  // So a completed step opens as a read-only summary automatically.
+  // The Verification step is the NBFC's review surface: always show the full
+  // customer dossier (details + verified documents from Steps 1–3) with a
+  // Download (ZIP) + Next → Offer action bar. When FI / Video KYC are opted in
+  // for this lead, their live track panels render below the dossier (§7.4).
+  const verifyContent = (
+    <div className="space-y-4">
+      {dossier ? (
+        <CustomerDossierPanel dossier={dossier} leadId={leadId} />
+      ) : null}
+      {verificationRequired ? (
+        <div className="space-y-3 border-t border-slate-200 pt-4">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+            Verification tracks
+          </p>
+          <FiTrackPanel leadId={leadId} />
+          <VkycTrackPanel leadId={leadId} />
+        </div>
+      ) : null}
+    </div>
+  );
+
+  const offerContent = <OfferPanel leadId={leadId} />;
+
+  const winnerContent = (
+    <p className="text-sm text-slate-600">
+      {won
+        ? "Selected as the winning lender by the customer."
+        : lost
+          ? "Not selected — a competing offer won. No further action."
+          : status === "offer_submitted"
+            ? "Offer submitted — awaiting the customer's decision between competing offers."
+            : "Submit your financing offer first; the customer then picks the winner across competing NBFCs."}
+    </p>
+  );
+
+  const enachContent = won ? (
+    <div className="space-y-3">
+      <EnachTrackPanel leadId={leadId} />
+      <AgreementTrackPanel leadId={leadId} />
+      <p className="text-[11px] leading-relaxed text-slate-500 border-t border-slate-100 pt-3">
+        <b className="text-slate-600">Agreement &amp; documents (§11).</b>{" "}
+        iTarang facilitates and files the sanction letter / loan agreement but is
+        not a party to them; document storage is optional. The Step-5 OTP —
+        captured on the dealer side — is the hard gate for battery-sold,
+        disbursal and warranty.
+      </p>
+    </div>
+  ) : (
+    <p className="text-sm text-slate-500">
+      {lost
+        ? "This NBFC was not selected — Stage 2 does not apply."
+        : "E-NACH mandate registration and the agreement unlock once the customer selects this NBFC as the winning lender (§9.1)."}
+    </p>
+  );
+
+  const disburseContent = won ? (
+    <SanctionPanel leadId={leadId} />
+  ) : (
+    <p className="text-sm text-slate-500">
+      Disbursal unlocks for the winning lead once the E-NACH mandate and
+      verification gates are satisfied.
+    </p>
+  );
+
+  const stages: StepperStage[] = [
+    {
+      key: "verify",
+      label: "Verification",
+      sub: verificationFailed
+        ? "track failed"
+        : !verificationRequired
+          ? "not required"
+          : verificationComplete
+            ? "complete"
+            : "in progress",
+      state: verificationFailed
+        ? "failed"
+        : !verificationRequired
+          ? "done"
+          : verificationComplete
+            ? "done"
+            : "active",
+      content: verifyContent,
+    },
+    {
+      key: "offer",
+      label: "Offer",
+      sub: offerSubmitted ? "submitted" : "pending",
+      state: nodeOffer(),
+      content: offerContent,
+    },
+    {
+      key: "winner",
+      label: "Winner",
+      sub: won ? "selected" : lost ? "not selected" : "customer decides",
+      state: nodeWinner(),
+      content: winnerContent,
+    },
+    {
+      key: "enach",
+      label: "E-NACH & Agreement",
+      sub: !won
+        ? "winner only"
+        : enachGate.satisfied
+          ? enachGate.status === "skipped"
+            ? "waived"
+            : "registered"
+          : "pending",
+      state: nodeEnach(),
+      content: enachContent,
+    },
+    {
+      key: "disburse",
+      label: "Disbursal",
+      sub: disbursalReady ? "ready" : "—",
+      state: disbursalReady ? "active" : "locked",
+      content: disburseContent,
+    },
+  ];
+
+  function deriveNextAction(): NextAction {
+    if (lost)
+      return {
+        tone: "muted",
+        text: "This NBFC was not selected by the customer — a competing offer won. No further action.",
+      };
+    if (closed)
+      return {
+        tone: "muted",
+        text: `This lead is ${STATUS_LABEL[status] ?? status}. No further action.`,
+      };
+    if (verificationFailed)
+      return {
+        tone: "danger",
+        text: "A verification track failed. Review Field Investigation / Video KYC below — re-initiate or record the outcome.",
+      };
+    if (!verificationComplete)
+      return {
+        tone: "info",
+        text: "FI Coordinator & Operations: complete Field Investigation and Active Video KYC — Stage-1 tracks run in parallel.",
+      };
+    if (!offerSubmitted)
+      return {
+        tone: "info",
+        text: "Credit / Underwriting: submit the firm financing offer for this lead.",
+      };
+    if (status === "offer_submitted")
+      return {
+        tone: "info",
+        text: "Offer submitted — awaiting the customer's decision between competing offers.",
+      };
+    if (won && enachGate.required && !enachGate.satisfied)
+      return {
+        tone: "info",
+        text: "Operations: register the E-NACH mandate for the winning lead (Stage 2, winner-only).",
+      };
+    if (won && disbursalReady)
+      return {
+        tone: "success",
+        text: "All applicable verification tracks satisfied — ready to sanction & disburse.",
+      };
+    if (won)
+      return {
+        tone: "info",
+        text: "Winning lead — complete the Stage-2 mandate and disbursal steps below.",
+      };
+    return { tone: "muted", text: "Awaiting the next step." };
+  }
+
+  const nextAction = deriveNextAction();
 
   return (
     <div className="px-6 py-8 space-y-6 max-w-6xl mx-auto">
@@ -184,6 +438,8 @@ export default async function AcquireLeadDetailPage({
           </div>
         </div>
       </header>
+
+      <LeadStageStepper stages={stages} nextAction={nextAction} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-5">
@@ -362,37 +618,18 @@ export default async function AcquireLeadDetailPage({
             <div className="text-xs text-slate-500 mt-1">
               {dealerRow?.dealer_id ?? lead.dealer_id ?? "—"}
             </div>
-            {dealerRow?.city && (
-              <div className="text-xs text-slate-500">{dealerRow.city}</div>
-            )}
           </section>
 
           <section className="border border-slate-200 rounded-xl bg-white p-5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">
-              Verification Tracks
+            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-2">
+              Origination steps
             </h2>
-            <div className="space-y-3">
-              <TrackPlaceholder title="Field Investigation" phase="A3" />
-              <TrackPlaceholder title="Active Video KYC" phase="A3" />
-              <TrackPlaceholder title="E-NACH (winner only)" phase="A6" />
-            </div>
-          </section>
-
-          <section className="border border-slate-200 rounded-xl bg-white p-5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">
-              Financing Offer
-            </h2>
-            <div className="rounded-lg border-2 border-dashed border-slate-200 p-4 text-center">
-              <CircleDashed className="w-5 h-5 text-slate-400 mx-auto" />
-              <p className="text-xs font-semibold text-slate-600 mt-2">
-                Offer submission lands in A4
-              </p>
-              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                Once verification tracks complete, Credit / Underwriting will
-                submit firm financing conditions. The customer compares offers
-                across selected NBFCs and picks the winner.
-              </p>
-            </div>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Use the progress rail above — click any step to open its panel.
+              Stage-1 (FI + Video KYC) runs in parallel and competitively;
+              E-NACH and disbursal are winner-only (§9.1). A completed step is
+              locked and read-only.
+            </p>
           </section>
         </div>
       </div>
@@ -445,16 +682,3 @@ function PhotoStrip({ title, urls }: { title: string; urls: string[] }) {
   );
 }
 
-function TrackPlaceholder({ title, phase }: { title: string; phase: string }) {
-  return (
-    <div className="rounded-lg border border-slate-200 p-3">
-      <div className="flex items-center gap-2">
-        <Clock className="w-4 h-4 text-slate-400" />
-        <span className="text-sm font-semibold text-slate-800">{title}</span>
-      </div>
-      <p className="text-[11px] text-slate-500 mt-1">
-        Not started · arrives in phase {phase}
-      </p>
-    </div>
-  );
-}

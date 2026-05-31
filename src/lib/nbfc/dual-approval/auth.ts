@@ -19,6 +19,7 @@ import { db } from "@/lib/db";
 import { eq, and } from "drizzle-orm";
 import { nbfcUsers, nbfcTenants } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess, getSessionUser } from "@/lib/nbfc/tenant";
+import { normalizeNbfcRole } from "@/lib/nbfc/origination-roles";
 
 export interface DualApprovalActor {
   user_id: string;
@@ -82,7 +83,10 @@ export async function resolveActor(headers: Headers): Promise<DualApprovalActor>
     .from(nbfcUsers)
     .where(and(eq(nbfcUsers.user_id, session.id), eq(nbfcUsers.tenant_id, tenant.id)))
     .limit(1);
-  const role = rows[0]?.role ?? "viewer";
+  // The activation flow seeds the primary partner-owner with the legacy role
+  // 'admin'; the origination RBAC layer (§7.2) uses 'nbfc_admin'. Normalise so
+  // the account owner is recognised by every action gate (see normalizeNbfcRole).
+  const role = normalizeNbfcRole(rows[0]?.role);
   return {
     user_id: session.id,
     tenant_id: tenant.id,
