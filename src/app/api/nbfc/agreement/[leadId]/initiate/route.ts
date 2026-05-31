@@ -175,10 +175,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             sign_type: "aadhaar",
           },
         ],
-        sequential: true,
         expire_in_days: 14,
         notify_signers: true,
-        customer_notification_mode: "all",
+        // Direct tokenised signing link in the email (otherwise Digio sends the
+        // generic "Register and Login into your Digio account" invite, which
+        // leaves the borrower unable to sign).
+        send_sign_link: true,
+        generate_access_token: true,
+        display_on_page: "all",
+        sequence_type: "SEQUENTIAL",
         // Routed to the loan-agreement webhook by the AGR_ callback prefix.
         callback: `AGR_${agreementRef}`,
       });
