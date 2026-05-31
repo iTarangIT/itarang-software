@@ -122,29 +122,6 @@ jobs:
             rm -rf .next/standalone/public
             if [ -d public ]; then cp -r public .next/standalone/public; fi
 
-            echo "=== Copy @sparticuz/chromium (incl bin/) into standalone ==="
-            # Next.js standalone file-tracing resolves @sparticuz/chromium's
-            # binary by runtime path, not require(), so it drops the bin/ dir —
-            # which makes the @sparticuz launch path fail with "input directory
-            # .../@sparticuz/chromium/bin does not exist". Copy the full package
-            # (npm ci --include=dev above guarantees it's on disk) so the
-            # bundled-Chromium fallback in launch-browser.ts actually works.
-            if [ -d node_modules/@sparticuz/chromium ]; then
-              mkdir -p .next/standalone/node_modules/@sparticuz
-              rm -rf .next/standalone/node_modules/@sparticuz/chromium
-              cp -r node_modules/@sparticuz/chromium .next/standalone/node_modules/@sparticuz/chromium
-            fi
-            # puppeteer-core is normally traced, but copy defensively if missing.
-            if [ ! -d .next/standalone/node_modules/puppeteer-core ] && [ -d node_modules/puppeteer-core ]; then
-              cp -r node_modules/puppeteer-core .next/standalone/node_modules/puppeteer-core
-            fi
-
-            echo "=== Ensure Google Chrome is installed (PDF/agreement rendering) ==="
-            # Primary Chromium path for launch-browser.ts on the VPS
-            # (PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable). Idempotent:
-            # fast-paths out when Chrome is already present.
-            bash scripts/prod-system-setup.sh
-
             echo "=== Stop pm2 + guarantee port 3002 is free ==="
             # Previous "poll for port free" logic was unreliable — the ss
             # filter syntax could silently return empty, the loop would
