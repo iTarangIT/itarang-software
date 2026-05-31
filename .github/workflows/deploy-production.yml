@@ -70,30 +70,37 @@ jobs:
             ARCHIVE_KEEP=10
 
             echo "=== Snapshot previous .next/static into archive ring ==="
-            # The archive ring is a NON-CRITICAL stale-tab optimization (serves
-            # old chunks during the symlink swap). It has aborted the prod deploy
-            # at this exact spot several times under `set -eo pipefail` for subtle
-            # reasons (runs 26678229305 / 26680904559), so the WHOLE best-effort
-            # block runs with errexit OFF — it must never stop the build. Disk is
-            # not a concern here (box has tens of GB free); `rm -rf .next` below
-            # reclaims the old build anyway. errexit is restored right after.
-            set +e
-            mkdir -p "$ARCHIVE_DIR"
-            ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf
-            if [ -f .next/BUILD_ID ] && [ -d .next/static ]; then
-              OLD_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null)
-              if [ -n "$OLD_BUILD_ID" ]; then
-                rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID"
-                if cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"; then
-                  echo "Archived $OLD_BUILD_ID"
-                else
-                  echo "::warning::archive snapshot failed — non-fatal, continuing"
+            # Best-effort stale-tab optimization (serves old chunks during the
+            # symlink swap). MUST NEVER abort the deploy. A prior `set +e` guard
+            # did NOT help and it kept dying ~ms after this echo (runs
+            # 26637260611 / 26678229305 / 26680904559 / 26681957671 /
+            # 26708914647), because: (a) `set +e` does not clear `pipefail` (set
+            # at the top), so the `ls|tail|xargs` pipeline still returns non-zero
+            # on an empty archive dir; (b) appleboy/ssh-action `script_stop: true`
+            # tears the SSH session down on any non-zero status independent of
+            # in-script errexit. Fix: run the whole block in a subshell with
+            # errexit AND pipefail OFF, and force its overall status to 0 with
+            # `|| true`, so the single compound command drone-ssh sees can never
+            # be non-zero. Disk is not a concern (box has tens of GB free);
+            # `rm -rf .next` below reclaims the old build anyway.
+            (
+              set +e +o pipefail
+              mkdir -p "$ARCHIVE_DIR"
+              ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf
+              if [ -f .next/BUILD_ID ] && [ -d .next/static ]; then
+                OLD_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null)
+                if [ -n "$OLD_BUILD_ID" ]; then
+                  rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID"
+                  if cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"; then
+                    echo "Archived $OLD_BUILD_ID"
+                  else
+                    echo "::warning::archive snapshot failed — non-fatal, continuing"
+                  fi
                 fi
+              else
+                echo "No previous .next to archive (first build or clean tree)"
               fi
-            else
-              echo "No previous .next to archive (first build or clean tree)"
-            fi
-            set -e
+            ) || true
 
             echo "=== Cleaning prior build state ==="
             # Forces deterministic builds. The archive ring above already
@@ -136,7 +143,11 @@ jobs:
 
             echo "=== Prune archive ring (keep $ARCHIVE_KEEP newest) ==="
             if [ -d "$ARCHIVE_DIR" ]; then
-              ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf
+              # `|| true`: this runs under `set -eo pipefail`, and `ls` on a
+              # sparse/empty glob returns non-zero — without the guard the
+              # pipeline would abort the deploy here (same failure class as the
+              # snapshot block above).
+              ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf || true
               echo "Archive now holds $(ls -1d "$ARCHIVE_DIR"/*/ 2>/dev/null | wc -l) builds"
             fi
 
