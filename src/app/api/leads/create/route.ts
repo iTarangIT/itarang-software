@@ -11,6 +11,25 @@ import {
     dealers,
 } from '@/lib/db/schema';
 
+// Generates a human-readable, sequential lead reference (e.g. "#IT-2026-0000123").
+// Restored after a refactor dropped the definition while leaving the call site intact.
+async function generateLeadReference() {
+    const year = new Date().getFullYear();
+    const prefix = `#IT-${year}`;
+    const [lastRecord] = await db.select({ reference_id: leads.reference_id })
+        .from(leads)
+        .where(sql`${leads.reference_id} LIKE ${prefix + '-%'}`)
+        .orderBy(desc(leads.reference_id))
+        .limit(1);
+
+    let sequenceNum = 1;
+    if (lastRecord?.reference_id) {
+        const lastSeq = lastRecord.reference_id.split('-').pop();
+        if (lastSeq) sequenceNum = parseInt(lastSeq) + 1;
+    }
+    return `${prefix}-${sequenceNum.toString().padStart(7, '0')}`;
+}
+
 // [E-105] Lead-creation dealer-status gate (Sync Audit G-10).
 // Returns a structured 403 response with a stable string error code so the
 // dealer-portal UI can localise messages without parsing message text.
