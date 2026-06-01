@@ -1,5 +1,6 @@
 import { digioClient } from "./client";
-import { buildDigioPayload, buildUploadPdfPayload, type DigioUploadPdfInput } from "./mapper";
+import { buildUploadPdfPayload, type DigioUploadPdfInput } from "./mapper";
+import { buildLoanAgreementUploadPayload, type LoanAgreementUploadInput } from "./loan-agreement-mapper";
 
 /**
  * Upload a PDF to Digio for e-signing via /v2/client/document/uploadpdf
@@ -7,6 +8,18 @@ import { buildDigioPayload, buildUploadPdfPayload, type DigioUploadPdfInput } fr
  */
 export async function createDigioAgreement(data: DigioUploadPdfInput) {
   const payload = buildUploadPdfPayload(data);
+  const response = await digioClient.post("/v2/client/document/uploadpdf", payload);
+  return response.data;
+}
+
+/**
+ * Upload the NBFC's loan-agreement PDF to Digio for the borrower (+ NBFC
+ * signatory) to sign (BRD §17 "iTarang eSign"). Routes status callbacks to the
+ * loan-agreement webhook via notify_url + an AGR_<ref> callback token.
+ * Returns Digio's raw response (carries `id` and `signing_parties[].authentication_url`).
+ */
+export async function createLoanAgreementSignRequest(data: LoanAgreementUploadInput) {
+  const payload = buildLoanAgreementUploadPayload(data);
   const response = await digioClient.post("/v2/client/document/uploadpdf", payload);
   return response.data;
 }

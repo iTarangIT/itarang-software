@@ -1,33 +1,31 @@
 /**
  * GET /api/nbfc-uploads/{...path}
  *
- * Serves files uploaded at runtime under public/nbfc-uploads/ (compliance
- * documents, LSP agreement templates, signer identity docs, cached signed
- * PDFs, etc.).
+ * Serves NBFC documents — FI visit photos, FI agent reference photos,
+ * compliance docs, LSP agreement templates, signer identity docs, cached
+ * signed/audit PDFs.
  *
- * WHY THIS EXISTS — production serving bug:
- *   In Next.js `output: "standalone"`, the bundled server serves the
- *   `public/` directory from its OWN build copy (sandbox: `current/public/`
- *   inside the immutable release; prod: `.next/standalone/public/`). But the
- *   upload routes write to `process.cwd()/public/nbfc-uploads/` — the pm2
- *   working dir (`$APP_DIR/public/...`), which is a DIFFERENT directory than
- *   the standalone server's bundled `public/`. So every runtime-uploaded file
- *   requested at its static URL `/nbfc-uploads/...` misses the static handler
- *   and falls through to the app's catch-all "Page Not Found" page.
+ * Storage backend: the PRIVATE Supabase bucket `nbfc-documents` (see
+ * src/lib/nbfc/nbfc-storage.ts). The DB still stores `/nbfc-uploads/<key>`
+ * URLs, and this route maps `<key>` to the bucket object — so existing rows
+ * and display components need no change.
  *
- *   This route reads from the SAME cwd-relative directory the upload routes
- *   write to, so what's written is always what's served — independent of the
- *   standalone bundle layout. A `afterFiles` rewrite in next.config.ts maps
- *   `/nbfc-uploads/:path*` here when the static file isn't found, so existing
- *   stored URLs (`/nbfc-uploads/...`) keep working with no DB migration.
+ * AUTH: these files include KYC PII, so the route now requires an authenticated
+ * Supabase session. (Previously they were world-readable from public/ via a
+ * static path — that's the hole this migration closes.)
  *
- * Security: the resolved path is constrained to stay inside the
- * public/nbfc-uploads/ root (path-traversal guard). Exposure level is
- * identical to the previous static-file serving (these lived in public/).
+ * MIGRATION FALLBACK: if the object isn't in the bucket yet (not backfilled),
+ * we fall back to reading the legacy file from `process.cwd()/public/
+ * nbfc-uploads/` so nothing breaks during rollout. Run the backfill script
+ * (scripts/backfill-nbfc-uploads-to-supabase.mjs) on the host, then the local
+ * files can be removed.
  */
 import path from "node:path";
 import fs from "node:fs/promises";
 import { NextRequest, NextResponse } from "next/server";
+
+import { createClient } from "@/lib/supabase/server";
+import { getNbfcObject } from "@/lib/nbfc/nbfc-storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,39 +40,8 @@ const CONTENT_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
-export async function GET(
-  _req: NextRequest,
-  ctx: { params: Promise<{ path: string[] }> },
-) {
-  const { path: segments } = await ctx.params;
-  if (!segments || segments.length === 0) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  const root = path.join(process.cwd(), "public", "nbfc-uploads");
-  // Resolve + normalize, then confirm the result is still inside `root`
-  // (path-traversal guard). Next.js already URL-decodes catch-all segments,
-  // so no manual decodeURIComponent here.
-  const absPath = path.normalize(path.join(root, ...segments));
-  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
-  if (absPath !== root && !absPath.startsWith(rootWithSep)) {
-    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
-  }
-
-  let buf: Buffer;
-  try {
-    const stat = await fs.stat(absPath);
-    if (!stat.isFile()) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-    buf = await fs.readFile(absPath);
-  } catch {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  const ext = path.extname(absPath).toLowerCase();
+function fileResponse(buf: Buffer, ext: string): NextResponse {
   const contentType = CONTENT_TYPES[ext] ?? "application/octet-stream";
-
   return new NextResponse(new Uint8Array(buf), {
     status: 200,
     headers: {
@@ -85,4 +52,55 @@ export async function GET(
       // Cache-Control is set globally to no-store by next.config.ts headers().
     },
   });
+}
+
+export async function GET(
+  req: NextRequest,
+  ctx: { params: Promise<{ path: string[] }> },
+) {
+  const { path: segments } = await ctx.params;
+  if (!segments || segments.length === 0) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  // Require an authenticated session — these are PII KYC documents.
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Reject path-traversal / absolute segments before forming the key.
+  if (segments.some((s) => s === ".." || s.includes("\0") || path.isAbsolute(s))) {
+    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+  }
+  const key = segments.join("/");
+  const ext = path.extname(key).toLowerCase();
+
+  // 1) Supabase (the new home).
+  const fromBucket = await getNbfcObject(key);
+  if (fromBucket) return fileResponse(fromBucket, ext);
+
+  // 2) Legacy local disk fallback (pre-backfill). Same path-traversal guard as
+  //    before: the resolved path must stay inside public/nbfc-uploads/.
+  const root = path.join(process.cwd(), "public", "nbfc-uploads");
+  const absPath = path.normalize(path.join(root, ...segments));
+  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+  if (absPath !== root && !absPath.startsWith(rootWithSep)) {
+    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+  }
+  try {
+    const stat = await fs.stat(absPath);
+    if (!stat.isFile()) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const buf = await fs.readFile(absPath);
+    return fileResponse(buf, ext);
+  } catch {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
 }
