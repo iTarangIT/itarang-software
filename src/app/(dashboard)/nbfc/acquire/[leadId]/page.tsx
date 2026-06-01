@@ -228,10 +228,22 @@ export default async function AcquireLeadDetailPage({
         <CustomerDossierPanel dossier={dossier} leadId={leadId} />
       ) : null}
       {verificationRequired ? (
-        <div className="space-y-3 border-t border-slate-200 pt-4">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-            Verification tracks
-          </p>
+        <div className="space-y-3 border-t border-slate-200 pt-5">
+          <div className="flex items-center gap-2.5">
+            <span
+              className="grid h-7 w-7 place-items-center rounded-lg text-white shadow-sm"
+              style={{ backgroundImage: "linear-gradient(135deg, var(--color-brand-teal), var(--color-brand-navy))" }}
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />
+                <path d="m9 12 2 2 4-4" />
+              </svg>
+            </span>
+            <div>
+              <p className="text-sm font-semibold tracking-tight text-slate-900">Verification tracks</p>
+              <p className="text-[11px] text-slate-400">Stage-1 checks run in parallel before the offer</p>
+            </div>
+          </div>
           <FiTrackPanel leadId={leadId} />
           <VkycTrackPanel leadId={leadId} />
         </div>
