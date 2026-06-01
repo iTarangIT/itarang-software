@@ -24,6 +24,7 @@ import { generateFiLinkToken, geocodeAddress, getCurrentFiTrack, slaDueFrom } fr
 import { getFiAgent } from "@/lib/nbfc/fi-agents";
 import { dispatchFiLink } from "@/lib/nbfc/fi-dispatch";
 import { assertNotHaltedByFailure } from "@/lib/nbfc/track-gate";
+import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -94,7 +95,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     }
     const nbfcId = assignment.nbfc_id;
     const now = new Date();
-    const linkUrl = (token: string) => `${req.nextUrl.origin}/fi/${token}`;
+    // Build the agent link from the configured PUBLIC origin (NEXT_PUBLIC_APP_URL),
+    // NOT req.nextUrl.origin — the latter is the dev/internal bind host (e.g.
+    // localhost:3003) which is unreachable from the agent's phone, producing the
+    // ERR_CONNECTION_REFUSED the agent saw. Mirrors the VKYC initiate route.
+    let publicBase: string;
+    try {
+      publicBase = publicOrigin({ req });
+    } catch (err) {
+      const msg = err instanceof PublicOriginError ? err.message : "Cannot determine public origin";
+      return NextResponse.json({ ok: false, error: `Server misconfig: ${msg}` }, { status: 500 });
+    }
+    const linkUrl = (token: string) => `${publicBase}/fi/${token}`;
 
     // ── assign ────────────────────────────────────────────────────────────
     if (d.action === "assign") {
