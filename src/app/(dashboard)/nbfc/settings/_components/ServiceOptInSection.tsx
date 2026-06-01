@@ -3,9 +3,18 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import FiAgentDirectory from "./FiAgentDirectory";
+
 // BRD Addendum V0.2 §7.4 — Service Opt-In + Document Handling + Track Rules.
 // Per-service toggles; opting OUT means the NBFC does that step off-platform.
 // Zero services is valid. The read-only callback URL is shown when E-NACH is on.
+
+export interface FiConfig {
+  reinspection_cap: number | null;
+  gps_denied_block: boolean;
+  camera_only: boolean;
+  required_photos: string[];
+}
 
 export interface ServiceConfig {
   fi_enabled: boolean;
@@ -19,7 +28,15 @@ export interface ServiceConfig {
   store_loan_agreement: boolean;
   track_completion_gate: boolean;
   track_failure_halts: boolean;
+  fi_config?: FiConfig | null;
 }
+
+const DEFAULT_FI_CONFIG: FiConfig = {
+  reinspection_cap: null,
+  gps_denied_block: true,
+  camera_only: true,
+  required_photos: ["exterior", "customer_at_residence", "corroborator", "agent_selfie"],
+};
 
 interface Props {
   initialConfig: ServiceConfig;
@@ -37,6 +54,12 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
 
   function set<K extends keyof ServiceConfig>(key: K, value: ServiceConfig[K]) {
     setCfg((c) => ({ ...c, [key]: value }));
+    setSavedAt(null);
+  }
+
+  const fi: FiConfig = { ...DEFAULT_FI_CONFIG, ...(cfg.fi_config ?? {}) };
+  function setFi<K extends keyof FiConfig>(key: K, value: FiConfig[K]) {
+    setCfg((c) => ({ ...c, fi_config: { ...DEFAULT_FI_CONFIG, ...(c.fi_config ?? {}), [key]: value } }));
     setSavedAt(null);
   }
 
@@ -103,7 +126,46 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
         checked={cfg.fi_enabled}
         disabled={!canEdit || busy}
         onChange={(v) => set("fi_enabled", v)}
-      />
+      >
+        {cfg.fi_enabled ? (
+          <ConfigurePanel>
+            {/* Agent directory (§10.5) */}
+            <FiAgentDirectory canEdit={canEdit && !busy} />
+
+            {/* FI form + review parameters (§10.7/§10.8.2) */}
+            <div className="space-y-2">
+              <span className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">FI configuration</span>
+              <label className="flex items-center gap-2 text-xs text-slate-700">
+                <span className="w-40">Re-inspection cap</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={fi.reinspection_cap ?? ""}
+                  placeholder="Unlimited"
+                  disabled={!canEdit || busy}
+                  onChange={(e) => setFi("reinspection_cap", e.target.value === "" ? null : Number(e.target.value))}
+                  className="w-28 border border-slate-300 rounded px-2 py-1 text-xs"
+                />
+                <span className="text-[10px] text-slate-400">blank = unlimited</span>
+              </label>
+              <Toggle
+                label="Block submission when GPS is denied"
+                desc="Agent cannot submit without location (recommended)."
+                checked={fi.gps_denied_block}
+                disabled={!canEdit || busy}
+                onChange={(v) => setFi("gps_denied_block", v)}
+              />
+              <Toggle
+                label="Camera-only capture (no gallery uploads)"
+                checked={fi.camera_only}
+                disabled={!canEdit || busy}
+                onChange={(v) => setFi("camera_only", v)}
+              />
+            </div>
+          </ConfigurePanel>
+        ) : null}
+      </Toggle>
 
       {/* Active Video KYC */}
       <Toggle
