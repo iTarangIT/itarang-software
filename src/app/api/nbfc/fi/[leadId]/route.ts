@@ -1,8 +1,12 @@
 /**
- * GET /api/nbfc/fi/[leadId]
+ * GET /api/nbfc/fi/[leadId] — BRD Addendum V0.3.1 §10.
  *
- * Returns the acting NBFC's Field Investigation track for the lead, with a
- * derived sla_breached flag (§6.3) so the UI can surface an overdue visit.
+ * Returns the acting NBFC's CURRENT Field Investigation attempt for the lead,
+ * plus everything the Acquire FI panel + Review screen need:
+ *   - track (with derived sla_breached), photos, auto-flags (§10.8.1)
+ *   - the assigned agent + the active-agent directory for the picker
+ *   - attempt history summary (§10.10), opt-in state, and FI config (§10.7)
+ *   - can_act (only fi_coordinator / nbfc_admin decide; others are read-only)
  */
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
@@ -11,7 +15,8 @@ import { db } from "@/lib/db";
 import { nbfcServiceConfig } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
-import { getFiTrack } from "@/lib/nbfc/fi";
+import { computeFiAutoFlags, getCurrentFiTrack, getFiHistory, getFiPhotos } from "@/lib/nbfc/fi";
+import { getFiAgent, listFiAgents } from "@/lib/nbfc/fi-agents";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,31 +35,66 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
     if (!assignment) {
       return NextResponse.json({ ok: true, track: null, reason: "No assignment for this tenant." });
     }
-    const track = await getFiTrack(leadId, assignment.nbfc_id);
+
+    const track = await getCurrentFiTrack(leadId, assignment.nbfc_id);
     const overdue =
       !!track &&
       !!track.sla_due_at &&
       (track.status === "assigned" || track.status === "in_progress") &&
       new Date(track.sla_due_at).getTime() < Date.now();
 
-    // Opt-in state (mirrors the action route): per-lead snapshot first, live
-    // config fallback only for pre-snapshot rows (§7.4). Lets the UI show a
-    // clear "not opted in" notice rather than a button that 400s on click.
+    // Opt-in + FI config: per-lead snapshot first, live config fallback (§3.4).
     const snap = assignment.snapshot as { fi_enabled?: boolean };
     let enabled = snap.fi_enabled ?? false;
-    if (snap.fi_enabled === undefined) {
-      const cfg = await db
-        .select({ fi: nbfcServiceConfig.fi_enabled })
-        .from(nbfcServiceConfig)
-        .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
-        .limit(1);
-      enabled = cfg[0]?.fi ?? false;
+    const cfg = await db
+      .select({ fi: nbfcServiceConfig.fi_enabled, fiConfig: nbfcServiceConfig.fi_config })
+      .from(nbfcServiceConfig)
+      .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
+      .limit(1);
+    if (snap.fi_enabled === undefined) enabled = cfg[0]?.fi ?? false;
+    const fiConfig = (cfg[0]?.fiConfig as Record<string, unknown> | undefined) ?? null;
+
+    // Decision context for a submitted/decided attempt.
+    let photos: Awaited<ReturnType<typeof getFiPhotos>> = [];
+    let agent = null;
+    let autoFlags: ReturnType<typeof computeFiAutoFlags> = [];
+    if (track) {
+      photos = await getFiPhotos(track.id);
+      agent = track.assigned_agent_id ? await getFiAgent(track.assigned_agent_id, actor.tenant_id) : null;
+      autoFlags = computeFiAutoFlags(
+        { ...track, sla_breached: track.sla_breached || overdue },
+        photos,
+        !!agent?.reference_photo_url,
+      );
     }
+
+    // Lightweight history (prior attempts).
+    const history = (await getFiHistory(leadId, assignment.nbfc_id))
+      .filter((h) => !h.is_current)
+      .map((h) => ({
+        id: h.id,
+        attempt_no: h.attempt_no,
+        status: h.status,
+        decision: h.decision,
+        decision_reason: h.decision_reason,
+        assigned_to: h.assigned_to,
+        decided_at: h.decided_at,
+      }));
+
+    const agents = await listFiAgents(actor.tenant_id, { activeOnly: true });
 
     return NextResponse.json({
       ok: true,
       track: track ? { ...track, sla_breached: track.sla_breached || overdue } : null,
+      photos,
+      agent,
+      auto_flags: autoFlags,
+      history,
+      agents,
+      fi_config: fiConfig,
       can_act: actor.role === "fi_coordinator" || actor.role === "nbfc_admin",
+      can_reopen: actor.role === "nbfc_admin",
+      role: actor.role,
       enabled,
     });
   } catch (e) {

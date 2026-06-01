@@ -3304,6 +3304,12 @@ export const nbfcServiceConfig = pgTable(
     store_loan_agreement: boolean("store_loan_agreement").default(false).notNull(),
     track_completion_gate: boolean("track_completion_gate").default(true).notNull(),
     track_failure_halts: boolean("track_failure_halts").default(false).notNull(),
+    // E-148 §10.7/§15.4.2 — per-NBFC FI agent-form + review parameters.
+    // { reinspection_cap: number|null, gps_denied_block: boolean,
+    //   camera_only: boolean, required_photos: string[] }
+    fi_config: jsonb("fi_config").default(
+      sql`'{"reinspection_cap": null, "gps_denied_block": true, "camera_only": true, "required_photos": ["exterior", "customer_at_residence", "corroborator", "agent_selfie"]}'::jsonb`,
+    ).notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -3490,10 +3496,13 @@ export const videoKycAttempts = pgTable(
   }),
 );
 
-// E-136 — Addendum V0.2 §6.3. Field Investigation track, one row per
-// (lead × NBFC). Internal workflow (no external provider). Address = text match
-// + physical visit + GPS (~50 m supporting only); 48h SLA from assignment;
-// no per-lead skip. status/outcome CHECKs live on the DB side (E-136).
+// E-148 — Addendum V0.3.1 §10 (Field Investigation, Full Spec). Model C, pure
+// record-only: the Coordinator picks an agent from nbfcFiAgents, iTarang sends a
+// single-use link, the AGENT submits a mobile field form (GPS + watermarked
+// photos in fieldInvestigationPhotos), and the Coordinator reviews + decides.
+// NOW ONE ROW PER ATTEMPT per (lead × NBFC): is_current flags the operative
+// attempt; re-inspection appends a new row (attempt_no+1). 8 canonical states
+// (§10.4). status/address_match/decision CHECKs live on the DB side (E-148).
 export const fieldInvestigations = pgTable(
   "field_investigations",
   {
@@ -3501,29 +3510,107 @@ export const fieldInvestigations = pgTable(
     lead_id: varchar("lead_id", { length: 50 }).notNull(),
     nbfc_id: integer("nbfc_id").notNull(),
     tenant_id: uuid("tenant_id").notNull(),
-    // 'not_applicable' | 'pending' | 'assigned' | 'in_progress' | 'completed' | 'failed'
+    // not_applicable|pending|assigned|in_progress|submitted|passed|failed|re_inspection_requested
     status: varchar({ length: 20 }).default("pending").notNull(),
-    assigned_to: varchar("assigned_to", { length: 200 }),
+    attempt_no: integer("attempt_no").default(1).notNull(),
+    is_current: boolean("is_current").default(true).notNull(),
+    // assignment / SLA
+    assigned_agent_id: uuid("assigned_agent_id"), // FK → nbfcFiAgents
+    assigned_to: varchar("assigned_to", { length: 200 }), // denormalised agent name (legacy + display)
     assigned_by: uuid("assigned_by"),
     assigned_at: timestamp("assigned_at", { withTimezone: true }),
     sla_due_at: timestamp("sla_due_at", { withTimezone: true }),
     sla_breached: boolean("sla_breached").default(false).notNull(),
+    // single-use link
+    link_token: varchar("link_token", { length: 80 }),
+    link_sent_at: timestamp("link_sent_at", { withTimezone: true }),
+    link_channel: varchar("link_channel", { length: 12 }), // email|sms|whatsapp
+    link_expires_at: timestamp("link_expires_at", { withTimezone: true }),
+    // agent field-form submission
+    submitted_at: timestamp("submitted_at", { withTimezone: true }),
     visited_at: timestamp("visited_at", { withTimezone: true }),
-    address_text_match: boolean("address_text_match"),
     gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
     gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
     gps_accuracy_m: numeric("gps_accuracy_m", { precision: 8, scale: 2 }),
+    gps_server_timestamp: timestamp("gps_server_timestamp", { withTimezone: true }),
+    stated_lat: numeric("stated_lat", { precision: 10, scale: 7 }), // geocoded address anchor
+    stated_lng: numeric("stated_lng", { precision: 10, scale: 7 }),
+    distance_from_address_m: numeric("distance_from_address_m", { precision: 10, scale: 2 }),
+    address_text_match: boolean("address_text_match"), // legacy (E-136)
+    address_match: varchar("address_match", { length: 10 }), // matches|partial|no
+    address_match_notes: text("address_match_notes"),
+    customer_present: boolean("customer_present"),
+    customer_present_notes: text("customer_present_notes"),
     agent_notes: text("agent_notes"),
-    outcome: varchar({ length: 10 }), // 'pass' | 'fail'
-    proof_urls: jsonb("proof_urls"),
-    reviewed_by: uuid("reviewed_by"),
+    agent_declaration_at: timestamp("agent_declaration_at", { withTimezone: true }),
+    proof_urls: jsonb("proof_urls"), // legacy (E-136); photos now in fieldInvestigationPhotos
+    // Coordinator decision (§10.8.2)
+    outcome: varchar({ length: 10 }), // legacy mirror: 'pass' | 'fail'
+    decision: varchar("decision", { length: 16 }), // 'pass' | 'fail' | 're_inspection'
+    decision_reason: text("decision_reason"),
+    decided_by: uuid("decided_by"),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    reviewed_by: uuid("reviewed_by"), // legacy (E-136)
     reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
+    // NBFC Admin reopen audit (§10.8.2)
+    reopened_by: uuid("reopened_by"),
+    reopened_at: timestamp("reopened_at", { withTimezone: true }),
+    reopen_reason: text("reopen_reason"),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
-    leadNbfcUnique: uniqueIndex("field_investigations_lead_nbfc_unique").on(table.lead_id, table.nbfc_id),
+    // one CURRENT attempt per (lead × NBFC); history rows are is_current=false
+    currentUnique: uniqueIndex("field_investigations_current_unique")
+      .on(table.lead_id, table.nbfc_id)
+      .where(sql`is_current`),
     tenantStatusIdx: index("field_investigations_tenant_status_idx").on(table.tenant_id, table.status),
+  }),
+);
+
+// E-148 — Addendum V0.3.1 §10.5/§10.9.3. Per-NBFC FI agent directory.
+// Agents are NOT iTarang users (no login); lightweight contact records used for
+// single-use link dispatch + Coordinator selfie reference comparison.
+export const nbfcFiAgents = pgTable(
+  "nbfc_fi_agents",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    nbfc_id: integer("nbfc_id").notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    phone: varchar("phone", { length: 20 }).notNull(),
+    email: varchar("email", { length: 200 }),
+    city: varchar("city", { length: 120 }),
+    preferred_channel: varchar("preferred_channel", { length: 12 }).default("email").notNull(), // email|sms|whatsapp
+    reference_photo_url: text("reference_photo_url"),
+    active: boolean("active").default(true).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantActiveIdx: index("nbfc_fi_agents_tenant_active_idx").on(table.tenant_id, table.active),
+  }),
+);
+
+// E-148 — Addendum V0.3.1 §10.9.2. One row per FI photo, watermarked with
+// GPS + server timestamp at capture; structured GPS also stored.
+export const fieldInvestigationPhotos = pgTable(
+  "field_investigation_photos",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    field_investigation_id: uuid("field_investigation_id").notNull(),
+    // exterior|customer_at_residence|corroborator|agent_selfie|extra
+    photo_type: varchar("photo_type", { length: 24 }).notNull(),
+    image_url: text("image_url").notNull(),
+    gps_lat: numeric("gps_lat", { precision: 10, scale: 7 }),
+    gps_lng: numeric("gps_lng", { precision: 10, scale: 7 }),
+    gps_server_timestamp: timestamp("gps_server_timestamp", { withTimezone: true }),
+    watermark_applied: boolean("watermark_applied").default(false).notNull(),
+    exif_data: jsonb("exif_data"),
+    uploaded_at: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    fiIdx: index("field_investigation_photos_fi_idx").on(table.field_investigation_id),
   }),
 );
 

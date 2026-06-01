@@ -81,7 +81,8 @@ export async function evaluateTrackGate(leadId: string): Promise<TrackGate> {
   const completionGate = snap.track_completion_gate ?? true;
   const failureHalts = snap.track_failure_halts ?? false;
 
-  // FI (winning NBFC's row). complete = status 'completed' with outcome 'pass'.
+  // FI (winning NBFC's current attempt). V0.3.1 §10.4: complete = 'passed'
+  // ('completed' kept for any pre-E-148 row). failed = 'failed'.
   const fiRequired = snap.fi_enabled ?? false;
   const fiRow = fiRequired ? await getFiTrack(leadId, winner.nbfc_id) : null;
   const fiStatus = fiRow?.status ?? null;
@@ -89,8 +90,8 @@ export async function evaluateTrackGate(leadId: string): Promise<TrackGate> {
     key: "fi",
     required: fiRequired,
     status: fiStatus,
-    complete: fiStatus === "completed" && fiRow?.outcome === "pass",
-    failed: fiStatus === "failed" || fiRow?.outcome === "fail",
+    complete: fiStatus === "passed" || fiStatus === "completed",
+    failed: fiStatus === "failed",
   };
 
   // VKYC (winning NBFC's row). complete = 'verified'.

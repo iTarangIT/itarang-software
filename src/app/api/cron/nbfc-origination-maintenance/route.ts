@@ -94,12 +94,14 @@ async function run() {
     )
     .returning({ id: enachMandates.id });
 
-  // 3. FI SLA breach flag.
+  // 3. FI SLA breach flag (§10.1) — only the current attempt of each lead×NBFC
+  //    that is still awaiting the agent's submission past its 48h window.
   const fiResult = await db
     .update(fieldInvestigations)
     .set({ sla_breached: true, updated_at: new Date() })
     .where(
       and(
+        eq(fieldInvestigations.is_current, true),
         inArray(fieldInvestigations.status, ["assigned", "in_progress"]),
         eq(fieldInvestigations.sla_breached, false),
         lt(fieldInvestigations.sla_due_at, new Date()),
