@@ -13,6 +13,7 @@ import { leads, nbfcLoanAgreements, nbfcServiceConfig } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getWinningAssignment } from "@/lib/nbfc/enach";
 import { evaluateAgreementGate, type AgreementMethod } from "@/lib/nbfc/agreement";
+import { syncLoanAgreementStatusFromDigio } from "@/lib/nbfc/sync-loan-agreement-status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,6 +43,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
         .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
         .limit(1);
       method = (cfg?.m ?? null) as AgreementMethod | null;
+    }
+
+    // Reconcile against the eSign provider first so a fully-signed agreement
+    // surfaces its success UI + downloads even when the Digio webhook never
+    // arrived (local dev, missed callback). Best-effort — never throws.
+    if (isOurs) {
+      await syncLoanAgreementStatusFromDigio(leadId, winner!.nbfc_id);
     }
 
     const gate = await evaluateAgreementGate(

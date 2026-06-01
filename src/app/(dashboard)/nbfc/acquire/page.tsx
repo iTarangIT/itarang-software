@@ -12,6 +12,7 @@ import { getCurrentTenant } from "@/lib/nbfc/tenant";
 import AcquireCsvButton, {
   type AcquireRow,
 } from "./_components/AcquireCsvButton";
+import AcquireLeadRow from "./_components/AcquireLeadRow";
 
 // Acquire pipeline — Addendum V0.2 §6. Lists nbfc_lead_assignments rows for the
 // current tenant with URL-driven filters, KPI summary cards, search, sort,
@@ -469,9 +470,9 @@ export default async function AcquireQueuePage({
             </thead>
             <tbody>
               {slice.map((r) => (
-                <tr
+                <AcquireLeadRow
                   key={r.assignment_id}
-                  className="border-t border-slate-100 hover:bg-slate-50 transition"
+                  href={`/nbfc/acquire/${r.lead_id}`}
                 >
                   <td className="px-4 py-3">
                     <Link
@@ -517,7 +518,7 @@ export default async function AcquireQueuePage({
                   <td className="px-4 py-3 text-xs text-slate-500">
                     {relativeTime(r.assigned_at)}
                   </td>
-                </tr>
+                </AcquireLeadRow>
               ))}
             </tbody>
           </table>
