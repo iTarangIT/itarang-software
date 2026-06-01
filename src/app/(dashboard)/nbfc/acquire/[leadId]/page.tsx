@@ -369,7 +369,7 @@ export default async function AcquireLeadDetailPage({
     if (!verificationComplete)
       return {
         tone: "info",
-        text: "FI Coordinator & Operations: complete Field Investigation and Active Video KYC — Stage-1 tracks run in parallel.",
+        text: "FI Coordinator & Operations: complete Field Investigation and Passive Video KYC — Stage-1 tracks run in parallel.",
       };
     if (!offerSubmitted)
       return {

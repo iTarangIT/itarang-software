@@ -3442,7 +3442,7 @@ export const videoKycVerifications = pgTable(
     nbfc_id: integer("nbfc_id").notNull(),
     tenant_id: uuid("tenant_id").notNull(),
     vkyc_ref: varchar("vkyc_ref", { length: 64 }).notNull(),
-    mode: varchar({ length: 16 }).notNull(), // 'own' | 'itarang'
+    mode: varchar({ length: 16 }).notNull(), // 'own' | 'itarang' | 'passive' (E-153)
     // 'not_applicable' | 'pending' | 'in_progress' | 'verified' | 'failed'
     status: varchar({ length: 20 }).default("pending").notNull(),
     match_score: numeric("match_score", { precision: 5, scale: 2 }),
@@ -3455,6 +3455,11 @@ export const videoKycVerifications = pgTable(
     provider_raw_status: varchar("provider_raw_status", { length: 120 }),
     provider_raw_payload: jsonb("provider_raw_payload"),
     failure_reason: text("failure_reason"),
+    // E-152 — passive VKYC link lifecycle (Addendum V0.3.1 §11). The single-use
+    // capture link (token = vkyc_ref) is delivered over one of these channels.
+    link_channel: varchar("link_channel", { length: 16 }), // 'sms' | 'email' | 'whatsapp'
+    link_sent_at: timestamp("link_sent_at", { withTimezone: true }),
+    link_expires_at: timestamp("link_expires_at", { withTimezone: true }),
     triggered_by: uuid("triggered_by"),
     triggered_at: timestamp("triggered_at", { withTimezone: true }),
     completed_at: timestamp("completed_at", { withTimezone: true }),
