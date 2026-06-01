@@ -7,10 +7,9 @@
  * served via the /nbfc-uploads catch-all — standalone-safe.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,12 +45,11 @@ export async function POST(req: NextRequest) {
 
     const slug = actor.tenant_id.replace(/[^a-z0-9]/gi, "");
     const filename = `${Date.now()}.${ext}`;
-    const urlDir = path.posix.join("nbfc-uploads", "fi-agents", slug);
-    const absDir = path.join(process.cwd(), "public", "nbfc-uploads", "fi-agents", slug);
-    await mkdir(absDir, { recursive: true });
-    await writeFile(path.join(absDir, filename), Buffer.from(await file.arrayBuffer()));
+    const key = `fi-agents/${slug}/${filename}`;
+    const buf = Buffer.from(await file.arrayBuffer());
+    const { url } = await putNbfcObject(key, buf, file.type || `image/${ext === "jpg" ? "jpeg" : ext}`);
 
-    return NextResponse.json({ ok: true, fileUrl: `/${path.posix.join(urlDir, filename)}` });
+    return NextResponse.json({ ok: true, fileUrl: url });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const code = msg.startsWith("UNAUTHORIZED") ? 401 : msg.startsWith("FORBIDDEN") ? 403 : 500;

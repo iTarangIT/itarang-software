@@ -3407,6 +3407,9 @@ export const nbfcLoanAgreements = pgTable(
     // 'pending' | 'in_progress' | 'signed' | 'failed' | 'skipped'
     status: varchar({ length: 20 }).default("pending").notNull(),
     digio_document_id: varchar("digio_document_id", { length: 120 }),
+    // E-151: the NBFC-uploaded UNSIGNED agreement PDF (iTarang eSign mechanism);
+    // /initiate hands this to Digio uploadpdf for the customer + NBFC to sign.
+    source_document_url: text("source_document_url"),
     signed_document_url: text("signed_document_url"),
     audit_trail_url: text("audit_trail_url"),
     provider_raw_status: varchar("provider_raw_status", { length: 120 }),
@@ -3511,7 +3514,8 @@ export const fieldInvestigations = pgTable(
     nbfc_id: integer("nbfc_id").notNull(),
     tenant_id: uuid("tenant_id").notNull(),
     // not_applicable|pending|assigned|in_progress|submitted|passed|failed|re_inspection_requested
-    status: varchar({ length: 20 }).default("pending").notNull(),
+    // (E-150: widened 20→32 — 're_inspection_requested' is 23 chars.)
+    status: varchar({ length: 32 }).default("pending").notNull(),
     attempt_no: integer("attempt_no").default(1).notNull(),
     is_current: boolean("is_current").default(true).notNull(),
     // assignment / SLA

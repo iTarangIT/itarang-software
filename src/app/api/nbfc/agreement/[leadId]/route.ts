@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { nbfcLoanAgreements, nbfcServiceConfig } from "@/lib/db/schema";
+import { leads, nbfcLoanAgreements, nbfcServiceConfig } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getWinningAssignment } from "@/lib/nbfc/enach";
 import { evaluateAgreementGate, type AgreementMethod } from "@/lib/nbfc/agreement";
@@ -50,6 +50,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
       method,
     );
 
+    // Surface the customer's email so the panel can confirm where the
+    // Aadhaar-eSign agreement link will be sent (it's emailed to the borrower).
+    const [lead] = await db
+      .select({ owner_email: leads.owner_email })
+      .from(leads)
+      .where(eq(leads.id, leadId))
+      .limit(1);
+    const customerEmail = (lead?.owner_email || "").trim() || null;
+
     let attempts: unknown[] = [];
     if (isOurs) {
       attempts = await db
@@ -68,6 +77,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
       ok: true,
       gate,
       method,
+      customer_email: customerEmail,
       attempt_count: attempts.length,
       attempts,
       // Operations/admin own initiation + manual recording (§7.2, same as E-NACH).

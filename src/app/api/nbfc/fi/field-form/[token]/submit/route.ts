@@ -15,14 +15,13 @@
  * consume the token. The Coordinator reviews + decides separately (§10.8).
  */
 import { NextRequest, NextResponse } from "next/server";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { fieldInvestigations, fieldInvestigationPhotos, nbfcServiceConfig } from "@/lib/db/schema";
 import { haversineMeters, resolveFiByToken } from "@/lib/nbfc/fi";
 import { watermarkPhoto } from "@/lib/nbfc/fi-watermark";
+import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -111,18 +110,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   }
 
   const now = new Date();
-  const absDir = path.join(process.cwd(), "public", "nbfc-uploads", "fi", fi.id);
-  const urlDir = path.posix.join("nbfc-uploads", "fi", fi.id);
-  await mkdir(absDir, { recursive: true });
+  const keyDir = `fi/${fi.id}`;
 
-  // Watermark + persist each photo.
+  // Watermark + persist each photo to the private `nbfc-documents` bucket;
+  // image_url stays in the `/nbfc-uploads/...` scheme served by the
+  // authenticated /api/nbfc-uploads route.
   let i = 0;
   for (const { type, file } of collected) {
     const raw = Buffer.from(await file.arrayBuffer());
     const { buffer, applied } = await watermarkPhoto(raw, { lat: gpsLat, lng: gpsLng, accuracyM: gpsAcc, timestamp: now });
     const filename = `${type}-${now.getTime()}-${i++}.jpg`;
-    await writeFile(path.join(absDir, filename), buffer);
-    const imageUrl = `/${path.posix.join(urlDir, filename)}`;
+    const { url: imageUrl } = await putNbfcObject(`${keyDir}/${filename}`, buffer, "image/jpeg");
     await db.insert(fieldInvestigationPhotos).values({
       field_investigation_id: fi.id,
       photo_type: type,

@@ -15,9 +15,8 @@
  * replaces only the write-to-disk block; the calling pattern stays.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { requireAdminOrTestBypass } from "@/lib/auth/adminTestBypass";
+import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -88,21 +87,12 @@ export async function POST(
   const timestamp = Date.now();
   const filename = `${timestamp}-${slugSafe}.${ext}`;
 
-  // Disk I/O uses platform-native `path.join`; URL building uses
-  // `path.posix.join` so the response always has forward slashes. Mixing
-  // the two (Windows backslashes leaking into the URL) was rejected
-  // downstream as a non-conforming `fileUrl` by the JSON route's regex.
-  const urlDir = path.posix.join("nbfc-uploads", String(id));
-  const absDir = path.join(process.cwd(), "public", "nbfc-uploads", String(id));
-  const absPath = path.join(absDir, filename);
-
-  await mkdir(absDir, { recursive: true });
+  // Stored in the private `nbfc-documents` bucket under <nbfcId>/<filename>;
+  // the returned `/nbfc-uploads/...` URL is served by the authenticated
+  // /api/nbfc-uploads route (same URL scheme as the old local-disk version).
+  const key = `${id}/${filename}`;
   const buf = Buffer.from(await file.arrayBuffer());
-  await writeFile(absPath, buf);
-
-  // Next serves anything in public/ from the site root, so this URL is
-  // immediately fetchable.
-  const fileUrl = `/${path.posix.join(urlDir, filename)}`;
+  const { url: fileUrl } = await putNbfcObject(key, buf, file.type || "application/octet-stream");
 
   return NextResponse.json({
     ok: true,
