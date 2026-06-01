@@ -508,41 +508,77 @@ jobs:
             exec 2>&1
             cd "$APP_DIR"
 
-            # Clean up any legacy app name from the pre-arch deploy.
-            pm2 delete itarang-crm-new 2>/dev/null || true
+            PORT="${PROD_PORT}"
+            port_in_use() { ss -ltn 2>/dev/null | grep -q ":$PORT "; }
+            port_pids()   { ss -ltnp 2>/dev/null | grep ":$PORT " | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u; }
+
+            # Deterministically free the port before (re)starting. The first cutover from
+            # the old build-on-box deploy hit EADDRINUSE: `pm2 delete` only initiates a
+            # graceful SIGINT and the old process's kill_timeout (8s) kept the port held,
+            # so a single `fuser -k` + `sleep 2` raced and the new process crash-looped.
+            # Poll-kill until the port is genuinely free (kill -9 by PID + fuser fallback),
+            # then fail loudly with the owner if something unkillable (root) holds it.
+            free_port() {
+              pm2 delete itarang-crm-web itarang-crm-new 2>/dev/null || true
+              for i in $(seq 1 20); do
+                if ! port_in_use; then echo "port $PORT free after ${i}s"; return 0; fi
+                PIDS=$(port_pids)
+                if [ -n "$PIDS" ]; then
+                  echo "  killing PID(s) holding $PORT: $PIDS"
+                  for pid in $PIDS; do kill -9 "$pid" 2>/dev/null || true; done
+                fi
+                fuser -k "${PORT}/tcp" 2>/dev/null || true
+                sleep 1
+              done
+              if port_in_use; then
+                echo "❌ port $PORT STILL in use after ~20s — listener:"
+                ss -ltnp 2>/dev/null | grep ":$PORT " || true
+                echo "   If no PID is shown above it is owned by root/another user (a past"
+                echo "   manual root deploy left a rogue listener). One-time fix on the box"
+                echo "   as root:   fuser -k ${PORT}/tcp   then re-run this deploy."
+                exit 1
+              fi
+            }
+
+            web_status() { pm2 jlist 2>/dev/null | node -e "const j=JSON.parse(require('fs').readFileSync(0,'utf8')); const w=j.find(p=>p.name==='itarang-crm-web'); console.log(w?w.pm2_env.status:'missing')" 2>/dev/null || echo "missing"; }
 
             DESIRED_HASH=$(node -e "const c=require('./ecosystem.prod.config.js'); const w=c.apps.find(a=>a.name==='itarang-crm-web'); console.log(JSON.stringify({script:w.script,args:w.args,env:w.env,cwd:w.cwd}))" | sha256sum | cut -d' ' -f1)
             RUNNING_HASH=$(cat shared/.pm2-web-config-hash 2>/dev/null || echo "")
+            CURRENT_STATUS=$(web_status)
             echo "DESIRED_HASH=$DESIRED_HASH"
             echo "RUNNING_HASH=$RUNNING_HASH"
+            echo "CURRENT_STATUS=$CURRENT_STATUS"
 
-            if pm2 describe itarang-crm-web >/dev/null 2>&1 && [ "$DESIRED_HASH" = "$RUNNING_HASH" ]; then
+            # Graceful reload ONLY when the config is unchanged AND the process is healthy.
+            # Otherwise (config changed, first cutover, or a crash-looped/errored process)
+            # force a clean delete+start with a guaranteed-free port.
+            if pm2 describe itarang-crm-web >/dev/null 2>&1 && [ "$DESIRED_HASH" = "$RUNNING_HASH" ] && [ "$CURRENT_STATUS" = "online" ]; then
               if ! pm2 reload itarang-crm-web --update-env; then
                 echo "pm2 reload failed — falling back to delete+start"
-                pm2 delete itarang-crm-web 2>/dev/null || true
-                fuser -k "${PROD_PORT}/tcp" 2>/dev/null || true
-                sleep 2
+                free_port
                 pm2 start ecosystem.prod.config.js --only itarang-crm-web
               fi
             else
-              echo "Forcing delete+start (config changed or first deploy under new arch)"
-              pm2 delete itarang-crm-web 2>/dev/null || true
-              fuser -k "${PROD_PORT}/tcp" 2>/dev/null || true
-              sleep 2
+              echo "Forcing delete+start (config changed, first cutover, or status=$CURRENT_STATUS)"
+              free_port
               pm2 start ecosystem.prod.config.js --only itarang-crm-web
             fi
-            echo "$DESIRED_HASH" > shared/.pm2-web-config-hash
             pm2 save
             pm2 ls
 
-            # Fail loudly before the health-check window if pm2 didn't bring it online.
-            STATUS=$(pm2 jlist | node -e "const j=JSON.parse(require('fs').readFileSync(0,'utf8')); const w=j.find(p=>p.name==='itarang-crm-web'); console.log(w?w.pm2_env.status:'missing')")
+            # Give a freshly-started process a moment to either bind or crash (EADDRINUSE
+            # surfaces in <1s), then require 'online' before the health window.
+            sleep 3
+            STATUS=$(web_status)
             echo "itarang-crm-web pm2 status: $STATUS"
             if [ "$STATUS" != "online" ]; then
               echo "❌ itarang-crm-web is '$STATUS' — dumping recent stderr and aborting"
               pm2 logs itarang-crm-web --lines 120 --nostream --err || true
               exit 1
             fi
+            # Persist the config hash ONLY now that the process is confirmed online, so a
+            # failed start never poisons the next deploy's reload-vs-restart decision.
+            echo "$DESIRED_HASH" > shared/.pm2-web-config-hash
 
       # ── B.9 — health check. 180s @1Hz on /api/health (gates rollback). Next.js 16
       # standalone takes ~40s to "Ready" on this VPS + DB cold-connect can add more.
