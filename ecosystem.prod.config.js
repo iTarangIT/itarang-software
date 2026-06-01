@@ -3,7 +3,14 @@ module.exports = {
     {
       name: "itarang-crm-web",
       cwd: __dirname,
-      script: "./.next/standalone/server.js",
+      // `current/` is an atomic symlink maintained by .github/workflows/deploy-
+      // production.yml pointing at the latest shipped release under
+      // releases/<sha>/standalone. Atomic symlink swap on deploy means pm2 re-execs
+      // server.js from the new release without ever seeing a broken state. Run the
+      // bundled standalone server.js directly — `next start` is incompatible with
+      // output: "standalone" in next.config.ts.
+      script: "node",
+      args: "current/server.js",
       instances: 1,
       exec_mode: "fork",
       env: {
