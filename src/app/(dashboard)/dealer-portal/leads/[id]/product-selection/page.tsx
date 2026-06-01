@@ -720,6 +720,27 @@ export default function ProductSelectionPage() {
 
   const finalPrice = netSubtotal + Number(dealerMargin || 0);
 
+  // ── Display pricing (read-only fallback to the submitted snapshot) ───
+  // On submit the battery/charger are RESERVED and drop out of the
+  // available-inventory list, so once the lead is read-only the cart can no
+  // longer rehydrate and the live-computed pricing above collapses to 0. Fall
+  // back to the snapshot captured at submit (access.priorSelection) so the
+  // Pricing card always shows exactly what the dealer submitted.
+  const prior = access?.priorSelection ?? null;
+  const usePriorPricing = !!access?.readOnly && !!prior;
+  const toNum = (v: string | null | undefined): number => {
+    const x = Number(v);
+    return Number.isFinite(x) ? x : 0;
+  };
+  const dispBatteryPrice = usePriorPricing ? toNum(prior!.battery_net ?? prior!.battery_price) : batteryPrice;
+  const dispChargerPrice = usePriorPricing ? toNum(prior!.charger_net ?? prior!.charger_price) : chargerPrice;
+  const dispParaCost = usePriorPricing ? toNum(prior!.paraphernalia_cost) : paraCost;
+  const dispGrossSubtotal = usePriorPricing ? toNum(prior!.gross_subtotal) : grossSubtotal;
+  const dispGstSubtotal = usePriorPricing ? toNum(prior!.gst_subtotal) : gstSubtotal;
+  const dispNetSubtotal = usePriorPricing ? toNum(prior!.net_subtotal) : netSubtotal;
+  const dispDealerMargin = usePriorPricing ? toNum(prior!.dealer_margin) : dealerMargin;
+  const dispFinalPrice = usePriorPricing ? toNum(prior!.final_price) : finalPrice;
+
   // ── Product-type scope ──────────────────────────────────────────────
   // The primary Product Type + any "Add Another Product" rows narrow the
   // Battery / Charger / Paraphernalia card sections to just those products'
@@ -1718,13 +1739,13 @@ export default function ProductSelectionPage() {
           <div className="lg:col-span-4">
             <div className="lg:sticky lg:top-6">
               <PricingSummary
-                batteryPrice={batteryPrice}
-                chargerPrice={chargerPrice}
-                paraCost={paraCost}
-                grossSubtotal={grossSubtotal}
-                gstSubtotal={gstSubtotal}
-                netSubtotal={netSubtotal}
-                dealerMargin={dealerMargin}
+                batteryPrice={dispBatteryPrice}
+                chargerPrice={dispChargerPrice}
+                paraCost={dispParaCost}
+                grossSubtotal={dispGrossSubtotal}
+                gstSubtotal={dispGstSubtotal}
+                netSubtotal={dispNetSubtotal}
+                dealerMargin={dispDealerMargin}
                 marginMode={marginMode}
                 marginInput={marginInput}
                 marginPercentInput={marginPercentInput}
@@ -1750,7 +1771,7 @@ export default function ProductSelectionPage() {
                   }
                   setMarginMode(next);
                 }}
-                finalPrice={finalPrice}
+                finalPrice={dispFinalPrice}
                 inventoryNote={
                   isCash
                     ? "Inventory will be marked SOLD on confirm"
