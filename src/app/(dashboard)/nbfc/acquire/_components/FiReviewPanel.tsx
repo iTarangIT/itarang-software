@@ -60,6 +60,24 @@ const PHOTO_LABELS: Record<string, string> = {
   extra: "Extra",
 };
 
+type IconName = "pin" | "user" | "image" | "clipboard" | "flag";
+
+function SectionIcon({ name, className }: { name: IconName; className?: string }) {
+  const common = { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  switch (name) {
+    case "pin":
+      return (<svg {...common}><path d="M21 10c0 6-9 12-9 12s-9-6-9-12a9 9 0 0 1 18 0Z" /><circle cx="12" cy="10" r="3" /></svg>);
+    case "user":
+      return (<svg {...common}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>);
+    case "image":
+      return (<svg {...common}><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" /></svg>);
+    case "clipboard":
+      return (<svg {...common}><rect x="8" y="2" width="8" height="4" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="m9 14 2 2 4-4" /></svg>);
+    case "flag":
+      return (<svg {...common}><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" /></svg>);
+  }
+}
+
 export default function FiReviewPanel({
   leadId,
   track,
@@ -92,6 +110,7 @@ export default function FiReviewPanel({
   const evidencePhotos = photos.filter((p) => p.photo_type !== "agent_selfie");
   const captured = track.gps_lat && track.gps_lng ? `${track.gps_lat}, ${track.gps_lng}` : "—";
   const mapHref = track.gps_lat && track.gps_lng ? `https://www.google.com/maps?q=${track.gps_lat},${track.gps_lng}` : null;
+  const distanceFar = track.distance_from_address_m != null && Number(track.distance_from_address_m) > 50;
 
   async function act(body: Record<string, unknown>) {
     setBusy(true);
@@ -116,44 +135,54 @@ export default function FiReviewPanel({
   }
 
   return (
-    <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+    <div className="space-y-2.5 rounded-xl border border-slate-200/80 bg-slate-50/60 p-3">
       {/* Location evidence */}
-      <Section title="Location evidence">
-        <Row k="Stated (geocoded)" v={track.stated_lat && track.stated_lng ? `${track.stated_lat}, ${track.stated_lng}` : "not geocoded"} />
-        <Row k="Captured at visit" v={captured} />
-        <Row
-          k="Distance from address"
-          v={track.distance_from_address_m != null ? `${track.distance_from_address_m} m` : "not computable"}
-          danger={track.distance_from_address_m != null && Number(track.distance_from_address_m) > 50}
-        />
-        <Row k="GPS accuracy" v={track.gps_accuracy_m != null ? `±${track.gps_accuracy_m} m` : "—"} />
+      <Section icon="pin" title="Location evidence">
+        <div className="grid grid-cols-2 gap-2">
+          <Stat k="Stated (geocoded)" v={track.stated_lat && track.stated_lng ? `${track.stated_lat}, ${track.stated_lng}` : "not geocoded"} mono />
+          <Stat k="Captured at visit" v={captured} mono />
+          <Stat
+            k="Distance from address"
+            v={track.distance_from_address_m != null ? `${track.distance_from_address_m} m` : "not computable"}
+            danger={distanceFar}
+          />
+          <Stat k="GPS accuracy" v={track.gps_accuracy_m != null ? `±${track.gps_accuracy_m} m` : "—"} />
+        </div>
         {mapHref && (
-          <a href={mapHref} target="_blank" rel="noreferrer" className="text-[11px] font-semibold text-[color:var(--color-brand-sky)] underline">
+          <a
+            href={mapHref}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-2 inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-brand-sky)] shadow-sm transition hover:bg-slate-50"
+          >
+            <SectionIcon name="pin" className="h-3 w-3" />
             Open captured point in Maps →
           </a>
         )}
       </Section>
 
       {/* Agent identity */}
-      <Section title="Agent identity">
-        <div className="flex gap-4">
+      <Section icon="user" title="Agent identity">
+        <div className="flex gap-3">
           <Thumb label="Reference" url={agent?.reference_photo_url ?? null} />
           <Thumb label="Field selfie" url={selfie?.image_url ?? null} />
         </div>
-        <p className="text-[10px] text-slate-400 mt-1">Visual comparison only — no automated face match (§10.7).</p>
+        <p className="mt-1.5 text-[10px] text-slate-400">Visual comparison only — no automated face match (§10.7).</p>
       </Section>
 
       {/* Evidence photos */}
-      <Section title="Evidence photos">
+      <Section icon="image" title="Evidence photos">
         <div className="grid grid-cols-3 gap-2">
           {evidencePhotos.map((p) => (
-            <a key={p.id} href={p.image_url} target="_blank" rel="noreferrer" className="block">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={p.image_url} alt={p.photo_type} className="w-full h-20 object-cover rounded-md border border-slate-200" />
-              <p className="text-[9px] text-slate-500 mt-0.5">
-                {PHOTO_LABELS[p.photo_type] ?? p.photo_type}
-                {!p.watermark_applied && <span className="text-amber-600"> · no watermark</span>}
-              </p>
+            <a key={p.id} href={p.image_url} target="_blank" rel="noreferrer" className="group block">
+              <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={p.image_url} alt={p.photo_type} className="h-20 w-full object-cover transition duration-300 group-hover:scale-105" />
+                {!p.watermark_applied && (
+                  <span className="absolute right-1 top-1 rounded bg-amber-500/90 px-1 text-[8px] font-bold uppercase text-white">no wm</span>
+                )}
+              </div>
+              <p className="mt-1 truncate text-[9px] font-medium text-slate-500">{PHOTO_LABELS[p.photo_type] ?? p.photo_type}</p>
             </a>
           ))}
           {evidencePhotos.length === 0 && <p className="text-[11px] text-slate-400">No photos.</p>}
@@ -161,21 +190,33 @@ export default function FiReviewPanel({
       </Section>
 
       {/* Field observation */}
-      <Section title="Agent's field observation">
-        <Row k="Address match" v={track.address_match ?? "—"} danger={track.address_match === "no" || track.address_match === "partial"} />
-        {track.address_match_notes && <p className="text-[11px] text-slate-500">“{track.address_match_notes}”</p>}
-        <Row k="Customer present" v={track.customer_present == null ? "—" : track.customer_present ? "Yes" : "No"} danger={track.customer_present === false} />
-        {track.customer_present_notes && <p className="text-[11px] text-slate-500">“{track.customer_present_notes}”</p>}
-        {track.agent_notes && <p className="text-[11px] text-slate-500 mt-1">Notes: {track.agent_notes}</p>}
+      <Section icon="clipboard" title="Agent's field observation">
+        <div className="grid grid-cols-2 gap-2">
+          <Stat k="Address match" v={track.address_match ?? "—"} danger={track.address_match === "no" || track.address_match === "partial"} />
+          <Stat k="Customer present" v={track.customer_present == null ? "—" : track.customer_present ? "Yes" : "No"} danger={track.customer_present === false} />
+        </div>
+        {track.address_match_notes && <p className="mt-1.5 text-[11px] italic text-slate-500">“{track.address_match_notes}”</p>}
+        {track.customer_present_notes && <p className="mt-1 text-[11px] italic text-slate-500">“{track.customer_present_notes}”</p>}
+        {track.agent_notes && (
+          <p className="mt-1.5 rounded-lg bg-white px-2.5 py-1.5 text-[11px] text-slate-600 ring-1 ring-slate-100">
+            <span className="font-semibold text-slate-400">Notes · </span>
+            {track.agent_notes}
+          </p>
+        )}
       </Section>
 
       {/* Auto-flags */}
       {flags.length > 0 && (
-        <Section title="Auto-flags (review, never auto-fail)">
-          <ul className="space-y-1">
+        <Section icon="flag" title="Auto-flags · review only, never auto-fail">
+          <ul className="space-y-1.5">
             {flags.map((f) => (
-              <li key={f.key} className={`text-[11px] flex items-start gap-1.5 ${f.severity === "red" ? "text-red-600" : "text-amber-600"}`}>
-                <span>{f.severity === "red" ? "⛔" : "⚠"}</span>
+              <li
+                key={f.key}
+                className={`flex items-start gap-2 rounded-lg px-2.5 py-1.5 text-[11px] font-medium ring-1 ${
+                  f.severity === "red" ? "bg-rose-50 text-rose-700 ring-rose-100" : "bg-amber-50 text-amber-700 ring-amber-100"
+                }`}
+              >
+                <span className="mt-px">{f.severity === "red" ? "⛔" : "⚠"}</span>
                 <span>{f.label}</span>
               </li>
             ))}
@@ -183,42 +224,71 @@ export default function FiReviewPanel({
         </Section>
       )}
 
-      {error && <p className="text-[11px] text-red-600">{error}</p>}
+      {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-[11px] font-medium text-rose-700 ring-1 ring-rose-100">{error}</p>}
 
       {/* Decision panel */}
       {decided ? (
-        <div className="rounded-md border border-slate-200 bg-white p-2.5">
-          <p className="text-xs font-semibold text-slate-800">
-            Decision: <span className={track.status === "passed" ? "text-emerald-700" : "text-red-700"}>{track.status === "passed" ? "Passed" : "Failed"}</span>
-          </p>
-          {track.decision_reason && <p className="text-[11px] text-slate-500 mt-0.5">{track.decision_reason}</p>}
-          {canReopen && mode !== "reopen" && (
-            <button onClick={() => setMode("reopen")} className="mt-2 text-[11px] font-semibold text-[color:var(--color-brand-sky)] underline">
-              Reopen decision
-            </button>
-          )}
-          {canAct && mode !== "reinspect" && (
-            <button onClick={() => setMode("reinspect")} className="mt-2 ml-3 text-[11px] font-semibold text-amber-700 underline">
-              Request re-inspection
-            </button>
+        <div className={`rounded-xl p-3 ring-1 ${track.status === "passed" ? "bg-emerald-50 ring-emerald-100" : "bg-rose-50 ring-rose-100"}`}>
+          <div className="flex items-center gap-2">
+            <span className={`grid h-7 w-7 place-items-center rounded-full text-white ${track.status === "passed" ? "bg-emerald-500" : "bg-rose-500"}`}>
+              {track.status === "passed" ? "✓" : "✕"}
+            </span>
+            <div>
+              <p className="text-xs font-bold text-slate-800">Visit {track.status === "passed" ? "passed" : "failed"}</p>
+              {track.decision_reason && <p className="text-[11px] text-slate-500">{track.decision_reason}</p>}
+            </div>
+          </div>
+          {(canReopen || canAct) && mode !== "reopen" && (
+            <div className="mt-2.5 flex flex-wrap gap-3">
+              {canReopen && (
+                <button onClick={() => setMode("reopen")} className="text-[11px] font-semibold text-[color:var(--color-brand-sky)] underline-offset-2 hover:underline">
+                  Reopen decision
+                </button>
+              )}
+              {canAct && (
+                <button onClick={() => setMode("reinspect")} className="text-[11px] font-semibold text-amber-700 underline-offset-2 hover:underline">
+                  Request re-inspection
+                </button>
+              )}
+            </div>
           )}
           {mode === "reopen" && (
-            <ReasonBox value={reason} onChange={setReason} placeholder="Reason for reopening…" busy={busy} onSubmit={() => reason.trim() && act({ action: "reopen", reason })} submitLabel="Confirm reopen" onCancel={() => setMode("none")} />
+            <div className="mt-2">
+              <ReasonBox value={reason} onChange={setReason} placeholder="Reason for reopening…" busy={busy} onSubmit={() => reason.trim() && act({ action: "reopen", reason })} submitLabel="Confirm reopen" onCancel={() => setMode("none")} />
+            </div>
+          )}
+          {mode === "reinspect" && (
+            <div className="mt-2 space-y-2">
+              <ReAssign agents={agents} value={reAgent} onChange={setReAgent} />
+              <ReasonBox value={reason} onChange={setReason} placeholder="Reason for re-inspection (required)…" busy={busy} onSubmit={() => reAgent && reason.trim() && act({ action: "reinspect", agent_id: reAgent, reason })} submitLabel="Send re-inspection" onCancel={() => setMode("none")} />
+            </div>
           )}
         </div>
       ) : canAct ? (
-        <div className="rounded-md border border-slate-200 bg-white p-2.5 space-y-2">
-          <p className="text-xs font-semibold text-slate-800">Decision</p>
+        <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Coordinator decision</p>
           {mode === "none" && (
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => act({ action: "decide", decision: "pass" })} disabled={busy} className="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">
-                Pass
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                onClick={() => act({ action: "decide", decision: "pass" })}
+                disabled={busy}
+                className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-40"
+              >
+                ✓ Pass
               </button>
-              <button onClick={() => setMode("fail")} disabled={busy} className="px-3 py-1.5 rounded-md bg-red-600 text-white text-xs font-semibold disabled:opacity-50">
-                Fail
+              <button
+                onClick={() => setMode("fail")}
+                disabled={busy}
+                className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:opacity-40"
+              >
+                ✕ Fail
               </button>
-              <button onClick={() => setMode("reinspect")} disabled={busy} className="px-3 py-1.5 rounded-md border border-amber-400 text-amber-700 text-xs font-semibold disabled:opacity-50">
-                Request re-inspection
+              <button
+                onClick={() => setMode("reinspect")}
+                disabled={busy}
+                className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-2 text-[11px] font-semibold text-amber-700 transition hover:bg-amber-100 disabled:opacity-40"
+              >
+                ↻ Re-inspect
               </button>
             </div>
           )}
@@ -227,15 +297,7 @@ export default function FiReviewPanel({
           )}
           {mode === "reinspect" && (
             <div className="space-y-2">
-              <select value={reAgent} onChange={(e) => setReAgent(e.target.value)} className="w-full text-xs border border-slate-300 rounded-md px-2 py-1.5">
-                <option value="">Re-assign to… (same or new agent)</option>
-                {agents.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                    {a.city ? ` · ${a.city}` : ""}
-                  </option>
-                ))}
-              </select>
+              <ReAssign agents={agents} value={reAgent} onChange={setReAgent} />
               <ReasonBox value={reason} onChange={setReason} placeholder="Reason for re-inspection (required)…" busy={busy} onSubmit={() => reAgent && reason.trim() && act({ action: "reinspect", agent_id: reAgent, reason })} submitLabel="Send re-inspection" onCancel={() => setMode("none")} />
             </div>
           )}
@@ -247,20 +309,23 @@ export default function FiReviewPanel({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ icon, title, children }: { icon: IconName; title: string; children: React.ReactNode }) {
   return (
-    <div>
-      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">{title}</p>
-      <div className="space-y-0.5">{children}</div>
+    <div className="rounded-xl border border-slate-200/70 bg-white p-3">
+      <div className="mb-2 flex items-center gap-1.5">
+        <SectionIcon name={icon} className="h-3.5 w-3.5 text-[color:var(--color-brand-teal)]" />
+        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{title}</p>
+      </div>
+      {children}
     </div>
   );
 }
 
-function Row({ k, v, danger }: { k: string; v: string; danger?: boolean }) {
+function Stat({ k, v, danger, mono }: { k: string; v: string; danger?: boolean; mono?: boolean }) {
   return (
-    <div className="flex justify-between text-[11px]">
-      <span className="text-slate-500">{k}</span>
-      <span className={danger ? "text-red-600 font-semibold" : "text-slate-800"}>{v}</span>
+    <div className="rounded-lg bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-100">
+      <p className="text-[9px] font-medium uppercase tracking-wide text-slate-400">{k}</p>
+      <p className={`mt-0.5 text-[11px] font-semibold ${danger ? "text-rose-600" : "text-slate-800"} ${mono ? "font-mono tabular-nums" : ""}`}>{v}</p>
     </div>
   );
 }
@@ -268,16 +333,34 @@ function Row({ k, v, danger }: { k: string; v: string; danger?: boolean }) {
 function Thumb({ label, url }: { label: string; url: string | null }) {
   return (
     <div className="text-center">
-      <div className="w-20 h-20 rounded-md bg-slate-100 overflow-hidden border border-slate-200 flex items-center justify-center">
+      <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 shadow-sm">
         {url ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={url} alt={label} className="w-full h-full object-cover" />
+          <img src={url} alt={label} className="h-full w-full object-cover" />
         ) : (
-          <span className="text-[10px] text-slate-400 px-1">none</span>
+          <span className="px-1 text-[10px] text-slate-400">none</span>
         )}
       </div>
-      <p className="text-[10px] text-slate-500 mt-0.5">{label}</p>
+      <p className="mt-1 text-[10px] font-medium text-slate-500">{label}</p>
     </div>
+  );
+}
+
+function ReAssign({ agents, value, onChange }: { agents: FiAgentLite[]; value: string; onChange: (v: string) => void }) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700 shadow-sm focus:border-[color:var(--color-brand-sky)] focus:outline-none focus:ring-2 focus:ring-[var(--brand-sky-soft)]"
+    >
+      <option value="">Re-assign to… (same or new agent)</option>
+      {agents.map((a) => (
+        <option key={a.id} value={a.id}>
+          {a.name}
+          {a.city ? ` · ${a.city}` : ""}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -300,12 +383,23 @@ function ReasonBox({
 }) {
   return (
     <div className="space-y-2">
-      <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={2} placeholder={placeholder} className="w-full text-xs border border-slate-300 rounded-md px-2 py-1.5" />
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={2}
+        placeholder={placeholder}
+        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700 shadow-sm focus:border-[color:var(--color-brand-sky)] focus:outline-none focus:ring-2 focus:ring-[var(--brand-sky-soft)]"
+      />
       <div className="flex gap-2">
-        <button onClick={onSubmit} disabled={busy || !value.trim()} className="px-3 py-1.5 rounded-md bg-[color:var(--color-brand-navy)] text-white text-xs font-semibold disabled:opacity-50">
+        <button
+          onClick={onSubmit}
+          disabled={busy || !value.trim()}
+          className="rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:brightness-110 disabled:opacity-40"
+          style={{ backgroundImage: "linear-gradient(135deg, var(--color-brand-sky), var(--color-brand-navy))" }}
+        >
           {submitLabel}
         </button>
-        <button onClick={onCancel} disabled={busy} className="px-3 py-1.5 rounded-md border border-slate-300 text-slate-600 text-xs font-semibold">
+        <button onClick={onCancel} disabled={busy} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50">
           Cancel
         </button>
       </div>
