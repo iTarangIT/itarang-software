@@ -21,6 +21,7 @@ import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { nbfcLoanAgreements } from "@/lib/db/schema";
+import { fetchSignedLoanAgreementPdfAndAuditTrail } from "@/lib/nbfc/fetchSignedAgreementPdf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,6 +50,7 @@ const CANONICAL_ORDER: Record<string, number> = {
 const WebhookBody = z.object({
   payload: z.object({
     agreement_id: z.string().min(1).optional(),
+    id: z.string().min(1).optional(),
     agreement_status: z.enum([
       "SENT_TO_EXTERNAL_PARTY",
       "SIGN_PENDING",
@@ -58,7 +60,9 @@ const WebhookBody = z.object({
       "FAILED",
       "EXPIRED",
     ]),
-    callback: z.string().regex(AGR_CALLBACK_RE),
+    // Optional: uploadpdf does not reliably echo our AGR_<ref> callback, so we
+    // fall back to matching on the eSign document id (agreement_id / id).
+    callback: z.string().optional(),
     signed_document_url: z.string().url().optional(),
     audit_trail_url: z.string().url().optional(),
   }),
@@ -75,29 +79,33 @@ export async function POST(req: NextRequest) {
 
   const parsed = WebhookBody.safeParse(bodyJson);
   if (!parsed.success) {
-    const callbackIssue = parsed.error.issues.find((i) => i.path.includes("callback"));
-    return NextResponse.json(
-      { ok: false, error: callbackIssue ? "INVALID_CALLBACK_PREFIX" : "VALIDATION" },
-      { status: 400 },
-    );
+    return NextResponse.json({ ok: false, error: "VALIDATION" }, { status: 400 });
   }
 
   const { payload } = parsed.data;
-  const ref = payload.callback.match(AGR_CALLBACK_RE)?.[1] ?? "";
-  if (!ref) {
-    return NextResponse.json({ ok: false, error: "INVALID_CALLBACK_PREFIX" }, { status: 400 });
-  }
 
-  const [row] = await db
-    .select()
-    .from(nbfcLoanAgreements)
-    .where(eq(nbfcLoanAgreements.agreement_ref, ref))
-    .limit(1);
+  // Match by the AGR_<ref> callback when present; otherwise fall back to the
+  // eSign document id (uploadpdf doesn't reliably echo our callback).
+  let row: typeof nbfcLoanAgreements.$inferSelect | undefined;
+  let ref = payload.callback?.match(AGR_CALLBACK_RE)?.[1] ?? "";
+  if (ref) {
+    [row] = await db.select().from(nbfcLoanAgreements).where(eq(nbfcLoanAgreements.agreement_ref, ref)).limit(1);
+  }
+  if (!row) {
+    const docId = payload.agreement_id || payload.id;
+    if (docId) {
+      [row] = await db.select().from(nbfcLoanAgreements).where(eq(nbfcLoanAgreements.digio_document_id, docId)).limit(1);
+    }
+  }
   if (!row) {
     // 200 so Digio doesn't retry endlessly; log for triage.
-    console.warn("[Digio loan-agreement webhook] No agreement for ref:", ref);
+    console.warn("[Digio loan-agreement webhook] No agreement match", {
+      callback: payload.callback,
+      docId: payload.agreement_id ?? payload.id,
+    });
     return NextResponse.json({ ok: true, idempotent: true, reason: "no matching agreement" });
   }
+  ref = row.agreement_ref;
 
   // Idempotency — never regress.
   const curOrd = CANONICAL_ORDER[String(row.status ?? "")] ?? -1;
@@ -129,13 +137,29 @@ export async function POST(req: NextRequest) {
 
   if (nextStatus === "signed") {
     updates.signed_at = now;
-    // §11.4 — store the signed PDF + audit trail ONLY when the NBFC opted in.
-    if (row.store_loan_agreement) {
-      if (payload.signed_document_url) updates.signed_document_url = payload.signed_document_url;
-      if (payload.audit_trail_url) updates.audit_trail_url = payload.audit_trail_url;
+    // §17.4 — store the signed PDF + audit trail ONLY when the NBFC opted in.
+    // Proactively fetch+cache from the eSign provider so the Download buttons
+    // work immediately (uploadpdf webhooks often omit the URLs); fall back to
+    // any URLs the webhook did carry. Never fail the webhook on a fetch error.
+    if (row.store_loan_agreement && row.digio_document_id) {
+      try {
+        const fetched = await fetchSignedLoanAgreementPdfAndAuditTrail({
+          leadId: row.lead_id,
+          digioDocumentId: row.digio_document_id,
+        });
+        updates.signed_document_url = payload.signed_document_url ?? fetched.signedPdfUrl ?? null;
+        updates.audit_trail_url = payload.audit_trail_url ?? fetched.auditTrailUrl ?? null;
+      } catch (err) {
+        console.warn("[Digio loan-agreement webhook] signed PDF fetch failed", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+        if (payload.signed_document_url) updates.signed_document_url = payload.signed_document_url;
+        if (payload.audit_trail_url) updates.audit_trail_url = payload.audit_trail_url;
+      }
     }
-    // When opted out, signed_document_url stays null — the §11.6 audit record
-    // (this row: loan-exists flag, signed_at, no PDF) is iTarang's retention.
+    // When opted out, URLs stay null — the §17.6 audit record (this row:
+    // loan-exists flag, signed_at, no PDF) is iTarang's retention. The download
+    // proxies still fetch live on demand.
   }
   if (nextStatus === "failed") {
     updates.failure_reason = `Digio reported ${payload.agreement_status}`;
@@ -147,6 +171,6 @@ export async function POST(req: NextRequest) {
     ok: true,
     agreement_ref: ref,
     status: nextStatus,
-    stored_pdf: nextStatus === "signed" && !!row.store_loan_agreement && !!payload.signed_document_url,
+    stored_pdf: nextStatus === "signed" && !!row.store_loan_agreement && !!updates.signed_document_url,
   });
 }
