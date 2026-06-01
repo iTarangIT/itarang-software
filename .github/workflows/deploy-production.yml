@@ -1,5 +1,28 @@
 name: Deploy Production to VPS
 
+# Two-stage runner-build architecture (ported from deploy-sandbox.yml).
+#
+# Why this exists: production used to `git reset --hard` + `npm ci` + `next build`
+# ON the shared 8 GB VPS, while the live app was running and the sandbox deploy
+# fired on the same `push: main`. That on-box build OOM-killed / timed out / filled
+# disk EVERY time (the long graveyard of timeout bumps, heap bumps, "survive a full
+# disk", archive-ring `set +e` fixes in this file's history). Sandbox never failed
+# because it builds on the GitHub runner and only ships a prebuilt bundle to the box.
+#
+# Stage A — `build` job on `ubuntu-latest`: checkout, restore caches, `next build`,
+# stage `.next/standalone/` (static + public + @sparticuz/chromium copied in), pack a
+# tarball, upload as an artifact. No VPS contact.
+#
+# Stage B — `deploy` job (`needs: build`): download the artifact, rsync it to the VPS
+# into `releases/<sha>/standalone/`, atomically swap the `current` symlink, reload pm2,
+# run health + served-asset checks.
+#
+# Stage C — failure handler inside the `deploy` job: rolls back by symlink-swap to the
+# previous release. No rebuild on the VPS, ever.
+#
+# First-run migration: the deploy steps are idempotent and self-bootstrap the release
+# layout. `scripts/prod-bootstrap.sh` does the same prep manually if preferred.
+
 on:
   push:
     branches: [main]
@@ -9,243 +32,705 @@ concurrency:
   group: deploy-production
   cancel-in-progress: false
 
+env:
+  APP_DIR: /home/itarang-crm/htdocs/crm.itarang.com
+  LOG_DIR: /home/itarang-crm/deploy-logs
+  HEALTH_URL: http://127.0.0.1:3002/api/health
+  PROD_PORT: "3002"
+
 jobs:
-  deploy:
+  # ────────────────────────────────────────────────────────────────────
+  # Stage A — runner-side build. No VPS contact.
+  # ────────────────────────────────────────────────────────────────────
+  build:
+    name: Build (runner)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
-      - name: Deploy via SSH
+      - name: Slack notify start
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          MSG=$(printf '%s' "${{ github.event.head_commit.message }}" | head -c 200 | sed 's/"/\\"/g')
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "{\"text\":\":rocket: *Production deploy started* \`${{ github.sha }}\`\nby ${{ github.actor }} — \`${MSG}\`\n${{ github.event.head_commit.url }}\"}" \
+            "$SLACK_WEBHOOK_URL" || true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Cache Next.js webpack incremental cache
+        uses: actions/cache@v4
+        with:
+          # Prod-prefixed key so it never collides with the sandbox build cache.
+          path: .next/cache/webpack
+          key: prod-nextcache-${{ runner.os }}-${{ hashFiles('package-lock.json', 'next.config.ts') }}-${{ github.sha }}
+          restore-keys: |
+            prod-nextcache-${{ runner.os }}-${{ hashFiles('package-lock.json', 'next.config.ts') }}-
+            prod-nextcache-${{ runner.os }}-
+
+      - name: Write .env from PROD_ENV_FILE_B64
+        env:
+          ENV_B64: ${{ secrets.PROD_ENV_FILE_B64 }}
+        run: |
+          umask 077
+          # `next build` inlines NEXT_PUBLIC_* at build time — these MUST be the
+          # production values, which is why prod needs its own build job rather than
+          # reusing the sandbox artifact. tr -d '\r' strips CRLFs from a Windows paste.
+          printf '%s' "$ENV_B64" | base64 -d | tr -d '\r' > .env
+          chmod 600 .env
+          echo "Wrote .env ($(wc -l < .env) lines, $(wc -c < .env) bytes)"
+
+      - name: Install npm deps
+        run: |
+          time npm ci --no-audit --no-fund
+
+      - name: Build (next build --webpack)
+        run: |
+          export CI=1
+          export NEXT_TELEMETRY_DISABLED=1
+          # Keep the 4 GB cap for parity with the historical on-box build, in case
+          # any peak allocation pattern is config-sensitive. The runner has ~7 GB.
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          export GITHUB_SHA=$(git rev-parse HEAD)
+          echo "Node: $(node -v)  npm: $(npm -v)"
+          echo "Free mem before build:"; free -m || true
+          time npm run build
+          echo "Free mem after build:"; free -m || true
+
+      - name: Stage standalone bundle
+        run: |
+          # Next.js standalone output excludes static + public by design.
+          # Copy them into the standalone tree so server.js can serve assets.
+          rm -rf .next/standalone/.next/static .next/standalone/public
+          cp -r .next/static .next/standalone/.next/static
+          if [ -d public ]; then cp -r public .next/standalone/public; fi
+          echo "standalone tree top-level:"
+          ls -la .next/standalone | head -20
+
+      - name: Bundle @sparticuz/chromium into standalone (PDF rendering)
+        run: |
+          # Next.js standalone file-tracing resolves @sparticuz/chromium's binary by
+          # runtime path, not require(), so it drops the bin/ dir — which makes the
+          # bundled-Chromium fallback in launch-browser.ts fail with "input directory
+          # .../@sparticuz/chromium/bin does not exist". The primary path on the VPS is
+          # /usr/bin/google-chrome-stable, but ship the package as a working fallback.
+          # Must happen on the runner now (the box no longer has node_modules to copy from).
+          if [ -d node_modules/@sparticuz/chromium ]; then
+            mkdir -p .next/standalone/node_modules/@sparticuz
+            rm -rf .next/standalone/node_modules/@sparticuz/chromium
+            cp -r node_modules/@sparticuz/chromium .next/standalone/node_modules/@sparticuz/chromium
+            echo "Copied @sparticuz/chromium ($(du -sh .next/standalone/node_modules/@sparticuz/chromium | cut -f1))"
+          else
+            echo "::warning::@sparticuz/chromium not in node_modules — PDF fallback unavailable"
+          fi
+          if [ ! -d .next/standalone/node_modules/puppeteer-core ] && [ -d node_modules/puppeteer-core ]; then
+            cp -r node_modules/puppeteer-core .next/standalone/node_modules/puppeteer-core
+          fi
+
+      - name: Verify native binaries made it into the standalone trace
+        run: |
+          # sharp is the only native dep. In sharp 0.34+ the binary lives in a SPLIT
+          # package (node_modules/@img/sharp-<plat>/), not node_modules/sharp/. Just
+          # confirm at least one .node exists anywhere under the standalone tree.
+          NODE_BINS=$(find .next/standalone/node_modules -name '*.node' 2>/dev/null || true)
+          if [ -z "$NODE_BINS" ]; then
+            echo "❌ no .node binaries anywhere in standalone tree — VPS would fail at require()"
+            ls -la .next/standalone/node_modules/ 2>/dev/null | head -40
+            ls -la .next/standalone/node_modules/@img/ 2>/dev/null || echo "(no @img dir)"
+            exit 1
+          fi
+          echo "Native binaries in standalone tree:"
+          echo "$NODE_BINS"
+          echo "$NODE_BINS" | while read -r b; do file "$b" 2>/dev/null || true; done
+
+      - name: Verify chunk manifest (runner tree)
+        run: |
+          node scripts/verify-chunk-manifest.js
+
+      - name: Chunk count sanity
+        run: |
+          CHUNK_COUNT=$(find .next/standalone/.next/static/chunks -type f 2>/dev/null | wc -l)
+          if [ "$CHUNK_COUNT" -lt 5 ]; then
+            echo "❌ standalone chunks dir has only $CHUNK_COUNT files — staging failed"
+            exit 1
+          fi
+          echo "standalone has $CHUNK_COUNT chunk files"
+
+      - name: Pack standalone tarball
+        id: pack
+        run: |
+          # Pack the CONTENTS of standalone/ (trailing `.`), not the wrapper dir.
+          tar --owner=0 --group=0 -C .next/standalone -czf build.tar.gz .
+          BYTES=$(stat -c%s build.tar.gz)
+          SHA="${{ github.sha }}"
+          BUILD_ID=$(cat .next/BUILD_ID)
+          LOCK_HASH=$(sha256sum package-lock.json | cut -d' ' -f1)
+          FILES=$(tar -tzf build.tar.gz | wc -l)
+          cat > build.meta.json <<META
+          {
+            "sha": "$SHA",
+            "build_id": "$BUILD_ID",
+            "lock_hash": "$LOCK_HASH",
+            "tarball_bytes": $BYTES,
+            "file_count": $FILES,
+            "node_version": "$(node -v)"
+          }
+          META
+          echo "Tarball: $(du -h build.tar.gz | cut -f1), $FILES files"
+          echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-build-${{ github.sha }}
+          # Ship the runtime files the box needs alongside the bundle: the pm2 config
+          # (so pm2 always launches the version that matches main), the Chromium
+          # provisioning script, and the verify scripts (the box no longer runs `git
+          # pull`, so these would otherwise drift to whatever was last manually pulled).
+          path: |
+            build.tar.gz
+            build.meta.json
+            ecosystem.prod.config.js
+            scripts/sandbox-system-setup.sh
+            scripts/verify-chunk-manifest.js
+            scripts/verify-served-assets.js
+          retention-days: 7
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────────────
+  # Stage B — ship & swap. SSH-only. No build commands on VPS.
+  # ────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy (SSH)
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 25
+    steps:
+      # Wait until the VPS SSH port answers before any appleboy/ssh-action step runs
+      # (it has no native retry, so a transient blip would fail the first SSH step).
+      - name: Wait for VPS SSH to be reachable
+        run: |
+          for i in $(seq 1 8); do
+            if nc -z -w 10 "$HOST" "$PORT"; then
+              echo "VPS SSH reachable on attempt $i"; exit 0
+            fi
+            echo "attempt $i: $HOST:$PORT not reachable, retrying in 20s"; sleep 20
+          done
+          echo "::error::VPS SSH $HOST:$PORT unreachable after 8 attempts (~3.5 min) — VPS down or firewall blocking the runner"
+          exit 1
+        env:
+          HOST: ${{ secrets.PROD_VPS_HOST }}
+          PORT: ${{ secrets.PROD_VPS_PORT }}
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: prod-build-${{ github.sha }}
+
+      # ── B.1 — capture previous `current` target so rollback knows where to point back.
+      - name: Capture previous release pointer
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.PROD_VPS_HOST }}
           username: ${{ secrets.PROD_VPS_USER }}
           port: ${{ secrets.PROD_VPS_PORT }}
           key: ${{ secrets.PROD_VPS_SSH_KEY }}
-          script_stop: true
-          # 20m was too tight: `npm ci` alone takes ~19-20 min on this thrashing
-          # 8 GB box (worse when the sandbox deploy runs concurrently — both fire
-          # on push to main), so the build never started before the timeout fired
-          # (run 26680354069: "Run Command Timeout" at 20m). 45m covers npm ci +
-          # build + pm2 + health with headroom. The GitHub job timeout (default
-          # 360m) is the only outer bound.
-          command_timeout: 45m
+          timeout: 60s
+          command_timeout: 2m
+          script_stop: false
+          envs: APP_DIR
           script: |
             set -eo pipefail
-            APP_DIR=/home/itarang-crm/htdocs/crm.itarang.com
+            cd "$APP_DIR"
+            PREV_TARGET=$(readlink current 2>/dev/null || echo "")
+            PREV_SHA=$(printf '%s' "$PREV_TARGET" | sed -E 's|releases/([^/]+)/.*|\1|')
+            echo "PREV_TARGET=$PREV_TARGET"
+            echo "PREV_SHA=$PREV_SHA"
+            echo "$PREV_SHA" > /tmp/itarang-prod-prev-sha
+            echo "$PREV_TARGET" > /tmp/itarang-prod-prev-target
+            # Marker for Stage C to know whether the symlink was swapped.
+            rm -f /tmp/itarang-prod-swap-done
+
+      # ── B.2 — bootstrap release layout + write runtime env. Idempotent every deploy.
+      - name: Bootstrap release layout + write shared/.env
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 3m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR
+          script: |
+            set -eo pipefail
+            mkdir -p "$LOG_DIR"
+            cd "$APP_DIR"
+            mkdir -p releases shared/logs
+            # Write the runtime env from the secret every deploy — single source of
+            # truth. standalone/.env symlinks to this (wired in B.6). Same pattern the
+            # old prod workflow used for .env.production.
+            umask 077
+            echo "${{ secrets.PROD_ENV_FILE_B64 }}" | base64 -d | tr -d '\r' > shared/.env
+            chmod 600 shared/.env
+            echo "Wrote shared/.env ($(wc -l < shared/.env) lines)"
+            # Replace logs/ with a symlink to shared/logs/ so pm2 file paths survive
+            # across releases. Move any existing log files first.
+            if [ -d logs ] && [ ! -L logs ]; then
+              mv logs/* shared/logs/ 2>/dev/null || true
+              rmdir logs 2>/dev/null || true
+              ln -sfn shared/logs logs
+              echo "Converted logs/ to symlink"
+            elif [ ! -e logs ]; then
+              ln -sfn shared/logs logs
+            fi
+            ls -la shared logs releases | head -20
+
+      # ── B.2b — pre-flight: shared/.env must exist with DATABASE_URL. Without it
+      # src/lib/db/index.ts throws at module load and pm2 restart-loops silently.
+      - name: Pre-flight shared/.env check
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 1m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            if [ ! -s "$APP_DIR/shared/.env" ]; then
+              echo "❌ $APP_DIR/shared/.env is missing or empty."
+              exit 1
+            fi
+            if ! grep -q '^DATABASE_URL=' "$APP_DIR/shared/.env"; then
+              echo "❌ $APP_DIR/shared/.env exists but has no DATABASE_URL= line."
+              exit 1
+            fi
+            echo "✓ shared/.env present ($(wc -l < $APP_DIR/shared/.env) lines, DATABASE_URL set)"
+
+      # ── B.2c — ship runtime files (pm2 config, provisioning + verify scripts) so the
+      # box always runs the version that matches main, not whatever it last git-pulled.
+      - name: Ship runtime files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          source: "ecosystem.prod.config.js,scripts/sandbox-system-setup.sh,scripts/verify-chunk-manifest.js,scripts/verify-served-assets.js"
+          target: "${{ env.APP_DIR }}/"
+          overwrite: true
+          timeout: 2m
+
+      # ── B.3 — provision headless Chromium (libs + google-chrome-stable) + preflight.
+      # Runs before the swap, so a missing/broken browser fails THIS deploy loudly
+      # while the old release keeps serving. script_stop:true aborts on a bad preflight.
+      - name: Provision Chromium (libs + browser) and preflight
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 10m
+          script_stop: true
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            cd "$APP_DIR"
+            chmod +x scripts/sandbox-system-setup.sh
+            time ./scripts/sandbox-system-setup.sh
+
+      # ── B.3b — sanity check the pm2 config we just shipped launches current/server.js.
+      - name: Verify shipped ecosystem.prod.config.js args
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 1m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            if ! grep -q 'args: "current/server.js"' "$APP_DIR/ecosystem.prod.config.js"; then
+              echo "❌ ecosystem.prod.config.js on VPS is missing args: \"current/server.js\""
+              grep -n 'args:\|script:' "$APP_DIR/ecosystem.prod.config.js" || true
+              exit 1
+            fi
+            echo "✓ ecosystem.prod.config.js args is current/server.js"
+
+      # ── B.4 — create the release dir so rsync has a target.
+      - name: Create release directory
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 2m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            cd "$APP_DIR"
+            mkdir -p "releases/${{ github.sha }}/standalone"
+
+      # ── B.5 — rsync delta upload. --link-dest=current hardlinks byte-identical files
+      # (node_modules barely changes) so only changed files cross the network. --checksum
+      # because every build runs a fresh npm ci so mtimes always differ. First deploy:
+      # `current` is absent and rsync simply copies everything.
+      - name: Rsync build to VPS (delta upload)
+        timeout-minutes: 12
+        env:
+          SSH_KEY: ${{ secrets.PROD_VPS_SSH_KEY }}
+          HOST: ${{ secrets.PROD_VPS_HOST }}
+          VPS_USER: ${{ secrets.PROD_VPS_USER }}
+          PORT: ${{ secrets.PROD_VPS_PORT }}
+          DEST: ${{ env.APP_DIR }}/releases/${{ github.sha }}/standalone/
+        run: |
+          set -eo pipefail
+          umask 077
+          mkdir -p release_tree
+          tar -xzf build.tar.gz -C release_tree
+          echo "Unpacked $(find release_tree -type f | wc -l) files for rsync"
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/prod_key
+          chmod 600 ~/.ssh/prod_key
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          SSH_CMD="ssh -i $HOME/.ssh/prod_key -p $PORT \
+            -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            -o StrictHostKeyChecking=accept-new"
+
+          for attempt in 1 2 3; do
+            echo "Rsync attempt $attempt…"
+            if rsync -rlptDz --checksum --delete \
+                --link-dest="$APP_DIR/current/" \
+                -e "$SSH_CMD" \
+                release_tree/ \
+                "$VPS_USER@$HOST:$DEST"; then
+              echo "rsync delta upload succeeded on attempt $attempt"; exit 0
+            fi
+            echo "attempt $attempt failed; retrying in $((attempt * 10))s"; sleep $((attempt * 10))
+          done
+          echo "::error::rsync of build failed after 3 attempts"; exit 1
+
+      # ── B.6 — validate the rsync'd release, wire the .env symlinks.
+      - name: Validate release
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            cd "$APP_DIR/releases/${{ github.sha }}"
+
+            [ -f standalone/server.js ] || { echo "❌ standalone/server.js missing"; exit 1; }
+            [ -f standalone/.next/BUILD_ID ] || { echo "❌ standalone/.next/BUILD_ID missing"; exit 1; }
+            CHUNKS=$(find standalone/.next/static/chunks -type f 2>/dev/null | wc -l)
+            if [ "$CHUNKS" -lt 5 ]; then
+              echo "❌ chunk count $CHUNKS < 5 — rsync upload was incomplete"
+              exit 1
+            fi
+            echo "Release has $CHUNKS chunks, BUILD_ID=$(cat standalone/.next/BUILD_ID)"
+
+            # Wire .env into the release. Both resolve to $APP_DIR/shared/.env when
+            # read from inside standalone/ (../../../ from releases/<sha>/standalone).
+            ln -sfn ../../../shared/.env standalone/.env
+            ln -sfn ../../../shared/.env standalone/.env.production
+
+            # Verify the SHIPPED tree (defends against transfer corruption).
+            cd standalone
+            node "$APP_DIR/scripts/verify-chunk-manifest.js"
+
+      # ── B.7 — atomic symlink swap. Single rename(2). After this, a failure means
+      # Stage C must symlink back to PREV.
+      - name: Atomic symlink swap
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 2m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            cd "$APP_DIR"
+            ln -sfn "releases/${{ github.sha }}/standalone" current.new
+            mv -T current.new current
+            touch /tmp/itarang-prod-swap-done
+            echo "current -> $(readlink current)"
+
+      # ── B.8 — pm2 reload web. The config-hash guard forces delete+start whenever the
+      # ecosystem config's script/args/env changed (incl. the first deploy under this
+      # arch, where the launch path moved to `node current/server.js`); pm2 reload
+      # re-execs from the CACHED config and would otherwise keep the old launch path.
+      - name: Reload pm2 (web)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR,PROD_PORT
+          script: |
+            set -eo pipefail
+            exec 2>&1
             cd "$APP_DIR"
 
-            echo "=== Pulling latest from main ==="
-            git fetch origin main
-            git reset --hard origin/main
+            # Clean up any legacy app name from the pre-arch deploy.
+            pm2 delete itarang-crm-new 2>/dev/null || true
 
-            echo "=== Writing .env.production from secret ==="
-            umask 077
-            echo "${{ secrets.PROD_ENV_FILE_B64 }}" | base64 -d > .env.production
-            chmod 600 .env.production
+            DESIRED_HASH=$(node -e "const c=require('./ecosystem.prod.config.js'); const w=c.apps.find(a=>a.name==='itarang-crm-web'); console.log(JSON.stringify({script:w.script,args:w.args,env:w.env,cwd:w.cwd}))" | sha256sum | cut -d' ' -f1)
+            RUNNING_HASH=$(cat shared/.pm2-web-config-hash 2>/dev/null || echo "")
+            echo "DESIRED_HASH=$DESIRED_HASH"
+            echo "RUNNING_HASH=$RUNNING_HASH"
 
-            echo "=== Installing dependencies ==="
-            # Plain npm ci — known-good (run 26678229305 installed 852 packages
-            # this way). A "skip when lock unchanged" optimization aborted the
-            # deploy twice under drone-ssh's remote bash, so it was removed.
-            # --prefer-offline reuses the on-box package cache instead of
-            # re-downloading ~850 packages, cutting a big chunk off the ~19-min
-            # install; it falls back to the network for anything not cached.
-            npm ci --no-audit --no-fund --include=dev --prefer-offline
-
-            echo "=== Preparing logs directory ==="
-            mkdir -p logs
-
-            echo "=== Provision headless Chromium (libs + browser) + preflight ==="
-            # Installs google-chrome-stable (the binary PUPPETEER_EXECUTABLE_PATH
-            # points at) plus the GTK/NSS libs Chromium links against, then runs a
-            # launch preflight. Without this, PDF rendering (Initiate Agreement,
-            # KYC consent, audit trail) throws "Failed to launch the browser
-            # process ... ENOENT" because nothing in the pipeline ever installed
-            # the browser. Idempotent: skips apt when already present. Runs under
-            # the block's `set -eo pipefail` + script_stop, so a failed preflight
-            # aborts the deploy here — before pm2 is restarted onto the new build.
-            chmod +x scripts/sandbox-system-setup.sh
-            ./scripts/sandbox-system-setup.sh
-
-            ARCHIVE_DIR=/home/itarang-crm/static_archive
-            ARCHIVE_KEEP=10
-
-            echo "=== Snapshot previous .next/static into archive ring ==="
-            # The archive ring is a NON-CRITICAL stale-tab optimization (serves
-            # old chunks during the symlink swap). It has aborted the prod deploy
-            # at this exact spot several times under `set -eo pipefail` for subtle
-            # reasons (runs 26678229305 / 26680904559), so the WHOLE best-effort
-            # block runs with errexit OFF — it must never stop the build. Disk is
-            # not a concern here (box has tens of GB free); `rm -rf .next` below
-            # reclaims the old build anyway. errexit is restored right after.
-            set +e
-            mkdir -p "$ARCHIVE_DIR"
-            ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf
-            if [ -f .next/BUILD_ID ] && [ -d .next/static ]; then
-              OLD_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null)
-              if [ -n "$OLD_BUILD_ID" ]; then
-                rm -rf "$ARCHIVE_DIR/$OLD_BUILD_ID"
-                if cp -a .next/static "$ARCHIVE_DIR/$OLD_BUILD_ID"; then
-                  echo "Archived $OLD_BUILD_ID"
-                else
-                  echo "::warning::archive snapshot failed — non-fatal, continuing"
-                fi
+            if pm2 describe itarang-crm-web >/dev/null 2>&1 && [ "$DESIRED_HASH" = "$RUNNING_HASH" ]; then
+              if ! pm2 reload itarang-crm-web --update-env; then
+                echo "pm2 reload failed — falling back to delete+start"
+                pm2 delete itarang-crm-web 2>/dev/null || true
+                fuser -k "${PROD_PORT}/tcp" 2>/dev/null || true
+                sleep 2
+                pm2 start ecosystem.prod.config.js --only itarang-crm-web
               fi
             else
-              echo "No previous .next to archive (first build or clean tree)"
+              echo "Forcing delete+start (config changed or first deploy under new arch)"
+              pm2 delete itarang-crm-web 2>/dev/null || true
+              fuser -k "${PROD_PORT}/tcp" 2>/dev/null || true
+              sleep 2
+              pm2 start ecosystem.prod.config.js --only itarang-crm-web
             fi
-            set -e
-
-            echo "=== Cleaning prior build state ==="
-            # Forces deterministic builds. The archive ring above already
-            # snapshot the prior .next/static into $ARCHIVE_DIR/$OLD_BUILD_ID,
-            # so the stale-tab grace period is preserved. Without this nuke,
-            # .next/standalone/.next/server + .next/cache/turbopack can carry
-            # references the new build doesn't re-emit, surfacing as
-            # NOT-ON-DISK chunks at the served-asset verification step.
-            rm -rf .next
-
-            echo "=== Building Next.js (standalone) ==="
-            export GITHUB_SHA=$(git rev-parse HEAD)
-            echo "Building with GITHUB_SHA=$GITHUB_SHA"
-            # next build (webpack) for an app this size peaks past Node's
-            # default ~2 GB old-space heap — the build worker SIGABRTs with
-            # "Reached heap limit / heap out of memory" without this. 4 GB
-            # fits the 8 GB VPS alongside the running app.
-            export NODE_OPTIONS="--max-old-space-size=4096"
-            npm run build
-
-            echo "=== Merge archived chunks into new build (stale-tab grace period) ==="
-            NEW_BUILD_ID=""
-            if [ -f .next/BUILD_ID ]; then NEW_BUILD_ID=$(cat .next/BUILD_ID); fi
-            if [ -d "$ARCHIVE_DIR" ]; then
-              for archived in "$ARCHIVE_DIR"/*/; do
-                [ -d "$archived" ] || continue
-                archived_id=$(basename "$archived")
-                if [ "$archived_id" = "$NEW_BUILD_ID" ]; then continue; fi
-                # chunks/css/media only — never manifests, BUILD_ID, or server/.
-                # --ignore-existing guarantees new build artifacts always win.
-                for sub in chunks css media; do
-                  if [ -d "$archived/$sub" ]; then
-                    mkdir -p ".next/static/$sub"
-                    rsync -a --ignore-existing "$archived/$sub/" ".next/static/$sub/"
-                  fi
-                done
-              done
-              echo "After merge: $(find .next/static -type f | wc -l) files in .next/static"
-            fi
-
-            echo "=== Prune archive ring (keep $ARCHIVE_KEEP newest) ==="
-            if [ -d "$ARCHIVE_DIR" ]; then
-              ls -1td "$ARCHIVE_DIR"/*/ 2>/dev/null | tail -n +$((ARCHIVE_KEEP + 1)) | xargs -r rm -rf
-              echo "Archive now holds $(ls -1d "$ARCHIVE_DIR"/*/ 2>/dev/null | wc -l) builds"
-            fi
-
-            echo "=== Verify every chunk referenced by the build manifest exists on disk ==="
-            # Catches the failure mode where a build emits a manifest that
-            # points at chunk files the build (or a subsequent step) didn't
-            # actually write to disk — which silently succeeds the deploy
-            # but 404s every page.
-            #
-            # Intentionally run via a committed script, not node -e: drone-ssh
-            # appends shell boilerplate for exit-code propagation, and with
-            # a multi-line `node -e '...'` argument that boilerplate gets
-            # injected into the -e string and Node tries to parse it as JS.
-            node scripts/verify-chunk-manifest.js
-
-            echo "=== Assembling standalone bundle ==="
-            cp .env.production .next/standalone/.env.production
-            cp .env.production .next/standalone/.env
-            rm -rf .next/standalone/.next/static
-            cp -r .next/static .next/standalone/.next/static
-            rm -rf .next/standalone/public
-            if [ -d public ]; then cp -r public .next/standalone/public; fi
-
-            echo "=== Copy @sparticuz/chromium (incl bin/) into standalone ==="
-            # Next.js standalone file-tracing resolves @sparticuz/chromium's
-            # binary by runtime path, not require(), so it drops the bin/ dir —
-            # which makes the @sparticuz launch path fail with "input directory
-            # .../@sparticuz/chromium/bin does not exist". Copy the full package
-            # (npm ci --include=dev above guarantees it's on disk) so the
-            # bundled-Chromium fallback in launch-browser.ts actually works.
-            if [ -d node_modules/@sparticuz/chromium ]; then
-              mkdir -p .next/standalone/node_modules/@sparticuz
-              rm -rf .next/standalone/node_modules/@sparticuz/chromium
-              cp -r node_modules/@sparticuz/chromium .next/standalone/node_modules/@sparticuz/chromium
-            fi
-            # puppeteer-core is normally traced, but copy defensively if missing.
-            if [ ! -d .next/standalone/node_modules/puppeteer-core ] && [ -d node_modules/puppeteer-core ]; then
-              cp -r node_modules/puppeteer-core .next/standalone/node_modules/puppeteer-core
-            fi
-
-            echo "=== Ensure Google Chrome is installed (PDF/agreement rendering) ==="
-            # Primary Chromium path for launch-browser.ts on the VPS
-            # (PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable). Idempotent:
-            # fast-paths out when Chrome is already present.
-            bash scripts/prod-system-setup.sh
-
-            echo "=== Stop pm2 + guarantee port 3002 is free ==="
-            # Previous "poll for port free" logic was unreliable — the ss
-            # filter syntax could silently return empty, the loop would
-            # declare the port free while the old process was still holding
-            # it, pm2 start would EADDRINUSE, crash-loop, give up, and the
-            # OLD process kept serving stale HTML against the new .next.
-            # Do it deterministically: delete the pm2 entries, then
-            # unconditionally fuser -k the port, then sleep. Whatever was
-            # listening is guaranteed dead before pm2 start runs.
-            for app in itarang-crm-new itarang-crm-web; do
-              if pm2 describe "$app" > /dev/null 2>&1; then
-                pm2 delete "$app" 2>/dev/null || true
-              fi
-            done
-            fuser -k 3002/tcp 2>/dev/null || true
-            sleep 3
-            echo "Port 3002 cleared"
-
-            echo "=== Start pm2 fresh ==="
-            pm2 start ecosystem.prod.config.js
+            echo "$DESIRED_HASH" > shared/.pm2-web-config-hash
             pm2 save
             pm2 ls
 
-            echo "=== Health check ==="
+            # Fail loudly before the health-check window if pm2 didn't bring it online.
+            STATUS=$(pm2 jlist | node -e "const j=JSON.parse(require('fs').readFileSync(0,'utf8')); const w=j.find(p=>p.name==='itarang-crm-web'); console.log(w?w.pm2_env.status:'missing')")
+            echo "itarang-crm-web pm2 status: $STATUS"
+            if [ "$STATUS" != "online" ]; then
+              echo "❌ itarang-crm-web is '$STATUS' — dumping recent stderr and aborting"
+              pm2 logs itarang-crm-web --lines 120 --nostream --err || true
+              exit 1
+            fi
+
+      # ── B.9 — health check. 180s @1Hz on /api/health (gates rollback). Next.js 16
+      # standalone takes ~40s to "Ready" on this VPS + DB cold-connect can add more.
+      - name: Health check
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR,HEALTH_URL
+          script: |
+            set -eo pipefail
+            exec 2>&1
             HTTP=000
-            for i in $(seq 1 30); do
-              sleep 2
-              HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3002/ || echo 000)
-              if echo "$HTTP" | grep -qE "^(200|301|302|307)$"; then
-                echo "HTTP $HTTP after ${i} polls"
+            for i in $(seq 1 180); do
+              sleep 1
+              HTTP=$(curl -s -o /dev/null -m 5 -w "%{http_code}" "$HEALTH_URL" || true)
+              [ -z "$HTTP" ] && HTTP=000
+              if [ $((i % 10)) -eq 0 ] || [ "$HTTP" = "200" ]; then
+                echo "  t=${i}s http=$HTTP"
+              fi
+              if [ "$HTTP" = "200" ]; then
+                echo "HTTP 200 after ${i}s"
                 break
               fi
             done
-            if ! echo "$HTTP" | grep -qE "^(200|301|302|307)$"; then
-              echo "❌ Production failed health check (HTTP $HTTP)"
-              pm2 logs itarang-crm-web --lines 50 --nostream || true
+            if [ "$HTTP" != "200" ]; then
+              echo "❌ $HEALTH_URL returned $HTTP after 180s"
+              pm2 ls || true
+              pm2 logs itarang-crm-web --lines 80 --nostream || true
               exit 1
             fi
-            echo "✅ Production healthy"
+            echo "--- /api/health body ---"
+            curl -s "$HEALTH_URL" | head -c 800
+            echo ""
 
-            echo "=== Verify served BUILD_ID matches disk ==="
-            # Detects a stale-process deploy: disk has a new BUILD_ID but the
-            # running process still serves HTML tagged with the previous
-            # build's id, so chunk references don't exist on disk. Fail loudly
-            # rather than letting the deploy lie about success.
-            DISK_BUILD_ID=$(cat .next/BUILD_ID 2>/dev/null || echo "missing")
-            # Hit /login directly — / may 307 with no body so grep finds
-            # nothing. -L follows redirects either way. Wrap the pipeline in
-            # `|| true` so a no-match grep doesn't abort the script under
-            # set -eo pipefail.
-            HTML=$(curl -s -L http://127.0.0.1:3002/login 2>/dev/null || true)
-            SERVED_BUILD_ID=$(printf '%s' "$HTML" | grep -oE '"b":"[a-f0-9]+"' | head -1 | cut -d'"' -f4 || true)
-            echo "Disk BUILD_ID:   $DISK_BUILD_ID"
-            echo "Served BUILD_ID: ${SERVED_BUILD_ID:-<not found>}"
-            if [ -n "$SERVED_BUILD_ID" ] && [ "$DISK_BUILD_ID" != "$SERVED_BUILD_ID" ]; then
-              echo "❌ BUILD_ID mismatch — running process is stale"
+      # ── B.10 — served-asset verification. HEAD-checks every chunk the running app
+      # references in served HTML. Catches NOT-ON-DISK chunks /api/health can't see.
+      - name: Verify served assets
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 5m
+          script_stop: false
+          envs: APP_DIR,PROD_PORT
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            cd "$APP_DIR"
+            PORT="$PROD_PORT" node scripts/verify-served-assets.js
+
+      # ── B.11 — green bookkeeping: update `previous` symlink (only now that health +
+      # served-asset checks passed) and prune to the last 5 releases.
+      - name: Update `previous` symlink + prune releases
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 2m
+          script_stop: false
+          envs: APP_DIR
+          script: |
+            set -eo pipefail
+            cd "$APP_DIR"
+            PREV_SHA=$(cat /tmp/itarang-prod-prev-sha 2>/dev/null || echo "")
+            if [ -n "$PREV_SHA" ] && [ -d "releases/$PREV_SHA/standalone" ]; then
+              ln -sfn "releases/$PREV_SHA/standalone" previous.new
+              mv -T previous.new previous
+              echo "previous -> $(readlink previous)"
+            else
+              echo "No prior release to point previous at (first deploy under new arch)"
+            fi
+            ls -1td releases/*/ 2>/dev/null | tail -n +6 | xargs -r rm -rf
+            echo "Releases retained:"
+            ls -1t releases/ | head -10
+
+      # ────────────────────────────────────────────────────────────────
+      # Stage C — failure handlers. Run only on deploy failure/cancel.
+      # ────────────────────────────────────────────────────────────────
+      - name: Collect failure logs from VPS
+        if: failure() || cancelled()
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 3m
+          script_stop: false
+          envs: APP_DIR,LOG_DIR
+          script: |
+            exec 2>&1
+            echo ">>> readlink current/previous:"
+            (cd "$APP_DIR" && readlink current 2>/dev/null; readlink previous 2>/dev/null) || true
+            echo ""
+            echo ">>> releases on disk:"
+            ls -lt "$APP_DIR/releases/" 2>/dev/null | head -10 || echo "(no releases dir)"
+            echo ""
+            echo ">>> pm2 status:"
+            pm2 ls || true
+            echo ""
+            echo ">>> itarang-crm-web (last 100 lines):"
+            pm2 logs itarang-crm-web --lines 100 --nostream || true
+            echo ""
+            echo ">>> Disk free:"; df -h "$APP_DIR" || true
+            echo ">>> Memory:"; free -m || true
+
+      - name: Rollback (symlink swap only — no rebuild)
+        if: failure() || cancelled()
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_VPS_HOST }}
+          username: ${{ secrets.PROD_VPS_USER }}
+          port: ${{ secrets.PROD_VPS_PORT }}
+          key: ${{ secrets.PROD_VPS_SSH_KEY }}
+          timeout: 60s
+          command_timeout: 3m
+          script_stop: false
+          envs: APP_DIR,PROD_PORT,HEALTH_URL
+          script: |
+            set -eo pipefail
+            exec 2>&1
+            cd "$APP_DIR"
+
+            PREV_TARGET=$(cat /tmp/itarang-prod-prev-target 2>/dev/null || echo "")
+            SWAP_DONE=0
+            [ -f /tmp/itarang-prod-swap-done ] && SWAP_DONE=1
+            echo "PREV_TARGET=$PREV_TARGET"
+            echo "SWAP_DONE=$SWAP_DONE"
+
+            if [ "$SWAP_DONE" = "0" ]; then
+              echo "Failure occurred BEFORE symlink swap — nothing to roll back."
+              rm -rf "releases/${{ github.sha }}" 2>/dev/null || true
+              curl -s -o /dev/null -m 5 -w "Pre-swap: existing app HTTP %{http_code}\n" "$HEALTH_URL" || echo "(curl failed)"
+              exit 0
+            fi
+
+            if [ -z "$PREV_TARGET" ] || [ ! -d "$PREV_TARGET" ]; then
+              echo "❌ No usable PREV_TARGET — cannot symlink back. Manual intervention needed."
+              echo "Available releases:"
+              ls -1t releases/ 2>/dev/null | head -10
               exit 1
             fi
 
-            echo "=== Verify served assets reachable (HEAD on every chunk in served HTML) ==="
-            # Catches the failure mode that verify-chunk-manifest.js can miss:
-            # the static walker only sees chunks referenced from .next/ files
-            # on disk; this step hits the running app and HEAD-checks every
-            # asset referenced by actual served HTML, so 404s become deploy
-            # failures instead of runtime ChunkLoadError on real users.
-            PORT=3002 node scripts/verify-served-assets.js
+            echo "Rolling current symlink back to $PREV_TARGET"
+            ln -sfn "$PREV_TARGET" current.new
+            mv -T current.new current
+            pm2 reload itarang-crm-web --update-env || pm2 restart itarang-crm-web
+
+            HTTP=000
+            for i in $(seq 1 30); do
+              sleep 1
+              HTTP=$(curl -s -o /dev/null -m 5 -w "%{http_code}" "$HEALTH_URL" || echo 000)
+              if [ "$HTTP" = "200" ]; then
+                echo "Rollback healthy after ${i}s"
+                break
+              fi
+            done
+            if [ "$HTTP" != "200" ]; then
+              echo "❌ Rollback target ALSO failed health check (HTTP $HTTP). Manual intervention required."
+              exit 1
+            fi
+
+      - name: Slack notify result
+        if: always() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            ICON=":white_check_mark:"
+            STATUS="*succeeded*"
+          else
+            ICON=":x:"
+            STATUS="*FAILED*"
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "{\"text\":\"${ICON} Production deploy ${STATUS} \`${{ github.sha }}\`\nLogs: ${RUN_URL}\"}" \
+            "$SLACK_WEBHOOK_URL" || true
