@@ -92,6 +92,7 @@ export default async function SettingsPage() {
         store_loan_agreement: serviceCfgRow.store_loan_agreement,
         track_completion_gate: serviceCfgRow.track_completion_gate,
         track_failure_halts: serviceCfgRow.track_failure_halts,
+        fi_config: (serviceCfgRow.fi_config as ServiceConfig["fi_config"]) ?? null,
       }
     : SERVICE_CONFIG_DEFAULTS;
 

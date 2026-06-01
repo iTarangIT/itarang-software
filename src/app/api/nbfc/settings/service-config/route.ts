@@ -19,6 +19,13 @@ import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const DEFAULT_FI_CONFIG = {
+  reinspection_cap: null as number | null,
+  gps_denied_block: true,
+  camera_only: true,
+  required_photos: ["exterior", "customer_at_residence", "corroborator", "agent_selfie"],
+};
+
 const DEFAULTS = {
   fi_enabled: false,
   vkyc_enabled: false,
@@ -31,6 +38,7 @@ const DEFAULTS = {
   store_loan_agreement: false,
   track_completion_gate: true,
   track_failure_halts: false,
+  fi_config: DEFAULT_FI_CONFIG,
 };
 
 const Body = z.object({
@@ -45,6 +53,15 @@ const Body = z.object({
   store_loan_agreement: z.boolean(),
   track_completion_gate: z.boolean(),
   track_failure_halts: z.boolean(),
+  // E-148 §10.7 — FI agent-form + review parameters (optional; defaults apply).
+  fi_config: z
+    .object({
+      reinspection_cap: z.number().int().min(1).max(50).nullable().optional(),
+      gps_denied_block: z.boolean().optional(),
+      camera_only: z.boolean().optional(),
+      required_photos: z.array(z.enum(["exterior", "customer_at_residence", "corroborator", "agent_selfie", "extra"])).optional(),
+    })
+    .optional(),
 });
 
 function statusFromError(msg: string): number {
@@ -124,6 +141,7 @@ export async function PUT(req: NextRequest) {
     }
 
     const now = new Date();
+    const fiConfig = { ...DEFAULT_FI_CONFIG, ...(d.fi_config ?? {}) };
     const values = {
       tenant_id: actor.tenant_id,
       fi_enabled: d.fi_enabled,
@@ -137,6 +155,7 @@ export async function PUT(req: NextRequest) {
       store_loan_agreement: d.store_loan_agreement,
       track_completion_gate: d.track_completion_gate,
       track_failure_halts: d.track_failure_halts,
+      fi_config: fiConfig,
       updated_at: now,
     };
 
@@ -147,6 +166,7 @@ export async function PUT(req: NextRequest) {
         target: nbfcServiceConfig.tenant_id,
         set: {
           fi_enabled: values.fi_enabled,
+          fi_config: values.fi_config,
           vkyc_enabled: values.vkyc_enabled,
           vkyc_mode: values.vkyc_mode,
           enach_enabled: values.enach_enabled,
