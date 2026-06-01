@@ -60,3 +60,23 @@ export async function getVkycTrack(leadId: string, nbfcId: number) {
     .limit(1);
   return rows[0] ?? null;
 }
+
+/**
+ * Resolve the live passive-VKYC track for a single-use capture-link token
+ * (E-152). The token is the row's `vkyc_ref`; a link is valid only while the
+ * track is still `in_progress` (not yet verified/failed) and the link has not
+ * expired. Returns the row or null. No auth — the token IS the credential.
+ */
+export async function resolveVkycByToken(token: string) {
+  if (!token) return null;
+  const rows = await db
+    .select()
+    .from(videoKycVerifications)
+    .where(eq(videoKycVerifications.vkyc_ref, token))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  if (row.status !== "in_progress") return null; // not started / already decided
+  if (row.link_expires_at && new Date(row.link_expires_at).getTime() < Date.now()) return null; // expired
+  return row;
+}

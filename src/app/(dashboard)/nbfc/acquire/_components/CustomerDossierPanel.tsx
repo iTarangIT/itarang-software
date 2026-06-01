@@ -178,22 +178,20 @@ function KycTable({
           <tr className="bg-slate-50 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">
             <th className="px-3 py-2">Type</th>
             <th className="px-3 py-2">Status</th>
-            <th className="px-3 py-2">Match score</th>
             <th className="px-3 py-2">Admin action</th>
             <th className="px-3 py-2">Completed</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {rows.map((v) => (
+          {rows
+            .filter((v) => (v.verification_type ?? "").toLowerCase() !== "address")
+            .map((v) => (
             <tr key={v.id} className="hover:bg-slate-50/60">
               <td className="px-3 py-2 font-medium text-slate-700">
                 {titleCase(v.verification_type)}
               </td>
               <td className="px-3 py-2">
                 <StatusBadge status={v.status} />
-              </td>
-              <td className="px-3 py-2 text-slate-600">
-                {v.match_score != null ? `${v.match_score}%` : "—"}
               </td>
               <td className="px-3 py-2 text-slate-600">
                 {v.admin_action ? titleCase(v.admin_action) : "—"}
@@ -370,7 +368,6 @@ export default function CustomerDossierPanel({
                 label={doc.doc_type ?? doc.file_name ?? "Document"}
                 url={doc.file_url}
                 type={doc.file_type}
-                status={doc.verification_status ?? doc.doc_status}
               />
             ))}
           </div>
@@ -462,7 +459,7 @@ export default function CustomerDossierPanel({
               <Field k="Battery serial" v={ps.battery_serial} />
               <Field k="Charger serial" v={ps.charger_serial} />
               <Field k="Category" v={ps.category} />
-              <Field k="Model number" v={ps.model_number} />
+              <Field k="Model number" v={ps.model_number || dossier.productModel} />
               <Field k="Final price" v={fmtInr(ps.final_price)} />
               <Field k="Payment mode" v={titleCase(ps.payment_mode)} />
             </dl>

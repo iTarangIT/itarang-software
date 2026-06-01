@@ -19,10 +19,12 @@ import {
   coBorrowers,
   consentRecords,
   digilockerTransactions,
+  inventory,
   kycDocuments,
   kycVerifications,
   leads,
   otherDocumentRequests,
+  products,
   productSelections,
 } from "@/lib/db/schema";
 
@@ -47,6 +49,13 @@ export interface CustomerDossier {
   /** Step-3 supporting / additional documents. */
   supportingDocs: (typeof otherDocumentRequests.$inferSelect)[];
   productSelection: typeof productSelections.$inferSelect | null;
+  /**
+   * Model number of the selected battery, resolved from inventory→products.
+   * `product_selections.model_number` is rarely populated (it falls back to the
+   * unused lead.product_type_id), so we derive the real model code from the
+   * chosen battery serial for display.
+   */
+  productModel: string | null;
 }
 
 /** Fetches the full customer dossier for a lead, or null if the lead is gone. */
@@ -96,6 +105,26 @@ export async function getCustomerDossier(
   const customerKyc = allKyc.filter((v) => !isCoBorrower(v));
   const coBorrowerKyc = allKyc.filter(isCoBorrower);
 
+  // Resolve the selected battery's model code (inventory.model_type, falling
+  // back to the product's SKU/name) from its serial — this is the real "model
+  // number" shown in the dossier, since product_selections.model_number is
+  // almost never populated.
+  const selection = selectionRows[0] ?? null;
+  let productModel: string | null = selection?.model_number?.trim() || null;
+  if (!productModel && selection?.battery_serial) {
+    const [inv] = await db
+      .select({
+        model_type: inventory.model_type,
+        sku: products.sku,
+        name: products.name,
+      })
+      .from(inventory)
+      .leftJoin(products, eq(inventory.product_id, products.id))
+      .where(eq(inventory.serial_number, selection.battery_serial))
+      .limit(1);
+    productModel = inv?.model_type || inv?.sku || inv?.name || null;
+  }
+
   // Group co-borrower docs under their owner.
   const docsByCb = new Map<string, (typeof coBorrowerDocuments.$inferSelect)[]>();
   for (const doc of coBorrowerDocsRows) {
@@ -117,6 +146,7 @@ export async function getCustomerDossier(
       docs: docsByCb.get(info.id) ?? [],
     })),
     supportingDocs,
-    productSelection: selectionRows[0] ?? null,
+    productSelection: selection,
+    productModel,
   };
 }

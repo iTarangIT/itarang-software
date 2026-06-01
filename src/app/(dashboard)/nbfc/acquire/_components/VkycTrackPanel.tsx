@@ -1,15 +1,20 @@
 "use client";
 
 /**
- * Video KYC track panel — Addendum V0.2 §10. Stage-1 track for the acting NBFC.
- * Own mode → Initiate (B2-B) + Record manually. iTarang mode → Initiate hosted
- * Decentro session, poll for the decoded result, then Accept/Reject the card.
+ * Passive Video KYC track panel — Addendum V0.3.1 §11.
+ *
+ * The operator sends the customer a single-use link (SMS / Email / WhatsApp) to
+ * record a short LIVE selfie video; Decentro's passive liveness engine scores
+ * it. The panel polls for the result while the link is outstanding, then the
+ * operator Accepts / Rejects. Replaces the old Decentro Active (hosted-session)
+ * VKYC flow.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type Track = {
   id: string;
-  mode: "own" | "itarang";
+  vkyc_ref: string;
+  mode: string;
   status: string;
   match_score: string | null;
   liveliness: string | null;
@@ -17,9 +22,12 @@ type Track = {
   prerecorded_risk: boolean | null;
   failure_reason: string | null;
   admin_action: string | null;
+  link_channel: string | null;
 };
 
 type Resp = { ok: boolean; track: Track | null; can_act?: boolean; enabled?: boolean; error?: string };
+
+type Channel = "email" | "sms" | "whatsapp";
 
 const BADGE: Record<string, string> = {
   verified: "bg-emerald-100 text-emerald-700",
@@ -29,9 +37,13 @@ const BADGE: Record<string, string> = {
   not_applicable: "bg-slate-100 text-slate-500",
 };
 
+const CHANNEL_LABEL: Record<Channel, string> = { email: "Email", sms: "SMS", whatsapp: "WhatsApp" };
+
 export default function VkycTrackPanel({ leadId }: { leadId: string }) {
   const [data, setData] = useState<Resp | null>(null);
-  const [sessionUrl, setSessionUrl] = useState<string | null>(null);
+  const [channel, setChannel] = useState<Channel>("email");
+  const [linkUrl, setLinkUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -50,10 +62,9 @@ export default function VkycTrackPanel({ leadId }: { leadId: string }) {
     void load();
   }, [load]);
 
-  // Poll while a Decentro session is in flight so the lazy result fetch runs.
+  // Poll while the link is outstanding so the customer's submission lands.
   useEffect(() => {
-    const t = data?.track;
-    const polling = t?.mode === "itarang" && t?.status === "in_progress";
+    const polling = data?.track?.status === "in_progress";
     if (polling && !pollRef.current) {
       pollRef.current = setInterval(() => void load(), 5000);
     }
@@ -67,7 +78,7 @@ export default function VkycTrackPanel({ leadId }: { leadId: string }) {
         pollRef.current = null;
       }
     };
-  }, [data?.track, load]);
+  }, [data?.track?.status, load]);
 
   async function post(path: string, body?: unknown) {
     setBusy(true);
@@ -78,12 +89,9 @@ export default function VkycTrackPanel({ leadId }: { leadId: string }) {
         headers: { "content-type": "application/json" },
         body: body ? JSON.stringify(body) : "{}",
       });
-      const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; session_url?: string };
+      const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; link_url?: string };
       if (!res.ok || j.ok === false) throw new Error(j.error ?? `HTTP ${res.status}`);
-      if (j.session_url) {
-        setSessionUrl(j.session_url);
-        window.open(j.session_url, "_blank", "noopener");
-      }
+      if (j.link_url) setLinkUrl(j.link_url);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -92,15 +100,30 @@ export default function VkycTrackPanel({ leadId }: { leadId: string }) {
     }
   }
 
+  async function copyLink(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — ignore */
+    }
+  }
+
   const canAct = data?.can_act ?? false;
   const enabled = data?.enabled ?? true;
   const track = data?.track ?? null;
   const status = track?.status ?? "pending";
+  // The capture link = origin + /vkyc/<ref>. Prefer the value the initiate call
+  // returned; otherwise derive it from the track's ref.
+  const effLink =
+    linkUrl ??
+    (track?.vkyc_ref && typeof window !== "undefined" ? `${window.location.origin}/vkyc/${track.vkyc_ref}` : null);
 
   return (
     <div className="rounded-lg border border-slate-200 p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-slate-800">Active Video KYC</span>
+        <span className="text-sm font-semibold text-slate-800">Passive Video KYC</span>
         {track && (
           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${BADGE[status] ?? "bg-slate-100 text-slate-500"}`}>
             {status.replace(/_/g, " ")}
@@ -110,19 +133,12 @@ export default function VkycTrackPanel({ leadId }: { leadId: string }) {
 
       {track && (
         <p className="text-[11px] text-slate-500">
-          {track.mode === "itarang" ? "iTarang · Decentro" : "Own VKYC"}
-          {track.match_score ? ` · match ${track.match_score}` : ""}
-          {track.liveliness ? ` · liveliness ${track.liveliness}` : ""}
-          {track.static_risk ? " · static-risk" : ""}
-          {track.prerecorded_risk ? " · prerecorded-risk" : ""}
+          Passive liveness · Decentro
+          {track.link_channel ? ` · link sent via ${CHANNEL_LABEL[track.link_channel as Channel] ?? track.link_channel}` : ""}
+          {track.match_score ? ` · confidence ${track.match_score}%` : ""}
+          {track.liveliness ? ` · liveness ${track.liveliness}` : ""}
           {track.failure_reason ? ` · ${track.failure_reason}` : ""}
         </p>
-      )}
-
-      {sessionUrl && status === "in_progress" && (
-        <a href={sessionUrl} target="_blank" rel="noreferrer" className="text-[11px] text-[color:var(--color-brand-sky)] underline">
-          Open session link
-        </a>
       )}
 
       {error && <p className="text-[11px] text-red-600">{error}</p>}
@@ -137,32 +153,64 @@ export default function VkycTrackPanel({ leadId }: { leadId: string }) {
         </p>
       )}
 
+      {/* Outstanding link — show the capture URL + copy while we wait. */}
+      {status === "in_progress" && effLink && (
+        <div className="flex items-center gap-2 rounded-md bg-[var(--brand-sky-soft,#eff6ff)] px-2.5 py-1.5">
+          <span className="truncate text-[11px] text-[color:var(--color-brand-sky)]">{effLink}</span>
+          <button
+            onClick={() => copyLink(effLink)}
+            className="ml-auto shrink-0 rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            {copied ? "Copied" : "Copy link"}
+          </button>
+        </div>
+      )}
+
       {canAct && enabled && (
-        <div className="flex flex-wrap gap-2">
-          {(!track || status === "failed" || status === "not_applicable") && (
-            <button onClick={() => post("/initiate")} disabled={busy} className="px-3 py-1.5 rounded-md bg-[color:var(--color-brand-navy)] text-white text-xs font-semibold disabled:opacity-50">
-              {track ? "Re-initiate" : "Initiate VKYC"}
-            </button>
-          )}
-          {track?.mode === "own" && status === "in_progress" && (
-            <>
-              <button onClick={() => post("/record-manual", { status: "verified" })} disabled={busy} className="px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 text-xs font-semibold disabled:opacity-50">
-                Record verified
+        <div className="space-y-2">
+          {/* Channel picker + send (initial, failed, re-send) */}
+          {(!track || status === "failed" || status === "not_applicable" || status === "in_progress") && (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-md border border-slate-300 overflow-hidden">
+                {(["email", "sms", "whatsapp"] as Channel[]).map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setChannel(c)}
+                    className={`px-2.5 py-1 text-[11px] font-semibold ${
+                      channel === c ? "bg-[color:var(--color-brand-navy)] text-white" : "bg-white text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    {CHANNEL_LABEL[c]}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => post("/initiate", { channel })}
+                disabled={busy}
+                className="px-3 py-1.5 rounded-md bg-[color:var(--color-brand-navy)] text-white text-xs font-semibold disabled:opacity-50"
+              >
+                {busy ? "Sending…" : status === "in_progress" ? `Resend via ${CHANNEL_LABEL[channel]}` : `Send VKYC link via ${CHANNEL_LABEL[channel]}`}
               </button>
-              <button onClick={() => post("/record-manual", { status: "failed", failure_reason: "Marked failed by operations" })} disabled={busy} className="px-3 py-1.5 rounded-md border border-red-300 text-red-700 text-xs font-semibold disabled:opacity-50">
-                Record failed
-              </button>
-            </>
+            </div>
           )}
+
+          {status === "in_progress" && (
+            <p className="text-[11px] text-slate-400">Waiting for the customer to record their video…</p>
+          )}
+
+          {/* Accept / Reject on a verified result */}
           {status === "verified" && track?.admin_action !== "accepted" && (
-            <>
+            <div className="flex flex-wrap gap-2">
               <button onClick={() => post("/action", { action: "accept" })} disabled={busy} className="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">
                 Accept
               </button>
               <button onClick={() => post("/action", { action: "reject", notes: "Rejected on review" })} disabled={busy} className="px-3 py-1.5 rounded-md bg-red-600 text-white text-xs font-semibold disabled:opacity-50">
                 Reject
               </button>
-            </>
+            </div>
+          )}
+          {status === "verified" && track?.admin_action === "accepted" && (
+            <p className="text-[11px] text-emerald-600 font-semibold">Accepted.</p>
           )}
         </div>
       )}
