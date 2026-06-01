@@ -37,7 +37,9 @@ export async function sendGupshupSms(p: SendSmsParams): Promise<SendSmsResult> {
   const apiKey = process.env.GUPSHUP_API_KEY;
   const appName = process.env.GUPSHUP_APP_NAME;
   const source = process.env.GUPSHUP_SOURCE;
-  const channel = (process.env.GUPSHUP_CHANNEL || "sms").toLowerCase();
+  // A per-call channel (p.channel) wins over the GUPSHUP_CHANNEL env default so
+  // callers like the FI dispatcher can choose SMS vs WhatsApp explicitly.
+  const channel = (p.channel || process.env.GUPSHUP_CHANNEL || "sms").toLowerCase();
   const templateId = process.env.GUPSHUP_TEMPLATE_ID;
 
   if (!enabled || !apiKey || !appName || !source) {

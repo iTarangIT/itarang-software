@@ -6,6 +6,11 @@ export interface SendSmsParams {
   mobile_number: string;
   message: string;
   reference_id?: string;
+  // Per-call override of GUPSHUP_CHANNEL so a caller can pick the wire explicitly
+  // (e.g. the FI coordinator choosing SMS vs WhatsApp for the same agent). When
+  // omitted the gateway falls back to the GUPSHUP_CHANNEL env default. Decentro
+  // ignores it (SMS only).
+  channel?: "sms" | "whatsapp";
   // Ordered variables for an approved WhatsApp/SMS template, e.g. ["https://...", "24"].
   // Gupshup uses these when GUPSHUP_TEMPLATE_ID is set; Decentro ignores them.
   templateParams?: string[];
