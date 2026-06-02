@@ -38,6 +38,9 @@ const CONTENT_TYPES: Record<string, string> = {
   ".gif": "image/gif",
   ".webp": "image/webp",
   ".svg": "image/svg+xml",
+  // Passive VKYC session videos (E-154) play in the Acquire review screen.
+  ".webm": "video/webm",
+  ".mp4": "video/mp4",
 };
 
 function fileResponse(buf: Buffer, ext: string): NextResponse {
