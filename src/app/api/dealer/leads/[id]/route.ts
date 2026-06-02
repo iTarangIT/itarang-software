@@ -8,6 +8,7 @@ import { z } from 'zod';
 const updateSchema = z.object({
     full_name: z.string().optional().nullable(),
     phone: z.string().optional().nullable(),
+    email: z.string().optional().nullable(),
     father_or_husband_name: z.string().optional().nullable(),
     dob: z.string().optional().nullable(),
     current_address: z.string().optional().nullable(),
@@ -112,6 +113,7 @@ export const GET = withErrorHandler(async (_req: Request, { params }: { params: 
         formData: {
             full_name: lead.full_name || '',
             phone: lead.phone || '',
+            email: lead.owner_email || '',
             father_or_husband_name: lead.father_or_husband_name || '',
             dob: lead.dob ? new Date(lead.dob).toISOString().split('T')[0] : '',
             current_address: lead.current_address || '',
@@ -191,6 +193,7 @@ export const PATCH = withErrorHandler(async (req: Request, { params }: { params:
                 leadUpdates.owner_contact = norm;
                 leadUpdates.mobile = norm;
             }
+            if (data.email !== undefined) leadUpdates.owner_email = data.email?.trim() || null;
             if (data.dob !== undefined) leadUpdates.dob = data.dob ? new Date(data.dob) : null;
             if (data.interest_level !== undefined) {
                 leadUpdates.interest_level = data.interest_level;
