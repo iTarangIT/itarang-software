@@ -167,8 +167,10 @@ export default async function AcquireLeadDetailPage({
 
   const fiRequired = snap.fi_enabled ?? false;
   const fiRow = fiRequired ? await getFiTrack(leadId, assignment.nbfc_id) : null;
+  // FI terminal-pass is status "passed" (E-148; legacy E-136 rows used
+  // "completed", backfilled but accepted here to match track-gate.ts).
   const fiComplete =
-    !fiRequired || (fiRow?.status === "completed" && fiRow?.outcome === "pass");
+    !fiRequired || fiRow?.status === "passed" || fiRow?.status === "completed";
   const fiFailed =
     fiRequired && (fiRow?.status === "failed" || fiRow?.outcome === "fail");
 
