@@ -25,7 +25,7 @@ name: Deploy Production to VPS
 
 on:
   push:
-    branches: [main]
+    branches: [production]
   workflow_dispatch:
 
 concurrency:

@@ -24,6 +24,7 @@ import ProductSelector, {
 const emptyFormData = {
     full_name: '',
     phone: '',
+    email: '',
     father_or_husband_name: '',
     dob: '',
     current_address: '',
@@ -258,6 +259,12 @@ function NewLeadWizardContent() {
 
         if (!formData.phone) e.phone = 'Phone is required';
         else if (!phoneRegex.test(formData.phone)) e.phone = 'Must be exactly 10 digits';
+
+        // Email — required for finance leads (Digio e-sign signer id); when
+        // present on any lead it must still be a valid address.
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (finFlow && !formData.email?.trim()) e.email = 'Required for finance cases';
+        else if (formData.email?.trim() && !emailRegex.test(formData.email.trim())) e.email = 'Enter a valid email address';
 
         if (!formData.dob) e.dob = 'Required';
         else if (calculateAge(formData.dob) < 18) e.dob = 'Must be 18+';
@@ -577,6 +584,10 @@ function NewLeadWizardContent() {
                             </div>
 
                             <InputField label="Phone Number" value={formData.phone} onChange={v => updateField('phone', v)} onBlur={handlePhoneBlur} error={errors.phone} placeholder="9876543210" required inputMode="numeric" maxLength={10} />
+
+                            {/* Customer email — required for finance leads: used as the
+                                signer identifier for the Digio loan-agreement e-sign (§11.3). */}
+                            <InputField label="Email Address" value={formData.email} onChange={v => updateField('email', v)} error={errors.email} placeholder="customer@example.com" required={finFlow} inputMode="email" type="email" />
 
                             <div className="md:col-span-2">
                                 <TextAreaField label="Current Address" value={formData.current_address} onChange={v => updateField('current_address', v)} error={errors.current_address} placeholder="123, Main Street, City, State - 123456" required />

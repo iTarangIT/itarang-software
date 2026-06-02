@@ -13,13 +13,15 @@ import { db } from "@/lib/db";
 import { and, eq } from "drizzle-orm";
 import { nbfcUsers, users } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
+import { NBFC_ORIGINATION_ROLES } from "@/lib/nbfc/origination-roles";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const Body = z.object({
   email: z.string().email(),
-  role: z.string().min(1).max(32).default("viewer"),
+  // Addendum V0.2 §7.2 — five origination roles.
+  role: z.enum(NBFC_ORIGINATION_ROLES).default("viewer"),
 });
 
 function statusFromError(msg: string): number {
