@@ -531,8 +531,12 @@ export async function POST(req: NextRequest) {
     };
 
     const applicationPayload: typeof dealerOnboardingApplications.$inferInsert = {
-      dealer_user_id:
-        dealerUserId || existingApplication?.dealer_user_id || null,
+      // Internal staff (sales/admin) completing a converted lead's onboarding
+      // must NOT be stamped as the dealer — keep dealer_user_id NULL until the
+      // real dealer login is provisioned at approval (BRD §0.13).
+      dealer_user_id: rawBody.internalSubmission
+        ? existingApplication?.dealer_user_id ?? null
+        : dealerUserId || existingApplication?.dealer_user_id || null,
       dealer_code: dealerCode || existingApplication?.dealer_code || null,
       company_name: cleanString(company.companyName),
       company_type: cleanString(company.companyType) || null,
