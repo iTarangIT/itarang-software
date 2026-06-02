@@ -137,7 +137,7 @@ export default function VkycReviewPanel({
       });
       const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (!res.ok || j.ok === false) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setMode("none");
+      setDecisionMode("none");
       setReason("");
       onChanged();
     } catch (e) {
