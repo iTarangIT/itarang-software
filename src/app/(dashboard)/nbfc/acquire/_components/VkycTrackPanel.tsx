@@ -11,6 +11,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import VkycReviewPanel from "./VkycReviewPanel";
+
 type Track = {
   id: string;
   vkyc_ref: string;
@@ -21,7 +23,11 @@ type Track = {
   static_risk: boolean | null;
   prerecorded_risk: boolean | null;
   failure_reason: string | null;
+  session_video_url: string | null;
+  geo_location: unknown;
+  provider_raw_payload: unknown;
   admin_action: string | null;
+  admin_action_notes: string | null;
   link_channel: string | null;
 };
 
@@ -135,9 +141,6 @@ export default function VkycTrackPanel({ leadId }: { leadId: string }) {
         <p className="text-[11px] text-slate-500">
           Passive liveness · Decentro
           {track.link_channel ? ` · link sent via ${CHANNEL_LABEL[track.link_channel as Channel] ?? track.link_channel}` : ""}
-          {track.match_score ? ` · confidence ${track.match_score}%` : ""}
-          {track.liveliness ? ` · liveness ${track.liveliness}` : ""}
-          {track.failure_reason ? ` · ${track.failure_reason}` : ""}
         </p>
       )}
 
@@ -197,22 +200,13 @@ export default function VkycTrackPanel({ leadId }: { leadId: string }) {
           {status === "in_progress" && (
             <p className="text-[11px] text-slate-400">Waiting for the customer to record their video…</p>
           )}
-
-          {/* Accept / Reject on a verified result */}
-          {status === "verified" && track?.admin_action !== "accepted" && (
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => post("/action", { action: "accept" })} disabled={busy} className="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">
-                Accept
-              </button>
-              <button onClick={() => post("/action", { action: "reject", notes: "Rejected on review" })} disabled={busy} className="px-3 py-1.5 rounded-md bg-red-600 text-white text-xs font-semibold disabled:opacity-50">
-                Reject
-              </button>
-            </div>
-          )}
-          {status === "verified" && track?.admin_action === "accepted" && (
-            <p className="text-[11px] text-emerald-600 font-semibold">Accepted.</p>
-          )}
         </div>
+      )}
+
+      {/* Premium §11.3.4 review screen — video + signals + decision, once a
+          result has landed (or a clip was captured for an errored attempt). */}
+      {track && (status === "verified" || status === "failed" || !!track.session_video_url) && (
+        <VkycReviewPanel leadId={leadId} track={track} canAct={canAct} onChanged={() => void load()} />
       )}
     </div>
   );
