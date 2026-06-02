@@ -206,7 +206,7 @@ export default function VkycTrackPanel({ leadId }: { leadId: string }) {
       {/* Premium §11.3.4 review screen — video + signals + decision, once a
           result has landed (or a clip was captured for an errored attempt). */}
       {track && (status === "verified" || status === "failed" || !!track.session_video_url) && (
-        <VkycReviewPanel leadId={leadId} track={track} canAct={canAct} onChanged={() => void load()} />
+        <VkycReviewPanel leadId={leadId} track={track} mode={track.mode} canAct={canAct} onChanged={() => void load()} />
       )}
     </div>
   );
