@@ -9,6 +9,7 @@ import {
   dialerCampaigns,
   dialerCampaignLeads,
   dealerLeads,
+  aiCallLogs,
 } from "@/lib/db/schema";
 import { withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
@@ -32,6 +33,18 @@ function fmt(d: Date | null | undefined): string {
   return d
     ? new Date(d).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
     : "—";
+}
+
+// Excel hard-caps a single cell at 32,767 chars. Real call transcripts are far
+// shorter, but truncate defensively so a runaway transcript can't corrupt the
+// whole file.
+const TRANSCRIPT_CELL_MAX = 32000;
+function transcriptCell(t: string | null | undefined): string {
+  const trimmed = (t ?? "").trim();
+  if (!trimmed) return "—";
+  return trimmed.length > TRANSCRIPT_CELL_MAX
+    ? `${trimmed.slice(0, TRANSCRIPT_CELL_MAX)} …[truncated]`
+    : trimmed;
 }
 
 export const GET = withErrorHandler(
@@ -73,9 +86,18 @@ export const GET = withErrorHandler(
           state: dealerLeads.state,
           final_intent_score: dealerLeads.final_intent_score,
           current_status: dealerLeads.current_status,
+          // Transcript is keyed by the conversation id that the dialer stores
+          // in bolna_call_id (true for both Bolna and ElevenLabs). Joining here
+          // backfills transcripts for current AND previous campaigns from
+          // whatever is already persisted in ai_call_logs.
+          transcript: aiCallLogs.transcript,
         })
         .from(dialerCampaignLeads)
         .leftJoin(dealerLeads, eq(dealerLeads.id, dialerCampaignLeads.lead_id))
+        .leftJoin(
+          aiCallLogs,
+          eq(aiCallLogs.call_id, dialerCampaignLeads.bolna_call_id),
+        )
         .where(eq(dialerCampaignLeads.campaign_id, id))
         .orderBy(asc(dialerCampaignLeads.queue_position)),
     ]);
@@ -129,6 +151,7 @@ export const GET = withErrorHandler(
       { header: "Started", key: "started_at", width: 22 },
       { header: "Ended", key: "completed_at", width: 22 },
       { header: "Call Id", key: "call_id", width: 28 },
+      { header: "Transcription", key: "transcription", width: 80 },
     ];
     styleHeader(sheet.getRow(1));
 
@@ -147,6 +170,7 @@ export const GET = withErrorHandler(
         started_at: fmt(r.started_at),
         completed_at: fmt(r.completed_at),
         call_id: r.bolna_call_id ?? "—",
+        transcription: transcriptCell(r.transcript),
       });
       if (i % 2 === 0) {
         row.eachCell((cell) => {
