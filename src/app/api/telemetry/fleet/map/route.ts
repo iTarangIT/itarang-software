@@ -1,13 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth-utils';
 import { fetchFleetMapData } from '@/lib/telemetry/queries';
-
-function isVpsUnreachable(error: unknown): boolean {
-    const code = (error as { code?: string } | null)?.code;
-    if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ETIMEDOUT') return true;
-    const message = error instanceof Error ? error.message : String(error);
-    return /ECONNREFUSED|getaddrinfo|connection terminated|IOT_DATABASE_URL is not set/i.test(message);
-}
+import { isVpsUnreachable, vpsDegradedReason } from '@/lib/telemetry/vps-status';
 
 export async function GET() {
     let user;
@@ -27,7 +21,7 @@ export async function GET() {
             return NextResponse.json({
                 success: true,
                 degraded: true,
-                reason: 'IoT VPS unreachable — start the SSH tunnel to 127.0.0.1:5433 to see live data.',
+                reason: vpsDegradedReason(error),
                 data: [],
             });
         }
