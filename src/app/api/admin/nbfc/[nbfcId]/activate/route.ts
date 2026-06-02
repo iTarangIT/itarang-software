@@ -428,7 +428,7 @@ export async function POST(
     downloadPdfBuffer(toAbsoluteUrl(latestAgreementPdfs?.audit_trail_url)),
   ]);
 
-  const loginUrl = `${appOrigin}/nbfc/portfolio`;
+  const loginUrl = `${appOrigin}/login`;
 
   // 5. Send welcome email — on failure, revert status to 'approved' and bubble.
   try {
