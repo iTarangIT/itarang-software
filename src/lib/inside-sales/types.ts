@@ -88,6 +88,11 @@ export type LeadDetailLead = QueueRow & {
     address_history: unknown[];
     address_notes: string | null;
     brochure_sent_at: string | null;
+    // Conversion → Onboarding (BRD §0.13). Set once the lead is Converted and a
+    // draft dealer_onboarding_applications row exists; powers the header banner.
+    dealer_onboarding_application_id: string | null;
+    onboarding_status: string | null;
+    onboarding_created_at: string | null;
 };
 
 export type LeadDetailTouchpoint = {

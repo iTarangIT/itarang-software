@@ -64,12 +64,20 @@ export type WriteTouchpointResult = {
   historyId: string | null;
 };
 
+// A live transaction handle, pulled from db.transaction's callback signature so
+// callers can fold this write into a larger atomic operation (e.g.
+// mark-converted + onboarding creation that must commit or roll back together).
+// When `opts.tx` is omitted, writeTouchpoint opens its own transaction exactly
+// as before — every existing caller is unaffected.
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 export async function writeTouchpoint(
   input: WriteTouchpointInput,
+  opts?: { tx?: Tx },
 ): Promise<WriteTouchpointResult> {
   const performedAt = input.performedAt ?? new Date();
 
-  return db.transaction(async (tx) => {
+  const run = async (tx: Tx): Promise<WriteTouchpointResult> => {
     // 1. Touchpoint row — single source of audit truth.
     const [touchpoint] = await tx
       .insert(leadTouchpoints)
@@ -163,5 +171,7 @@ export async function writeTouchpoint(
       touchpointId: touchpoint!.touchpoint_id,
       historyId,
     };
-  });
+  };
+
+  return opts?.tx ? run(opts.tx) : db.transaction(run);
 }

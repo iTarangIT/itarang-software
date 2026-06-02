@@ -34,3 +34,28 @@ export async function notifyRoles(
         WHERE LOWER(u.role) IN ${lower} AND u.is_active = TRUE
     `);
 }
+
+// Notify one specific user (by id). Same best-effort contract as notifyRoles —
+// callers wrap it in try/catch so a notification failure never breaks the action.
+export async function notifyUser(
+    userId: string,
+    n: {
+        type: string;
+        title: string;
+        message: string;
+        data?: unknown;
+        leadId?: string | null;
+    },
+): Promise<void> {
+    if (!userId) return;
+
+    await db.execute(sql`
+        INSERT INTO notifications
+            (id, user_id, type, title, message, data, lead_id, read, created_at)
+        VALUES (
+            gen_random_uuid()::text, ${userId}::uuid, ${n.type}, ${n.title}, ${n.message},
+            ${JSON.stringify(n.data ?? {})}::jsonb, ${n.leadId ?? null},
+            false, NOW()
+        )
+    `);
+}
