@@ -198,6 +198,13 @@ export default async function AcquireLeadDetailPage({
   const verificationComplete = fiComplete && vkycComplete;
   const verificationFailed = fiFailed || vkycFailed;
   const disbursalReady = won && enachGate.satisfied && verificationComplete;
+  // Terminal state of the in-app journey (§14.3 Position X): the Step-5 OTP is
+  // the hard gate — on success the lead flips to `sold` (battery sold + warranty
+  // active). The disbursement money-transfer itself is PARKED (§19.1), so `sold`
+  // is the furthest state iTarang models. `loan_sanctioned` = sanctioned, dealer
+  // OTP/dispatch still pending.
+  const sanctioned = lead.kyc_status === "loan_sanctioned" || lead.kyc_status === "sold";
+  const sold = lead.kyc_status === "sold";
 
   function nodeOffer(): StepperStage["state"] {
     if (offerSubmitted) return "done";
@@ -346,8 +353,16 @@ export default async function AcquireLeadDetailPage({
     {
       key: "disburse",
       label: "Disbursal",
-      sub: disbursalReady ? "ready" : "—",
-      state: disbursalReady ? "active" : "locked",
+      sub: sold
+        ? "disbursed & dispatched"
+        : sanctioned
+          ? "sanctioned · awaiting dealer OTP"
+          : disbursalReady
+            ? "ready"
+            : "—",
+      // `sold` (post-OTP) is the terminal state we model — disbursement transfer
+      // itself is PARKED (§19.1), so we don't gate on a money-movement record.
+      state: sold ? "done" : disbursalReady || sanctioned ? "active" : "locked",
       content: disburseContent,
     },
   ];
@@ -362,6 +377,16 @@ export default async function AcquireLeadDetailPage({
       return {
         tone: "muted",
         text: `This lead is ${STATUS_LABEL[status] ?? status}. No further action.`,
+      };
+    if (sold)
+      return {
+        tone: "success",
+        text: "Loan sanctioned and battery dispatched — origination complete. (Disbursement transfer is out of scope, §19.1.)",
+      };
+    if (sanctioned)
+      return {
+        tone: "success",
+        text: "Loan sanctioned — the dealer can now complete Step 5 (OTP + dispatch).",
       };
     if (verificationFailed)
       return {
