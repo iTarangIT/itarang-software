@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Phone, MapPin, AlarmCheck, AlertCircle, RotateCcw, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Phone, MapPin, AlarmCheck, AlertCircle, RotateCcw, ShieldAlert, CheckCircle2 } from "lucide-react";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
 import { StatusChip } from "../../../_components/StatusChip";
 import { IntentBadge } from "../../../_components/IntentBadge";
@@ -22,12 +22,36 @@ function daysAgo(iso: string | null): string {
     return `${days} days ago`;
 }
 
+function pad2(n: number): string {
+    return String(n).padStart(2, "0");
+}
+
+function formatDateTime(iso: string | null): string {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+// Short, human-friendly application reference (BRD §0.13 "Application ID: APP-XXXX").
+function shortAppId(id: string | null): string {
+    if (!id) return "—";
+    return `APP-${id.slice(0, 8).toUpperCase()}`;
+}
+
+function formatOnboardingStatus(s: string | null): string {
+    if (!s) return "Draft";
+    return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ");
+}
+
 export function LeadDetailHeader({ bundle, viewerId }: Props) {
     const lead = bundle.lead;
     const isOwner = lead.current_owner_id === viewerId;
     const isUnassigned = !lead.current_owner_id;
     const isEscalated = lead.escalation_status === "pending_review";
     const wasReactivated = Boolean(lead.previous_lost_reason);
+    const onboardingInitiated =
+        lead.lead_status === "Converted" &&
+        Boolean(lead.dealer_onboarding_application_id);
 
     return (
         <div className="border-b border-gray-200 bg-white sticky top-0 z-10">
@@ -88,6 +112,25 @@ export function LeadDetailHeader({ bundle, viewerId }: Props) {
                         Reactivated from Lost{lead.previous_lost_reason ? ` (was ${lead.previous_lost_reason})` : ""}. Review prior history before calling.
                     </Banner>
                 )}
+                {onboardingInitiated && (
+                    <Banner tone="emerald" icon={CheckCircle2}>
+                        <span className="font-medium">Onboarding Initiated</span>
+                        {" — Application "}
+                        <span className="font-medium">{shortAppId(lead.dealer_onboarding_application_id)}</span>
+                        {" · Status: "}
+                        {formatOnboardingStatus(lead.onboarding_status)}
+                        {lead.onboarding_created_at
+                            ? ` · Created ${formatDateTime(lead.onboarding_created_at)}`
+                            : ""}
+                        {" · "}
+                        <Link
+                            href={`/dealer-onboarding?applicationId=${lead.dealer_onboarding_application_id}`}
+                            className="font-semibold underline underline-offset-2 hover:text-emerald-900"
+                        >
+                            Continue Onboarding →
+                        </Link>
+                    </Banner>
+                )}
             </div>
         </div>
     );
@@ -100,12 +143,13 @@ function Banner({
 }: {
     children: React.ReactNode;
     icon: React.ComponentType<{ className?: string }>;
-    tone: "gray" | "amber" | "sky";
+    tone: "gray" | "amber" | "sky" | "emerald";
 }) {
     const tones: Record<string, string> = {
         gray: "border-gray-200 bg-gray-50 text-gray-700",
         amber: "border-amber-200 bg-amber-50 text-amber-800",
         sky: "border-sky-200 bg-sky-50 text-sky-800",
+        emerald: "border-emerald-200 bg-emerald-50 text-emerald-800",
     };
     return (
         <div className={`rounded-md border px-3 py-2 text-xs flex items-center gap-2 ${tones[tone]}`}>
