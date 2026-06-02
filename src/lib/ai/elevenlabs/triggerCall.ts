@@ -211,8 +211,9 @@ export async function triggerElevenLabsCall(
 
     // Idempotency: skip duplicate dispatches within 25 hours for the same
     // (lead, phone) pair. Bypassed when scheduling for a future date —
-    // those legitimately fire later and shouldn't be deduped against now.
-    if (!payload.scheduledAt) {
+    // those legitimately fire later and shouldn't be deduped against now —
+    // or when the caller is a deliberate re-call (bypassIdempotency).
+    if (!payload.scheduledAt && !payload.bypassIdempotency) {
       const idemKey = idempotencyKey(lead.id, recipientPhone);
       const { claimed } = await dedupClaim(
         idemKey,

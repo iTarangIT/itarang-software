@@ -49,7 +49,7 @@ function deriveInterest(status: string | null): string {
   if (["interested", "approved", "hot"].includes(s)) return "hot";
   if (["contacted", "warm", "callback_requested"].includes(s)) return "warm";
   return "cold";
-}
+} 
 
 function buildLastCallMemory(followUpHistory: any[]): string {
   if (!Array.isArray(followUpHistory) || followUpHistory.length === 0)
@@ -225,8 +225,10 @@ export async function triggerBolnaCall(
 
     // Step 7b: Idempotency claim. Catches QStash retries firing the same
     // dispatch within 25 hours. Skip when scheduling for a future date —
-    // those legitimately fire later and shouldn't be deduped against now.
-    if (!payload.scheduledAt) {
+    // those legitimately fire later and shouldn't be deduped against now —
+    // or when the caller is a deliberate re-call (bypassIdempotency) that
+    // intends to dial the same lead again the same day.
+    if (!payload.scheduledAt && !payload.bypassIdempotency) {
       const idemKey = idempotencyKey(lead.id, recipientPhone);
       const { claimed } = await dedupClaim(
         idemKey,
