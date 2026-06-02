@@ -15,6 +15,7 @@ import { db } from "@/lib/db";
 import { videoKycAttempts, videoKycVerifications } from "@/lib/db/schema";
 import { resolveVkycByToken } from "@/lib/nbfc/vkyc";
 import { videoLiveness } from "@/lib/decentro";
+import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,13 +44,32 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     return NextResponse.json({ ok: false, error: `The video is too large (max ${MAX_BYTES / (1024 * 1024)} MB). Record a shorter clip.` }, { status: 413 });
   }
 
-  const filename = file.type.includes("mp4") ? "liveness.mp4" : "liveness.webm";
+  const ext = file.type.includes("mp4") ? "mp4" : "webm";
+  const filename = `liveness.${ext}`;
   const now = new Date();
+
+  // Persist the customer's recorded video so the NBFC reviewer can watch it on
+  // the Acquire review screen (Addendum V0.3.1 §11.3.4 "Session Video"). We hold
+  // the blob in hand (passive flow uploads it to us), unlike the hosted active
+  // flow where the video lives on the provider. Stored regardless of pass/fail.
+  // Best-effort: a storage hiccup must never block the liveness result.
+  let sessionVideoUrl: string | null = null;
+  try {
+    const buf = Buffer.from(await file.arrayBuffer());
+    const { url } = await putNbfcObject(
+      `vkyc/${track.id}/liveness-${now.getTime()}.${ext}`,
+      buf,
+      file.type || (ext === "mp4" ? "video/mp4" : "video/webm"),
+    );
+    sessionVideoUrl = url;
+  } catch (e) {
+    console.error("[vkyc submit] video persist failed:", e instanceof Error ? e.message : e);
+  }
 
   // ── Decentro passive liveness ──────────────────────────────────────────────
   let resp: Awaited<ReturnType<typeof videoLiveness>>;
   try {
-    resp = await videoLiveness(file, "Customer video liveness for loan KYC (NBFC origination)", filename);
+    resp = await videoLiveness(file, "Customer video liveness for loan KYC", filename);
   } catch (e) {
     return NextResponse.json(
       { ok: false, error: `Could not verify the video right now. Please try again. (${e instanceof Error ? e.message : String(e)})` },
@@ -88,6 +108,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       provider_raw_status: apiStatus || null,
       provider_raw_payload: resp as unknown as Record<string, unknown>,
       failure_reason: failureReason,
+      ...(sessionVideoUrl ? { session_video_url: sessionVideoUrl } : {}),
       completed_at: now,
       updated_at: now,
     })
