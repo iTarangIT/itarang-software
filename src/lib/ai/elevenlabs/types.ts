@@ -2,6 +2,10 @@ export interface ElevenLabsCallPayload {
   leadId: string;
   phone: string;
   scheduledAt?: string;
+  // Skip the once-per-(lead,phone,day) idempotency guard. Set only for
+  // deliberate human-initiated re-calls (e.g. the "Retry failed leads"
+  // campaign) where a same-day second dial is the intended behaviour.
+  bypassIdempotency?: boolean;
 }
 
 export interface ElevenLabsCallResponse {
