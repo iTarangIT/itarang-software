@@ -7,13 +7,19 @@
 
 import { Loader2, CheckCircle2, XCircle, Ban, Clock, PhoneCall } from "lucide-react";
 
-type ParentStatus = "running" | "completed" | "stopped" | "failed";
+type ParentStatus = "draft" | "running" | "completed" | "stopped" | "failed";
 type LeadStatus = "pending" | "calling" | "completed" | "failed" | "skipped";
 
 const PARENT_STYLES: Record<
   ParentStatus,
   { bg: string; text: string; label: string; Icon?: any }
 > = {
+  draft: {
+    bg: "bg-indigo-100",
+    text: "text-indigo-700",
+    label: "Ready",
+    Icon: Clock,
+  },
   running: {
     bg: "bg-amber-100",
     text: "text-amber-800",

@@ -11,6 +11,7 @@ import {
   X,
   Check,
 } from "lucide-react";
+import { ListsTab } from "./lists-tab";
 
 // ─── Types shared with the dialer modal & /api/ai-dialer/preview ──────
 
@@ -76,12 +77,28 @@ export function RegionSelector({
   value,
   onChange,
   onManageGroups,
+  onModeChange,
+  provider = "bolna",
+  onStartList,
 }: {
   value: RegionSelection;
   onChange: (next: RegionSelection) => void;
   onManageGroups: () => void;
+  // Fires when the user switches between the region tabs (saved/custom) and
+  // the Lists tab, so the modal can hide its region-only segment + footer.
+  onModeChange?: (mode: "region" | "list") => void;
+  // Voice agent the modal currently has selected — used when a list draft is
+  // started from the Lists tab.
+  provider?: "bolna" | "elevenlabs";
+  onStartList?: (campaignId: string) => Promise<void> | void;
 }) {
-  const [tab, setTab] = useState<"saved" | "custom">("saved");
+  const [tab, setTab] = useState<"saved" | "custom" | "list">("saved");
+
+  // Switch tabs and tell the modal whether we're in region or list mode.
+  const selectTab = (t: "saved" | "custom" | "list") => {
+    setTab(t);
+    onModeChange?.(t === "list" ? "list" : "region");
+  };
 
   // Refetch on every mount and throw on non-2xx / {success:false} so a
   // transient API error (schema drift while a migration was being applied,
@@ -326,16 +343,23 @@ export function RegionSelector({
         <button
           type="button"
           className={`region-tab ${tab === "saved" ? "is-active" : ""}`}
-          onClick={() => setTab("saved")}
+          onClick={() => selectTab("saved")}
         >
           Saved Groups{groups.length > 0 ? ` · ${groups.length}` : ""}
         </button>
         <button
           type="button"
           className={`region-tab ${tab === "custom" ? "is-active" : ""}`}
-          onClick={() => setTab("custom")}
+          onClick={() => selectTab("custom")}
         >
           Custom Selection
+        </button>
+        <button
+          type="button"
+          className={`region-tab ${tab === "list" ? "is-active" : ""}`}
+          onClick={() => selectTab("list")}
+        >
+          Lists
         </button>
       </div>
 
@@ -346,28 +370,35 @@ export function RegionSelector({
           value={value}
           onChange={onChange}
         />
-      ) : (
+      ) : tab === "custom" ? (
         <CustomTab
           tree={tree}
           loading={treeLoading}
           value={value}
           onChange={onChange}
         />
+      ) : (
+        <ListsTab provider={provider} onStartList={onStartList} />
       )}
 
-      <SelectionChips groups={groups} value={value} onChange={onChange} />
+      {/* Region-only affordances — hidden while the Lists tab is active. */}
+      {tab !== "list" && (
+        <>
+          <SelectionChips groups={groups} value={value} onChange={onChange} />
 
-      <div className="region-manage">
-        <span className="text-gray-500">
-          {isEmptySelection(value)
-            ? "No regions selected — all callable leads will be dialed."
-            : `${selectionLabel(value, groups)} selected`}
-        </span>
-        <button type="button" onClick={onManageGroups}>
-          <Pencil className="w-3 h-3" />
-          Manage groups
-        </button>
-      </div>
+          <div className="region-manage">
+            <span className="text-gray-500">
+              {isEmptySelection(value)
+                ? "No regions selected — all callable leads will be dialed."
+                : `${selectionLabel(value, groups)} selected`}
+            </span>
+            <button type="button" onClick={onManageGroups}>
+              <Pencil className="w-3 h-3" />
+              Manage groups
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
