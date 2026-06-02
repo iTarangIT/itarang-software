@@ -2,6 +2,8 @@
 
 import { create } from "zustand";
 import type {
+  CompanyStepData,
+  ComplianceStepData,
   DealerOnboardingState,
   UploadFileItem,
 } from "@/components/onboarding/onboardingTypes";
@@ -64,6 +66,7 @@ type StoreActions = {
     field: string,
     value: any
   ) => void;
+  hydrateFromApplication: (app: unknown, documents: unknown) => void;
   setErrors: (errors: Record<string, string>) => void;
   clearError: (key: string) => void;
   saveDraft: () => void;
@@ -165,6 +168,7 @@ const initialState: DealerOnboardingState = {
   lastSavedAt: null,
   dealerId: "",
   dealerDisplayName: "",
+  internalApplicationId: null,
 
   company: {
     companyName: "",
@@ -307,6 +311,101 @@ export const useOnboardingStore = create<
       errors: removeStaleSubmitErrors(state.errors),
       lastSavedAt: new Date().toISOString(),
     })),
+
+  // Pre-fill the wizard from an existing dealer_onboarding_applications row
+  // (BRD §0.13). Used when an internal user opens the wizard for a converted
+  // lead via /dealer-onboarding?applicationId=<id>. `app` is the raw API row,
+  // `documents` its dealerOnboardingDocuments (empty on a fresh conversion).
+  hydrateFromApplication: (app, documents) =>
+    set((state) => {
+      const a = (app ?? {}) as Record<string, unknown>;
+      const str = (v: unknown): string => (typeof v === "string" ? v : "");
+
+      const paymentMethod = str(a.payment_method).toLowerCase();
+      const enableFinance: DealerOnboardingState["finance"]["enableFinance"] =
+        paymentMethod === "finance"
+          ? "yes"
+          : paymentMethod === "cash"
+            ? "no"
+            : "";
+
+      const businessAddress = a.business_address;
+      const companyAddress =
+        typeof businessAddress === "string"
+          ? businessAddress
+          : str((businessAddress as Record<string, unknown> | null)?.address);
+
+      const company: CompanyStepData = {
+        ...state.company,
+        companyName: str(a.company_name),
+        companyType: str(
+          a.company_type,
+        ) as DealerOnboardingState["company"]["companyType"],
+        gstNumber: str(a.gst_number),
+        companyPanNumber: str(a.pan_number),
+        companyAddress,
+      };
+      const compliance: ComplianceStepData = { ...state.compliance };
+
+      // Re-attach any already-saved documents to their wizard upload slots
+      // (none on a fresh conversion; populated after a prior submit).
+      const docList = Array.isArray(documents)
+        ? (documents as Array<Record<string, unknown>>)
+        : [];
+      for (const doc of docList) {
+        const type = str(doc.document_type);
+        const item: UploadFileItem = {
+          ...makeUploadItem(type),
+          uploadedUrl: str(doc.file_url) || null,
+          storagePath: str(doc.storage_path) || null,
+          bucketName: str(doc.bucket_name) || null,
+          verificationState: "verified",
+          progress: 100,
+          uploadedAt: str(doc.uploaded_at) || new Date().toISOString(),
+        };
+        switch (type) {
+          case "itr_3_years": compliance.itr3Years = item; break;
+          case "bank_statement_3_months": compliance.bankStatement3Months = item; break;
+          case "undated_cheques": compliance.undatedCheques = item; break;
+          case "passport_photo": compliance.passportPhoto = item; break;
+          case "udyam_certificate": compliance.udyamCertificate = item; break;
+          case "gst_certificate": company.gstCertificate = item; break;
+          case "pan_card": company.companyPanFile = item; break;
+        }
+      }
+
+      return {
+        ...state,
+        internalApplicationId: str(a.id) || null,
+        step: 1,
+        status: (str(a.onboarding_status) ||
+          "draft") as DealerOnboardingState["status"],
+        dealerId: str(a.dealer_code) || state.dealerId,
+        dealerDisplayName: str(a.company_name) || state.dealerDisplayName,
+        lastSavedAt: new Date().toISOString(),
+        company,
+        compliance,
+        ownership: {
+          ...state.ownership,
+          ownerName: str(a.owner_name),
+          ownerPhone: str(a.owner_phone),
+          ownerEmail: str(a.owner_email),
+          ownerLandline: str(a.owner_landline),
+          ownerCity: str(a.city),
+          ownerState: str(a.state),
+          ownerPinCode: str(a.pincode),
+          bankName: str(a.bank_name),
+          accountNumber: str(a.account_number),
+          ifsc: str(a.ifsc_code),
+          beneficiaryName: str(a.beneficiary_name),
+        },
+        finance: {
+          ...state.finance,
+          enableFinance,
+        },
+        errors: {},
+      };
+    }),
 
   setErrors: (errors) => set({ errors }),
 
