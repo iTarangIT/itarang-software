@@ -22,6 +22,7 @@ import {
   Clock,
   StopCircle,
   PhoneOutgoing,
+  RotateCcw,
 } from "lucide-react";
 import { CampaignLeadTranscriptDrawer } from "./CampaignLeadTranscriptDrawer";
 import {
@@ -231,6 +232,44 @@ export function CampaignDetailView({
     },
   });
 
+  // Re-dial this campaign's failed leads in place: resets them to pending and
+  // flips the campaign back to running. The detail view then refreshes to show
+  // the renewed progress.
+  const retryMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(
+        `/api/ai-dialer/campaigns/${campaignId}/recall-failed`,
+        { method: "POST" },
+      );
+      const json = await res.json();
+      if (!json.success) {
+        throw new Error(json.error?.message ?? "Retry failed");
+      }
+      return json.data as { retryCount: number };
+    },
+    onSuccess: () => {
+      // Optimistically flip the cached campaign to "running" so `isRunning`
+      // becomes true on the very next render. That immediately starts the 4s
+      // polling on BOTH the campaign and the leads queries — without it, polling
+      // wouldn't begin until a network round-trip confirmed the new status, so
+      // the user had to refresh to see calls go live.
+      queryClient.setQueryData(
+        ["dialer-campaign", campaignId],
+        (old: Campaign | undefined) =>
+          old ? { ...old, status: "running", completedAt: null } : old,
+      );
+      queryClient.invalidateQueries({ queryKey: ["dialer-campaign", campaignId] });
+      queryClient.invalidateQueries({
+        queryKey: ["dialer-campaign-leads", campaignId],
+      });
+    },
+    onError: (err: unknown) => {
+      window.alert(
+        err instanceof Error ? err.message : "Could not retry failed leads",
+      );
+    },
+  });
+
   const { data: campaign, isLoading: campaignLoading } = useQuery<Campaign>({
     queryKey: ["dialer-campaign", campaignId],
     queryFn: async () => {
@@ -346,6 +385,32 @@ export function CampaignDetailView({
                 <StopCircle className="w-4 h-4" />
               )}
               Force stop
+            </button>
+          )}
+          {!isRunning && campaign.failedLeads > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Retry ${campaign.failedLeads} failed lead${
+                      campaign.failedLeads === 1 ? "" : "s"
+                    }? They'll be called again in this campaign.`,
+                  )
+                ) {
+                  retryMutation.mutate();
+                }
+              }}
+              disabled={retryMutation.isPending}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white"
+              title="Create a new campaign from this campaign's failed leads and start dialing"
+            >
+              {retryMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RotateCcw className="w-4 h-4" />
+              )}
+              Retry failed leads ({campaign.failedLeads})
             </button>
           )}
           <a
