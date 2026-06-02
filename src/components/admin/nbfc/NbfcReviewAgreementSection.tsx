@@ -26,6 +26,8 @@ import {
 } from "lucide-react";
 import type { NbfcMasterSummary } from "./NbfcLspAgreementPanel";
 import { AgreementAutofillOverlay } from "./NbfcLspAgreementPanel";
+import { usePdfAvailability } from "./usePdfAvailability";
+import { PdfUnavailableBody, PdfLoadingBody } from "./PdfPreviewFallback";
 import NbfcFlagButton from "./NbfcFlagButton";
 import { AGREEMENT_TEMPLATE_KEY } from "@/lib/nbfc/admin/correction-catalog";
 
@@ -91,6 +93,7 @@ export default function NbfcReviewAgreementSection({
 }: Props) {
   const [previewOpen, setPreviewOpen] = useState<PreviewVariant | null>(null);
   const templateUrl = agreement?.agreement_template_url ?? "";
+  const availability = usePdfAvailability(templateUrl || null);
   const templateSize = agreement?.agreement_template_size ?? null;
   const fileName =
     templateUrl.split("/").pop() ?? "Agreement template";
@@ -188,13 +191,19 @@ export default function NbfcReviewAgreementSection({
               {templateSize ? formatBytes(templateSize) : ""}
             </span>
           </div>
-          <iframe
-            src={`${templateUrl}#toolbar=0&navpanes=0&view=FitH`}
-            title={`Blank agreement: ${fileName}`}
-            className="w-full block bg-[color:var(--color-bg)] pointer-events-none"
-            style={{ height: 312, border: 0 }}
-            tabIndex={-1}
-          />
+          {availability === "available" ? (
+            <iframe
+              src={`${templateUrl}#toolbar=0&navpanes=0&view=FitH`}
+              title={`Blank agreement: ${fileName}`}
+              className="w-full block bg-[color:var(--color-bg)] pointer-events-none"
+              style={{ height: 312, border: 0 }}
+              tabIndex={-1}
+            />
+          ) : availability === "loading" ? (
+            <PdfLoadingBody height={312} />
+          ) : (
+            <PdfUnavailableBody height={312} />
+          )}
           <div
             className="absolute bottom-0 left-0 right-0 px-3 py-1.5 text-[10px] font-medium text-white flex items-center justify-between"
             style={{ background: "rgba(0,0,0,0.55)" }}
@@ -237,13 +246,19 @@ export default function NbfcReviewAgreementSection({
             className="relative bg-white pointer-events-none"
             style={{ height: 312 }}
           >
-            <iframe
-              src={`${templateUrl}#toolbar=0&navpanes=0&view=FitH`}
-              title="Auto-filled agreement preview"
-              className="w-full h-full block"
-              style={{ border: 0 }}
-              tabIndex={-1}
-            />
+            {availability === "available" ? (
+              <iframe
+                src={`${templateUrl}#toolbar=0&navpanes=0&view=FitH`}
+                title="Auto-filled agreement preview"
+                className="w-full h-full block"
+                style={{ border: 0 }}
+                tabIndex={-1}
+              />
+            ) : availability === "loading" ? (
+              <PdfLoadingBody height={312} />
+            ) : (
+              <PdfUnavailableBody height={312} />
+            )}
             <AgreementAutofillOverlay
               master={master}
               signers={signers}

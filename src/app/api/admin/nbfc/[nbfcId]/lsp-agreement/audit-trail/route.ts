@@ -8,13 +8,12 @@
  *
  * Auth: same admin/CEO/test-bypass gate.
  */
-import path from "node:path";
-import fs from "node:fs/promises";
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { nbfc, nbfcLspAgreements } from "@/lib/db/schema";
 import { requireAdminOrTestBypass } from "@/lib/auth/adminTestBypass";
+import { getNbfcObject, putNbfcObject } from "@/lib/nbfc/nbfc-storage";
 import {
   getDigioBaseUrl,
   getDigioBasicAuth,
@@ -42,39 +41,21 @@ function isValidPdfBuffer(buffer: ArrayBuffer | Buffer | null): boolean {
   );
 }
 
+// Cache lives in the private `nbfc-documents` Supabase bucket (names kept for
+// call-site stability; no longer local disk).
 async function readLocalCache(nbfcId: number): Promise<Buffer | null> {
-  const absPath = path.join(
-    process.cwd(),
-    "public",
-    "nbfc-uploads",
-    String(nbfcId),
-    "lsp-agreement",
-    "audit-trail.pdf",
-  );
-  try {
-    const buf = await fs.readFile(absPath);
-    if (!isValidPdfBuffer(buf)) return null;
-    return buf;
-  } catch {
-    return null;
-  }
+  const buf = await getNbfcObject(`${nbfcId}/lsp-agreement/audit-trail.pdf`);
+  if (!buf || !isValidPdfBuffer(buf)) return null;
+  return buf;
 }
 
 async function writeLocalCache(
   nbfcId: number,
   buf: Buffer,
 ): Promise<string | null> {
-  const absDir = path.join(
-    process.cwd(),
-    "public",
-    "nbfc-uploads",
-    String(nbfcId),
-    "lsp-agreement",
-  );
   try {
-    await fs.mkdir(absDir, { recursive: true });
-    await fs.writeFile(path.join(absDir, "audit-trail.pdf"), buf);
-    return "/" + path.posix.join("nbfc-uploads", String(nbfcId), "lsp-agreement", "audit-trail.pdf");
+    const { url } = await putNbfcObject(`${nbfcId}/lsp-agreement/audit-trail.pdf`, buf, "application/pdf");
+    return url;
   } catch (err) {
     console.warn("[lsp-agreement/audit-trail] cache write failed", {
       nbfcId,
