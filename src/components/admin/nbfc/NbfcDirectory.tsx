@@ -264,16 +264,28 @@ export default function NbfcDirectory({
                           <ArrowRight className="w-3.5 h-3.5" />
                         </Link>
                         {row.status === "active" && !ownedFilter && (
-                          <Link
-                            href={`/admin/nbfc/${row.id}/loan-products`}
-                            className="inline-flex items-center gap-1.5 px-3 h-8 rounded-lg text-[13px] font-semibold transition-all border hover:bg-[color:var(--color-bg)]"
-                            style={{
-                              color: "var(--color-brand-navy)",
-                              borderColor: "var(--color-border)",
-                            }}
-                          >
-                            Add loan products
-                          </Link>
+                          <>
+                            <Link
+                              href={`/admin/nbfc/${row.id}/loan-products`}
+                              className="inline-flex items-center gap-1.5 px-3 h-8 rounded-lg text-[13px] font-semibold transition-all border hover:bg-[color:var(--color-bg)]"
+                              style={{
+                                color: "var(--color-brand-navy)",
+                                borderColor: "var(--color-border)",
+                              }}
+                            >
+                              Add loan products
+                            </Link>
+                            <Link
+                              href={`/admin/nbfc/${row.id}/billing`}
+                              className="inline-flex items-center gap-1.5 px-3 h-8 rounded-lg text-[13px] font-semibold transition-all border hover:bg-[color:var(--color-bg)]"
+                              style={{
+                                color: "var(--color-brand-navy)",
+                                borderColor: "var(--color-border)",
+                              }}
+                            >
+                              Billing
+                            </Link>
+                          </>
                         )}
                         {/* Always reserve the trash icon's slot so the
                             Review pill sits at the same right offset on
