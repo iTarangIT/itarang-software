@@ -47,25 +47,53 @@ function isRisk(v: boolean | null): boolean {
   return v === true;
 }
 
-/** A failure_reason that's a provider/transport error, not a real liveness fail. */
+/**
+ * A failure that's an input-quality / transport reject — the provider never
+ * scored liveness — rather than a genuine "not live" verdict. These attempts
+ * have no real liveness/confidence/risk results, so we must not surface them as
+ * a liveness failure; the customer just needs to re-record.
+ */
 function isSystemError(reason: string | null): boolean {
   if (!reason) return false;
   const r = reason.toLowerCase();
-  return r.includes("unsanitized") || r.includes("could not be completed") || r.includes("result fetch failed") || r.includes("authentication");
+  return (
+    r.includes("unsanitized") ||
+    r.includes("could not be completed") ||
+    r.includes("result fetch failed") ||
+    r.includes("authentication") ||
+    r.includes("resolution") ||
+    r.includes("invalid video") ||
+    r.includes("lower than expected") ||
+    r.includes("minimum of") ||
+    r.includes("too large") ||
+    r.includes("no video")
+  );
+}
+
+/** A human-friendly hint for the common input-quality rejects. */
+function systemErrorHint(reason: string | null): string {
+  const r = (reason ?? "").toLowerCase();
+  if (r.includes("resolution") || r.includes("800") || r.includes("lower than expected") || r.includes("minimum of")) {
+    return "The clip was below the provider's 800×600 minimum. Ask the customer to re-record in good light with the phone held steady and the face filling the frame.";
+  }
+  return "The provider couldn't score this attempt. Re-send the link so the customer can record again.";
 }
 
 type Flag = { key: string; severity: "red" | "warn"; label: string };
 
-function buildFlags(t: VkycReviewTrack): Flag[] {
+function buildFlags(t: VkycReviewTrack, systemErr: boolean): Flag[] {
   const flags: Flag[] = [];
+  // Input/transport reject — provider never scored liveness. One warn, no red
+  // liveness/risk flags (there are no real signals to flag).
+  if (systemErr) {
+    flags.push({ key: "system", severity: "warn", label: "Attempt not scored — re-record needed (not a liveness failure)" });
+    return flags;
+  }
   const live = (t.liveliness ?? "").toLowerCase();
   if (t.status !== "in_progress" && t.status !== "pending") {
     if (live && live !== "yes") flags.push({ key: "liveliness", severity: "red", label: "Liveness not confirmed by the provider" });
     if (isRisk(t.static_risk)) flags.push({ key: "static", severity: "red", label: "Static-image (photo-of-photo) risk detected" });
     if (isRisk(t.prerecorded_risk)) flags.push({ key: "prerecorded", severity: "red", label: "Pre-recorded / replayed video risk detected" });
-  }
-  if (isSystemError(t.failure_reason)) {
-    flags.push({ key: "system", severity: "warn", label: "Provider couldn't score this attempt (system error) — re-send the link to retry" });
   }
   return flags;
 }
@@ -73,23 +101,30 @@ function buildFlags(t: VkycReviewTrack): Flag[] {
 export default function VkycReviewPanel({
   leadId,
   track,
+  mode,
   canAct,
   onChanged,
 }: {
   leadId: string;
   track: VkycReviewTrack;
+  mode: string;
   canAct: boolean;
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<"none" | "reject">("none");
+  const [decisionMode, setDecisionMode] = useState<"none" | "reject">("none");
   const [reason, setReason] = useState("");
 
   const decided = track.admin_action === "accepted" || track.admin_action === "rejected";
-  const flags = buildFlags(track);
+  const systemErr = track.status === "failed" && isSystemError(track.failure_reason);
+  const flags = buildFlags(track, systemErr);
   const live = (track.liveliness ?? "").toLowerCase();
   const livenessOk = live === "yes";
+  // Decentro's PASSIVE liveness endpoint only returns a liveness verdict +
+  // confidence — static/pre-recorded risk are ACTIVE-mode (Farsight) signals,
+  // so we don't render those tiles in passive mode (they'd be perpetually "—").
+  const isPassive = mode === "passive";
 
   async function act(body: Record<string, unknown>) {
     setBusy(true);
@@ -102,7 +137,7 @@ export default function VkycReviewPanel({
       });
       const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (!res.ok || j.ok === false) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setMode("none");
+      setDecisionMode("none");
       setReason("");
       onChanged();
     } catch (e) {
@@ -140,14 +175,36 @@ export default function VkycReviewPanel({
         </Section>
       )}
 
+      {/* Why it failed — surfaced plainly (the reviewer shouldn't have to dig
+          into the raw payload). System/quality rejects read amber (re-record,
+          not a liveness failure); genuine "not live" verdicts read rose. */}
+      {track.status === "failed" && track.failure_reason && (
+        <div className={`rounded-xl px-3 py-2.5 text-[11px] ring-1 ${systemErr ? "bg-amber-50 text-amber-800 ring-amber-100" : "bg-rose-50 text-rose-700 ring-rose-100"}`}>
+          <p className="font-bold">{systemErr ? "Attempt could not be scored" : "Liveness failed"}</p>
+          <p className="mt-0.5 font-medium">{track.failure_reason}</p>
+          {systemErr && <p className="mt-1 text-amber-700">{systemErrorHint(track.failure_reason)}</p>}
+        </div>
+      )}
+
       {/* Liveness & spoof signals (§11.3.4) */}
       <Section icon="shield" title="Liveness &amp; spoof signals">
-        <div className="grid grid-cols-2 gap-2">
-          <Stat k="Confidence" v={track.match_score != null ? `${track.match_score}%` : "—"} mono />
-          <Stat k="Liveliness" v={track.liveliness ? (livenessOk ? "Yes ✓" : track.liveliness) : "—"} danger={!!track.liveliness && !livenessOk} />
-          <Stat k="Static-image risk" v={track.static_risk == null ? "—" : isRisk(track.static_risk) ? "Detected" : "Clear ✓"} danger={isRisk(track.static_risk)} />
-          <Stat k="Pre-recorded risk" v={track.prerecorded_risk == null ? "—" : isRisk(track.prerecorded_risk) ? "Detected" : "Clear ✓"} danger={isRisk(track.prerecorded_risk)} />
-        </div>
+        {systemErr ? (
+          <p className="text-[11px] text-slate-400">Not scored — the provider rejected the clip before evaluating liveness.</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            <Stat k="Confidence" v={track.match_score != null ? `${track.match_score}%` : "—"} mono />
+            <Stat k="Liveliness" v={track.liveliness ? (livenessOk ? "Yes ✓" : track.liveliness) : "—"} danger={!!track.liveliness && !livenessOk} />
+            {!isPassive && (
+              <>
+                <Stat k="Static-image risk" v={track.static_risk == null ? "—" : isRisk(track.static_risk) ? "Detected" : "Clear ✓"} danger={isRisk(track.static_risk)} />
+                <Stat k="Pre-recorded risk" v={track.prerecorded_risk == null ? "—" : isRisk(track.prerecorded_risk) ? "Detected" : "Clear ✓"} danger={isRisk(track.prerecorded_risk)} />
+              </>
+            )}
+          </div>
+        )}
+        {isPassive && !systemErr && (
+          <p className="mt-1.5 text-[10px] text-slate-400">Static-image &amp; pre-recorded-risk are active-VKYC signals — not provided by the passive engine.</p>
+        )}
       </Section>
 
       {/* Auto-flags (§11.3.5 — review only, never auto-fail) */}
@@ -200,7 +257,7 @@ export default function VkycReviewPanel({
       ) : canAct ? (
         <div className="rounded-xl border border-slate-200 bg-white p-3">
           <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Reviewer decision</p>
-          {mode === "none" && (
+          {decisionMode === "none" && (
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => act({ action: "accept" })}
@@ -210,7 +267,7 @@ export default function VkycReviewPanel({
                 ✓ Accept
               </button>
               <button
-                onClick={() => setMode("reject")}
+                onClick={() => setDecisionMode("reject")}
                 disabled={busy}
                 className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:opacity-40"
               >
@@ -218,7 +275,7 @@ export default function VkycReviewPanel({
               </button>
             </div>
           )}
-          {mode === "reject" && (
+          {decisionMode === "reject" && (
             <ReasonBox
               value={reason}
               onChange={setReason}
@@ -226,7 +283,7 @@ export default function VkycReviewPanel({
               busy={busy}
               onSubmit={() => reason.trim() && act({ action: "reject", notes: reason })}
               submitLabel="Confirm reject"
-              onCancel={() => { setMode("none"); setReason(""); }}
+              onCancel={() => { setDecisionMode("none"); setReason(""); }}
             />
           )}
         </div>
