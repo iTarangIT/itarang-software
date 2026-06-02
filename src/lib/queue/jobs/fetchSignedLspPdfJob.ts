@@ -12,8 +12,7 @@
  * NODE_ENV != production), we return deterministic synthetic URLs. This keeps
  * the AC tests hermetic — they don't need Digio creds or disk writes.
  */
-import path from "node:path";
-import fs from "node:fs/promises";
+import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
 import {
   getDigioBaseUrl,
   getDigioBasicAuth,
@@ -174,24 +173,16 @@ async function fetchSignedAgreementPdf(
   return downloadPdf(directUrl, authHeader, "signed:direct");
 }
 
+// Persists to the private `nbfc-documents` Supabase bucket; the returned
+// `/nbfc-uploads/...` URL is served by the authenticated /api/nbfc-uploads
+// route (name kept for call-site stability).
 async function writePdfToDisk(
   buffer: Buffer,
   nbfcId: number,
   filename: string,
-): Promise<{ publicUrl: string; absPath: string }> {
-  const urlDir = path.posix.join("nbfc-uploads", String(nbfcId), "lsp-agreement");
-  const absDir = path.join(
-    process.cwd(),
-    "public",
-    "nbfc-uploads",
-    String(nbfcId),
-    "lsp-agreement",
-  );
-  await fs.mkdir(absDir, { recursive: true });
-  const absPath = path.join(absDir, filename);
-  await fs.writeFile(absPath, buffer);
-  const publicUrl = "/" + path.posix.join(urlDir, filename);
-  return { publicUrl, absPath };
+): Promise<{ publicUrl: string }> {
+  const { url } = await putNbfcObject(`${nbfcId}/lsp-agreement/${filename}`, buffer, "application/pdf");
+  return { publicUrl: url };
 }
 
 export async function fetchSignedLspPdfAndAuditTrail(

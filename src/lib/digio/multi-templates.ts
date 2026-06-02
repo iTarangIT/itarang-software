@@ -28,11 +28,24 @@ export interface MultiTemplateSigner {
 
 export interface MultiTemplateCreateInput {
   templates: Array<{ template_key: string; template_values?: Record<string, unknown> }>;
-  signers: MultiTemplateSigner[]; // ordered: index 0 signs first when sequential=true
-  sequential: boolean;
+  signers: MultiTemplateSigner[]; // ordered: index 0 signs first when SEQUENTIAL
   expire_in_days: number;
   notify_signers: boolean;
-  customer_notification_mode: string;
+  // When true, the notification email/SMS carries a direct, tokenised signing
+  // deep-link that drops the signer straight into the document. Without it
+  // Digio sends the generic "Register and Login into your Digio account"
+  // invite, which lands external signers on a login wall they can't pass.
+  // (The working dealer-onboarding flow in src/lib/digio/mapper.ts sets this.)
+  send_sign_link?: boolean;
+  // When true, Digio returns an access_token in the response that can be used
+  // to build/embed the gateway signing URL ourselves.
+  generate_access_token?: boolean;
+  // Digio's real field for which page the signature is stamped on ("all" = each).
+  display_on_page?: string;
+  // Digio's real ordering field: "SEQUENTIAL" | "PARALLEL". Plain `sequential:
+  // boolean` is NOT a Digio field and is silently ignored, so the order never
+  // took effect — use this instead.
+  sequence_type?: "SEQUENTIAL" | "PARALLEL";
   callback?: string;
   estamp_request?: { tags?: Record<string, number> };
 }
@@ -40,6 +53,8 @@ export interface MultiTemplateCreateInput {
 export interface MultiTemplateCreateResponse {
   id: string; // digio document id
   agreement_status?: string;
+  access_token?: { id?: string; entity_id?: string; valid_till?: string };
+  signing_parties?: Array<{ identifier?: string; name?: string; status?: string }>;
   [k: string]: unknown;
 }
 

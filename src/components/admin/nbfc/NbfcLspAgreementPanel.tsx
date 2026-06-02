@@ -37,6 +37,8 @@ import {
   X,
 } from "lucide-react";
 import NbfcLspSignerCard from "./NbfcLspSignerCard";
+import { usePdfAvailability } from "./usePdfAvailability";
+import { PdfUnavailableBody, PdfLoadingBody } from "./PdfPreviewFallback";
 
 const signerSchema = z.object({
   fullName: z.string().min(2, "Full name is required"),
@@ -571,6 +573,7 @@ function AgreementTemplateUpload({
   }
 
   const hasUpload = !!templateUrl;
+  const availability = usePdfAvailability(hasUpload ? templateUrl : null);
   const displayName =
     fileName ??
     (hasUpload ? templateUrl.split("/").pop() ?? "Agreement template" : "");
@@ -696,13 +699,19 @@ function AgreementTemplateUpload({
                   {templateSize ? formatBytes(templateSize) : ""}
                 </span>
               </div>
-              <iframe
-                src={`${templateUrl}#toolbar=0&navpanes=0&view=FitH`}
-                title={`Blank agreement preview: ${displayName}`}
-                className="w-full block bg-[color:var(--color-bg)] pointer-events-none"
-                style={{ height: 312, border: 0 }}
-                tabIndex={-1}
-              />
+              {availability === "available" ? (
+                <iframe
+                  src={`${templateUrl}#toolbar=0&navpanes=0&view=FitH`}
+                  title={`Blank agreement preview: ${displayName}`}
+                  className="w-full block bg-[color:var(--color-bg)] pointer-events-none"
+                  style={{ height: 312, border: 0 }}
+                  tabIndex={-1}
+                />
+              ) : availability === "loading" ? (
+                <PdfLoadingBody height={312} />
+              ) : (
+                <PdfUnavailableBody height={312} />
+              )}
               <div
                 className="absolute bottom-0 left-0 right-0 px-3 py-1.5 text-[10px] font-medium text-white flex items-center justify-between"
                 style={{ background: "rgba(0,0,0,0.55)" }}
@@ -756,13 +765,19 @@ function AgreementTemplateUpload({
                 className="relative bg-white pointer-events-none"
                 style={{ height: 312 }}
               >
-                <iframe
-                  src={`${templateUrl}#toolbar=0&navpanes=0&view=FitH`}
-                  title="Auto-filled agreement preview"
-                  className="w-full h-full block"
-                  style={{ border: 0 }}
-                  tabIndex={-1}
-                />
+                {availability === "available" ? (
+                  <iframe
+                    src={`${templateUrl}#toolbar=0&navpanes=0&view=FitH`}
+                    title="Auto-filled agreement preview"
+                    className="w-full h-full block"
+                    style={{ border: 0 }}
+                    tabIndex={-1}
+                  />
+                ) : availability === "loading" ? (
+                  <PdfLoadingBody height={312} />
+                ) : (
+                  <PdfUnavailableBody height={312} />
+                )}
                 <AgreementAutofillOverlay
                   master={master}
                   signers={allSigners}

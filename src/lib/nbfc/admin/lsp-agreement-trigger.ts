@@ -178,10 +178,19 @@ export async function triggerLspSigning(
         sign_type: "aadhaar",
       };
     }),
-    sequential: true,
     expire_in_days: resolveExpireInDays(),
     notify_signers: true,
-    customer_notification_mode: "all",
+    // Without send_sign_link Digio emails the generic "Register and Login into
+    // your Digio account" invite (no document token), leaving external NBFC
+    // signers stuck on a login wall. send_sign_link puts a direct, tokenised
+    // signing deep-link in the email so they land straight on the document.
+    send_sign_link: true,
+    generate_access_token: true,
+    display_on_page: "all",
+    // NBFC party signs first, then iTarang signers (matches the ordered
+    // signer_order load above). `sequence_type` is Digio's real field — the
+    // old `sequential: true` boolean was ignored.
+    sequence_type: "SEQUENTIAL",
     callback: getWebhookCallback(nbfcId),
   };
 

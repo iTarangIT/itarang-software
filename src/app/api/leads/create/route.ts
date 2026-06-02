@@ -11,6 +11,25 @@ import {
     dealers,
 } from '@/lib/db/schema';
 
+// Generates a human-readable, sequential lead reference (e.g. "#IT-2026-0000123").
+// Restored after a refactor dropped the definition while leaving the call site intact.
+async function generateLeadReference() {
+    const year = new Date().getFullYear();
+    const prefix = `#IT-${year}`;
+    const [lastRecord] = await db.select({ reference_id: leads.reference_id })
+        .from(leads)
+        .where(sql`${leads.reference_id} LIKE ${prefix + '-%'}`)
+        .orderBy(desc(leads.reference_id))
+        .limit(1);
+
+    let sequenceNum = 1;
+    if (lastRecord?.reference_id) {
+        const lastSeq = lastRecord.reference_id.split('-').pop();
+        if (lastSeq) sequenceNum = parseInt(lastSeq) + 1;
+    }
+    return `${prefix}-${sequenceNum.toString().padStart(7, '0')}`;
+}
+
 // [E-105] Lead-creation dealer-status gate (Sync Audit G-10).
 // Returns a structured 403 response with a stable string error code so the
 // dealer-portal UI can localise messages without parsing message text.
@@ -101,6 +120,9 @@ async function checkDealerStatusGate(
 const step1Schema = z.object({
     full_name: z.string().optional().nullable(),
     phone: z.string().optional().nullable(),
+    // Customer email → leads.owner_email. Required for finance leads (the Digio
+    // loan-agreement e-sign signer id, §11.3); enforced in the commit block.
+    email: z.string().optional().nullable(),
     father_or_husband_name: z.string().optional().nullable(),
     dob: z.string().optional().nullable(),
     current_address: z.string().optional().nullable(),
@@ -144,20 +166,22 @@ const step1Schema = z.object({
     is_vehicle_category: z.boolean().optional(),
 }).passthrough();
 
-async function generateLeadReference() {
-    const year = new Date().getFullYear();
-    const prefix = `#IT-${year}`;
-    const [lastRecord] = await db.select({ reference_id: leads.reference_id })
+// Compute the next reference sequence by taking the NUMERIC max of the trailing
+// segment — not a lexical sort. Lexical `ORDER BY reference_id DESC` is unsafe:
+// any historical row whose suffix isn't exactly 7 zero-padded digits can make
+// the "last" row differ from the numerically-highest, resetting the counter to
+// a value that already exists (→ duplicate key on leads_reference_id_key).
+async function nextReferenceSequence(prefix: string): Promise<number> {
+    const [row] = await db
+        .select({
+            maxSeq: sql<number | null>`MAX(CAST(NULLIF(REGEXP_REPLACE(SPLIT_PART(${leads.reference_id}, '-', 3), '[^0-9]', '', 'g'), '') AS INTEGER))`,
+        })
         .from(leads)
-        .where(sql`${leads.reference_id} LIKE ${prefix + '-%'}`)
-        .orderBy(desc(leads.reference_id))
-        .limit(1);
+        .where(sql`${leads.reference_id} LIKE ${prefix + '-%'}`);
+    return (row?.maxSeq ?? 0) + 1;
+}
 
-    let sequenceNum = 1;
-    if (lastRecord?.reference_id) {
-        const lastSeq = lastRecord.reference_id.split('-').pop();
-        if (lastSeq) sequenceNum = parseInt(lastSeq) + 1;
-    }
+function formatReference(prefix: string, sequenceNum: number) {
     return `${prefix}-${sequenceNum.toString().padStart(7, '0')}`;
 }
 
@@ -321,6 +345,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                         formData: {
                             full_name: existing.full_name,
                             phone: existing.phone,
+                            email: existing.owner_email ?? '',
                             current_address: existing.current_address,
                             permanent_address: existing.permanent_address,
                             is_current_same: existing.is_current_same,
@@ -406,6 +431,13 @@ export const POST = withErrorHandler(async (req: Request) => {
             || data.payment_method === 'other_finance'
             || data.payment_method === 'dealer_finance';
         if (_isFinanceLead) {
+            const email = data.email?.trim();
+            if (!email) {
+                return errorResponse('Customer email required for finance cases', 400);
+            }
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                return errorResponse('Enter a valid customer email address', 400);
+            }
             if (data.resident_status !== 'owned' && data.resident_status !== 'rented') {
                 return errorResponse('Resident status required for finance cases', 400);
             }
@@ -438,6 +470,7 @@ export const POST = withErrorHandler(async (req: Request) => {
                     phone: normPhone,
                     owner_name: data.full_name?.trim()!,
                     owner_contact: normPhone,
+                    owner_email: data.email?.trim() || null,
                     mobile: normPhone,
                     current_address: data.current_address?.trim(),
                     permanent_address: data.is_current_same ? data.current_address?.trim() : data.permanent_address?.trim(),
