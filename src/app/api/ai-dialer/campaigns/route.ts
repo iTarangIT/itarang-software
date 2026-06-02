@@ -6,7 +6,7 @@
 import { db } from "@/lib/db";
 import { dialerCampaigns, users } from "@/lib/db/schema";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
-import { and, desc, eq, type SQL } from "drizzle-orm";
+import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 
 export const GET = withErrorHandler(async (req: Request) => {
   const { searchParams } = new URL(req.url);
@@ -21,6 +21,13 @@ export const GET = withErrorHandler(async (req: Request) => {
   const filters: SQL[] = [];
   if (provider === "bolna" || provider === "elevenlabs") {
     filters.push(eq(dialerCampaigns.provider, provider));
+  }
+
+  // The Lists tab opts in with ?kind=list to show only list-origin campaigns
+  // (drafts + running + done). Region campaigns have no `kind` key in their
+  // region_filter blob, so ->>'kind' is NULL and they're excluded.
+  if (searchParams.get("kind") === "list") {
+    filters.push(sql`${dialerCampaigns.region_filter}->>'kind' = 'list'`);
   }
 
   const rows = await db

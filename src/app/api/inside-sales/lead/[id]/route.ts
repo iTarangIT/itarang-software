@@ -78,12 +78,16 @@ export const GET = withErrorHandler(
                 COALESCE(dl.segments, '[]'::jsonb) AS segments,
                 COALESCE(dl.address_history, '[]'::jsonb) AS address_history,
                 dl.address_notes,
-                dl.brochure_sent_at
+                dl.brochure_sent_at,
+                dl.dealer_onboarding_application_id,
+                app.onboarding_status AS onboarding_status,
+                app.created_at AS onboarding_created_at
             FROM dealer_leads dl
             LEFT JOIN users owner ON owner.id::text = dl.current_owner_id
             LEFT JOIN users originator ON originator.id::text = dl.originator_id
             LEFT JOIN users closer ON closer.id::text = dl.closing_owner_id
             LEFT JOIN users asm ON asm.id::text = dl.asm_id
+            LEFT JOIN dealer_onboarding_applications app ON app.id = dl.dealer_onboarding_application_id
             WHERE dl.id = ${id}
             LIMIT 1
         `);
