@@ -23,6 +23,7 @@ import {
   nbfcLoans,
   loanFiles,
   loanApplications,
+  loanSanctions,
   leads,
   dealers,
   borrowerRiskScores,
@@ -105,20 +106,42 @@ export async function GET(
       .limit(1);
     const app = appRows[0] ?? null;
 
-    const borrowerName = file?.borrower_name ?? app?.applicant_name ?? null;
-    const tenureMonths = file?.tenure_months ?? app?.tenure_months ?? null;
-    const disbursedAt = file?.disbursed_at ?? app?.disbursed_at ?? null;
-    const dealerId = file?.dealer_id ?? app?.dealer_id ?? null;
-    const leadId = file?.lead_id ?? app?.lead_id ?? null;
+    // Origination-flow loans (LS-*) have no loan_files / loan_applications row —
+    // their canonical record is loan_sanctions, which links to the lead (sole
+    // identity + dealer source). Mirror the battery master-table resolution.
+    const sanctionRows = await db
+      .select({
+        tenure_months: loanSanctions.tenure_months,
+        disbursed_at: loanSanctions.disbursed_at,
+        lead_id: loanSanctions.lead_id,
+      })
+      .from(loanSanctions)
+      .where(eq(loanSanctions.id, loanSanctionId))
+      .limit(1);
+    const sanction = sanctionRows[0] ?? null;
 
+    const tenureMonths =
+      file?.tenure_months ?? app?.tenure_months ?? sanction?.tenure_months ?? null;
+    const disbursedAt =
+      file?.disbursed_at ?? app?.disbursed_at ?? sanction?.disbursed_at ?? null;
+    const leadId = file?.lead_id ?? app?.lead_id ?? sanction?.lead_id ?? null;
+
+    // Lead carries borrower name + phone + city + dealer link for the
+    // origination flow. Fetched first so its dealer_id can feed the dealer
+    // lookup below.
     let phone: string | null = null;
     let city: string | null = null;
+    let leadName: string | null = null;
+    let leadDealerId: string | null = null;
     if (leadId) {
       const leadRows = await db
         .select({
+          full_name: leads.full_name,
+          owner_name: leads.owner_name,
           phone: leads.phone,
           mobile: leads.mobile,
           city: leads.city,
+          dealer_id: leads.dealer_id,
         })
         .from(leads)
         .where(eq(leads.id, leadId))
@@ -126,8 +149,14 @@ export async function GET(
       if (leadRows[0]) {
         phone = leadRows[0].mobile ?? leadRows[0].phone ?? null;
         city = leadRows[0].city ?? null;
+        leadName = leadRows[0].full_name ?? leadRows[0].owner_name ?? null;
+        leadDealerId = leadRows[0].dealer_id ?? null;
       }
     }
+
+    const borrowerName =
+      file?.borrower_name ?? app?.applicant_name ?? leadName ?? null;
+    const dealerId = file?.dealer_id ?? app?.dealer_id ?? leadDealerId ?? null;
 
     let dealerName: string | null = null;
     if (dealerId) {

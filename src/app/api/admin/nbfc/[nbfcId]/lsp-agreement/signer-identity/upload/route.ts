@@ -14,10 +14,9 @@
  * No DB write here. Auth: shared admin/test-bypass idiom from E-007/E-107.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { requireAdminOrTestBypass } from "@/lib/auth/adminTestBypass";
+import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -95,21 +94,11 @@ export async function POST(
   const rand = randomBytes(6).toString("hex");
   const filename = `${timestamp}-${rand}.${ext}`;
 
-  const urlDir = path.posix.join("nbfc-uploads", String(id), "signer-identity");
-  const absDir = path.join(
-    process.cwd(),
-    "public",
-    "nbfc-uploads",
-    String(id),
-    "signer-identity",
-  );
-  const absPath = path.join(absDir, filename);
-
-  await mkdir(absDir, { recursive: true });
+  // Private `nbfc-documents` bucket; served via the authenticated
+  // /api/nbfc-uploads route under the same /nbfc-uploads/... URL scheme.
+  const key = `${id}/signer-identity/${filename}`;
   const buf = Buffer.from(await file.arrayBuffer());
-  await writeFile(absPath, buf);
-
-  const fileUrl = `/${path.posix.join(urlDir, filename)}`;
+  const { url: fileUrl } = await putNbfcObject(key, buf, file.type || "application/octet-stream");
 
   return NextResponse.json({
     ok: true,

@@ -224,6 +224,17 @@ export async function activateNbfc(
     tenantId = created.id;
   }
 
+  // E-139 — bind the legacy `nbfc` (int PK, RBI master) row to its portal
+  // tenant. Without this, competitive-routing fan-out in
+  // submit-product-selection cannot resolve a tenant_id from the chosen lender
+  // and silently drops the lead before it reaches the NBFC's Acquire queue.
+  // This is the same `tenantId` the partner's portal login resolves to via
+  // nbfc_users, so the tenant-scoped Acquire query will match. Idempotent.
+  await db
+    .update(nbfc)
+    .set({ tenant_id: tenantId, updated_at: now })
+    .where(eq(nbfc.id, nbfcId));
+
   await db
     .insert(users)
     .values({
