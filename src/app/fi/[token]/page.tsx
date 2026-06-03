@@ -122,7 +122,7 @@ export default function FiFieldFormPage() {
     declared &&
     !submitting;
 
-  async function postOnce(): Promise<{ ok: boolean; error?: string; retryable: boolean }> {
+  async function postOnce(): Promise<{ ok: boolean; error?: string; retryable: boolean; network?: boolean }> {
     const fd = new FormData();
     if (geo) {
       fd.set("gps_lat", String(geo.lat));
@@ -141,10 +141,12 @@ export default function FiFieldFormPage() {
       const res = await fetch(`/api/nbfc/fi/field-form/${token}/submit`, { method: "POST", body: fd });
       const j = await res.json().catch(() => ({}));
       if (res.ok && j.ok !== false) return { ok: true, retryable: false };
-      // 5xx = transient/server; 4xx = our payload, don't retry.
-      return { ok: false, error: j.error ?? `HTTP ${res.status}`, retryable: res.status >= 500 };
+      // 5xx = transient/server; 4xx = our payload, don't retry. Not a network
+      // failure — the server responded, it just errored.
+      return { ok: false, error: j.error ?? `HTTP ${res.status}`, retryable: res.status >= 500, network: false };
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e), retryable: true };
+      // The fetch itself threw — genuine connectivity failure.
+      return { ok: false, error: e instanceof Error ? e.message : String(e), retryable: true, network: true };
     }
   }
 
@@ -152,6 +154,8 @@ export default function FiFieldFormPage() {
     setSubmitting(true);
     setSubmitError(null);
     // Buffer + auto-retry transient failures (§10.7).
+    let lastError: string | undefined;
+    let lastWasNetwork = false;
     for (let attempt = 0; attempt < 3; attempt++) {
       const r = await postOnce();
       if (r.ok) {
@@ -164,9 +168,18 @@ export default function FiFieldFormPage() {
         setSubmitting(false);
         return;
       }
+      lastError = r.error;
+      lastWasNetwork = r.network === true;
       await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));
     }
-    setSubmitError("Network problem — your visit is saved on this device. Tap Submit to retry.");
+    // Only blame the network when the failure was an actual fetch throw. A 5xx
+    // from the server is a server-side problem, not the agent's connection —
+    // saying "Network problem" there sends the agent chasing the wrong fix.
+    setSubmitError(
+      lastWasNetwork
+        ? "Network problem — your visit is saved on this device. Tap Submit to retry."
+        : `Couldn't save the visit (${lastError ?? "server error"}). It's saved on this device — tap Submit to retry.`,
+    );
     setSubmitting(false);
   }
 
