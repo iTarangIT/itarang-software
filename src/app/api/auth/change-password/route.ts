@@ -43,17 +43,30 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // update in your DB
+    // update in your DB. Match by id, NOT email: Supabase Auth lowercases the
+    // email while the app's users row may hold it mixed-case (from onboarding),
+    // and Postgres `=` is case-sensitive — matching by email updated 0 rows, so
+    // must_change_password never cleared and every login looped back here. The
+    // row's id IS the Supabase auth user id (set at activation).
     const newHash = await hashPassword(password);
 
-    await db
+    const updated = await db
       .update(users)
       .set({
         password_hash: newHash,
         must_change_password: false,
         updated_at: new Date(),
       })
-      .where(eq(users.email, user.email!));
+      .where(eq(users.id, user.id))
+      .returning({ id: users.id });
+
+    if (updated.length === 0) {
+      console.error(`CHANGE PASSWORD: no users row for auth id ${user.id} (${user.email})`);
+      return NextResponse.json(
+        { success: false, message: "Account record not found." },
+        { status: 404 },
+      );
+    }
 
     return NextResponse.json({
       success: true,
