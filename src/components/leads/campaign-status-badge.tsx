@@ -168,6 +168,21 @@ export function CampaignOutcomeBadge({ outcome }: { outcome: string | null }) {
       </span>
     );
   }
+  // Trigger failures are persisted as "trigger_failed: <reason>" /
+  // "trigger_exception: <reason>". Show a clean red chip and surface the full
+  // reason on hover so a prod/sandbox failure (usually a missing provider env
+  // var) explains itself without digging through server logs.
+  if (outcome.startsWith("trigger_failed") || outcome.startsWith("trigger_exception")) {
+    const reason = outcome.replace(/^trigger_(failed|exception):?\s*/, "").trim();
+    return (
+      <span
+        title={reason || undefined}
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-50 text-rose-700 cursor-help"
+      >
+        Trigger failed{reason ? " ⓘ" : ""}
+      </span>
+    );
+  }
   const cfg = OUTCOME_STYLES[outcome] ?? {
     bg: "bg-zinc-100",
     text: "text-zinc-600",
