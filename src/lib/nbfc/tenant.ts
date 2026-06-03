@@ -13,6 +13,7 @@
  * should call. It throws (caught by the route handler → 403) unless the
  * current session is allowed to act on that tenant.
  */
+import { cache } from "react";
 import { db } from "@/lib/db";
 import { eq, and } from "drizzle-orm";
 import { nbfcLoans, nbfcTenants, nbfcUsers, users } from "@/lib/db/schema";
@@ -38,8 +39,18 @@ export interface SessionUser {
 /**
  * Look up the current Supabase user + their CRM users.role. Returns null if
  * not authenticated.
+ *
+ * Wrapped in React `cache()` so it runs at most ONCE per server request. Auth
+ * resolution (`resolveActor`) used to call this three times per request — via
+ * getCurrentTenant, requireNbfcAccess, and directly — each spinning up its own
+ * Supabase client and calling auth.getUser(). When the access token needed a
+ * refresh, those repeated calls raced on Supabase's refresh-token rotation:
+ * the first refresh rotated the token, the later calls used the now-revoked one
+ * and returned null → an inconsistent "UNAUTHORIZED: no session" (e.g. the GET
+ * succeeded but the POST that followed failed). Deduping to a single getUser()
+ * per request removes the race and the extra round-trips.
  */
-export async function getSessionUser(): Promise<SessionUser | null> {
+export const getSessionUser = cache(async function getSessionUser(): Promise<SessionUser | null> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -60,7 +71,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     role = (rows[0]?.role ?? "user").toLowerCase();
   }
   return { id: user.id, email: user.email ?? null, role };
-}
+});
 
 /**
  * Resolve the tenant the current request is for. See doc-block at top.

@@ -13,20 +13,21 @@
 import { analyzeTranscript } from "@/lib/ai/analysis";
 import { decideNextAction } from "@/lib/ai/decision/engine";
 import { db } from "@/lib/db";
-import { aiCallLogs, dealerLeads } from "@/lib/db/schema";
+import { aiCallLogs, dealerLeads, dialerCampaigns } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { reactivateLead } from "@/lib/leads/reactivation";
 import { updateLeadAfterCall } from "../storage/leadStore";
 import { completeCampaignLead } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { scheduleCall } from "@/lib/queue/scheduler";
-import { appendSalesCallLog } from "@/lib/google/sheet";
+import { appendSalesCallLog, appendCallReview } from "@/lib/google/sheet";
 import {
   normalizeAnalysis,
   resolveNextCallAt,
 } from "@/lib/ai/analysis/postCallHelpers";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
+import { rehostRecording } from "@/lib/ai/storage/recordingStore";
 
 export type BolnaFinalizePayload = {
   callId: string;
@@ -89,7 +90,12 @@ export async function finalizeBolnaCall(
       status,
     );
     let leadForPhone:
-      | { id: string; phone: string | null }
+      | {
+          id: string;
+          phone: string | null;
+          shop_name: string | null;
+          dealer_name: string | null;
+        }
       | null
       | undefined = null;
 
@@ -131,6 +137,44 @@ export async function finalizeBolnaCall(
         intentScore: null,
       });
       campaignIdAfterComplete = r.campaignId;
+
+      // "All calls" requirement: log no-conversation calls (no_answer / busy /
+      // failed) to the Campaign_Call_Review sheet too. No transcript exists, so
+      // the Transcript cell carries a short status note. Fire-and-forget —
+      // including the campaign-name lookup — so it never blocks or breaks
+      // finalization or campaign advancement. Values captured into consts since
+      // `leadForPhone` is a `let` and loses its narrowing inside the closure.
+      const reviewUuid = executionId ?? callId ?? "—";
+      const reviewCompany = leadForPhone.shop_name ?? "—";
+      const reviewDealer = leadForPhone.dealer_name ?? "—";
+      const reviewCampaignId = r.campaignId;
+      const reviewStatus = status || "no_answer";
+      void (async () => {
+        let campaign = reviewCampaignId ?? "—";
+        if (reviewCampaignId) {
+          const c = await db
+            .select({ name: dialerCampaigns.name })
+            .from(dialerCampaigns)
+            .where(eq(dialerCampaigns.id, reviewCampaignId))
+            .limit(1);
+          campaign = c[0]?.name ?? reviewCampaignId;
+        }
+        const playableUrl = await rehostRecording({
+          provider: "bolna",
+          callId,
+          recordingUrl,
+        });
+        await appendCallReview({
+          uuid: reviewUuid,
+          campaign,
+          companyName: reviewCompany,
+          dealerName: reviewDealer,
+          recordingUrl: playableUrl,
+          transcript: `No conversation (${reviewStatus})`,
+        });
+      })().catch((err) =>
+        console.error("[bolna:finalize] call review log failed:", err),
+      );
     }
     if (campaignIdAfterComplete) {
       await advanceCampaign(campaignIdAfterComplete, {
@@ -148,7 +192,13 @@ export async function finalizeBolnaCall(
 
   // Locate the dealer_leads row. Prefer the hint, then phone.
   let lead:
-    | { id: string; phone: string | null; follow_up_history: unknown }
+    | {
+        id: string;
+        phone: string | null;
+        follow_up_history: unknown;
+        shop_name: string | null;
+        dealer_name: string | null;
+      }
     | null
     | undefined = null;
   if (leadIdHint) {
@@ -271,6 +321,42 @@ export async function finalizeBolnaCall(
     convId: executionId ?? callId ?? "—",
   }).catch((err) =>
     console.error("[bolna:finalize] sheet log failed:", err),
+  );
+
+  // Mirror this connected call into the Call_Review sheet so the reviewers can
+  // leave feedback. Fire-and-forget — including the campaign-name lookup — so a
+  // Sheets/DB hiccup never blocks or breaks finalization or campaign advance.
+  // Values captured into consts because `lead` is a `let` and loses its
+  // non-null narrowing inside the closure below.
+  const reviewUuid = executionId ?? callId ?? "—";
+  const reviewCompany = lead.shop_name ?? "—";
+  const reviewDealer = lead.dealer_name ?? "—";
+  const reviewCampaignId = completeR.campaignId;
+  void (async () => {
+    let campaign = reviewCampaignId ?? "—";
+    if (reviewCampaignId) {
+      const c = await db
+        .select({ name: dialerCampaigns.name })
+        .from(dialerCampaigns)
+        .where(eq(dialerCampaigns.id, reviewCampaignId))
+        .limit(1);
+      campaign = c[0]?.name ?? reviewCampaignId;
+    }
+    const playableUrl = await rehostRecording({
+      provider: "bolna",
+      callId,
+      recordingUrl,
+    });
+    await appendCallReview({
+      uuid: reviewUuid,
+      campaign,
+      companyName: reviewCompany,
+      dealerName: reviewDealer,
+      recordingUrl: playableUrl,
+      transcript,
+    });
+  })().catch((err) =>
+    console.error("[bolna:finalize] call review log failed:", err),
   );
 
   if (completeR.campaignId) {

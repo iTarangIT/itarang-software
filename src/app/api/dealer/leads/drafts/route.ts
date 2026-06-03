@@ -49,6 +49,7 @@ export const GET = withErrorHandler(async (req: Request) => {
         full_name: leads.full_name,
         phone: leads.phone,
         kyc_status: leads.kyc_status,
+        status: leads.status,
         workflow_step: leads.workflow_step,
         consent_status: leads.consent_status,
         kyc_draft_data: leads.kyc_draft_data,
@@ -117,13 +118,21 @@ export const GET = withErrorHandler(async (req: Request) => {
                 const consentPortion = progress.consentComplete ? 30 : 0;
                 percent = Math.min(100, Math.round(docPortion + consentPortion));
             }
+            // A Step-1 wizard draft (status INCOMPLETE) resumes on the new-lead
+            // wizard; a KYC draft (status ACTIVE) resumes on the KYC flow. The
+            // page uses `is_step1` to pick the route.
+            const isStep1 = r.status === 'INCOMPLETE';
+            // Show the placeholder name as "Unnamed" rather than the literal 'DRAFT'.
+            const displayName = r.owner_name && r.owner_name !== 'DRAFT' ? r.owner_name : r.full_name;
+            const displayContact = r.owner_contact && r.owner_contact !== 'DRAFT' ? r.owner_contact : r.phone;
             return {
                 id: r.id,
                 reference_id: r.reference_id,
-                owner_name: r.owner_name || r.full_name,
-                owner_contact: r.owner_contact || r.phone,
+                owner_name: displayName,
+                owner_contact: displayContact,
                 workflow_step: r.workflow_step || 1,
                 consent_status: r.consent_status || 'awaiting_signature',
+                is_step1: isStep1,
                 progress,
                 progress_percent: percent,
                 last_saved_at: r.updated_at,
@@ -148,6 +157,7 @@ export const GET = withErrorHandler(async (req: Request) => {
             owner_contact: r.owner_contact || r.phone,
             workflow_step: 4,
             consent_status: r.consent_status || 'awaiting_signature',
+            is_step1: false,
             progress: null,
             progress_percent: percent,
             // ps.updated_at is the true "last saved" for a Step-4 draft.

@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Download,
@@ -190,6 +191,7 @@ export function CampaignDetailView({
   const [page, setPage] = useState(1);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const router = useRouter();
 
   const stopMutation = useMutation({
     mutationFn: async () => {
@@ -232,9 +234,11 @@ export function CampaignDetailView({
     },
   });
 
-  // Re-dial this campaign's failed leads in place: resets them to pending and
-  // flips the campaign back to running. The detail view then refreshes to show
-  // the renewed progress.
+  // Bundle this campaign's retryable failed leads into a BRAND-NEW campaign and
+  // start dialing it. The source campaign is left untouched (its stats remain the
+  // historical record). On success we navigate to the new campaign's detail page,
+  // which mounts already "running" and polls every 4s — so calling status shows
+  // live with no manual refresh.
   const retryMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch(
@@ -245,23 +249,13 @@ export function CampaignDetailView({
       if (!json.success) {
         throw new Error(json.error?.message ?? "Retry failed");
       }
-      return json.data as { retryCount: number };
+      return json.data as { campaignId: string; retryCount: number };
     },
-    onSuccess: () => {
-      // Optimistically flip the cached campaign to "running" so `isRunning`
-      // becomes true on the very next render. That immediately starts the 4s
-      // polling on BOTH the campaign and the leads queries — without it, polling
-      // wouldn't begin until a network round-trip confirmed the new status, so
-      // the user had to refresh to see calls go live.
-      queryClient.setQueryData(
-        ["dialer-campaign", campaignId],
-        (old: Campaign | undefined) =>
-          old ? { ...old, status: "running", completedAt: null } : old,
-      );
-      queryClient.invalidateQueries({ queryKey: ["dialer-campaign", campaignId] });
-      queryClient.invalidateQueries({
-        queryKey: ["dialer-campaign-leads", campaignId],
-      });
+    onSuccess: (data) => {
+      // Refresh the campaign history list (if mounted) so the new retry campaign
+      // appears, then jump straight to it to watch it dial.
+      queryClient.invalidateQueries({ queryKey: ["dialer-campaigns"] });
+      router.push(`/leads/campaigns/${data.campaignId}`);
     },
     onError: (err: unknown) => {
       window.alert(
@@ -395,7 +389,7 @@ export function CampaignDetailView({
                   window.confirm(
                     `Retry ${campaign.failedLeads} failed lead${
                       campaign.failedLeads === 1 ? "" : "s"
-                    }? They'll be called again in this campaign.`,
+                    }? This starts a new campaign and begins calling them.`,
                   )
                 ) {
                   retryMutation.mutate();

@@ -446,15 +446,34 @@ export async function POST(req: NextRequest) {
       cleanString(finance.enableFinance) === "yes" ||
       rawBody.financeEnabled === true;
 
+    // Only the fields actually used below — selecting the whole row (Drizzle's
+    // default `.select()`) makes this lookup crash if ANY schema column is
+    // missing from the live DB (e.g. an unapplied additive migration like
+    // E-127's originating_dealer_lead_id). Narrow it so Submit is resilient to
+    // such drift; the INSERT/UPDATE payload below never touches those columns.
+    const lookupColumns = {
+      id: dealerOnboardingApplications.id,
+      dealer_user_id: dealerOnboardingApplications.dealer_user_id,
+      dealer_code: dealerOnboardingApplications.dealer_code,
+      provider_raw_response: dealerOnboardingApplications.provider_raw_response,
+      onboarding_status: dealerOnboardingApplications.onboarding_status,
+    } as const;
+
     let existingApplication:
-      | typeof dealerOnboardingApplications.$inferSelect
+      | {
+          id: string;
+          dealer_user_id: string | null;
+          dealer_code: string | null;
+          provider_raw_response: unknown;
+          onboarding_status: string | null;
+        }
       | null = null;
 
     if (applicationId) {
       existingApplication =
         (
           await db
-            .select()
+            .select(lookupColumns)
             .from(dealerOnboardingApplications)
             .where(eq(dealerOnboardingApplications.id, applicationId))
             .limit(1)
@@ -465,7 +484,7 @@ export async function POST(req: NextRequest) {
       existingApplication =
         (
           await db
-            .select()
+            .select(lookupColumns)
             .from(dealerOnboardingApplications)
             .where(eq(dealerOnboardingApplications.dealer_user_id, dealerUserId))
             .orderBy(desc(dealerOnboardingApplications.updated_at))
@@ -477,7 +496,7 @@ export async function POST(req: NextRequest) {
       existingApplication =
         (
           await db
-            .select()
+            .select(lookupColumns)
             .from(dealerOnboardingApplications)
             .where(
               eq(dealerOnboardingApplications.owner_email, primaryOwner.ownerEmail)
@@ -491,7 +510,7 @@ export async function POST(req: NextRequest) {
       existingApplication =
         (
           await db
-            .select()
+            .select(lookupColumns)
             .from(dealerOnboardingApplications)
             .where(eq(dealerOnboardingApplications.owner_email, authEmail))
             .orderBy(desc(dealerOnboardingApplications.updated_at))
@@ -503,7 +522,7 @@ export async function POST(req: NextRequest) {
       existingApplication =
         (
           await db
-            .select()
+            .select(lookupColumns)
             .from(dealerOnboardingApplications)
             .where(eq(dealerOnboardingApplications.dealer_code, dealerCode))
             .orderBy(desc(dealerOnboardingApplications.updated_at))

@@ -250,6 +250,9 @@ export async function advanceCampaign(
         // pending lead. Previously we returned an error here, which left
         // the caller (webhook/poll) thinking the advance failed and
         // stalled the whole campaign on a single provider exception.
+        const exReason = (
+          err instanceof Error ? err.message : String(err)
+        ).slice(0, 160);
         console.error(
           "[advanceCampaign] trigger threw, skipping lead",
           {
@@ -264,7 +267,7 @@ export async function advanceCampaign(
           .set({
             status: "failed",
             completed_at: new Date(),
-            call_outcome: "trigger_exception",
+            call_outcome: `trigger_exception: ${exReason}`,
           })
           .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
         // Failure path — only bump failed_leads.
@@ -278,16 +281,27 @@ export async function advanceCampaign(
       }
 
       if (!trigResult.success) {
-        // Provider rejected the call (rate limit, invalid number, etc.).
-        // Mark failed and continue advancing so we don't stall on a bad
-        // row. The trigger keeps the row out of "calling" forever
-        // otherwise.
+        // Provider rejected the call (missing/invalid config, rate limit, bad
+        // number, etc.). Capture WHY: previously this stored a bare
+        // "trigger_failed" and discarded trigResult.error, which made
+        // "works on localhost, fails on sandbox" impossible to diagnose from
+        // the UI (the usual cause is a missing/wrong provider env var on the
+        // box — e.g. ELEVENLABS_AGENT_PHONE_NUMBER_ID or ELEVENLABS_PHONE_
+        // PROVIDER). Log it AND persist a short reason on the row so the
+        // failure explains itself in production.
+        const reason = (trigResult.error || "unknown").slice(0, 160);
+        console.error("[advanceCampaign] provider trigger failed", {
+          campaignId,
+          leadId: lead[0].id,
+          provider,
+          error: trigResult.error,
+        });
         await db
           .update(dialerCampaignLeads)
           .set({
             status: "failed",
             completed_at: new Date(),
-            call_outcome: "trigger_failed",
+            call_outcome: `trigger_failed: ${reason}`,
           })
           .where(eq(dialerCampaignLeads.id, claimed.campaignLeadId));
         // Failure path — only bump failed_leads.
