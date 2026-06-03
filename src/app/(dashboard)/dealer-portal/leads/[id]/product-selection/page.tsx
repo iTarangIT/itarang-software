@@ -1735,9 +1735,12 @@ export default function ProductSelectionPage() {
             )}
           </div>
 
-          {/* Right rail — Pricing summary (sticky on desktop) */}
+          {/* Right rail — Pricing summary (sticky on desktop, stays pinned
+              while the dealer scrolls through battery/charger/paraphernalia).
+              max-h + overflow lets a tall card scroll internally instead of
+              getting clipped under the viewport. */}
           <div className="lg:col-span-4">
-            <div className="lg:sticky lg:top-6">
+            <div className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
               <PricingSummary
                 batteryPrice={dispBatteryPrice}
                 chargerPrice={dispChargerPrice}
