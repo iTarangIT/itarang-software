@@ -90,7 +90,18 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
         body: JSON.stringify(cfg),
       });
       if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        const j = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          issues?: { path?: (string | number)[]; message?: string }[];
+        };
+        // The server returns a bare "VALIDATION" code plus a Zod `issues` array.
+        // Surface the offending field(s) so this isn't an opaque dead-end.
+        if (j.error === "VALIDATION" && j.issues?.length) {
+          const detail = j.issues
+            .map((i) => `${(i.path ?? []).join(".") || "field"} — ${i.message ?? "invalid"}`)
+            .join("; ");
+          throw new Error(`Validation failed: ${detail}`);
+        }
         throw new Error(j.error ?? `HTTP ${res.status}`);
       }
       setSavedAt(new Date());
@@ -105,7 +116,7 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
   const callbackUrl = `${callbackBase}/api/nbfc/enach/callback`;
   const razorpayWebhookUrl = `${callbackBase}/api/payments/razorpay/emandate-webhook`;
   const isManagedRzp = cfg.enach_handoff_method === "itarang_razorpay";
-
+ 
   return (
     <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-5">
       <div>
