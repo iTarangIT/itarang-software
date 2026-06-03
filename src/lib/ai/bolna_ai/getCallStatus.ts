@@ -60,10 +60,18 @@ export async function getBolnaCallStatus(
     };
   }
 
+  // /executions/{id} shape: top-level `status` ("completed" etc.) + `transcript`
+  // + `conversation_duration`; the recording + telephony fields are nested under
+  // `telephony_data`. Read both the top-level and nested locations so the poll
+  // works regardless of which Bolna surface answered.
   const rawStatus: string = r?.status || r?.call_status || "unknown";
   const transcript: string | null = r?.transcript || null;
   const recordingUrl: string | null =
-    r?.recording_url || r?.recording || r?.audio_url || null;
+    r?.recording_url ||
+    r?.recording ||
+    r?.audio_url ||
+    r?.telephony_data?.recording_url ||
+    null;
   const duration: number | null =
     typeof r?.duration === "number"
       ? r.duration
@@ -71,11 +79,14 @@ export async function getBolnaCallStatus(
         ? r.call_duration
         : typeof r?.conversation_duration === "number"
           ? r.conversation_duration
-          : null;
+          : typeof r?.telephony_data?.duration === "number"
+            ? r.telephony_data.duration
+            : null;
   const phone: string | null =
     r?.user_number ||
     r?.recipient_phone_number ||
     r?.phone_number ||
+    r?.telephony_data?.to_number ||
     null;
 
   return {
