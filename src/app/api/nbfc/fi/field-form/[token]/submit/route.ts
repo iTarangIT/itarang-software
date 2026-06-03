@@ -112,56 +112,72 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   const now = new Date();
   const keyDir = `fi/${fi.id}`;
 
-  // Watermark + persist each photo to the private `nbfc-documents` bucket;
-  // image_url stays in the `/nbfc-uploads/...` scheme served by the
-  // authenticated /api/nbfc-uploads route.
-  let i = 0;
-  for (const { type, file } of collected) {
-    const raw = Buffer.from(await file.arrayBuffer());
-    const { buffer, applied } = await watermarkPhoto(raw, { lat: gpsLat, lng: gpsLng, accuracyM: gpsAcc, timestamp: now });
-    const filename = `${type}-${now.getTime()}-${i++}.jpg`;
-    const { url: imageUrl } = await putNbfcObject(`${keyDir}/${filename}`, buffer, "image/jpeg");
-    await db.insert(fieldInvestigationPhotos).values({
-      field_investigation_id: fi.id,
-      photo_type: type,
-      image_url: imageUrl,
-      gps_lat: gpsLat != null ? String(gpsLat) : null,
-      gps_lng: gpsLng != null ? String(gpsLng) : null,
-      gps_server_timestamp: now,
-      watermark_applied: applied,
-      uploaded_at: now,
-    });
+  // The photo upload + DB writes can throw (storage outage, native-module load
+  // failure, DB error). Without this guard a throw became an unhandled 500,
+  // which the agent's form reports as a misleading "Network problem". Catch it,
+  // log the real cause server-side, and return a 5xx the client treats as
+  // retryable — but with a truthful "server error" message.
+  try {
+    // Watermark + persist each photo to the private `nbfc-documents` bucket;
+    // image_url stays in the `/nbfc-uploads/...` scheme served by the
+    // authenticated /api/nbfc-uploads route.
+    let i = 0;
+    for (const { type, file } of collected) {
+      const raw = Buffer.from(await file.arrayBuffer());
+      const { buffer, applied } = await watermarkPhoto(raw, { lat: gpsLat, lng: gpsLng, accuracyM: gpsAcc, timestamp: now });
+      const filename = `${type}-${now.getTime()}-${i++}.jpg`;
+      const { url: imageUrl } = await putNbfcObject(`${keyDir}/${filename}`, buffer, "image/jpeg");
+      await db.insert(fieldInvestigationPhotos).values({
+        field_investigation_id: fi.id,
+        photo_type: type,
+        image_url: imageUrl,
+        gps_lat: gpsLat != null ? String(gpsLat) : null,
+        gps_lng: gpsLng != null ? String(gpsLng) : null,
+        gps_server_timestamp: now,
+        watermark_applied: applied,
+        uploaded_at: now,
+      });
+    }
+
+    // Distance from the stated address (supporting evidence only, §10.1).
+    let distance: string | null = null;
+    if (gpsLat != null && gpsLng != null && fi.stated_lat != null && fi.stated_lng != null) {
+      distance = String(haversineMeters(Number(fi.stated_lat), Number(fi.stated_lng), gpsLat, gpsLng));
+    }
+    const slaBreached = !!fi.sla_due_at && now.getTime() > new Date(fi.sla_due_at).getTime();
+
+    await db
+      .update(fieldInvestigations)
+      .set({
+        status: "submitted",
+        submitted_at: now,
+        visited_at: now,
+        gps_lat: gpsLat != null ? String(gpsLat) : null,
+        gps_lng: gpsLng != null ? String(gpsLng) : null,
+        gps_accuracy_m: gpsAcc != null ? String(gpsAcc) : null,
+        gps_server_timestamp: now,
+        distance_from_address_m: distance,
+        address_match: addressMatch,
+        address_match_notes: addressMatchNotes,
+        customer_present: customerPresent,
+        customer_present_notes: customerPresentNotes,
+        agent_notes: agentNotes,
+        agent_declaration_at: now,
+        sla_breached: slaBreached,
+        link_token: null, // consume the single-use link
+        updated_at: now,
+      })
+      .where(eq(fieldInvestigations.id, fi.id));
+
+    return NextResponse.json({ ok: true, status: "submitted" });
+  } catch (err) {
+    console.error(
+      `[fi-submit] failed for field_investigation ${fi.id} (tenant ${fi.tenant_id}):`,
+      err instanceof Error ? err.stack ?? err.message : err,
+    );
+    return NextResponse.json(
+      { ok: false, error: "Server error while saving the visit. Please retry." },
+      { status: 500 },
+    );
   }
-
-  // Distance from the stated address (supporting evidence only, §10.1).
-  let distance: string | null = null;
-  if (gpsLat != null && gpsLng != null && fi.stated_lat != null && fi.stated_lng != null) {
-    distance = String(haversineMeters(Number(fi.stated_lat), Number(fi.stated_lng), gpsLat, gpsLng));
-  }
-  const slaBreached = !!fi.sla_due_at && now.getTime() > new Date(fi.sla_due_at).getTime();
-
-  await db
-    .update(fieldInvestigations)
-    .set({
-      status: "submitted",
-      submitted_at: now,
-      visited_at: now,
-      gps_lat: gpsLat != null ? String(gpsLat) : null,
-      gps_lng: gpsLng != null ? String(gpsLng) : null,
-      gps_accuracy_m: gpsAcc != null ? String(gpsAcc) : null,
-      gps_server_timestamp: now,
-      distance_from_address_m: distance,
-      address_match: addressMatch,
-      address_match_notes: addressMatchNotes,
-      customer_present: customerPresent,
-      customer_present_notes: customerPresentNotes,
-      agent_notes: agentNotes,
-      agent_declaration_at: now,
-      sla_breached: slaBreached,
-      link_token: null, // consume the single-use link
-      updated_at: now,
-    })
-    .where(eq(fieldInvestigations.id, fi.id));
-
-  return NextResponse.json({ ok: true, status: "submitted" });
 }
