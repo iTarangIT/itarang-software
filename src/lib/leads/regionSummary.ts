@@ -18,6 +18,7 @@ export function summarizeRegion(region: unknown): string {
     pincodes?: unknown;
     groupIds?: unknown;
     groupNames?: unknown;
+    recall?: unknown;
   };
 
   const states = Array.isArray(r.states) ? (r.states as string[]) : [];
@@ -65,6 +66,15 @@ export function summarizeRegion(region: unknown): string {
 
   if (pincodes.length > 0) {
     parts.push(`${pincodes.length} pincode${pincodes.length === 1 ? "" : "s"}`);
+  }
+
+  // A "Retry failed leads" campaign carries recall:true in its region_filter.
+  // Prefix the label so the list/detail clearly read as a retry while keeping
+  // the inherited region context.
+  if (r.recall === true) {
+    return parts.length > 0
+      ? `Retry · ${parts.join(" · ")}`
+      : "Retry · previous campaign";
   }
 
   return parts.length > 0 ? parts.join(" · ") : "All regions";
@@ -118,6 +128,7 @@ export function describeRegion(region: unknown): string {
     pincodes?: unknown;
     groupNames?: unknown;
     groupIds?: unknown;
+    recall?: unknown;
   };
 
   const states = Array.isArray(r.states) ? (r.states as string[]) : [];
@@ -150,6 +161,14 @@ export function describeRegion(region: unknown): string {
 
   if (pincodes.length > 0) {
     segments.push(`Pincodes: ${pincodes.join(", ")}`);
+  }
+
+  // Retry campaign (see summarizeRegion) — make the detail header read as a
+  // retry of the source campaign, keeping any inherited region breakdown.
+  if (r.recall === true) {
+    return segments.length > 0
+      ? `Retry of previous campaign · ${segments.join(" · ")}`
+      : "Retry of previous campaign";
   }
 
   return segments.length > 0 ? segments.join(" · ") : "All regions";
