@@ -20,7 +20,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { randomUUID, randomInt } from "node:crypto";
 import { db } from "@/lib/db";
 import {
@@ -349,6 +349,19 @@ export async function POST(
       .returning({ id: nbfcTenants.id });
     tenantId = created.id;
   }
+
+  // 3c. Bind the legacy `nbfc` row to its tenant (E-139). The inline
+  //     activation above seeds nbfc_tenants but historically never wrote
+  //     nbfc.tenant_id back — leaving the NBFC unbound. With a NULL binding
+  //     the Section G loader (loadActiveProductsForDealer) filters the NBFC
+  //     out of a dealer's financing options, and the submit-product-selection
+  //     fan-out can't resolve a tenant so the lead never reaches the NBFC's
+  //     Acquire queue. Only fill when NULL so a prior manual binding (E-026B)
+  //     is never clobbered.
+  await db
+    .update(nbfc)
+    .set({ tenant_id: tenantId, updated_at: now })
+    .where(and(eq(nbfc.id, id), isNull(nbfc.tenant_id)));
 
   // The middleware reads role from supabase user_metadata first, but the
   // /api/user/profile sync endpoint and various server-side helpers also
