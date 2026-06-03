@@ -57,9 +57,16 @@ const CONSENT_COMPLETE_STATUSES = new Set([
 
 export function createWorkflowId(prefix: string, now = new Date()): string {
   const dateStr = now.toISOString().slice(0, 10).replace(/-/g, "");
-  const seq = Math.floor(Math.random() * 10000)
-    .toString()
-    .padStart(4, "0");
+  // High-entropy suffix to avoid primary-key collisions. The previous 4-digit
+  // random suffix had only 10,000 values/day, so a busy day collided (birthday
+  // paradox: ~50% chance after ~118 ids) and the INSERT failed on the PK. We
+  // combine the millisecond-of-day with 5 random base36 chars; two calls would
+  // have to land in the same millisecond AND draw the same ~60M random value.
+  const msOfDay = now.getTime() % 86_400_000;
+  const rand = Math.floor(Math.random() * 36 ** 5)
+    .toString(36)
+    .padStart(5, "0");
+  const seq = `${msOfDay.toString(36)}${rand}`;
 
   return `${prefix}-${dateStr}-${seq}`;
 }

@@ -5,7 +5,31 @@ const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
 export const SHEETS = {
   CONVERTED: "itarang_leads",
   SALES_CALL: "Sales_Call",
+  CALL_REVIEW: "Campaign_Call_Review",
 };
+
+// Reviewers who leave feedback on each call. Each name becomes its own column
+// on the Call_Review tab; edit this list to change who reviews.
+export const CALL_REVIEWERS = [
+  "Sonu",
+  "Kartik",
+  "Sanchit",
+  "Abhishek",
+  "Apoorv",
+  "Nidhi",
+  "Sweeti",
+];
+
+// Fixed call-data columns followed by one empty feedback column per reviewer.
+const CALL_REVIEW_HEADERS = [
+  "UUID",
+  "Campaign",
+  "Company Name",
+  "Dealer Name",
+  "Call Recording",
+  "Transcript",
+  ...CALL_REVIEWERS,
+];
 
 const HEADERS = [
   "Lead ID",
@@ -42,6 +66,17 @@ function getAuth() {
 async function getSheetsClient() {
   const auth = getAuth();
   return google.sheets({ version: "v4", auth });
+}
+
+// 1-based column number → A1 column letter(s). 13 → "M".
+function colLetter(n: number): string {
+  let s = "";
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
 }
 
 async function writeHeaders(sheets: any, spreadsheetId: string, meta: any) {
@@ -299,6 +334,271 @@ export async function appendSalesCallLog(call: {
     );
   } catch (err) {
     console.error("[SHEETS] Failed to append sales call log:", err);
+  }
+}
+
+// Ensure the Campaign_Call_Review tab exists with headers, a frozen header row,
+// header colors, and column widths. Header/structural styling is applied on
+// creation (or if the header row was missing). Per-row data styling is handled
+// by appendCallReview after each append. Returns the tab name and numeric id.
+async function ensureCallReviewSheet(): Promise<{
+  tabName: string;
+  sheetId: number | null;
+}> {
+  const sheets = await getSheetsClient();
+  const spreadsheetId = process.env.GOOGLE_SHEET_ID!;
+
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const existingSheets =
+    meta.data.sheets?.map((s) => s.properties?.title) ?? [];
+
+  // Find the actual tab name (case-insensitive)
+  let tabName = existingSheets.find(
+    (name) => name?.toLowerCase() === SHEETS.CALL_REVIEW.toLowerCase(),
+  );
+
+  const isNewTab = !tabName;
+
+  if (!tabName) {
+    tabName = SHEETS.CALL_REVIEW;
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            addSheet: {
+              properties: {
+                title: tabName,
+                gridProperties: { frozenRowCount: 1 },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    console.log("[SHEETS] Created tab:", tabName);
+  }
+
+  // Ensure headers exist
+  const lastCol = colLetter(CALL_REVIEW_HEADERS.length);
+  const existing = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${tabName}!A1:${lastCol}1`,
+  });
+
+  const firstRow = existing.data.values?.[0];
+  const headersMissing = !firstRow || firstRow.length === 0;
+  if (headersMissing) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${tabName}!A1`,
+      valueInputOption: "RAW",
+      requestBody: { values: [CALL_REVIEW_HEADERS] },
+    });
+  }
+
+  // Resolve the numeric sheet id (needed for all cell formatting).
+  const sheetId =
+    (await sheets.spreadsheets.get({ spreadsheetId })).data.sheets?.find(
+      (s) => s.properties?.title === tabName,
+    )?.properties?.sheetId ?? null;
+
+  // Header/structural styling — only on creation or if headers were (re)written.
+  if (sheetId != null && (isNewTab || headersMissing)) {
+    const reviewerStart = CALL_REVIEW_HEADERS.length - CALL_REVIEWERS.length; // 6
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          // Freeze the header row
+          {
+            updateSheetProperties: {
+              properties: {
+                sheetId,
+                gridProperties: { frozenRowCount: 1 },
+              },
+              fields: "gridProperties.frozenRowCount",
+            },
+          },
+          // Call-data headers (UUID..Transcript): black bg, white bold, centered
+          {
+            repeatCell: {
+              range: {
+                sheetId,
+                startRowIndex: 0,
+                endRowIndex: 1,
+                startColumnIndex: 0,
+                endColumnIndex: reviewerStart,
+              },
+              cell: {
+                userEnteredFormat: {
+                  backgroundColor: { red: 0, green: 0, blue: 0 },
+                  textFormat: {
+                    bold: true,
+                    foregroundColor: { red: 1, green: 1, blue: 1 },
+                    fontSize: 11,
+                  },
+                  horizontalAlignment: "CENTER",
+                  verticalAlignment: "MIDDLE",
+                },
+              },
+              fields:
+                "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
+            },
+          },
+          // Reviewer headers: distinct dark-teal accent so feedback area stands out
+          {
+            repeatCell: {
+              range: {
+                sheetId,
+                startRowIndex: 0,
+                endRowIndex: 1,
+                startColumnIndex: reviewerStart,
+                endColumnIndex: CALL_REVIEW_HEADERS.length,
+              },
+              cell: {
+                userEnteredFormat: {
+                  backgroundColor: { red: 0.04, green: 0.4, blue: 0.36 },
+                  textFormat: {
+                    bold: true,
+                    foregroundColor: { red: 1, green: 1, blue: 1 },
+                    fontSize: 11,
+                  },
+                  horizontalAlignment: "CENTER",
+                  verticalAlignment: "MIDDLE",
+                },
+              },
+              fields:
+                "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
+            },
+          },
+          // Column widths
+          colWidth(sheetId, 0, 1, 180), // UUID
+          colWidth(sheetId, 1, 2, 200), // Campaign
+          colWidth(sheetId, 2, 4, 180), // Company + Dealer
+          colWidth(sheetId, 4, 5, 260), // Recording
+          colWidth(sheetId, 5, 6, 600), // Transcript
+          colWidth(sheetId, reviewerStart, CALL_REVIEW_HEADERS.length, 160), // reviewers
+        ],
+      },
+    });
+  }
+
+  return { tabName, sheetId };
+}
+
+// updateDimensionProperties request to set a fixed pixel width for a column range.
+function colWidth(
+  sheetId: number,
+  startIndex: number,
+  endIndex: number,
+  pixelSize: number,
+) {
+  return {
+    updateDimensionProperties: {
+      range: { sheetId, dimension: "COLUMNS", startIndex, endIndex },
+      properties: { pixelSize },
+      fields: "pixelSize",
+    },
+  };
+}
+
+// Append one call to the Campaign_Call_Review tab. Fired per connected call
+// from the post-call pipeline. Reviewer feedback columns are left blank for
+// reviewers to fill in. Swallows all errors so a Sheets outage never breaks
+// call finalization or campaign advancement.
+export async function appendCallReview(review: {
+  uuid: string;
+  campaign: string;
+  companyName: string;
+  dealerName: string;
+  recordingUrl: string;
+  transcript: string;
+}) {
+  try {
+    const { tabName, sheetId } = await ensureCallReviewSheet();
+
+    const sheets = await getSheetsClient();
+    const spreadsheetId = process.env.GOOGLE_SHEET_ID!;
+
+    const row = [
+      review.uuid,
+      review.campaign,
+      review.companyName,
+      review.dealerName,
+      review.recordingUrl,
+      review.transcript,
+      // one empty feedback cell per reviewer
+      ...CALL_REVIEWERS.map(() => ""),
+    ];
+
+    const lastCol = colLetter(CALL_REVIEW_HEADERS.length);
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${tabName}!A:${lastCol}`,
+      valueInputOption: "RAW",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: { values: [row] },
+    });
+
+    // Re-assert plain data-row styling across every row below the header:
+    // white background, normal black text, top-aligned, with the long Recording
+    // + Transcript columns wrapped. This runs AFTER the append because
+    // values.append copies the black header format onto the newly inserted row;
+    // this overrides it so data rows match the clean Sales_Call look.
+    if (sheetId != null) {
+      const RECORDING_COL = 4;
+      const TRANSCRIPT_COL = 5;
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              repeatCell: {
+                range: {
+                  sheetId,
+                  startRowIndex: 1,
+                  startColumnIndex: 0,
+                  endColumnIndex: CALL_REVIEW_HEADERS.length,
+                },
+                cell: {
+                  userEnteredFormat: {
+                    backgroundColor: { red: 1, green: 1, blue: 1 },
+                    textFormat: {
+                      bold: false,
+                      foregroundColor: { red: 0, green: 0, blue: 0 },
+                      fontSize: 10,
+                    },
+                    verticalAlignment: "TOP",
+                  },
+                },
+                fields:
+                  "userEnteredFormat(backgroundColor,textFormat,verticalAlignment)",
+              },
+            },
+            // Wrap the long Recording + Transcript columns
+            {
+              repeatCell: {
+                range: {
+                  sheetId,
+                  startRowIndex: 1,
+                  startColumnIndex: RECORDING_COL,
+                  endColumnIndex: TRANSCRIPT_COL + 1,
+                },
+                cell: { userEnteredFormat: { wrapStrategy: "WRAP" } },
+                fields: "userEnteredFormat(wrapStrategy)",
+              },
+            },
+          ],
+        },
+      });
+    }
+
+    console.log(`[SHEETS] Appended call review: ${review.uuid}`);
+  } catch (err) {
+    console.error("[SHEETS] Failed to append call review:", err);
   }
 }
 

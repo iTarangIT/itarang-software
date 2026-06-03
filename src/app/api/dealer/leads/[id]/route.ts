@@ -119,6 +119,8 @@ export const GET = withErrorHandler(async (_req: Request, { params }: { params: 
             current_address: lead.current_address || '',
             permanent_address: lead.permanent_address || '',
             is_current_same: !!lead.is_current_same,
+            state: lead.state || '',
+            city: lead.city || '',
             product_category_id: lead.product_category_id || '',
             product_type_id: lead.product_type_id || '',
             primary_product_id: lead.primary_product_id || '',

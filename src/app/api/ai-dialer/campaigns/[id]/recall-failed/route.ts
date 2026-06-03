@@ -1,24 +1,26 @@
 // POST /api/ai-dialer/campaigns/[id]/recall-failed
 //
-// "Retry failed leads": re-dial this campaign's retryable failed leads IN PLACE
-// — no new campaign is created. The failed rows are reset to 'pending', the
-// campaign is rolled back to 'running', and dialing resumes via advanceCampaign.
+// "Retry failed leads": bundle this campaign's retryable failed leads into a
+// BRAND-NEW campaign and start dialing it immediately. The source campaign and
+// its stats are left completely untouched — each run stays a clean, separate
+// record for audit/cost history.
 //
 // Retryable = dialer_campaign_leads.status='failed' EXCEPT the outcomes that
 // can't or shouldn't be re-dialed:
 //   - no_phone               → there is no number to call
 //   - ineligible_active_lead → the lead is now owned by Inside Sales / ASM
 //
-// A `recall: true` marker is merged into the campaign's region_filter, which
-// makes advanceCampaign bypass the once-per-day idempotency guard so the second
-// dial goes through even on the same day the lead first failed.
+// The new campaign carries recall:true in its region_filter, which makes
+// advanceCampaign bypass the once-per-day idempotency guard so the second dial
+// goes through even on the same day the lead first failed.
 
 import { db } from "@/lib/db";
 import { dialerCampaigns, dialerCampaignLeads } from "@/lib/db/schema";
-import { and, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, notInArray, or } from "drizzle-orm";
 import { successResponse, errorResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireAuth } from "@/lib/auth-utils";
 import { type DialerProvider } from "@/lib/queue/dialerSession";
+import { createCampaign } from "@/lib/queue/campaignTracker";
 import { startDraftCampaign } from "@/lib/queue/startCampaign";
 
 // Failure outcomes that should NOT be retried.
@@ -30,17 +32,22 @@ export const POST = withErrorHandler(
     if (!campaignId) return errorResponse("Campaign id required", 400);
 
     // Auth is best-effort (dev/system contexts) — same posture as list start.
+    let triggeredBy: string | null = null;
     try {
-      await requireAuth();
+      const user = await requireAuth();
+      triggeredBy = user?.id ?? null;
     } catch {
       /* tolerate no session */
     }
 
+    // Load the source campaign — we read from it but never mutate it.
     const rows = await db
       .select({
         id: dialerCampaigns.id,
+        name: dialerCampaigns.name,
         status: dialerCampaigns.status,
         provider: dialerCampaigns.provider,
+        category: dialerCampaigns.category,
         region_filter: dialerCampaigns.region_filter,
       })
       .from(dialerCampaigns)
@@ -48,15 +55,20 @@ export const POST = withErrorHandler(
       .limit(1);
 
     if (rows.length === 0) return errorResponse("Campaign not found", 404);
-    const campaign = rows[0];
+    const source = rows[0];
 
-    if (campaign.status === "running") {
-      return errorResponse("Campaign is already running", 400);
+    // Retrying while the source is still dialing would race its live session;
+    // the UI hides the button in this state, but guard the API too.
+    if (source.status === "running") {
+      return errorResponse(
+        "Wait for the campaign to finish before retrying.",
+        400,
+      );
     }
 
-    // Retryable failed rows for this campaign.
+    // Retryable failed rows for the source campaign, in original queue order.
     const failed = await db
-      .select({ id: dialerCampaignLeads.id })
+      .select({ lead_id: dialerCampaignLeads.lead_id })
       .from(dialerCampaignLeads)
       .where(
         and(
@@ -67,60 +79,65 @@ export const POST = withErrorHandler(
             notInArray(dialerCampaignLeads.call_outcome, NON_RETRYABLE_OUTCOMES),
           ),
         ),
-      );
+      )
+      .orderBy(asc(dialerCampaignLeads.queue_position));
 
-    if (failed.length === 0) {
+    // De-dupe lead ids preserving order (a lead could have more than one
+    // failed row across earlier follow-ups within the same campaign).
+    const seen = new Set<string>();
+    const queueIds: string[] = [];
+    for (const r of failed) {
+      if (!seen.has(r.lead_id)) {
+        seen.add(r.lead_id);
+        queueIds.push(r.lead_id);
+      }
+    }
+
+    if (queueIds.length === 0) {
       return errorResponse("No failed leads to retry", 400);
     }
 
-    const rowIds = failed.map((r) => r.id);
-    const n = rowIds.length;
-
-    // 1. Reset the failed rows to a fresh 'pending' so advanceCampaign re-dials
-    //    them, clearing the prior attempt's outcome / timestamps / call id.
-    const CHUNK = 500;
-    for (let i = 0; i < rowIds.length; i += CHUNK) {
-      await db
-        .update(dialerCampaignLeads)
-        .set({
-          status: "pending",
-          call_outcome: null,
-          started_at: null,
-          completed_at: null,
-          bolna_call_id: null,
-          intent_score: null,
-        })
-        .where(inArray(dialerCampaignLeads.id, rowIds.slice(i, i + CHUNK)));
-    }
-
-    // 2. Roll the campaign back to a runnable state: drop the just-un-failed
-    //    rows from failed_leads, clear the terminal markers, and stamp the
-    //    region_filter so the dialer bypasses the same-day idempotency guard.
-    const existingRegion =
-      campaign.region_filter && typeof campaign.region_filter === "object"
-        ? (campaign.region_filter as Record<string, unknown>)
+    // New campaign's region_filter: inherit the source region for display
+    // context, then add the recall markers. recall:true is what makes
+    // advanceCampaign bypass the once-per-day idempotency guard.
+    const srcRegion =
+      source.region_filter && typeof source.region_filter === "object"
+        ? (source.region_filter as Record<string, unknown>)
         : {};
-    await db
-      .update(dialerCampaigns)
-      .set({
-        completed_at: null,
-        stopped_by: null,
-        failed_leads: sql`GREATEST(${dialerCampaigns.failed_leads} - ${n}, 0)`,
-        region_filter: { ...existingRegion, recall: true },
-      })
-      .where(eq(dialerCampaigns.id, campaignId));
+    const region = {
+      ...srcRegion,
+      recall: true,
+      sourceCampaignId: source.id,
+    };
 
-    // 3. Resume dialing — flips status→running, seeds the session, places the
-    //    first call. Preserve the original started_at (same campaign, not a new run).
     const provider: DialerProvider =
-      campaign.provider === "elevenlabs" ? "elevenlabs" : "bolna";
-    const result = await startDraftCampaign(campaignId, provider, {
-      resetStartedAt: false,
+      source.provider === "elevenlabs" ? "elevenlabs" : "bolna";
+
+    // Name the retry "Retry · <original>". Collapse any existing "Retry · "
+    // prefixes first so retrying a retry doesn't compound into
+    // "Retry · Retry · Retry · …".
+    const baseName = (source.name ?? "").replace(/^(?:Retry · )+/, "").trim();
+    const retryName = `Retry · ${baseName || "previous campaign"}`;
+
+    // Create the retry as a draft, then start it (same sequence as List start).
+    const newId = await createCampaign({
+      queueIds,
+      provider,
+      category: source.category,
+      region,
+      triggeredBy,
+      status: "draft",
+      name: retryName,
     });
 
+    if (!newId) return errorResponse("Could not create retry campaign", 500);
+
+    // Flip to running, tag leads, seed the session, place the first call.
+    const result = await startDraftCampaign(newId, provider);
+
     return successResponse({
-      campaignId,
-      retryCount: n,
+      campaignId: newId,
+      retryCount: queueIds.length,
       status: "running",
       firstCallPlaced: result.firstCallPlaced,
       firstCallError: result.firstCallError,
