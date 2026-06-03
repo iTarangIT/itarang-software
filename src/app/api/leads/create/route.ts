@@ -149,6 +149,8 @@ const step1Schema = z.object({
     has_health_insurance: z.boolean().optional().nullable(),
     has_life_insurance: z.boolean().optional().nullable(),
     initializeDraft: z.boolean().optional(),
+    saveDraft: z.boolean().optional(),
+    fresh: z.boolean().optional(),
     commitStep: z.boolean().optional(),
     leadId: z.string().optional().nullable(),
     lead_score: z.number().optional().nullable(),
@@ -310,7 +312,10 @@ export const POST = withErrorHandler(async (req: Request) => {
     // [E-105] Dealer-status gate — must run BEFORE any leads row is inserted
     // or updated. payment_method is unknown in initializeDraft mode, so only
     // the DEALER_NOT_ACTIVE guard fires there; finance guards run on commit.
-    const gateBlock = await checkDealerStatusGate(dealer_id, data.payment_method);
+    // Draft saves are also exempt from the finance-enabled guard (the payment
+    // method may still change before commit) — only the active check applies.
+    const gatePaymentMethod = (data.initializeDraft || data.saveDraft) ? null : data.payment_method;
+    const gateBlock = await checkDealerStatusGate(dealer_id, gatePaymentMethod);
     if (gateBlock) return gateBlock;
 
     // MODE 1: INITIALIZE DRAFT
@@ -402,6 +407,85 @@ export const POST = withErrorHandler(async (req: Request) => {
         }
     }
 
+    // MODE 1.5: SAVE DRAFT — persist partial Step-1 progress WITHOUT the strict
+    // commit validation, so a dealer can stop midway and resume later from
+    // "My Drafts". The lead stays INCOMPLETE / workflow_step 1 and gets
+    // kyc_status='draft' so it surfaces in the drafts list.
+    if (data.saveDraft) {
+        if (!data.leadId) return errorResponse('leadId required to save draft', 400);
+
+        const normPhone = data.phone ? normalizePhone(data.phone) : null;
+        const _isFinanceLead = data.payment_method === 'finance'
+            || data.payment_method === 'other_finance'
+            || data.payment_method === 'dealer_finance';
+
+        try {
+            await db.transaction(async (tx) => {
+                await tx.update(leads).set({
+                    full_name: data.full_name?.trim() || null,
+                    phone: normPhone,
+                    // owner_name/owner_contact are NOT NULL — surface the entered
+                    // values so the draft shows a real name in "My Drafts", else
+                    // keep the 'DRAFT' placeholder.
+                    owner_name: data.full_name?.trim() || 'DRAFT',
+                    owner_contact: normPhone || 'DRAFT',
+                    owner_email: data.email?.trim() || null,
+                    mobile: normPhone,
+                    // kyc_status='draft' is what surfaces the lead in the "My Drafts"
+                    // list (Source 1). status stays INCOMPLETE so Resume knows to
+                    // reopen the Step-1 wizard rather than the KYC flow.
+                    kyc_status: 'draft',
+                    current_address: data.current_address?.trim() || null,
+                    permanent_address: data.is_current_same ? data.current_address?.trim() : (data.permanent_address?.trim() || null),
+                    is_current_same: data.is_current_same || false,
+                    state: data.state?.trim() || null,
+                    city: data.city?.trim() || null,
+                    dob: data.dob ? new Date(data.dob) : null,
+                    father_or_husband_name: data.father_or_husband_name?.trim() || null,
+                    product_category_id: data.product_category_id || null,
+                    product_type_id: data.product_type_id || null,
+                    primary_product_id: data.primary_product_id || null,
+                    asset_type: data.asset_type ?? null,
+                    interest_level: data.interest_level || null,
+                    vehicle_rc: data.vehicle_rc?.toUpperCase().trim() || null,
+                    vehicle_ownership: data.vehicle_ownership || null,
+                    vehicle_owner_name: data.vehicle_owner_name?.trim() || null,
+                    vehicle_owner_phone: data.vehicle_owner_phone ? normalizePhone(data.vehicle_owner_phone) : null,
+                    interested_in: data.interested_in || [],
+                    payment_method: data.payment_method || null,
+                    resident_status: _isFinanceLead ? data.resident_status : null,
+                    has_health_insurance: _isFinanceLead ? data.has_health_insurance : null,
+                    has_life_insurance: _isFinanceLead ? data.has_life_insurance : null,
+                    status: 'INCOMPLETE',
+                    workflow_step: 1,
+                    updated_at: new Date(),
+                }).where(and(eq(leads.id, data.leadId!), eq(leads.uploader_id, user.id)));
+
+                // Keep the lead's extra-product rows in sync on draft save too.
+                await tx.delete(leadProducts).where(eq(leadProducts.lead_id, data.leadId!));
+                const extras = (data.additional_products ?? []).filter(
+                    (p) => typeof p.product_id === 'string' && UUID_RE.test(p.product_id.trim()),
+                ).map((p) => ({ ...p, product_id: p.product_id.trim() }));
+                if (extras.length > 0) {
+                    await tx.insert(leadProducts).values(
+                        extras.map((p) => ({
+                            lead_id: data.leadId!,
+                            product_id: p.product_id,
+                            product_category_id: p.category_id ?? null,
+                            category_slug: p.category_slug ?? null,
+                            asset_type: p.asset_type ?? null,
+                        })),
+                    );
+                }
+            });
+
+            return successResponse({ success: true, leadId: data.leadId, saved: true });
+        } catch (err) {
+            console.error('Draft save failed:', err);
+            return errorResponse('Could not save draft. Please try again.', 500);
+        }
+    }
+
     // MODE 2: COMMIT STEP 1
     if (data.commitStep) {
         if (!data.leadId) return errorResponse('leadId required for commit', 400);
@@ -426,18 +510,28 @@ export const POST = withErrorHandler(async (req: Request) => {
             }
         }
 
-        // Addendum §3.2, §3.3 — three new fields are required for finance leads.
+        // Email + State + City are mandatory for EVERY lead (the UI marks them
+        // required like name/phone). Email also doubles as the Digio e-sign
+        // signer id for finance leads.
+        const email = data.email?.trim();
+        if (!email) {
+            return errorResponse('Customer email required', 400);
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return errorResponse('Enter a valid customer email address', 400);
+        }
+        if (!data.state?.trim()) {
+            return errorResponse('State required', 400);
+        }
+        if (!data.city?.trim()) {
+            return errorResponse('City required', 400);
+        }
+
+        // Addendum §3.2, §3.3 — these three remain required for finance leads only.
         const _isFinanceLead = data.payment_method === 'finance'
             || data.payment_method === 'other_finance'
             || data.payment_method === 'dealer_finance';
         if (_isFinanceLead) {
-            const email = data.email?.trim();
-            if (!email) {
-                return errorResponse('Customer email required for finance cases', 400);
-            }
-            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-                return errorResponse('Enter a valid customer email address', 400);
-            }
             if (data.resident_status !== 'owned' && data.resident_status !== 'rented') {
                 return errorResponse('Resident status required for finance cases', 400);
             }
@@ -446,12 +540,6 @@ export const POST = withErrorHandler(async (req: Request) => {
             }
             if (typeof data.has_life_insurance !== 'boolean') {
                 return errorResponse('Existing Life Insurance answer required for finance cases', 400);
-            }
-            if (!data.state?.trim()) {
-                return errorResponse('State required for finance cases', 400);
-            }
-            if (!data.city?.trim()) {
-                return errorResponse('City required for finance cases', 400);
             }
         }
 

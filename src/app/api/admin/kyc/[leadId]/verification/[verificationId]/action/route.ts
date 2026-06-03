@@ -116,24 +116,30 @@ export async function POST(
       })
       .where(eq(kycVerifications.id, verificationId));
 
-    // Audit log
-    await db.insert(auditLogs).values({
-      id: createWorkflowId("AUDIT", now),
-      entity_type: "kyc_verification",
-      entity_id: verificationId,
-      action: `card_${action}`,
-      changes: {
-        lead_id: leadId,
-        verification_type: verification.verification_type,
-        previous_status: verification.status,
-        new_status: newStatus,
-        admin_action: adminAction,
-        notes,
-        rejection_reason: rejectionReason,
-      },
-      performed_by: appUser.id,
-      timestamp: now,
-    });
+    // Audit log — non-fatal. The verification update above is already committed
+    // (this route is not transactional), so a logging failure must not surface
+    // as a 500 that makes a successful accept/reject look broken.
+    try {
+      await db.insert(auditLogs).values({
+        id: createWorkflowId("AUDIT", now),
+        entity_type: "kyc_verification",
+        entity_id: verificationId,
+        action: `card_${action}`,
+        changes: {
+          lead_id: leadId,
+          verification_type: verification.verification_type,
+          previous_status: verification.status,
+          new_status: newStatus,
+          admin_action: adminAction,
+          notes,
+          rejection_reason: rejectionReason,
+        },
+        performed_by: appUser.id,
+        timestamp: now,
+      });
+    } catch (auditErr) {
+      console.error("[Verification Card Action] Audit insert failed:", auditErr);
+    }
 
     // Update lead kyc_status when docs are requested
     if (action === "request_more_docs") {
