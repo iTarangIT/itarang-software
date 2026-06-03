@@ -1345,6 +1345,37 @@ export default function LeadsUnifiedPage() {
     [startDialerPoller, startCallingLead],
   );
 
+  // Launch a draft list campaign (created in the modal's Lists tab). The
+  // campaign dials server-side; we don't hold the lead objects locally, so the
+  // live banner reads counts from /api/ai-dialer/status. Light up the session
+  // indicator and jump to the Campaigns tab to watch it run.
+  const startListCampaign = useCallback(
+    async (campaignId: string, provider: DialerProvider) => {
+      const res = await fetch(`/api/ai-dialer/lists/${campaignId}/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        alert(json?.error?.message ?? "Failed to start the campaign");
+        return;
+      }
+      stopRef.current = false;
+      queueRef.current = [];
+      setDialerQueue([]);
+      setDialerIndex(0);
+      setDialerCallsMade(1);
+      setDialerProvider(provider);
+      setCurrentCampaignId(campaignId);
+      setDialerOn(true);
+      setDialerPhase("calling");
+      startDialerPoller();
+      setTab("campaigns");
+    },
+    [startDialerPoller],
+  );
+
   const handleDialerOff = useCallback(() => {
     stopRef.current = true;
     if (countdownRef.current) clearInterval(countdownRef.current);
@@ -1409,6 +1440,7 @@ export default function LeadsUnifiedPage() {
         isOpen={dialerModalOpen}
         onClose={() => setDialerModalOpen(false)}
         onConfirm={confirmDialerStart}
+        onStartListCampaign={startListCampaign}
       />
 
       {/* HEADER */}

@@ -47,6 +47,12 @@ interface DialerStartModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: (payload: DialerStartPayload) => Promise<void> | void;
+  // Launch a draft list campaign created in the Lists tab. The modal supplies
+  // the currently-selected voice agent and closes itself on success.
+  onStartListCampaign?: (
+    campaignId: string,
+    provider: DialerProvider,
+  ) => Promise<void> | void;
 }
 
 const CATEGORIES: { key: DialerCategory; label: string; hint: string }[] = [
@@ -116,11 +122,15 @@ export function DialerStartModal({
   isOpen,
   onClose,
   onConfirm,
+  onStartListCampaign,
 }: DialerStartModalProps) {
   const [provider, setProvider] = useState<DialerProvider>("bolna");
   const [providerOpen, setProviderOpen] = useState(false);
   const [category, setCategory] = useState<DialerCategory>("hot");
   const [region, setRegion] = useState<RegionSelection>(EMPTY_SELECTION);
+  // "region" = Saved Groups / Custom Selection; "list" = the Lists (Excel) tab.
+  // Reported up by RegionSelector.onModeChange; gates the segment + footer.
+  const [mode, setMode] = useState<"region" | "list">("region");
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [counts, setCounts] = useState<Record<DialerCategory, number>>({
@@ -144,6 +154,7 @@ export function DialerStartModal({
       setProviderOpen(false);
       setSubmitting(false);
       setSaveAsName("");
+      setMode("region");
     }
   }, [isOpen]);
 
@@ -221,6 +232,12 @@ export function DialerStartModal({
     } finally {
       setSubmitting(false);
     }
+  };
+
+  // Launch a draft list campaign with the currently-selected voice agent.
+  const handleStartList = async (campaignId: string) => {
+    await onStartListCampaign?.(campaignId, provider);
+    onClose();
   };
 
   const handleSaveAsGroup = async () => {
@@ -429,7 +446,7 @@ export function DialerStartModal({
           <div className="mb-6 relative z-10">
             <div className="flex items-center justify-between mb-2.5">
               <p className="dialer-eyebrow">02 · Region</p>
-              {!isEmptySelection(region) && (
+              {mode !== "list" && !isEmptySelection(region) && (
                 <div className="flex items-center gap-1.5">
                   <input
                     type="text"
@@ -458,10 +475,14 @@ export function DialerStartModal({
               value={region}
               onChange={setRegion}
               onManageGroups={() => setShowGroupManager(true)}
+              onModeChange={setMode}
+              provider={provider}
+              onStartList={handleStartList}
             />
           </div>
 
-          {/* 03 — Lead segment */}
+          {/* 03 — Lead segment (region mode only) */}
+          {mode !== "list" && (
           <div className="mb-2 relative z-10">
             <div className="flex items-baseline justify-between mb-3">
               <p className="dialer-eyebrow">03 · Lead Segment</p>
@@ -587,27 +608,38 @@ export function DialerStartModal({
               })}
             </div>
           </div>
+          )}
         </div>
 
         <div className="flex items-center justify-between gap-3 px-7 py-5 border-t border-gray-100 bg-gray-50">
           <div className="flex items-center gap-3">
-            <Phone className="w-3.5 h-3.5 text-gray-400" />
-            <p className="text-[13px] text-gray-600">
-              Will dial{" "}
-              <span className="text-gray-900 font-bold dialer-tnum">
-                {selectedCount}
-              </span>{" "}
-              {selectedCount === 1 ? "lead" : "leads"} via{" "}
-              <span
-                className={`font-semibold ${
-                  provider === "elevenlabs"
-                    ? "text-violet-600"
-                    : "text-blue-600"
-                }`}
-              >
-                {selectedProvider.label}
-              </span>
-            </p>
+            {mode === "list" ? (
+              <p className="text-[13px] text-gray-500">
+                Upload a list, then press{" "}
+                <span className="font-semibold text-emerald-700">Start</span> on
+                it to begin calling.
+              </p>
+            ) : (
+              <>
+                <Phone className="w-3.5 h-3.5 text-gray-400" />
+                <p className="text-[13px] text-gray-600">
+                  Will dial{" "}
+                  <span className="text-gray-900 font-bold dialer-tnum">
+                    {selectedCount}
+                  </span>{" "}
+                  {selectedCount === 1 ? "lead" : "leads"} via{" "}
+                  <span
+                    className={`font-semibold ${
+                      provider === "elevenlabs"
+                        ? "text-violet-600"
+                        : "text-blue-600"
+                    }`}
+                  >
+                    {selectedProvider.label}
+                  </span>
+                </p>
+              </>
+            )}
           </div>
           <div className="flex items-center gap-1.5">
             <button
@@ -615,25 +647,27 @@ export function DialerStartModal({
               disabled={submitting}
               className="px-4 py-2 text-[13px] text-gray-600 hover:text-gray-900 transition-colors cursor-pointer disabled:opacity-50"
             >
-              Cancel
+              {mode === "list" ? "Close" : "Cancel"}
             </button>
-            <button
-              onClick={handleConfirm}
-              disabled={selectedCount === 0 || submitting || previewing}
-              className="dialer-cta inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] cursor-pointer"
-            >
-              {submitting ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Starting
-                </>
-              ) : (
-                <>
-                  Start dialing
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </>
-              )}
-            </button>
+            {mode !== "list" && (
+              <button
+                onClick={handleConfirm}
+                disabled={selectedCount === 0 || submitting || previewing}
+                className="dialer-cta inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] cursor-pointer"
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Starting
+                  </>
+                ) : (
+                  <>
+                    Start dialing
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </div>
       </div>

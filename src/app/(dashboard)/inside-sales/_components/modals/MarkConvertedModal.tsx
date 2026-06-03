@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { CheckCircle2 } from "lucide-react";
 import { Modal } from "../Modal";
@@ -16,6 +17,7 @@ type Props = {
 };
 
 export function MarkConvertedModal({ open, onClose, leadId, hasFinalPrice, onSuccess }: Props) {
+    const router = useRouter();
     const [notes, setNotes] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
@@ -33,9 +35,17 @@ export function MarkConvertedModal({ open, onClose, leadId, hasFinalPrice, onSuc
             });
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error?.message ?? "Failed to mark converted");
-            toast.success("Lead marked Converted.");
             setNotes("");
             onSuccess();
+            // BRD §0.13 — converting starts dealer onboarding: take the rep
+            // straight into the wizard, pre-filled from this lead.
+            const appId = json?.data?.onboardingApplicationId;
+            if (appId) {
+                toast.success("Lead Converted — starting dealer onboarding…");
+                router.push(`/dealer-onboarding?applicationId=${encodeURIComponent(appId)}`);
+            } else {
+                toast.success("Lead marked Converted.");
+            }
         } catch (err) {
             toast.error((err as Error).message);
         } finally {
@@ -70,9 +80,9 @@ export function MarkConvertedModal({ open, onClose, leadId, hasFinalPrice, onSuc
                         <CheckCircle2 className="h-5 w-5" />
                     </div>
                     <div className="space-y-1 text-sm text-gray-700">
-                        <p>Marks the lead as <span className="font-semibold">Converted</span>. closing_owner_id = you; closing_role = is_phone.</p>
+                        <p>Marks the lead as <span className="font-semibold">Converted</span> (closing_owner_id = you) and initiates dealer onboarding.</p>
                         <p className="text-xs text-gray-500">
-                            Onboarding application creation is handled by the admin loopback in Module 3 — this action only seals the sales-stage close.
+                            A draft dealer onboarding application is created automatically and linked to this lead. If it cannot be created, the conversion is rolled back.
                         </p>
                     </div>
                 </div>

@@ -1,6 +1,8 @@
 "use client";
 
+import { Suspense } from "react";
 import OnboardingLayout from "@/components/onboarding/OnboardingLayout";
+import OnboardingHydrator from "@/components/onboarding/OnboardingHydrator";
 import { useOnboardingStore } from "@/store/onboardingStore";
 import StepAgreement from "@/components/onboarding/steps/StepAgreement";
 import StepCompany from "@/components/onboarding/steps/StepCompany";
@@ -13,13 +15,18 @@ export default function DealerOnboardingPage() {
   const step = useOnboardingStore((s) => s.step);
 
   return (
-    <OnboardingLayout>
-      {step === 1 && <StepCompany />}
-      {step === 2 && <StepDocuments />}
-      {step === 3 && <StepOwnership />}
-      {step === 4 && <StepFinance />}
-      {step === 5 && <StepAgreement />}
-      {step === 6 && <StepReview />}
-    </OnboardingLayout>
+    <>
+      <Suspense fallback={null}>
+        <OnboardingHydrator />
+      </Suspense>
+      <OnboardingLayout>
+        {step === 1 && <StepCompany />}
+        {step === 2 && <StepDocuments />}
+        {step === 3 && <StepOwnership />}
+        {step === 4 && <StepFinance />}
+        {step === 5 && <StepAgreement />}
+        {step === 6 && <StepReview />}
+      </OnboardingLayout>
+    </>
   );
 }

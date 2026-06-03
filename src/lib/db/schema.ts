@@ -3455,6 +3455,11 @@ export const videoKycVerifications = pgTable(
     provider_raw_status: varchar("provider_raw_status", { length: 120 }),
     provider_raw_payload: jsonb("provider_raw_payload"),
     failure_reason: text("failure_reason"),
+    // E-154 — Addendum V0.3.1 §11.3.4/§11.6 "Session Video". The customer's
+    // recorded passive-liveness clip, stored in the nbfc-documents bucket and
+    // served via /api/nbfc-uploads/<key>. Null for active/own modes where no
+    // local video exists (review screen hides the block).
+    session_video_url: text("session_video_url"),
     // E-152 — passive VKYC link lifecycle (Addendum V0.3.1 §11). The single-use
     // capture link (token = vkyc_ref) is delivered over one of these channels.
     link_channel: varchar("link_channel", { length: 16 }), // 'sms' | 'email' | 'whatsapp'

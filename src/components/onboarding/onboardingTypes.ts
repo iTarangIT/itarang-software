@@ -208,6 +208,9 @@ export type DealerOnboardingState = {
   lastSavedAt: string | null;
   dealerId: string;
   dealerDisplayName: string;
+  // Set when an internal user (sales / admin) is completing the wizard on a
+  // converted lead's behalf (BRD §0.13). Null for normal dealer self-service.
+  internalApplicationId: string | null;
   company: CompanyStepData;
   compliance: ComplianceStepData;
   ownership: OwnershipBankingData;

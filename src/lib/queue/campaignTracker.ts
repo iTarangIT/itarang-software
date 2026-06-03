@@ -53,10 +53,19 @@ export async function createCampaign(opts: {
   category?: string | null;
   region?: unknown;
   triggeredBy?: string | null;
+  // Lifecycle status to create the campaign in. Defaults to "running" (the
+  // region flow fires the first call immediately). The List flow passes
+  // "draft" so the queue is held until the user explicitly presses Start.
+  status?: string;
+  // Explicit campaign name. Defaults to the auto-generated "Segment · Region ·
+  // time" label. The List flow passes the user-typed list name.
+  name?: string;
 }): Promise<string | null> {
   try {
     const campaignId = newId("camp");
-    const name = autoName({ category: opts.category, region: opts.region });
+    const name =
+      opts.name?.trim() ||
+      autoName({ category: opts.category, region: opts.region });
 
     await db.insert(dialerCampaigns).values({
       id: campaignId,
@@ -65,7 +74,7 @@ export async function createCampaign(opts: {
       provider: opts.provider,
       category: opts.category ?? null,
       region_filter: opts.region ?? null,
-      status: "running",
+      status: opts.status ?? "running",
       total_leads: opts.queueIds.length,
     });
 
