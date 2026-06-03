@@ -44,6 +44,13 @@ export async function POST(req: NextRequest) {
       phone: body.phone,
       leadId: body.leadId,
       scheduledAt: body.scheduledAt,
+      // This route is only ever hit by a human pressing "Call" (the per-lead
+      // call buttons). That's a deliberate action — re-dialing a lead the same
+      // day (e.g. retrying a failed call) is exactly the intent — so bypass the
+      // once-per-day idempotency guard by default. The guard still protects the
+      // automated QStash dispatch path (/api/elevenlabs/dispatch-call). A caller
+      // can pass bypassIdempotency:false to opt back into the guard.
+      bypassIdempotency: body.bypassIdempotency ?? true,
     });
 
     console.log("[ELEVENLABS CALL] Result:", result);
