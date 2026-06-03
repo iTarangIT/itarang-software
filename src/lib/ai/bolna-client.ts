@@ -62,7 +62,14 @@ export async function getCallStatus(callId: string) {
     }
 
     try {
-        const res = await fetch(`${BOLNA_BASE_URL}/call/${callId}`, {
+        // Bolna identifies a placed call by its EXECUTION id (what POST /call
+        // returns as `execution_id`, which we store as bolna_call_id). The
+        // status/detail endpoint is `/executions/{id}` — `/call/{id}` 404s for
+        // an execution id, which silently broke the dialer-poll backstop: every
+        // poll got a 404, so a call whose webhook was dropped (all localhost
+        // calls, and any dropped prod webhook) was never reconciled and the
+        // watchdog wrongly marked the succeeded call `no_webhook`/failed.
+        const res = await fetch(`${BOLNA_BASE_URL}/executions/${callId}`, {
             headers: {
                 'Authorization': `Bearer ${BOLNA_API_KEY}`,
             },
