@@ -17,7 +17,10 @@ import {
 } from "@/lib/ai/analysis/postCallHelpers";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
-import { rehostRecording } from "@/lib/ai/storage/recordingStore";
+import {
+  rehostRecording,
+  rehostElevenLabsRecording,
+} from "@/lib/ai/storage/recordingStore";
 
 export type ElevenLabsFinalizePayload = {
   conversationId: string;
@@ -32,6 +35,25 @@ export type ElevenLabsFinalizePayload = {
 
 const IN_PROGRESS = new Set(["initiated", "ringing", "in-progress"]);
 const ADVANCE_DELAY_MS = 5_000;
+
+// Resolve a browser-playable recording URL for an ElevenLabs call. ElevenLabs
+// doesn't hand back a hosted recording URL on the webhook/poll (unlike Bolna),
+// so prefer an explicit URL if one ever appears, otherwise pull the audio bytes
+// from the conversation /audio endpoint and re-host them. Returns "" if no
+// recording could be produced.
+async function resolveElevenLabsPlayableUrl(
+  conversationId: string,
+  recordingUrl: string | null,
+): Promise<string> {
+  if (recordingUrl) {
+    return rehostRecording({
+      provider: "elevenlabs",
+      callId: conversationId,
+      recordingUrl,
+    });
+  }
+  return rehostElevenLabsRecording(conversationId);
+}
 
 export async function finalizeElevenLabsCall(
   payload: ElevenLabsFinalizePayload,
@@ -134,11 +156,10 @@ export async function finalizeElevenLabsCall(
             .limit(1);
           campaign = c[0]?.name ?? reviewCampaignId;
         }
-        const playableUrl = await rehostRecording({
-          provider: "elevenlabs",
-          callId: conversationId,
+        const playableUrl = await resolveElevenLabsPlayableUrl(
+          conversationId,
           recordingUrl,
-        });
+        );
         await appendCallReview({
           uuid: reviewUuid,
           campaign,
@@ -303,11 +324,10 @@ export async function finalizeElevenLabsCall(
         .limit(1);
       campaign = c[0]?.name ?? reviewCampaignId;
     }
-    const playableUrl = await rehostRecording({
-      provider: "elevenlabs",
-      callId: conversationId,
+    const playableUrl = await resolveElevenLabsPlayableUrl(
+      conversationId,
       recordingUrl,
-    });
+    );
     await appendCallReview({
       uuid: reviewUuid,
       campaign,

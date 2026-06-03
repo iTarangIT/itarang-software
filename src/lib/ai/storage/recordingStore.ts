@@ -18,6 +18,9 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 // /storage/v1/object/public/<bucket>/<key> with no auth.
 const BUCKET = "call-recordings";
 
+const ELEVENLABS_BASE =
+  process.env.ELEVENLABS_API_BASE_URL || "https://api.elevenlabs.io";
+
 // Optional per-environment key prefix so sandbox and production don't collide
 // when they share one Supabase project. Leave unset if they use separate
 // projects. Normalized to end with "/" when present.
@@ -89,5 +92,80 @@ export async function rehostRecording(opts: {
       err,
     );
     return recordingUrl;
+  }
+}
+
+/**
+ * Re-host an ElevenLabs conversation's audio.
+ *
+ * Unlike Bolna, ElevenLabs does NOT return a hosted recording URL on the
+ * post-call transcription webhook or the conversation status JSON — the audio
+ * is only available from a SEPARATE authenticated endpoint:
+ *   GET /v1/convai/conversations/{conversation_id}/audio   (xi-api-key header)
+ * which streams the raw audio bytes (not a URL). We pull those bytes and upload
+ * them to the same public bucket, returning OUR permanent browser-playable URL.
+ *
+ * Returns "" on any failure (missing key, audio not ready yet, upload error) so
+ * the review sheet simply has no link rather than breaking finalization. The
+ * audio can lag the transcript by a few seconds after a call ends; a later
+ * poll/backfill re-running finalize will pick it up.
+ */
+export async function rehostElevenLabsRecording(
+  conversationId: string,
+): Promise<string> {
+  if (!conversationId) return "";
+
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) {
+    console.warn(
+      "[recordingStore] ELEVENLABS_API_KEY not set — cannot fetch conversation audio",
+    );
+    return "";
+  }
+
+  const url = `${ELEVENLABS_BASE}/v1/convai/conversations/${encodeURIComponent(
+    conversationId,
+  )}/audio`;
+
+  try {
+    const res = await fetch(url, {
+      headers: { "xi-api-key": apiKey, accept: "audio/mpeg" },
+    });
+    if (!res.ok) {
+      throw new Error(`audio fetch failed: HTTP ${res.status}`);
+    }
+
+    const contentType =
+      res.headers.get("content-type")?.split(";")[0]?.trim() || "audio/mpeg";
+    const ext = extFor(contentType);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.byteLength === 0) {
+      throw new Error("audio endpoint returned 0 bytes (not ready yet?)");
+    }
+
+    const key = `${envPrefix()}elevenlabs/${sanitize(conversationId)}.${ext}`;
+    const { error } = await supabaseAdmin.storage
+      .from(BUCKET)
+      .upload(key, buffer, { contentType, upsert: true });
+    if (error) {
+      throw new Error(`upload failed: ${error.message}`);
+    }
+
+    const { data } = supabaseAdmin.storage.from(BUCKET).getPublicUrl(key);
+    const publicUrl = data?.publicUrl;
+    if (!publicUrl) {
+      throw new Error("getPublicUrl returned no url");
+    }
+
+    console.log(
+      `[recordingStore] re-hosted ElevenLabs audio ${conversationId} (${buffer.byteLength} bytes)`,
+    );
+    return publicUrl;
+  } catch (err) {
+    console.error(
+      `[recordingStore] ElevenLabs audio re-host failed for ${conversationId}:`,
+      err,
+    );
+    return "";
   }
 }
