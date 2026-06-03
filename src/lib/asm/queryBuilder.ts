@@ -22,7 +22,11 @@ type BuildArgs = {
 function tabFilter(tab: AsmQueueTab, asmId: string) {
     switch (tab) {
         case "my_visits":
-            return sql`dl.current_owner_id = ${asmId} AND dl.lead_status = 'Transferred_to_ASM' AND dl.is_active IS NOT FALSE`;
+            // Any open lead the ASM owns — not just Transferred_to_ASM. The
+            // status-equals filter created ghosts when an admin reassign or
+            // any other path set current_owner_id without flipping the status.
+            // Ownership + not-terminal is the natural definition of "my active".
+            return sql`dl.current_owner_id = ${asmId} AND dl.lead_status NOT IN (${TERMINAL_LIST}) AND dl.is_active IS NOT FALSE`;
         case "today":
             return sql`dl.asm_id = ${asmId} AND lv.scheduled_date = CURRENT_DATE AND lv.visit_status IN ('scheduled','pending_scheduling') AND dl.is_active IS NOT FALSE`;
         case "territory":

@@ -243,6 +243,17 @@ export interface VideoLivenessResult {
     responseKey?: string;
 }
 
+// Decentro rejects `consent_purpose` values that contain special characters,
+// replying with "Unsanitized values detected for key(s): consent_purpose.
+// Kindly sanitize ... by removing special characters such as . @ # $ % ^ & * !
+// ; : ' " ~ ` ? = + ) (". That rejection fails the WHOLE request before the
+// video is ever scored, so the track lands as failed. Strip anything outside
+// [A-Za-z0-9 hyphen] and collapse whitespace so no caller can trip it.
+function sanitizeConsentPurpose(s: string): string {
+    const cleaned = s.replace(/[^A-Za-z0-9 -]/g, ' ').replace(/\s+/g, ' ').trim();
+    return cleaned || 'Customer video liveness for loan KYC';
+}
+
 export async function videoLiveness(
     video: Blob,
     consentPurpose: string = 'Customer video liveness for loan KYC',
@@ -251,7 +262,7 @@ export async function videoLiveness(
     const form = new FormData();
     form.append('reference_id', genRefId());
     form.append('consent', 'true');
-    form.append('consent_purpose', consentPurpose);
+    form.append('consent_purpose', sanitizeConsentPurpose(consentPurpose));
     form.append('video', video, filename);
 
     // Forensics endpoints (face_match + video_liveness) authenticate with

@@ -447,7 +447,8 @@ export default function StepReview() {
       setIsSubmitting(true);
 
       const payload = {
-        applicationId: "",
+        applicationId: state.internalApplicationId || "",
+        internalSubmission: !!state.internalApplicationId,
         dealerId: state.dealerId || "",
         company: state.company,
         compliance: state.compliance,
@@ -560,6 +561,14 @@ export default function StepReview() {
 
       // Mark onboarding complete in Zustand store (also saves dealerId to localStorage)
       completeOnboarding();
+
+      // Internal staff completing onboarding on a converted lead's behalf must
+      // stay logged in — skip the dealer sign-out + portal redirect below and
+      // return them to the sales workspace.
+      if (state.internalApplicationId) {
+        router.push("/inside-sales");
+        return;
+      }
 
       // Always send submitted dealers to the sandbox login portal. A stale
       // ngrok URL in NEXT_PUBLIC_DEALER_LOGIN_URL / NEXT_PUBLIC_APP_URL must

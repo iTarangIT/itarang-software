@@ -56,10 +56,16 @@ function extractEmail(memory: unknown): string | null {
     return null;
 }
 
+// `db` or a live transaction handle — both expose `.execute`. Letting the
+// caller pass its transaction lets conversion + onboarding creation commit or
+// roll back as one unit (BRD §0.13: never Converted without an application).
+type SqlExecutor = Pick<typeof db, "execute">;
+
 export async function createOnboardingApplicationForConvertedLead(
     leadId: string,
-): Promise<{ created: boolean; applicationId: string | null }> {
-    const rows = (await db.execute<ConvertedLeadRow>(sql`
+    executor: SqlExecutor = db,
+): Promise<{ created: boolean; applicationId: string | null; alreadyExisted: boolean }> {
+    const rows = (await executor.execute<ConvertedLeadRow>(sql`
         SELECT
             dl.dealer_name, dl.shop_name, dl.phone, dl.location, dl.city,
             dl.state, dl.pincode, dl.language, dl.segments,
@@ -82,7 +88,7 @@ export async function createOnboardingApplicationForConvertedLead(
     `)) as unknown as ConvertedLeadRow[];
 
     const r = rows[0];
-    if (!r) return { created: false, applicationId: null };
+    if (!r) return { created: false, applicationId: null, alreadyExisted: false };
 
     // company_name is NOT NULL on dealer_onboarding_applications.
     const companyName =
@@ -101,7 +107,7 @@ export async function createOnboardingApplicationForConvertedLead(
         owner_email: "to_be_verified",
     });
 
-    const inserted = (await db.execute<{ id: string }>(sql`
+    const inserted = (await executor.execute<{ id: string }>(sql`
         INSERT INTO dealer_onboarding_applications (
             company_name, onboarding_status,
             originating_dealer_lead_id, sponsoring_asm_id, owner_id,
@@ -112,7 +118,8 @@ export async function createOnboardingApplicationForConvertedLead(
             source_ai_session_id, source_ai_intent_score,
             proposed_deal_value, proposed_credit_terms, proposed_delivery_terms,
             proposed_warranty_terms, proposed_terms_notes, payment_method,
-            deal_notes, quote_document_url, field_verification_status
+            deal_notes, quote_document_url, field_verification_status,
+            last_action_by, last_action_at
         ) VALUES (
             ${companyName}, 'draft',
             ${leadId}, ${sponsoringAsmId}, ${r.closing_owner_id},
@@ -124,7 +131,8 @@ export async function createOnboardingApplicationForConvertedLead(
             ${r.ai_session_id}, ${r.final_intent_score},
             ${r.c_final_price}, ${r.c_credit_terms}, ${r.c_delivery_terms},
             ${r.c_warranty_terms}, ${r.c_notes}, ${r.c_payment_method},
-            ${r.c_deal_notes}, ${r.c_quote_url}, ${fieldVerification}::jsonb
+            ${r.c_deal_notes}, ${r.c_quote_url}, ${fieldVerification}::jsonb,
+            ${r.closing_owner_id}::uuid, NOW()
         )
         ON CONFLICT (originating_dealer_lead_id)
             WHERE originating_dealer_lead_id IS NOT NULL
@@ -132,10 +140,25 @@ export async function createOnboardingApplicationForConvertedLead(
         RETURNING id
     `)) as unknown as { id: string }[];
 
-    const applicationId = inserted[0]?.id ?? null;
+    let applicationId = inserted[0]?.id ?? null;
+    const created = !!applicationId;
+
+    // Re-conversion (Lost → reactivated → Converted again): the partial UNIQUE
+    // index on originating_dealer_lead_id makes the INSERT a no-op, so RETURNING
+    // is empty. Fetch the application that already exists for this lead so the
+    // caller (audit log / banner / notifications) still gets a valid id.
+    if (!applicationId) {
+        const existing = (await executor.execute<{ id: string }>(sql`
+            SELECT id FROM dealer_onboarding_applications
+            WHERE originating_dealer_lead_id = ${leadId}
+            LIMIT 1
+        `)) as unknown as { id: string }[];
+        applicationId = existing[0]?.id ?? null;
+    }
+
     if (applicationId) {
         // Back-reference so the Lead Detail can show "Onboarding initiated".
-        await db.execute(sql`
+        await executor.execute(sql`
             UPDATE dealer_leads
             SET dealer_onboarding_application_id = ${applicationId},
                 updated_at = NOW()
@@ -143,5 +166,5 @@ export async function createOnboardingApplicationForConvertedLead(
         `);
     }
 
-    return { created: !!applicationId, applicationId };
+    return { created, applicationId, alreadyExisted: !created && !!applicationId };
 }

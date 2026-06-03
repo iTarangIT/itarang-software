@@ -4,6 +4,11 @@ export interface BolnaCallPayload {
   name?: string;
   context?: string;
   scheduledAt?: string;
+  // Skip the once-per-(lead,phone,day) idempotency guard. Set only for
+  // deliberate human-initiated re-calls (e.g. the "Retry failed leads"
+  // campaign) where a same-day second dial is the intended behaviour. The
+  // guard otherwise stops QStash retries from double-billing one daily attempt.
+  bypassIdempotency?: boolean;
 }
 
 export interface BolnaCallResponse {

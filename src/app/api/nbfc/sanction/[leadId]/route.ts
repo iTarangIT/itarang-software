@@ -16,10 +16,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { leads, loanSanctions, nbfc, nbfcFinancingOffers, productSelections } from "@/lib/db/schema";
+import { leads, loanSanctions, nbfc, nbfcFinancingOffers, nbfcServiceConfig, productSelections } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 import { evaluateTrackGate } from "@/lib/nbfc/track-gate";
+import { evaluateAgreementGate, type AgreementMethod } from "@/lib/nbfc/agreement";
+import { syncLoanAgreementStatusFromDigio } from "@/lib/nbfc/sync-loan-agreement-status";
 import { postCharge } from "@/lib/nbfc/charging";
 import { generateId } from "@/lib/api-utils";
 import { notifyLoanSanctioned } from "@/lib/notifications";
@@ -60,14 +62,38 @@ async function loadContext(leadId: string, tenantId: string) {
   // §7.4 Track Rules — the unified gate composes FI + VKYC + E-NACH per the
   // lead's frozen config snapshot (E-NACH stays a §9.4 hard gate on its own).
   const gate = await evaluateTrackGate(leadId);
-  return { assignment, lead, gate };
+
+  // Agreement status — advisory only (§17.5, Step-5 OTP is the hard gate), but
+  // surfaced on the disbursal card so the NBFC can see the signing state. Method
+  // comes from the per-lead snapshot first, falling back to live config.
+  const snap = (assignment?.snapshot ?? {}) as { doc_agreement_method?: AgreementMethod | null };
+  let agreementMethod: AgreementMethod | null = snap.doc_agreement_method ?? null;
+  if (!agreementMethod && assignment) {
+    const [cfg] = await db
+      .select({ m: nbfcServiceConfig.doc_agreement_method })
+      .from(nbfcServiceConfig)
+      .where(eq(nbfcServiceConfig.tenant_id, tenantId))
+      .limit(1);
+    agreementMethod = (cfg?.m ?? null) as AgreementMethod | null;
+  }
+  // Reconcile against Digio first so a signed agreement surfaces even when the
+  // webhook never arrived (local dev / missed callback). Best-effort.
+  if (assignment) {
+    await syncLoanAgreementStatusFromDigio(leadId, assignment.nbfc_id).catch(() => {});
+  }
+  const agreement_gate = await evaluateAgreementGate(
+    leadId,
+    assignment?.nbfc_id ?? null,
+    agreementMethod,
+  );
+  return { assignment, lead, gate, agreement_gate };
 }
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
   try {
     const { leadId } = await params;
     const actor = await resolveActor(req.headers);
-    const { assignment, lead, gate } = await loadContext(leadId, actor.tenant_id);
+    const { assignment, lead, gate, agreement_gate } = await loadContext(leadId, actor.tenant_id);
     const isWinner = assignment?.status === "selected";
     const alreadySanctioned = lead?.kyc_status === "loan_sanctioned" || lead?.kyc_status === "sold";
     const canAct = (actor.role === "credit_underwriting" || actor.role === "nbfc_admin") && isWinner && !alreadySanctioned;
@@ -76,6 +102,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
       is_winner: isWinner,
       already_sanctioned: alreadySanctioned,
       track_gate: gate,
+      agreement_gate,
       can_sanction: canAct && gate.satisfied,
       lead_status: lead?.kyc_status ?? null,
     });

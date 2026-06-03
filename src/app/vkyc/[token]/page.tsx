@@ -79,8 +79,12 @@ export default function VkycCapturePage() {
     setError(null);
     setPhase("starting");
     try {
+      // Decentro's passive liveness rejects clips below 800×600
+      // (responseKey error_invalid_video). Request 1280×720 so the recorded
+      // webm comfortably clears that floor; ideal (not min) keeps weaker front
+      // cameras from throwing OverconstrainedError — they still land ≥800×600.
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: true,
       });
       streamRef.current = stream;

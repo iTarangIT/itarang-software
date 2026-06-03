@@ -20,11 +20,19 @@ type TrackGate = {
   blocked_by_failure: boolean;
   tracks: TrackState[];
 };
+type AgreementGate = {
+  applicable: boolean;
+  satisfied: boolean;
+  status: string | null;
+  method: string | null;
+  reason: string;
+};
 type Resp = {
   ok: boolean;
   is_winner?: boolean;
   already_sanctioned?: boolean;
   track_gate?: TrackGate;
+  agreement_gate?: AgreementGate;
   can_sanction?: boolean;
   lead_status?: string | null;
   error?: string;
@@ -105,6 +113,21 @@ export default function SanctionPanel({ leadId }: { leadId: string }) {
                     );
                   })
               )}
+              {data.agreement_gate?.applicable && (() => {
+                const ag = data.agreement_gate!;
+                const signed = ag.status === "signed";
+                const skipped = ag.status === "skipped";
+                const tone = signed || skipped ? "text-emerald-700" : "text-slate-500";
+                const mark = signed || skipped ? "✓" : "•";
+                const label = signed ? "signed" : skipped ? "not required" : (ag.status ?? "pending");
+                return (
+                  <p className={`text-[11px] ${tone}`}>
+                    <span className="font-mono mr-1.5">{mark}</span>
+                    Loan Agreement: {label}
+                    <span className="text-slate-400"> · advisory (Step-5 OTP is the gate)</span>
+                  </p>
+                );
+              })()}
               {!data.track_gate.satisfied && (
                 <p className="text-[11px] text-amber-700 pt-1">{data.track_gate.reason}</p>
               )}

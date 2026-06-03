@@ -116,6 +116,7 @@ export async function advanceCampaign(
         id: dialerCampaigns.id,
         status: dialerCampaigns.status,
         provider: dialerCampaigns.provider,
+        region_filter: dialerCampaigns.region_filter,
       })
       .from(dialerCampaigns)
       .where(eq(dialerCampaigns.id, campaignId))
@@ -126,6 +127,13 @@ export async function advanceCampaign(
     }
 
     const provider = (cmp[0].provider || "bolna").toLowerCase();
+
+    // A campaign mid-retry ("Retry failed leads") carries recall:true in its
+    // region_filter. For these, bypass the once-per-day idempotency guard so the
+    // deliberate second dial actually goes through even on the same day the lead
+    // first failed. Normal campaigns and cron follow-ups keep the guard.
+    const isRecall =
+      (cmp[0].region_filter as { recall?: boolean } | null)?.recall === true;
 
     // Pre-call delay (legacy webhook path used 5s to space requests).
     if (opts.preCallDelayMs && opts.preCallDelayMs > 0) {
@@ -228,11 +236,13 @@ export async function advanceCampaign(
           trigResult = (await triggerElevenLabsCall({
             phone: lead[0].phone,
             leadId: lead[0].id,
+            bypassIdempotency: isRecall,
           })) as typeof trigResult;
         } else {
           trigResult = (await triggerBolnaCall({
             phone: lead[0].phone,
             leadId: lead[0].id,
+            bypassIdempotency: isRecall,
           })) as typeof trigResult;
         }
       } catch (err) {
