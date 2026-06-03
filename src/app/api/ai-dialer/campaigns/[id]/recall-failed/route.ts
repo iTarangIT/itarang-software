@@ -113,6 +113,12 @@ export const POST = withErrorHandler(
     const provider: DialerProvider =
       source.provider === "elevenlabs" ? "elevenlabs" : "bolna";
 
+    // Name the retry "Retry · <original>". Collapse any existing "Retry · "
+    // prefixes first so retrying a retry doesn't compound into
+    // "Retry · Retry · Retry · …".
+    const baseName = (source.name ?? "").replace(/^(?:Retry · )+/, "").trim();
+    const retryName = `Retry · ${baseName || "previous campaign"}`;
+
     // Create the retry as a draft, then start it (same sequence as List start).
     const newId = await createCampaign({
       queueIds,
@@ -121,7 +127,7 @@ export const POST = withErrorHandler(
       region,
       triggeredBy,
       status: "draft",
-      name: `Retry · ${source.name}`,
+      name: retryName,
     });
 
     if (!newId) return errorResponse("Could not create retry campaign", 500);
