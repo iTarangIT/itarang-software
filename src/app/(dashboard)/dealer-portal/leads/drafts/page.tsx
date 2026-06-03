@@ -17,6 +17,7 @@ type Draft = {
     owner_contact: string | null;
     workflow_step: number;
     consent_status: string;
+    is_step1?: boolean;
     progress: { docsUploaded: number; docsRequired: number; consentComplete: boolean } | null;
     progress_percent: number;
     last_saved_at: string | null;
@@ -207,12 +208,15 @@ export default function DraftsPage() {
                                             <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                                 <button
                                                     onClick={() => {
-                                                        // Step 4 drafts resume on the product-selection
-                                                        // page; everything earlier resumes on the KYC
-                                                        // wizard which already routes between Steps 1-3.
-                                                        const target = d.workflow_step >= 4
-                                                            ? `/dealer-portal/leads/${d.id}/product-selection`
-                                                            : `/dealer-portal/leads/${d.id}/kyc`;
+                                                        // Routing matrix for Resume:
+                                                        //  • Step-1 wizard drafts (status INCOMPLETE) → new-lead wizard in edit mode.
+                                                        //  • Step 4 drafts → product-selection page.
+                                                        //  • Steps 1-3 KYC drafts → KYC wizard (self-routes between steps).
+                                                        const target = d.is_step1
+                                                            ? `/dealer-portal/leads/new?id=${d.id}`
+                                                            : d.workflow_step >= 4
+                                                                ? `/dealer-portal/leads/${d.id}/product-selection`
+                                                                : `/dealer-portal/leads/${d.id}/kyc`;
                                                         router.push(target);
                                                     }}
                                                     className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-brand-50 text-brand-700 hover:bg-brand-100 rounded-lg text-xs font-semibold transition-all"

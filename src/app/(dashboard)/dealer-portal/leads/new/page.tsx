@@ -9,7 +9,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import {
     SectionCard, InputField, SelectField, TextAreaField,
     ProgressHeader, StickyBottomBar, ErrorBanner,
-    PrimaryButton, OutlineButton, OCRModal, FullPageLoader,
+    PrimaryButton, SecondaryButton, OutlineButton, OCRModal, FullPageLoader,
     DigilockerKycButton,
 } from '@/components/dealer-portal/lead-wizard/shared';
 import {
@@ -71,6 +71,7 @@ function NewLeadWizardContent() {
     const [leadId, setLeadId] = useState<string | null>(null);
     const [referenceId, setReferenceId] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
+    const [savingDraft, setSavingDraft] = useState(false);
     const [initLoading, setInitLoading] = useState(true);
     const [lastSaved, setLastSaved] = useState<string | null>(null);
     const [isModified, setIsModified] = useState(false);
@@ -260,11 +261,10 @@ function NewLeadWizardContent() {
         if (!formData.phone) e.phone = 'Phone is required';
         else if (!phoneRegex.test(formData.phone)) e.phone = 'Must be exactly 10 digits';
 
-        // Email — required for finance leads (Digio e-sign signer id); when
-        // present on any lead it must still be a valid address.
+        // Email — mandatory for every lead (also the Digio e-sign signer id).
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (finFlow && !formData.email?.trim()) e.email = 'Required for finance cases';
-        else if (formData.email?.trim() && !emailRegex.test(formData.email.trim())) e.email = 'Enter a valid email address';
+        if (!formData.email?.trim()) e.email = 'Email is required';
+        else if (!emailRegex.test(formData.email.trim())) e.email = 'Enter a valid email address';
 
         if (!formData.dob) e.dob = 'Required';
         else if (calculateAge(formData.dob) < 18) e.dob = 'Must be 18+';
@@ -273,7 +273,13 @@ function NewLeadWizardContent() {
         if (!formData.current_address || formData.current_address.trim().length < 20) e.current_address = 'Minimum 20 characters required';
         if (formData.permanent_address && formData.permanent_address.trim().length < 20) e.permanent_address = 'Minimum 20 characters required';
 
-        // Addendum §3.2, §3.3 — three new fields required for finance leads.
+        // State + City — mandatory for every lead. Also feed the BRE's Section G
+        // geo match: without them, every product with active_locations passes
+        // vacuously (the matcher treats a null customer attr as a wildcard).
+        if (!formData.state) e.state = 'State is required';
+        if (!formData.city) e.city = 'City is required';
+
+        // Addendum §3.2, §3.3 — these three remain finance-only.
         // resident_status drives the BRE's Owned/Rented housing-variant match.
         if (finFlow) {
             if (!formData.resident_status) e.resident_status = 'Required for finance cases';
@@ -283,11 +289,6 @@ function NewLeadWizardContent() {
             if (formData.has_life_insurance === null || formData.has_life_insurance === undefined) {
                 e.has_life_insurance = 'Required for finance cases';
             }
-            // Required for the BRE's Section G geo match. Without state/city,
-            // every product with any active_locations passes vacuously (the
-            // matcher treats a null customer attr as a wildcard).
-            if (!formData.state) e.state = 'State required for finance cases';
-            if (!formData.city) e.city = 'City required for finance cases';
         }
 
         const isVehicle = formData.is_vehicle_category;
@@ -363,6 +364,37 @@ function NewLeadWizardContent() {
             setApiError('Connection failed. Please retry.');
         } finally {
             setLoading(false);
+        }
+    };
+
+    // Save the current Step-1 progress as a draft without committing. No strict
+    // validation — the dealer can resume later from "My Drafts".
+    const handleSaveDraft = async () => {
+        if (!leadId) { setApiError('Lead draft not initialized. Please refresh.'); return; }
+        setSavingDraft(true);
+        setApiError(null);
+        try {
+            const res = await fetch('/api/leads/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ...formData,
+                    leadId,
+                    saveDraft: true,
+                    additional_products: additionalProducts.filter(p => p.product_id),
+                })
+            });
+            const result = await res.json();
+            if (result.success) {
+                setIsModified(false);
+                setLastSaved(`Draft saved ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+            } else {
+                setApiError(readApiError(result, 'Could not save draft. Please try again.'));
+            }
+        } catch {
+            setApiError('Connection failed. Could not save draft.');
+        } finally {
+            setSavingDraft(false);
         }
     };
 
@@ -585,13 +617,58 @@ function NewLeadWizardContent() {
 
                             <InputField label="Phone Number" value={formData.phone} onChange={v => updateField('phone', v)} onBlur={handlePhoneBlur} error={errors.phone} placeholder="9876543210" required inputMode="numeric" maxLength={10} />
 
-                            {/* Customer email — required for finance leads: used as the
-                                signer identifier for the Digio loan-agreement e-sign (§11.3). */}
-                            <InputField label="Email Address" value={formData.email} onChange={v => updateField('email', v)} error={errors.email} placeholder="customer@example.com" required={finFlow} inputMode="email" type="email" />
+                            {/* Customer email — mandatory for every lead (also the
+                                signer identifier for the Digio loan-agreement e-sign, §11.3). */}
+                            <InputField label="Email Address" value={formData.email} onChange={v => updateField('email', v)} error={errors.email} placeholder="customer@example.com" required inputMode="email" type="email" />
 
                             <div className="md:col-span-2">
                                 <TextAreaField label="Current Address" value={formData.current_address} onChange={v => updateField('current_address', v)} error={errors.current_address} placeholder="123, Main Street, City, State - 123456" required />
                             </div>
+
+                            {/* State + City — mandatory for every lead. Sit directly
+                                after Current Address (the address they qualify) and
+                                feed the BRE's Section G geo match. Source is
+                                `country-state-city` so the string matches what NBFCs
+                                declare on nbfc_loan_products.active_locations. */}
+                            <SelectField
+                                label="State"
+                                value={formData.state}
+                                onChange={(v) => {
+                                    updateField('state', v);
+                                    // Reset city when state changes — city list is state-scoped.
+                                    if (v !== formData.state) updateField('city', '');
+                                }}
+                                options={State.getStatesOfCountry('IN').map((s) => ({
+                                    value: s.name,
+                                    label: s.name,
+                                }))}
+                                error={errors.state}
+                                placeholder="Select state"
+                                required
+                            />
+                            <SelectField
+                                label="City"
+                                value={formData.city}
+                                onChange={(v) => updateField('city', v)}
+                                options={(() => {
+                                    const iso = State.getStatesOfCountry('IN').find(
+                                        (s) => s.name === formData.state,
+                                    )?.isoCode;
+                                    if (!iso) return [];
+                                    const seen = new Set<string>();
+                                    return City.getCitiesOfState('IN', iso)
+                                        .filter((c) => {
+                                            if (seen.has(c.name)) return false;
+                                            seen.add(c.name);
+                                            return true;
+                                        })
+                                        .map((c) => ({ value: c.name, label: c.name }));
+                                })()}
+                                error={errors.city}
+                                placeholder={formData.state ? 'Select city' : 'Pick a state first'}
+                                required
+                                disabled={!formData.state}
+                            />
 
                             <div className="md:col-span-2 space-y-2">
                                 <div className="flex items-center justify-between px-1">
@@ -620,141 +697,6 @@ function NewLeadWizardContent() {
                                 />
                                 {errors.permanent_address && <p className="text-[10px] text-red-500 font-bold px-1">{errors.permanent_address}</p>}
                             </div>
-
-                            {/* State + City — feeds the BRE's Section G geo match.
-                                Source is `country-state-city` so the string matches
-                                what NBFCs declare on nbfc_loan_products.active_locations. */}
-                            {finFlow && (
-                                <>
-                                    <SelectField
-                                        label="State"
-                                        value={formData.state}
-                                        onChange={(v) => {
-                                            updateField('state', v);
-                                            // Reset city when state changes — city list is state-scoped.
-                                            if (v !== formData.state) updateField('city', '');
-                                        }}
-                                        options={State.getStatesOfCountry('IN').map((s) => ({
-                                            value: s.name,
-                                            label: s.name,
-                                        }))}
-                                        error={errors.state}
-                                        placeholder="Select state"
-                                        required
-                                    />
-                                    <SelectField
-                                        label="City"
-                                        value={formData.city}
-                                        onChange={(v) => updateField('city', v)}
-                                        options={(() => {
-                                            const iso = State.getStatesOfCountry('IN').find(
-                                                (s) => s.name === formData.state,
-                                            )?.isoCode;
-                                            if (!iso) return [];
-                                            const seen = new Set<string>();
-                                            return City.getCitiesOfState('IN', iso)
-                                                .filter((c) => {
-                                                    if (seen.has(c.name)) return false;
-                                                    seen.add(c.name);
-                                                    return true;
-                                                })
-                                                .map((c) => ({ value: c.name, label: c.name }));
-                                        })()}
-                                        error={errors.city}
-                                        placeholder={formData.state ? 'Select city' : 'Pick a state first'}
-                                        required
-                                        disabled={!formData.state}
-                                    />
-                                </>
-                            )}
-
-                            {/* Addendum §3.2, §3.3 — resident status + existing insurance.
-                                Required for finance leads; hidden for cash. Feeds the BRE's
-                                Owned/Rented housing-variant match at Product Selection. */}
-                            {finFlow && (
-                                <>
-                                    <div className="md:col-span-2 space-y-2">
-                                        <label className="text-sm font-bold text-gray-900 px-1 block">
-                                            Resident Status <span className="text-red-500">*</span>
-                                        </label>
-                                        <p className="text-xs text-gray-500 px-1">Does the customer own or rent their current residence?</p>
-                                        <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5 mt-1">
-                                            {[
-                                                { value: 'owned', label: 'Owned' },
-                                                { value: 'rented', label: 'Rented' },
-                                            ].map((opt) => (
-                                                <button
-                                                    key={opt.value}
-                                                    type="button"
-                                                    onClick={() => updateField('resident_status', opt.value)}
-                                                    className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all tracking-tight ${
-                                                        formData.resident_status === opt.value
-                                                            ? 'bg-[#0047AB] text-white shadow-sm'
-                                                            : 'text-gray-500 hover:text-gray-800'
-                                                    }`}
-                                                >
-                                                    {opt.label}
-                                                </button>
-                                            ))}
-                                        </div>
-                                        {errors.resident_status && <p className="text-[10px] text-red-500 font-bold px-1">{errors.resident_status}</p>}
-                                    </div>
-
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-bold text-gray-900 px-1 block">
-                                            Existing Health Insurance <span className="text-red-500">*</span>
-                                        </label>
-                                        <p className="text-xs text-gray-500 px-1">Does the customer currently hold their own health insurance policy?</p>
-                                        <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5 mt-1">
-                                            {[
-                                                { value: true, label: 'Yes' },
-                                                { value: false, label: 'No' },
-                                            ].map((opt) => (
-                                                <button
-                                                    key={String(opt.value)}
-                                                    type="button"
-                                                    onClick={() => updateField('has_health_insurance', opt.value)}
-                                                    className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all tracking-tight ${
-                                                        formData.has_health_insurance === opt.value
-                                                            ? 'bg-[#0047AB] text-white shadow-sm'
-                                                            : 'text-gray-500 hover:text-gray-800'
-                                                    }`}
-                                                >
-                                                    {opt.label}
-                                                </button>
-                                            ))}
-                                        </div>
-                                        {errors.has_health_insurance && <p className="text-[10px] text-red-500 font-bold px-1">{errors.has_health_insurance}</p>}
-                                    </div>
-
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-bold text-gray-900 px-1 block">
-                                            Existing Life Insurance <span className="text-red-500">*</span>
-                                        </label>
-                                        <p className="text-xs text-gray-500 px-1">Does the customer currently hold their own life insurance policy?</p>
-                                        <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5 mt-1">
-                                            {[
-                                                { value: true, label: 'Yes' },
-                                                { value: false, label: 'No' },
-                                            ].map((opt) => (
-                                                <button
-                                                    key={String(opt.value)}
-                                                    type="button"
-                                                    onClick={() => updateField('has_life_insurance', opt.value)}
-                                                    className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all tracking-tight ${
-                                                        formData.has_life_insurance === opt.value
-                                                            ? 'bg-[#0047AB] text-white shadow-sm'
-                                                            : 'text-gray-500 hover:text-gray-800'
-                                                    }`}
-                                                >
-                                                    {opt.label}
-                                                </button>
-                                            ))}
-                                        </div>
-                                        {errors.has_life_insurance && <p className="text-[10px] text-red-500 font-bold px-1">{errors.has_life_insurance}</p>}
-                                    </div>
-                                </>
-                            )}
                         </div>
                     </SectionCard>
 
@@ -941,13 +883,108 @@ function NewLeadWizardContent() {
                             </div>
                         </div>
                     </SectionCard>
+
+                    {/* ─── Additional Finance Details (Addendum §3.2, §3.3) ─
+                        Resident status + existing insurance. Shown only for the
+                        finance path and placed AFTER payment method, since that
+                        choice is what makes these fields applicable. Feeds the
+                        BRE's Owned/Rented housing-variant match at Product Selection. */}
+                    {finFlow && (
+                        <SectionCard title="Additional Finance Details">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6">
+                                <div className="md:col-span-2 space-y-2">
+                                    <label className="text-sm font-bold text-gray-900 px-1 block">
+                                        Resident Status <span className="text-red-500">*</span>
+                                    </label>
+                                    <p className="text-xs text-gray-500 px-1">Does the customer own or rent their current residence?</p>
+                                    <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5 mt-1">
+                                        {[
+                                            { value: 'owned', label: 'Owned' },
+                                            { value: 'rented', label: 'Rented' },
+                                        ].map((opt) => (
+                                            <button
+                                                key={opt.value}
+                                                type="button"
+                                                onClick={() => updateField('resident_status', opt.value)}
+                                                className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all tracking-tight ${
+                                                    formData.resident_status === opt.value
+                                                        ? 'bg-[#0047AB] text-white shadow-sm'
+                                                        : 'text-gray-500 hover:text-gray-800'
+                                                }`}
+                                            >
+                                                {opt.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {errors.resident_status && <p className="text-[10px] text-red-500 font-bold px-1">{errors.resident_status}</p>}
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="text-sm font-bold text-gray-900 px-1 block">
+                                        Existing Health Insurance <span className="text-red-500">*</span>
+                                    </label>
+                                    <p className="text-xs text-gray-500 px-1">Does the customer currently hold their own health insurance policy?</p>
+                                    <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5 mt-1">
+                                        {[
+                                            { value: true, label: 'Yes' },
+                                            { value: false, label: 'No' },
+                                        ].map((opt) => (
+                                            <button
+                                                key={String(opt.value)}
+                                                type="button"
+                                                onClick={() => updateField('has_health_insurance', opt.value)}
+                                                className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all tracking-tight ${
+                                                    formData.has_health_insurance === opt.value
+                                                        ? 'bg-[#0047AB] text-white shadow-sm'
+                                                        : 'text-gray-500 hover:text-gray-800'
+                                                }`}
+                                            >
+                                                {opt.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {errors.has_health_insurance && <p className="text-[10px] text-red-500 font-bold px-1">{errors.has_health_insurance}</p>}
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="text-sm font-bold text-gray-900 px-1 block">
+                                        Existing Life Insurance <span className="text-red-500">*</span>
+                                    </label>
+                                    <p className="text-xs text-gray-500 px-1">Does the customer currently hold their own life insurance policy?</p>
+                                    <div className="flex bg-[#F1F3F5] rounded-[14px] p-1.5 mt-1">
+                                        {[
+                                            { value: true, label: 'Yes' },
+                                            { value: false, label: 'No' },
+                                        ].map((opt) => (
+                                            <button
+                                                key={String(opt.value)}
+                                                type="button"
+                                                onClick={() => updateField('has_life_insurance', opt.value)}
+                                                className={`flex-1 py-3 text-sm font-bold rounded-[10px] transition-all tracking-tight ${
+                                                    formData.has_life_insurance === opt.value
+                                                        ? 'bg-[#0047AB] text-white shadow-sm'
+                                                        : 'text-gray-500 hover:text-gray-800'
+                                                }`}
+                                            >
+                                                {opt.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {errors.has_life_insurance && <p className="text-[10px] text-red-500 font-bold px-1">{errors.has_life_insurance}</p>}
+                                </div>
+                            </div>
+                        </SectionCard>
+                    )}
                 </main>
 
                 {/* ─── Bottom Bar ────────────────────────────────────────── */}
                 {!showConfirm && (
                     <StickyBottomBar lastSaved={lastSaved}>
                         <OutlineButton onClick={handleCancel}>Cancel</OutlineButton>
-                        <PrimaryButton onClick={commitStep} loading={loading}>
+                        <SecondaryButton onClick={handleSaveDraft} loading={savingDraft} disabled={loading}>
+                            Save Draft
+                        </SecondaryButton>
+                        <PrimaryButton onClick={commitStep} loading={loading} disabled={savingDraft}>
                             <ChevronRight className="w-4 h-4" /> Create Lead
                         </PrimaryButton>
                     </StickyBottomBar>
