@@ -1,0 +1,93 @@
+// Re-host a provider call recording into our own PUBLIC Supabase Storage bucket.
+//
+// Why: the raw Bolna/ElevenLabs recording URL is not something a non-technical
+// reviewer (with no provider account) can reliably click and play — it may sit
+// behind the provider's API/domain or expire. We download the audio server-side
+// and re-upload it to a public bucket, then hand out OUR permanent URL, which
+// plays directly in any browser with no login.
+//
+// Used by the Bolna + ElevenLabs post-call pipelines, inside their existing
+// fire-and-forget sheet-logging closures, so this never blocks or breaks call
+// finalization. On any failure it falls back to the original provider URL so the
+// review sheet still has a link.
+
+import { supabaseAdmin } from "@/lib/supabase/admin";
+
+// Public bucket — create once in the Supabase project (Storage → New bucket →
+// Public). Service-role uploads bypass RLS; public objects are served at
+// /storage/v1/object/public/<bucket>/<key> with no auth.
+const BUCKET = "call-recordings";
+
+// Optional per-environment key prefix so sandbox and production don't collide
+// when they share one Supabase project. Leave unset if they use separate
+// projects. Normalized to end with "/" when present.
+function envPrefix(): string {
+  const raw = (process.env.CALL_RECORDINGS_PREFIX ?? "").trim();
+  if (!raw) return "";
+  return raw.replace(/^\/+|\/+$/g, "") + "/";
+}
+
+function sanitize(s: string): string {
+  return s.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function extFor(contentType: string): string {
+  const ct = contentType.toLowerCase();
+  if (ct.includes("wav")) return "wav";
+  if (ct.includes("m4a") || ct.includes("mp4") || ct.includes("aac")) return "m4a";
+  if (ct.includes("ogg")) return "ogg";
+  return "mp3";
+}
+
+/**
+ * Download `recordingUrl` and re-host it in the public `call-recordings` bucket.
+ * Returns the public, browser-playable URL. Falls back to the original
+ * `recordingUrl` on any failure, or "" when there is no recording to host.
+ */
+export async function rehostRecording(opts: {
+  provider: string;
+  callId: string;
+  recordingUrl: string | null;
+}): Promise<string> {
+  const { provider, callId, recordingUrl } = opts;
+  if (!recordingUrl) return "";
+
+  try {
+    // Both Bolna and ElevenLabs serve directly-fetchable HTTPS/S3 URLs — no
+    // auth header is needed to download the bytes.
+    const res = await fetch(recordingUrl);
+    if (!res.ok) {
+      throw new Error(`download failed: HTTP ${res.status}`);
+    }
+
+    const contentType =
+      res.headers.get("content-type")?.split(";")[0]?.trim() || "audio/mpeg";
+    const ext = extFor(contentType);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const key = `${envPrefix()}${sanitize(provider)}/${sanitize(callId)}.${ext}`;
+
+    const { error } = await supabaseAdmin.storage
+      .from(BUCKET)
+      .upload(key, buffer, { contentType, upsert: true });
+    if (error) {
+      throw new Error(`upload failed: ${error.message}`);
+    }
+
+    const { data } = supabaseAdmin.storage.from(BUCKET).getPublicUrl(key);
+    const publicUrl = data?.publicUrl;
+    if (!publicUrl) {
+      throw new Error("getPublicUrl returned no url");
+    }
+
+    console.log(`[recordingStore] re-hosted ${provider} recording ${callId}`);
+    return publicUrl;
+  } catch (err) {
+    // Never throw — fall back to the provider URL so the sheet still links
+    // somewhere, and the call pipeline is unaffected.
+    console.error(
+      `[recordingStore] re-host failed for ${provider} ${callId}, using provider URL:`,
+      err,
+    );
+    return recordingUrl;
+  }
+}
