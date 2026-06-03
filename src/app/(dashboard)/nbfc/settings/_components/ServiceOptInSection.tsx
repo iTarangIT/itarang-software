@@ -116,7 +116,7 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
   const callbackUrl = `${callbackBase}/api/nbfc/enach/callback`;
   const razorpayWebhookUrl = `${callbackBase}/api/payments/razorpay/emandate-webhook`;
   const isManagedRzp = cfg.enach_handoff_method === "itarang_razorpay";
-
+ 
   return (
     <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-5">
       <div>
