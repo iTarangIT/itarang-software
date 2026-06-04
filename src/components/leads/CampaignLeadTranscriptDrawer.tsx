@@ -9,7 +9,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   X,
@@ -17,12 +17,20 @@ import {
   MapPin,
   Clock,
   PlayCircle,
+  Play,
+  Pause,
   Sparkles,
   AlertCircle,
   Loader2,
   Bot,
   User as UserIcon,
+  History,
+  RotateCcw,
+  CheckCircle2,
 } from "lucide-react";
+// Import the thresholds module directly (not the scoring barrel) so the client
+// bundle doesn't pull in zod / the scoring engine.
+import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
 
 type SubScores = {
   next_step_commitment: number;
@@ -31,6 +39,15 @@ type SubScores = {
   need_acknowledgment: number;
   objection_quality: number;
   engagement_depth: number;
+};
+
+// The truthful per-point breakdown from the deterministic scorer. Contributions
+// (positive signal points + any negative cap line) sum exactly to intentScore.
+type ScoreBreakdownItem = {
+  signal: string;
+  label: string;
+  contribution: number;
+  evidence: string;
 };
 
 // Raw conversation turn shapes vary by provider. Bolna stores objects with
@@ -47,6 +64,22 @@ type RawTurn = {
   time_in_call_secs?: number;
   timestamp?: string | number;
   start_time?: number;
+};
+
+// One dialer attempt for this lead, across the original + every recall
+// campaign. Ordered chronologically by the transcript route.
+type Attempt = {
+  attempt: number;
+  campaignId: string;
+  campaignName: string | null;
+  isRecall: boolean;
+  status: string;
+  callOutcome: string | null;
+  intentScore: number | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  converted: boolean;
+  isCurrent: boolean;
 };
 
 type TranscriptPayload = {
@@ -70,6 +103,10 @@ type TranscriptPayload = {
   callStatus: string | null;
   nextAction: string | null;
   analysis: SubScores | null;
+  scoreBreakdown: ScoreBreakdownItem[] | null;
+  scoringVersion: string | null;
+  attempts: Attempt[] | null;
+  convertedOnAttempt: number | null;
 };
 
 type ChatTurn = {
@@ -187,11 +224,40 @@ function scoreToneClass(score: number | null): {
 } {
   if (score == null)
     return { ring: "border-gray-200", text: "text-gray-500", bar: "bg-gray-400", bg: "bg-gray-50" };
-  if (score >= 70)
+  if (score >= INTENT_THRESHOLDS.QUALIFIED)
     return { ring: "border-emerald-300", text: "text-emerald-700", bar: "bg-emerald-500", bg: "bg-emerald-50" };
-  if (score >= 40)
+  if (score >= INTENT_THRESHOLDS.WARM)
     return { ring: "border-amber-300", text: "text-amber-700", bar: "bg-amber-500", bg: "bg-amber-50" };
   return { ring: "border-rose-300", text: "text-rose-700", bar: "bg-rose-500", bg: "bg-rose-50" };
+}
+
+// One row of the truthful breakdown: label, signed point contribution, a bar
+// sized by magnitude (out of the 100-point scale), and the supporting evidence.
+function BreakdownRow({ item }: { item: ScoreBreakdownItem }) {
+  const positive = item.contribution >= 0;
+  const pct = Math.min(100, Math.abs(item.contribution));
+  const barTone = positive ? "bg-emerald-500" : "bg-rose-400";
+  const valTone = positive ? "text-emerald-700" : "text-rose-700";
+  const showEvidence = item.evidence && item.evidence !== "unknown";
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-xs font-medium text-gray-700">{item.label}</span>
+        <span className={`text-[11px] tabular-nums font-mono ${valTone}`}>
+          {positive ? "+" : "−"}
+          {Math.abs(item.contribution)}
+        </span>
+      </div>
+      <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+        <div className={`h-full ${barTone} transition-all`} style={{ width: `${pct}%` }} />
+      </div>
+      {showEvidence && (
+        <p className="text-[10px] text-gray-400 leading-snug truncate" title={item.evidence}>
+          {item.evidence}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function StatusPill({ status }: { status: string }) {
@@ -229,7 +295,7 @@ function SubScoreBar({ label, hint, value }: { label: string; hint: string; valu
   );
 }
 
-type TabKey = "overview" | "transcript" | "details";
+type TabKey = "overview" | "attempts" | "transcript" | "details";
 
 export function CampaignLeadTranscriptDrawer({
   campaignId,
@@ -287,6 +353,7 @@ export function CampaignLeadTranscriptDrawer({
 
   const status = data?.campaignLeadStatus ?? "pending";
   const hasContent = turns.length > 0;
+  const attemptCount = data?.attempts?.length ?? 0;
 
   return (
     <div className="fixed inset-0 z-50">
@@ -352,6 +419,14 @@ export function CampaignLeadTranscriptDrawer({
           <TabBtn active={tab === "overview"} onClick={() => setTab("overview")}>
             Overview
           </TabBtn>
+          <TabBtn active={tab === "attempts"} onClick={() => setTab("attempts")}>
+            Attempts
+            {attemptCount > 0 && (
+              <span className="ml-1.5 inline-flex items-center justify-center text-[10px] tabular-nums font-mono bg-gray-100 text-gray-600 rounded-full px-1.5 py-px">
+                {attemptCount}
+              </span>
+            )}
+          </TabBtn>
           <TabBtn active={tab === "transcript"} onClick={() => setTab("transcript")}>
             Transcription
             {hasContent && (
@@ -363,19 +438,13 @@ export function CampaignLeadTranscriptDrawer({
           <TabBtn active={tab === "details"} onClick={() => setTab("details")}>
             Details
           </TabBtn>
-
-          {data?.recordingUrl && (
-            <a
-              href={data.recordingUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="ml-auto inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 hover:text-emerald-800 py-3"
-            >
-              <PlayCircle className="w-4 h-4" />
-              Recording
-            </a>
-          )}
         </div>
+
+        {/* Inline recording player — visible on every tab once a call has a
+            recording. recordingUrl is the lead's latest call across campaigns. */}
+        {data?.recordingUrl && (
+          <RecordingPlayer key={data.recordingUrl} url={data.recordingUrl} />
+        )}
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto bg-gray-50/50">
@@ -389,7 +458,11 @@ export function CampaignLeadTranscriptDrawer({
               <AlertCircle className="w-5 h-5 mx-auto mb-2" />
               {(error as Error)?.message ?? "Failed to load transcript"}
             </div>
-          ) : !data ? null : status === "pending" ? (
+          ) : !data ? null : tab === "attempts" ? (
+            // Attempts always renders its own timeline — even for a lead that's
+            // pending/calling in THIS campaign but was dialed in earlier ones.
+            <AttemptsTab data={data} />
+          ) : status === "pending" ? (
             <EmptyState
               icon={<Clock className="w-8 h-8 text-gray-300" />}
               title="Call not yet placed"
@@ -428,6 +501,225 @@ export function CampaignLeadTranscriptDrawer({
           }
         }
       `}</style>
+    </div>
+  );
+}
+
+// Slim, always-visible audio player for the call recording. The URL is a
+// public Supabase Storage link (Bolna + ElevenLabs are re-hosted there), so it
+// plays in-page with a plain <audio> element — no proxy or auth needed.
+// Rendered with key={url} by the parent, so a new lead/recording remounts this
+// fresh — no reset effect needed, all transport state starts clean.
+function RecordingPlayer({ url }: { url: string }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [cur, setCur] = useState(0);
+  const [dur, setDur] = useState(0);
+  const [ready, setReady] = useState(false);
+  const [errored, setErrored] = useState(false);
+
+  function toggle() {
+    const el = audioRef.current;
+    if (!el) return;
+    if (el.paused) {
+      void el.play().catch(() => setErrored(true));
+    } else {
+      el.pause();
+    }
+  }
+
+  function onSeek(e: React.ChangeEvent<HTMLInputElement>) {
+    const el = audioRef.current;
+    const t = Number(e.target.value);
+    if (el) el.currentTime = t;
+    setCur(t);
+  }
+
+  if (errored) {
+    return (
+      <div className="border-b border-gray-100 px-6 py-2.5 flex items-center gap-2 text-xs text-gray-400 bg-gray-50/60">
+        <AlertCircle className="w-3.5 h-3.5" />
+        Recording unavailable
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-b border-gray-100 px-6 py-2.5 flex items-center gap-3 bg-gradient-to-r from-emerald-50/70 to-white">
+      <audio
+        ref={audioRef}
+        src={url}
+        preload="metadata"
+        onLoadedMetadata={(e) => {
+          const d = e.currentTarget.duration;
+          setDur(Number.isFinite(d) ? d : 0);
+          setReady(true);
+        }}
+        onTimeUpdate={(e) => setCur(e.currentTarget.currentTime || 0)}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => {
+          setPlaying(false);
+          setCur(0);
+        }}
+        onError={() => setErrored(true)}
+      />
+      <button
+        type="button"
+        onClick={toggle}
+        disabled={!ready}
+        aria-label={playing ? "Pause recording" : "Play recording"}
+        className="flex-shrink-0 w-9 h-9 rounded-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white flex items-center justify-center shadow-sm transition-colors"
+      >
+        {playing ? (
+          <Pause className="w-4 h-4" />
+        ) : (
+          <Play className="w-4 h-4 ml-0.5" />
+        )}
+      </button>
+      <span className="hidden sm:inline text-[10px] uppercase tracking-wider text-emerald-700 font-semibold">
+        Recording
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={dur || 0}
+        step={0.1}
+        value={cur}
+        onChange={onSeek}
+        disabled={!ready}
+        aria-label="Seek recording"
+        className="flex-1 h-1 accent-emerald-600 cursor-pointer disabled:cursor-default"
+      />
+      <span className="flex-shrink-0 text-[11px] tabular-nums font-mono text-gray-500 min-w-[78px] text-right">
+        {fmtClock(cur) ?? "0:00"} / {ready ? fmtClock(dur) ?? "0:00" : "–:––"}
+      </span>
+    </div>
+  );
+}
+
+// Cross-campaign attempt timeline. Answers "how many times was this lead
+// dialed, and which attempt converted it?" — including attempts made in earlier
+// (original / prior recall) campaigns, not just the one this drawer opened from.
+function AttemptsTab({ data }: { data: TranscriptPayload }) {
+  const attempts = data.attempts ?? [];
+  if (attempts.length === 0) {
+    return (
+      <EmptyState
+        icon={<History className="w-8 h-8 text-gray-300" />}
+        title="No attempts yet"
+        body="This lead has not been dialed in any campaign yet. Attempts will appear here as calls are placed."
+      />
+    );
+  }
+
+  const total = attempts.length;
+  const convertedOn = data.convertedOnAttempt ?? null;
+
+  return (
+    <div className="px-6 py-5">
+      <div
+        className={`rounded-xl border px-4 py-3 mb-5 flex items-center gap-3 ${
+          convertedOn
+            ? "border-emerald-200 bg-emerald-50"
+            : "border-gray-200 bg-gray-50"
+        }`}
+      >
+        {convertedOn ? (
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+        ) : (
+          <RotateCcw className="w-5 h-5 text-gray-400 flex-shrink-0" />
+        )}
+        <p className="text-sm">
+          {convertedOn ? (
+            <span className="font-semibold text-emerald-800">
+              Converted on attempt {convertedOn} of {total}
+            </span>
+          ) : (
+            <span className="font-medium text-gray-700">
+              Not yet converted · {total} attempt{total === 1 ? "" : "s"}
+            </span>
+          )}
+        </p>
+      </div>
+
+      <ol className="relative ml-2 space-y-4 border-l border-gray-200">
+        {attempts.map((a) => {
+          const tone = scoreToneClass(a.intentScore ?? null);
+          const isConvertPoint = convertedOn === a.attempt;
+          return (
+            <li key={`${a.campaignId}-${a.attempt}`} className="ml-5">
+              <span
+                className={`absolute -left-[7px] mt-1.5 w-3.5 h-3.5 rounded-full border-2 border-white ${
+                  isConvertPoint
+                    ? "bg-emerald-500"
+                    : a.converted
+                      ? "bg-emerald-400"
+                      : "bg-gray-300"
+                }`}
+              />
+              <div
+                className={`rounded-xl border px-4 py-3 ${
+                  isConvertPoint
+                    ? "border-emerald-300 bg-emerald-50/60 shadow-sm"
+                    : "border-gray-200 bg-white"
+                }`}
+              >
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-semibold text-gray-900">
+                    Attempt {a.attempt}
+                  </span>
+                  {a.isRecall && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-100 rounded-full px-2 py-0.5">
+                      <RotateCcw className="w-3 h-3" /> Recall
+                    </span>
+                  )}
+                  {a.isCurrent && (
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-blue-700 bg-blue-100 rounded-full px-2 py-0.5">
+                      This campaign
+                    </span>
+                  )}
+                  {isConvertPoint && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-100 rounded-full px-2 py-0.5">
+                      <CheckCircle2 className="w-3 h-3" /> Converted
+                    </span>
+                  )}
+                  {a.intentScore != null && (
+                    <span
+                      className={`ml-auto text-[11px] font-mono tabular-nums px-2 py-0.5 rounded-full ${tone.bg} ${tone.text}`}
+                    >
+                      {a.intentScore}/100
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1.5 flex items-center gap-x-3 gap-y-1 text-xs text-gray-500 flex-wrap">
+                  {a.campaignName && (
+                    <span
+                      className="truncate max-w-[240px]"
+                      title={a.campaignName}
+                    >
+                      {a.campaignName}
+                    </span>
+                  )}
+                  <StatusPill status={a.status} />
+                  {a.callOutcome && <span>{formatOutcome(a.callOutcome)}</span>}
+                  {a.startedAt && (
+                    <span className="inline-flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {new Date(a.startedAt).toLocaleString("en-IN", {
+                        day: "2-digit",
+                        month: "short",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }
@@ -557,7 +849,34 @@ function OverviewTab({ data }: { data: TranscriptPayload }) {
         </div>
       </div>
 
-      {data.analysis && (
+      {data.scoreBreakdown && data.scoreBreakdown.length > 0 ? (
+        // Truthful breakdown — these contributions sum to the headline score.
+        <section className="rounded-2xl border border-gray-200 bg-white p-4">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-3 flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
+            Score breakdown
+          </h3>
+          <div className="space-y-3">
+            {data.scoreBreakdown.map((item, i) => (
+              <BreakdownRow key={`${item.signal}-${i}`} item={item} />
+            ))}
+          </div>
+          <div className="mt-3 flex items-baseline justify-between border-t border-gray-100 pt-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+              Total intent
+            </span>
+            <span className="text-xs font-mono font-bold tabular-nums text-gray-800">
+              {data.intentScore ?? 0}/100
+            </span>
+          </div>
+          {data.intentReason && (
+            <p className="mt-3 text-xs text-gray-600 italic border-l-2 border-emerald-200 pl-3">
+              {data.intentReason}
+            </p>
+          )}
+        </section>
+      ) : data.analysis ? (
+        // Legacy fallback for pre-refactor rows (no stored breakdown).
         <section className="rounded-2xl border border-gray-200 bg-white p-4">
           <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-3 flex items-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
@@ -574,7 +893,7 @@ function OverviewTab({ data }: { data: TranscriptPayload }) {
             </p>
           )}
         </section>
-      )}
+      ) : null}
 
       {data.summary && (
         <section>
