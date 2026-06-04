@@ -200,7 +200,13 @@ function DealerLeadsContent() {
                                             </span>
                                         </td>
                                         <td className="px-6 py-4 text-gray-600">
-                                            {lead.loan_amount ? `₹${Number(lead.loan_amount).toLocaleString()}` : '-'}
+                                            {(() => {
+                                                // Prefer the product-selection FINAL PRICE (battery + charger +
+                                                // paraphernalia + dealer margin); fall back to the lead's
+                                                // originally-requested loan amount before a selection exists.
+                                                const amount = lead.final_price ?? lead.loan_amount;
+                                                return amount ? `₹${Number(amount).toLocaleString()}` : '-';
+                                            })()}
                                         </td>
                                         <td className="px-6 py-4 text-gray-500">
                                             {new Date(lead.created_at).toLocaleDateString()}
@@ -211,27 +217,29 @@ function DealerLeadsContent() {
                                                     const isHot = lead.interest_level === 'hot';
                                                     const cash = isCashMethod(lead.payment_method);
                                                     const finance = isFinanceMethod(lead.payment_method);
-                                                    if (isHot && finance) {
-                                                        return (
-                                                            <Link href={`/dealer-portal/leads/${lead.id}/kyc`} className="text-brand-600 hover:text-brand-800 font-medium text-xs">
-                                                                View Details
-                                                            </Link>
-                                                        );
+                                                    // Deep-link to the lead's CURRENT step (furthest reached),
+                                                    // not a fixed one, so "View Details" resumes where it left off.
+                                                    let href: string;
+                                                    if (finance && lead.kyc_status === 'loan_sanctioned') {
+                                                        // Sanctioned finance → Step 5 (dispatch / OTP).
+                                                        href = `/dealer-portal/leads/${lead.id}/step-5`;
+                                                    } else if (lead.has_product_selection) {
+                                                        // A product selection exists → resume at Product Selection.
+                                                        href = `/dealer-portal/leads/${lead.id}/product-selection`;
+                                                    } else if (isHot && finance) {
+                                                        href = `/dealer-portal/leads/${lead.id}/kyc`;
+                                                    } else if (isHot && cash) {
+                                                        href = `/dealer-portal/leads/${lead.id}/product-selection`;
+                                                    } else {
+                                                        // Cold / Warm leads stay at Step 1 — open the wizard with
+                                                        // ?id=… so the dealer can edit fields like address.
+                                                        href = `/dealer-portal/leads/new?id=${lead.id}`;
                                                     }
-                                                    if (isHot && cash) {
-                                                        return (
-                                                            <Link href={`/dealer-portal/leads/${lead.id}/product-selection`} className="text-brand-600 hover:text-brand-800 font-medium text-xs">
-                                                                View Details
-                                                            </Link>
-                                                        );
-                                                    }
-                                                    // Cold / Warm leads stay at Step 1. Open the wizard with
-                                                    // ?id=… so the dealer can edit fields like address.
                                                     return (
                                                         <Link
-                                                            href={`/dealer-portal/leads/new?id=${lead.id}`}
+                                                            href={href}
                                                             className="text-brand-600 hover:text-brand-800 font-medium text-xs"
-                                                            title="Open Step 1 to edit this lead"
+                                                            title="Open this lead at its current step"
                                                         >
                                                             View Details
                                                         </Link>

@@ -10,11 +10,23 @@
  * the same global search overlay as the admin header.
  */
 import React, { useState, useRef, useEffect } from "react";
-import { Search, Bell, LogOut, User, ChevronDown, Settings, CreditCard, Menu } from "lucide-react";
+import { Search, Bell, LogOut, User, ChevronDown, Settings, CreditCard, Menu, Inbox, MapPin, Video, FileSignature, FileText, CheckCircle2 } from "lucide-react";
 import Link from "next/link";
 import { GlobalSearchOverlay } from "@/components/search/GlobalSearchOverlay";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { useNbfcWorkQueue } from "@/hooks/useNbfcWorkQueue";
 import { toast } from "sonner";
+
+/** Compact "2h ago" style relative time for recent-activity rows. */
+function relativeTime(iso: string): string {
+    const diffMs = Date.now() - new Date(iso).getTime();
+    const min = Math.floor(diffMs / 60_000);
+    if (min < 1) return "just now";
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    return `${Math.floor(hr / 24)}d ago`;
+}
 
 export default function NbfcPortalHeader({
     tenantName,
@@ -24,10 +36,24 @@ export default function NbfcPortalHeader({
     onMenuClick?: () => void;
 }) {
     const { user } = useAuth();
+    const wq = useNbfcWorkQueue();
     const [isProfileOpen, setIsProfileOpen] = useState(false);
+    const [isBellOpen, setIsBellOpen] = useState(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [loggingOut, setLoggingOut] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const bellRef = useRef<HTMLDivElement>(null);
+
+    // One row per track. Hidden when its count is 0; each deep-links to the
+    // Acquire pipeline pre-filtered to exactly the leads that need that action.
+    const bellItems = [
+        { key: "pending", label: "New applications", count: wq.acquire_pending, href: "/nbfc/acquire?status=pending", icon: Inbox },
+        { key: "fi", label: "Field Investigation to review", count: wq.fi, href: "/nbfc/acquire?need=fi", icon: MapPin },
+        { key: "vkyc", label: "Video KYC pending", count: wq.vkyc, href: "/nbfc/acquire?need=vkyc", icon: Video },
+        { key: "enach", label: "E-NACH pending", count: wq.enach, href: "/nbfc/acquire?need=enach", icon: FileSignature },
+        { key: "agreement", label: "Agreement pending", count: wq.agreement, href: "/nbfc/acquire?need=agreement", icon: FileText },
+    ];
+    const visibleBellItems = bellItems.filter((i) => i.count > 0);
 
     const displayEmail = user?.email || "";
 
@@ -57,6 +83,9 @@ export default function NbfcPortalHeader({
         function handleClickOutside(event: MouseEvent) {
             if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
                 setIsProfileOpen(false);
+            }
+            if (bellRef.current && !bellRef.current.contains(event.target as Node)) {
+                setIsBellOpen(false);
             }
         }
         document.addEventListener("mousedown", handleClickOutside);
@@ -106,10 +135,109 @@ export default function NbfcPortalHeader({
 
             {/* Right Actions */}
             <div className="flex items-center gap-4">
-                <button className="relative p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors">
-                    <Bell className="w-5 h-5" />
-                    <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
-                </button>
+                {/* Notification bell — live work-queue summary (no read/unread). */}
+                <div className="relative" ref={bellRef}>
+                    <button
+                        type="button"
+                        onClick={() => setIsBellOpen((v) => !v)}
+                        aria-label={wq.total > 0 ? `${wq.total} items need attention` : "Notifications"}
+                        className="relative p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors"
+                    >
+                        <Bell className="w-5 h-5" />
+                        {wq.total > 0 && (
+                            <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center bg-red-500 text-white text-[10px] font-bold rounded-full border-2 border-white tabular-nums">
+                                {wq.total > 99 ? "99+" : wq.total}
+                            </span>
+                        )}
+                    </button>
+
+                    {isBellOpen && (
+                        <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-lg border border-gray-100 py-2 animate-in fade-in slide-in-from-top-2 z-30 max-h-[80vh] overflow-y-auto">
+                            <div className="px-4 py-2 border-b border-gray-50">
+                                <p className="text-sm font-semibold text-gray-900">Notifications</p>
+                            </div>
+
+                            {visibleBellItems.length === 0 && wq.recent.length === 0 ? (
+                                <div className="px-4 py-6 text-center">
+                                    <p className="text-sm text-gray-500">You&apos;re all caught up 🎉</p>
+                                </div>
+                            ) : (
+                                <>
+                                    {/* Needs attention — open work, clears when done. */}
+                                    {visibleBellItems.length > 0 && (
+                                        <div className="py-1">
+                                            <div className="flex items-center justify-between px-4 pt-1 pb-1">
+                                                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Needs attention</p>
+                                                <span className="text-[11px] text-gray-400 tabular-nums">{wq.attention_total} open</span>
+                                            </div>
+                                            {visibleBellItems.map((i) => {
+                                                const Icon = i.icon;
+                                                return (
+                                                    <Link
+                                                        key={i.key}
+                                                        href={i.href}
+                                                        onClick={() => setIsBellOpen(false)}
+                                                        className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                                    >
+                                                        <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-gray-50 text-gray-500 shrink-0">
+                                                            <Icon className="w-4 h-4" />
+                                                        </span>
+                                                        <span className="flex-1 min-w-0">{i.label}</span>
+                                                        <span className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-full bg-[color:var(--color-brand-sky)] text-white text-[11px] font-bold tabular-nums">
+                                                            {i.count > 99 ? "99+" : i.count}
+                                                        </span>
+                                                    </Link>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+
+                                    {/* Recent activity — successes from the last 24h (auto-ages out). */}
+                                    {wq.recent.length > 0 && (
+                                        <div className="py-1 border-t border-gray-50">
+                                            <p className="px-4 pt-1.5 pb-1 text-[10px] font-bold uppercase tracking-widest text-gray-400">Recent activity</p>
+                                            {wq.recent.map((e, idx) => {
+                                                const isAgreement = e.type === "agreement";
+                                                const Icon = isAgreement ? FileText : Video;
+                                                const label = isAgreement ? "Agreement signed" : "Video KYC submitted";
+                                                return (
+                                                    <Link
+                                                        key={`${e.type}-${e.lead_id}-${idx}`}
+                                                        href={`/nbfc/acquire/${e.lead_id}`}
+                                                        onClick={() => setIsBellOpen(false)}
+                                                        className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                                                    >
+                                                        <span className="relative flex items-center justify-center w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 shrink-0">
+                                                            <Icon className="w-4 h-4" />
+                                                            <CheckCircle2 className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 text-emerald-500 bg-white rounded-full" />
+                                                        </span>
+                                                        <span className="flex-1 min-w-0">
+                                                            <span className="block font-medium text-gray-800">{label}</span>
+                                                            <span className="block text-xs text-gray-500 truncate">
+                                                                {e.customer_name || e.lead_id}
+                                                            </span>
+                                                        </span>
+                                                        <span className="text-[11px] text-gray-400 shrink-0">{relativeTime(e.at)}</span>
+                                                    </Link>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </>
+                            )}
+
+                            <div className="border-t border-gray-100 mt-1 pt-1">
+                                <Link
+                                    href="/nbfc/acquire"
+                                    onClick={() => setIsBellOpen(false)}
+                                    className="block px-4 py-2 text-xs font-semibold text-[color:var(--color-brand-sky)] hover:bg-gray-50 transition-colors"
+                                >
+                                    Go to Acquire →
+                                </Link>
+                            </div>
+                        </div>
+                    )}
+                </div>
 
                 {/* Profile Dropdown */}
                 <div className="relative" ref={dropdownRef}>

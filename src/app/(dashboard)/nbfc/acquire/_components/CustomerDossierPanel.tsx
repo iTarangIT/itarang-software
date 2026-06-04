@@ -7,7 +7,9 @@ import {
   PackageCheck,
 } from "lucide-react";
 import type { CustomerDossier } from "@/lib/nbfc/dossier";
+import { extractOcrFields, type OcrField } from "@/lib/nbfc/ocr-display";
 import DossierActions from "./DossierActions";
+import KycVerificationDetails from "./KycVerificationDetails";
 
 // Verification-step customer dossier (Addendum V0.2 §6/§7) — the read-only
 // review surface the NBFC sees before underwriting: everything the dealer
@@ -129,11 +131,13 @@ function DocTile({
   url,
   type,
   status,
+  ocrFields,
 }: {
   label: string;
   url: string | null | undefined;
   type?: string | null;
   status?: string | null;
+  ocrFields?: OcrField[];
 }) {
   const img = isImageUrl(url, type);
   return (
@@ -159,101 +163,18 @@ function DocTile({
         </span>
         {status ? <StatusBadge status={status} /> : null}
       </div>
-    </div>
-  );
-}
-
-function KycTable({
-  rows,
-}: {
-  rows: CustomerDossier["customerKyc"];
-}) {
-  if (rows.length === 0) {
-    return <p className="text-sm text-slate-400">No verifications recorded.</p>;
-  }
-  return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="bg-slate-50 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">
-            <th className="px-3 py-2">Type</th>
-            <th className="px-3 py-2">Status</th>
-            <th className="px-3 py-2">Admin action</th>
-            <th className="px-3 py-2">Completed</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {rows
-            .filter((v) => (v.verification_type ?? "").toLowerCase() !== "address")
-            .map((v) => (
-            <tr key={v.id} className="hover:bg-slate-50/60">
-              <td className="px-3 py-2 font-medium text-slate-700">
-                {titleCase(v.verification_type)}
-              </td>
-              <td className="px-3 py-2">
-                <StatusBadge status={v.status} />
-              </td>
-              <td className="px-3 py-2 text-slate-600">
-                {v.admin_action ? titleCase(v.admin_action) : "—"}
-              </td>
-              <td className="px-3 py-2 text-slate-500">
-                {fmtDate(v.completed_at ?? v.submitted_at)}
-              </td>
-            </tr>
+      {ocrFields && ocrFields.length > 0 ? (
+        <dl className="space-y-0.5 border-t border-slate-100 bg-slate-50/60 px-2.5 py-2">
+          {ocrFields.map((f) => (
+            <div key={f.label} className="flex gap-1.5 text-[11px] leading-tight">
+              <dt className="shrink-0 font-medium text-slate-400">{f.label}:</dt>
+              <dd className="truncate text-slate-700" title={f.value}>
+                {f.value}
+              </dd>
+            </div>
           ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function AadhaarMatch({ dossier }: { dossier: CustomerDossier }) {
-  const xm = (dossier.aadhaar?.cross_match_result ?? null) as Record<
-    string,
-    unknown
-  > | null;
-  if (!xm || typeof xm !== "object" || Object.keys(xm).length === 0) return null;
-  const entries = Object.entries(xm);
-  return (
-    <div className="mt-3 flex flex-wrap gap-2">
-      {entries.map(([field, val]) => {
-        const obj =
-          val && typeof val === "object" ? (val as Record<string, unknown>) : null;
-        const matched =
-          obj && typeof obj.match === "boolean"
-            ? (obj.match as boolean)
-            : typeof val === "boolean"
-              ? (val as boolean)
-              : null;
-        const sim =
-          obj && (typeof obj.similarity === "number" || typeof obj.score === "number")
-            ? Number(obj.similarity ?? obj.score)
-            : null;
-        const tone =
-          matched === true
-            ? "border-emerald-200 text-emerald-700"
-            : matched === false
-              ? "border-rose-200 text-rose-700"
-              : "border-slate-200 text-slate-600";
-        return (
-          <span
-            key={field}
-            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${tone}`}
-          >
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${
-                matched === true
-                  ? "bg-emerald-500"
-                  : matched === false
-                    ? "bg-rose-500"
-                    : "bg-slate-400"
-              }`}
-            />
-            {titleCase(field)}
-            {sim != null ? ` · ${sim.toFixed(0)}%` : ""}
-          </span>
-        );
-      })}
+        </dl>
+      ) : null}
     </div>
   );
 }
@@ -348,8 +269,11 @@ export default function CustomerDossierPanel({
         title="KYC verifications"
         hint="Aadhaar / PAN / Bank / RC — verified via Decentro (Step 2)"
       >
-        <KycTable rows={dossier.customerKyc} />
-        <AadhaarMatch dossier={dossier} />
+        <KycVerificationDetails
+          rows={dossier.customerKyc}
+          aadhaar={dossier.aadhaar}
+          docs={dossier.customerDocs}
+        />
       </SectionCard>
 
       {/* 3 — Documents */}
@@ -368,6 +292,7 @@ export default function CustomerDossierPanel({
                 label={doc.doc_type ?? doc.file_name ?? "Document"}
                 url={doc.file_url}
                 type={doc.file_type}
+                ocrFields={extractOcrFields(doc.ocr_data, doc.doc_type)}
               />
             ))}
           </div>
@@ -421,7 +346,10 @@ export default function CustomerDossierPanel({
               <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
                 Co-borrower KYC
               </p>
-              <KycTable rows={dossier.coBorrowerKyc} />
+              <KycVerificationDetails
+                rows={dossier.coBorrowerKyc}
+                aadhaar={null}
+              />
             </div>
           ) : null}
         </SectionCard>

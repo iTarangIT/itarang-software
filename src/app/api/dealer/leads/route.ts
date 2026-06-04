@@ -3,8 +3,8 @@ import { createClient } from '@/lib/supabase/server';
 import { withErrorHandler, successResponse, errorResponse, generateId } from '@/lib/api-utils';
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { leads, loanDetails, personalDetails, documents, auditLogs, accounts, dealerOnboardingApplications } from '@/lib/db/schema'; // Added accounts
-import { eq, and, desc, ilike, or, ne, isNull } from 'drizzle-orm';
+import { leads, loanDetails, personalDetails, documents, auditLogs, accounts, dealerOnboardingApplications, productSelections } from '@/lib/db/schema'; // Added accounts
+import { eq, and, desc, ilike, or, ne, isNull, inArray } from 'drizzle-orm';
 import { resolveDealerProfile } from '@/lib/supabase/identity';
 import { requireRole } from '@/lib/auth-utils';
 
@@ -255,5 +255,39 @@ export const GET = withErrorHandler(async (req: Request) => {
         .where(and(...conditions))
         .orderBy(desc(leads.created_at));
 
-    return successResponse(data);
+    // Attach the product-selection FINAL PRICE (shown in the Loan Amount column)
+    // and a reached-product-selection flag (so "View Details" can deep-link to
+    // the lead's current step). Fetched in one query and mapped in JS to avoid
+    // join-fan-out; the latest selection (by submitted/created time) wins.
+    const leadIds = data.map((l) => l.id);
+    const psByLead = new Map<string, { final_price: string | null; payment_mode: string | null; ts: number }>();
+    if (leadIds.length > 0) {
+        const selections = await db.select({
+            lead_id: productSelections.lead_id,
+            final_price: productSelections.final_price,
+            payment_mode: productSelections.payment_mode,
+            submitted_at: productSelections.submitted_at,
+            created_at: productSelections.created_at,
+        })
+            .from(productSelections)
+            .where(inArray(productSelections.lead_id, leadIds));
+        for (const ps of selections) {
+            const ts = new Date(ps.submitted_at ?? ps.created_at ?? 0).getTime();
+            const prev = psByLead.get(ps.lead_id);
+            if (!prev || ts >= prev.ts) {
+                psByLead.set(ps.lead_id, { final_price: ps.final_price, payment_mode: ps.payment_mode, ts });
+            }
+        }
+    }
+    const enriched = data.map((l) => {
+        const ps = psByLead.get(l.id);
+        return {
+            ...l,
+            final_price: ps?.final_price ?? null,
+            product_payment_mode: ps?.payment_mode ?? null,
+            has_product_selection: !!ps,
+        };
+    });
+
+    return successResponse(enriched);
 });
