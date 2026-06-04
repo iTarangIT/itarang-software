@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Brain, Check, Loader2, Sparkles, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { INTENT_THRESHOLDS } from '@/lib/ai/scoring/thresholds';
 
 interface Lead {
     id: string;
@@ -191,8 +192,8 @@ export function AIStatusBadges({ lead }: { lead: Lead }) {
             {lead.intent_score != null && lead.intent_score > 0 && (
                 <span className={cn(
                     'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold',
-                    lead.intent_score >= 70 ? 'bg-green-100 text-green-700' :
-                    lead.intent_score >= 40 ? 'bg-amber-100 text-amber-700' :
+                    lead.intent_score >= INTENT_THRESHOLDS.QUALIFIED ? 'bg-green-100 text-green-700' :
+                    lead.intent_score >= INTENT_THRESHOLDS.WARM ? 'bg-amber-100 text-amber-700' :
                     'bg-red-100 text-red-700'
                 )}>
                     {lead.intent_score}

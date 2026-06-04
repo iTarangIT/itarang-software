@@ -66,6 +66,8 @@ type Lead = {
   state: string | null;
   finalIntentScore: number | null;
   currentStatus: string | null;
+  attemptCount: number;
+  convertedOnAttempt: number | null;
 };
 
 type Bucket = "all" | "pending" | "calling" | "completed" | "failed";
@@ -169,6 +171,29 @@ function LeadRow({
         {row.intentScore != null ? (
           <span className="inline-flex items-center gap-1 font-medium text-emerald-700">
             <TrendingUp className="w-3 h-3" /> {row.intentScore}
+          </span>
+        ) : (
+          <span className="text-gray-400">—</span>
+        )}
+      </td>
+      <td className="px-3 py-2.5 text-xs">
+        {row.attemptCount > 0 ? (
+          <span
+            className="inline-flex items-center gap-1.5"
+            title="Total dialer attempts for this lead across all campaigns (original + recalls)"
+          >
+            <span className="inline-flex items-center gap-1 font-medium text-gray-700 tabular-nums">
+              <RotateCcw className="w-3 h-3 text-gray-400" />
+              {row.attemptCount}×
+            </span>
+            {row.convertedOnAttempt != null && (
+              <span
+                className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-emerald-700 bg-emerald-100 rounded-full px-1.5 py-0.5"
+                title={`Qualified on attempt ${row.convertedOnAttempt}`}
+              >
+                <CheckCircle2 className="w-3 h-3" />#{row.convertedOnAttempt}
+              </span>
+            )}
           </span>
         ) : (
           <span className="text-gray-400">—</span>
@@ -532,6 +557,9 @@ export function CampaignDetailView({
                   </th>
                   <th className="px-3 py-2.5 text-left font-semibold">
                     Intent
+                  </th>
+                  <th className="px-3 py-2.5 text-left font-semibold">
+                    Attempts
                   </th>
                   <th className="px-3 py-2.5 text-left font-semibold">
                     Started

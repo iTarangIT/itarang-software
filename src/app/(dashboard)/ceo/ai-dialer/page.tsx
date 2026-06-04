@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Phone, PhoneOff, RefreshCw, Clock, Brain, Loader2, AlertTriangle, User, ChevronDown, ChevronUp, Power } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { INTENT_THRESHOLDS } from '@/lib/ai/scoring/thresholds';
 
 type Tab = 'queue' | 'assigned' | 'history';
 
@@ -364,7 +365,7 @@ function HistoryTab() {
 // ─── Shared Components ───────────────────────────────────────────────────────
 
 function IntentBadge({ score }: { score: number }) {
-    const color = score >= 70 ? 'bg-green-100 text-green-700' : score >= 40 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700';
+    const color = score >= INTENT_THRESHOLDS.QUALIFIED ? 'bg-green-100 text-green-700' : score >= INTENT_THRESHOLDS.WARM ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700';
     return (
         <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold', color)}>
             {score}
