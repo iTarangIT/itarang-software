@@ -25,6 +25,7 @@ import {
   Siren,
   X,
 } from "lucide-react";
+import { useNbfcWorkQueue } from "@/hooks/useNbfcWorkQueue";
 
 const NAV_ITEMS: Array<{
   id: string;
@@ -94,12 +95,14 @@ function SidebarBody({
   activeLoans,
   aumInr,
   pathname,
+  acquirePending,
   onNavigate,
 }: {
   tenantName: string;
   activeLoans: number;
   aumInr: number | null;
   pathname: string;
+  acquirePending: number;
   onNavigate?: () => void;
 }) {
   return (
@@ -150,6 +153,14 @@ function SidebarBody({
               >
                 <Icon className="w-4 h-4 shrink-0" />
                 <span>{item.label}</span>
+                {item.id === "acquire" && acquirePending > 0 && (
+                  <span
+                    aria-label={`${acquirePending} pending applications`}
+                    className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-[color:var(--color-brand-sky)] text-white text-[11px] font-bold tabular-nums"
+                  >
+                    {acquirePending > 99 ? "99+" : acquirePending}
+                  </span>
+                )}
               </Link>
             );
           })}
@@ -178,6 +189,7 @@ export default function NbfcPortalSidebar({
   onClose?: () => void;
 }) {
   const pathname = usePathname() ?? "";
+  const { acquire_pending } = useNbfcWorkQueue();
 
   return (
     <>
@@ -188,6 +200,7 @@ export default function NbfcPortalSidebar({
           activeLoans={activeLoans}
           aumInr={aumInr}
           pathname={pathname}
+          acquirePending={acquire_pending}
         />
       </aside>
 
@@ -227,6 +240,7 @@ export default function NbfcPortalSidebar({
             activeLoans={activeLoans}
             aumInr={aumInr}
             pathname={pathname}
+            acquirePending={acquire_pending}
             onNavigate={onClose}
           />
         </aside>

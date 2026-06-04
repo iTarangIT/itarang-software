@@ -6,9 +6,9 @@
  * lead assignment. Canonical states drive logic; the Decentro raw layer is
  * display/audit only (§9.3 pattern). There is NO per-lead skip (§9.2).
  */
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { nbfcLeadAssignments, videoKycVerifications } from "@/lib/db/schema";
+import { nbfcLeadAssignments, videoKycAttempts, videoKycVerifications } from "@/lib/db/schema";
 
 export const VKYC_STATES = [
   "not_applicable",
@@ -49,6 +49,25 @@ export async function getActiveAssignment(leadId: string, tenantId: string) {
   if (!row) return null;
   const snap = (row.snapshot ?? {}) as Snapshot;
   return { ...row, snapshot: snap };
+}
+
+/**
+ * All VKYC session runs for a verification track, OLDEST first, so the UI can
+ * number them Run 1..N. One row per link sent / capture (§8.2 billing unit);
+ * each carries its own outcome (in_progress | verified | failed).
+ */
+export async function getVkycAttempts(verificationId: string) {
+  return db
+    .select({
+      id: videoKycAttempts.id,
+      status: videoKycAttempts.status,
+      provider_raw_status: videoKycAttempts.provider_raw_status,
+      created_at: videoKycAttempts.created_at,
+      updated_at: videoKycAttempts.updated_at,
+    })
+    .from(videoKycAttempts)
+    .where(eq(videoKycAttempts.verification_id, verificationId))
+    .orderBy(asc(videoKycAttempts.created_at));
 }
 
 /** Existing track row for (lead, nbfc), or null. */

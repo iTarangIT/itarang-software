@@ -34,16 +34,41 @@ function statusFromError(msg: string): number {
 const numStr = (v: number | string | null | undefined): string | null =>
   v == null || v === "" ? null : String(v);
 
-const Body = z.object({
-  roi_pct: z.union([z.number(), z.string()]).optional().nullable(),
-  emi_amount: z.union([z.number(), z.string()]).optional().nullable(),
-  tenure_months: z.union([z.number(), z.string()]).optional().nullable(),
-  loan_amount: z.union([z.number(), z.string()]).optional().nullable(),
-  down_payment: z.union([z.number(), z.string()]).optional().nullable(),
-  processing_fee: z.union([z.number(), z.string()]).optional().nullable(),
-  conditions: z.string().max(4000).optional().nullable(),
-  valid_until: z.string().optional().nullable(),
-});
+// Every offer detail is mandatory; only `conditions` is optional. A valid number
+// (incl. 0, e.g. a ₹0 processing fee) is required for the numeric fields and a
+// date for `valid_until`. Mirrors the OfferPanel button gate so the API can't be
+// bypassed with a blank firm offer.
+const REQUIRED_NUMERIC = [
+  "loan_amount",
+  "roi_pct",
+  "emi_amount",
+  "tenure_months",
+  "down_payment",
+  "processing_fee",
+] as const;
+
+const Body = z
+  .object({
+    roi_pct: z.union([z.number(), z.string()]).optional().nullable(),
+    emi_amount: z.union([z.number(), z.string()]).optional().nullable(),
+    tenure_months: z.union([z.number(), z.string()]).optional().nullable(),
+    loan_amount: z.union([z.number(), z.string()]).optional().nullable(),
+    down_payment: z.union([z.number(), z.string()]).optional().nullable(),
+    processing_fee: z.union([z.number(), z.string()]).optional().nullable(),
+    conditions: z.string().max(4000).optional().nullable(),
+    valid_until: z.string().optional().nullable(),
+  })
+  .superRefine((d, ctx) => {
+    for (const k of REQUIRED_NUMERIC) {
+      const v = d[k];
+      if (v == null || String(v).trim() === "" || Number.isNaN(Number(v))) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [k], message: `${k} is required` });
+      }
+    }
+    if (!d.valid_until || d.valid_until.trim() === "") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["valid_until"], message: "valid_until is required" });
+    }
+  });
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
   try {

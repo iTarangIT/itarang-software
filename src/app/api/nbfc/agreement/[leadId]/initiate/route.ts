@@ -64,15 +64,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     let nbfcSigns = true;
     let nbfcSignerName = "";
     let nbfcSignerEmail = "";
+    // "Resend link": re-send the e-sign email for an already in-progress
+    // agreement by re-issuing the sign request (Digio has no resend-only API).
+    let resend = false;
     try {
       const body = (await req.json()) as {
         nbfc_signs?: boolean;
         nbfc_signer_name?: string;
         nbfc_signer_email?: string;
+        resend?: boolean;
       } | null;
       if (body && typeof body.nbfc_signs === "boolean") nbfcSigns = body.nbfc_signs;
       if (body && typeof body.nbfc_signer_name === "string") nbfcSignerName = body.nbfc_signer_name.trim();
       if (body && typeof body.nbfc_signer_email === "string") nbfcSignerEmail = body.nbfc_signer_email.trim();
+      if (body && typeof body.resend === "boolean") resend = body.resend;
     } catch {
       /* no/blank body — keep defaults */
     }
@@ -123,9 +128,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     }
 
     // Idempotency — if a non-terminal attempt exists, return it instead of
-    // opening duplicates (Digio docs are expensive to re-create).
+    // opening duplicates (Digio docs are expensive to re-create). EXCEPTION:
+    // an explicit "Resend link" on an in-progress agreement re-issues the
+    // request so the customer's e-sign email is sent again. A signed attempt is
+    // terminal — resend is ignored there.
     const latest = await getLatestAgreement(leadId, winner.nbfc_id);
-    if (latest && (latest.status === "in_progress" || latest.status === "signed")) {
+    const allowResend = resend && latest?.status === "in_progress";
+    if (latest && (latest.status === "in_progress" || latest.status === "signed") && !allowResend) {
       return NextResponse.json({
         ok: true,
         agreement_id: latest.id,
@@ -136,12 +145,41 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       });
     }
 
+    // On resend, reuse the signer config we saved at first send (the in-progress
+    // UI doesn't re-collect it). Legacy rows that predate this saved config fall
+    // back to a CUSTOMER-ONLY re-send — the customer is the awaiting party, and
+    // we can't recover an NBFC co-signer's email after the fact, so we must never
+    // block the resend (or drop the customer's email) on a missing co-signer.
+    if (allowResend) {
+      const saved = (latest!.provider_raw_payload as
+        | { _resend?: { nbfc_signs?: boolean; nbfc_signer_name?: string; nbfc_signer_email?: string } }
+        | null)?._resend;
+      const savedEmail = (saved?.nbfc_signer_email ?? "").trim();
+      if (saved?.nbfc_signs && savedEmail) {
+        nbfcSigns = true;
+        nbfcSignerName = saved.nbfc_signer_name ?? "";
+        nbfcSignerEmail = savedEmail;
+      } else {
+        nbfcSigns = false;
+      }
+    }
+
     // iTarang eSign on an NBFC-uploaded PDF (uploadpdf) when a source doc was
     // uploaded into the current pending row; otherwise fall back to the
     // pre-configured template path.
     const useUpload =
-      method === "digio" && latest?.status === "pending" && !!latest?.source_document_url;
-    const agreementRef = useUpload ? latest!.agreement_ref : generateAgreementRef(leadId);
+      method === "digio" && !!latest?.source_document_url && (latest?.status === "pending" || allowResend);
+    // Re-issue against the SAME agreement row (keeps one attempt per agreement)
+    // for both the uploadpdf path and any resend.
+    const reuseRow = useUpload || allowResend;
+    // On RESEND, mint a FRESH agreement ref so Digio treats it as a brand-new
+    // sign request and re-sends the email — rather than potentially de-duping
+    // against the prior request. The uploadpdf-from-pending path keeps its ref.
+    const agreementRef = allowResend
+      ? generateAgreementRef(leadId)
+      : reuseRow && latest
+        ? latest.agreement_ref
+        : generateAgreementRef(leadId);
     const now = new Date();
 
     // Customer + NBFC context for the signing request.
@@ -312,16 +350,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       }
     }
 
-    // Persist: update the existing pending row (uploadpdf path) or open a new one.
-    if (useUpload) {
+    // Persist the effective signer config alongside the raw Digio payload so a
+    // later "Resend link" can faithfully re-issue (esp. the optional NBFC
+    // co-signer, whose email Digio's response does not echo back).
+    const persistedPayload = providerRaw
+      ? {
+          ...providerRaw,
+          _resend: { nbfc_signs: nbfcSigns, nbfc_signer_name: nbfcSignerName, nbfc_signer_email: nbfcSignerEmail },
+        }
+      : null;
+
+    // Persist: update the existing row (uploadpdf path or resend) or open a new one.
+    if (reuseRow) {
       await db
         .update(nbfcLoanAgreements)
         .set({
           status: "in_progress",
           method,
+          agreement_ref: agreementRef,
           digio_document_id: digioDocumentId,
           provider_raw_status: "sign_request_created",
-          provider_raw_payload: providerRaw,
+          provider_raw_payload: persistedPayload,
           initiated_by: actor.user_id,
           initiated_at: now,
           updated_at: now,
@@ -335,6 +384,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         status: "in_progress",
         digio_document_id: digioDocumentId,
         customer_signing_url: customerSigningUrl,
+        resent: allowResend,
       });
     }
 

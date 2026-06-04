@@ -18,6 +18,7 @@ import {
   getDigioBaseUrl,
   getDigioBasicAuth,
 } from "@/lib/digio/client";
+import { generateAuditRecordPdf } from "@/lib/nbfc/agreement-audit-pdf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,7 +83,7 @@ export async function GET(
   }
 
   const [nbfcRow] = await db
-    .select({ id: nbfc.id, lsp_agreement_id: nbfc.lsp_agreement_id })
+    .select({ id: nbfc.id, lsp_agreement_id: nbfc.lsp_agreement_id, legal_name: nbfc.legal_name, short_name: nbfc.short_name })
     .from(nbfc)
     .where(eq(nbfc.id, nbfcId))
     .limit(1);
@@ -195,14 +196,47 @@ export async function GET(
   }
 
   if (!pdf) {
-    return NextResponse.json(
-      {
-        success: false,
-        message:
-          "Could not fetch audit trail from Digio. The audit trail may not be available yet — please try again in a few minutes.",
+    // No provider audit certificate available (recorded manually / different
+    // eSign environment → ENTITY_NOT_FOUND). Generate iTarang's own audit record
+    // so the admin always gets a document instead of an error.
+    console.warn("[lsp-agreement/audit-trail] provider trail unavailable; serving iTarang audit record", { nbfcId });
+    const fmtDate = (d: Date | string | null | undefined): string => {
+      if (!d) return "—";
+      const dt = d instanceof Date ? d : new Date(d);
+      if (Number.isNaN(dt.getTime())) return "—";
+      try {
+        return new Intl.DateTimeFormat("en-IN", {
+          day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata",
+        }).format(dt) + " IST";
+      } catch {
+        return dt.toISOString();
+      }
+    };
+    const fallback = await generateAuditRecordPdf({
+      title: "iTarang — LSP Agreement Audit Record",
+      intro: [
+        "iTarang's internal signing/audit record for the iTarang & NBFC LSP agreement,",
+        "generated from iTarang's immutable records. This is NOT the eSign provider's legal",
+        "certificate - when that certificate is available, it is provided instead of this record.",
+      ],
+      rows: [
+        { label: "NBFC", value: nbfcRow.legal_name || nbfcRow.short_name || String(nbfcId) },
+        { label: "Agreement reference", value: agreement.agreement_id || String(agreement.id) },
+        { label: "Signing method", value: "iTarang eSign" },
+        { label: "Status", value: agreement.agreement_status ?? "—" },
+        { label: "Last updated", value: fmtDate(agreement.updated_at) },
+      ],
+      footerNote: "iTarang facilitates and files the LSP agreement; document storage is optional.",
+      generatedAt: new Date(),
+    });
+    return new NextResponse(new Uint8Array(fallback), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="lsp-audit-record-${nbfcId}.pdf"`,
+        "Cache-Control": "no-store",
       },
-      { status: 502 },
-    );
+    });
   }
 
   const publicUrl = await writeLocalCache(nbfcId, pdf);

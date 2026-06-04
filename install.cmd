@@ -4,6 +4,7 @@ setlocal enabledelayedexpansion
 REM Claude Code Windows CMD Bootstrap Script
 REM Installs Claude Code for environments where PowerShell is not available
 
+
 REM Parse command line argument
 set "TARGET=%~1"
 if "!TARGET!"=="" set "TARGET=latest"
