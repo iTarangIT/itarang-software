@@ -11,7 +11,8 @@
 import { db } from "@/lib/db";
 import { dialerCampaignLeads, dealerLeads } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
 
 const PAGE_SIZE = 50;
 const BANNER_LIMIT = 100; // per bucket on bucket=all
@@ -42,6 +43,10 @@ function shapeRow(r: any) {
     state: r.state,
     finalIntentScore: r.finalIntentScore,
     currentStatus: r.currentStatus,
+    // Cross-campaign attempt tracking (only populated on the detail query).
+    attemptCount: Number(r.attemptCount ?? 0),
+    convertedOnAttempt:
+      r.convertedOnAttempt != null ? Number(r.convertedOnAttempt) : null,
   };
 }
 
@@ -61,6 +66,34 @@ const selectShape = {
   state: dealerLeads.state,
   finalIntentScore: dealerLeads.final_intent_score,
   currentStatus: dealerLeads.current_status,
+};
+
+// Detail-table only: the lead's total dialer attempts across ALL campaigns
+// (original + every recall), and the 1-based attempt on which it first crossed
+// the qualified-intent threshold (75 — matches getLeadStatus() in
+// src/lib/ai/storage/leadStore.ts). Computed as correlated subqueries so the
+// per-row cost stays on the campaign-detail table and off the lighter
+// bucket=all banner query, which doesn't render these columns.
+const detailSelectShape = {
+  ...selectShape,
+  attemptCount: sql<number>`(
+    select count(*)::int from dialer_campaign_leads x
+    where x.lead_id = ${dialerCampaignLeads.lead_id}
+  )`,
+  convertedOnAttempt: sql<number | null>`(
+    select s.ord::int from (
+      select row_number() over (
+               order by c.started_at asc nulls last, x.created_at asc
+             ) as ord,
+             x.intent_score as sc
+      from dialer_campaign_leads x
+      join dialer_campaigns c on c.id = x.campaign_id
+      where x.lead_id = ${dialerCampaignLeads.lead_id}
+    ) s
+    where s.sc >= ${INTENT_THRESHOLDS.QUALIFIED}
+    order by s.ord asc
+    limit 1
+  )`,
 };
 
 export const GET = withErrorHandler(
@@ -165,7 +198,7 @@ export const GET = withErrorHandler(
           );
 
     const rows = await db
-      .select(selectShape)
+      .select(detailSelectShape)
       .from(dialerCampaignLeads)
       .leftJoin(dealerLeads, eq(dealerLeads.id, dialerCampaignLeads.lead_id))
       .where(where)

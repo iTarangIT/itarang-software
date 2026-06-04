@@ -2,9 +2,11 @@ import { StateGraph, Annotation, END } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { db } from '@/lib/db';
 import { leads, aiCallLogs } from '@/lib/db/schema';
-import { eq, desc, and, gte } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import { triggerCall } from '@/lib/ai/bolna-client';
 import { getAICallerEnabled } from '@/lib/ai/settings';
+import { analyzeTranscript } from '@/lib/ai/analysis';
+import { INTENT_THRESHOLDS, leadStatusFor } from '@/lib/ai/scoring';
 
 // ─── State Definition ────────────────────────────────────────────────────────
 
@@ -24,6 +26,13 @@ const GraphState = Annotation.Root({
     shouldCall: Annotation<boolean>({ reducer: (_, b) => b, default: () => false }),
     callResult: Annotation<string>({ reducer: (_, b) => b, default: () => '' }),
     error: Annotation<string | null>({ reducer: (_, b) => b, default: () => null }),
+    // Auditable scoring (from the shared engine). intentScore above is the
+    // canonical number; these carry the breakdown/signals/band for the leads row.
+    intentBand: Annotation<string>({ reducer: (_, b) => b, default: () => '' }),
+    scoreBreakdown: Annotation<unknown[]>({ reducer: (_, b) => b, default: () => [] }),
+    signals: Annotation<Record<string, unknown> | null>({ reducer: (_, b) => b, default: () => null }),
+    scoringVersion: Annotation<string>({ reducer: (_, b) => b, default: () => '' }),
+    needsReview: Annotation<boolean>({ reducer: (_, b) => b, default: () => false }),
 });
 
 type State = typeof GraphState.State;
@@ -110,59 +119,87 @@ async function summarizeConversation(state: State): Promise<Partial<State>> {
 }
 
 // ─── Node 3: Score Purchase Intent ───────────────────────────────────────────
+//
+// The graph NO LONGER scores leads itself. The canonical intent number comes
+// ONLY from the shared, deterministic engine (latest signals-extraction prompt +
+// computeIntentScore), so the CEO dialer and the campaign dialer agree.
 
 async function scorePurchaseIntent(state: State): Promise<Partial<State>> {
-    try {
-        const leadInfo = state.lead || {};
-        const result = await model.invoke([
-            {
-                role: 'system',
-                content: `You are a lead scoring expert for an EV/battery company. Score the lead's purchase intent from 0-100 based on all available data. Respond ONLY with valid JSON:
-{
-  "score": <number 0-100>,
-  "reason": "<1-2 sentence rationale>",
-  "objections": "<known objections or 'none'>",
-  "suggested_pitch": "<1-2 sentence recommended approach>"
-}`,
-            },
-            {
-                role: 'user',
-                content: `Lead: ${leadInfo.full_name || leadInfo.owner_name}
-Interest level: ${leadInfo.interest_level || 'unknown'}
-Lead status: ${leadInfo.lead_status || 'new'}
-Product interest: ${leadInfo.asset_model || 'unknown'}
-Investment capacity: ${leadInfo.investment_capacity || 'unknown'}
-Business type: ${leadInfo.business_type || 'unknown'}
-Total AI calls: ${leadInfo.total_ai_calls || 0}
-Last call outcome: ${leadInfo.last_call_outcome || 'none'}
-Conversation summary: ${state.conversationSummary || 'No conversation yet'}`,
-            },
-        ]);
+    const transcript = (state.latestTranscript || '').trim();
 
-        const text = typeof result.content === 'string' ? result.content : String(result.content);
-        const jsonStr = text.replace(/```json|```/g, '').trim();
-        const parsed = JSON.parse(jsonStr);
-
+    // Pre-call (no transcript yet): carry forward the lead's last stored
+    // canonical score for prioritization. Never invent a fresh LLM score.
+    if (!transcript) {
+        const prior = Number(state.lead?.intent_score) || 0;
         return {
-            intentScore: Number(parsed.score) || 0,
-            intentReason: parsed.reason || '',
-            objections: parsed.objections || '',
-            suggestedPitch: parsed.suggested_pitch || '',
+            intentScore: prior,
+            intentReason: (state.lead?.intent_reason as string) || 'No transcript yet — prior score carried forward',
+            objections: '',
+            suggestedPitch: '',
         };
-    } catch {
-        return { intentScore: 30, intentReason: 'Scoring failed, defaulting to low' };
     }
+
+    const result = await analyzeTranscript(transcript);
+
+    // No silent zeros: on extraction/parse failure flag needs_review and keep
+    // the prior score (writeBackToDB leaves intent_score untouched).
+    if (result.status === 'failed') {
+        return {
+            needsReview: true,
+            intentScore: Number(state.lead?.intent_score) || 0,
+            intentReason: `analysis_failed:${result.reason}`,
+        };
+    }
+
+    return {
+        intentScore: result.intent_score,
+        intentReason: result.memory?.intent_summary || '',
+        intentBand: leadStatusFor(result.intent_score, { qualified_gate: result.qualified_gate }),
+        signals: result.signals as unknown as Record<string, unknown>,
+        scoreBreakdown: result.score_breakdown,
+        scoringVersion: result.scoring_version,
+        objections:
+            result.signals.objection_quality.level !== 'unknown'
+                ? result.signals.objection_quality.evidence
+                : '',
+        suggestedPitch: '',
+    };
 }
 
 // ─── Node 4: Decide Next Action ──────────────────────────────────────────────
 
 async function decideNextAction(state: State): Promise<Partial<State>> {
     const score = state.intentScore;
-    const lead = state.lead || {};
     const now = new Date();
+    const COLD_DELAY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-    // High intent (70+) → call now
-    if (score >= 70) {
+    // Analysis failed → hold for human review; never auto-dial on a guess.
+    if (state.needsReview) {
+        return {
+            nextAction: 'needs_review',
+            callPriority: Math.max(score, 10),
+            shouldCall: false,
+            nextCallAt: null,
+        };
+    }
+
+    // Hard negatives from the latest call → stop dialing, park far out.
+    const negs = state.signals?.negatives as Record<string, boolean> | undefined;
+    const hardStop = !!(
+        negs &&
+        (negs.do_not_call || negs.explicit_not_interested || negs.already_bought_competitor)
+    );
+    if (hardStop) {
+        return {
+            nextAction: 'mark_cold',
+            callPriority: Math.max(score, 10),
+            shouldCall: false,
+            nextCallAt: new Date(now.getTime() + COLD_DELAY_MS).toISOString(),
+        };
+    }
+
+    // Tiers use the SAME central thresholds as the rest of the system.
+    if (score >= INTENT_THRESHOLDS.QUALIFIED) {
         return {
             nextAction: 'call_now',
             callPriority: score,
@@ -171,8 +208,7 @@ async function decideNextAction(state: State): Promise<Partial<State>> {
         };
     }
 
-    // Medium intent (40-69) → schedule for later today or tomorrow
-    if (score >= 40) {
+    if (score >= INTENT_THRESHOLDS.WARM) {
         const scheduleTime = new Date(now.getTime() + 4 * 60 * 60 * 1000); // 4 hours later
         return {
             nextAction: 'schedule_later',
@@ -182,13 +218,11 @@ async function decideNextAction(state: State): Promise<Partial<State>> {
         };
     }
 
-    // Low intent (< 40) → mark cold, schedule far out
-    const coldSchedule = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
     return {
         nextAction: 'mark_cold',
         callPriority: Math.max(score, 10),
         shouldCall: false,
-        nextCallAt: coldSchedule.toISOString(),
+        nextCallAt: new Date(now.getTime() + COLD_DELAY_MS).toISOString(),
     };
 }
 
@@ -196,9 +230,34 @@ async function decideNextAction(state: State): Promise<Partial<State>> {
 
 async function writeBackToDB(state: State): Promise<Partial<State>> {
     try {
+        const intentDetails = {
+            signals: state.signals ?? null,
+            score_breakdown: state.scoreBreakdown ?? [],
+            scoring_version: state.scoringVersion || null,
+            needs_review: state.needsReview ?? false,
+        };
+
+        if (state.needsReview) {
+            // Analysis failed — DO NOT overwrite the canonical score/band; just
+            // record the reason + audit blob and surface for human follow-up.
+            await db.update(leads).set({
+                intent_reason: state.intentReason,
+                intent_details: intentDetails,
+                conversation_summary: state.conversationSummary,
+                call_priority: state.callPriority,
+                next_call_at: state.nextCallAt ? new Date(state.nextCallAt) : null,
+                last_ai_action_at: new Date(),
+                updated_at: new Date(),
+            }).where(eq(leads.id, state.leadId));
+            return {};
+        }
+
         await db.update(leads).set({
             intent_score: state.intentScore,
             intent_reason: state.intentReason,
+            intent_band: state.intentBand || null,
+            intent_details: intentDetails,
+            intent_scored_at: new Date(),
             conversation_summary: state.conversationSummary,
             call_priority: state.callPriority,
             next_call_at: state.nextCallAt ? new Date(state.nextCallAt) : null,

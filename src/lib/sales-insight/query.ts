@@ -13,6 +13,7 @@
 
 import { sql, type SQL } from "drizzle-orm";
 import type { ConvertedFilters } from "./types";
+import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
 
 export type BuiltQueries = {
     rowsSql: SQL;
@@ -79,7 +80,7 @@ function unionBase(filters: ConvertedFilters): SQL {
                         (jsonb_array_length(dl.follow_up_history) - 1))
                         -> 'analysis' ->> 'intent_score')::int,
                     0
-                  ) >= 75
+                  ) >= ${INTENT_THRESHOLDS.QUALIFIED}
         ),
         src_b AS (
             SELECT

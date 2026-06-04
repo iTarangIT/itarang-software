@@ -27,6 +27,7 @@ import { db } from "@/lib/db";
 import { regionGroups } from "@/lib/db/schema";
 import { inArray, sql } from "drizzle-orm";
 import { AI_DIALABLE_SQL } from "@/lib/ai-dialer/exclusionFilter";
+import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
 
 type RegionEntry = { state: string; cities?: string[] };
 
@@ -41,8 +42,8 @@ const NO_CALL_STATUSES = new Set(["converted", "not_interested", "dnc", "blackli
 // → cold, which matches the user's intuition that an uncalled lead is cold.
 function bucketOf(score: number | null | undefined): "hot" | "warm" | "cold" {
   const s = typeof score === "number" ? score : 0;
-  if (s >= 75) return "hot";
-  if (s >= 40) return "warm";
+  if (s >= INTENT_THRESHOLDS.QUALIFIED) return "hot";
+  if (s >= INTENT_THRESHOLDS.WARM) return "warm";
   return "cold";
 }
 
