@@ -110,7 +110,6 @@ export default function FiReviewPanel({
   const evidencePhotos = photos.filter((p) => p.photo_type !== "agent_selfie");
   const captured = track.gps_lat && track.gps_lng ? `${track.gps_lat}, ${track.gps_lng}` : "—";
   const mapHref = track.gps_lat && track.gps_lng ? `https://www.google.com/maps?q=${track.gps_lat},${track.gps_lng}` : null;
-  const distanceFar = track.distance_from_address_m != null && Number(track.distance_from_address_m) > 50;
 
   async function act(body: Record<string, unknown>) {
     setBusy(true);
@@ -139,13 +138,7 @@ export default function FiReviewPanel({
       {/* Location evidence */}
       <Section icon="pin" title="Location evidence">
         <div className="grid grid-cols-2 gap-2">
-          <Stat k="Stated (geocoded)" v={track.stated_lat && track.stated_lng ? `${track.stated_lat}, ${track.stated_lng}` : "not geocoded"} mono />
           <Stat k="Captured at visit" v={captured} mono />
-          <Stat
-            k="Distance from address"
-            v={track.distance_from_address_m != null ? `${track.distance_from_address_m} m` : "not computable"}
-            danger={distanceFar}
-          />
           <Stat k="GPS accuracy" v={track.gps_accuracy_m != null ? `±${track.gps_accuracy_m} m` : "—"} />
         </div>
         {mapHref && (

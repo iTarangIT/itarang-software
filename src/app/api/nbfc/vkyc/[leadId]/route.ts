@@ -15,7 +15,7 @@ import { db } from "@/lib/db";
 import { nbfcServiceConfig, videoKycAttempts, videoKycVerifications } from "@/lib/db/schema";
 import { activeVideoLivenessResult } from "@/lib/decentro";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
-import { getActiveAssignment, getVkycTrack } from "@/lib/nbfc/vkyc";
+import { getActiveAssignment, getVkycAttempts, getVkycTrack } from "@/lib/nbfc/vkyc";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -127,9 +127,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
       }
     }
 
+    // History bar: every VKYC run for this track (oldest → newest).
+    const history = track ? await getVkycAttempts(track.id) : [];
+
     return NextResponse.json({
       ok: true,
       track,
+      history,
       can_act: canAct,
       enabled,
     });

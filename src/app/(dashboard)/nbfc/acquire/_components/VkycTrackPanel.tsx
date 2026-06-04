@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import VkycReviewPanel from "./VkycReviewPanel";
+import TrackHistoryBar, { type HistoryBarEntry } from "./TrackHistoryBar";
 
 type Track = {
   id: string;
@@ -28,10 +29,55 @@ type Track = {
   provider_raw_payload: unknown;
   admin_action: string | null;
   admin_action_notes: string | null;
+  admin_action_at: string | null;
   link_channel: string | null;
 };
 
-type Resp = { ok: boolean; track: Track | null; can_act?: boolean; enabled?: boolean; error?: string };
+type VkycAttempt = {
+  id: string;
+  status: string;
+  provider_raw_status: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type Resp = { ok: boolean; track: Track | null; history?: VkycAttempt[]; can_act?: boolean; enabled?: boolean; error?: string };
+
+const RUN_LABEL: Record<string, { label: string; tone: HistoryBarEntry["tone"] }> = {
+  verified: { label: "Verified", tone: "pass" },
+  failed: { label: "Liveness failed", tone: "fail" },
+  in_progress: { label: "Link sent · awaiting", tone: "info" },
+};
+
+/** Build the Video KYC history timeline: each run, plus the reviewer's decision. */
+function buildVkycHistory(track: Track | null, attempts: VkycAttempt[]): HistoryBarEntry[] {
+  const entries: HistoryBarEntry[] = [];
+  // Reviewer decision sits on top (most recent action on the track).
+  if (track?.admin_action) {
+    const accepted = track.admin_action === "accepted";
+    entries.push({
+      key: "decision",
+      label: accepted ? "Reviewer accepted" : "Reviewer rejected",
+      tone: accepted ? "pass" : "fail",
+      detail: track.admin_action_notes,
+      at: track.admin_action_at,
+    });
+  }
+  // Runs newest-first; run numbers count from the oldest (Run 1).
+  attempts.forEach((a, idx) => {
+    const meta = RUN_LABEL[a.status] ?? { label: a.status.replace(/_/g, " "), tone: "neutral" as const };
+    entries.push({
+      key: a.id,
+      label: `Run ${idx + 1} · ${meta.label}`,
+      tone: meta.tone,
+      detail: a.provider_raw_status ? a.provider_raw_status.replace(/_/g, " ") : null,
+      at: a.updated_at ?? a.created_at,
+    });
+  });
+  // Decision first, then runs newest → oldest.
+  const decision = entries[0]?.key === "decision" ? [entries.shift()!] : [];
+  return [...decision, ...entries.reverse()];
+}
 
 type Channel = "email" | "sms" | "whatsapp";
 
@@ -208,6 +254,9 @@ export default function VkycTrackPanel({ leadId }: { leadId: string }) {
       {track && (status === "verified" || status === "failed" || !!track.session_video_url) && (
         <VkycReviewPanel leadId={leadId} track={track} mode={track.mode} canAct={canAct} onChanged={() => void load()} />
       )}
+
+      {/* History bar — every VKYC run + the reviewer's decision. */}
+      <TrackHistoryBar title="Video KYC history" entries={buildVkycHistory(track, data?.history ?? [])} />
     </div>
   );
 }
