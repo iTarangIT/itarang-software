@@ -291,6 +291,7 @@ export default function ProductSelectionPage() {
   };
   type SectionGNbfc = {
     nbfcId: number;
+    nbfcCode: string;
     shortName: string;
     legalName: string;
     activeLoanProducts: SectionGProduct[];
@@ -3280,6 +3281,7 @@ function SectionG({
 }: {
   options: Array<{
     nbfcId: number;
+    nbfcCode: string;
     shortName: string;
     legalName: string;
     activeLoanProducts: Array<{
@@ -3330,7 +3332,7 @@ function SectionG({
         </div>
       ) : (
         <div className="space-y-3">
-          {options.map((opt) => {
+          {options.map((opt, idx) => {
             const picked = isPicked(opt.nbfcId);
             // Phase 2 stub: use the first active product's bands as the
             // indicative range. Phase 3 will pick the right product after
@@ -3354,7 +3356,7 @@ function SectionG({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-sm font-bold text-gray-900 truncate">
-                      {opt.shortName || opt.legalName}
+                      {`iTarang Scheme ${idx + 1} (${opt.nbfcCode})`}
                     </div>
                     {product && (
                       <div className="text-[11px] text-gray-500 mt-0.5 truncate">
