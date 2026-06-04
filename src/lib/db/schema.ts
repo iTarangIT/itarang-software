@@ -976,6 +976,12 @@ export const aiCallLogs = pgTable(
     cost_currency: varchar("cost_currency", { length: 3 }).default("INR"),
     cost_source: varchar("cost_source", { length: 20 }),
     cost_fetched_at: timestamp("cost_fetched_at", { withTimezone: true }),
+    // E-156: auditable intent scoring. `scoring_version` stamps which weight
+    // table produced `intent_score`; `signals` and `score_breakdown` persist the
+    // raw extracted signals and the truthful per-point breakdown for audit.
+    scoring_version: varchar("scoring_version", { length: 20 }),
+    signals: jsonb("signals"),
+    score_breakdown: jsonb("score_breakdown"),
   },
   (table) => {
     return {
