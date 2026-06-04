@@ -12,6 +12,8 @@
     "start": "node server.js",
     "lint": "eslint",
     "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:push": "drizzle-kit push",
     "db:update-passwords": "node scripts/update-passwords.js",
     "db:seed-test": "tsx scripts/seed-test-data.ts",
@@ -106,6 +108,7 @@
     "puppeteer": "^24.41.0",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.8"
   }
 }
