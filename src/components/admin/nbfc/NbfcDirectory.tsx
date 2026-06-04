@@ -134,7 +134,10 @@ export default function NbfcDirectory({
           />
         </div>
         {canOnboard && (
-          <Link href="/admin/nbfc/new" className="btn-primary">
+          <Link
+            href="/admin/nbfc/new"
+            className="btn-primary shrink-0 whitespace-nowrap"
+          >
             <Plus className="w-4 h-4" />
             Onboard NBFC
           </Link>
@@ -152,7 +155,8 @@ export default function NbfcDirectory({
         </div>
       ) : (
         <div className="card-iTarang overflow-hidden">
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[1080px] text-sm">
             <thead>
               <tr className="text-left">
                 {["NBFC", "Status", "Step", "RBI registration", "LSP signing", "Partnership", "CoR expiry", ""].map(
@@ -184,11 +188,11 @@ export default function NbfcDirectory({
                     key={row.id}
                     className="table-row-parcel"
                   >
-                    <td className="px-5 py-4">
+                    <td className="px-5 py-4 min-w-[200px]">
                       <div className="font-semibold text-[color:var(--color-brand-navy)]">
                         {row.legalName}
                       </div>
-                      <div className="text-[12px] font-mono text-[color:var(--color-ink-muted)] mt-0.5">
+                      <div className="text-[12px] font-mono text-[color:var(--color-ink-muted)] mt-0.5 whitespace-nowrap">
                         {row.nbfcId}
                       </div>
                     </td>
@@ -320,6 +324,7 @@ export default function NbfcDirectory({
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
