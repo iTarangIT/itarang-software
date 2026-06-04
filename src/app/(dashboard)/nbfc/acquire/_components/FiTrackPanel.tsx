@@ -16,6 +16,29 @@ import FiReviewPanel, {
   type FiPhotoLite,
   type FiTrackLite,
 } from "./FiReviewPanel";
+import TrackHistoryBar, { type HistoryBarEntry } from "./TrackHistoryBar";
+
+const FI_STATUS_TONE: Record<string, HistoryBarEntry["tone"]> = {
+  passed: "pass",
+  failed: "fail",
+  re_inspection_requested: "info",
+};
+
+/** Map prior FI attempts (newest first from the API) to history-bar entries. */
+function buildFiHistory(rows: HistoryRow[]): HistoryBarEntry[] {
+  return rows.map((h) => {
+    const detail = [h.assigned_to, h.decision_reason ? `“${h.decision_reason}”` : null]
+      .filter(Boolean)
+      .join(" · ");
+    return {
+      key: h.id,
+      label: `Attempt ${h.attempt_no} · ${h.status.replace(/_/g, " ")}`,
+      tone: FI_STATUS_TONE[h.status] ?? "neutral",
+      detail: detail || null,
+      at: h.decided_at,
+    };
+  });
+}
 
 interface Track extends FiTrackLite {
   id: string;
@@ -169,7 +192,6 @@ export default function FiTrackPanel({ leadId }: { leadId: string }) {
   const [agentId, setAgentId] = useState("");
   const [channel, setChannel] = useState<Channel>("email");
   const [showReview, setShowReview] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -416,27 +438,9 @@ export default function FiTrackPanel({ leadId }: { leadId: string }) {
           </div>
         )}
 
-        {/* History */}
+        {/* History bar — prior FI attempts (re-inspections, decisions). */}
         {data?.history && data.history.length > 0 && (
-          <div className="border-t border-slate-100 pt-2">
-            <button onClick={() => setShowHistory((s) => !s)} className="text-[11px] font-medium text-slate-400 underline-offset-2 hover:underline">
-              {showHistory ? "Hide history" : `View prior attempts (${data.history.length})`}
-            </button>
-            {showHistory && (
-              <ul className="mt-1.5 space-y-1">
-                {data.history.map((h) => (
-                  <li key={h.id} className="flex items-center gap-2 text-[11px] text-slate-500">
-                    <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-slate-100 text-[9px] font-bold text-slate-400">{h.attempt_no}</span>
-                    <span>
-                      {h.status.replace(/_/g, " ")}
-                      {h.assigned_to ? ` · ${h.assigned_to}` : ""}
-                      {h.decision_reason ? ` — “${h.decision_reason}”` : ""}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          <TrackHistoryBar title="Field Investigation history" entries={buildFiHistory(data.history)} />
         )}
       </div>
     </div>

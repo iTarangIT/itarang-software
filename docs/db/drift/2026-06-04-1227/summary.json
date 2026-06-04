@@ -1,0 +1,13 @@
+{
+  "generatedAt": "2026-06-04-1227",
+  "diff1": {
+    "mode": "git-text-only",
+    "error": "failed to import main schema.ts: Only URLs with a scheme in: file, data, and node are supported by the default ESM loader. On Windows, absolute paths must be valid file:// URLs. Received protocol 'c:'",
+    "hasChanges": true
+  },
+  "diff2_4_codeBaseline": "branch (main load failed)",
+  "prodError": ".env.production missing or no DATABASE_URL",
+  "diff2": {
+    "summary": "2 only in code, 2 only in sandbox, 118 table(s) with shape diffs"
+  }
+}

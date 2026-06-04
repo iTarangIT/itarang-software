@@ -114,6 +114,7 @@ export default function AgreementTrackPanel({ leadId }: { leadId: string }) {
   const [showManual, setShowManual] = useState(false);
   const [manualUrl, setManualUrl] = useState("");
   const [signingUrl, setSigningUrl] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [nbfcSigns, setNbfcSigns] = useState(false);
   const [nbfcSignerName, setNbfcSignerName] = useState("");
@@ -177,18 +178,33 @@ export default function AgreementTrackPanel({ leadId }: { leadId: string }) {
     }
   }
 
-  async function initiate() {
-    if (nbfcSigns && !nbfcSignerEmail.trim()) {
+  async function initiate(opts?: { resend?: boolean }) {
+    const isResend = !!opts?.resend;
+    // On resend the backend reuses the original signers, so we don't re-collect
+    // the NBFC signatory email here.
+    if (!isResend && nbfcSigns && !nbfcSignerEmail.trim()) {
       setError("Enter the NBFC signatory's email, or untick “NBFC signatory also signs” to send for the customer's signature only.");
       return;
     }
+    setNotice(null);
     const j = await post("/initiate", {
+      resend: isResend,
       nbfc_signs: nbfcSigns,
       nbfc_signer_name: nbfcSigns ? nbfcSignerName.trim() : "",
       nbfc_signer_email: nbfcSigns ? nbfcSignerEmail.trim() : "",
     });
     const url = (j?.customer_signing_url as string | undefined) ?? null;
     if (url) setSigningUrl(url);
+    if (isResend && j && j.ok !== false) {
+      if (j.idempotent) {
+        // The server short-circuited without re-issuing — usually means it is
+        // running an older build that doesn't support resend.
+        setError("Resend did not re-issue the request (server returned the existing one). Ensure the latest build is running and retry.");
+      } else {
+        setNotice("Signing link re-sent to the customer.");
+        setTimeout(() => setNotice(null), 5000);
+      }
+    }
   }
 
   async function copyLink(url: string) {
@@ -356,13 +372,18 @@ export default function AgreementTrackPanel({ leadId }: { leadId: string }) {
                 )}
                 {canAct && (
                   <div className="flex flex-wrap items-center gap-3">
-                    <button onClick={() => void initiate()} disabled={busy} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-brand-sky)] shadow-sm transition hover:bg-slate-50 disabled:opacity-40">
+                    <button onClick={() => void initiate({ resend: true })} disabled={busy} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-brand-sky)] shadow-sm transition hover:bg-slate-50 disabled:opacity-40">
                       {busy ? "Resending…" : "Resend link"}
                     </button>
                     <button onClick={() => setShowManual((s) => !s)} className="text-[11px] font-medium text-slate-400 underline-offset-2 hover:underline">
                       {showManual ? "Hide manual fallback" : "Manual fallback"}
                     </button>
                   </div>
+                )}
+                {notice && (
+                  <p className="rounded-lg bg-emerald-50 px-3 py-2 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-100">
+                    {notice}
+                  </p>
                 )}
                 {showManual && canAct && (
                   <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">

@@ -104,6 +104,16 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
   const canAct = data?.can_act ?? false;
   const decided = status === "selected" || status === "not_selected";
 
+  // Every offer detail is mandatory (a real firm offer can't have blanks);
+  // only Conditions/notes is optional. The numeric fields must carry a valid
+  // number (0 is allowed, e.g. a ₹0 processing fee), and "Valid until" a date.
+  const numericFilled = fields.every((f) => {
+    const v = (form[f.key as string] ?? "").trim();
+    return v !== "" && !Number.isNaN(Number(v));
+  });
+  const validUntilFilled = (form.valid_until ?? "").trim() !== "";
+  const canSubmit = numericFilled && validUntilFilled && !busy;
+
   return (
     <section className="border border-slate-200 rounded-xl bg-white p-5">
       <div className="flex items-center justify-between mb-4">
@@ -149,9 +159,10 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
           <div className="grid grid-cols-2 gap-3">
             {fields.map((f) => (
               <label key={f.key} className="text-[11px] text-slate-500 font-semibold">
-                {f.label}
+                {f.label} <span className="text-red-500">*</span>
                 <input
                   type={f.type}
+                  required
                   value={form[f.key] ?? ""}
                   onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))}
                   placeholder={f.placeholder}
@@ -161,7 +172,7 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
             ))}
           </div>
           <label className="text-[11px] text-slate-500 font-semibold block">
-            Conditions / notes
+            Conditions / notes <span className="text-slate-400 font-normal">(optional)</span>
             <textarea
               value={form.conditions ?? ""}
               onChange={(e) => setForm((s) => ({ ...s, conditions: e.target.value }))}
@@ -171,26 +182,31 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
             />
           </label>
           <label className="text-[11px] text-slate-500 font-semibold block">
-            Valid until
+            Valid until <span className="text-red-500">*</span>
             <input
               type="date"
+              required
               value={form.valid_until ?? ""}
               onChange={(e) => setForm((s) => ({ ...s, valid_until: e.target.value }))}
               className="mt-1 w-full text-sm border border-slate-200 rounded-md px-2 py-1.5 font-normal"
             />
           </label>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             <button
               onClick={submit}
-              disabled={busy}
-              className="px-3 py-1.5 rounded-md bg-[color:var(--color-brand-navy)] text-white text-xs font-semibold disabled:opacity-50"
+              disabled={!canSubmit}
+              title={!canSubmit && !busy ? "Fill in all required offer details first" : undefined}
+              className="px-3 py-1.5 rounded-md bg-[color:var(--color-brand-navy)] text-white text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {offer ? "Resubmit offer" : "Submit offer"}
+              {busy ? "Saving…" : offer ? "Resubmit offer" : "Submit offer"}
             </button>
             {offer && (
               <button onClick={() => setEdit(false)} disabled={busy} className="px-3 py-1.5 rounded-md border border-slate-300 text-slate-700 text-xs font-semibold">
                 Cancel
               </button>
+            )}
+            {!canSubmit && !busy && (
+              <span className="text-[11px] text-slate-400">All fields except notes are required.</span>
             )}
           </div>
         </div>

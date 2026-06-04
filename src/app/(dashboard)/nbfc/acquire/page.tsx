@@ -9,6 +9,10 @@ import {
   productSelections,
 } from "@/lib/db/schema";
 import { getCurrentTenant } from "@/lib/nbfc/tenant";
+import {
+  getNbfcWorkQueueLeadIds,
+  type WorkQueueNeed,
+} from "@/lib/nbfc/work-queue";
 import AcquireCsvButton, {
   type AcquireRow,
 } from "./_components/AcquireCsvButton";
@@ -23,6 +27,8 @@ export const dynamic = "force-dynamic";
 
 interface SearchParams {
   status?: string;
+  // Track work-queue filter from the notification bell: fi | vkyc | enach | agreement.
+  need?: string;
   q?: string;
   dealer?: string;
   residence?: string;
@@ -34,6 +40,14 @@ interface SearchParams {
   page?: string;
   page_size?: string;
 }
+
+// Labels for the active "needs <track>" chip — keys match WorkQueueNeed.
+const NEED_LABELS: Record<string, string> = {
+  fi: "Field Investigation to review",
+  vkyc: "Video KYC pending",
+  enach: "E-NACH pending",
+  agreement: "Agreement pending",
+};
 
 const STATUSES = [
   { id: "pending", label: "Pending" },
@@ -189,6 +203,17 @@ export default async function AcquireQueuePage({
     ),
   ).sort();
 
+  // Track work-queue filter (from the bell): restrict to leads whose FI / VKYC /
+  // E-NACH / agreement is currently open. Lead-id set comes from the same
+  // predicates that drive the bell counts, so the list matches the badge.
+  const needFilter =
+    params.need && NEED_LABELS[params.need] ? params.need : "";
+  let needLeadIds: Set<string> | null = null;
+  if (needFilter) {
+    const ids = await getNbfcWorkQueueLeadIds(tenant.id, needFilter as WorkQueueNeed);
+    needLeadIds = new Set(ids);
+  }
+
   const statusFilter = params.status?.trim() ?? "";
   const dealerFilter = params.dealer?.trim() ?? "";
   const residenceFilter = params.residence?.trim() ?? "";
@@ -205,6 +230,7 @@ export default async function AcquireQueuePage({
     : null;
 
   let filtered = enriched.filter((r) => {
+    if (needLeadIds && !needLeadIds.has(r.lead_id)) return false;
     if (statusFilter && r.assignment_status !== statusFilter) return false;
     if (dealerFilter && r.dealer_name !== dealerFilter) return false;
     if (residenceFilter && r.resident_status !== residenceFilter) return false;
@@ -247,6 +273,7 @@ export default async function AcquireQueuePage({
 
   const hasFilters = Boolean(
     params.status ||
+      params.need ||
       params.dealer ||
       params.residence ||
       params.amount_min ||
@@ -310,6 +337,22 @@ export default async function AcquireQueuePage({
           );
         })}
       </section>
+
+      {/* Active track filter chip (from the notification bell). */}
+      {needFilter && (
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[color:var(--brand-sky-soft)] px-3 py-1 text-xs font-semibold text-[color:var(--color-brand-sky)]">
+            Showing: {NEED_LABELS[needFilter]}
+            <span className="tabular-nums">· {total}</span>
+          </span>
+          <Link
+            href={urlFor({ need: "", page: "1" })}
+            className="text-xs text-slate-500 underline"
+          >
+            Clear
+          </Link>
+        </div>
+      )}
 
       {/* Filter bar — GET form, URL-driven (mirrors /nbfc/leads). */}
       <form className="border border-slate-200 rounded-xl bg-white flex flex-wrap items-end gap-3 p-3">
@@ -423,6 +466,9 @@ export default async function AcquireQueuePage({
         </div>
         {params.status ? (
           <input type="hidden" name="status" value={params.status} />
+        ) : null}
+        {params.need ? (
+          <input type="hidden" name="need" value={params.need} />
         ) : null}
         <button
           type="submit"
