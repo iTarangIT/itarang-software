@@ -1414,7 +1414,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
       )}
 
       {/* Final Decision Panel */}
-      <div className="relative bg-white border border-gray-100 rounded-3xl p-6 md:p-7 sticky bottom-4 shadow-xl ring-1 ring-gray-200/50 overflow-hidden">
+      <div className="relative bg-white border border-gray-100 rounded-3xl p-6 md:p-7 shadow-xl ring-1 ring-gray-200/50 overflow-hidden">
         {/* Decorative gradient strip */}
         <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-teal-500 via-emerald-500 to-blue-500" />
 

@@ -254,6 +254,7 @@ export default function FiFieldFormPage() {
               key={type}
               label={PHOTO_LABELS[type] ?? type}
               cameraOnly={ctx.camera_only}
+              facingMode={type === "agent_selfie" ? "user" : "environment"}
               preview={photos[type] ? previews.current[type] : undefined}
               onPick={(f) => setPhoto(type, f)}
             />
@@ -262,6 +263,7 @@ export default function FiFieldFormPage() {
           <PhotoInput
             label={PHOTO_LABELS.extra}
             cameraOnly={ctx.camera_only}
+            facingMode="environment"
             preview={extras[0] ? URL.createObjectURL(extras[0]) : undefined}
             onPick={(f) => setExtras(f ? [f] : [])}
           />
@@ -372,14 +374,17 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function PhotoInput({
   label,
   cameraOnly,
+  facingMode,
   preview,
   onPick,
 }: {
   label: string;
   cameraOnly: boolean;
+  facingMode: "user" | "environment";
   preview?: string;
   onPick: (f: File | null) => void;
 }) {
+  const [showCamera, setShowCamera] = useState(false);
   return (
     <div className="flex items-center gap-3 border border-slate-200 rounded-lg p-2">
       <div className="w-14 h-14 rounded-md bg-slate-100 overflow-hidden flex items-center justify-center shrink-0">
@@ -392,17 +397,178 @@ function PhotoInput({
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-xs font-medium text-slate-700">{label}</p>
-        <label className="inline-block mt-1 text-[11px] font-semibold text-[color:var(--color-brand-sky,#2563eb)] cursor-pointer">
-          {preview ? "Retake" : "Take photo"}
-          <input
-            type="file"
-            accept="image/*"
-            {...(cameraOnly ? { capture: "environment" as const } : {})}
-            onChange={(e) => onPick(e.target.files?.[0] ?? null)}
-            className="hidden"
-          />
-        </label>
+        {cameraOnly ? (
+          <button
+            type="button"
+            onClick={() => setShowCamera(true)}
+            className="inline-block mt-1 text-[11px] font-semibold text-[color:var(--color-brand-sky,#2563eb)] cursor-pointer"
+          >
+            {preview ? "Retake" : "Take photo"}
+          </button>
+        ) : (
+          <label className="inline-block mt-1 text-[11px] font-semibold text-[color:var(--color-brand-sky,#2563eb)] cursor-pointer">
+            {preview ? "Retake" : "Take photo"}
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => onPick(e.target.files?.[0] ?? null)}
+              className="hidden"
+            />
+          </label>
+        )}
       </div>
+      {showCamera && (
+        <CameraCapture
+          label={label}
+          facingMode={facingMode}
+          onCapture={(f) => {
+            onPick(f);
+            setShowCamera(false);
+          }}
+          onClose={() => setShowCamera(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * In-page live camera (getUserMedia) — enforces camera-only capture so the FI
+ * agent cannot pick an existing image from the gallery. Mirrors the stream
+ * lifecycle used by the public VKYC page. Falls back to a camera-backed file
+ * input if getUserMedia is unavailable or permission is denied, so the agent is
+ * never hard-blocked on a quirky browser.
+ */
+function CameraCapture({
+  label,
+  facingMode,
+  onCapture,
+  onClose,
+}: {
+  label: string;
+  facingMode: "user" | "environment";
+  onCapture: (f: File) => void;
+  onClose: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+
+  const stopStream = useCallback(() => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setError("Camera is not available on this browser.");
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.muted = true;
+          await videoRef.current.play().catch(() => {});
+        }
+        setReady(true);
+      } catch {
+        setError("Allow camera access to continue, or use the upload fallback below.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+      stopStream();
+    };
+  }, [facingMode, stopStream]);
+
+  function capture() {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return;
+        const name = `${facingMode === "user" ? "selfie" : "photo"}-${canvas.width}x${canvas.height}.jpg`;
+        stopStream();
+        onCapture(new File([blob], name, { type: "image/jpeg" }));
+      },
+      "image/jpeg",
+      0.9,
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black flex flex-col">
+      <div className="flex items-center justify-between px-4 py-3 text-white">
+        <span className="text-sm font-semibold truncate">{label}</span>
+        <button
+          type="button"
+          onClick={() => {
+            stopStream();
+            onClose();
+          }}
+          aria-label="Close camera"
+          className="text-2xl leading-none px-2"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="flex-1 relative flex items-center justify-center overflow-hidden">
+        {error ? (
+          <div className="text-center px-6">
+            <p className="text-sm text-white/90">{error}</p>
+            <label className="inline-block mt-4 px-4 py-2 rounded-md bg-white text-slate-900 text-sm font-semibold cursor-pointer">
+              Upload photo
+              <input
+                type="file"
+                accept="image/*"
+                capture={facingMode}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onCapture(f);
+                }}
+                className="hidden"
+              />
+            </label>
+          </div>
+        ) : (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="max-h-full max-w-full object-contain"
+          />
+        )}
+      </div>
+      {!error && (
+        <div className="flex items-center justify-center py-6 bg-black">
+          <button
+            type="button"
+            onClick={capture}
+            disabled={!ready}
+            aria-label="Capture photo"
+            className="w-16 h-16 rounded-full bg-white border-4 border-white/40 disabled:opacity-40 active:scale-95 transition"
+          />
+        </div>
+      )}
     </div>
   );
 }

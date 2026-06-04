@@ -14,7 +14,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { fieldInvestigations, leads, nbfcServiceConfig } from "@/lib/db/schema";
@@ -269,45 +269,63 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         return NextResponse.json({ ok: false, error: "BAD_REQUEST: agent not found or inactive" }, { status: 400 });
       }
 
-      // Close the current attempt (audit) and open a fresh one (SLA restarts).
-      await db
-        .update(fieldInvestigations)
-        .set({
-          status: "re_inspection_requested",
-          decision: "re_inspection",
-          decision_reason: d.reason.trim(),
-          decided_by: actor.user_id,
-          decided_at: now,
-          is_current: false,
-          updated_at: now,
-        })
-        .where(eq(fieldInvestigations.id, track.id));
-
       const sla = slaDueFrom(now);
       const token = generateFiLinkToken();
       const lead = await leadSummary(leadId);
-      const [row] = await db
-        .insert(fieldInvestigations)
-        .values({
-          lead_id: leadId,
-          nbfc_id: nbfcId,
-          tenant_id: actor.tenant_id,
-          attempt_no: track.attempt_no + 1,
-          is_current: true,
-          status: "assigned",
-          assigned_agent_id: agent.id,
-          assigned_to: agent.name,
-          assigned_by: actor.user_id,
-          assigned_at: now,
-          sla_due_at: sla,
-          link_token: token,
-          link_expires_at: sla,
-          stated_lat: track.stated_lat,
-          stated_lng: track.stated_lng,
-          created_at: now,
-          updated_at: now,
-        })
-        .returning({ id: fieldInvestigations.id });
+      // Close the current attempt (audit) and open a fresh one (SLA restarts) —
+      // atomically. Without a transaction a failed insert would leave the closed
+      // row at is_current=false with NO replacement, orphaning the lead ("no
+      // current FI attempt"). The partial unique index allows only ONE is_current
+      // row per (lead × NBFC), so every current row must be closed BEFORE insert.
+      const row = await db.transaction(async (tx) => {
+        await tx
+          .update(fieldInvestigations)
+          .set({
+            status: "re_inspection_requested",
+            decision: "re_inspection",
+            decision_reason: d.reason.trim(),
+            decided_by: actor.user_id,
+            decided_at: now,
+            is_current: false,
+            updated_at: now,
+          })
+          .where(eq(fieldInvestigations.id, track.id));
+        // Defensive: close any other current row for this pair (legacy data may
+        // have stragglers) so the partial unique index can never be violated.
+        await tx
+          .update(fieldInvestigations)
+          .set({ is_current: false, updated_at: now })
+          .where(
+            and(
+              eq(fieldInvestigations.lead_id, leadId),
+              eq(fieldInvestigations.nbfc_id, nbfcId),
+              eq(fieldInvestigations.is_current, true),
+            ),
+          );
+        const [inserted] = await tx
+          .insert(fieldInvestigations)
+          .values({
+            lead_id: leadId,
+            nbfc_id: nbfcId,
+            tenant_id: actor.tenant_id,
+            attempt_no: track.attempt_no + 1,
+            is_current: true,
+            status: "assigned",
+            assigned_agent_id: agent.id,
+            assigned_to: agent.name,
+            assigned_by: actor.user_id,
+            assigned_at: now,
+            sla_due_at: sla,
+            link_token: token,
+            link_expires_at: sla,
+            stated_lat: track.stated_lat,
+            stated_lng: track.stated_lng,
+            created_at: now,
+            updated_at: now,
+          })
+          .returning({ id: fieldInvestigations.id });
+        return inserted;
+      });
 
       const sent = await dispatchFiLink({ agent, url: linkUrl(token), customerName: lead.name, expiresAt: sla, channel: d.channel });
       if (sent.ok) {
@@ -351,6 +369,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     return NextResponse.json({ ok: false, error: "BAD_REQUEST: unknown action" }, { status: 400 });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    // Drizzle wraps DB failures in a verbose "Failed query: …" message and hides
+    // the actual Postgres error (constraint name, detail) on `.cause`. Prefer the
+    // concise cause so the UI shows e.g. "duplicate key value violates …" rather
+    // than the full SQL+params dump.
+    const cause = e instanceof Error && e.cause instanceof Error ? e.cause.message : undefined;
+    return NextResponse.json({ ok: false, error: cause ?? msg }, { status: statusFromError(msg) });
   }
 }
