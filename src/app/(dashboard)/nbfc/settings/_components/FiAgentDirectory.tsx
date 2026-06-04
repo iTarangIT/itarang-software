@@ -1,5 +1,6 @@
 "use client";
 
+
 /**
  * FI Agent Directory — BRD Addendum V0.3.1 §10.5/§15.4.2.
  *
