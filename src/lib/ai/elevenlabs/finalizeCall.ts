@@ -2,7 +2,6 @@
 // Bolna folder for the design rationale — this is the symmetric version.
 
 import { analyzeTranscript } from "@/lib/ai/analysis";
-import { decideNextAction } from "@/lib/ai/decision/engine";
 import { db } from "@/lib/db";
 import { aiCallLogs, dealerLeads, dialerCampaigns } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -11,10 +10,7 @@ import { completeCampaignLead } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
 import { scheduleElevenLabsCall } from "@/lib/queue/scheduler";
 import { appendSalesCallLog, appendCallReview } from "@/lib/google/sheet";
-import {
-  normalizeAnalysis,
-  resolveNextCallAt,
-} from "@/lib/ai/analysis/postCallHelpers";
+import { resolveNextCallAt } from "@/lib/ai/analysis/postCallHelpers";
 import { claimCallForProcessing } from "@/lib/ai/analysis/callClaim";
 import { fetchAndPersistCallCost } from "@/lib/ai/storage/costStore";
 import {
@@ -180,11 +176,8 @@ export async function finalizeElevenLabsCall(
     return;
   }
 
-  const rawAnalysis = await analyzeTranscript(transcript);
-  const analysis = normalizeAnalysis(rawAnalysis);
-  const decision = decideNextAction(analysis.intent_score, analysis.outcome);
-  const nextCallAt = resolveNextCallAt(analysis, transcript, decision.action);
-
+  // Locate the dealer_leads row first — both the scored and the analysis-failed
+  // paths need it. Prefer the hint, then phone.
   let lead:
     | {
         id: string;
@@ -213,6 +206,43 @@ export async function finalizeElevenLabsCall(
     return;
   }
 
+  const result = await analyzeTranscript(transcript);
+
+  // No silent zeros: on analysis failure mark needs_review, KEEP any prior
+  // score, and surface the call for human follow-up.
+  if (result.status === "failed") {
+    console.error(
+      `[elevenlabs:finalize] analysis failed for lead ${lead.id}: ${result.reason}`,
+    );
+    const r = await markLeadNeedsReview({
+      leadId: lead.id,
+      followUpHistory: (lead.follow_up_history as unknown[]) || [],
+      callId: conversationId,
+      status,
+      transcript,
+      recordingUrl,
+      duration,
+      phone: phone ?? lead.phone,
+      conversation: conversation ?? [],
+      reason: result.reason,
+    });
+    if (r.campaignId) {
+      await advanceCampaign(r.campaignId, { preCallDelayMs: ADVANCE_DELAY_MS });
+    }
+    return;
+  }
+
+  const analysis = result;
+  const route = analysis.route;
+  const negs = analysis.signals.negatives;
+  const hardNegative =
+    negs.do_not_call || negs.explicit_not_interested || negs.already_bought_competitor;
+  const nextCallAt = resolveNextCallAt(
+    { callback_time: analysis.callback_time, intent_score: analysis.intent_score },
+    transcript,
+    route.action,
+  );
+
   const updatedLead = updateLeadAfterCall(
     {
       ...lead,
@@ -226,6 +256,12 @@ export async function finalizeElevenLabsCall(
       conversation: conversation ?? [],
       memory: analysis.memory,
       provider: "elevenlabs",
+      intentScore: analysis.intent_score,
+      signals: analysis.signals,
+      scoreBreakdown: analysis.score_breakdown,
+      scoringVersion: analysis.scoring_version,
+      qualifiedGate: analysis.qualified_gate,
+      hardNegative,
     },
   );
 
@@ -257,7 +293,10 @@ export async function finalizeElevenLabsCall(
     phone: phone ?? lead.phone,
     intentScore: analysis.intent_score,
     intentReason: analysis.memory?.intent_summary ?? null,
-    nextAction: decision.action ?? null,
+    nextAction: route.action ?? null,
+    scoringVersion: analysis.scoring_version,
+    signals: analysis.signals,
+    scoreBreakdown: analysis.score_breakdown,
   });
 
   // Capture per-call cost from ElevenLabs /v1/convai/conversations/{id}.
@@ -272,7 +311,7 @@ export async function finalizeElevenLabsCall(
     intentScore: analysis.intent_score,
   });
 
-  if (decision.action === "schedule_call" && nextCallAt && phone) {
+  if (route.action === "schedule_call" && nextCallAt && phone) {
     const messageId = await scheduleElevenLabsCall({
       phone,
       leadId: lead.id,
@@ -285,7 +324,7 @@ export async function finalizeElevenLabsCall(
     }
   }
 
-  if (decision.action === "push_to_crm") {
+  if (route.action === "push_to_crm") {
     await db
       .update(dealerLeads)
       .set({ current_status: "qualified" })
@@ -359,6 +398,9 @@ async function upsertAiCallLog(opts: {
   intentScore: number | null;
   intentReason: string | null;
   nextAction: string | null;
+  scoringVersion?: string | null;
+  signals?: unknown;
+  scoreBreakdown?: unknown;
 }): Promise<void> {
   try {
     const existing = opts.callId
@@ -383,6 +425,9 @@ async function upsertAiCallLog(opts: {
           intent_score: opts.intentScore,
           intent_reason: opts.intentReason,
           next_action: opts.nextAction,
+          scoring_version: opts.scoringVersion ?? null,
+          signals: opts.signals ?? null,
+          score_breakdown: opts.scoreBreakdown ?? null,
           ended_at: now,
           updated_at: now,
         })
@@ -405,9 +450,79 @@ async function upsertAiCallLog(opts: {
       intent_score: opts.intentScore,
       intent_reason: opts.intentReason,
       next_action: opts.nextAction,
+      scoring_version: opts.scoringVersion ?? null,
+      signals: opts.signals ?? null,
+      score_breakdown: opts.scoreBreakdown ?? null,
       ended_at: now,
     });
   } catch (err) {
     console.error("[elevenlabs:finalize] ai_call_logs upsert failed:", err);
   }
+}
+
+// Analysis-failure path (symmetric with the Bolna pipeline): record the call as
+// needs_review WITHOUT scoring it, leave final_intent_score untouched, and still
+// complete the campaign lead so the dialer advances.
+async function markLeadNeedsReview(opts: {
+  leadId: string;
+  followUpHistory: unknown[];
+  callId: string;
+  status: string;
+  transcript: string | null;
+  recordingUrl: string | null;
+  duration: number | null;
+  phone: string | null;
+  conversation: unknown[];
+  reason: string;
+}): Promise<{ campaignId: string | null }> {
+  const history = opts.followUpHistory || [];
+  const newEntry = {
+    attempt: history.length + 1,
+    called_at: new Date().toISOString(),
+    outcome: "needs_review",
+    analysis_failed: true,
+    reason: opts.reason,
+    transcript: opts.transcript || "",
+    conversation: opts.conversation || [],
+    provider: "elevenlabs",
+  };
+
+  try {
+    await db
+      .update(dealerLeads)
+      .set({
+        follow_up_history: [...history, newEntry],
+        total_attempts: history.length + 1,
+        current_status: "needs_review",
+        provider: "elevenlabs",
+      })
+      .where(eq(dealerLeads.id, opts.leadId));
+  } catch (err) {
+    console.error("[elevenlabs:finalize] needs_review update failed:", err);
+  }
+
+  await upsertAiCallLog({
+    callId: opts.callId,
+    leadId: opts.leadId,
+    status: "needs_review",
+    transcript: opts.transcript,
+    summary: `analysis_failed — ${opts.reason}`,
+    recordingUrl: opts.recordingUrl,
+    duration: opts.duration,
+    phone: opts.phone,
+    intentScore: null,
+    intentReason: opts.reason,
+    nextAction: null,
+  });
+
+  await fetchAndPersistCallCost("elevenlabs", opts.callId);
+
+  const r = await completeCampaignLead({
+    leadId: opts.leadId,
+    success: true,
+    bolnaCallId: opts.callId || null,
+    outcome: "needs_review",
+    intentScore: null,
+  });
+  return { campaignId: r.campaignId };
 }

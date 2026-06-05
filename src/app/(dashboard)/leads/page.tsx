@@ -28,6 +28,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { CallButton } from "@/components/leads/call-button";
+import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
 import { ScraperDashboard } from "@/components/scraper/ScraperDashboard";
 import { DownloadConvertedLeadsButton } from "@/components/leads/DownloadButton";
 import {
@@ -167,14 +168,14 @@ function getStatusConfig(status: string | null) {
 }
 function getIntentColor(score: number | null) {
   if (!score) return "text-gray-400";
-  if (score >= 75) return "text-emerald-600";
-  if (score >= 50) return "text-amber-500";
+  if (score >= INTENT_THRESHOLDS.QUALIFIED) return "text-emerald-600";
+  if (score >= INTENT_THRESHOLDS.WARM) return "text-amber-500";
   return "text-red-500";
 }
 function getIntentBg(score: number | null) {
   if (!score) return "bg-gray-100";
-  if (score >= 75) return "bg-emerald-50";
-  if (score >= 50) return "bg-amber-50";
+  if (score >= INTENT_THRESHOLDS.QUALIFIED) return "bg-emerald-50";
+  if (score >= INTENT_THRESHOLDS.WARM) return "bg-amber-50";
   return "bg-red-50";
 }
 function formatNextCall(date: string | null) {

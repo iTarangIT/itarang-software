@@ -7,6 +7,7 @@ import { dealerLeads } from "@/lib/db/schema";
 import { withErrorHandler } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 import { desc, sql } from "drizzle-orm";
+import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
 import ExcelJS from "exceljs";
 
 export const GET = withErrorHandler(async () => {
@@ -27,7 +28,7 @@ export const GET = withErrorHandler(async () => {
           (jsonb_array_length(${dealerLeads.follow_up_history}) - 1))
           -> 'analysis' ->> 'intent_score')::int,
         0
-      ) >= 75
+      ) >= ${INTENT_THRESHOLDS.QUALIFIED}
     `)
     .orderBy(desc(dealerLeads.created_at));
 

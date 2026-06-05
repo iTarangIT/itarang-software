@@ -1,7 +1,11 @@
 // Shared helpers used by both Bolna and ElevenLabs post-call pipelines.
-// Pulled out of the per-provider webhook handlers (where they were
-// duplicated verbatim) so a fix to scoring or callback-time parsing
-// reaches both providers at once.
+//
+// NOTE: the old `normalizeAnalysis` guardrail (which bumped callback scores to
+// 60/75) is GONE — scoring is now deterministic upstream (computeIntentScore),
+// so there is nothing to "normalize". What remains here is callback-time
+// parsing and next-call scheduling, which both pipelines still share.
+
+import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
 
 export function getValidDate(input: unknown): Date | null {
   if (!input) return null;
@@ -17,9 +21,7 @@ export function extractDealerLines(transcript: string): string {
     .join(" ");
 }
 
-export function parseCallbackTimeFromTranscript(
-  transcript: string,
-): Date | null {
+export function parseCallbackTimeFromTranscript(transcript: string): Date | null {
   if (!transcript) return null;
 
   const now = Date.now();
@@ -49,94 +51,36 @@ export function parseCallbackTimeFromTranscript(
   }
 
   if (/kal|tomorrow|कल/.test(t)) return new Date(now + 24 * 60 * 60 * 1000);
-  if (/parso|day after|परसों/.test(t))
-    return new Date(now + 48 * 60 * 60 * 1000);
+  if (/parso|day after|परसों/.test(t)) return new Date(now + 48 * 60 * 60 * 1000);
   if (/thodi der|thoda time|थोड़ी देर|थोड़ा टाइम/.test(t))
     return new Date(now + 30 * 60 * 1000);
 
   return null;
 }
 
-// Apply guardrails over the raw LLM analysis so downstream code can trust
-// the numbers and outcome labels. Kept in sync with what was previously
-// inlined in each provider's webhookHandler.
-export type NormalizedAnalysis = {
-  outcome: string;
-  callback_time: string | null;
-  intent_score: number;
-  analysis: {
-    next_step_commitment: number;
-    urgency_signals: number;
-    product_curiosity: number;
-    need_acknowledgment: number;
-    objection_quality: number;
-    engagement_depth: number;
-    intent_score: number;
-  };
-  memory: {
-    requirement?: string | null;
-    product_interest?: string | null;
-    quantity?: string | null;
-    intent_summary?: string;
-    followup_reason?: string | null;
-  };
-};
-
-export function normalizeAnalysis(analysis: any): NormalizedAnalysis {
-  const safe: NormalizedAnalysis = {
-    outcome: analysis?.outcome || "unknown",
-    callback_time: analysis?.callback_time || null,
-    intent_score: Math.max(
-      0,
-      Math.min(100, Number(analysis?.intent_score || 0)),
-    ),
-    analysis: analysis?.analysis || {
-      next_step_commitment: 0,
-      urgency_signals: 0,
-      product_curiosity: 0,
-      need_acknowledgment: 0,
-      objection_quality: 0,
-      engagement_depth: 0,
-      intent_score: 0,
-    },
-    memory: analysis?.memory || {},
-  };
-
-  const hasQuantity = !!safe.memory?.quantity;
-  const hasCallback =
-    safe.outcome === "callback_requested" ||
-    (safe.memory?.followup_reason || "").toLowerCase().includes("callback");
-
-  if (hasCallback) safe.outcome = "callback_requested";
-  if (hasQuantity && safe.analysis.product_curiosity < 5)
-    safe.analysis.product_curiosity = 7;
-  if (hasCallback && safe.intent_score < 50) safe.intent_score = 60;
-  if (hasQuantity && hasCallback && safe.intent_score < 70)
-    safe.intent_score = 75;
-
-  return safe;
-}
-
+// Decide when to place the next call for a schedule_call action. Prefers an
+// explicit callback time (from extraction or transcript), otherwise falls back
+// to a score-tiered delay using the SAME central thresholds as routing/status.
 export function resolveNextCallAt(
-  analysis: NormalizedAnalysis,
+  analysis: { callback_time: string | null; intent_score: number },
   transcript: string,
   action: string,
 ): Date | null {
   if (action !== "schedule_call") return null;
 
-  const fromGemini = getValidDate(analysis.callback_time);
-  if (fromGemini) return fromGemini;
+  const fromModel = getValidDate(analysis.callback_time);
+  if (fromModel) return fromModel;
 
   const fromTranscript = parseCallbackTimeFromTranscript(transcript);
   if (fromTranscript) return fromTranscript;
 
   const score = analysis.intent_score;
   const delayMs =
-    score >= 75
-      ? 30 * 60 * 1000
-      : score >= 50
-        ? 2 * 60 * 60 * 1000
-        : 24 * 60 * 60 * 1000;
+    score >= INTENT_THRESHOLDS.QUALIFIED
+      ? 30 * 60 * 1000 // hot → 30 min
+      : score >= INTENT_THRESHOLDS.WARM
+        ? 2 * 60 * 60 * 1000 // warm → 2 h
+        : 24 * 60 * 60 * 1000; // cold/callback brush-off → 24 h
 
   return new Date(Date.now() + delayMs);
 }

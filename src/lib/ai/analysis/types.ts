@@ -1,3 +1,8 @@
+// Legacy analysis types. The live result type is `AnalysisResult` in
+// analyzeTranscript.ts (signals + truthful breakdown). These remain for the
+// legacy 6-field follow_up_history `analysis` shape and the coarse outcome label
+// that stored rows / secondary UI still read.
+
 export type OutcomeType =
   | "interested"
   | "not_interested"
@@ -22,20 +27,4 @@ export interface Analysis {
   objection_quality: number;
   engagement_depth: number;
   intent_score: number;
-}
-
-export interface ParsedData {
-  outcome: OutcomeType;
-  callback_time: string | null;
-  language: LanguageType;
-  analysis: Analysis;
-  memory: Memory;
-}
-
-export interface AnalysisResult {
-  outcome: OutcomeType;
-  callback_time: string | null;
-  intent_score: number;
-  analysis: Analysis;
-  memory: Memory;
 }

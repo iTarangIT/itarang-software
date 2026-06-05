@@ -18,9 +18,16 @@ import {
   aiCallLogs,
   dealerLeads,
   dialerCampaignLeads,
+  dialerCampaigns,
 } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
+import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
+
+// Intent score at/above which the dialer considers a lead "qualified" — the
+// single central threshold (INTENT_THRESHOLDS), shared with routing/status. The
+// first attempt to reach it is treated as the converting attempt.
+const QUALIFIED_INTENT = INTENT_THRESHOLDS.QUALIFIED;
 
 type SubScores = {
   next_step_commitment: number;
@@ -29,6 +36,15 @@ type SubScores = {
   need_acknowledgment: number;
   objection_quality: number;
   engagement_depth: number;
+};
+
+// The truthful per-point breakdown produced by the deterministic scorer.
+// Contributions sum to the intent score. Absent on pre-refactor rows.
+type ScoreBreakdownItem = {
+  signal: string;
+  label: string;
+  contribution: number;
+  evidence: string;
 };
 
 // Shape of the analyzer's `memory` jsonb on dealer_leads. Only intent_summary
@@ -102,6 +118,8 @@ function buildSummary(opts: {
 
 type LastHistoryEntry = {
   analysis: SubScores | null;
+  scoreBreakdown: ScoreBreakdownItem[] | null;
+  scoringVersion: string | null;
   transcript: string | null;
   conversation: unknown[] | null;
   calledAt: string | null;
@@ -113,6 +131,8 @@ function readLastHistory(history: unknown): LastHistoryEntry {
   if (!Array.isArray(history) || history.length === 0) {
     return {
       analysis: null,
+      scoreBreakdown: null,
+      scoringVersion: null,
       transcript: null,
       conversation: null,
       calledAt: null,
@@ -122,6 +142,8 @@ function readLastHistory(history: unknown): LastHistoryEntry {
   }
   const last = history[history.length - 1] as {
     analysis?: unknown;
+    score_breakdown?: unknown;
+    scoring_version?: unknown;
     transcript?: string;
     dealer_said?: string;
     conversation?: unknown[];
@@ -141,8 +163,14 @@ function readLastHistory(history: unknown): LastHistoryEntry {
           engagement_depth: Number(a.engagement_depth ?? 0),
         }
       : null;
+  const scoreBreakdown = Array.isArray(last?.score_breakdown)
+    ? (last.score_breakdown as ScoreBreakdownItem[])
+    : null;
   return {
     analysis,
+    scoreBreakdown,
+    scoringVersion:
+      typeof last?.scoring_version === "string" ? last.scoring_version : null,
     transcript: last?.transcript || last?.dealer_said || null,
     conversation: Array.isArray(last?.conversation) ? last.conversation : null,
     calledAt: last?.called_at ?? null,
@@ -220,6 +248,56 @@ export const GET = withErrorHandler(
     const latest = calls[0] ?? null;
     const lastHistory = readLastHistory(cl.followUpHistory);
 
+    // Cross-campaign attempt timeline for this lead. Each dialer_campaign_leads
+    // row is one attempt; recall campaigns re-enrol the same lead_id, so
+    // ordering every row (across original + recalls) by campaign start gives the
+    // full journey. The converting attempt is the first to reach QUALIFIED_INTENT.
+    const attemptRows = await db
+      .select({
+        campaignId: dialerCampaignLeads.campaign_id,
+        campaignName: dialerCampaigns.name,
+        regionFilter: dialerCampaigns.region_filter,
+        campaignStartedAt: dialerCampaigns.started_at,
+        status: dialerCampaignLeads.status,
+        callOutcome: dialerCampaignLeads.call_outcome,
+        intentScore: dialerCampaignLeads.intent_score,
+        startedAt: dialerCampaignLeads.started_at,
+        completedAt: dialerCampaignLeads.completed_at,
+      })
+      .from(dialerCampaignLeads)
+      .leftJoin(
+        dialerCampaigns,
+        eq(dialerCampaigns.id, dialerCampaignLeads.campaign_id),
+      )
+      .where(eq(dialerCampaignLeads.lead_id, leadId))
+      .orderBy(
+        asc(dialerCampaigns.started_at),
+        asc(dialerCampaignLeads.created_at),
+      );
+
+    const attempts = attemptRows.map((a, i) => {
+      const intentScore = a.intentScore ?? null;
+      const isRecall =
+        a.regionFilter && typeof a.regionFilter === "object"
+          ? (a.regionFilter as { recall?: unknown }).recall === true
+          : false;
+      return {
+        attempt: i + 1,
+        campaignId: a.campaignId,
+        campaignName: a.campaignName ?? null,
+        isRecall,
+        status: a.status,
+        callOutcome: a.callOutcome,
+        intentScore,
+        startedAt: a.startedAt ?? a.campaignStartedAt ?? null,
+        completedAt: a.completedAt ?? null,
+        converted: intentScore != null && intentScore >= QUALIFIED_INTENT,
+        isCurrent: a.campaignId === campaignId,
+      };
+    });
+    const convertedOnAttempt =
+      attempts.find((a) => a.converted)?.attempt ?? null;
+
     // Prefer per-call intent score, fall back to the campaign-lead row, then
     // the lead-wide rollup. Same precedence for the reason text.
     const intentScore =
@@ -277,6 +355,10 @@ export const GET = withErrorHandler(
       callStatus: latest?.status ?? null,
       nextAction: latest?.nextAction ?? null,
       analysis: lastHistory.analysis,
+      scoreBreakdown: lastHistory.scoreBreakdown,
+      scoringVersion: lastHistory.scoringVersion,
+      attempts,
+      convertedOnAttempt,
     });
   },
 );

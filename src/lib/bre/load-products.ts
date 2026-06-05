@@ -19,6 +19,10 @@ import type { LoanProductRow } from './match';
 export type LoadedLoanProduct = LoanProductRow & {
   nbfc_short_name: string;
   nbfc_legal_name: string;
+  // Human-readable NBFC code (e.g. "NBFC-7X9A8YCV"). Surfaced so dealer-facing
+  // financing cards can show "iTarang Scheme N (NBFC-XXXX)" instead of the
+  // real lender name.
+  nbfc_id_code: string;
 };
 
 const BLOCKING_STATUSES = ['suspended', 'terminated'] as const;
@@ -44,6 +48,7 @@ export async function loadActiveProductsForDealer(
       nbfc_id: nbfcLoanProducts.nbfc_id,
       nbfc_short_name: nbfc.short_name,
       nbfc_legal_name: nbfc.legal_name,
+      nbfc_id_code: nbfc.nbfc_id,
       product_name: nbfcLoanProducts.product_name,
       status: nbfcLoanProducts.status,
       eligible_battery_categories: nbfcLoanProducts.eligible_battery_categories,
@@ -87,6 +92,7 @@ export async function loadActiveProductsForDealer(
     nbfc_id: r.nbfc_id,
     nbfc_short_name: r.nbfc_short_name,
     nbfc_legal_name: r.nbfc_legal_name,
+    nbfc_id_code: r.nbfc_id_code,
     product_name: r.product_name,
     status: r.status,
     eligible_battery_categories: r.eligible_battery_categories,
