@@ -72,11 +72,12 @@ export async function POST(
       : (lead.dob ? new Date(lead.dob).toISOString().slice(0, 10) : "");
     const address = personal?.local_address || lead.local_address || lead.current_address || "";
 
-    // Provider-routed (BRD Addendum §4.3 — Equifax platform-wide). Passing
-    // null lands on DEFAULT_PLATFORM_BUREAU = 'equifax'. KYC runs before
-    // Section G, so there is no matched product to read credit_bureau from
-    // at this point; the per-product column is reserved for future bureau
-    // policy and not consulted here.
+    // Provider-routed (BRD Addendum §4.3). Passing null lands on
+    // DEFAULT_PLATFORM_BUREAU, currently 'cibil' (the working provider) until
+    // the Equifax stub is provisioned. KYC runs before Section G, so there is
+    // no matched product to read credit_bureau from at this point; the
+    // per-product column is reserved for future bureau policy and not consulted
+    // here.
     const result = await getCreditBureauProvider(null).fetchScore({
       name,
       pan: personal?.pan_no || "",
