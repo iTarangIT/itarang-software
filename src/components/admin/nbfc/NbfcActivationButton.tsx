@@ -41,13 +41,27 @@ export default function NbfcActivationButton({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ resend }),
         });
-        const j = (await res.json()) as {
+        // Read the body as text first so an empty or non-JSON response (e.g. a
+        // bare 500 / gateway 502 from the VPS) degrades to a readable HTTP
+        // status instead of throwing "Unexpected end of JSON input".
+        const raw = await res.text();
+        let j: {
           ok?: boolean;
           status?: string;
           credentialDispatchedTo?: string;
           error?: string;
           message?: string;
-        };
+        } = {};
+        if (raw) {
+          try {
+            j = JSON.parse(raw);
+          } catch {
+            setError(
+              `Server returned an unreadable response (HTTP ${res.status}).`,
+            );
+            return;
+          }
+        }
         if (!res.ok || !j.ok) {
           setError(j.message ?? j.error ?? `HTTP ${res.status}`);
           return;
