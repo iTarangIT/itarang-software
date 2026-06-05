@@ -130,6 +130,28 @@ export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ nbfcId: string }> },
 ) {
+  // Outer guard: every code path below MUST resolve to a JSON response. An
+  // unhandled throw here returns a 500 with an EMPTY body, which surfaces in
+  // the admin UI as the opaque "Failed to execute 'json' on 'Response':
+  // Unexpected end of JSON input". Wrapping the whole handler converts any
+  // unexpected DB/network failure into a readable JSON error envelope so the
+  // operator sees the real cause instead of a JSON-parse error.
+  try {
+    return await activateNbfc(req, ctx);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "unknown error";
+    console.error("[nbfc/activate] unhandled failure", e);
+    return NextResponse.json(
+      { ok: false, error: "ACTIVATION_FAILED", message: msg },
+      { status: 500 },
+    );
+  }
+}
+
+async function activateNbfc(
+  req: NextRequest,
+  ctx: { params: Promise<{ nbfcId: string }> },
+) {
   const auth = await requireAdminOrTestBypass(req.headers);
   if (!auth.ok) return auth.response;
   const adminUserId = auth.user.id;
