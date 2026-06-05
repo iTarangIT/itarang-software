@@ -34,6 +34,13 @@ async function getMailer() {
     port,
     secure: port === 465,
     auth: { user, pass },
+    // Bound every network phase so a blocked outbound SMTP port (a common VPS
+    // firewall default) fails fast with a real error instead of hanging the
+    // whole HTTP request until the reverse proxy times out — which surfaced
+    // in the admin UI as "Unexpected end of JSON input" (empty 502 body).
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 20_000,
   });
 
   if (!transporterVerified) {

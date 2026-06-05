@@ -10,7 +10,13 @@ export async function downloadPdfBuffer(
   if (!url || typeof url !== "string") return null;
 
   try {
-    const response = await fetch(url, { cache: "no-store" });
+    // Bound the fetch so a slow/looping upstream (e.g. fetching our own
+    // /nbfc-uploads back through the reverse proxy) can't hang the caller —
+    // the email must still go out without the attachment.
+    const response = await fetch(url, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    });
     if (!response.ok) {
       console.warn(
         `[downloadPdfBuffer] non-ok response ${response.status} for ${url}`
