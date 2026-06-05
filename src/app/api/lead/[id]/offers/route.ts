@@ -47,7 +47,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const nbfcIds = assignments.map((a) => a.nbfc_id);
     const nbfcRows = nbfcIds.length
       ? await db
-          .select({ id: nbfc.id, short_name: nbfc.short_name, legal_name: nbfc.legal_name })
+          .select({ id: nbfc.id, nbfc_id_code: nbfc.nbfc_id, short_name: nbfc.short_name, legal_name: nbfc.legal_name })
           .from(nbfc)
           .where(inArray(nbfc.id, nbfcIds))
       : [];
@@ -63,6 +63,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
     const items = assignments.map((a) => ({
       nbfc_id: a.nbfc_id,
+      nbfc_id_code: nameById.get(a.nbfc_id)?.nbfc_id_code ?? null,
       nbfc_short_name: nameById.get(a.nbfc_id)?.short_name ?? null,
       nbfc_legal_name: nameById.get(a.nbfc_id)?.legal_name ?? null,
       status: a.status,

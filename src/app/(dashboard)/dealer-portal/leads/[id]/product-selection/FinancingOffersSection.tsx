@@ -23,6 +23,7 @@ type Offer = {
 
 type Item = {
   nbfc_id: number;
+  nbfc_id_code: string | null;
   nbfc_short_name: string | null;
   nbfc_legal_name: string | null;
   status: string;
@@ -145,7 +146,7 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
       {error && <p className="text-xs text-red-600 mb-3">{error}</p>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {data.items.map((item) => {
+        {data.items.map((item, idx) => {
           const isWinner = data.winnerNbfcId === item.nbfc_id;
           const isLoser = decided && !isWinner;
           return (
@@ -161,8 +162,9 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
             >
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <div className="font-bold text-slate-800">{item.nbfc_short_name ?? `NBFC #${item.nbfc_id}`}</div>
-                  <div className="text-[11px] text-slate-500">{item.nbfc_legal_name}</div>
+                  <div className="font-bold text-slate-800">
+                    {`iTarang Scheme ${idx + 1} (${item.nbfc_id_code ?? `#${item.nbfc_id}`})`}
+                  </div>
                 </div>
                 {isWinner && <span className="text-[10px] font-bold uppercase text-emerald-700">Selected</span>}
                 {isLoser && <span className="text-[10px] font-bold uppercase text-slate-500">Not selected</span>}
