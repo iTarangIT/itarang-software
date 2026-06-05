@@ -20,12 +20,13 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { randomUUID, randomInt } from "node:crypto";
 import { db } from "@/lib/db";
 import {
   nbfc,
   nbfcLspAgreements,
+  nbfcLspAgreementSigners,
   nbfcPortalCredentials,
   nbfcTenants,
   nbfcUsers,
@@ -261,14 +262,13 @@ async function activateNbfc(
     );
   }
 
-  // Both signers must have completed before first-time activation. (Skip on
-  // resend since the agreement is already terminal in that path.) The
-  // nbfc_lsp_agreements table may carry several history rows when an
-  // agreement was re-initiated — accept activation as long as at least one
-  // row reached COMPLETED, mirroring the lspTerminalRows lookup the
-  // /admin/nbfc/[id]/review page uses to drive its UI.
-  if (isApproved) {
-    const [completedAgreement] = await db
+  // Resolve the canonical COMPLETED LSP agreement id once. Prefer the FK the
+  // Digio webhook stamps on the NBFC when the agreement completes; fall back to
+  // the newest COMPLETED row for legacy data where the FK was never propagated.
+  // Reused below for both the NBFC-signer lookup and the welcome-email PDFs.
+  let agreementId: number | null = row.lsp_agreement_id ?? null;
+  if (!agreementId) {
+    const [completed] = await db
       .select({ id: nbfcLspAgreements.id })
       .from(nbfcLspAgreements)
       .where(
@@ -277,17 +277,54 @@ async function activateNbfc(
           eq(nbfcLspAgreements.agreement_status, "COMPLETED"),
         ),
       )
+      .orderBy(desc(nbfcLspAgreements.id))
       .limit(1);
-    if (!completedAgreement) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "AGREEMENT_NOT_COMPLETED",
-          message:
-            "LSP agreement must be fully signed before the NBFC can be activated.",
-        },
-        { status: 409 },
-      );
+    agreementId = completed?.id ?? null;
+  }
+
+  // Both signers must have completed before first-time activation. (Skip on
+  // resend since the agreement is already terminal in that path.) The
+  // nbfc_lsp_agreements table may carry several history rows when an
+  // agreement was re-initiated — accept activation as long as at least one
+  // row reached COMPLETED, mirroring the lspTerminalRows lookup the
+  // /admin/nbfc/[id]/review page uses to drive its UI.
+  if (isApproved && !agreementId) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "AGREEMENT_NOT_COMPLETED",
+        message:
+          "LSP agreement must be fully signed before the NBFC can be activated.",
+      },
+      { status: 409 },
+    );
+  }
+
+  // Portal credentials go to the NBFC-side LSP signer — the authorised NBFC
+  // representative who actually signed the agreement — NOT the onboarding
+  // primary_contact (which is a comms contact and was frequently a shared
+  // test address). The login ID becomes this signer's email. Fall back to
+  // primary_contact only when no NBFC-party signer is on file (legacy data).
+  let recipientEmail = row.primary_contact_email;
+  let recipientName = row.primary_contact_name;
+  if (agreementId) {
+    const [nbfcSigner] = await db
+      .select({
+        email: nbfcLspAgreementSigners.email,
+        full_name: nbfcLspAgreementSigners.full_name,
+      })
+      .from(nbfcLspAgreementSigners)
+      .where(
+        and(
+          eq(nbfcLspAgreementSigners.nbfc_lsp_agreement_id, agreementId),
+          eq(nbfcLspAgreementSigners.party, "nbfc"),
+        ),
+      )
+      .orderBy(asc(nbfcLspAgreementSigners.signer_order))
+      .limit(1);
+    if (nbfcSigner?.email) {
+      recipientEmail = nbfcSigner.email;
+      recipientName = nbfcSigner.full_name ?? recipientName;
     }
   }
 
@@ -298,10 +335,7 @@ async function activateNbfc(
   // 1. Provision (or look up) the Supabase auth user with that exact password.
   let supabaseUserId: string;
   try {
-    supabaseUserId = await ensureSupabaseUser(
-      row.primary_contact_email,
-      password,
-    );
+    supabaseUserId = await ensureSupabaseUser(recipientEmail, password);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "unknown";
     return NextResponse.json(
@@ -309,6 +343,36 @@ async function activateNbfc(
       { status: 500 },
     );
   }
+
+  // Guard the users.email UNIQUE constraint BEFORE any write. The portal login
+  // email must not already belong to a DIFFERENT platform user. When it does
+  // — e.g. the address was previously onboarded as a dealer with a users row
+  // whose id differs from this NBFC's Supabase auth uid — the `users` upsert
+  // below (ON CONFLICT (id)) can't absorb the email collision and throws a
+  // users_email_key violation mid-activation, leaving the NBFC half-active and
+  // leaking a 'pending' nbfc_portal_credentials row each attempt. Fail fast
+  // with an actionable message instead. Compare case-insensitively because
+  // Supabase lowercases auth emails while users.email is stored as entered.
+  const [emailOwner] = await db
+    .select({ id: users.id, role: users.role })
+    .from(users)
+    .where(sql`lower(${users.email}) = lower(${recipientEmail})`)
+    .limit(1);
+  if (emailOwner && emailOwner.id !== supabaseUserId) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "EMAIL_ALREADY_IN_USE",
+        message:
+          `The NBFC signer email ${recipientEmail} is already ` +
+          `registered to another account (role: ${emailOwner.role ?? "unknown"}). ` +
+          `Use a different email for this NBFC's signer, or remove the ` +
+          `conflicting account before activating.`,
+      },
+      { status: 409 },
+    );
+  }
+
   const credentialId = randomUUID();
   await db.insert(nbfcPortalCredentials).values({
     id: credentialId,
@@ -392,8 +456,8 @@ async function activateNbfc(
     .insert(users)
     .values({
       id: supabaseUserId,
-      email: row.primary_contact_email,
-      name: row.primary_contact_name,
+      email: recipientEmail,
+      name: recipientName,
       role: "nbfc_partner",
       must_change_password: true,
     })
@@ -421,36 +485,20 @@ async function activateNbfc(
     )
   `);
 
-  // 4. Resolve the canonical signed LSP agreement + audit-trail PDFs so we
-  //    can attach them to the welcome email. Prefer the row pointed at by
-  //    nbfc.lsp_agreement_id (set by the Digio webhook when the agreement
-  //    reaches COMPLETED), fall back to the most-recent COMPLETED row for
-  //    legacy data where the FK was never propagated. PDFs live under
-  //    public/nbfc-uploads and are served as static files; we fetch them
-  //    via the app origin.
-  const [latestAgreementPdfs] = row.lsp_agreement_id
+  // 4. Resolve the signed LSP agreement + audit-trail PDFs for the same
+  //    canonical agreement (agreementId, resolved above) so we can attach them
+  //    to the welcome email. PDFs live under public/nbfc-uploads and are served
+  //    as static files; we fetch them via the app origin.
+  const [latestAgreementPdfs] = agreementId
     ? await db
         .select({
           signed_pdf_url: nbfcLspAgreements.signed_pdf_url,
           audit_trail_url: nbfcLspAgreements.audit_trail_url,
         })
         .from(nbfcLspAgreements)
-        .where(eq(nbfcLspAgreements.id, row.lsp_agreement_id))
+        .where(eq(nbfcLspAgreements.id, agreementId))
         .limit(1)
-    : await db
-        .select({
-          signed_pdf_url: nbfcLspAgreements.signed_pdf_url,
-          audit_trail_url: nbfcLspAgreements.audit_trail_url,
-        })
-        .from(nbfcLspAgreements)
-        .where(
-          and(
-            eq(nbfcLspAgreements.nbfc_id, id),
-            eq(nbfcLspAgreements.agreement_status, "COMPLETED"),
-          ),
-        )
-        .orderBy(desc(nbfcLspAgreements.id))
-        .limit(1);
+    : [undefined];
 
   const appOrigin = process.env.NEXT_PUBLIC_APP_URL ?? req.nextUrl.origin;
   const toAbsoluteUrl = (u?: string | null): string | null => {
@@ -470,10 +518,10 @@ async function activateNbfc(
     await enqueueNbfcPortalCredentialsJob({
       nbfcId: id,
       credentialId,
-      toEmail: row.primary_contact_email,
+      toEmail: recipientEmail,
       password,
       supabaseUserId,
-      primaryContactName: row.primary_contact_name,
+      primaryContactName: recipientName,
       nbfcLegalName: row.legal_name,
       nbfcCode: row.nbfc_id,
       loginUrl,
@@ -522,7 +570,7 @@ async function activateNbfc(
       status: "active",
       activated_at: now.toISOString(),
       credentialId,
-      credentialDispatchedTo: maskEmail(row.primary_contact_email),
+      credentialDispatchedTo: maskEmail(recipientEmail),
     },
   });
 
@@ -530,6 +578,6 @@ async function activateNbfc(
     ok: true,
     nbfcId: id,
     status: "active",
-    credentialDispatchedTo: maskEmail(row.primary_contact_email),
+    credentialDispatchedTo: maskEmail(recipientEmail),
   });
 }
