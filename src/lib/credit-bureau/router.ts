@@ -43,14 +43,18 @@ class UnimplementedProvider implements CreditBureauProvider {
   }
 }
 
-// Platform-wide default bureau per BRD Addendum §4.3: "Equifax replaces CIBIL
-// platform-wide — both the Step 2 KYC credit verification card and the NBFC
-// BRE gate use Equifax." Applied when:
+// Platform-wide default bureau. BRD Addendum §4.3 targets "Equifax replaces
+// CIBIL platform-wide", but the Equifax provider is still a stub (Phase 3 —
+// no live HTTP client / EQUIFAX_* creds), so defaulting to it makes every
+// score/report call fail with EQUIFAX_NOT_PROVISIONED. Until provisioning
+// lands, the working provider is CIBIL — keep it as the default and flip this
+// one constant to 'equifax' when EquifaxProvider is actually wired up.
+// Applied when:
 //   (a) the caller has no product context (e.g. KYC-time score fetch runs
 //       before the dealer picks NBFCs at Section G), or
 //   (b) the matched nbfc_loan_products.credit_bureau is NULL (legacy rows
 //       pre-E-130 that haven't been backfilled).
-export const DEFAULT_PLATFORM_BUREAU: BureauKind = 'equifax';
+export const DEFAULT_PLATFORM_BUREAU: BureauKind = 'cibil';
 
 export function getCreditBureauProvider(
   bureau: BureauKind | string | null | undefined,
@@ -66,10 +70,12 @@ export function getCreditBureauProvider(
       return new UnimplementedProvider(resolved);
     default:
       // Unknown value — fall back to the platform default so the call doesn't
-      // crash, but log so monitoring catches mis-set columns.
+      // crash, but log so monitoring catches mis-set columns. Use the working
+      // provider for the default (not the Equifax stub) so a mis-set column
+      // degrades gracefully instead of erroring out.
       console.warn(
         `[credit-bureau] Unknown credit_bureau value '${bureau}'; falling back to ${DEFAULT_PLATFORM_BUREAU}`,
       );
-      return new EquifaxProvider();
+      return new CibilProvider();
   }
 }
