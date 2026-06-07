@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#1e1e1e"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="800" height="600" fill="#ffffff"/>
+
+  <text x="400" y="42" text-anchor="middle" font-size="24" font-weight="700" fill="#1e1e1e">How the Intent Score Learns</text>
+
+  <!-- arrows (drawn first so boxes sit on top) -->
+  <line x1="290" y1="130" x2="464" y2="130" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="572" y1="172" x2="656" y2="246" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="658" y1="332" x2="576" y2="406" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="470" y1="450" x2="296" y2="450" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="90"  y1="450" x2="108" y2="336" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="110" y1="250" x2="186" y2="176" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- center label -->
+  <text x="385" y="284" text-anchor="middle" font-size="20" fill="#757575">THE LEARNING</text>
+  <text x="385" y="307" text-anchor="middle" font-size="20" fill="#757575">LOOP</text>
+
+  <!-- 1. AI scores -->
+  <rect x="90" y="90" width="200" height="80" rx="12" fill="#a5d8ff" stroke="#2563eb" stroke-width="2"/>
+  <text x="190" y="125" text-anchor="middle" font-size="16" fill="#1e1e1e">1. AI scores the call</text>
+  <text x="190" y="146" text-anchor="middle" font-size="16" fill="#1e1e1e">(0-100)</text>
+
+  <!-- 2. You spot -->
+  <rect x="470" y="90" width="200" height="80" rx="12" fill="#fff3bf" stroke="#b45309" stroke-width="2"/>
+  <text x="570" y="125" text-anchor="middle" font-size="16" fill="#1e1e1e">2. You spot a</text>
+  <text x="570" y="146" text-anchor="middle" font-size="16" fill="#1e1e1e">wrong score</text>
+
+  <!-- 3. You correct -->
+  <rect x="560" y="250" width="200" height="80" rx="12" fill="#ffd8a8" stroke="#b45309" stroke-width="2"/>
+  <text x="660" y="285" text-anchor="middle" font-size="16" fill="#1e1e1e">3. You click</text>
+  <text x="660" y="306" text-anchor="middle" font-size="16" fill="#1e1e1e">'Correct this score'</text>
+
+  <!-- 4. Answer key -->
+  <rect x="470" y="410" width="200" height="80" rx="12" fill="#c3fae8" stroke="#0e7490" stroke-width="2"/>
+  <text x="570" y="445" text-anchor="middle" font-size="16" fill="#1e1e1e">4. Corrections pile up</text>
+  <text x="570" y="466" text-anchor="middle" font-size="16" fill="#1e1e1e">= answer key</text>
+
+  <!-- 5. Report card -->
+  <rect x="90" y="410" width="200" height="80" rx="12" fill="#eebefa" stroke="#a21caf" stroke-width="2"/>
+  <text x="190" y="445" text-anchor="middle" font-size="16" fill="#1e1e1e">5. Report card:</text>
+  <text x="190" y="466" text-anchor="middle" font-size="16" fill="#1e1e1e">where is it wrong?</text>
+
+  <!-- 6. Fix it -->
+  <rect x="10" y="250" width="200" height="80" rx="12" fill="#b2f2bb" stroke="#15803d" stroke-width="2"/>
+  <text x="110" y="285" text-anchor="middle" font-size="16" fill="#1e1e1e">6. Fix it: examples</text>
+  <text x="110" y="306" text-anchor="middle" font-size="16" fill="#1e1e1e">or adjust points</text>
+
+  <!-- bottom note -->
+  <rect x="175" y="520" width="450" height="48" rx="12" fill="#fff3bf" fill-opacity="0.6" stroke="#b45309" stroke-width="1"/>
+  <text x="400" y="549" text-anchor="middle" font-size="16" fill="#1e1e1e">You only do steps 2 &amp; 3. The rest improves the AI for you.</text>
+</svg>
