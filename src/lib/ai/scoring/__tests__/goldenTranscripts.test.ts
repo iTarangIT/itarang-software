@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { analyzeTranscript } from "@/lib/ai/analysis";
+import { computeIntentScore, decideRoute, type IntentSignals, type LeadStatus } from "@/lib/ai/scoring";
 
 // Golden-transcript suite — exercises the REAL extraction (OpenAI) end-to-end,
 // so it is opt-in: set RUN_GOLDEN=1 and provide OPENAI_API_KEY. Extraction is an
@@ -68,6 +71,45 @@ describe.skipIf(!ENABLED)("golden transcripts (live extraction)", () => {
       },
       30_000,
     );
+  }
+});
+
+// ── Fixture-driven RUBRIC regression (always-on, no LLM) ─────────────────────
+// The golden fixture is materialized from human corrections by
+// `npm run intent:export-golden`. For every case that carries ground-truth
+// signals, the deterministic scorer must reproduce the human's label. This is
+// the regression gate a weights change must pass — it needs no OpenAI key, so it
+// runs in CI on every push.
+type GoldenFixtureCase = {
+  callId: string;
+  label: LeadStatus;
+  originalSignals: IntentSignals | null;
+  correctedSignals: IntentSignals | null;
+};
+
+function loadFixture(): GoldenFixtureCase[] {
+  const p = path.resolve(process.cwd(), "src/lib/ai/scoring/__tests__/fixtures/golden.json");
+  if (!existsSync(p)) return [];
+  try {
+    return JSON.parse(readFileSync(p, "utf8")) as GoldenFixtureCase[];
+  } catch {
+    return [];
+  }
+}
+
+function labelFor(signals: IntentSignals): LeadStatus {
+  const s = computeIntentScore(signals);
+  return decideRoute(s.intent_score, signals, s.qualified_gate).status;
+}
+
+const FIXTURE = loadFixture().filter((c) => c.correctedSignals ?? c.originalSignals);
+
+describe.skipIf(FIXTURE.length === 0)("golden fixture — rubric reproduces human label", () => {
+  for (const c of FIXTURE) {
+    it(`${c.callId} → ${c.label}`, () => {
+      const sig = (c.correctedSignals ?? c.originalSignals) as IntentSignals;
+      expect(labelFor(sig)).toBe(c.label);
+    });
   }
 });
 
