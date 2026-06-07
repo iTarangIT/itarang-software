@@ -24,7 +24,7 @@ import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { generateEnachRef, getWinningAssignment } from "@/lib/nbfc/enach";
 import { assertNotHaltedByFailure } from "@/lib/nbfc/track-gate";
 import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
-import { createEmandateCustomer, createEmandateOrder } from "@/lib/razorpay";
+import { createEmandateCustomer, createEmandateOrder, razorpayErrorMessage } from "@/lib/razorpay";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -229,7 +229,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
           handoff: { method, checkout },
         });
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        // Razorpay rejects with a non-Error object — unwrap so the real reason
+        // (e.g. "Recurring payments are not enabled", "auth_type required")
+        // surfaces instead of "[object Object]".
+        const msg = razorpayErrorMessage(err);
+        console.error("[E-NACH register] Razorpay e-mandate creation failed:", msg, err);
         return NextResponse.json(
           { ok: false, error: `Razorpay e-mandate creation failed: ${msg}` },
           { status: 502 },

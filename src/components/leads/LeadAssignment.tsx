@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 
 interface User {
     id: string;
@@ -53,10 +54,10 @@ export default function LeadAssignment({
                 throw new Error(err.error?.message || 'Assignment failed');
             }
 
-            alert('Assignment updated successfully');
+            toast.success('Assignment updated successfully');
             router.refresh();
         } catch (error: any) {
-            alert(error.message);
+            toast.error(error.message);
         } finally {
             setLoading(false);
         }

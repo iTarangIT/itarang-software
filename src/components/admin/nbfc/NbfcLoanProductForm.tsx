@@ -45,46 +45,140 @@ const DISBURSEMENT_METHODS = [
   { value: "escrow", label: "Escrow" },
 ] as const;
 
+// Full prefill payload for edit mode — mirrors the GET on
+// /api/admin/nbfc/loan-products/[productId]. Numerics arrive as strings
+// (Drizzle numeric), integers as numbers, gated fields as number | null.
+export type LoanProductInitialValues = {
+  productName: string;
+  eligibleBatteryCategories: string[] | null;
+  loanAmountMin: number;
+  loanAmountMax: number;
+  tenureMonthsMin: number;
+  tenureMonthsMax: number;
+  minRoiPct: string;
+  maxRoiPct: string;
+  downPaymentPct: string;
+  subventionAvailable: boolean;
+  fileChargeFixed: string | null;
+  fileChargePct: string | null;
+  disbursementMethod: string;
+  status: "active" | "inactive";
+  activeLocations: LocationPair[] | null;
+  processingFeeOwnedRupees: number | null;
+  processingFeeRentedRupees: number | null;
+  healthLifeInsuranceOwnedRupees: number | null;
+  healthLifeInsuranceRentedRupees: number | null;
+  disbursementTatHours: number | null;
+  cibilRequired: boolean | null;
+  minCreditScore: number | null;
+  maxCreditScore: number | null;
+  eligibilityDocuments: string[] | null;
+};
+
 type Props = {
   nbfcId: number;
   onCreated?: (productId: number) => void;
+  // Edit mode: when productId is set the form PATCHes that product and seeds
+  // its state from initialValues. Absent → create mode (unchanged).
+  productId?: number;
+  initialValues?: LoanProductInitialValues;
 };
 
-export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
-  const [productName, setProductName] = useState("");
-  const [categories, setCategories] = useState<BatteryCategory[]>([]);
-  const [loanAmountMin, setLoanAmountMin] = useState("");
-  const [loanAmountMax, setLoanAmountMax] = useState("");
-  const [tenureMin, setTenureMin] = useState("");
-  const [tenureMax, setTenureMax] = useState("");
-  const [minRoi, setMinRoi] = useState("");
-  const [maxRoi, setMaxRoi] = useState("");
-  const [downPayment, setDownPayment] = useState("");
-  const [subventionAvailable, setSubventionAvailable] = useState(false);
-  const [fileChargeFixed, setFileChargeFixed] = useState("");
-  const [fileChargePct, setFileChargePct] = useState("");
-  const [disbursement, setDisbursement] = useState("direct_to_dealer");
-  const [status, setStatus] = useState<"active" | "inactive">("active");
-  const [activeLocations, setActiveLocations] = useState<LocationPair[]>([]);
+const numToStr = (v: number | null | undefined) =>
+  v === null || v === undefined ? "" : String(v);
+
+export default function NbfcLoanProductForm({
+  nbfcId,
+  onCreated,
+  productId,
+  initialValues: iv,
+}: Props) {
+  const isEdit = productId !== undefined;
+
+  const [productName, setProductName] = useState(iv?.productName ?? "");
+  const [categories, setCategories] = useState<BatteryCategory[]>(
+    (iv?.eligibleBatteryCategories ?? []).filter((c): c is BatteryCategory =>
+      (BATTERY_CATEGORIES as readonly string[]).includes(c),
+    ),
+  );
+  const [loanAmountMin, setLoanAmountMin] = useState(numToStr(iv?.loanAmountMin));
+  const [loanAmountMax, setLoanAmountMax] = useState(numToStr(iv?.loanAmountMax));
+  const [tenureMin, setTenureMin] = useState(numToStr(iv?.tenureMonthsMin));
+  const [tenureMax, setTenureMax] = useState(numToStr(iv?.tenureMonthsMax));
+  const [minRoi, setMinRoi] = useState(iv?.minRoiPct ?? "");
+  const [maxRoi, setMaxRoi] = useState(iv?.maxRoiPct ?? "");
+  const [downPayment, setDownPayment] = useState(iv?.downPaymentPct ?? "");
+  const [subventionAvailable, setSubventionAvailable] = useState(
+    iv?.subventionAvailable ?? false,
+  );
+  const [fileChargeFixed, setFileChargeFixed] = useState(
+    iv?.fileChargeFixed ?? "",
+  );
+  const [fileChargePct, setFileChargePct] = useState(iv?.fileChargePct ?? "");
+  // File charge is either a fixed ₹ amount OR a % of loan — never both. Default
+  // to the mode the stored product already uses (% if a percentage is set).
+  const [fileChargeMode, setFileChargeMode] = useState<"fixed" | "pct">(
+    iv?.fileChargePct != null && iv?.fileChargePct !== "" ? "pct" : "fixed",
+  );
+  const [disbursement, setDisbursement] = useState(
+    iv?.disbursementMethod ?? "direct_to_dealer",
+  );
+  const [status, setStatus] = useState<"active" | "inactive">(
+    iv?.status ?? "active",
+  );
+  const [activeLocations, setActiveLocations] = useState<LocationPair[]>(
+    iv?.activeLocations ?? [],
+  );
 
   // Scheme Highlights — housing variants (E-115 redesign).
   // Each variant is opt-in. Health+Life Insurance is nested per variant.
-  const [ownedApplicable, setOwnedApplicable] = useState(true);
-  const [rentedApplicable, setRentedApplicable] = useState(false);
-  const [processingFeeOwned, setProcessingFeeOwned] = useState("");
-  const [processingFeeRented, setProcessingFeeRented] = useState("");
-  const [ownedHealthLifeApplicable, setOwnedHealthLifeApplicable] = useState(false);
-  const [rentedHealthLifeApplicable, setRentedHealthLifeApplicable] = useState(false);
-  const [healthLifeInsuranceOwned, setHealthLifeInsuranceOwned] = useState("");
-  const [healthLifeInsuranceRented, setHealthLifeInsuranceRented] = useState("");
-  const [disbursementTatHours, setDisbursementTatHours] = useState("");
+  // In edit mode a variant is "applicable" when it has any stored amount.
+  const [ownedApplicable, setOwnedApplicable] = useState(
+    isEdit
+      ? iv?.processingFeeOwnedRupees != null ||
+          iv?.healthLifeInsuranceOwnedRupees != null
+      : true,
+  );
+  const [rentedApplicable, setRentedApplicable] = useState(
+    isEdit
+      ? iv?.processingFeeRentedRupees != null ||
+          iv?.healthLifeInsuranceRentedRupees != null
+      : false,
+  );
+  const [processingFeeOwned, setProcessingFeeOwned] = useState(
+    numToStr(iv?.processingFeeOwnedRupees),
+  );
+  const [processingFeeRented, setProcessingFeeRented] = useState(
+    numToStr(iv?.processingFeeRentedRupees),
+  );
+  const [ownedHealthLifeApplicable, setOwnedHealthLifeApplicable] = useState(
+    iv?.healthLifeInsuranceOwnedRupees != null,
+  );
+  const [rentedHealthLifeApplicable, setRentedHealthLifeApplicable] = useState(
+    iv?.healthLifeInsuranceRentedRupees != null,
+  );
+  const [healthLifeInsuranceOwned, setHealthLifeInsuranceOwned] = useState(
+    numToStr(iv?.healthLifeInsuranceOwnedRupees),
+  );
+  const [healthLifeInsuranceRented, setHealthLifeInsuranceRented] = useState(
+    numToStr(iv?.healthLifeInsuranceRentedRupees),
+  );
+  const [disbursementTatHours, setDisbursementTatHours] = useState(
+    numToStr(iv?.disbursementTatHours),
+  );
 
-  // CIBIL / CRIF gate + range (E-115).
-  const [cibilRequired, setCibilRequired] = useState(true);
-  const [minCreditScore, setMinCreditScore] = useState("");
-  const [maxCreditScore, setMaxCreditScore] = useState("");
+  // CIBIL / CRIF gate + range (E-115). Legacy null → treat as required.
+  const [cibilRequired, setCibilRequired] = useState(iv?.cibilRequired ?? true);
+  const [minCreditScore, setMinCreditScore] = useState(
+    numToStr(iv?.minCreditScore),
+  );
+  const [maxCreditScore, setMaxCreditScore] = useState(
+    numToStr(iv?.maxCreditScore),
+  );
 
-  const [eligibilityDocs, setEligibilityDocs] = useState<string[]>([]);
+  const [eligibilityDocs, setEligibilityDocs] = useState<string[]>(
+    iv?.eligibilityDocuments ?? [],
+  );
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,6 +204,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
     setSubventionAvailable(false);
     setFileChargeFixed("");
     setFileChargePct("");
+    setFileChargeMode("fixed");
     setDisbursement("direct_to_dealer");
     setStatus("active");
     setActiveLocations([]);
@@ -168,53 +263,93 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
         .map((d) => d.trim())
         .filter((d) => d.length > 0),
     };
-    if (fileChargeFixed !== "") body.fileChargeFixed = Number(fileChargeFixed);
-    if (fileChargePct !== "") body.fileChargePct = Number(fileChargePct);
+    // For optional/gated fields, edit mode sends an explicit null when the
+    // value is cleared so toggling a variant off actually clears the stored
+    // amount. Create mode just omits them (column defaults apply).
+    const setOrClear = (key: string, value: number | null) => {
+      if (value !== null) body[key] = value;
+      else if (isEdit) body[key] = null;
+    };
+
+    // Mutually exclusive: persist only the selected mode's value, clear the other.
+    setOrClear(
+      "fileChargeFixed",
+      fileChargeMode === "fixed" && fileChargeFixed !== ""
+        ? Number(fileChargeFixed)
+        : null,
+    );
+    setOrClear(
+      "fileChargePct",
+      fileChargeMode === "pct" && fileChargePct !== ""
+        ? Number(fileChargePct)
+        : null,
+    );
 
     // Owned housing variant — gate fee + insurance behind the variant toggle.
-    if (ownedApplicable && processingFeeOwned !== "")
-      body.processingFeeOwnedRupees = Number(processingFeeOwned);
-    if (
+    setOrClear(
+      "processingFeeOwnedRupees",
+      ownedApplicable && processingFeeOwned !== ""
+        ? Number(processingFeeOwned)
+        : null,
+    );
+    setOrClear(
+      "healthLifeInsuranceOwnedRupees",
       ownedApplicable &&
-      ownedHealthLifeApplicable &&
-      healthLifeInsuranceOwned !== ""
-    )
-      body.healthLifeInsuranceOwnedRupees = Number(healthLifeInsuranceOwned);
+        ownedHealthLifeApplicable &&
+        healthLifeInsuranceOwned !== ""
+        ? Number(healthLifeInsuranceOwned)
+        : null,
+    );
 
     // Rented housing variant — same shape.
-    if (rentedApplicable && processingFeeRented !== "")
-      body.processingFeeRentedRupees = Number(processingFeeRented);
-    if (
+    setOrClear(
+      "processingFeeRentedRupees",
+      rentedApplicable && processingFeeRented !== ""
+        ? Number(processingFeeRented)
+        : null,
+    );
+    setOrClear(
+      "healthLifeInsuranceRentedRupees",
       rentedApplicable &&
-      rentedHealthLifeApplicable &&
-      healthLifeInsuranceRented !== ""
-    )
-      body.healthLifeInsuranceRentedRupees = Number(healthLifeInsuranceRented);
+        rentedHealthLifeApplicable &&
+        healthLifeInsuranceRented !== ""
+        ? Number(healthLifeInsuranceRented)
+        : null,
+    );
 
-    if (disbursementTatHours !== "")
-      body.disbursementTatHours = Number(disbursementTatHours);
+    setOrClear(
+      "disbursementTatHours",
+      disbursementTatHours !== "" ? Number(disbursementTatHours) : null,
+    );
 
     // CIBIL range only when the gate is on. API zod will reject mismatched/
-    // missing values, so we just pass through what the user typed.
+    // missing values, so we just pass through what the user typed. When the
+    // gate is off the API forces both score columns to null.
     if (cibilRequired) {
       if (minCreditScore !== "") body.minCreditScore = Number(minCreditScore);
       if (maxCreditScore !== "") body.maxCreditScore = Number(maxCreditScore);
     }
 
     try {
-      const res = await fetch(`/api/admin/nbfc/${nbfcId}/loan-products`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const res = await fetch(
+        isEdit
+          ? `/api/admin/nbfc/loan-products/${productId}`
+          : `/api/admin/nbfc/${nbfcId}/loan-products`,
+        {
+          method: isEdit ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
       const data = await res.json();
       if (!res.ok) {
         setError(data?.message ?? `Request failed (${res.status})`);
       } else {
         setSuccess({
-          productId: data.id,
-          productName: data.productName ?? productName,
-          status: (data.status as "active" | "inactive") ?? status,
+          // PATCH returns only { id, updatedAt }; fall back to local state.
+          productId: data.id ?? productId,
+          productName,
+          status,
         });
         // Scroll the success banner into view since the button is at the
         // bottom and the banner renders just above it.
@@ -250,7 +385,9 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
         >
           <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
           <div className="text-sm flex-1">
-            <p className="font-semibold">Loan product created</p>
+            <p className="font-semibold">
+              {isEdit ? "Loan product updated" : "Loan product created"}
+            </p>
             <p className="opacity-90 mt-0.5">
               <span className="font-medium">{success.productName}</span>{" "}
               <span className="opacity-80">(id #{success.productId})</span> is
@@ -261,22 +398,33 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
                 : " — flip status to Active when you want it to show in dealer Section G."}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  resetForm();
-                  setSuccess(null);
-                }}
-                className="text-xs font-semibold underline underline-offset-2 hover:opacity-80"
-              >
-                Create another
-              </button>
-              <Link
-                href={`/admin/nbfc/${nbfcId}/edit`}
-                className="text-xs font-semibold underline underline-offset-2 hover:opacity-80"
-              >
-                Back to NBFC
-              </Link>
+              {isEdit ? (
+                <Link
+                  href="/admin/loan-products"
+                  className="text-xs font-semibold underline underline-offset-2 hover:opacity-80"
+                >
+                  Back to Loan Products
+                </Link>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetForm();
+                      setSuccess(null);
+                    }}
+                    className="text-xs font-semibold underline underline-offset-2 hover:opacity-80"
+                  >
+                    Create another
+                  </button>
+                  <Link
+                    href={`/admin/nbfc/${nbfcId}/edit`}
+                    className="text-xs font-semibold underline underline-offset-2 hover:opacity-80"
+                  >
+                    Back to NBFC
+                  </Link>
+                </>
+              )}
             </div>
           </div>
           <button
@@ -670,41 +818,48 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
             />
 
             <ParamRow
-              label="File charge — fixed"
-              unit="₹"
-              min={null}
-              max={
-                <input
-                  type="number"
-                  onWheel={blurOnWheel}
-                  value={fileChargeFixed}
-                  onChange={(e) => setFileChargeFixed(e.target.value)}
-                  step="0.01"
-                  min={0}
+              label="File charge"
+              unit={fileChargeMode === "fixed" ? "₹" : "%"}
+              min={
+                <select
+                  value={fileChargeMode}
+                  onChange={(e) =>
+                    setFileChargeMode(e.target.value as "fixed" | "pct")
+                  }
                   className="input-itarang"
-                  name="fileChargeFixed"
-                  placeholder="e.g. 1500"
-                />
+                  name="fileChargeMode"
+                >
+                  <option value="fixed">Fixed (₹)</option>
+                  <option value="pct">% of loan</option>
+                </select>
               }
-            />
-
-            <ParamRow
-              label="File charge — % of loan"
-              unit="%"
-              min={null}
               max={
-                <input
-                  type="number"
-                  onWheel={blurOnWheel}
-                  value={fileChargePct}
-                  onChange={(e) => setFileChargePct(e.target.value)}
-                  step="0.01"
-                  min={0}
-                  max={100}
-                  className="input-itarang"
-                  name="fileChargePct"
-                  placeholder="e.g. 1.5"
-                />
+                fileChargeMode === "fixed" ? (
+                  <input
+                    type="number"
+                    onWheel={blurOnWheel}
+                    value={fileChargeFixed}
+                    onChange={(e) => setFileChargeFixed(e.target.value)}
+                    step="0.01"
+                    min={0}
+                    className="input-itarang"
+                    name="fileChargeFixed"
+                    placeholder="e.g. 1500"
+                  />
+                ) : (
+                  <input
+                    type="number"
+                    onWheel={blurOnWheel}
+                    value={fileChargePct}
+                    onChange={(e) => setFileChargePct(e.target.value)}
+                    step="0.01"
+                    min={0}
+                    max={100}
+                    className="input-itarang"
+                    name="fileChargePct"
+                    placeholder="e.g. 1.5"
+                  />
+                )
               }
             />
 
@@ -770,7 +925,11 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
       <div className="flex justify-end pt-2">
         <button type="submit" disabled={submitting} className="btn-primary">
           {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-          {submitting ? "Saving…" : "Create Loan Product"}
+          {submitting
+            ? "Saving…"
+            : isEdit
+              ? "Save changes"
+              : "Create Loan Product"}
         </button>
       </div>
     </form>

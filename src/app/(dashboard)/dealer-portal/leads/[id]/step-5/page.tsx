@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import {
   CheckCircle2,
   AlertCircle,
@@ -275,7 +276,12 @@ export default function Step5Page() {
 
   const [marking, setMarking] = useState(false);
   const handleMarkDelivered = async () => {
-    if (!confirm("Confirm physical delivery to the customer? This finalizes the sale.")) return;
+    const ok = await confirmDialog({
+      title: "Confirm delivery?",
+      message: "Confirm physical delivery to the customer. This finalizes the sale.",
+      confirmText: "Confirm delivery",
+    });
+    if (!ok) return;
     setMarking(true);
     setError(null);
     try {
@@ -294,7 +300,13 @@ export default function Step5Page() {
   };
 
   const handleCloseLead = async () => {
-    if (!confirm("Close this lead permanently? This cannot be undone.")) return;
+    const ok = await confirmDialog({
+      title: "Close this lead?",
+      message: "This closes the lead permanently and cannot be undone.",
+      confirmText: "Close lead",
+      variant: "danger",
+    });
+    if (!ok) return;
     setActioning("close");
     setError(null);
     try {
@@ -313,12 +325,14 @@ export default function Step5Page() {
   };
 
   const handleSwitchToCash = async () => {
-    if (
-      !confirm(
-        "Convert this lead to a CASH sale? The dealer is the sole authoriser — no admin approval. The customer pays the dealer directly.",
-      )
-    )
-      return;
+    const ok = await confirmDialog({
+      title: "Convert to cash sale?",
+      message:
+        "The dealer is the sole authoriser — no admin approval. The customer pays the dealer directly.",
+      confirmText: "Convert to cash",
+      variant: "danger",
+    });
+    if (!ok) return;
     setActioning("switch");
     setError(null);
     try {

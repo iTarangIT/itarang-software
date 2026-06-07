@@ -145,7 +145,12 @@ const step1Schema = z.object({
     payment_method: z.enum(['upfront', 'finance', 'cash', 'other_finance', 'dealer_finance']).optional().nullable(),
     // E-130 / Addendum §3.2, §3.3 — captured at Step 1 for finance leads;
     // strict 'required for finance' check runs in the commitStep block below.
-    resident_status: z.enum(['owned', 'rented']).optional().nullable(),
+    // The Step-1 form initializes this to '' (unanswered). An empty string is not
+    // a valid enum member, so a partial Save Draft would fail Zod — coerce '' → null.
+    resident_status: z.preprocess(
+        (v) => (v === '' ? null : v),
+        z.enum(['owned', 'rented']).optional().nullable(),
+    ),
     has_health_insurance: z.boolean().optional().nullable(),
     has_life_insurance: z.boolean().optional().nullable(),
     initializeDraft: z.boolean().optional(),

@@ -32,6 +32,8 @@ import {
   CampaignStatusBadge,
 } from "./campaign-status-badge";
 import { describeRegion, displayCampaignName } from "@/lib/leads/regionSummary";
+import { toast } from "sonner";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 type Campaign = {
   id: string;
@@ -283,7 +285,7 @@ export function CampaignDetailView({
       router.push(`/leads/campaigns/${data.campaignId}`);
     },
     onError: (err: unknown) => {
-      window.alert(
+      toast.error(
         err instanceof Error ? err.message : "Could not retry failed leads",
       );
     },
@@ -386,12 +388,14 @@ export function CampaignDetailView({
           {isRunning && (
             <button
               type="button"
-              onClick={() => {
-                if (
-                  window.confirm(
-                    "Force-stop this campaign? In-flight calls will be marked failed.",
-                  )
-                ) {
+              onClick={async () => {
+                const ok = await confirmDialog({
+                  title: "Force-stop this campaign?",
+                  message: "In-flight calls will be marked failed.",
+                  confirmText: "Force stop",
+                  variant: "danger",
+                });
+                if (ok) {
                   stopMutation.mutate();
                 }
               }}
@@ -409,14 +413,16 @@ export function CampaignDetailView({
           {!isRunning && campaign.failedLeads > 0 && (
             <button
               type="button"
-              onClick={() => {
-                if (
-                  window.confirm(
-                    `Retry ${campaign.failedLeads} failed lead${
-                      campaign.failedLeads === 1 ? "" : "s"
-                    }? This starts a new campaign and begins calling them.`,
-                  )
-                ) {
+              onClick={async () => {
+                const ok = await confirmDialog({
+                  title: `Retry ${campaign.failedLeads} failed lead${
+                    campaign.failedLeads === 1 ? "" : "s"
+                  }?`,
+                  message:
+                    "This starts a new campaign and begins calling them.",
+                  confirmText: "Retry",
+                });
+                if (ok) {
                   retryMutation.mutate();
                 }
               }}

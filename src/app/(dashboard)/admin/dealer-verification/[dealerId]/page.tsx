@@ -29,6 +29,7 @@ import {
   AlertTriangle,
   GitBranch,
 } from "lucide-react";
+import { toast } from "sonner";
 
 type DuplicateFlag = "none" | "branch" | "duplicate" | "pan-mismatch";
 
@@ -755,14 +756,14 @@ export default function DealerReviewPage() {
         body: JSON.stringify(editForm),
       });
       const json = await res.json();
-      if (!json.success) { alert(json.message || "Failed to save"); return; }
+      if (!json.success) { toast.error(json.message || "Failed to save"); return; }
 
       // optimistic local update so UI reflects new values immediately
       setData((prev) => prev ? { ...prev, ...editForm } : prev);
       setIsEditing(false);
     } catch (err) {
       console.error("Save error:", err);
-      alert("Something went wrong while saving.");
+      toast.error("Something went wrong while saving.");
     } finally {
       setEditSaving(false);
     }
@@ -785,7 +786,7 @@ export default function DealerReviewPage() {
         setLangSaved(true);
         setTimeout(() => setLangSaved(false), 3000);
       } else {
-        alert(json.message || "Failed to save language");
+        toast.error(json.message || "Failed to save language");
       }
     } catch (err) {
       console.error("Language save error:", err);
@@ -840,8 +841,8 @@ export default function DealerReviewPage() {
   };
 
   const handleAuditTrailDownload = async () => {
-    if (!hasInitiatedAgreement) { alert("Agreement has not been initiated yet."); return; }
-    if (!isAgreementCompleted)  { alert("Audit trail available only after agreement completion."); return; }
+    if (!hasInitiatedAgreement) { toast.error("Agreement has not been initiated yet."); return; }
+    if (!isAgreementCompleted)  { toast.error("Audit trail available only after agreement completion."); return; }
 
     setAuditTrailLoading(true);
     try {
@@ -851,9 +852,9 @@ export default function DealerReviewPage() {
       if (!res.ok) {
         if (ct.includes("json")) {
           const err = await res.json().catch(() => null);
-          alert(err?.message || `Audit trail download failed (HTTP ${res.status})`);
+          toast.error(err?.message || `Audit trail download failed (HTTP ${res.status})`);
         } else {
-          alert(`Audit trail download failed (HTTP ${res.status})`);
+          toast.error(`Audit trail download failed (HTTP ${res.status})`);
         }
         return;
       }
@@ -868,14 +869,14 @@ export default function DealerReviewPage() {
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err: any) {
-      alert(err?.message || "Failed to download audit trail");
+      toast.error(err?.message || "Failed to download audit trail");
     } finally {
       setAuditTrailLoading(false);
     }
   };
 
   const handleAgreementAction = async (action: "initiate" | "refresh" | "reinitiate" | "retry") => {
-    if (data?.onboardingStatus === "rejected") { alert("This application is rejected and locked."); return; }
+    if (data?.onboardingStatus === "rejected") { toast.error("This application is rejected and locked."); return; }
     setAgreementActionLoading(action);
     try {
       const payload = action === "initiate" || action === "reinitiate"
@@ -909,11 +910,11 @@ export default function DealerReviewPage() {
       });
       let json: any = null;
       try { json = await res.json(); } catch { json = null; }
-      if (!res.ok || !json?.success) { alert(json?.message || "Agreement action failed"); return; }
+      if (!res.ok || !json?.success) { toast.error(json?.message || "Agreement action failed"); return; }
       await reloadDealer();
     } catch (error) {
       console.error(`Failed to ${action} agreement`, error);
-      alert("Something went wrong while processing agreement action");
+      toast.error("Something went wrong while processing agreement action");
     } finally {
       setAgreementActionLoading(null);
     }
@@ -926,12 +927,12 @@ export default function DealerReviewPage() {
       let json: any = null;
       try { json = await res.json(); } catch { /* non-JSON body */ }
       if (!res.ok || !json?.success) {
-        alert(json?.message || `Approve failed (HTTP ${res.status})`);
+        toast.error(json?.message || `Approve failed (HTTP ${res.status})`);
         return;
       }
       router.push("/admin/dealer-verification");
     } catch (err: any) {
-      alert(err?.message || "Something went wrong while approving");
+      toast.error(err?.message || "Something went wrong while approving");
     } finally { setSubmitting(false); }
   };
 
@@ -950,12 +951,12 @@ export default function DealerReviewPage() {
       let json: any = null;
       try { json = await res.json(); } catch { /* non-JSON body */ }
       if (!res.ok || !json?.success) {
-        alert(json?.message || `Reject failed (HTTP ${res.status})`);
+        toast.error(json?.message || `Reject failed (HTTP ${res.status})`);
         return;
       }
       router.push("/admin/dealer-verification");
     } catch (err: any) {
-      alert(err?.message || "Something went wrong while rejecting");
+      toast.error(err?.message || "Something went wrong while rejecting");
     } finally { setSubmitting(false); }
   };
 

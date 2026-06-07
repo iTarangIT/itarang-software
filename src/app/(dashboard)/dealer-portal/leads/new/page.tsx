@@ -6,6 +6,7 @@ import { Plus, X, AlertCircle, Scan, Info, ChevronRight, ChevronDown, Loader2, S
 import { State, City } from 'country-state-city';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { DatePicker } from '@/components/ui/date-picker';
+import { confirmDialog } from '@/components/ui/confirm-dialog';
 import {
     SectionCard, InputField, SelectField, TextAreaField,
     ProgressHeader, StickyBottomBar, ErrorBanner,
@@ -54,6 +55,41 @@ const emptyFormData = {
     resident_status: '',           // 'owned' | 'rented'
     has_health_insurance: null,    // boolean | null (null = unanswered)
     has_life_insurance: null,      // boolean | null
+};
+
+// Human labels for the validation summary, in visual (top-to-bottom) order so
+// the "missing fields" message reads the same way the form is laid out.
+const FIELD_LABELS: Record<string, string> = {
+    full_name: 'Full Name',
+    father_or_husband_name: 'Father/Husband Name',
+    dob: 'Date of Birth',
+    phone: 'Phone Number',
+    email: 'Email Address',
+    current_address: 'Current Address',
+    state: 'State',
+    city: 'City',
+    permanent_address: 'Permanent Address',
+    product_category_id: 'Product Category',
+    primary_product_id: 'Product',
+    vehicle_ownership: 'Vehicle Ownership',
+    vehicle_owner_name: 'Vehicle Owner Name',
+    vehicle_owner_phone: 'Vehicle Owner Phone',
+    resident_status: 'Residence Status',
+    has_health_insurance: 'Health Insurance',
+    has_life_insurance: 'Life Insurance',
+};
+
+// Phone fields are stored E.164 (+91…) in the DB, but the Step-1 inputs expect
+// the bare 10-digit national number (validated as exactly 10 digits). Strip any
+// country code / formatting to the last 10 digits when loading a saved lead, so
+// a resumed/edited draft doesn't show "+918208677782" and fail validation.
+const to10Digits = (p?: string | null) => (p ?? '').replace(/\D/g, '').slice(-10);
+const normalizeLoadedPhones = (fd: any) => {
+    if (!fd) return fd;
+    const out = { ...fd };
+    if (out.phone != null) out.phone = to10Digits(out.phone);
+    if (out.vehicle_owner_phone != null) out.vehicle_owner_phone = to10Digits(out.vehicle_owner_phone);
+    return out;
 };
 
 function NewLeadWizardContent() {
@@ -112,7 +148,7 @@ function NewLeadWizardContent() {
                 setLeadId(result.data.leadId);
                 setReferenceId(result.data.referenceId);
                 if (result.data.formData && !fresh) {
-                    const fd = result.data.formData;
+                    const fd = normalizeLoadedPhones(result.data.formData);
                     const hasData = fd.full_name || fd.phone || fd.dob || fd.father_or_husband_name;
                     if (hasData && result.data.resumed) {
                         setHasDraft(true);
@@ -153,7 +189,7 @@ function NewLeadWizardContent() {
             if (result.success) {
                 setLeadId(result.data.leadId);
                 setReferenceId(result.data.referenceId);
-                setFormData((prev: any) => ({ ...prev, ...result.data.formData }));
+                setFormData((prev: any) => ({ ...prev, ...normalizeLoadedPhones(result.data.formData) }));
                 setAdditionalProducts(result.data.additional_products ?? []);
                 setLastSaved('Loaded for editing');
             } else {
@@ -301,14 +337,35 @@ function NewLeadWizardContent() {
         }
 
         setErrors(e);
-        return Object.keys(e).length === 0;
+        return e;
     };
 
     // ─── Submit ─────────────────────────────────────────────────────────────
 
     const commitStep = () => {
         if (!leadId) { setApiError('Lead draft not initialized. Please refresh.'); return; }
-        if (!validate()) return;
+        const errs = validate();
+        if (Object.keys(errs).length > 0) {
+            // Popup: name the missing/invalid fields in form order.
+            const missing = Object.keys(FIELD_LABELS).filter((k) => errs[k]);
+            const labels = missing.map((k) => FIELD_LABELS[k]);
+            setApiError(
+                labels.length
+                    ? `Please complete ${labels.length} required field${labels.length > 1 ? 's' : ''}: ${labels.join(', ')}.`
+                    : 'Please fix the highlighted fields before creating the lead.',
+            );
+            // Direction: jump to the first field with an error. The inline error
+            // markers (`p.text-red-500.font-bold`) render in DOM = visual order,
+            // so the first match is the topmost missing field. Defer one tick so
+            // the just-set errors have painted before we query for them.
+            setTimeout(() => {
+                const marker = document.querySelector('main p.font-bold.text-red-500');
+                const box = marker?.closest('div');
+                box?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                (box?.querySelector('input, select, textarea') as HTMLElement | null)?.focus({ preventScroll: true });
+            }, 60);
+            return;
+        }
         setShowConfirm(true);
     };
 
@@ -400,7 +457,13 @@ function NewLeadWizardContent() {
 
     const handleCancel = async () => {
         if (!isModified) { router.push('/dealer-portal'); return; }
-        if (confirm('Discard draft?')) {
+        const ok = await confirmDialog({
+            title: 'Discard draft?',
+            message: 'Your unsaved changes to this lead will be lost.',
+            confirmText: 'Discard',
+            variant: 'danger',
+        });
+        if (ok) {
             if (leadId) await fetch(`/api/leads/draft/${leadId}`, { method: 'DELETE' }).catch(() => {});
             router.push('/dealer-portal');
         }
