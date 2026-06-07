@@ -12,6 +12,7 @@ import {
   TIMELINE_LEVELS,
   OBJECTION_LEVELS,
 } from "@/lib/ai/scoring";
+import { renderCalibrationExamples } from "./calibrationExamples";
 
 export type ExtractionResult =
   | { status: "ok"; signals: IntentSignals }
@@ -52,6 +53,12 @@ RULES (read carefully):
   called back or to talk later.
 - Interpret Hinglish charitably, but if a passage is garbled/unintelligible, mark
   the affected signal "unknown".
+- THIN-CALL RULE: if the dealer contributes only a few substantive words (a bare
+  "yes/haan/ok", a one-line answer, or the line is garbled), the call is THIN.
+  On a thin call you have almost no evidence: cap engagement and curiosity at
+  "weak" at most, and prefer "unknown" for need, budget, and timeline. Naming a
+  current brand, or a single "yes", is NOT curiosity, need, or engagement — it is
+  just a fact. Do not manufacture intent from a near-empty exchange.
 - Each signal needs a short evidence string: a brief verbatim or paraphrased
   quote from the dealer (or "unknown").
 
@@ -113,7 +120,7 @@ OUTPUT EXACTLY THIS JSON SHAPE (fill every field):
   "call_summary": "...",
   "callback_time": null
 }
-
+${renderCalibrationExamples()}
 Return ONLY the JSON object.`;
 }
 
