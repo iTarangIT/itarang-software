@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ShoppingCart, CheckCircle2, ChevronLeft, Package, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
+import { toast } from 'sonner';
 
 interface InventoryItem {
     id: string;
@@ -77,7 +78,7 @@ export default function CreateOrderPage({ params }: { params: Promise<{ id: stri
             if (!res.ok) throw new Error('Failed to create order');
             router.push('/orders');
         } catch (err) {
-            alert('Error creating order');
+            toast.error('Error creating order');
         } finally {
             setLoading(false);
         }

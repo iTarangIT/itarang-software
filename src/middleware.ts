@@ -207,6 +207,9 @@ export async function middleware(request: NextRequest) {
     // /api/admin/nbfc/* routes still gate writes per role; this just allows
     // the dashboard pages to render.
     "/admin/nbfc": ["admin", "ceo", "business_head", "sales_head"],
+    // Global NBFC loan-product catalogue (view/search/edit). Same audience as
+    // the NBFC directory; writes are still admin-gated by the API.
+    "/admin/loan-products": ["admin", "ceo", "business_head", "sales_head"],
     "/admin/product-review": ["admin", "sales_head", "business_head", "ceo"],
     "/admin/inventory": [
       "admin",

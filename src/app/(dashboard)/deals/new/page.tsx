@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Plus, Trash2, Calculator, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface Product {
     id: string;
@@ -66,11 +67,11 @@ function NewDealForm() {
     const onSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!leadId) {
-            alert('Lead ID is missing');
+            toast.error('Lead ID is missing');
             return;
         }
         if (selectedProducts.length === 0) {
-            alert('Add at least one product');
+            toast.error('Add at least one product');
             return;
         }
 
@@ -106,7 +107,7 @@ function NewDealForm() {
             router.push(`/deals/${data.data.id}`);
             router.refresh();
         } catch (error: any) {
-            alert(error.message);
+            toast.error(error.message);
         } finally {
             setLoading(false);
         }

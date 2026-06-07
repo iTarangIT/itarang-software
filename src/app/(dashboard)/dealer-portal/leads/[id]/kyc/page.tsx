@@ -541,7 +541,9 @@ export default function KYCPage() {
                 } else {
                     // First validation — show success alert
                     setLead((prev: any) => prev ? { ...prev, coupon_code: data.coupon_code, coupon_status: 'reserved' } : prev);
-                    alert(`Coupon "${data.coupon_code}" validated successfully! Your coupon has been reserved for this lead.`);
+                    toast.success('Coupon validated', {
+                        description: `"${data.coupon_code}" has been reserved for this lead.`,
+                    });
                 }
             } else {
                 setApiError(data.message || data.error || 'Invalid coupon');
@@ -585,7 +587,9 @@ export default function KYCPage() {
             if (data.success) {
                 setSubmittedForVerification(true);
                 setLead((prev: any) => prev ? { ...prev, coupon_status: 'used' } : prev);
-                alert('Verification submitted successfully! KYC verification is now in progress.');
+                toast.success('Verification submitted', {
+                    description: 'KYC verification is now in progress.',
+                });
                 await loadPageData(true);
             } else {
                 setApiError(data.message || data.error?.message || 'Submission failed');
@@ -664,7 +668,9 @@ export default function KYCPage() {
         : `/dealer-portal/leads/${leadId}/borrower-consent`;
 
     const stepRoutes: Record<number, string> = {
-        1: '/dealer-portal/leads/new',
+        // Carry the lead id so Step 1 reopens this lead (prefilled) instead of a
+        // blank draft when the dealer steps back.
+        1: `/dealer-portal/leads/new?id=${leadId}`,
         2: `/dealer-portal/leads/${leadId}/kyc`,
         3: `/dealer-portal/leads/${leadId}/borrower-consent`,
         4: `/dealer-portal/leads/${leadId}/product-selection`,
@@ -693,7 +699,7 @@ export default function KYCPage() {
                     title="KYC"
                     subtitle={`Lead ID: ${leadId}${lead?.full_name ? ` — ${lead.full_name}` : ''}`}
                     step={2}
-                    onBack={() => router.push('/dealer-portal/leads/new')}
+                    onBack={() => router.push(`/dealer-portal/leads/new?id=${leadId}`)}
                     onPrev={() => jumpToStep(1)}
                     onNext={() => router.push(nextStepRoute)}
                     onStepClick={jumpToStep}
@@ -1249,7 +1255,7 @@ export default function KYCPage() {
                     </div>
                 )}
                 <StickyBottomBar lastSaved={lastSaved}>
-                    <OutlineButton onClick={() => router.push('/dealer-portal/leads/new')}>Back</OutlineButton>
+                    <OutlineButton onClick={() => router.push(`/dealer-portal/leads/new?id=${leadId}`)}>Back</OutlineButton>
                     <SecondaryButton onClick={() => handleSaveDraft(false)} loading={savingDraft}>Save Draft</SecondaryButton>
                     <PrimaryButton onClick={handleSaveAndNext} loading={submitting} disabled={submitting || !canProceed}>
                         Next <ChevronRight className="w-4 h-4" />

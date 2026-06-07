@@ -124,9 +124,15 @@ export default function EnachTrackPanel({ leadId }: { leadId: string }) {
         email: checkout.email ?? undefined,
         contact: checkout.contact ?? undefined,
       },
-      // The webhook is the source of truth; these just refresh the panel.
-      handler: () => {
-        void load();
+      // On authorisation, hand the signed result to the server to verify and
+      // mark the mandate registered (works on localhost where the webhook can't
+      // reach). In prod the webhook is the async source of truth; both converge.
+      handler: (resp: {
+        razorpay_payment_id?: string;
+        razorpay_order_id?: string;
+        razorpay_signature?: string;
+      }) => {
+        void confirmMandate(resp);
       },
       modal: {
         ondismiss: () => {
@@ -135,6 +141,37 @@ export default function EnachTrackPanel({ leadId }: { leadId: string }) {
       },
     });
     rzp.open();
+  }
+
+  // Server-verified confirmation of the Checkout result. The signed fields are
+  // posted to /confirm, which verifies the signature and fetches the token from
+  // Razorpay before flipping the mandate to registered.
+  async function confirmMandate(resp: {
+    razorpay_payment_id?: string;
+    razorpay_order_id?: string;
+    razorpay_signature?: string;
+  }) {
+    if (!resp?.razorpay_payment_id || !resp?.razorpay_order_id || !resp?.razorpay_signature) {
+      setError("Razorpay returned no signed result to confirm. Use 'Record as registered' if the mandate did authorise.");
+      await load();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/nbfc/enach/${leadId}/confirm`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(resp),
+      });
+      const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok || j.ok === false) throw new Error(j.error ?? `HTTP ${res.status}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      await load();
+    }
   }
 
   async function post(path: string, body?: unknown) {

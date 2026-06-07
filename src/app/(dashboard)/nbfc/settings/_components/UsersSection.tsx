@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { NBFC_ORIGINATION_ROLES, NBFC_ROLE_LABELS } from "@/lib/nbfc/origination-roles";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 interface Member {
   user_id: string;
@@ -59,7 +60,13 @@ export default function UsersSection({ currentUserId, members }: Props) {
   }
 
   async function remove(userId: string) {
-    if (!confirm("Remove this user from the tenant?")) return;
+    const ok = await confirmDialog({
+      title: "Remove user?",
+      message: "Remove this user from the tenant?",
+      confirmText: "Remove",
+      variant: "danger",
+    });
+    if (!ok) return;
     setBusy(true);
     setError(null);
     try {

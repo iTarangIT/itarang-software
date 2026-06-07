@@ -147,6 +147,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/nbfc",
         },
         {
+          id: "loan-products",
+          label: "Loan Products",
+          icon: Package,
+          href: "/admin/loan-products",
+        },
+        {
           id: "nbfc-ecosystem",
           label: "Ecosystem Overview",
           icon: PieChart,
@@ -271,6 +277,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "NBFC Directory",
           icon: Landmark,
           href: "/admin/nbfc",
+        },
+        {
+          id: "loan-products",
+          label: "Loan Products",
+          icon: Package,
+          href: "/admin/loan-products",
         },
         {
           id: "nbfc-my-drafts",

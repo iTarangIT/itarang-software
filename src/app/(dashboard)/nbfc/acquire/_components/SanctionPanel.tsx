@@ -9,6 +9,7 @@
  * by Credit / Underwriting.
  */
 import { useCallback, useEffect, useState } from "react";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 type TrackKey = "fi" | "vkyc" | "enach";
 type TrackState = { key: TrackKey; required: boolean; status: string | null; complete: boolean; failed: boolean };
@@ -63,7 +64,13 @@ export default function SanctionPanel({ leadId }: { leadId: string }) {
   }, [load]);
 
   async function sanction() {
-    if (!confirm("Sanction & disburse this loan? This advances the lead to dispatch (Step 5) and charges your wallet per the disbursal rule.")) return;
+    const ok = await confirmDialog({
+      title: "Sanction & disburse?",
+      message: "This advances the lead to dispatch (Step 5) and charges your wallet per the disbursal rule.",
+      confirmText: "Sanction & disburse",
+      variant: "danger",
+    });
+    if (!ok) return;
     setBusy(true);
     setError(null);
     try {

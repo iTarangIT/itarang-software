@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Building2, User, Phone, Mail, Upload, CheckCircle, AlertCircle, FileText } from 'lucide-react';
+import { toast } from 'sonner';
 import { useRef } from 'react';
 
 const CONTACT_ROLES = [
@@ -89,7 +90,7 @@ export default function OemOnboardingPage() {
                 throw new Error(data.error?.message || `Failed to register OEM (Error ${res.status})`);
             }
 
-            alert('OEM Onboarded Successfully!');
+            toast.success('OEM Onboarded Successfully!');
             router.push('/dashboard'); // or list view if it exists
         } catch (err: any) {
             setError(err.message);

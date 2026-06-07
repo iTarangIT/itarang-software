@@ -105,10 +105,38 @@ export interface EmandateCustomerParams {
   notes?: Record<string, string>;
 }
 
+const onlyDigits10 = (s?: string | null) => (s || "").replace(/\D/g, "").slice(-10);
+
+/**
+ * Find an existing Razorpay customer by contact (or email). Used to recover the
+ * id of a customer orphaned by a prior failed registration, when Razorpay's
+ * duplicate error doesn't carry `metadata.customer_id`. Scans the most recent
+ * page of customers (fallback-only path, so the unfiltered list is acceptable).
+ */
+async function findCustomerByContactOrEmail(
+  contact?: string | null,
+  email?: string | null,
+): Promise<string | null> {
+  const rzp = getRazorpay();
+  const list = (await rzp.customers.all({ count: 100 })) as unknown as {
+    items?: Array<{ id: string; contact?: string; email?: string }>;
+  };
+  const items = list?.items ?? [];
+  const wantContact = onlyDigits10(contact);
+  const wantEmail = (email || "").trim().toLowerCase();
+  const match = items.find(
+    (it) =>
+      (wantContact && onlyDigits10(it.contact) === wantContact) ||
+      (wantEmail && (it.email || "").trim().toLowerCase() === wantEmail),
+  );
+  return match?.id ?? null;
+}
+
 /**
  * Create (or reuse) a Razorpay customer for e-mandate authorisation. Razorpay
  * rejects a duplicate (same contact/email) with BAD_REQUEST_ERROR; we surface
- * the existing customer instead of failing the registration.
+ * the existing customer instead of failing the registration — first from the
+ * error metadata, then (if absent) by looking the customer up by contact/email.
  */
 export async function createEmandateCustomer(
   params: EmandateCustomerParams,
@@ -124,9 +152,21 @@ export async function createEmandateCustomer(
     } as any);
     return { id: c.id };
   } catch (e: any) {
-    // Defensive: if fail_existing isn't honoured, try to recover the id.
-    const existingId = e?.error?.metadata?.customer_id;
-    if (existingId) return { id: existingId };
+    // 1) Recover the id from the duplicate-error metadata (shape varies by SDK).
+    const metaId =
+      e?.error?.metadata?.customer_id ?? e?.metadata?.customer_id ?? null;
+    if (metaId) return { id: metaId };
+    // 2) Only on an "already exists" error, look the customer up directly. This
+    //    rescues a customer orphaned by an earlier registration that failed at
+    //    the order step (so no mandate row stored its id).
+    const desc: string = e?.error?.description ?? e?.description ?? "";
+    if (/already exists/i.test(desc)) {
+      const found = await findCustomerByContactOrEmail(
+        params.contact,
+        params.email,
+      ).catch(() => null);
+      if (found) return { id: found };
+    }
     throw e;
   }
 }
@@ -139,6 +179,12 @@ export interface EmandateOrderParams {
   authAmountPaise?: number;
   /** Mandate expiry as a unix epoch (seconds). Default ~10 years out. */
   expireAt?: number;
+  /**
+   * Mandate authorisation rail. Razorpay REQUIRES auth_type in the token block
+   * for e-mandate orders; 'netbanking' has the broadest bank coverage and is the
+   * most reliable in test mode (the customer picks their bank in Checkout).
+   */
+  authType?: "netbanking" | "debitcard" | "aadhaar";
   /** Correlation ref stored in notes so the webhook can find the mandate. */
   enachRef: string;
   leadId: string;
@@ -176,13 +222,15 @@ export async function createEmandateOrder(
       itarang_nbfc_id: String(params.nbfcId),
     },
     token: {
+      // auth_type is MANDATORY for an e-mandate order — omitting it makes
+      // Razorpay reject the order with a 400. The customer chooses the actual
+      // bank inside Checkout; we do NOT send a (partial) bank_account block,
+      // since Razorpay requires the full account block if any is present.
+      auth_type: params.authType ?? "netbanking",
       max_amount: params.maxAmountPaise ?? 100_00_00_000,
       expire_at:
         params.expireAt ?? Math.floor(Date.now() / 1000) + 10 * 365 * 24 * 3600,
       frequency: "as_presented",
-      ...(params.bankAccountName
-        ? { bank_account: { beneficiary_name: params.bankAccountName } }
-        : {}),
     },
   } as any);
   return {
@@ -197,6 +245,56 @@ export async function createEmandateOrder(
 /** Fetch a registered token (reconciliation fallback when a webhook is missed). */
 export async function fetchEmandateToken(customerId: string, tokenId: string) {
   return getRazorpay().customers.fetchToken(customerId, tokenId);
+}
+
+/** Fetch a payment — used by the confirm endpoint to read the registered
+ *  token_id / bank details right after Checkout, without waiting for the
+ *  (localhost-unreachable) webhook. */
+export async function fetchPayment(paymentId: string) {
+  return getRazorpay().payments.fetch(paymentId) as Promise<Record<string, any>>;
+}
+
+/**
+ * Unwraps a Razorpay SDK rejection into a human-readable string. The SDK rejects
+ * with a plain object `{ statusCode, error: { code, description, … } }` — NOT an
+ * Error — so `String(err)` yields the useless "[object Object]". Prefer the
+ * provider's `error.description`, then a nested message, then a JSON fallback.
+ */
+export function razorpayErrorMessage(err: unknown): string {
+  if (err && typeof err === "object") {
+    const e = err as { error?: { description?: string; reason?: string }; message?: string };
+    if (e.error?.description) return e.error.description;
+    if (e.error?.reason) return e.error.reason;
+    if (e.message) return e.message;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      /* fall through */
+    }
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Verifies a Razorpay Checkout payment signature: HMAC-SHA256 of
+ * `order_id|payment_id` keyed by RAZORPAY_KEY_SECRET (Razorpay's standard
+ * client-handoff verification). Used by the server-verified confirm endpoint so
+ * a registered mandate is never trusted on the client's word alone.
+ */
+export function verifyPaymentSignature(
+  orderId: string,
+  paymentId: string,
+  signature: string,
+  secret?: string,
+): boolean {
+  const keySecret = secret || process.env.RAZORPAY_KEY_SECRET!;
+  const expected = crypto
+    .createHmac("sha256", keySecret)
+    .update(`${orderId}|${paymentId}`)
+    .digest("hex");
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signature || "");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 /**
