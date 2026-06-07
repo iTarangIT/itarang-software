@@ -239,6 +239,9 @@ export const GET = withErrorHandler(
         status: aiCallLogs.status,
         nextAction: aiCallLogs.next_action,
         createdAt: aiCallLogs.created_at,
+        // Raw extracted signals — drives the deep-mode correction dropdowns so a
+        // reviewer can flip an over-read level (e.g. curiosity strong → none).
+        signals: aiCallLogs.signals,
       })
       .from(aiCallLogs)
       .where(eq(aiCallLogs.lead_id, leadId))
@@ -344,6 +347,12 @@ export const GET = withErrorHandler(
       startedAt: cl.startedAt,
       completedAt: cl.completedAt,
       bolnaCallId: cl.bolnaCallId,
+      // Canonical ai_call_logs.call_id of the call whose score is shown — the
+      // key the correction UI POSTs back. Falls back to the campaign-lead's
+      // bolna_call_id for rows that predate ai_call_logs upsert.
+      callId: latest?.callId ?? cl.bolnaCallId ?? null,
+      // Raw signals behind the score, for deep-mode per-signal correction.
+      signals: latest?.signals ?? null,
       intentScore,
       intentReason: latest?.intentReason ?? null,
       callDuration,

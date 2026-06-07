@@ -992,6 +992,52 @@ export const aiCallLogs = pgTable(
   },
 );
 
+// =============================================================================
+// E-159 — Intent-score human feedback (the "this score is wrong" correction)
+// A reviewer can correct an AI intent score from the transcript drawer. Every
+// correction snapshots what the AI produced (original_intent_score +
+// original_signals + scoring_version) and records the human's ground truth:
+//   - corrected_status   — always set (quick mode): qualified|warm|cold|disqualified
+//   - corrected_score     — optional explicit number
+//   - corrected_signals   — optional per-signal fixes (deep mode), shaped like
+//                           ai_call_logs.signals (IntentSignals)
+// These rows ARE the benchmark/golden set: the eval harness (scripts/intent)
+// replays them to measure label accuracy + locate where extraction over-reads,
+// and the calibration / weight-tuning levers learn from them. Append-only — a
+// re-correction of the same call inserts a new row (latest by created_at wins).
+// =============================================================================
+export const intentScoreFeedback = pgTable(
+  "intent_score_feedback",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // ai_call_logs.call_id of the corrected call (drawer's bolnaCallId).
+    call_id: varchar("call_id", { length: 255 }).notNull(),
+    lead_id: varchar("lead_id", { length: 255 }),
+    // Scoring version that produced the original score (audit trail).
+    scoring_version: varchar("scoring_version", { length: 20 }),
+    original_intent_score: integer("original_intent_score"),
+    original_signals: jsonb("original_signals"),
+    // Human ground-truth label — always present (quick mode).
+    corrected_status: varchar("corrected_status", { length: 20 }).notNull(),
+    // Optional explicit number the reviewer believes is right.
+    corrected_score: integer("corrected_score"),
+    // Optional per-signal corrections (deep mode), shaped like IntentSignals.
+    corrected_signals: jsonb("corrected_signals"),
+    reviewer_note: text("reviewer_note"),
+    reviewed_by: uuid("reviewed_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    callIdIdx: index("intent_score_feedback_call_id_idx").on(table.call_id),
+    leadIdIdx: index("intent_score_feedback_lead_id_idx").on(table.lead_id),
+    createdAtIdx: index("intent_score_feedback_created_at_idx").on(
+      table.created_at,
+    ),
+  }),
+);
+
 // --- AI CALLS ---
 
 export const callSessions = pgTable("call_sessions", {
