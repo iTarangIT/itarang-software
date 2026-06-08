@@ -258,6 +258,36 @@ export function CampaignDetailView({
     },
   });
 
+  // Resume a stopped campaign: continue dialing the leads that were never
+  // reached, in THIS same campaign (stats stay cumulative). The route flips it
+  // back to running and advanceCampaign claims only 'pending' rows, so
+  // completed/failed leads are never re-dialed. Failed leads are handled
+  // separately by the "Retry failed leads" button.
+  const resumeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(
+        `/api/ai-dialer/campaigns/${campaignId}/resume`,
+        { method: "POST" },
+      );
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error?.message ?? "Resume failed");
+      return json.data;
+    },
+    onSuccess: () => {
+      // Status flips to running → the campaign GET's refetchInterval re-enables
+      // and the page resumes live 4s polling on its own.
+      queryClient.invalidateQueries({ queryKey: ["dialer-campaign", campaignId] });
+      queryClient.invalidateQueries({
+        queryKey: ["dialer-campaign-leads", campaignId],
+      });
+    },
+    onError: (err: unknown) => {
+      window.alert(
+        err instanceof Error ? err.message : "Could not resume campaign",
+      );
+    },
+  });
+
   // Manual nudge to place the next pending call. Needed when the
   // watchdog swept a stalled 'calling' row but no webhook re-entered
   // advanceCampaign — the remaining pending leads would sit untouched
@@ -327,6 +357,13 @@ export function CampaignDetailView({
   });
 
   const isRunning = campaign?.status === "running";
+  // Leads never reached yet = total minus the two terminal buckets. (calls_made
+  // == completed_leads by the counter logic, so completed is the right term.)
+  const pendingLeads = campaign
+    ? campaign.totalLeads - campaign.completedLeads - campaign.failedLeads
+    : 0;
+  const canResume =
+    !isRunning && campaign?.status === "stopped" && pendingLeads > 0;
 
   const { data: leadsData, isLoading: leadsLoading } = useQuery({
     queryKey: ["dialer-campaign-leads", campaignId, bucket, page],
@@ -427,6 +464,32 @@ export function CampaignDetailView({
                 <StopCircle className="w-4 h-4" />
               )}
               Force stop
+            </button>
+          )}
+          {canResume && (
+            <button
+              type="button"
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Resume calling ${pendingLeads} pending lead${
+                      pendingLeads === 1 ? "" : "s"
+                    } from where this campaign stopped?`,
+                  )
+                ) {
+                  resumeMutation.mutate();
+                }
+              }}
+              disabled={resumeMutation.isPending}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white"
+              title="Continue dialing this campaign's un-called leads from where it stopped"
+            >
+              {resumeMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <PhoneOutgoing className="w-4 h-4" />
+              )}
+              Resume calling ({pendingLeads})
             </button>
           )}
           {!isRunning && campaign.failedLeads > 0 && (
