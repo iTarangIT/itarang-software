@@ -19,6 +19,7 @@ import {
   dealerLeads,
   dialerCampaignLeads,
   dialerCampaigns,
+  intentScoreFeedback,
 } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
@@ -334,6 +335,20 @@ export const GET = withErrorHandler(
     const convertedOnAttempt =
       attempts.find((a) => a.converted)?.attempt ?? null;
 
+    // Latest human correction for this lead (E-159) — drives the "Corrected"
+    // flag in the drawer header. Lead-level: any attempt's correction flags it.
+    const correctionRows = await db
+      .select({
+        correctedStatus: intentScoreFeedback.corrected_status,
+        correctedScore: intentScoreFeedback.corrected_score,
+        createdAt: intentScoreFeedback.created_at,
+      })
+      .from(intentScoreFeedback)
+      .where(eq(intentScoreFeedback.lead_id, leadId))
+      .orderBy(desc(intentScoreFeedback.created_at))
+      .limit(1);
+    const lastCorrection = correctionRows[0] ?? null;
+
     // Prefer per-call intent score, fall back to the campaign-lead row, then
     // the lead-wide rollup. Same precedence for the reason text.
     const intentScore =
@@ -410,6 +425,7 @@ export const GET = withErrorHandler(
       scoringVersion: lastHistory.scoringVersion,
       attempts,
       convertedOnAttempt,
+      lastCorrection,
     });
   },
 );

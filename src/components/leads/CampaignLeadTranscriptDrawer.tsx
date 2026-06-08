@@ -151,6 +151,13 @@ type TranscriptPayload = {
   scoringVersion: string | null;
   attempts: Attempt[] | null;
   convertedOnAttempt: number | null;
+  // Latest human correction for this lead (E-159), or null. Drives the
+  // "Corrected" flag in the header.
+  lastCorrection: {
+    correctedStatus: string;
+    correctedScore: number | null;
+    createdAt: string;
+  } | null;
 };
 
 type ChatTurn = {
@@ -420,6 +427,14 @@ export function CampaignLeadTranscriptDrawer({
                 {data?.leadName ?? "Lead"}
               </h2>
               <StatusPill status={status} />
+              {data?.lastCorrection && (
+                <span
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700"
+                  title={`Corrected to ${data.lastCorrection.correctedStatus}`}
+                >
+                  <CheckCircle2 className="w-3 h-3" /> Corrected
+                </span>
+              )}
             </div>
             <div className="mt-1 flex items-center gap-3 text-xs text-gray-500 flex-wrap">
               {data?.phone && (
@@ -1100,6 +1115,12 @@ function CorrectScorePanel({
       const json = await res.json();
       if (!json.success) throw new Error(json.error?.message ?? "Save failed");
       await qc.invalidateQueries({ queryKey: feedbackKey });
+      // Refresh the drawer (header "Corrected" pill) and the campaign table
+      // (row "Corrected" pill) so the flag appears without a manual reload.
+      qc.invalidateQueries({
+        queryKey: ["campaign-lead-transcript", campaignId, leadId],
+      });
+      qc.invalidateQueries({ queryKey: ["dialer-campaign-leads", campaignId] });
       setOpenPanel(false);
       setNote("");
     } catch (e) {
