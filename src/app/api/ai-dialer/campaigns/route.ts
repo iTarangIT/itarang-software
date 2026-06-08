@@ -46,6 +46,26 @@ export const GET = withErrorHandler(async (req: Request) => {
       completedAt: dialerCampaigns.completed_at,
       triggeredBy: dialerCampaigns.triggered_by,
       triggeredByName: users.name,
+      // Total talk time across the campaign's calls (seconds): sum of each
+      // call's provider-reported duration (ai_call_logs.call_duration), falling
+      // back to per-lead wall-clock (capped at 2h) — mirrors the per-call
+      // Duration in the detail table, so this total ≈ the sum of those cells.
+      totalTalkTimeSeconds: sql<number>`(
+        select coalesce(sum(
+          case
+            when acl.call_duration is not null and acl.call_duration > 0
+              then acl.call_duration
+            when dcl.started_at is not null and dcl.completed_at is not null
+                 and extract(epoch from (dcl.completed_at - dcl.started_at)) > 0
+                 and extract(epoch from (dcl.completed_at - dcl.started_at)) < 7200
+              then extract(epoch from (dcl.completed_at - dcl.started_at))::int
+            else 0
+          end
+        ), 0)::int
+        from dialer_campaign_leads dcl
+        left join ai_call_logs acl on acl.call_id = dcl.bolna_call_id
+        where dcl.campaign_id = ${dialerCampaigns.id}
+      )`,
     })
     .from(dialerCampaigns)
     .leftJoin(users, eq(users.id, dialerCampaigns.triggered_by))
