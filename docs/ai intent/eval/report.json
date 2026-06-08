@@ -1,0 +1,31 @@
+{
+  "generatedAt": "2026-06-07T12:25:59.687Z",
+  "total": 2,
+  "rubric": {
+    "evaluated": 2,
+    "accuracy": 0,
+    "scoreMae": 29.5,
+    "confusion": [
+      "truth ↓ / pred →qualified     warm          cold          disqualified  ",
+      "qualified     0             1             0             0             ",
+      "warm          0             0             0             1             ",
+      "cold          0             0             0             0             ",
+      "disqualified  0             0             0             0             "
+    ],
+    "misses": [
+      {
+        "callId": "conv_8901ktbb3gqffz98rwv8cxekj75s",
+        "truth": "qualified",
+        "pred": "warm",
+        "score": 57
+      },
+      {
+        "callId": "conv_3201ktbb79esfsnry91s8bqw93ex",
+        "truth": "warm",
+        "pred": "disqualified",
+        "score": 9
+      }
+    ]
+  },
+  "extraction": null
+}

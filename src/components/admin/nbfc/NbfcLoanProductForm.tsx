@@ -28,6 +28,14 @@ const StateCityPicker = dynamic(() => import("./StateCityPicker"), {
   ),
 });
 
+// `<input type="number">` mutates its value when the mouse wheel scrolls over
+// a focused field. Users scrolling the long form accidentally bump ROI / down
+// payment / fees by `step` each tick. Blurring on wheel lets the page scroll
+// normally and leaves whatever the user typed untouched.
+const blurOnWheel = (e: React.WheelEvent<HTMLInputElement>) => {
+  e.currentTarget.blur();
+};
+
 const BATTERY_CATEGORIES = ["3W", "2W", "4W", "INVERTER", "SOLAR"] as const;
 type BatteryCategory = (typeof BATTERY_CATEGORIES)[number];
 
@@ -406,6 +414,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
           <Field label="Disbursement TAT (hours)">
             <input
               type="number"
+              onWheel={blurOnWheel}
               value={disbursementTatHours}
               onChange={(e) => setDisbursementTatHours(e.target.value)}
               min={1}
@@ -447,6 +456,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
                 <Field label="Min score (300–900)">
                   <input
                     type="number"
+                  onWheel={blurOnWheel}
                     value={minCreditScore}
                     onChange={(e) => setMinCreditScore(e.target.value)}
                     min={300}
@@ -461,6 +471,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
                 <Field label="Max score (300–900)">
                   <input
                     type="number"
+                  onWheel={blurOnWheel}
                     value={maxCreditScore}
                     onChange={(e) => setMaxCreditScore(e.target.value)}
                     min={300}
@@ -548,6 +559,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
               min={
                 <input
                   type="number"
+                  onWheel={blurOnWheel}
                   value={loanAmountMin}
                   onChange={(e) => setLoanAmountMin(e.target.value)}
                   required
@@ -560,6 +572,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
               max={
                 <input
                   type="number"
+                  onWheel={blurOnWheel}
                   value={loanAmountMax}
                   onChange={(e) => setLoanAmountMax(e.target.value)}
                   required
@@ -577,6 +590,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
               min={
                 <input
                   type="number"
+                  onWheel={blurOnWheel}
                   value={tenureMin}
                   onChange={(e) => setTenureMin(e.target.value)}
                   required
@@ -589,6 +603,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
               max={
                 <input
                   type="number"
+                  onWheel={blurOnWheel}
                   value={tenureMax}
                   onChange={(e) => setTenureMax(e.target.value)}
                   required
@@ -606,6 +621,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
               min={
                 <input
                   type="number"
+                  onWheel={blurOnWheel}
                   value={minRoi}
                   onChange={(e) => setMinRoi(e.target.value)}
                   required
@@ -619,6 +635,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
               max={
                 <input
                   type="number"
+                  onWheel={blurOnWheel}
                   value={maxRoi}
                   onChange={(e) => setMaxRoi(e.target.value)}
                   required
@@ -638,6 +655,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
               max={
                 <input
                   type="number"
+                  onWheel={blurOnWheel}
                   value={downPayment}
                   onChange={(e) => setDownPayment(e.target.value)}
                   required
@@ -658,6 +676,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
               max={
                 <input
                   type="number"
+                  onWheel={blurOnWheel}
                   value={fileChargeFixed}
                   onChange={(e) => setFileChargeFixed(e.target.value)}
                   step="0.01"
@@ -676,6 +695,7 @@ export default function NbfcLoanProductForm({ nbfcId, onCreated }: Props) {
               max={
                 <input
                   type="number"
+                  onWheel={blurOnWheel}
                   value={fileChargePct}
                   onChange={(e) => setFileChargePct(e.target.value)}
                   step="0.01"
@@ -871,6 +891,7 @@ function HousingVariantCard({
       <Field label="Processing Fee + Battery Insurance (₹)">
         <input
           type="number"
+          onWheel={blurOnWheel}
           value={fee}
           onChange={(e) => onFeeChange(e.target.value)}
           min={0}
@@ -899,6 +920,7 @@ function HousingVariantCard({
           <Field label="Insurance amount (₹)">
             <input
               type="number"
+              onWheel={blurOnWheel}
               value={insurance}
               onChange={(e) => onInsuranceChange(e.target.value)}
               min={0}

@@ -121,6 +121,7 @@ export async function GET(
 
     type NbfcGroup = {
       nbfcId: number;
+      nbfcCode: string;
       shortName: string;
       legalName: string;
       activeLoanProducts: Array<{
@@ -142,6 +143,7 @@ export async function GET(
       if (!meta) continue;
       const group = byNbfc.get(hit.nbfc_id) ?? {
         nbfcId: hit.nbfc_id,
+        nbfcCode: meta.nbfc_id_code,
         shortName: meta.nbfc_short_name,
         legalName: meta.nbfc_legal_name,
         activeLoanProducts: [],
