@@ -36,6 +36,41 @@ const START: Cfg = {
   thresholds: { ...INTENT_THRESHOLDS },
 };
 
+// ── Guard rails (see ADDENDUM 2) ─────────────────────────────────────────────
+// Tuning on a handful of corrections overfits hard (a 2-case run once proposed
+// curiosity=122, weights summing to 240). These bounds make absurd proposals
+// structurally impossible and refuse to tune below a safe sample size.
+const MIN_TUNE_CASES = Number(process.env.INTENT_TUNE_MIN ?? "15");
+const MAX_WEIGHT = 45; // no single signal may dominate
+const WEIGHT_SUM = 100; // the score is "% of an ideal buyer" only when weights sum to 100
+
+type Weights = Cfg["weights"];
+
+// Scale weights to sum EXACTLY to WEIGHT_SUM as integers. Round, then hand the
+// rounding remainder to the largest fractional parts so the total is exact.
+function normalizeWeights(w: Weights): Weights {
+  const keys = Object.keys(w) as Array<keyof Weights>;
+  const raw = keys.map((k) => Math.max(0, w[k]));
+  const total = raw.reduce((a, b) => a + b, 0);
+  if (total === 0) return { ...w };
+  const scaled = raw.map((v) => (v / total) * WEIGHT_SUM);
+  const floored = scaled.map((v) => Math.floor(v));
+  let remainder = WEIGHT_SUM - floored.reduce((a, b) => a + b, 0);
+  // distribute the remainder to the largest fractional parts
+  const order = scaled
+    .map((v, i) => ({ i, frac: v - Math.floor(v) }))
+    .sort((a, b) => b.frac - a.frac);
+  const out = [...floored];
+  for (const { i } of order) {
+    if (remainder <= 0) break;
+    out[i] += 1;
+    remainder -= 1;
+  }
+  const result = {} as Weights;
+  keys.forEach((k, i) => (result[k] = out[i]));
+  return result;
+}
+
 // Parametrized mirror of computeIntentScore + decideRoute → (score, label).
 function scoreLabel(s: IntentSignals, cfg: Cfg): { score: number; label: LeadStatus } {
   const w = cfg.weights;
@@ -119,6 +154,16 @@ async function main() {
   }
   if (sourceArg !== "both") console.log(`Tuning on source="${sourceArg}" only.`);
 
+  // Minimum-sample gate — refuse to tune on a handful of corrections (overfits).
+  if (cases.length < MIN_TUNE_CASES) {
+    console.log(
+      `\nToo few corrections to tune safely (${cases.length}/${MIN_TUNE_CASES}). ` +
+        `Collect more labeled calls, then re-run. Not proposing any changes.\n` +
+        `(Override the gate only for experiments: INTENT_TUNE_MIN=1 npm run intent:tune-weights)`,
+    );
+    process.exit(0);
+  }
+
   let best = clone(START);
   let bestScore = evalCfg(cases, best);
   const baseScore = bestScore;
@@ -133,7 +178,11 @@ async function main() {
     for (const k of weightKeys) {
       for (const d of deltas) {
         const cand = clone(best);
-        cand.weights[k] = Math.max(0, cand.weights[k] + d);
+        // Clamp the perturbed weight, then re-normalize the whole vector to 100
+        // so every candidate preserves the "% of an ideal buyer" property and no
+        // single weight can blow up (curiosity=122 is structurally impossible).
+        cand.weights[k] = Math.min(MAX_WEIGHT, Math.max(0, cand.weights[k] + d));
+        cand.weights = normalizeWeights(cand.weights);
         const sc = evalCfg(cases, cand);
         if (better(sc, bestScore)) { best = cand; bestScore = sc; improved = true; }
       }
@@ -172,11 +221,8 @@ async function main() {
     if (best.thresholds[k] !== START.thresholds[k])
       console.log(`  INTENT_THRESHOLDS.${k}: ${START.thresholds[k]} → ${best.thresholds[k]}`);
   }
-  if (wsumNew !== 100)
-    console.log(`\n  ⚠ proposed SIGNAL_WEIGHTS sum to ${wsumNew} (was 100). The score is "% of an`);
-  console.log(`    ideal buyer" only when they sum to 100 — re-normalize if you keep that property.`);
-  console.log(`\n  ⚠ Small golden sets overfit. Re-run \`npm run eval:intent\` after applying,`);
-  console.log(`    and don't ship a change backed by only a handful of corrections.`);
+  console.log(`\n  ✓ proposed SIGNAL_WEIGHTS sum to ${wsumNew} (each ≤ ${MAX_WEIGHT}).`);
+  console.log(`  Re-run \`npm run eval:intent\` after applying to confirm it doesn't regress.`);
   process.exit(0);
 }
 
