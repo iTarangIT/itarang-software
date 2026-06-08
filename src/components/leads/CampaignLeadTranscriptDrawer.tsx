@@ -10,7 +10,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   X,
   Phone,
@@ -49,6 +49,43 @@ type ScoreBreakdownItem = {
   contribution: number;
   evidence: string;
 };
+
+// Raw extracted signals behind the score (ai_call_logs.signals). Only the
+// leveled signals drive the deep-mode correction dropdowns; the rest is carried
+// through untouched when a reviewer submits a per-signal correction. Levels are
+// declared locally (not imported from signals.ts) to keep zod / the scoring
+// engine out of the client bundle.
+type LeveledSignal = { level: string; evidence?: string };
+type ClientSignals = {
+  budget?: LeveledSignal;
+  authority?: LeveledSignal;
+  need?: LeveledSignal;
+  timeline?: LeveledSignal;
+  engagement?: LeveledSignal;
+  curiosity?: LeveledSignal;
+  objection_quality?: LeveledSignal;
+  [k: string]: unknown;
+};
+
+const SIGNAL_LEVELS = ["unknown", "none", "weak", "moderate", "strong"];
+const AUTHORITY_LEVELS = ["unknown", "decision_maker", "influencer", "not_decision_maker"];
+const TIMELINE_LEVELS = ["unknown", "now", "this_week", "this_month", "later", "none"];
+const OBJECTION_LEVELS = ["unknown", "none", "low", "substantive"];
+
+// The seven leveled signals a reviewer can correct in deep mode, with their
+// allowed level sets. Mirrors signals.ts (kept in sync by hand to avoid the
+// zod import on the client).
+const CORRECTABLE_SIGNALS: Array<{ key: keyof ClientSignals; label: string; levels: string[] }> = [
+  { key: "need", label: "Need", levels: SIGNAL_LEVELS },
+  { key: "budget", label: "Budget / Financing", levels: SIGNAL_LEVELS },
+  { key: "engagement", label: "Engagement", levels: SIGNAL_LEVELS },
+  { key: "curiosity", label: "Curiosity", levels: SIGNAL_LEVELS },
+  { key: "timeline", label: "Timeline", levels: TIMELINE_LEVELS },
+  { key: "objection_quality", label: "Objection Quality", levels: OBJECTION_LEVELS },
+  { key: "authority", label: "Authority", levels: AUTHORITY_LEVELS },
+];
+
+const LEAD_STATUS_OPTIONS = ["qualified", "warm", "cold", "disqualified"] as const;
 
 // Raw conversation turn shapes vary by provider. Bolna stores objects with
 // `role` + `content` (or `transcript`/`message`); ElevenLabs uses `role` +
@@ -97,6 +134,8 @@ type TranscriptPayload = {
   startedAt: string | null;
   completedAt: string | null;
   bolnaCallId: string | null;
+  callId: string | null;
+  signals: ClientSignals | null;
   intentScore: number | null;
   intentReason: string | null;
   callDuration: number | null;
@@ -487,7 +526,7 @@ export function CampaignLeadTranscriptDrawer({
           ) : tab === "transcript" ? (
             <TranscriptTab turns={turns} data={data} />
           ) : tab === "overview" ? (
-            <OverviewTab data={data} />
+            <OverviewTab data={data} campaignId={campaignId} leadId={leadId} />
           ) : (
             <DetailsTab data={data} />
           )}
@@ -859,7 +898,15 @@ function TranscriptTab({
   );
 }
 
-function OverviewTab({ data }: { data: TranscriptPayload }) {
+function OverviewTab({
+  data,
+  campaignId,
+  leadId,
+}: {
+  data: TranscriptPayload;
+  campaignId: string;
+  leadId: string | null;
+}) {
   const scoreTone = scoreToneClass(data.intentScore ?? null);
   return (
     <div className="px-6 py-5 space-y-6">
@@ -933,6 +980,19 @@ function OverviewTab({ data }: { data: TranscriptPayload }) {
         </section>
       ) : null}
 
+      {/* Human-in-the-loop correction — only when we have a call to attribute it
+          to. This is the entry point of the learning loop: corrections become
+          the benchmark/golden set the eval + calibration levers learn from. */}
+      {(data.callId || data.bolnaCallId) && leadId && (
+        <CorrectScorePanel
+          campaignId={campaignId}
+          leadId={leadId}
+          callId={data.callId ?? data.bolnaCallId!}
+          intentScore={data.intentScore ?? null}
+          signals={data.signals ?? null}
+        />
+      )}
+
       {data.summary && (
         <section>
           <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2 flex items-center gap-1.5">
@@ -945,6 +1005,248 @@ function OverviewTab({ data }: { data: TranscriptPayload }) {
         </section>
       )}
     </div>
+  );
+}
+
+// "Correct this score" — the teach-it's-wrong affordance. Quick mode captures
+// the true status label (+ optional note); deep mode lets a reviewer fix each
+// over-read signal level (e.g. curiosity strong → none on a thin call). Submits
+// to /intent-feedback, where it becomes a golden/benchmark row.
+function CorrectScorePanel({
+  campaignId,
+  leadId,
+  callId,
+  intentScore,
+  signals,
+}: {
+  campaignId: string;
+  leadId: string;
+  callId: string;
+  intentScore: number | null;
+  signals: ClientSignals | null;
+}) {
+  const qc = useQueryClient();
+  const [openPanel, setOpenPanel] = useState(false);
+  const [status, setStatus] = useState<string>("");
+  const [scoreText, setScoreText] = useState<string>("");
+  const [note, setNote] = useState("");
+  const [deep, setDeep] = useState(false);
+  // Per-signal level overrides, seeded from the call's extracted signals.
+  const [levels, setLevels] = useState<Record<string, string>>(() => {
+    const seed: Record<string, string> = {};
+    for (const { key } of CORRECTABLE_SIGNALS) {
+      seed[key as string] = (signals?.[key] as LeveledSignal | undefined)?.level ?? "unknown";
+    }
+    return seed;
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const feedbackKey = ["intent-feedback", campaignId, leadId, callId];
+  const { data: existing } = useQuery<{
+    feedback: Array<{
+      id: string;
+      correctedStatus: string;
+      correctedScore: number | null;
+      createdAt: string;
+    }>;
+  }>({
+    queryKey: feedbackKey,
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/ai-dialer/campaigns/${campaignId}/leads/${leadId}/intent-feedback?callId=${encodeURIComponent(callId)}`,
+      );
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error?.message ?? "Failed");
+      return json.data;
+    },
+  });
+  const lastCorrection = existing?.feedback?.[0] ?? null;
+
+  async function submit() {
+    if (!status) {
+      setError("Pick the correct status first.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    // Deep mode: carry the original signals through, overriding edited levels.
+    let correctedSignals: ClientSignals | null = null;
+    if (deep) {
+      const base: ClientSignals = signals ? { ...signals } : {};
+      for (const { key } of CORRECTABLE_SIGNALS) {
+        const prev = (base[key] as LeveledSignal | undefined) ?? { level: "unknown", evidence: "" };
+        base[key] = { ...prev, level: levels[key as string] };
+      }
+      correctedSignals = base;
+    }
+    const parsedScore = scoreText.trim() === "" ? null : Number(scoreText);
+    try {
+      const res = await fetch(
+        `/api/ai-dialer/campaigns/${campaignId}/leads/${leadId}/intent-feedback`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            callId,
+            correctedStatus: status,
+            correctedScore:
+              parsedScore != null && Number.isFinite(parsedScore) ? parsedScore : null,
+            correctedSignals,
+            note: note.trim() || null,
+          }),
+        },
+      );
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error?.message ?? "Save failed");
+      await qc.invalidateQueries({ queryKey: feedbackKey });
+      setOpenPanel(false);
+      setNote("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-xs font-bold uppercase tracking-wider text-amber-700 flex items-center gap-1.5">
+          <AlertCircle className="w-3.5 h-3.5" />
+          Score looks wrong?
+        </h3>
+        {!openPanel && (
+          <button
+            type="button"
+            onClick={() => setOpenPanel(true)}
+            className="text-xs font-semibold text-amber-700 hover:text-amber-900 underline underline-offset-2"
+          >
+            Correct this score
+          </button>
+        )}
+      </div>
+
+      {lastCorrection && (
+        <p className="mt-2 text-[11px] text-amber-700 flex items-center gap-1">
+          <CheckCircle2 className="w-3 h-3" />
+          Last corrected to <b className="capitalize">{lastCorrection.correctedStatus}</b>
+          {lastCorrection.correctedScore != null && <> ({lastCorrection.correctedScore}/100)</>}
+        </p>
+      )}
+
+      {openPanel && (
+        <div className="mt-3 space-y-3">
+          <p className="text-[11px] text-gray-600">
+            AI scored this <b>{intentScore ?? "—"}/100</b>. Tell the system the correct
+            outcome so it can learn.
+          </p>
+
+          {/* Quick mode — the true status label */}
+          <div>
+            <label className="block text-[11px] font-semibold text-gray-600 mb-1">
+              Correct status
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {LEAD_STATUS_OPTIONS.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setStatus(s)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize border ${
+                    status === s
+                      ? "bg-amber-500 text-white border-amber-500"
+                      : "bg-white text-gray-700 border-gray-200 hover:border-amber-300"
+                  }`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label className="text-[11px] font-semibold text-gray-600">
+              Correct score (optional)
+            </label>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={scoreText}
+              onChange={(e) => setScoreText(e.target.value)}
+              placeholder="0–100"
+              className="w-20 h-8 rounded-lg border border-gray-200 px-2 text-xs"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold text-gray-600 mb-1">
+              Note (optional)
+            </label>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              placeholder="e.g. only two garbled lines, dealer showed no real interest"
+              className="w-full rounded-lg border border-gray-200 px-2 py-1.5 text-xs"
+            />
+          </div>
+
+          {/* Deep mode — per-signal correction */}
+          <button
+            type="button"
+            onClick={() => setDeep((d) => !d)}
+            className="text-[11px] font-semibold text-amber-700 hover:text-amber-900 underline underline-offset-2"
+          >
+            {deep ? "Hide signal details" : "Refine signals (advanced)"}
+          </button>
+          {deep && (
+            <div className="grid grid-cols-2 gap-2 rounded-xl border border-amber-100 bg-white p-3">
+              {CORRECTABLE_SIGNALS.map(({ key, label, levels: opts }) => (
+                <label key={key as string} className="text-[11px] text-gray-600">
+                  <span className="block font-semibold mb-0.5">{label}</span>
+                  <select
+                    value={levels[key as string] ?? "unknown"}
+                    onChange={(e) =>
+                      setLevels((prev) => ({ ...prev, [key as string]: e.target.value }))
+                    }
+                    className="w-full h-8 rounded-lg border border-gray-200 px-1 text-xs"
+                  >
+                    {opts.map((lvl) => (
+                      <option key={lvl} value={lvl}>
+                        {lvl.replace(/_/g, " ")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {error && <p className="text-[11px] text-red-600">{error}</p>}
+
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={submit}
+              disabled={submitting}
+              className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 disabled:opacity-50 inline-flex items-center gap-1.5"
+            >
+              {submitting && <Loader2 className="w-3 h-3 animate-spin" />}
+              Save correction
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpenPanel(false)}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-600 hover:text-gray-900"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
