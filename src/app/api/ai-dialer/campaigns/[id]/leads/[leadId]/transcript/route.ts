@@ -19,9 +19,10 @@ import {
   dealerLeads,
   dialerCampaignLeads,
   dialerCampaigns,
+  intentScoreFeedback,
 } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
 
 // Intent score at/above which the dialer considers a lead "qualified" — the
@@ -266,6 +267,7 @@ export const GET = withErrorHandler(
         intentScore: dialerCampaignLeads.intent_score,
         startedAt: dialerCampaignLeads.started_at,
         completedAt: dialerCampaignLeads.completed_at,
+        bolnaCallId: dialerCampaignLeads.bolna_call_id,
       })
       .from(dialerCampaignLeads)
       .leftJoin(
@@ -278,12 +280,42 @@ export const GET = withErrorHandler(
         asc(dialerCampaignLeads.created_at),
       );
 
+    // Per-attempt recording: each attempt's bolna_call_id (the provider call id
+    // for BOTH Bolna and ElevenLabs — the column doubles for both, see
+    // elevenlabs/webhookHandler.ts) maps 1:1 to ai_call_logs.call_id. Resolve
+    // them in one extra query rather than joining into attemptRows above, which
+    // would risk duplicating rows and corrupting the i+1 attempt ordinal.
+    const callIds = attemptRows
+      .map((a) => a.bolnaCallId)
+      .filter((c): c is string => !!c);
+    const recordingByCall = new Map<string, string | null>();
+    if (callIds.length > 0) {
+      const recRows = await db
+        .select({
+          callId: aiCallLogs.call_id,
+          recordingUrl: aiCallLogs.recording_url,
+        })
+        .from(aiCallLogs)
+        .where(inArray(aiCallLogs.call_id, callIds));
+      for (const r of recRows) recordingByCall.set(r.callId, r.recordingUrl);
+    }
+
     const attempts = attemptRows.map((a, i) => {
       const intentScore = a.intentScore ?? null;
       const isRecall =
         a.regionFilter && typeof a.regionFilter === "object"
           ? (a.regionFilter as { recall?: unknown }).recall === true
           : false;
+      const callId = a.bolnaCallId ?? null;
+      const stored = callId ? recordingByCall.get(callId) ?? null : null;
+      // Stored URL when present; else the self-healing proxy (re-hosts + backfills
+      // ElevenLabs audio on first hit, 302s to Bolna's URL); else null — a
+      // no-answer/failed attempt with no call id simply has no recording.
+      const recordingUrl = stored
+        ? stored
+        : callId
+          ? `/api/ai-dialer/recording/${encodeURIComponent(callId)}`
+          : null;
       return {
         attempt: i + 1,
         campaignId: a.campaignId,
@@ -296,10 +328,26 @@ export const GET = withErrorHandler(
         completedAt: a.completedAt ?? null,
         converted: intentScore != null && intentScore >= QUALIFIED_INTENT,
         isCurrent: a.campaignId === campaignId,
+        callId,
+        recordingUrl,
       };
     });
     const convertedOnAttempt =
       attempts.find((a) => a.converted)?.attempt ?? null;
+
+    // Latest human correction for this lead (E-159) — drives the "Corrected"
+    // flag in the drawer header. Lead-level: any attempt's correction flags it.
+    const correctionRows = await db
+      .select({
+        correctedStatus: intentScoreFeedback.corrected_status,
+        correctedScore: intentScoreFeedback.corrected_score,
+        createdAt: intentScoreFeedback.created_at,
+      })
+      .from(intentScoreFeedback)
+      .where(eq(intentScoreFeedback.lead_id, leadId))
+      .orderBy(desc(intentScoreFeedback.created_at))
+      .limit(1);
+    const lastCorrection = correctionRows[0] ?? null;
 
     // Prefer per-call intent score, fall back to the campaign-lead row, then
     // the lead-wide rollup. Same precedence for the reason text.
@@ -356,7 +404,16 @@ export const GET = withErrorHandler(
       intentScore,
       intentReason: latest?.intentReason ?? null,
       callDuration,
-      recordingUrl: latest?.recordingUrl ?? null,
+      // Prefer the stored URL (Bolna, or an already re-hosted ElevenLabs call).
+      // When it's still empty but we have a call id, hand back the self-healing
+      // proxy route — it re-hosts the ElevenLabs audio on first hit and backfills
+      // recording_url, so the drawer player lights up even for older calls that
+      // never had a URL stored.
+      recordingUrl:
+        latest?.recordingUrl ??
+        (latest?.callId
+          ? `/api/ai-dialer/recording/${encodeURIComponent(latest.callId)}`
+          : null),
       summary,
       transcript,
       conversation: lastHistory.conversation,
@@ -368,6 +425,7 @@ export const GET = withErrorHandler(
       scoringVersion: lastHistory.scoringVersion,
       attempts,
       convertedOnAttempt,
+      lastCorrection,
     });
   },
 );
