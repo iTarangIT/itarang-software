@@ -29,7 +29,19 @@ type CampaignRow = {
   completedAt: string | null;
   triggeredBy: string | null;
   triggeredByName: string | null;
+  totalTalkTimeSeconds: number | null;
 };
+
+// Total talk time across a campaign's calls, as "1h 03m" / "7m 12s" / "45s".
+function fmtTalkTime(seconds: number | null): string {
+  if (!seconds || seconds <= 0) return "—";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}h ${m.toString().padStart(2, "0")}m`;
+  if (m > 0) return `${m}m ${s.toString().padStart(2, "0")}s`;
+  return `${s}s`;
+}
 
 function categoryLabel(c: string | null): string {
   if (!c) return "All";
@@ -144,6 +156,7 @@ export function CampaignsTable() {
               <th className="px-4 py-3 text-left font-semibold">Progress</th>
               <th className="px-4 py-3 text-left font-semibold">Started by</th>
               <th className="px-4 py-3 text-left font-semibold">Started</th>
+              <th className="px-4 py-3 text-left font-semibold">Duration</th>
               <th className="px-4 py-3 text-right" aria-label="Open" />
             </tr>
           </thead>
@@ -233,6 +246,9 @@ export function CampaignsTable() {
                   </td>
                   <td className="px-4 py-3 text-gray-500 text-xs">
                     {startedLabel}
+                  </td>
+                  <td className="px-4 py-3 text-gray-700 text-xs tabular-nums">
+                    {fmtTalkTime(c.totalTalkTimeSeconds)}
                   </td>
                   <td className="px-4 py-3 text-right text-gray-400 group-hover:text-emerald-600">
                     <ChevronRight className="w-4 h-4 inline-block" />

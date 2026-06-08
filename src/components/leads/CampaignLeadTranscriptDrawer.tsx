@@ -117,6 +117,11 @@ type Attempt = {
   completedAt: string | null;
   converted: boolean;
   isCurrent: boolean;
+  // Provider call id + a playable recording URL for THIS attempt (stored Supabase
+  // link, or the self-healing /api/ai-dialer/recording proxy). null when the
+  // attempt has no call id (no-answer/failed) and thus no recording.
+  callId: string | null;
+  recordingUrl: string | null;
 };
 
 type TranscriptPayload = {
@@ -146,6 +151,13 @@ type TranscriptPayload = {
   scoringVersion: string | null;
   attempts: Attempt[] | null;
   convertedOnAttempt: number | null;
+  // Latest human correction for this lead (E-159), or null. Drives the
+  // "Corrected" flag in the header.
+  lastCorrection: {
+    correctedStatus: string;
+    correctedScore: number | null;
+    createdAt: string;
+  } | null;
 };
 
 type ChatTurn = {
@@ -415,6 +427,14 @@ export function CampaignLeadTranscriptDrawer({
                 {data?.leadName ?? "Lead"}
               </h2>
               <StatusPill status={status} />
+              {data?.lastCorrection && (
+                <span
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700"
+                  title={`Corrected to ${data.lastCorrection.correctedStatus}`}
+                >
+                  <CheckCircle2 className="w-3 h-3" /> Corrected
+                </span>
+              )}
             </div>
             <div className="mt-1 flex items-center gap-3 text-xs text-gray-500 flex-wrap">
               {data?.phone && (
@@ -544,12 +564,23 @@ export function CampaignLeadTranscriptDrawer({
   );
 }
 
-// Slim, always-visible audio player for the call recording. The URL is a
-// public Supabase Storage link (Bolna + ElevenLabs are re-hosted there), so it
-// plays in-page with a plain <audio> element — no proxy or auth needed.
+// Slim audio player for a call recording. `url` is either a public Supabase
+// Storage link (already re-hosted) or the self-healing
+// /api/ai-dialer/recording/[callId] proxy, which 302-redirects to that same
+// public link after re-hosting an ElevenLabs call's audio on first hit. Either
+// way it plays in-page with a plain <audio> element.
+// Two layouts: the default full-width top strip (latest call, on every tab) and
+// `compact` — an in-card variant rendered per attempt in the Attempts timeline.
 // Rendered with key={url} by the parent, so a new lead/recording remounts this
-// fresh — no reset effect needed, all transport state starts clean.
-function RecordingPlayer({ url }: { url: string }) {
+// fresh — no reset effect needed, all transport state starts clean. Each instance
+// owns its own <audio>, so per-attempt players play independently.
+function RecordingPlayer({
+  url,
+  compact = false,
+}: {
+  url: string;
+  compact?: boolean;
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
@@ -576,7 +607,13 @@ function RecordingPlayer({ url }: { url: string }) {
 
   if (errored) {
     return (
-      <div className="border-b border-gray-100 px-6 py-2.5 flex items-center gap-2 text-xs text-gray-400 bg-gray-50/60">
+      <div
+        className={
+          compact
+            ? "mt-2 rounded-lg border border-gray-200 bg-gray-50/80 px-3 py-2 flex items-center gap-2 text-xs text-gray-400"
+            : "border-b border-gray-100 px-6 py-2.5 flex items-center gap-2 text-xs text-gray-400 bg-gray-50/60"
+        }
+      >
         <AlertCircle className="w-3.5 h-3.5" />
         Recording unavailable
       </div>
@@ -584,7 +621,13 @@ function RecordingPlayer({ url }: { url: string }) {
   }
 
   return (
-    <div className="border-b border-gray-100 px-6 py-2.5 flex items-center gap-3 bg-gradient-to-r from-emerald-50/70 to-white">
+    <div
+      className={
+        compact
+          ? "mt-2 rounded-lg border border-emerald-100 bg-emerald-50/40 px-3 py-2 flex items-center gap-3"
+          : "border-b border-gray-100 px-6 py-2.5 flex items-center gap-3 bg-gradient-to-r from-emerald-50/70 to-white"
+      }
+    >
       <audio
         ref={audioRef}
         src={url}
@@ -608,7 +651,9 @@ function RecordingPlayer({ url }: { url: string }) {
         onClick={toggle}
         disabled={!ready}
         aria-label={playing ? "Pause recording" : "Play recording"}
-        className="flex-shrink-0 w-9 h-9 rounded-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white flex items-center justify-center shadow-sm transition-colors"
+        className={`flex-shrink-0 rounded-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white flex items-center justify-center shadow-sm transition-colors ${
+          compact ? "w-8 h-8" : "w-9 h-9"
+        }`}
       >
         {playing ? (
           <Pause className="w-4 h-4" />
@@ -616,9 +661,11 @@ function RecordingPlayer({ url }: { url: string }) {
           <Play className="w-4 h-4 ml-0.5" />
         )}
       </button>
-      <span className="hidden sm:inline text-[10px] uppercase tracking-wider text-emerald-700 font-semibold">
-        Recording
-      </span>
+      {!compact && (
+        <span className="hidden sm:inline text-[10px] uppercase tracking-wider text-emerald-700 font-semibold">
+          Recording
+        </span>
+      )}
       <input
         type="range"
         min={0}
@@ -754,6 +801,12 @@ function AttemptsTab({ data }: { data: TranscriptPayload }) {
                     </span>
                   )}
                 </div>
+                {/* This attempt's own recording — Bolna (stored URL) or
+                    ElevenLabs (via the self-healing proxy). Each player owns its
+                    own <audio>, so they play independently. */}
+                {a.recordingUrl && (
+                  <RecordingPlayer key={a.recordingUrl} url={a.recordingUrl} compact />
+                )}
               </div>
             </li>
           );
@@ -1062,6 +1115,12 @@ function CorrectScorePanel({
       const json = await res.json();
       if (!json.success) throw new Error(json.error?.message ?? "Save failed");
       await qc.invalidateQueries({ queryKey: feedbackKey });
+      // Refresh the drawer (header "Corrected" pill) and the campaign table
+      // (row "Corrected" pill) so the flag appears without a manual reload.
+      qc.invalidateQueries({
+        queryKey: ["campaign-lead-transcript", campaignId, leadId],
+      });
+      qc.invalidateQueries({ queryKey: ["dialer-campaign-leads", campaignId] });
       setOpenPanel(false);
       setNote("");
     } catch (e) {

@@ -66,6 +66,8 @@ type Lead = {
   state: string | null;
   finalIntentScore: number | null;
   currentStatus: string | null;
+  durationSeconds: number | null;
+  corrected: boolean;
   attemptCount: number;
   convertedOnAttempt: number | null;
 };
@@ -90,6 +92,15 @@ function fmt(iso: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+// Exact call duration as "Xm YYs" — mirrors the drawer's fmtDuration so the
+// table cell and the drawer header always read the same.
+function fmtDuration(seconds: number | null): string {
+  if (!seconds || seconds <= 0) return "—";
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}m ${s.toString().padStart(2, "0")}s`;
 }
 
 function StatCard({
@@ -144,7 +155,17 @@ function LeadRow({
         #{row.queuePosition + 1}
       </td>
       <td className="px-3 py-2.5">
-        <p className="font-medium text-gray-900 text-sm">{name}</p>
+        <div className="flex items-center gap-1.5">
+          <p className="font-medium text-gray-900 text-sm">{name}</p>
+          {row.corrected && (
+            <span
+              className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-emerald-700 bg-emerald-100 rounded-full px-1.5 py-0.5"
+              title="Intent score manually corrected"
+            >
+              <CheckCircle2 className="w-3 h-3" /> Corrected
+            </span>
+          )}
+        </div>
         {row.phone && (
           <p className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
             <Phone className="w-2.5 h-2.5" /> {row.phone}
@@ -200,7 +221,9 @@ function LeadRow({
         )}
       </td>
       <td className="px-3 py-2.5 text-xs text-gray-500">{fmt(row.startedAt)}</td>
-      <td className="px-3 py-2.5 text-xs text-gray-500">{fmt(row.completedAt)}</td>
+      <td className="px-3 py-2.5 text-xs text-gray-700 tabular-nums">
+        {fmtDuration(row.durationSeconds)}
+      </td>
     </tr>
   );
 }
@@ -565,7 +588,7 @@ export function CampaignDetailView({
                     Started
                   </th>
                   <th className="px-3 py-2.5 text-left font-semibold">
-                    Ended
+                    Duration
                   </th>
                 </tr>
               </thead>

@@ -26,6 +26,27 @@ const VALID_BUCKETS = new Set([
   "skipped",
 ]);
 
+// Authoritative call duration in seconds: the provider-reported value when
+// present, else wall-clock (completed − started) clamped to a sane window.
+// Mirrors transcript/route.ts so the table and the drawer always agree.
+function deriveDuration(
+  callDuration: number | string | null | undefined,
+  startedAt: Date | string | null,
+  completedAt: Date | string | null,
+): number | null {
+  const provided = callDuration != null ? Number(callDuration) : null;
+  if (provided != null && Number.isFinite(provided) && provided > 0) {
+    return provided;
+  }
+  if (startedAt && completedAt) {
+    const diffSec = Math.round(
+      (new Date(completedAt).getTime() - new Date(startedAt).getTime()) / 1000,
+    );
+    if (diffSec > 0 && diffSec < 2 * 60 * 60) return diffSec;
+  }
+  return null;
+}
+
 function shapeRow(r: any) {
   return {
     id: r.id,
@@ -43,6 +64,10 @@ function shapeRow(r: any) {
     state: r.state,
     finalIntentScore: r.finalIntentScore,
     currentStatus: r.currentStatus,
+    // Exact call duration (seconds) shown in the table's Duration column.
+    durationSeconds: deriveDuration(r.callDuration, r.startedAt, r.completedAt),
+    // True when a reviewer has manually corrected this lead's intent score.
+    corrected: Boolean(r.corrected),
     // Cross-campaign attempt tracking (only populated on the detail query).
     attemptCount: Number(r.attemptCount ?? 0),
     convertedOnAttempt:
@@ -66,6 +91,21 @@ const selectShape = {
   state: dealerLeads.state,
   finalIntentScore: dealerLeads.final_intent_score,
   currentStatus: dealerLeads.current_status,
+  // Provider-reported duration of THIS attempt's call (ai_call_logs.call_duration,
+  // keyed by the campaign-lead's bolna_call_id). Same source as the drawer; the
+  // wall-clock fallback is applied in shapeRow. Raw table name keeps the
+  // subquery off the JOIN, matching the attemptCount/convertedOnAttempt pattern.
+  callDuration: sql<number | null>`(
+    select call_duration from ai_call_logs
+    where call_id = ${dialerCampaignLeads.bolna_call_id}
+    limit 1
+  )`,
+  // Whether a human has corrected this lead's intent score in any attempt
+  // (intent_score_feedback, E-159). Lead-level — drives the "Corrected" flag.
+  corrected: sql<boolean>`exists (
+    select 1 from intent_score_feedback f
+    where f.lead_id = ${dialerCampaignLeads.lead_id}
+  )`,
 };
 
 // Detail-table only: the lead's total dialer attempts across ALL campaigns
