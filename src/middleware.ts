@@ -42,6 +42,20 @@ export async function middleware(request: NextRequest) {
     );
   }
 
+  // App Router prefetches/navigations fetch an RSC payload (marked by the
+  // `RSC` header; prefetches also carry `Next-Router-Prefetch`). The no-store
+  // header below is only meant for full HTML document loads (anti-stale across
+  // deploys) — applying it to RSC responses tells the client router to treat
+  // every prefetched <Link> as immediately stale, killing prefetch and making
+  // navigations feel unresponsive (looks like the link needs multiple clicks).
+  // For those requests we return the response without the no-store headers so
+  // the router cache can keep the prefetch.
+  const isRscRequest =
+    request.headers.get("rsc") === "1" ||
+    request.headers.has("next-router-prefetch");
+  const finalize = (res: NextResponse): NextResponse =>
+    isRscRequest ? res : addNoStoreHeaders(res);
+
   let response = NextResponse.next({
     request: {
       headers: request.headers,
@@ -122,15 +136,15 @@ export async function middleware(request: NextRequest) {
     path === "/dashboard";
 
   if (!user) {
-    if (isPublicRoute) return addNoStoreHeaders(response);
+    if (isPublicRoute) return finalize(response);
 
     if (isProtectedRoute) {
       const url = request.nextUrl.clone();
       url.pathname = "/login";
-      return addNoStoreHeaders(NextResponse.redirect(url));
+      return finalize(NextResponse.redirect(url));
     }
 
-    return addNoStoreHeaders(response);
+    return finalize(response);
   }
 
   // Role lives on AWS RDS, not Supabase — read it from app_metadata (synced by
@@ -183,7 +197,7 @@ export async function middleware(request: NextRequest) {
       .eq("id", user.id)
       .maybeSingle();
     if (mustChange?.must_change_password) {
-      return addNoStoreHeaders(
+      return finalize(
         NextResponse.redirect(new URL("/change-password", request.url)),
       );
     }
@@ -191,11 +205,11 @@ export async function middleware(request: NextRequest) {
 
   if (path === "/login" || path === "/" || path === "/dashboard") {
     if (myDashboard !== "/") {
-      return addNoStoreHeaders(
+      return finalize(
         NextResponse.redirect(new URL(myDashboard, request.url)),
       );
     }
-    return addNoStoreHeaders(response);
+    return finalize(response);
   }
 
   // Shared access routes
@@ -239,7 +253,7 @@ export async function middleware(request: NextRequest) {
   )?.[1];
 
   if (allowedSharedRoles && allowedSharedRoles.includes(role)) {
-    return addNoStoreHeaders(response);
+    return finalize(response);
   }
 
   const matchedRole = Object.entries(roleDashboards).find(([, dashboardPath]) =>
@@ -250,12 +264,12 @@ export async function middleware(request: NextRequest) {
   // Admin can also see /nbfc/* for support/troubleshooting (Phase C addition).
   const isAdminViewingNbfc = role === "admin" && path.startsWith("/nbfc");
   if (matchedRole && matchedRole !== role && role !== "ceo" && !isAdminViewingNbfc) {
-    return addNoStoreHeaders(
+    return finalize(
       NextResponse.redirect(new URL(myDashboard, request.url)),
     );
   }
 
-  return addNoStoreHeaders(response);
+  return finalize(response);
 }
 
 export const config = {
