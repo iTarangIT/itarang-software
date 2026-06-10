@@ -28,6 +28,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { CallButton } from "@/components/leads/call-button";
+import { toast } from "sonner";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
 import { ScraperDashboard } from "@/components/scraper/ScraperDashboard";
 import { DownloadConvertedLeadsButton } from "@/components/leads/DownloadButton";
@@ -1359,7 +1360,7 @@ export default function LeadsUnifiedPage() {
       });
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.success) {
-        alert(json?.error?.message ?? "Failed to start the campaign");
+        toast.error(json?.error?.message ?? "Failed to start the campaign");
         return;
       }
       stopRef.current = false;

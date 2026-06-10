@@ -12,6 +12,7 @@ import {
   Search,
   XCircle,
 } from "lucide-react";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 // Admin · Dealer NBFC Exclusions
 // /admin/dealer-verification/[dealerId]/nbfcs
@@ -393,13 +394,14 @@ export default function DealerNbfcExclusionsPage() {
                           <button
                             type="button"
                             disabled={patching === a.id}
-                            onClick={() => {
-                              if (
-                                !confirm(
-                                  `Permanently lock ${a.shortName} for this dealer? This cannot be reversed.`,
-                                )
-                              )
-                                return;
+                            onClick={async () => {
+                              const ok = await confirmDialog({
+                                title: "Permanently lock NBFC",
+                                message: `Permanently lock ${a.shortName} for this dealer? This cannot be reversed.`,
+                                confirmText: "Lock",
+                                variant: "danger",
+                              });
+                              if (!ok) return;
                               handlePatch(a.id, "terminated");
                             }}
                             className="px-2.5 py-1.5 rounded-md text-xs font-bold border border-rose-200 text-rose-700 hover:bg-rose-50 disabled:opacity-50 transition inline-flex items-center gap-1.5"

@@ -32,6 +32,8 @@ import {
   CampaignStatusBadge,
 } from "./campaign-status-badge";
 import { describeRegion, displayCampaignName } from "@/lib/leads/regionSummary";
+import { toast } from "sonner";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 type Campaign = {
   id: string;
@@ -238,6 +240,14 @@ export function CampaignDetailView({
   const [bucket, setBucket] = useState<Bucket>("all");
   const [page, setPage] = useState(1);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
+  // Intent-score filter for the lead table. `intentMin` null = "Any" (off).
+  // `intentStrict` toggles ">" vs ">=" so the ">0" preset means strictly
+  // greater than zero, while the "N+" presets are inclusive. Filtering is
+  // client-side over the already-loaded rows (a campaign is a bounded set and
+  // the All tab loads every lead), and the matching count is shown as a badge.
+  const [intentMin, setIntentMin] = useState<number | null>(null);
+  const [intentStrict, setIntentStrict] = useState(false);
+  const [intentCustom, setIntentCustom] = useState(false);
   const queryClient = useQueryClient();
   const router = useRouter();
 
@@ -336,7 +346,7 @@ export function CampaignDetailView({
       router.push(`/leads/campaigns/${data.campaignId}`);
     },
     onError: (err: unknown) => {
-      window.alert(
+      toast.error(
         err instanceof Error ? err.message : "Could not retry failed leads",
       );
     },
@@ -408,6 +418,29 @@ export function CampaignDetailView({
     return [];
   })();
 
+  // Apply the intent-score filter client-side. A null intentScore never
+  // matches an active filter (it has no score yet). `filteredLeads` is what
+  // the table renders and what the count badge reports.
+  const intentActive = intentMin != null;
+  const matchesIntent = (row: Lead): boolean => {
+    if (intentMin == null) return true;
+    const s = row.intentScore;
+    if (s == null) return false;
+    return intentStrict ? s > intentMin : s >= intentMin;
+  };
+  const filteredLeads = intentActive ? flatLeads.filter(matchesIntent) : flatLeads;
+
+  // Value backing the preset <select>. Maps current filter state to an option.
+  const intentSelectValue = intentCustom
+    ? "custom"
+    : intentMin == null
+      ? "any"
+      : intentMin === 0 && intentStrict
+        ? "gt0"
+        : [30, 50, 75].includes(intentMin) && !intentStrict
+          ? String(intentMin)
+          : "custom";
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -446,12 +479,14 @@ export function CampaignDetailView({
           {isRunning && (
             <button
               type="button"
-              onClick={() => {
-                if (
-                  window.confirm(
-                    "Force-stop this campaign? In-flight calls will be marked failed.",
-                  )
-                ) {
+              onClick={async () => {
+                const ok = await confirmDialog({
+                  title: "Force-stop this campaign?",
+                  message: "In-flight calls will be marked failed.",
+                  confirmText: "Force stop",
+                  variant: "danger",
+                });
+                if (ok) {
                   stopMutation.mutate();
                 }
               }}
@@ -495,14 +530,16 @@ export function CampaignDetailView({
           {!isRunning && campaign.failedLeads > 0 && (
             <button
               type="button"
-              onClick={() => {
-                if (
-                  window.confirm(
-                    `Retry ${campaign.failedLeads} failed lead${
-                      campaign.failedLeads === 1 ? "" : "s"
-                    }? This starts a new campaign and begins calling them.`,
-                  )
-                ) {
+              onClick={async () => {
+                const ok = await confirmDialog({
+                  title: `Retry ${campaign.failedLeads} failed lead${
+                    campaign.failedLeads === 1 ? "" : "s"
+                  }?`,
+                  message:
+                    "This starts a new campaign and begins calling them.",
+                  confirmText: "Retry",
+                });
+                if (ok) {
                   retryMutation.mutate();
                 }
               }}
@@ -593,26 +630,87 @@ export function CampaignDetailView({
       </div>
 
       <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
-        <div className="flex items-center gap-1 border-b border-gray-100 px-4 pt-3">
-          {(Object.keys(BUCKET_LABELS) as Bucket[]).map((b) => {
-            const isActive = bucket === b;
-            return (
-              <button
-                key={b}
-                onClick={() => {
-                  setBucket(b);
-                  setPage(1);
-                }}
-                className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
-                  isActive
-                    ? "border-emerald-600 text-emerald-700"
-                    : "border-transparent text-gray-500 hover:text-gray-800"
-                }`}
+        <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-4 pt-3">
+          <div className="flex items-center gap-1">
+            {(Object.keys(BUCKET_LABELS) as Bucket[]).map((b) => {
+              const isActive = bucket === b;
+              return (
+                <button
+                  key={b}
+                  onClick={() => {
+                    setBucket(b);
+                    setPage(1);
+                  }}
+                  className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                    isActive
+                      ? "border-emerald-600 text-emerald-700"
+                      : "border-transparent text-gray-500 hover:text-gray-800"
+                  }`}
+                >
+                  {BUCKET_LABELS[b]}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Intent-score filter + live count of matching leads. */}
+          <div className="flex items-center gap-2 pb-2">
+            {intentActive && (
+              <span
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700"
+                title="Leads matching the intent filter"
               >
-                {BUCKET_LABELS[b]}
-              </button>
-            );
-          })}
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                {filteredLeads.length} lead{filteredLeads.length === 1 ? "" : "s"}
+              </span>
+            )}
+            <select
+              value={intentSelectValue}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "custom") {
+                  setIntentCustom(true);
+                  setIntentStrict(false);
+                } else if (v === "any") {
+                  setIntentCustom(false);
+                  setIntentStrict(false);
+                  setIntentMin(null);
+                } else if (v === "gt0") {
+                  setIntentCustom(false);
+                  setIntentStrict(true);
+                  setIntentMin(0);
+                } else {
+                  setIntentCustom(false);
+                  setIntentStrict(false);
+                  setIntentMin(Number(v));
+                }
+              }}
+              title="Filter leads by intent score"
+              className="py-1.5 pl-3 pr-8 text-sm border border-gray-200 rounded-lg bg-white outline-none focus:border-gray-400 text-gray-700"
+            >
+              <option value="any">Intent: Any</option>
+              <option value="gt0">Intent: &gt; 0</option>
+              <option value="30">Intent: 30+</option>
+              <option value="50">Intent: 50+</option>
+              <option value="75">Intent: 75+</option>
+              <option value="custom">Intent: Custom…</option>
+            </select>
+            {intentCustom && (
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={intentMin ?? ""}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setIntentMin(raw === "" ? null : Number(raw));
+                }}
+                placeholder="min"
+                title="Minimum intent score (inclusive)"
+                className="py-1.5 px-3 text-sm border border-gray-200 rounded-lg bg-white outline-none focus:border-gray-400 w-20"
+              />
+            )}
+          </div>
         </div>
 
         {leadsLoading ? (
@@ -620,10 +718,12 @@ export function CampaignDetailView({
             <Loader2 className="w-4 h-4 animate-spin mr-2" />
             Loading leads…
           </div>
-        ) : flatLeads.length === 0 ? (
+        ) : filteredLeads.length === 0 ? (
           <div className="py-16 text-center text-sm text-gray-500">
             <Clock className="w-5 h-5 mx-auto mb-2 text-gray-300" />
-            No leads in this bucket
+            {flatLeads.length === 0
+              ? "No leads in this bucket"
+              : "No leads match this intent filter"}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -656,7 +756,7 @@ export function CampaignDetailView({
                 </tr>
               </thead>
               <tbody>
-                {flatLeads.map((row, i) => (
+                {filteredLeads.map((row, i) => (
                   <LeadRow
                     key={row.id}
                     row={row}

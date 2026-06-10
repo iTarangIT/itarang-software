@@ -23,6 +23,7 @@
  * via your normal loan-application flow.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { nbfcLoans, nbfcTenants, loanApplications } from "@/lib/db/schema";
@@ -144,6 +145,6 @@ export async function POST(req: NextRequest) {
     }
     const msg = e instanceof Error ? e.message : String(e);
     const status = msg.startsWith("UNAUTHORIZED") ? 401 : msg.startsWith("FORBIDDEN") ? 403 : 500;
-    return NextResponse.json({ ok: false, error: msg }, { status });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status });
   }
 }

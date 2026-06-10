@@ -1,8 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NBFC_ORIGINATION_ROLES, NBFC_ROLE_LABELS } from "@/lib/nbfc/origination-roles";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 interface Member {
   user_id: string;
@@ -29,7 +30,22 @@ export default function UsersSection({ currentUserId, members }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState("viewer");
+  // A selected value is either "sys:<role>" (system role) or "custom:<roleId>".
+  const [roleValue, setRoleValue] = useState("sys:viewer");
+  const [customRoles, setCustomRoles] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/nbfc/roles")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((j: { customRoles?: { id: string; name: string; is_active: boolean }[] }) => {
+        if (!cancelled) setCustomRoles((j.customRoles ?? []).filter((r) => r.is_active).map((r) => ({ id: r.id, name: r.name })));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function invite() {
     if (!email.trim().includes("@")) {
@@ -39,17 +55,20 @@ export default function UsersSection({ currentUserId, members }: Props) {
     setBusy(true);
     setError(null);
     try {
+      const body: { email: string; role?: string; role_id?: string } = { email: email.trim() };
+      if (roleValue.startsWith("custom:")) body.role_id = roleValue.slice("custom:".length);
+      else body.role = roleValue.slice("sys:".length);
       const res = await fetch("/api/nbfc/users", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), role }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(j.error ?? `HTTP ${res.status}`);
       }
       setEmail("");
-      setRole("viewer");
+      setRoleValue("sys:viewer");
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -59,7 +78,13 @@ export default function UsersSection({ currentUserId, members }: Props) {
   }
 
   async function remove(userId: string) {
-    if (!confirm("Remove this user from the tenant?")) return;
+    const ok = await confirmDialog({
+      title: "Remove user?",
+      message: "Remove this user from the tenant?",
+      confirmText: "Remove",
+      variant: "danger",
+    });
+    if (!ok) return;
     setBusy(true);
     setError(null);
     try {
@@ -154,16 +179,25 @@ export default function UsersSection({ currentUserId, members }: Props) {
               Role
             </label>
             <select
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
+              value={roleValue}
+              onChange={(e) => setRoleValue(e.target.value)}
               disabled={busy}
               className="border border-slate-300 rounded px-2 py-1 text-sm"
             >
               {ROLE_OPTIONS.map((r) => (
-                <option key={r} value={r}>
+                <option key={r} value={`sys:${r}`}>
                   {roleLabel(r)}
                 </option>
               ))}
+              {customRoles.length > 0 && (
+                <optgroup label="Custom roles">
+                  {customRoles.map((r) => (
+                    <option key={r.id} value={`custom:${r.id}`}>
+                      {r.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </div>
           <button

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import FiAgentDirectory from "./FiAgentDirectory";
+import EsignCredentialsPanel from "./EsignCredentialsPanel";
 
 // BRD Addendum V0.2 §7.4 — Service Opt-In + Document Handling + Track Rules.
 // Per-service toggles; opting OUT means the NBFC does that step off-platform.
@@ -20,15 +21,24 @@ export interface ServiceConfig {
   fi_enabled: boolean;
   vkyc_enabled: boolean;
   vkyc_mode: "own" | "itarang" | null;
+  vkyc_endpoint_url: string | null;
   enach_enabled: boolean;
   enach_handoff_method: "redirect" | "webhook" | "itarang_razorpay" | null;
   enach_endpoint_url: string | null;
-  doc_agreement_method: "upload" | "digio" | "api_autofetch" | null;
+  doc_agreement_method: "upload" | "digio" | "api_autofetch" | "own_esign" | null;
+  esign_endpoint_url: string | null;
+  // E-166 — chosen e-sign provider when method='digio' (null ⇒ iTarang's account).
+  esign_provider: string | null;
   store_sanction_letter: boolean;
   store_loan_agreement: boolean;
   track_completion_gate: boolean;
   track_failure_halts: boolean;
   fi_config?: FiConfig | null;
+  // E-165 — iTarang-minted per-rail HMAC secrets (read-only; the NBFC verifies
+  // our handoffs with these). Null until the rail first enters "own" mode.
+  vkyc_webhook_secret?: string | null;
+  enach_webhook_secret?: string | null;
+  esign_webhook_secret?: string | null;
 }
 
 const DEFAULT_FI_CONFIG: FiConfig = {
@@ -81,6 +91,14 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
       setError("This E-NACH handoff method needs the NBFC endpoint URL before saving.");
       return;
     }
+    if (cfg.vkyc_enabled && cfg.vkyc_mode === "own" && !cfg.vkyc_endpoint_url) {
+      setError("Own Video KYC needs your own VKYC endpoint URL before saving.");
+      return;
+    }
+    if (cfg.doc_agreement_method === "own_esign" && !cfg.esign_endpoint_url) {
+      setError("Own e-sign needs your own e-sign endpoint URL before saving.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -114,6 +132,8 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
   }
 
   const callbackUrl = `${callbackBase}/api/nbfc/enach/callback`;
+  const vkycCallbackUrl = `${callbackBase}/api/nbfc/vkyc/callback`;
+  const esignCallbackUrl = `${callbackBase}/api/nbfc/agreement/callback`;
   const razorpayWebhookUrl = `${callbackBase}/api/payments/razorpay/emandate-webhook`;
   const isManagedRzp = cfg.enach_handoff_method === "itarang_razorpay";
  
@@ -178,9 +198,9 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
         ) : null}
       </Toggle>
 
-      {/* Active Video KYC */}
+      {/* Video KYC */}
       <Toggle
-        label="Active Video KYC"
+        label="Video KYC"
         desc="Active Video Liveness as a Stage-1 verification track."
         checked={cfg.vkyc_enabled}
         disabled={!canEdit || busy}
@@ -199,6 +219,29 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
                 { value: "itarang", label: "Use iTarang VKYC", hint: "iTarang's Decentro Active Video Liveness. A flat fee per run applies (§8.2)." },
               ]}
             />
+            {cfg.vkyc_mode === "own" ? (
+              <>
+                <LabelledInput
+                  label="Your VKYC endpoint"
+                  placeholder="https://nbfc.example.com/vkyc"
+                  value={cfg.vkyc_endpoint_url ?? ""}
+                  disabled={!canEdit || busy}
+                  onChange={(v) => set("vkyc_endpoint_url", v || null)}
+                />
+                <ReadOnlyField
+                  label="Result callback URL (read-only)"
+                  value={vkycCallbackUrl}
+                  hint="Run VKYC on your own vendor, map its outcome to iTarang's canonical states (verified / failed) and POST here with the ref."
+                />
+                {cfg.vkyc_webhook_secret ? (
+                  <ReadOnlyField
+                    label="Handoff signing secret (read-only)"
+                    value={cfg.vkyc_webhook_secret}
+                    hint="iTarang signs each handoff with this (header X-iTarang-Signature). Verify it on your side to confirm the request is genuine."
+                  />
+                ) : null}
+              </>
+            ) : null}
           </ConfigurePanel>
         ) : null}
       </Toggle>
@@ -279,10 +322,42 @@ export default function ServiceOptInSection({ initialConfig, canEdit, callbackBa
           onChange={(v) => set("doc_agreement_method", v as ServiceConfig["doc_agreement_method"])}
           options={[
             { value: "upload", label: "Upload signed copy" },
-            { value: "digio", label: "iTarang Digio e-sign" },
+            { value: "digio", label: "iTarang e-sign", hint: "iTarang facilitates the e-sign — on iTarang's account, or your own provider (Digio / Leegality / …) with your keys." },
             { value: "api_autofetch", label: "API autofetch" },
+            { value: "own_esign", label: "Own e-sign (handoff)", hint: "iTarang triggers + records; you e-sign on your own platform and POST the signed result back." },
           ]}
         />
+        {cfg.doc_agreement_method === "digio" ? (
+          <EsignCredentialsPanel
+            esignProvider={cfg.esign_provider}
+            onProviderChange={(v) => set("esign_provider", v)}
+            canEdit={canEdit}
+            callbackBase={callbackBase}
+          />
+        ) : null}
+        {cfg.doc_agreement_method === "own_esign" ? (
+          <ConfigurePanel>
+            <LabelledInput
+              label="Your e-sign endpoint"
+              placeholder="https://nbfc.example.com/esign"
+              value={cfg.esign_endpoint_url ?? ""}
+              disabled={!canEdit || busy}
+              onChange={(v) => set("esign_endpoint_url", v || null)}
+            />
+            <ReadOnlyField
+              label="Result callback URL (read-only)"
+              value={esignCallbackUrl}
+              hint="E-sign on your own platform, map the outcome to iTarang's canonical states (signed / failed) and POST here with the ref."
+            />
+            {cfg.esign_webhook_secret ? (
+              <ReadOnlyField
+                label="Handoff signing secret (read-only)"
+                value={cfg.esign_webhook_secret}
+                hint="iTarang signs each handoff with this (header X-iTarang-Signature)."
+              />
+            ) : null}
+          </ConfigurePanel>
+        ) : null}
         <Toggle
           label="iTarang may store the sanction letter"
           checked={cfg.store_sanction_letter}
@@ -424,6 +499,22 @@ function Radio({
         ))}
       </div>
     </fieldset>
+  );
+}
+
+// Read-only labelled value (callback URL / HMAC secret) the NBFC copies into
+// their own provider's config. E-165.
+function ReadOnlyField({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div>
+      <span className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+        {label}
+      </span>
+      <code className="block text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 break-all">
+        {value}
+      </code>
+      {hint ? <p className="text-[11px] text-slate-500 mt-1">{hint}</p> : null}
+    </div>
   );
 }
 

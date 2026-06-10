@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Download, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 
 export function DownloadScrapedLeadsButton() {
   const [loading, setLoading] = useState(false);
@@ -28,7 +29,7 @@ export function DownloadScrapedLeadsButton() {
       URL.revokeObjectURL(url);
     } catch (err: any) {
       console.error("Download error:", err);
-      alert(err?.message ?? "Failed to download. Please try again.");
+      toast.error(err?.message ?? "Failed to download. Please try again.");
     } finally {
       setLoading(false);
     }

@@ -24,7 +24,9 @@ export const AGREEMENT_STATES = [
 ] as const;
 export type AgreementState = (typeof AGREEMENT_STATES)[number];
 
-export const AGREEMENT_METHODS = ["upload", "digio", "api_autofetch"] as const;
+// 'own_esign' (E-165): the NBFC e-signs on their OWN platform (handoff); iTarang
+// triggers + records canonical status only via /api/nbfc/agreement/callback.
+export const AGREEMENT_METHODS = ["upload", "digio", "api_autofetch", "own_esign"] as const;
 export type AgreementMethod = (typeof AGREEMENT_METHODS)[number];
 
 /** Opaque correlation ref (mirrors generateEnachRef). */

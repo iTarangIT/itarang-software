@@ -14,6 +14,7 @@
  * this never blocks sanction. Role: operations or nbfc_admin.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -30,10 +31,12 @@ import {
   getLatestAgreement,
   type AgreementMethod,
 } from "@/lib/nbfc/agreement";
-import { createMultiTemplateSignRequest } from "@/lib/digio/multi-templates";
-import { createLoanAgreementSignRequest } from "@/lib/digio/service";
-import type { DigioSigner } from "@/lib/digio/mapper";
+import { getEsignProvider } from "@/lib/nbfc/esign/registry";
+import { loadProviderCredentials } from "@/lib/nbfc/esign/credentials";
+import type { EsignSigner } from "@/lib/nbfc/esign/provider";
 import { getNbfcObject } from "@/lib/nbfc/nbfc-storage";
+import { buildHandoffUrl, postHandoff } from "@/lib/nbfc/handoff";
+import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -100,6 +103,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     // Resolve the signing mechanism: snapshot first (§7.4), then live config.
     const snap = (winner.snapshot ?? {}) as {
       doc_agreement_method?: AgreementMethod | null;
+      esign_provider?: string | null;
       store_sanction_letter?: boolean;
       store_loan_agreement?: boolean;
     };
@@ -142,6 +146,101 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         method: latest.method,
         digio_document_id: latest.digio_document_id,
         idempotent: true,
+      });
+    }
+
+    // E-165 — Own e-sign (handoff): the NBFC e-signs on their OWN platform. No
+    // Digio call; iTarang records canonical status only via the result callback
+    // at /api/nbfc/agreement/callback. Self-contained — runs instead of the Digio
+    // resend/uploadpdf logic below. Endpoint + secret read LIVE (not snapshotted).
+    if (method === "own_esign") {
+      const [ecfg] = await db
+        .select({
+          endpoint: nbfcServiceConfig.esign_endpoint_url,
+          secret: nbfcServiceConfig.esign_webhook_secret,
+        })
+        .from(nbfcServiceConfig)
+        .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
+        .limit(1);
+      if (!ecfg?.endpoint) {
+        return NextResponse.json(
+          { ok: false, error: "BAD_REQUEST: Own e-sign has no endpoint URL configured in Settings → Document Handling" },
+          { status: 400 },
+        );
+      }
+      let origin: string;
+      try {
+        origin = publicOrigin({ req });
+      } catch (err) {
+        const m = err instanceof PublicOriginError ? err.message : "Cannot determine public origin";
+        return NextResponse.json({ ok: false, error: `Server misconfig: ${m}` }, { status: 500 });
+      }
+      const callbackUrl = `${origin}/api/nbfc/agreement/callback`;
+      const now = new Date();
+      const agreementRef = generateAgreementRef(leadId);
+
+      const [lead] = await db
+        .select({ full_name: leads.full_name, owner_name: leads.owner_name, owner_email: leads.owner_email })
+        .from(leads)
+        .where(eq(leads.id, leadId))
+        .limit(1);
+      if (!lead) {
+        return NextResponse.json({ ok: false, error: "NOT_FOUND: lead not found" }, { status: 404 });
+      }
+
+      const baseRow = {
+        status: "in_progress" as const,
+        method,
+        agreement_ref: agreementRef,
+        provider_raw_status: "handoff_sent",
+        initiated_by: actor.user_id,
+        initiated_at: now,
+        updated_at: now,
+      };
+      const reuse = allowResend && !!latest;
+      let agreementId: string;
+      if (reuse) {
+        await db.update(nbfcLoanAgreements).set(baseRow).where(eq(nbfcLoanAgreements.id, latest!.id));
+        agreementId = latest!.id;
+      } else {
+        const [created] = await db
+          .insert(nbfcLoanAgreements)
+          .values({
+            lead_id: leadId,
+            nbfc_id: winner.nbfc_id,
+            tenant_id: actor.tenant_id,
+            store_sanction_letter: storeSanction,
+            store_loan_agreement: storeLoan,
+            ...baseRow,
+          })
+          .returning({ id: nbfcLoanAgreements.id });
+        agreementId = created.id;
+      }
+
+      const handoff = await postHandoff({
+        url: ecfg.endpoint,
+        secret: ecfg.secret,
+        payload: {
+          event: "esign.handoff",
+          itarang_lead_id: leadId,
+          itarang_agreement_ref: agreementRef,
+          nbfc_id: winner.nbfc_id,
+          customer_name: lead.full_name ?? lead.owner_name ?? "Customer",
+          customer_email: (lead.owner_email || "").trim() || null,
+          callback_url: callbackUrl,
+        },
+      });
+
+      return NextResponse.json({
+        ok: true,
+        agreement_id: agreementId,
+        agreement_ref: agreementRef,
+        method,
+        status: "in_progress",
+        handoff_url: buildHandoffUrl(ecfg.endpoint, { ref: agreementRef, callback: callbackUrl }),
+        callback_url: callbackUrl,
+        handoff_delivered: handoff.ok,
+        resent: reuse,
       });
     }
 
@@ -199,9 +298,43 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     let digioDocumentId: string | null = null;
     let providerRaw: Record<string, unknown> | null = null;
     let customerSigningUrl: string | null = null;
+    let providerType: string | null = null;
     const customerName = lead.full_name ?? lead.owner_name ?? "Customer";
 
     if (method === "digio") {
+      // E-166 — resolve which e-sign provider to use (the NBFC's own Digio /
+      // Leegality / … or iTarang's GLOBAL Digio account fallback). Provider is
+      // snapshotted per lead; credentials are resolved LIVE.
+      let esignProvider = snap.esign_provider ?? null;
+      if (esignProvider == null) {
+        const [pc] = await db
+          .select({ p: nbfcServiceConfig.esign_provider })
+          .from(nbfcServiceConfig)
+          .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
+          .limit(1);
+        esignProvider = pc?.p ?? null;
+      }
+      providerType = esignProvider ?? "digio";
+      const creds = await loadProviderCredentials(actor.tenant_id, providerType);
+      if (!creds) {
+        return NextResponse.json(
+          { ok: false, error: `BAD_REQUEST: configure your '${providerType}' e-sign credentials in Settings → Document Handling` },
+          { status: 400 },
+        );
+      }
+      const provider = await getEsignProvider(providerType);
+      let origin: string;
+      try {
+        origin = publicOrigin({ req });
+      } catch (err) {
+        const m = err instanceof PublicOriginError ? err.message : "Cannot determine public origin";
+        return NextResponse.json({ ok: false, error: `Server misconfig: ${m}` }, { status: 500 });
+      }
+      // Global Digio keeps the legacy webhook route; own-provider posts results
+      // to the per-provider webhook so in-flight global docs are unaffected.
+      const callbackUrl =
+        creds.source === "global" ? undefined : `${origin}/api/esign/${providerType}/webhook`;
+
       const [me] = await db
         .select({ legal_name: nbfc.legal_name, short_name: nbfc.short_name })
         .from(nbfc)
@@ -209,7 +342,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         .limit(1);
 
       if (useUpload) {
-        // ── iTarang eSign on the NBFC-uploaded PDF (Digio uploadpdf) ────────
+        // ── e-Sign on the NBFC-uploaded PDF ────────────────────────────────
         const srcBuf = await getNbfcObject(latest!.source_document_url!);
         if (!srcBuf) {
           return NextResponse.json(
@@ -218,7 +351,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
           );
         }
         // Customer signs via Aadhaar eSign; the signing link is emailed to the
-        // borrower, so the customer's email is the Digio identifier (required).
+        // borrower, so the customer's email is the identifier (required).
         const customerId = (lead.owner_email || "").trim();
         if (!customerId) {
           return NextResponse.json(
@@ -227,17 +360,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
           );
         }
         // Customer signs first; bottom-right (bottom-centre when signing alone).
-        const signers: DigioSigner[] = [
+        const signers: EsignSigner[] = [
           {
             identifier: customerId,
             name: customerName,
             reason: "Borrower, loan agreement",
-            sign_type: "aadhaar",
-            sign_coordinates: { page_no: 1, x: nbfcSigns ? 360 : 200, y: 780, w: 180, h: 50 },
+            signType: "aadhaar",
+            sequence: 1,
+            signCoordinates: { page: 1, x: nbfcSigns ? 360 : 200, y: 780, w: 180, h: 50 },
           },
         ];
-        // Optional NBFC signatory — the operator-entered signer signs second via
-        // Aadhaar eSign; the link is emailed to the address they typed in.
+        // Optional NBFC signatory — operator-entered, signs second.
         if (nbfcSigns) {
           if (!nbfcSignerEmail) {
             return NextResponse.json(
@@ -249,27 +382,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             identifier: nbfcSignerEmail,
             name: nbfcSignerName || me?.legal_name || me?.short_name || "NBFC signatory",
             reason: "NBFC signatory",
-            sign_type: "aadhaar",
-            sign_coordinates: { page_no: 1, x: 60, y: 780, w: 180, h: 50 }, // bottom-left
+            signType: "aadhaar",
+            sequence: 2,
+            signCoordinates: { page: 1, x: 60, y: 780, w: 180, h: 50 }, // bottom-left
           });
         }
 
-        const resp = (await createLoanAgreementSignRequest({
-          fileData: srcBuf.toString("base64"),
-          fileName: `loan-agreement-${leadId}.pdf`,
-          agreementRef,
-          expireInDays: 14,
-          signers,
-        })) as {
-          id?: string;
-          document_id?: string;
-          signing_parties?: Array<{ authentication_url?: string; authenticationUrl?: string }>;
-        } & Record<string, unknown>;
-
-        digioDocumentId = resp.id ?? resp.document_id ?? null;
-        customerSigningUrl =
-          resp.signing_parties?.[0]?.authentication_url ?? resp.signing_parties?.[0]?.authenticationUrl ?? null;
-        providerRaw = resp;
+        const result = await provider.createSignRequestFromPdf(
+          {
+            fileData: srcBuf.toString("base64"),
+            fileName: `loan-agreement-${leadId}.pdf`,
+            agreementRef,
+            expireInDays: 14,
+            signers,
+            callbackUrl,
+          },
+          creds,
+        );
+        digioDocumentId = result.providerDocumentId;
+        customerSigningUrl = result.customerSigningUrl;
+        providerRaw = result.raw;
         if (!digioDocumentId) {
           return NextResponse.json(
             { ok: false, error: "The e-Sign request could not be created — please try again shortly." },
@@ -278,6 +410,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         }
       } else {
         // ── Fallback: pre-configured template (no uploaded PDF) ─────────────
+        if (!provider.createSignRequestFromTemplate) {
+          return NextResponse.json(
+            { ok: false, error: "BAD_REQUEST: upload an agreement PDF first (this e-sign provider has no template flow)" },
+            { status: 400 },
+          );
+        }
         const templateKey =
           process.env.NBFC_LOAN_AGREEMENT_DIGIO_TEMPLATE_KEY?.trim() ||
           process.env.DIGIO_TEMPLATE_ID?.trim();
@@ -294,15 +432,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             { status: 400 },
           );
         }
-        const tplSigners = [
-          {
-            identifier: customerEmail,
-            name: customerName,
-            reason: "Borrower, loan agreement",
-            sign_type: "aadhaar" as const,
-          },
+        const tplSigners: EsignSigner[] = [
+          { identifier: customerEmail, name: customerName, reason: "Borrower, loan agreement", signType: "aadhaar", sequence: 1 },
         ];
-        // Optional NBFC signatory — operator-entered, emailed via Aadhaar eSign.
         if (nbfcSigns) {
           if (!nbfcSignerEmail) {
             return NextResponse.json(
@@ -314,33 +446,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             identifier: nbfcSignerEmail,
             name: nbfcSignerName || me?.legal_name || me?.short_name || "NBFC signatory",
             reason: "NBFC signatory",
-            sign_type: "aadhaar" as const,
+            signType: "aadhaar",
+            sequence: 2,
           });
         }
-        const resp = (await createMultiTemplateSignRequest({
-          templates: [
-            {
-              template_key: templateKey,
-              template_values: {
-                customer_name: customerName,
-                nbfc_legal_name: me?.legal_name ?? me?.short_name ?? "",
-                lead_id: leadId,
-                agreement_date: now.toISOString().slice(0, 10),
-              },
+        const result = await provider.createSignRequestFromTemplate(
+          {
+            templateKey,
+            templateValues: {
+              customer_name: customerName,
+              nbfc_legal_name: me?.legal_name ?? me?.short_name ?? "",
+              lead_id: leadId,
+              agreement_date: now.toISOString().slice(0, 10),
             },
-          ],
-          signers: tplSigners,
-          expire_in_days: 14,
-          notify_signers: true,
-          send_sign_link: true,
-          generate_access_token: true,
-          display_on_page: "all",
-          sequence_type: "SEQUENTIAL",
-          callback: `AGR_${agreementRef}`,
-        })) as { id?: string; signing_parties?: Array<{ authentication_url?: string }> } & Record<string, unknown>;
-        digioDocumentId = resp.id ?? null;
-        customerSigningUrl = resp.signing_parties?.[0]?.authentication_url ?? null;
-        providerRaw = resp;
+            agreementRef,
+            expireInDays: 14,
+            signers: tplSigners,
+            callbackUrl,
+          },
+          creds,
+        );
+        digioDocumentId = result.providerDocumentId;
+        customerSigningUrl = result.customerSigningUrl;
+        providerRaw = result.raw;
         if (!digioDocumentId) {
           return NextResponse.json(
             { ok: false, error: "The e-Sign request could not be created — please try again shortly." },
@@ -367,6 +495,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         .set({
           status: "in_progress",
           method,
+          provider_type: providerType,
           agreement_ref: agreementRef,
           digio_document_id: digioDocumentId,
           provider_raw_status: "sign_request_created",
@@ -396,6 +525,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         tenant_id: actor.tenant_id,
         agreement_ref: agreementRef,
         method,
+        provider_type: providerType,
         status: "in_progress",
         digio_document_id: digioDocumentId,
         provider_raw_status: method === "digio" ? "sign_request_created" : "awaiting_upload",
@@ -419,6 +549,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

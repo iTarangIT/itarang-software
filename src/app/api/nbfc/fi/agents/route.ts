@@ -5,6 +5,7 @@
  * Role: fi_coordinator / nbfc_admin. Tenant-scoped throughout.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
@@ -56,7 +57,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, agents, can_manage: canManage(actor.role) });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }
 
@@ -94,6 +95,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, agent });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }
