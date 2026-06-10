@@ -56,20 +56,22 @@ export async function POST(req: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
+        // Use the getAll/setAll adapter — the deprecated get/set/remove form
+        // fails to reassemble Supabase's chunked auth cookie under this
+        // @supabase/ssr version, so getUser() returned null and every autosave
+        // 401'd silently. setAll still writes onto the cookieCollector so
+        // refreshed session cookies ride back out via mergeCookies.
         cookies: {
-          get(name: string) {
-            return req.cookies.get(name)?.value;
-          },
-          set(name: string, value: string, options: Record<string, any>) {
-            cookieCollector.cookies.set({ name, value, ...options });
-          },
-          remove(name: string, options: Record<string, any>) {
-            cookieCollector.cookies.set({
+          getAll() {
+            return req.cookies.getAll().map(({ name, value }) => ({
               name,
-              value: "",
-              ...options,
-              maxAge: 0,
-            });
+              value,
+            }));
+          },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieCollector.cookies.set({ name, value, ...options })
+            );
           },
         },
       }
@@ -99,6 +101,28 @@ export async function POST(req: NextRequest) {
       cleanString(body.dealer_id) ||
       cleanString(body.dealerId) ||
       null;
+
+    // Which draft to update. Internal staff onboard several dealers, each its
+    // own draft row, so we key on the applicationId the client round-trips —
+    // NOT on user.id (which would collapse every dealer onto a single row).
+    // A UUID-shaped value is required before we query the uuid PK column.
+    const requestedApplicationId =
+      cleanString(body.applicationId) ||
+      cleanString(body.internalApplicationId) ||
+      null;
+    const isUuid = (v: string | null): v is string =>
+      !!v &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+    const targetApplicationId = isUuid(requestedApplicationId)
+      ? requestedApplicationId
+      : null;
+
+    // Last wizard step (1–6) so a resumed draft reopens where the user left off.
+    const draftStepRaw = Number(body.draftStep ?? body.step);
+    const draftStep =
+      Number.isFinite(draftStepRaw) && draftStepRaw >= 1 && draftStepRaw <= 6
+        ? Math.floor(draftStepRaw)
+        : null;
 
     const companyName = cleanString(body.companyName);
     const companyType = cleanString(body.companyType);
@@ -219,17 +243,33 @@ export async function POST(req: NextRequest) {
 
     let application: typeof dealerOnboardingApplications.$inferSelect | null = null;
 
-    // Only resolve rows owned by the authenticated dealer. Prior version
-    // matched on body.ownerEmail / body.dealerCode too — attacker-controlled
-    // keys with no ownership constraint — which could let one dealer take
-    // over another dealer's in-progress draft.
-    const existing = await db
-      .select()
-      .from(dealerOnboardingApplications)
-      .where(eq(dealerOnboardingApplications.dealer_user_id, dealerUserId))
-      .limit(1);
+    // Resolve the specific draft the client is editing by its applicationId.
+    // Ownership guard: a row already claimed by a *different* user must not be
+    // writable here (prevents one dealer hijacking another's draft). Rows with
+    // no owner yet (created by lead-conversion, E-127) or owned by this caller
+    // are fine to resume/claim. When no applicationId is supplied — or it
+    // points at a row that no longer exists — we fall through and INSERT a
+    // fresh draft, so "start a new dealer" always begins a new row.
+    if (targetApplicationId) {
+      const existing = await db
+        .select()
+        .from(dealerOnboardingApplications)
+        .where(eq(dealerOnboardingApplications.id, targetApplicationId))
+        .limit(1);
 
-    if (existing.length > 0) application = existing[0];
+      if (existing.length > 0) {
+        const row = existing[0];
+        if (row.dealer_user_id && row.dealer_user_id !== dealerUserId) {
+          const res = NextResponse.json(
+            { success: false, message: "This onboarding draft belongs to another user." },
+            { status: 403 }
+          );
+          mergeCookies(cookieCollector, res);
+          return res;
+        }
+        application = row;
+      }
+    }
 
     if (application && application.onboarding_status === "approved") {
       // Don't modify approved applications via auto-save.
@@ -287,6 +327,7 @@ export async function POST(req: NextRequest) {
       finance_enabled: financeEnabled,
       onboarding_status: onboardingStatus,
       review_status: reviewStatus,
+      ...(draftStep !== null ? { draft_step: draftStep } : {}),
       owner_name: ownerName,
       owner_phone: ownerPhone,
       owner_email: ownerEmail,

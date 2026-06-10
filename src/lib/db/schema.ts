@@ -992,6 +992,52 @@ export const aiCallLogs = pgTable(
   },
 );
 
+// =============================================================================
+// E-159 — Intent-score human feedback (the "this score is wrong" correction)
+// A reviewer can correct an AI intent score from the transcript drawer. Every
+// correction snapshots what the AI produced (original_intent_score +
+// original_signals + scoring_version) and records the human's ground truth:
+//   - corrected_status   — always set (quick mode): qualified|warm|cold|disqualified
+//   - corrected_score     — optional explicit number
+//   - corrected_signals   — optional per-signal fixes (deep mode), shaped like
+//                           ai_call_logs.signals (IntentSignals)
+// These rows ARE the benchmark/golden set: the eval harness (scripts/intent)
+// replays them to measure label accuracy + locate where extraction over-reads,
+// and the calibration / weight-tuning levers learn from them. Append-only — a
+// re-correction of the same call inserts a new row (latest by created_at wins).
+// =============================================================================
+export const intentScoreFeedback = pgTable(
+  "intent_score_feedback",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // ai_call_logs.call_id of the corrected call (drawer's bolnaCallId).
+    call_id: varchar("call_id", { length: 255 }).notNull(),
+    lead_id: varchar("lead_id", { length: 255 }),
+    // Scoring version that produced the original score (audit trail).
+    scoring_version: varchar("scoring_version", { length: 20 }),
+    original_intent_score: integer("original_intent_score"),
+    original_signals: jsonb("original_signals"),
+    // Human ground-truth label — always present (quick mode).
+    corrected_status: varchar("corrected_status", { length: 20 }).notNull(),
+    // Optional explicit number the reviewer believes is right.
+    corrected_score: integer("corrected_score"),
+    // Optional per-signal corrections (deep mode), shaped like IntentSignals.
+    corrected_signals: jsonb("corrected_signals"),
+    reviewer_note: text("reviewer_note"),
+    reviewed_by: uuid("reviewed_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    callIdIdx: index("intent_score_feedback_call_id_idx").on(table.call_id),
+    leadIdIdx: index("intent_score_feedback_lead_id_idx").on(table.lead_id),
+    createdAtIdx: index("intent_score_feedback_created_at_idx").on(
+      table.created_at,
+    ),
+  }),
+);
+
 // --- AI CALLS ---
 
 export const callSessions = pgTable("call_sessions", {
@@ -2495,6 +2541,9 @@ export const dealerOnboardingApplications = pgTable(
     finance_enabled: boolean("finance_enabled").default(false),
     onboarding_status: varchar("onboarding_status", { length: 30 }).default('draft').notNull(),
     review_status: varchar("review_status", { length: 30 }).default('pending'),
+    // Last wizard step a draft was left on, so a resumed onboarding reopens
+    // where the user stopped instead of restarting at step 1 (E-164).
+    draft_step: integer("draft_step").default(1),
     submitted_at: timestamp("submitted_at"),
     approved_at: timestamp("approved_at"),
     rejected_at: timestamp("rejected_at"),
@@ -3204,12 +3253,85 @@ export const nbfcUsers = pgTable(
     user_id: uuid("user_id").notNull(),
     tenant_id: uuid("tenant_id").notNull(),
     role: varchar({ length: 32 }).default('viewer').notNull(),
+    // E-162 — optional custom RBAC role. NULL ⇒ run on the `role` string
+    // default (every existing row); set ⇒ fine-grained permissions from
+    // nbfc_role_permissions. role still drives the legacy coarse checks.
+    role_id: uuid("role_id"),
     notification_prefs: jsonb("notification_prefs").default({}).notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     userTenantIdx: index("nbfc_users_user_tenant_idx").on(table.user_id, table.tenant_id),
     tenantIdx: index("nbfc_users_tenant_idx").on(table.tenant_id),
+  }),
+);
+
+// E-162 — NBFC Custom RBAC (§15.8). Tenant-scoped custom roles cloned from a
+// system role; the five system roles are CODE defaults (src/lib/nbfc/permissions.ts)
+// and are NOT stored here. base_role maps a custom role back to a system role
+// for the legacy coarse role checks; fine-grained access comes from
+// nbfcRolePermissions.
+export const nbfcRoles = pgTable(
+  "nbfc_roles",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    name: varchar("name", { length: 64 }).notNull(),
+    description: text("description"),
+    base_role: varchar("base_role", { length: 32 }).notNull(),
+    is_active: boolean("is_active").default(true).notNull(),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_roles_tenant_idx").on(table.tenant_id, table.is_active),
+  }),
+);
+
+export const nbfcRolePermissions = pgTable(
+  "nbfc_role_permissions",
+  {
+    role_id: uuid("role_id").notNull().references(() => nbfcRoles.id, { onDelete: "cascade" }),
+    permission_key: varchar("permission_key", { length: 64 }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.role_id, table.permission_key] }),
+  }),
+);
+
+// E-163 — Per-NBFC Notification Channels (§15.5). One row per tenant. The
+// channel resolver falls back to the platform-global env gateway when a row is
+// absent or a channel is left on its '*_default' mode, so existing sends are
+// unchanged until an NBFC opts in.
+export const nbfcNotificationChannels = pgTable(
+  "nbfc_notification_channels",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    email_mode: varchar("email_mode", { length: 16 }).default("itarang_default").notNull(),
+    email_from: text("email_from"),
+    email_from_name: text("email_from_name"),
+    smtp_host: text("smtp_host"),
+    smtp_port: integer("smtp_port"),
+    smtp_user: text("smtp_user"),
+    smtp_pass: text("smtp_pass"),
+    smtp_secure: boolean("smtp_secure").default(false).notNull(),
+    sms_provider: varchar("sms_provider", { length: 24 }).default("itarang_default").notNull(),
+    sms_api_key: text("sms_api_key"),
+    sms_source: text("sms_source"),
+    sms_dlt_template_id: text("sms_dlt_template_id"),
+    whatsapp_enabled: boolean("whatsapp_enabled").default(false).notNull(),
+    whatsapp_provider: varchar("whatsapp_provider", { length: 24 }),
+    whatsapp_waba_id: text("whatsapp_waba_id"),
+    whatsapp_api_key: text("whatsapp_api_key"),
+    whatsapp_from: text("whatsapp_from"),
+    whatsapp_templates: jsonb("whatsapp_templates"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantUnique: uniqueIndex("nbfc_notification_channels_tenant_unique").on(table.tenant_id),
   }),
 );
 
@@ -3277,6 +3399,17 @@ export const nbfcFinancingOffers = pgTable(
     conditions: text("conditions"),
     valid_until: date("valid_until"),
     status: varchar({ length: 16 }).default("active").notNull(), // 'active' | 'withdrawn'
+    // E-161 — iTarang CEO approval gate for out-of-band deviations (§13.3.4).
+    // ceo_approval_status: not_required | pending | approved | rejected. An offer
+    // is released to the dealer only when not_required or approved. deviation_*
+    // capture why it tripped the gate; ceo_* the platform-CEO decision.
+    deviation_detected: boolean("deviation_detected").default(false).notNull(),
+    deviation_fields: jsonb("deviation_fields"),
+    deviation_reason: text("deviation_reason"),
+    ceo_approval_status: varchar("ceo_approval_status", { length: 24 }).default("not_required").notNull(),
+    ceo_approval_request_id: uuid("ceo_approval_request_id"),
+    ceo_decided_by: uuid("ceo_decided_by"),
+    ceo_decided_at: timestamp("ceo_decided_at", { withTimezone: true }),
     submitted_by: uuid("submitted_by"),
     submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -3286,6 +3419,7 @@ export const nbfcFinancingOffers = pgTable(
     assignmentUnique: uniqueIndex("nbfc_financing_offers_assignment_unique").on(table.assignment_id),
     leadIdx: index("nbfc_financing_offers_lead_idx").on(table.lead_id),
     tenantIdx: index("nbfc_financing_offers_tenant_idx").on(table.tenant_id),
+    ceoStatusIdx: index("nbfc_financing_offers_ceo_status_idx").on(table.ceo_approval_status),
   }),
 );
 
@@ -3305,7 +3439,22 @@ export const nbfcServiceConfig = pgTable(
     enach_enabled: boolean("enach_enabled").default(false).notNull(),
     enach_handoff_method: varchar("enach_handoff_method", { length: 16 }), // 'redirect' | 'webhook' | 'itarang_razorpay'
     enach_endpoint_url: text("enach_endpoint_url"),
-    doc_agreement_method: varchar("doc_agreement_method", { length: 24 }), // 'upload' | 'digio' | 'api_autofetch'
+    doc_agreement_method: varchar("doc_agreement_method", { length: 24 }), // 'upload' | 'digio' | 'api_autofetch' | 'own_esign' (E-165)
+    // E-165 — bring-your-own-provider handoff. Endpoint URLs the NBFC's OWN
+    // provider is reached at when a rail is in "own" mode (vkyc_mode='own' /
+    // doc_agreement_method='own_esign'); read live (NOT snapshotted). The
+    // *_webhook_secret are iTarang-minted HMAC secrets for signing outbound
+    // handoffs + verifying inbound result callbacks. NBFC API keys are NEVER
+    // stored — only these URLs + secrets.
+    vkyc_endpoint_url: text("vkyc_endpoint_url"),
+    esign_endpoint_url: text("esign_endpoint_url"),
+    vkyc_webhook_secret: text("vkyc_webhook_secret"),
+    enach_webhook_secret: text("enach_webhook_secret"),
+    esign_webhook_secret: text("esign_webhook_secret"),
+    // E-166 — which e-sign provider the NBFC's loan agreements use (their own
+    // Digio account / Leegality / …). NULL ⇒ 'digio' = iTarang's global account
+    // (today's behaviour). Only meaningful when doc_agreement_method='digio'.
+    esign_provider: varchar("esign_provider", { length: 24 }),
     store_sanction_letter: boolean("store_sanction_letter").default(false).notNull(),
     store_loan_agreement: boolean("store_loan_agreement").default(false).notNull(),
     track_completion_gate: boolean("track_completion_gate").default(true).notNull(),
@@ -3321,6 +3470,35 @@ export const nbfcServiceConfig = pgTable(
   },
   (table) => ({
     tenantUnique: uniqueIndex("nbfc_service_config_tenant_unique").on(table.tenant_id),
+  }),
+);
+
+// E-166 — per-tenant ENCRYPTED e-sign provider credentials (Model B). An NBFC's
+// own provider keys (Leegality token, own Digio client id/secret, …) stored as
+// an AES-256-GCM blob (see src/lib/nbfc/esign/crypto.ts); never plaintext.
+// Absence of a row ⇒ iTarang's global Digio account (the fallback).
+export const nbfcProviderCredentials = pgTable(
+  "nbfc_provider_credentials",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    provider_type: varchar("provider_type", { length: 24 }).notNull(), // 'digio' | 'leegality' | …
+    environment: varchar("environment", { length: 12 }).default("sandbox").notNull(),
+    ciphertext: text("ciphertext").notNull(),
+    iv: text("iv").notNull(),
+    auth_tag: text("auth_tag").notNull(),
+    key_version: integer("key_version").default(1).notNull(),
+    label: text("label"),
+    last_tested_at: timestamp("last_tested_at", { withTimezone: true }),
+    last_test_ok: boolean("last_test_ok"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantProviderUnique: uniqueIndex("nbfc_provider_credentials_tenant_provider_unique").on(
+      table.tenant_id,
+      table.provider_type,
+    ),
   }),
 );
 
@@ -3409,7 +3587,9 @@ export const nbfcLoanAgreements = pgTable(
     nbfc_id: integer("nbfc_id").notNull(),
     tenant_id: uuid("tenant_id").notNull(),
     agreement_ref: varchar("agreement_ref", { length: 64 }).notNull(),
-    method: varchar({ length: 16 }), // 'upload' | 'digio' | 'api_autofetch'
+    method: varchar({ length: 16 }), // 'upload' | 'digio' | 'api_autofetch' | 'own_esign' (E-165)
+    // E-166 — e-sign provider that owns this attempt (NULL ⇒ legacy 'digio').
+    provider_type: varchar("provider_type", { length: 24 }),
     // 'pending' | 'in_progress' | 'signed' | 'failed' | 'skipped'
     status: varchar({ length: 20 }).default("pending").notNull(),
     digio_document_id: varchar("digio_document_id", { length: 120 }),
@@ -3648,6 +3828,21 @@ export const nbfcWallets = pgTable(
     auto_nach_threshold: numeric("auto_nach_threshold", { precision: 14, scale: 2 }),
     auto_nach_recharge_amount: numeric("auto_nach_recharge_amount", { precision: 14, scale: 2 }),
     auto_nach_mandate_ref: varchar("auto_nach_mandate_ref", { length: 120 }),
+    // E-160 — §16.4 funds-provider handles. provider_name + the iTarang Virtual
+    // Account (Smart Collect) display fields + the creditor-side auto-recharge
+    // mandate handles. NBFC-facing UI must use "iTarang Virtual Account" /
+    // "iTarang Auto-Recharge Mandate", never the vendor name (§3.2).
+    provider_name: varchar("provider_name", { length: 40 }),
+    va_provider_account_id: varchar("va_provider_account_id", { length: 64 }),
+    va_upi_vpa: varchar("va_upi_vpa", { length: 120 }),
+    va_account_number: varchar("va_account_number", { length: 40 }),
+    va_ifsc: varchar("va_ifsc", { length: 20 }),
+    va_status: varchar("va_status", { length: 24 }),
+    auto_nach_customer_id: varchar("auto_nach_customer_id", { length: 64 }),
+    auto_nach_token_id: varchar("auto_nach_token_id", { length: 64 }),
+    auto_nach_order_id: varchar("auto_nach_order_id", { length: 64 }),
+    auto_nach_status: varchar("auto_nach_status", { length: 24 }).default("none"), // none | pending | registered | failed
+    auto_nach_last_fired_at: timestamp("auto_nach_last_fired_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -3697,11 +3892,38 @@ export const nbfcWalletLedger = pgTable(
     trigger_rule: varchar("trigger_rule", { length: 24 }),
     posted_by: uuid("posted_by"),
     month: varchar({ length: 7 }).notNull(),
+    // E-160 — provider inflow correlation handle on top-up lines (§16.3 audit).
+    provider_event_id: varchar("provider_event_id", { length: 120 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     tenantMonthIdx: index("nbfc_wallet_ledger_tenant_month_idx").on(table.tenant_id, table.month),
     leadIdx: index("nbfc_wallet_ledger_lead_idx").on(table.lead_id),
+  }),
+);
+
+// E-160 — Addendum V0.3.1 §16.3/§16.4. Idempotency + audit ledger for wallet
+// money-IN (VA credits + recurring-debit settlements). The UNIQUE on
+// (provider_name, provider_event_id) is the dedupe guarantee — a re-delivered
+// webhook inserts ON CONFLICT DO NOTHING, so it cannot double-credit the wallet.
+// ledger_id links to the topup line actually posted (NULL until posted).
+export const nbfcWalletInflows = pgTable(
+  "nbfc_wallet_inflows",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    nbfc_id: integer("nbfc_id"),
+    provider_name: varchar("provider_name", { length: 40 }).notNull(),
+    provider_event_id: varchar("provider_event_id", { length: 120 }).notNull(),
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+    raw_status: varchar("raw_status", { length: 40 }),
+    ledger_id: uuid("ledger_id"),
+    raw_payload: jsonb("raw_payload"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    eventUnique: uniqueIndex("nbfc_wallet_inflows_event_unique").on(table.provider_name, table.provider_event_id),
+    tenantIdx: index("nbfc_wallet_inflows_tenant_idx").on(table.tenant_id),
   }),
 );
 

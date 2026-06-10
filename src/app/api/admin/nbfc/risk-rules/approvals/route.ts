@@ -5,6 +5,7 @@
  * Admin-only. Read-only.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { resolveAdminActor, statusFromError } from "@/lib/nbfc/admin/auth";
 import { listPendingChangeRequests } from "@/lib/nbfc/admin/riskRuleApprovalService";
 
@@ -32,7 +33,7 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { ok: false, error: msg },
+      { ok: false, error: clientError(msg) },
       { status: statusFromError(msg) },
     );
   }

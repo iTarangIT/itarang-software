@@ -58,7 +58,8 @@ export async function POST(
     const address = cb.address || cb.current_address || "";
     const pincode = address.match(/\b\d{6}\b/)?.[0] || "";
 
-    // Provider-routed (BRD Addendum §4.3). Null → Equifax via DEFAULT_PLATFORM_BUREAU.
+    // Provider-routed (BRD Addendum §4.3). Null → DEFAULT_PLATFORM_BUREAU,
+    // currently 'cibil' (the working provider) until Equifax is provisioned.
     const result = await getCreditBureauProvider(null).fetchReport({
       name,
       pan: cb.pan_no,

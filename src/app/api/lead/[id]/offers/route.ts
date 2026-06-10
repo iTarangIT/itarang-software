@@ -59,7 +59,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
           .from(nbfcFinancingOffers)
           .where(inArray(nbfcFinancingOffers.nbfc_id, nbfcIds))
       : [];
-    const offerByAssignment = new Map(offerRows.map((o) => [o.assignment_id, o] as const));
+    // E-161 — only surface RELEASED offers to the dealer. An out-of-band offer
+    // held for iTarang CEO approval (pending) or rejected is withheld until
+    // approved. Legacy rows default to 'not_required' → shown, as before.
+    const released = offerRows.filter(
+      (o) => o.ceo_approval_status === "not_required" || o.ceo_approval_status === "approved",
+    );
+    const offerByAssignment = new Map(released.map((o) => [o.assignment_id, o] as const));
 
     const items = assignments.map((a) => ({
       nbfc_id: a.nbfc_id,

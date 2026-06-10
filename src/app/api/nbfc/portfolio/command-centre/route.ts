@@ -12,6 +12,7 @@
  * computeCommandCentre filters by tenant id.
  */
 import { NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { computeCommandCentre } from "@/lib/nbfc/command-centre";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import { isTestBypassRequest, resolveActor } from "@/lib/nbfc/dual-approval/auth";
@@ -48,6 +49,6 @@ export async function GET(req: Request) {
         { status: 500 },
       );
     }
-    return NextResponse.json({ ok: false, error: msg }, { status });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status });
   }
 }

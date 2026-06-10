@@ -14,6 +14,7 @@
  * against the seed-vs-migration ordering of `npm run db:push`.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { db } from "@/lib/db";
 import { nbfcRiskRules } from "@/lib/db/schema";
 import {
@@ -87,7 +88,7 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { ok: false, error: msg },
+      { ok: false, error: clientError(msg) },
       { status: statusFromError(msg) },
     );
   }

@@ -84,6 +84,9 @@ function buildServiceSnapshot(cfg: ServiceConfigRow | undefined, capturedAt: Dat
     enach_enabled: cfg?.enach_enabled ?? false,
     enach_handoff_method: cfg?.enach_handoff_method ?? null,
     doc_agreement_method: cfg?.doc_agreement_method ?? null,
+    // E-166 — which e-sign provider this lead's agreement uses (snapshotted;
+    // credentials are read live). NULL ⇒ iTarang's global Digio account.
+    esign_provider: cfg?.esign_provider ?? null,
     store_sanction_letter: cfg?.store_sanction_letter ?? false,
     store_loan_agreement: cfg?.store_loan_agreement ?? false,
     track_completion_gate: cfg?.track_completion_gate ?? true,

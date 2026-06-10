@@ -12,9 +12,13 @@ type RouteContext = {
   params: Promise<{ applicationId: string }>;
 };
 
-// Internal staff who may open a converted-lead application in the wizard
-// (BRD §0.13). This endpoint returns a full application by id, so it must be
-// gated — previously it had no auth at all.
+// Internal staff who may open ANY application in the wizard — e.g. continuing a
+// converted lead (BRD §0.13) they didn't personally create. Everyone else may
+// only open an application they OWN (dealer_user_id === their id), matching the
+// owner-scoped "My Drafts" list (/api/dealer-onboarding/my). Without the
+// ownership branch, a draft owner whose role isn't internal (e.g. the dedicated
+// "onboarding" role) gets 403 resuming their own draft, so its saved documents
+// never reload.
 const INTERNAL_ROLES = ["admin", "sales_head", "ceo", "inside_sales_rep", "asm"];
 
 export async function GET(_req: NextRequest, context: RouteContext) {
@@ -36,12 +40,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         .where(eq(users.id, user.id))
         .limit(1)
     )[0];
-    if (!dbUser || !INTERNAL_ROLES.includes(dbUser.role)) {
-      return NextResponse.json(
-        { success: false, message: "Forbidden" },
-        { status: 403 }
-      );
-    }
+    const isInternal = !!dbUser && INTERNAL_ROLES.includes(dbUser.role);
 
     const { applicationId } = await context.params;
 
@@ -53,6 +52,15 @@ export async function GET(_req: NextRequest, context: RouteContext) {
           .where(eq(dealerOnboardingApplications.id, applicationId))
           .limit(1)
       )[0] ?? null;
+
+    // Authorize: internal staff may open any application; everyone else only
+    // their own. Checked after the fetch so the owner test can use the row.
+    if (application && !isInternal && application.dealer_user_id !== user.id) {
+      return NextResponse.json(
+        { success: false, message: "Forbidden" },
+        { status: 403 }
+      );
+    }
 
     const documents = application
       ? await db

@@ -6,6 +6,7 @@
  * Role: fi_coordinator / nbfc_admin. Tenant-scoped (a foreign agentId 404s).
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
@@ -50,7 +51,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ ag
     return NextResponse.json({ ok: true, agent });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }
 
@@ -66,6 +67,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ a
     return NextResponse.json({ ok: true, agent });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

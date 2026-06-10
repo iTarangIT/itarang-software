@@ -15,6 +15,7 @@
  * Role: `operations` or `nbfc_admin` (same as register, §7.2 / §9).
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 
@@ -156,6 +157,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     return NextResponse.json({ ok: true, mandate_id: row.id, status: "registered" });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }
