@@ -211,6 +211,11 @@ export type DealerOnboardingState = {
   // Set when an internal user (sales / admin) is completing the wizard on a
   // converted lead's behalf (BRD §0.13). Null for normal dealer self-service.
   internalApplicationId: string | null;
+  // The dealer_onboarding_applications row this wizard autosaves to. Set for
+  // EVERY draft (self-service or internal) once the first autosave succeeds, so
+  // submit targets the exact row instead of a dealer_user_id fallback that
+  // could pick the wrong draft when one user has several in progress (E-160).
+  draftApplicationId: string | null;
   company: CompanyStepData;
   compliance: ComplianceStepData;
   ownership: OwnershipBankingData;

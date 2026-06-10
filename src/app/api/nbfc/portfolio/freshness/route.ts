@@ -13,6 +13,7 @@
  * matches secret) so it cannot be abused by a leaked header alone.
  */
 import { NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { computePortfolioFreshness } from "@/lib/nbfc/portfolio-freshness";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
@@ -41,6 +42,6 @@ export async function GET(req: Request) {
       : msg.startsWith("FORBIDDEN")
         ? 403
         : 500;
-    return NextResponse.json({ ok: false, error: msg }, { status });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status });
   }
 }

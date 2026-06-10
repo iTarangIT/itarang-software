@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Package, Plus, Trash2, Calendar, Building2, CheckCircle } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface OEM {
     id: string;
@@ -84,7 +85,7 @@ export default function NewProvisionPage() {
             router.push('/provisions');
         } catch (err) {
             console.error(err);
-            alert('Error creating provision');
+            toast.error('Error creating provision');
         } finally {
             setLoading(false);
         }

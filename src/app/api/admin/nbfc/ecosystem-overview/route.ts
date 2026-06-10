@@ -10,6 +10,7 @@
  * surface (E-001, E-005).
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { resolveAdminActor, statusFromError } from "@/lib/nbfc/admin/auth";
 import { computeEcosystemOverview } from "@/lib/nbfc/ecosystem-overview";
 
@@ -22,7 +23,7 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { ok: false, error: msg },
+      { ok: false, error: clientError(msg) },
       { status: statusFromError(msg) },
     );
   }
@@ -32,6 +33,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(overview);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: 500 });
   }
 }

@@ -9,6 +9,7 @@
  * Self-hides when the lead has no routed NBFCs (cash lead / not yet routed).
  */
 import { useCallback, useEffect, useState } from "react";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 type Offer = {
   roi_pct: string | null;
@@ -81,7 +82,13 @@ export default function FinancingOffersSection({ leadId }: { leadId: string }) {
   }
 
   async function convertToCash() {
-    if (!confirm("Convert this lead to a CASH sale? Financing data will be purged and the lead reopens in cash mode.")) return;
+    const ok = await confirmDialog({
+      title: "Convert to cash sale?",
+      message: "Financing data will be purged and the lead reopens in cash mode.",
+      confirmText: "Convert to cash",
+      variant: "danger",
+    });
+    if (!ok) return;
     setBusy(-1);
     setError(null);
     try {

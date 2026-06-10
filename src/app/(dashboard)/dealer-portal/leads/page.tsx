@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { PlusCircle, Search, Filter, Loader2, Trash2, X, AlertTriangle, Pencil, Save } from 'lucide-react';
 import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { toast } from 'sonner';
 import { isCashMethod, isFinanceMethod } from '@/components/dealer-portal/lead-wizard/constants';
 
 function DealerLeadsContent() {
@@ -50,10 +51,10 @@ function DealerLeadsContent() {
                 setDeleteTarget(null);
                 fetchLeads();
             } else {
-                alert(data.error?.message || data.message || 'Failed to delete lead');
+                toast.error(data.error?.message || data.message || 'Failed to delete lead');
             }
         } catch {
-            alert('Failed to delete lead');
+            toast.error('Failed to delete lead');
         } finally {
             setDeleting(false);
         }
@@ -84,10 +85,10 @@ function DealerLeadsContent() {
                 fetchLeads();
             } else {
                 const msg = data.error?.message || data.error || data.message || 'Failed to update lead';
-                alert(msg);
+                toast.error(msg);
             }
         } catch {
-            alert('Failed to update lead');
+            toast.error('Failed to update lead');
         } finally {
             setSaving(false);
         }

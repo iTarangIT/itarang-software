@@ -141,10 +141,22 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/nbfc/approvals",
         },
         {
+          id: "financing-offer-approvals",
+          label: "Financing Approvals",
+          icon: ClipboardCheck,
+          href: "/admin/nbfc/financing-offers/approvals",
+        },
+        {
           id: "nbfc-directory",
           label: "NBFC Directory",
           icon: Building,
           href: "/admin/nbfc",
+        },
+        {
+          id: "loan-products",
+          label: "Loan Products",
+          icon: Package,
+          href: "/admin/loan-products",
         },
         {
           id: "nbfc-ecosystem",
@@ -271,6 +283,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "NBFC Directory",
           icon: Landmark,
           href: "/admin/nbfc",
+        },
+        {
+          id: "loan-products",
+          label: "Loan Products",
+          icon: Package,
+          href: "/admin/loan-products",
         },
         {
           id: "nbfc-my-drafts",

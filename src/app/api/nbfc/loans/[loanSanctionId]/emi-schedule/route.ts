@@ -7,6 +7,7 @@
  * requireNbfcAccess).
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { db } from "@/lib/db";
 import { and, asc, eq } from "drizzle-orm";
 import { emiSchedules, nbfcLoans } from "@/lib/db/schema";
@@ -68,6 +69,6 @@ export async function GET(
       : msg.startsWith("UNAUTHORIZED")
         ? 401
         : 500;
-    return NextResponse.json({ ok: false, error: msg }, { status });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status });
   }
 }

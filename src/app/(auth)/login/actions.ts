@@ -67,6 +67,12 @@ export async function login(formData: FormData) {
     redirect("/admin");
   }
 
+  // The "onboarding" role has no dashboard — it exists to land staff straight
+  // in the dealer-onboarding workspace (New / My Drafts chooser).
+  if (appUser.role === "onboarding") {
+    redirect("/dealer-onboarding");
+  }
+
   redirect("/");
 }
 

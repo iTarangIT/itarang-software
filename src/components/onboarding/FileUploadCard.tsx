@@ -230,6 +230,19 @@ export default function FileUploadCard({
     inputRef.current?.click();
   };
 
+  // A slot counts as "has an upload" when it carries an in-memory File (just
+  // picked) OR a persisted reference (storagePath / uploadedUrl) restored from a
+  // resumed draft. The detail panel below must render in both cases — otherwise
+  // a resumed document shows the "Uploaded" badge but no filename / view link.
+  const hasUpload = Boolean(
+    currentValue.file || currentValue.uploadedUrl || currentValue.storagePath
+  );
+  const displayName =
+    currentValue.file?.name ||
+    currentValue.storagePath?.split("/").pop() ||
+    currentValue.label ||
+    "Uploaded document";
+
   useEffect(() => {
     return () => {
       if (currentValue?.previewUrl?.startsWith("blob:")) {
@@ -315,7 +328,7 @@ export default function FileUploadCard({
         />
       </div>
 
-      {currentValue.file ? (
+      {hasUpload ? (
         <div className="rounded-2xl border border-[#E3E8EF] bg-white p-4 shadow-sm">
           <div className="flex items-start justify-between gap-4">
             <div className="flex min-w-0 items-start gap-3">
@@ -325,11 +338,13 @@ export default function FileUploadCard({
 
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-slate-800">
-                  {currentValue.file.name}
+                  {displayName}
                 </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {(currentValue.file.size / 1024).toFixed(1)} KB
-                </p>
+                {currentValue.file ? (
+                  <p className="mt-1 text-xs text-slate-500">
+                    {(currentValue.file.size / 1024).toFixed(1)} KB
+                  </p>
+                ) : null}
 
                 {currentValue.uploadedAt ? (
                   <p className="mt-1 text-xs text-slate-400">

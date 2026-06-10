@@ -3,6 +3,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 
 interface PDIFormProps {
     data: {
@@ -114,7 +115,7 @@ export default function PDIForm({ data, engineerId }: PDIFormProps) {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!location) {
-            alert('GPS Location is mandatory!');
+            toast.error('GPS Location is mandatory!');
             return;
         }
 
@@ -161,7 +162,7 @@ export default function PDIForm({ data, engineerId }: PDIFormProps) {
             router.refresh();
 
         } catch (error: any) {
-            alert(error.message);
+            toast.error(error.message);
         } finally {
             setSubmitting(false);
         }

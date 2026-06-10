@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { AlertTriangle, Info, Camera, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 function NewDisputeForm() {
     const router = useRouter();
@@ -29,7 +30,7 @@ function NewDisputeForm() {
 
     const onSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!selectedOrder) return alert('Please select an order');
+        if (!selectedOrder) { toast.error('Please select an order'); return; }
 
         setLoading(true);
         try {
@@ -49,11 +50,11 @@ function NewDisputeForm() {
                 throw new Error(err.error?.message || 'Failed to raise dispute');
             }
 
-            alert('Dispute raised successfully');
+            toast.success('Dispute raised successfully');
             router.push('/disputes');
             router.refresh();
         } catch (error: any) {
-            alert(error.message);
+            toast.error(error.message);
         } finally {
             setLoading(false);
         }

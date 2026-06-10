@@ -20,6 +20,7 @@
  * loan belongs to them.
  */
 import { NextResponse, type NextRequest } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -184,6 +185,6 @@ export async function GET(req: NextRequest) {
       : msg.startsWith("FORBIDDEN")
         ? 403
         : 500;
-    return NextResponse.json({ ok: false, error: msg }, { status });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status });
   }
 }

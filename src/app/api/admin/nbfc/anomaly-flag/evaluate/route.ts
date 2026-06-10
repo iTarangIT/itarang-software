@@ -17,6 +17,7 @@
  * receive 403.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { resolveAdminActor, statusFromError } from "@/lib/nbfc/admin/auth";
 import { evaluateAnomalyFlags } from "@/lib/nbfc/anomalyFlags";
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { ok: false, error: msg },
+      { ok: false, error: clientError(msg) },
       { status: statusFromError(msg) },
     );
   }
@@ -77,6 +78,6 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[admin/nbfc/anomaly-flag/evaluate] failed:", msg);
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: 500 });
   }
 }
