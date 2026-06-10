@@ -7,6 +7,7 @@
  * served via the /nbfc-uploads catch-all — standalone-safe.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { putNbfcObject } from "@/lib/nbfc/nbfc-storage";
@@ -53,6 +54,6 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const code = msg.startsWith("UNAUTHORIZED") ? 401 : msg.startsWith("FORBIDDEN") ? 403 : 500;
-    return NextResponse.json({ ok: false, error: msg }, { status: code });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: code });
   }
 }

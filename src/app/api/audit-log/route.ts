@@ -24,6 +24,7 @@
  * Results ordered by timestamp DESC, paginated.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { and, desc, eq, gte, lte, sql, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -283,7 +284,7 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { ok: false, error: msg },
+      { ok: false, error: clientError(msg) },
       { status: statusFromError(msg) },
     );
   }

@@ -8,6 +8,7 @@
  * Only the original requestor (initiator_user_id) may fetch the access_token.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { mintGrantIfApproved } from "@/lib/nbfc/pii-access/service";
@@ -93,7 +94,7 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { ok: false, error: msg },
+      { ok: false, error: clientError(msg) },
       { status: statusFromError(msg) },
     );
   }

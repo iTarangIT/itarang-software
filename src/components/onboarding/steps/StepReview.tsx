@@ -298,7 +298,10 @@ function buildDocument(
   documentType: string,
   item: UploadItemLike
 ): DealerDocumentPayload | null {
-  if (!item?.file || !item?.storagePath) {
+  // Gate on storagePath, NOT on `file`: a resumed draft restores storagePath /
+  // uploadedUrl but not the in-memory File, and those already-uploaded docs must
+  // still be submitted (otherwise reopening a draft and submitting drops them).
+  if (!item?.storagePath) {
     return null;
   }
 
@@ -306,10 +309,11 @@ function buildDocument(
     documentType,
     bucketName: item.bucketName || "dealer-documents",
     storagePath: item.storagePath,
-    fileName: item.file.name,
+    fileName:
+      item.file?.name || item.storagePath.split("/").pop() || documentType,
     fileUrl: item.uploadedUrl || null,
-    mimeType: item.file.type || null,
-    fileSize: typeof item.file.size === "number" ? item.file.size : null,
+    mimeType: item.file?.type || null,
+    fileSize: typeof item.file?.size === "number" ? item.file.size : null,
   };
 }
 
@@ -447,7 +451,12 @@ export default function StepReview() {
       setIsSubmitting(true);
 
       const payload = {
-        applicationId: state.internalApplicationId || "",
+        // Target the exact row this wizard autosaved to (E-160). Falls back to
+        // internalApplicationId for the converted-lead flow. internalSubmission
+        // stays tied to internalApplicationId so a normal self-service submit
+        // keeps its own dealer redirect / ownership semantics.
+        applicationId:
+          state.draftApplicationId || state.internalApplicationId || "",
         internalSubmission: !!state.internalApplicationId,
         dealerId: state.dealerId || "",
         company: state.company,

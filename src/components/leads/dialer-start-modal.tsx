@@ -19,6 +19,7 @@ import {
   type RegionSelection,
 } from "./region-selector";
 import { RegionGroupManager } from "./region-group-manager";
+import { toast } from "sonner";
 
 export type DialerProvider = "bolna" | "elevenlabs";
 export type DialerCategory = "hot" | "warm" | "cold" | "all";
@@ -248,7 +249,7 @@ export function DialerStartModal({
       await saveGroup(name, region);
       setSaveAsName("");
     } catch (err: any) {
-      alert(err?.message ?? "Failed to save group");
+      toast.error(err?.message ?? "Failed to save group");
     } finally {
       setSavingGroup(false);
     }

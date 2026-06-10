@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface DealActionsProps {
     approvalId: string;
@@ -34,10 +35,10 @@ export default function DealActions({ approvalId, dealId, role, level }: DealAct
                 const err = await res.json();
                 throw new Error(err.error?.message || 'Approval failed');
             }
-            alert(`L${level} Approval Successful`);
+            toast.success(`L${level} Approval Successful`);
             router.refresh();
         } catch (error: any) {
-            alert(error.message);
+            toast.error(error.message);
         } finally {
             setLoading(false);
         }
@@ -56,10 +57,10 @@ export default function DealActions({ approvalId, dealId, role, level }: DealAct
                 const err = await res.json();
                 throw new Error(err.error?.message || 'Rejection failed');
             }
-            alert('Deal Rejected');
+            toast.success('Deal Rejected');
             router.refresh();
         } catch (error: any) {
-            alert(error.message);
+            toast.error(error.message);
         } finally {
             setLoading(false);
         }

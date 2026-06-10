@@ -8,6 +8,7 @@
  * KYC have no per-lead skip).
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
@@ -78,6 +79,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     return NextResponse.json({ ok: true, mandate_id: created.id, status: "skipped" });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

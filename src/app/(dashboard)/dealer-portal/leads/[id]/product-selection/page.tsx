@@ -995,11 +995,20 @@ export default function ProductSelectionPage() {
         const idStr = String(nbfcId);
         const idx = prev.findIndex((p) => p.nbfc_id === idStr);
         if (idx >= 0) {
-          // Already picked — remove (toggle off).
-          return prev.filter((_, i) => i !== idx);
+          const existing = prev[idx];
+          if (existing.loan_product_id === loanProductId) {
+            // Same product re-clicked — toggle the NBFC off.
+            return prev.filter((_, i) => i !== idx);
+          }
+          // A different product of an already-picked NBFC — swap the product
+          // in place. One product per NBFC, so the pick count is unchanged.
+          const next = [...prev];
+          next[idx] = { nbfc_id: idStr, loan_product_id: loanProductId };
+          return next;
         }
         if (prev.length >= 2) {
-          // Cap at 2 per §6.2; replace the oldest pick so dealer can swap easily.
+          // Cap at 2 NBFCs per §6.2; replace the oldest pick so dealer can
+          // swap lenders easily.
           return [...prev.slice(1), { nbfc_id: idStr, loan_product_id: loanProductId }];
         }
         return [...prev, { nbfc_id: idStr, loan_product_id: loanProductId }];
@@ -3303,8 +3312,12 @@ function SectionG({
   disclosureAck: boolean;
   onDisclosureChange: (next: boolean) => void;
 }) {
-  const isPicked = (nbfcId: number) =>
-    selected.some((s) => s.nbfc_id === String(nbfcId));
+  // Selection is keyed per product now (one card per loan product), while the
+  // cap is still on distinct NBFCs (max 2). pickedProductIds drives the card's
+  // selected state; pickedNbfcIds gates which NBFCs are still selectable.
+  const pickedProductIds = new Set(selected.map((s) => s.loan_product_id));
+  const pickedNbfcIds = new Set(selected.map((s) => s.nbfc_id));
+  const isNbfcPicked = (nbfcId: number) => pickedNbfcIds.has(String(nbfcId));
   const pickCount = selected.length;
 
   return (
@@ -3331,64 +3344,87 @@ function SectionG({
           lead will be routed to Manual Handoff after submit.
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-5">
           {options.map((opt, idx) => {
-            const picked = isPicked(opt.nbfcId);
-            // Phase 2 stub: use the first active product's bands as the
-            // indicative range. Phase 3 will pick the right product after
-            // amount-aware BRE re-evaluation.
-            const product = opt.activeLoanProducts[0];
-            const disablePick = !picked && pickCount >= 2;
+            const nbfcPicked = isNbfcPicked(opt.nbfcId);
+            // When two NBFCs are already chosen, every product of any other
+            // NBFC is locked (one product per NBFC, max two NBFCs).
+            const nbfcLocked = !nbfcPicked && pickCount >= 2;
             return (
-              <button
-                key={opt.nbfcId}
-                type="button"
-                onClick={() => product && onTogglePick(opt.nbfcId, product.id)}
-                disabled={!product || disablePick}
-                className={`w-full text-left p-4 rounded-2xl border-2 transition-all ${
-                  picked
-                    ? "border-[#0047AB] bg-blue-50/60 shadow-sm"
-                    : disablePick
-                      ? "border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed"
-                      : "border-gray-200 bg-white hover:border-[#0047AB] hover:shadow-sm"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-sm font-bold text-gray-900 truncate">
-                      {`iTarang Scheme ${idx + 1} (${opt.nbfcCode})`}
-                    </div>
-                    {product && (
-                      <div className="text-[11px] text-gray-500 mt-0.5 truncate">
-                        {product.productName}
-                      </div>
-                    )}
-                  </div>
-                  <div
-                    className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
-                      picked
-                        ? "border-[#0047AB] bg-[#0047AB]"
-                        : "border-gray-300"
-                    }`}
-                  >
-                    {picked && <CheckCircle2 className="w-3 h-3 text-white" />}
-                  </div>
+              <div key={opt.nbfcId} className="space-y-2">
+                <div className="flex items-center gap-2 px-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-gray-600">
+                    {`iTarang Scheme ${idx + 1} (${opt.nbfcCode})`}
+                  </span>
+                  {opt.activeLoanProducts.length > 1 && (
+                    <span className="text-[10px] text-gray-400">
+                      · pick one of {opt.activeLoanProducts.length}
+                    </span>
+                  )}
                 </div>
-                {product && (
-                  <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <RangeStat label="ROI" value={`${product.minRoiPct}% – ${product.maxRoiPct}%`} />
-                    <RangeStat
-                      label="Tenure"
-                      value={`${product.tenureMonthsMin} – ${product.tenureMonthsMax} mo`}
-                    />
-                    <RangeStat label="Down payment" value={`${product.downPaymentPct}%`} />
-                    <RangeStat
-                      label="Loan amount"
-                      value={`₹${product.loanAmountMin.toLocaleString("en-IN")} – ₹${product.loanAmountMax.toLocaleString("en-IN")}`}
-                    />
-                  </div>
+                {opt.activeLoanProducts.length === 0 ? (
+                  <p className="text-[11px] text-gray-400 px-1">
+                    No active products from this partner right now.
+                  </p>
+                ) : (
+                  opt.activeLoanProducts.map((product) => {
+                    const picked = pickedProductIds.has(product.id);
+                    const disablePick = !picked && nbfcLocked;
+                    return (
+                      <button
+                        key={product.id}
+                        type="button"
+                        onClick={() => onTogglePick(opt.nbfcId, product.id)}
+                        disabled={disablePick}
+                        className={`w-full text-left p-4 rounded-2xl border-2 transition-all ${
+                          picked
+                            ? "border-[#0047AB] bg-blue-50/60 shadow-sm"
+                            : disablePick
+                              ? "border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed"
+                              : "border-gray-200 bg-white hover:border-[#0047AB] hover:shadow-sm"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-bold text-gray-900 truncate">
+                              {product.productName}
+                            </div>
+                          </div>
+                          <div
+                            className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
+                              picked
+                                ? "border-[#0047AB] bg-[#0047AB]"
+                                : "border-gray-300"
+                            }`}
+                          >
+                            {picked && (
+                              <CheckCircle2 className="w-3 h-3 text-white" />
+                            )}
+                          </div>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+                          <RangeStat
+                            label="ROI"
+                            value={`${product.minRoiPct}% – ${product.maxRoiPct}%`}
+                          />
+                          <RangeStat
+                            label="Tenure"
+                            value={`${product.tenureMonthsMin} – ${product.tenureMonthsMax} mo`}
+                          />
+                          <RangeStat
+                            label="Down payment"
+                            value={`${product.downPaymentPct}%`}
+                          />
+                          <RangeStat
+                            label="Loan amount"
+                            value={`₹${product.loanAmountMin.toLocaleString("en-IN")} – ₹${product.loanAmountMax.toLocaleString("en-IN")}`}
+                          />
+                        </div>
+                      </button>
+                    );
+                  })
                 )}
-              </button>
+              </div>
             );
           })}
           <p className="text-[11px] text-gray-400 px-1">

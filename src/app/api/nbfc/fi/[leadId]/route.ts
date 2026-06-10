@@ -9,6 +9,7 @@
  *   - can_act (only fi_coordinator / nbfc_admin decide; others are read-only)
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -99,6 +100,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

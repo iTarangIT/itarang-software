@@ -7,6 +7,7 @@
  * Auth gating mirrors /api/nbfc/risk/run — see that file's doc-block.
  */
 import { NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { getCurrentTenant, getTenantLoanSlice, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import { getFleetSummary } from "@/lib/db/iot-queries";
 
@@ -26,6 +27,6 @@ export async function GET() {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const status = msg.startsWith("UNAUTHORIZED") ? 401 : msg.startsWith("FORBIDDEN") ? 403 : 500;
-    return NextResponse.json({ ok: false, error: msg }, { status });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status });
   }
 }
