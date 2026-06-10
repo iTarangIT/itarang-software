@@ -8,6 +8,7 @@
  * by the admin dashboard and by the daily cron at /api/cron/nbfc-cor-expiry.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { and, gte, lte, isNotNull } from "drizzle-orm";
@@ -93,7 +94,7 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { ok: false, error: msg },
+      { ok: false, error: clientError(msg) },
       { status: statusFromError(msg) },
     );
   }

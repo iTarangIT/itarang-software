@@ -18,6 +18,9 @@ type Offer = {
   conditions: string | null;
   valid_until: string | null;
   submitted_at: string | null;
+  // E-161 — out-of-band deviation gate (§13.3.4).
+  ceo_approval_status?: string | null;
+  deviation_reason?: string | null;
 };
 
 type Resp = {
@@ -127,9 +130,26 @@ export default function OfferPanel({ leadId }: { leadId: string }) {
         {status === "not_selected" && (
           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-slate-200 text-slate-600">Not selected</span>
         )}
+        {offer?.ceo_approval_status === "pending" && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-100 text-amber-700">Pending iTarang CEO approval</span>
+        )}
+        {offer?.ceo_approval_status === "rejected" && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-100 text-red-700">CEO rejected</span>
+        )}
       </div>
 
       {error && <p className="text-[11px] text-red-600 mb-2">{error}</p>}
+
+      {offer?.ceo_approval_status === "pending" && (
+        <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-md px-3 py-2 mb-2">
+          This offer is outside the product band{offer.deviation_reason ? ` (${offer.deviation_reason})` : ""} and is held for iTarang CEO approval before the customer can see it.
+        </p>
+      )}
+      {offer?.ceo_approval_status === "rejected" && (
+        <p className="text-[11px] text-red-700 bg-red-50 border border-red-100 rounded-md px-3 py-2 mb-2">
+          The iTarang CEO rejected this out-of-band offer{offer.deviation_reason ? ` (${offer.deviation_reason})` : ""}. Revise the terms within band and resubmit.
+        </p>
+      )}
 
       {offer && !edit && (
         <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">

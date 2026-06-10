@@ -12,6 +12,7 @@
  * FK that here, but the UI only offers current members.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
@@ -50,7 +51,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, owners: rows });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }
 
@@ -111,6 +112,6 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ ok: true, count: parsed.data.owners.length });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

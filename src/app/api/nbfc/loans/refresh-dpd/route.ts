@@ -15,6 +15,7 @@
  * system) before going to production. The schema and shape stay the same.
  */
 import { NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { db } from "@/lib/db";
 import { nbfcLoans } from "@/lib/db/schema";
 import { sql } from "drizzle-orm";
@@ -54,6 +55,6 @@ export async function POST() {
     return NextResponse.json({ ok: true, updated });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: 500 });
   }
 }

@@ -4,6 +4,7 @@
  * §8.2 — edit or remove a chargeable-item catalogue entry. Admin-only.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 
@@ -56,7 +57,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ nbfc
     return NextResponse.json({ ok: true });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }
 
@@ -69,6 +70,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ n
     return NextResponse.json({ ok: true });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

@@ -14,6 +14,9 @@ import { extractSignedAgreementUrl } from "@/lib/digio/parse-status";
 export interface FetchSignedAgreementInput {
   leadId: string;
   digioDocumentId: string;
+  // E-166 — when an NBFC uses their OWN Digio account, the adapter passes its
+  // base URL + Basic-auth header here. Omitted ⇒ iTarang's global Digio creds.
+  override?: { baseUrl: string; authHeader: string };
 }
 export interface FetchSignedAgreementResult {
   signedPdfUrl: string | null;
@@ -84,12 +87,12 @@ export async function fetchSignedLoanAgreementPdfAndAuditTrail(
     return { signedPdfUrl: `${base}/signed.pdf`, auditTrailUrl: `${base}/audit-trail.pdf`, stubbed: true };
   }
 
-  const authHeader = getDigioBasicAuth();
+  const authHeader = input.override?.authHeader ?? getDigioBasicAuth();
   if (!authHeader) {
     console.warn("[fetchSignedAgreement] eSign provider creds not set — cannot download");
     return { signedPdfUrl: null, auditTrailUrl: null, stubbed: false };
   }
-  const baseUrl = getDigioBaseUrl();
+  const baseUrl = input.override?.baseUrl ?? getDigioBaseUrl();
   const auditUrl = baseUrl + AUDIT_TRAIL_PATH.replace("{documentId}", encodeURIComponent(input.digioDocumentId));
 
   const [signedBuffer, auditBuffer] = await Promise.all([

@@ -15,6 +15,7 @@
  * onto the BullMQ worker so the UI can poll for status.
  */
 import { NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 import { runRiskWorkflow } from "@/lib/ai/langgraph/risk-hypothesis-graph";
 
@@ -31,6 +32,6 @@ export async function POST() {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const status = msg.startsWith("UNAUTHORIZED") ? 401 : msg.startsWith("FORBIDDEN") ? 403 : 500;
-    return NextResponse.json({ ok: false, error: msg }, { status });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status });
   }
 }

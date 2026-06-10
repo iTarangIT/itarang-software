@@ -14,6 +14,7 @@
  * Role: `operations` (owns VKYC initiation, §7.2) or `nbfc_admin`.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -24,6 +25,7 @@ import { assertNotHaltedByFailure } from "@/lib/nbfc/track-gate";
 import { dispatchVkycLink, type VkycChannel } from "@/lib/nbfc/vkyc-dispatch";
 import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
 import { assertChargeable, postCharge } from "@/lib/nbfc/charging";
+import { buildHandoffUrl, postHandoff } from "@/lib/nbfc/handoff";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,6 +88,129 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     // §7.4 Track Rules — don't start a new run if a sibling track failed and
     // this NBFC halts the others on failure.
     await assertNotHaltedByFailure(leadId, "vkyc");
+
+    // E-165 — Video KYC mode. 'own' = the NBFC runs VKYC on their OWN provider;
+    // iTarang triggers + records only (no Decentro call, no per-run fee). Mode
+    // is snapshotted (frozen per lead, §7.4); the endpoint URL + signing secret
+    // are read LIVE so a corrected endpoint applies to in-flight leads.
+    let mode: "own" | "itarang" = assignment.snapshot.vkyc_mode === "own" ? "own" : "itarang";
+    if (assignment.snapshot.vkyc_mode == null) {
+      const [m] = await db
+        .select({ mode: nbfcServiceConfig.vkyc_mode })
+        .from(nbfcServiceConfig)
+        .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
+        .limit(1);
+      mode = m?.mode === "own" ? "own" : "itarang";
+    }
+
+    if (mode === "own") {
+      const [cfg] = await db
+        .select({ endpoint: nbfcServiceConfig.vkyc_endpoint_url, secret: nbfcServiceConfig.vkyc_webhook_secret })
+        .from(nbfcServiceConfig)
+        .where(eq(nbfcServiceConfig.tenant_id, actor.tenant_id))
+        .limit(1);
+      if (!cfg?.endpoint) {
+        return NextResponse.json(
+          { ok: false, error: "BAD_REQUEST: Own Video KYC has no endpoint URL configured in Settings → Service Opt-In" },
+          { status: 400 },
+        );
+      }
+      let origin: string;
+      try {
+        origin = publicOrigin({ req });
+      } catch (err) {
+        const m = err instanceof PublicOriginError ? err.message : "Cannot determine public origin";
+        return NextResponse.json({ ok: false, error: `Server misconfig: ${m}` }, { status: 500 });
+      }
+      const callbackUrl = `${origin}/api/nbfc/vkyc/callback`;
+
+      const [lead] = await db
+        .select({
+          full_name: leads.full_name,
+          owner_name: leads.owner_name,
+          owner_email: leads.owner_email,
+          phone: leads.phone,
+          owner_contact: leads.owner_contact,
+        })
+        .from(leads)
+        .where(eq(leads.id, leadId))
+        .limit(1);
+      if (!lead) {
+        return NextResponse.json({ ok: false, error: "NOT_FOUND: lead not found" }, { status: 404 });
+      }
+
+      const now = new Date();
+      const vkycRef = generateVkycRef(leadId);
+      // Create/refresh the track in canonical 'own' mode — NO Decentro, NO
+      // capture link, NO charge. Result returns via /api/nbfc/vkyc/callback
+      // (match-by-ref) or record-manual.
+      const [track] = await db
+        .insert(videoKycVerifications)
+        .values({
+          lead_id: leadId,
+          nbfc_id: assignment.nbfc_id,
+          tenant_id: actor.tenant_id,
+          vkyc_ref: vkycRef,
+          mode: "own",
+          status: "in_progress",
+          provider_name: "nbfc_own",
+          triggered_by: actor.user_id,
+          triggered_at: now,
+          updated_at: now,
+        })
+        .onConflictDoUpdate({
+          target: [videoKycVerifications.lead_id, videoKycVerifications.nbfc_id],
+          set: {
+            status: "in_progress",
+            mode: "own",
+            provider_name: "nbfc_own",
+            vkyc_ref: vkycRef,
+            // clear any prior result + stale passive-link metadata
+            match_score: null,
+            liveliness: null,
+            static_risk: null,
+            prerecorded_risk: null,
+            failure_reason: null,
+            completed_at: null,
+            admin_action: null,
+            admin_action_by: null,
+            admin_action_at: null,
+            link_channel: null,
+            link_sent_at: null,
+            link_expires_at: null,
+            triggered_by: actor.user_id,
+            triggered_at: now,
+            updated_at: now,
+          },
+        })
+        .returning({ id: videoKycVerifications.id });
+
+      const handoffUrl = buildHandoffUrl(cfg.endpoint, { ref: vkycRef, callback: callbackUrl });
+      const handoff = await postHandoff({
+        url: cfg.endpoint,
+        secret: cfg.secret,
+        payload: {
+          event: "vkyc.handoff",
+          itarang_lead_id: leadId,
+          itarang_vkyc_ref: vkycRef,
+          nbfc_id: assignment.nbfc_id,
+          customer_name: lead.full_name ?? lead.owner_name ?? "Customer",
+          customer_email: (lead.owner_email || "").trim() || null,
+          customer_phone: (lead.phone || lead.owner_contact || "").trim() || null,
+          callback_url: callbackUrl,
+        },
+      });
+
+      return NextResponse.json({
+        ok: true,
+        mode: "own",
+        track_id: track.id,
+        vkyc_ref: vkycRef,
+        handoff_url: handoffUrl,
+        callback_url: callbackUrl,
+        handoff_delivered: handoff.ok,
+      });
+    }
 
     // §8.1/§8.2 — passive VKYC is iTarang-operated (Decentro), so an empty
     // wallet blocks a new run; the flat fee applies per run.
@@ -229,6 +354,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

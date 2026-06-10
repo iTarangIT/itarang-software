@@ -10,6 +10,7 @@
  * Caller MUST have role 'nbfc_risk_head'.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { requestImmobilisation } from "@/lib/nbfc/actions/request-immobilisation";
@@ -68,7 +69,7 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { ok: false, error: msg },
+      { ok: false, error: clientError(msg) },
       { status: statusFromError(msg) },
     );
   }

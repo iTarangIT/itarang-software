@@ -4,6 +4,7 @@ import "./globals.css";
 import Providers from "@/components/Providers";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 import ChunkReloadGuard from "@/components/ChunkReloadGuard";
+import { ConfirmDialogHost } from "@/components/ui/confirm-dialog";
 import { Toaster } from "sonner";
 
 export const metadata: Metadata = {
@@ -46,6 +47,7 @@ export default function RootLayout({
           <AuthProvider>{children}</AuthProvider>
         </Providers>
         <Toaster position="top-right" richColors closeButton duration={4000} />
+        <ConfirmDialogHost />
       </body>
     </html>
   );
