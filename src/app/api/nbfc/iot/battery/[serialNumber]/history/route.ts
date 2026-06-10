@@ -21,6 +21,7 @@
  * Points are ordered ASCENDING by date — this is the contract AC4 asserts.
  */
 import { NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { getIotSql } from "@/lib/db/iot";
 import {
@@ -153,6 +154,6 @@ export async function GET(
     return NextResponse.json({ serial: serialNumber, metric, points });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: errorToStatus(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: errorToStatus(msg) });
   }
 }

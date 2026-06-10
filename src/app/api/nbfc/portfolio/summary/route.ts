@@ -7,6 +7,7 @@
  * tenant.id, and requireNbfcAccess() throws on a cross-tenant request.
  */
 import { NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { computePortfolioSummary } from "@/lib/nbfc/portfolio-summary";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
 
@@ -26,6 +27,6 @@ export async function GET() {
       : msg.startsWith("FORBIDDEN")
         ? 403
         : 500;
-    return NextResponse.json({ ok: false, error: msg }, { status });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status });
   }
 }

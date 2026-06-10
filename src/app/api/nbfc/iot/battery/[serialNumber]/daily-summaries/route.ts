@@ -11,6 +11,7 @@
  * AC5 covers this endpoint.
  */
 import { NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { desc, eq } from "drizzle-orm";
@@ -72,6 +73,6 @@ export async function GET(
     return NextResponse.json({ serial: serialNumber, summaries });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: errorToStatus(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: errorToStatus(msg) });
   }
 }

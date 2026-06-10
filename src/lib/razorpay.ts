@@ -254,6 +254,112 @@ export async function fetchPayment(paymentId: string) {
   return getRazorpay().payments.fetch(paymentId) as Promise<Record<string, any>>;
 }
 
+// ─────────────── NBFC wallet funds-in (Smart Collect + recurring) ────────────
+// Backs the §16.4 WalletFundsProvider (see src/lib/nbfc/wallet/razorpay-adapter).
+// 1. Smart Collect virtual account → per-NBFC funds-collection routing.
+// 2. Recurring payment on a saved e-mandate token → the §16.1 auto-recharge pull.
+// NBFC-facing UI never names Razorpay (§3.2) — these are admin/infra helpers.
+
+export interface VirtualAccountResult {
+  id: string;
+  upiVpa: string | null;
+  accountNumber: string | null;
+  ifsc: string | null;
+  status: string | null;
+}
+
+/**
+ * Create a Smart Collect virtual account for an NBFC. `notes` carry the tenant +
+ * nbfc so an inflow webhook can be routed unambiguously back to the right wallet
+ * (§16.4). Issues both a UPI VPA and a bank-account receiver. Surfaced to the NBFC
+ * as the "iTarang Virtual Account".
+ */
+export async function createVirtualAccount(params: {
+  tenantId: string;
+  nbfcId: number;
+  name: string;
+}): Promise<VirtualAccountResult> {
+  const va = (await getRazorpay().virtualAccounts.create({
+    receivers: { types: ["vpa", "bank_account"] },
+    description: `iTarang Virtual Account — ${params.name}`,
+    notes: {
+      itarang_tenant_id: params.tenantId,
+      itarang_nbfc_id: String(params.nbfcId),
+      itarang_purpose: "nbfc_wallet_topup",
+    },
+  } as any)) as any;
+  return normaliseVirtualAccount(va);
+}
+
+/** Fetch a virtual account (refresh display fields / reconciliation). */
+export async function fetchVirtualAccount(vaId: string): Promise<VirtualAccountResult> {
+  const va = (await getRazorpay().virtualAccounts.fetch(vaId)) as any;
+  return normaliseVirtualAccount(va);
+}
+
+function normaliseVirtualAccount(va: any): VirtualAccountResult {
+  const receivers: any[] = Array.isArray(va?.receivers) ? va.receivers : [];
+  const vpa = receivers.find((r) => r?.entity === "vpa" || r?.address);
+  const bank = receivers.find((r) => r?.entity === "bank_account" || r?.account_number);
+  return {
+    id: String(va?.id ?? ""),
+    upiVpa: vpa?.address ?? null,
+    accountNumber: bank?.account_number ?? null,
+    ifsc: bank?.ifsc ?? null,
+    status: va?.status ?? null,
+  };
+}
+
+export interface RecurringDebitResult {
+  paymentId: string;
+  status: string;
+}
+
+/**
+ * Execute one recurring debit against a saved e-mandate token (the §16.1
+ * auto-recharge pull, iTarang as creditor on the NBFC's mandate). Creates an
+ * order then charges the token via the recurring endpoint. The wallet is credited
+ * when the resulting inflow webhook arrives — NOT synchronously here.
+ *
+ * `idempotencyKey` is stamped into the order receipt + notes so a retried cron
+ * tick reuses the same correlation handle and the inflow credit stays idempotent.
+ */
+export async function createRecurringDebit(params: {
+  customerId: string;
+  tokenId: string;
+  amountPaise: number;
+  email?: string | null;
+  contact?: string | null;
+  idempotencyKey: string;
+  notes?: Record<string, string>;
+}): Promise<RecurringDebitResult> {
+  const rzp = getRazorpay();
+  const order = (await rzp.orders.create({
+    amount: params.amountPaise,
+    currency: "INR",
+    receipt: params.idempotencyKey.slice(0, 40),
+    payment_capture: true,
+    notes: { ...(params.notes ?? {}), itarang_idempotency_key: params.idempotencyKey },
+  } as any)) as any;
+
+  const payment = (await rzp.payments.createRecurringPayment({
+    email: params.email ?? undefined,
+    contact: params.contact ?? undefined,
+    amount: params.amountPaise,
+    currency: "INR",
+    order_id: order.id,
+    customer_id: params.customerId,
+    token: params.tokenId,
+    recurring: "1",
+    notes: { ...(params.notes ?? {}), itarang_idempotency_key: params.idempotencyKey },
+  } as any)) as any;
+
+  return {
+    paymentId: String(payment?.razorpay_payment_id ?? payment?.id ?? ""),
+    status: String(payment?.status ?? "created"),
+  };
+}
+
 /**
  * Unwraps a Razorpay SDK rejection into a human-readable string. The SDK rejects
  * with a plain object `{ statusCode, error: { code, description, … } }` — NOT an

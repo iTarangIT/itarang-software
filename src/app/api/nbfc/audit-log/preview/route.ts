@@ -20,6 +20,7 @@
  * IMPORTANT: This route MUST NOT write to audit_logs. Preview-only.
  */
 import { NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
@@ -87,6 +88,6 @@ export async function POST(req: Request) {
       : msg.startsWith("FORBIDDEN")
         ? 403
         : 500;
-    return NextResponse.json({ ok: false, error: msg }, { status });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status });
   }
 }

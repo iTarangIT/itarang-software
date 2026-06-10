@@ -5,6 +5,7 @@
  * Body: { prefs: { [event]: { email: bool, in_app: bool } } }
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { and, eq } from "drizzle-orm";
@@ -81,6 +82,6 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (e) {
     const msg = unwrapDbError(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

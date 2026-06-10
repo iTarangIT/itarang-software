@@ -60,7 +60,8 @@ export async function POST(
     const dob = cb.dob ? new Date(cb.dob).toISOString().slice(0, 10) : "";
     const address = cb.address || cb.current_address || "";
 
-    // Provider-routed (BRD Addendum §4.3). Null → Equifax via DEFAULT_PLATFORM_BUREAU.
+    // Provider-routed (BRD Addendum §4.3). Null → DEFAULT_PLATFORM_BUREAU,
+    // currently 'cibil' (the working provider) until Equifax is provisioned.
     const result = await getCreditBureauProvider(null).fetchScore({
       name,
       pan: cb.pan_no || "",

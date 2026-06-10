@@ -11,6 +11,7 @@
  * AuthN/Z: nbfc-tenant — caller must be the seller tenant for the settlement.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { patchSettlementStatus } from "@/lib/nbfc/auction/settlements";
@@ -73,7 +74,7 @@ export async function PATCH(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { ok: false, error: msg },
+      { ok: false, error: clientError(msg) },
       { status: statusFromError(msg) },
     );
   }

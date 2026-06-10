@@ -1,0 +1,14 @@
+<!doctype html><meta charset="utf-8"><title>Intent eval</title>
+<style>body{font:14px/1.5 system-ui;margin:40px;max-width:900px}pre{background:#f6f8fa;padding:12px;border-radius:8px;overflow:auto}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:4px 10px;text-align:left}h1,h2{font-weight:700}</style>
+<h1>Intent scoring eval</h1>
+<p>Generated 2026-06-07T12:25:59.687Z · 2 golden case(s)</p>
+<h2>Rubric (correct signals → correct label?)</h2>
+<p>Cases: 2 · Accuracy: <b>0.0%</b> · Score MAE: 29.5</p>
+<pre>truth ↓ / pred →qualified     warm          cold          disqualified  
+qualified     0             1             0             0             
+warm          0             0             0             1             
+cold          0             0             0             0             
+disqualified  0             0             0             0             </pre>
+<h3>Misses</h3><pre>conv_8901ktbb3gqffz98rwv8cxekj75s  truth=qualified pred=warm (score 57)
+conv_3201ktbb79esfsnry91s8bqw93ex  truth=warm pred=disqualified (score 9)</pre>
+<p><i>Extraction eval skipped (RUN_GOLDEN=1 + OPENAI_API_KEY to enable).</i></p>

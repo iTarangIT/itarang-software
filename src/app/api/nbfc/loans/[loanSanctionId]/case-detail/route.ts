@@ -17,6 +17,7 @@
  * No mutations. Tenant-scoped through requireNbfcAccess(); 403 if cross-tenant.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { db } from "@/lib/db";
 import { and, desc, eq } from "drizzle-orm";
 import {
@@ -300,6 +301,6 @@ export async function GET(
       : msg.startsWith("UNAUTHORIZED")
         ? 401
         : 500;
-    return NextResponse.json({ ok: false, error: msg }, { status });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status });
   }
 }
