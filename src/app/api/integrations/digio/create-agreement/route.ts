@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { launchBrowser } from "@/lib/pdf/launch-browser";
+import { launchBrowser, resetBrowser } from "@/lib/pdf/launch-browser";
 import { buildTarangDealerAgreementHtml } from "@/lib/agreement/dealer-agreement-template";
 import {
   extractAttachedEstampDetails,
@@ -143,16 +143,33 @@ function buildSignerCoordinatesList(
   return coords;
 }
 
-async function renderPdfFromHtml(html: string) {
+// Per-step timeout for the Puppeteer render. The agreement template embeds NO
+// remote assets (system fonts only, no <img>/<link>), so a healthy render
+// finishes in well under a second. A long block here means the shared Chrome on
+// the VPS has gone unresponsive — we want to fail fast and relaunch, not sit on
+// the silent 30s default that produced "Navigation timeout of 30000 ms exceeded".
+const PDF_RENDER_TIMEOUT_MS = 15000;
+
+async function renderPdfOnce(html: string) {
   const browser = await launchBrowser();
   const page = await browser.newPage();
 
   try {
-    await page.setContent(html, { waitUntil: "networkidle0" });
+    page.setDefaultNavigationTimeout(PDF_RENDER_TIMEOUT_MS);
+    page.setDefaultTimeout(PDF_RENDER_TIMEOUT_MS);
+
+    // "domcontentloaded" (not "networkidle0"): the template has no external
+    // resources, so waiting for the network to go idle buys nothing and is the
+    // exact wait that hangs for the full timeout when Chrome is degraded.
+    await page.setContent(html, {
+      waitUntil: "domcontentloaded",
+      timeout: PDF_RENDER_TIMEOUT_MS,
+    });
 
     const pdf = await page.pdf({
       format: "A4",
       printBackground: true,
+      timeout: PDF_RENDER_TIMEOUT_MS,
       margin: {
         top: "14mm",
         right: "12mm",
@@ -163,12 +180,39 @@ async function renderPdfFromHtml(html: string) {
 
     return Buffer.from(pdf);
   } finally {
-    // Close only the PAGE. launchBrowser() returns a SHARED, long-lived browser
-    // reused across requests — closing it would break concurrent renders and
-    // force an expensive relaunch (and was a source of intermittent
-    // "Target closed" errors on the shared VPS).
+    // Close only the PAGE on success. launchBrowser() returns a SHARED,
+    // long-lived browser reused across requests — closing it on the happy path
+    // would break concurrent renders and force an expensive relaunch.
     await page.close().catch(() => {});
   }
+}
+
+async function renderPdfFromHtml(html: string) {
+  // Two attempts. The dominant VPS failure mode is a zombie shared Chrome
+  // (OOM-killed renderer / leaked pages) where isConnected() still reports true
+  // but every render hangs until the timeout. On the first failure we discard
+  // and relaunch the browser, then retry once with a clean Chrome — recovering
+  // automatically instead of surfacing a 30s timeout and needing a pm2 restart.
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await renderPdfOnce(html);
+    } catch (err) {
+      lastError = err;
+      console.warn(
+        `DIGIO DEBUG -> PDF render attempt ${attempt}/2 failed:`,
+        err instanceof Error ? err.message : err,
+      );
+      // Treat any render failure as a possibly-dead browser and force a fresh
+      // launch for the retry (and for subsequent requests).
+      await resetBrowser();
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("PDF render failed after retry");
 }
 
 function normalizeDigioAgreementStatus(parsed: any) {
