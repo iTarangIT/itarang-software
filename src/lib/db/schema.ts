@@ -2631,6 +2631,17 @@ export const dealerOnboardingApplications = pgTable(
     payment_method: varchar("payment_method", { length: 20 }),
     deal_notes: text("deal_notes"),
     quote_document_url: text("quote_document_url"),
+    // ---- E-167 WhatsApp onboarding ----
+    // source distinguishes web-wizard drafts from WhatsApp-bot-collected ones so
+    // the Sales Admin review list can badge/filter them; everything else is
+    // shared. verification_warnings / extraction_summary surface what the bot
+    // read + checked so no failed check passes silently (design §8, §16).
+    source: varchar("source", { length: 16 }).default('web').notNull(),
+    wa_phone: varchar("wa_phone", { length: 20 }),
+    wa_session_id: uuid("wa_session_id"),
+    verification_warnings: jsonb("verification_warnings").default([]).notNull(),
+    extraction_summary: jsonb("extraction_summary").default({}).notNull(),
+    dealer_confirmed_at: timestamp("dealer_confirmed_at"),
   },
 );
 
@@ -2720,10 +2731,93 @@ export const dealerOnboardingDocuments = pgTable(
     created_at: timestamp("created_at").defaultNow().notNull(),
     updated_at: timestamp("updated_at").defaultNow().notNull(),
     admin_comment: text("admin_comment"),
+    // ---- E-167 WhatsApp onboarding (per-doc extraction/verification provenance) ----
+    source: varchar("source", { length: 16 }).default('web').notNull(),
+    extraction_engine: varchar("extraction_engine", { length: 24 }),
+    extraction_confidence: numeric("extraction_confidence"),
+    verification_provider: varchar("verification_provider", { length: 24 }),
   },
   (table) => ({
     applicationIdIdx: index("dealer_onboarding_documents_application_id_idx").on(
       table.application_id,
+    ),
+  }),
+);
+
+// ── E-167 WhatsApp dealer-onboarding chatbot ────────────────────────────────
+// One row per dealer conversation. Persists the conversation state machine so a
+// dropped chat resumes exactly where it left off (design §4). State values are
+// code-owned (src/lib/whatsapp/orchestrator.ts), not DB-constrained.
+export const whatsappOnboardingSessions = pgTable(
+  "whatsapp_onboarding_sessions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    wa_phone: varchar("wa_phone", { length: 20 }).notNull(),
+    wa_contact_name: text("wa_contact_name"),
+    provider: varchar("provider", { length: 16 }).default('meta').notNull(),
+    provider_conversation_id: text("provider_conversation_id"),
+    application_id: uuid("application_id"),
+    current_state: varchar("current_state", { length: 32 })
+      .default('GREETING')
+      .notNull(),
+    expected_document_type: varchar("expected_document_type", { length: 64 }),
+    detected_company_type: varchar("detected_company_type", { length: 48 }),
+    language: varchar("language", { length: 12 }).default('en').notNull(),
+    context: jsonb("context").default({}).notNull(),
+    reminder_count: integer("reminder_count").default(0).notNull(),
+    last_inbound_at: timestamp("last_inbound_at", { withTimezone: true }),
+    last_outbound_at: timestamp("last_outbound_at", { withTimezone: true }),
+    last_reminder_at: timestamp("last_reminder_at", { withTimezone: true }),
+    session_status: varchar("session_status", { length: 24 })
+      .default('active')
+      .notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    waPhoneIdx: index("whatsapp_onboarding_sessions_wa_phone_idx").on(
+      table.wa_phone,
+    ),
+    statusInboundIdx: index(
+      "whatsapp_onboarding_sessions_status_inbound_idx",
+    ).on(table.session_status, table.last_inbound_at),
+    applicationIdIdx: index(
+      "whatsapp_onboarding_sessions_application_id_idx",
+    ).on(table.application_id),
+  }),
+);
+
+// Append-only inbound/outbound log: audit trail, idempotency
+// (provider_message_id UNIQUE — duplicate webhook deliveries are no-ops), and
+// delivery-status tracking.
+export const whatsappMessages = pgTable(
+  "whatsapp_messages",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    session_id: uuid("session_id"),
+    provider_message_id: text("provider_message_id"),
+    direction: varchar("direction", { length: 12 }).notNull(),
+    message_type: varchar("message_type", { length: 24 }).notNull(),
+    text_body: text("text_body"),
+    media_provider_id: text("media_provider_id"),
+    storage_path: text("storage_path"),
+    template_name: text("template_name"),
+    delivery_status: varchar("delivery_status", { length: 16 }),
+    raw_payload: jsonb("raw_payload"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    providerMessageIdUnique: uniqueIndex(
+      "whatsapp_messages_provider_message_id_unique",
+    ).on(table.provider_message_id),
+    sessionIdIdx: index("whatsapp_messages_session_id_idx").on(
+      table.session_id,
     ),
   }),
 );
