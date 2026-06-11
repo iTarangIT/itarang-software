@@ -227,6 +227,45 @@ function getSignerUrl(item: any) {
   );
 }
 
+type ExistingSignerRow = {
+  signer_name?: string | null;
+  signer_email?: string | null;
+  signer_mobile?: string | null;
+  signing_method?: string | null;
+  created_at?: Date | string;
+};
+
+// Fill a signer party's missing name/email/mobile from a previously-saved
+// dealer_agreement_signers row. Values present in the incoming config always
+// win; the existing row only backfills blanks.
+function hydrateParty(
+  party: AgreementParty | null | undefined,
+  existing: ExistingSignerRow | undefined
+): AgreementParty | null {
+  if (!existing) return party ?? null;
+  return {
+    ...(party || {}),
+    name: cleanString(party?.name) || existing.signer_name || "",
+    email: cleanString(party?.email) || existing.signer_email || "",
+    mobile: normalizePhone(party?.mobile) || existing.signer_mobile || "",
+    signingMethod:
+      cleanString(party?.signingMethod) ||
+      existing.signing_method ||
+      "aadhaar_esign",
+  };
+}
+
+// Same as hydrateParty but keeps the optional iTarang signer 2 null when there
+// is neither incoming data nor a saved row — so we don't fabricate a 3rd signer.
+function hydrateOptionalParty(
+  party: AgreementParty | null | undefined,
+  existing: ExistingSignerRow | undefined
+): AgreementParty | null {
+  const started = !!(party?.name || party?.email || party?.mobile);
+  if (!started && !existing) return null;
+  return hydrateParty(party, existing);
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ dealerId: string }> }
@@ -299,28 +338,91 @@ export async function POST(
       );
     }
 
+    // Recover signer details from previously-saved agreement signers when the
+    // saved agreement config (provider_raw_response.agreement) is incomplete.
+    // The admin "Initiate / Re-initiate" button rebuilds the signer payload
+    // from that config; for some applications it's missing the dealer / iTarang
+    // signer fields even though a prior initiation already persisted full signer
+    // rows in dealer_agreement_signers (the Agreement Tracking Table). Without
+    // this fallback, re-initiation 400s with "Dealer and iTarang Signer 1 must
+    // have valid name, email, and phone" even though the data exists and the
+    // signers were already sent.
+    const existingSignerRows = await db
+      .select()
+      .from(dealerAgreementSigners)
+      .where(eq(dealerAgreementSigners.application_id, application.id));
+
+    const existingSignerByRole = new Map<
+      string,
+      (typeof existingSignerRows)[number]
+    >();
+    for (const rowSigner of existingSignerRows) {
+      const prior = existingSignerByRole.get(rowSigner.signer_role);
+      if (
+        !prior ||
+        new Date(rowSigner.created_at).getTime() >
+          new Date(prior.created_at).getTime()
+      ) {
+        existingSignerByRole.set(rowSigner.signer_role, rowSigner);
+      }
+    }
+
+    const dealerExisting = existingSignerByRole.get("dealer");
+    const itarang1Existing = existingSignerByRole.get("itarang_signatory_1");
+    const itarang2Existing = existingSignerByRole.get("itarang_signatory_2");
+
+    const hydratedAgreement: AgreementConfig = {
+      ...agreement,
+      dealerSignerName:
+        cleanString(agreement.dealerSignerName) ||
+        dealerExisting?.signer_name ||
+        "",
+      dealerSignerEmail:
+        cleanString(agreement.dealerSignerEmail) ||
+        dealerExisting?.signer_email ||
+        "",
+      dealerSignerPhone:
+        normalizePhone(agreement.dealerSignerPhone) ||
+        dealerExisting?.signer_mobile ||
+        "",
+      dealerSigningMethod:
+        cleanString(agreement.dealerSigningMethod) ||
+        dealerExisting?.signing_method ||
+        "aadhaar_esign",
+      itarangSignatory1: hydrateParty(
+        agreement.itarangSignatory1,
+        itarang1Existing
+      ),
+      itarangSignatory2: hydrateOptionalParty(
+        agreement.itarangSignatory2,
+        itarang2Existing
+      ),
+    };
+
     const dealerSigner = buildSigner({
-      name: agreement.dealerSignerName,
-      email: agreement.dealerSignerEmail,
-      mobile: agreement.dealerSignerPhone,
+      name: hydratedAgreement.dealerSignerName,
+      email: hydratedAgreement.dealerSignerEmail,
+      mobile: hydratedAgreement.dealerSignerPhone,
       reason: "dealer signer",
-      signingMethod: agreement.dealerSigningMethod || "aadhaar_esign",
+      signingMethod: hydratedAgreement.dealerSigningMethod || "aadhaar_esign",
     });
 
     const itarangSigner1 = buildSigner({
-      name: agreement.itarangSignatory1?.name,
-      email: agreement.itarangSignatory1?.email,
-      mobile: agreement.itarangSignatory1?.mobile,
+      name: hydratedAgreement.itarangSignatory1?.name,
+      email: hydratedAgreement.itarangSignatory1?.email,
+      mobile: hydratedAgreement.itarangSignatory1?.mobile,
       reason: "iTarang signer 1",
-      signingMethod: agreement.itarangSignatory1?.signingMethod || "aadhaar_esign",
+      signingMethod:
+        hydratedAgreement.itarangSignatory1?.signingMethod || "aadhaar_esign",
     });
 
     const itarangSigner2 = buildSigner({
-      name: agreement.itarangSignatory2?.name,
-      email: agreement.itarangSignatory2?.email,
-      mobile: agreement.itarangSignatory2?.mobile,
+      name: hydratedAgreement.itarangSignatory2?.name,
+      email: hydratedAgreement.itarangSignatory2?.email,
+      mobile: hydratedAgreement.itarangSignatory2?.mobile,
       reason: "iTarang signer 2",
-      signingMethod: agreement.itarangSignatory2?.signingMethod || "aadhaar_esign",
+      signingMethod:
+        hydratedAgreement.itarangSignatory2?.signingMethod || "aadhaar_esign",
     });
 
     if (!dealerSigner || !itarangSigner1) {
@@ -339,9 +441,9 @@ export async function POST(
     }
 
     const signer2Started =
-      !!agreement.itarangSignatory2?.name ||
-      !!agreement.itarangSignatory2?.email ||
-      !!agreement.itarangSignatory2?.mobile;
+      !!hydratedAgreement.itarangSignatory2?.name ||
+      !!hydratedAgreement.itarangSignatory2?.email ||
+      !!hydratedAgreement.itarangSignatory2?.mobile;
 
     if (signer2Started && !itarangSigner2) {
       return NextResponse.json(
@@ -399,15 +501,17 @@ export async function POST(
         dateOfSigning: cleanString(agreement.dateOfSigning),
         mouDate: cleanString(agreement.mouDate),
         financierName: "",
-        dealerSignerName: cleanString(agreement.dealerSignerName),
+        dealerSignerName: cleanString(hydratedAgreement.dealerSignerName),
         dealerSignerDesignation: cleanString(agreement.dealerSignerDesignation),
-        dealerSignerEmail: cleanString(agreement.dealerSignerEmail),
-        dealerSignerPhone: normalizePhone(agreement.dealerSignerPhone),
+        dealerSignerEmail: cleanString(hydratedAgreement.dealerSignerEmail),
+        dealerSignerPhone: normalizePhone(hydratedAgreement.dealerSignerPhone),
         dealerSigningMethod:
-          cleanString(agreement.dealerSigningMethod) || "aadhaar_esign",
+          cleanString(hydratedAgreement.dealerSigningMethod) || "aadhaar_esign",
         financierSignatory: null,
-        itarangSignatory1: agreement.itarangSignatory1 || null,
-        itarangSignatory2: itarangSigner2 ? agreement.itarangSignatory2 || null : null,
+        itarangSignatory1: hydratedAgreement.itarangSignatory1 || null,
+        itarangSignatory2: itarangSigner2
+          ? hydratedAgreement.itarangSignatory2 || null
+          : null,
         signingOrder: finalSigningOrder,
         isOemFinancing: !!agreement.isOemFinancing,
         vehicleType: cleanString(agreement.vehicleType),
@@ -416,7 +520,7 @@ export async function POST(
         statePresence: cleanString(agreement.statePresence),
         signers,
         sequential: true,
-        expireInDays: 5,
+        expireInDays: 30,
       },
     };
 

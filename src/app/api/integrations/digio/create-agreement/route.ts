@@ -394,7 +394,7 @@ export async function POST(req: NextRequest) {
     const digioPayload: Record<string, unknown> = {
       file_name: `${cleanString(company.companyName) || "dealer"}-agreement.pdf`,
       file_data: agreementBase64,
-      expire_in_days: 5,
+      expire_in_days: 30,
       notify_signers: true,
       send_sign_link: true,
       include_authentication_url: true,

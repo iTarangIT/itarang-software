@@ -16,6 +16,7 @@ import {
   UserCog,
   AlertTriangle,
   GitBranch,
+  MessageCircle,
 } from "lucide-react";
 
 type DuplicateFlag = "none" | "branch" | "duplicate" | "pan-mismatch";
@@ -75,7 +76,25 @@ type DealerVerificationItem = {
   salesManagerMobile?: string | null;
   duplicateFlag?: DuplicateFlag | null;
   isBranchDealer?: boolean | null;
+  // E-167: where the application was collected, and how many bot checks flagged.
+  source?: string | null;
+  warningCount?: number | null;
 };
+
+// E-167: badge dealers collected over the WhatsApp bot so admins know the data
+// was machine-extracted (Gemini) and may carry verification warnings.
+function SourceBadge({ source }: { source?: string | null }) {
+  if ((source || "web").toLowerCase() !== "whatsapp") return null;
+  return (
+    <span
+      title="Collected via the WhatsApp onboarding bot — fields were auto-extracted; review the verification warnings."
+      className="ml-2 inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700"
+    >
+      <MessageCircle className="h-3 w-3" />
+      WhatsApp
+    </span>
+  );
+}
 
 function StatCard({
   title,
@@ -497,8 +516,21 @@ export default function DealerVerificationPage() {
                     className="border-b border-slate-100 transition hover:bg-slate-50/70"
                   >
                     <td className="px-6 py-5 align-top">
-                      <p className="font-semibold text-slate-900">{item.dealerName}</p>
+                      <p className="font-semibold text-slate-900">
+                        {item.dealerName}
+                        <SourceBadge source={item.source} />
+                      </p>
                       <p className="mt-1 text-sm text-slate-500">ID: {item.dealerId.slice(0, 8)}...</p>
+                      {!!item.warningCount && item.warningCount > 0 && (
+                        <p
+                          title="The WhatsApp bot flagged document checks that need admin attention."
+                          className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-rose-600"
+                        >
+                          <AlertTriangle className="h-3 w-3" />
+                          {item.warningCount} verification warning
+                          {item.warningCount !== 1 ? "s" : ""}
+                        </p>
+                      )}
                       {item.submittedAt && (
                         <p className="mt-1 text-xs text-slate-400">
                           Submitted:{" "}
