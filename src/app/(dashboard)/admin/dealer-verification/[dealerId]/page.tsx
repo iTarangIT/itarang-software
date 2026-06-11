@@ -28,6 +28,8 @@ import {
   Languages,
   AlertTriangle,
   GitBranch,
+  MessageCircle,
+  UploadCloud,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -157,6 +159,10 @@ type DealerReviewData = {
   correctionRound?: CorrectionRound | null;
   documents?: DocumentItem[];
   agreement?: AgreementData | null;
+  // E-167: collection channel + bot verification warnings.
+  source?: string | null;
+  waPhone?: string | null;
+  verificationWarnings?: string[];
 };
 
 type AgreementSignerRow = {
@@ -222,6 +228,14 @@ type CompanyEditForm = {
   salesManagerEmail: string;
   salesManagerMobile: string;
 };
+
+// Application IDs where manual (out-of-band) agreement completion is allowed.
+// Mirrors the server allowlist in upload-signed-agreement/route.ts — keep both
+// in sync. Scoped per-dealer because it bypasses the Digio completion gate.
+const MANUAL_COMPLETION_ALLOWLIST = new Set<string>([
+  "b4846be7-deb9-4830-bffb-a47624f4f3db", // EXNON
+  "4de51b0d-7298-43ab-83c5-d645782b14a7", // MAA PITAMBARA ENTERPRISES
+]);
 
 const AGREEMENT_LANGUAGE_OPTIONS = [
   { value: "english", label: "English Agreement" },
@@ -620,6 +634,11 @@ export default function DealerReviewPage() {
   const [tracking, setTracking]             = useState<AgreementTrackingResponse | null>(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
   const [auditTrailLoading, setAuditTrailLoading] = useState(false);
+  // Manual agreement completion — upload the final signed agreement + audit
+  // trail by hand when Digio signing was completed out-of-band.
+  const [manualSignedFile, setManualSignedFile] = useState<File | null>(null);
+  const [manualAuditFile, setManualAuditFile]   = useState<File | null>(null);
+  const [manualUploading, setManualUploading]   = useState(false);
   const [duplicate, setDuplicate] = useState<DuplicateCheckResult | null>(null);
   const [correctionDialogOpen, setCorrectionDialogOpen] = useState(false);
 
@@ -875,6 +894,38 @@ export default function DealerReviewPage() {
     }
   };
 
+  const handleManualUpload = async () => {
+    if (!manualSignedFile || !manualAuditFile) {
+      toast.error("Select both the signed agreement PDF and the audit trail PDF.");
+      return;
+    }
+    setManualUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("signedAgreement", manualSignedFile);
+      fd.append("auditTrail", manualAuditFile);
+
+      const res = await fetch(
+        `/api/admin/dealer-verifications/${dealerId}/upload-signed-agreement`,
+        { method: "POST", body: fd },
+      );
+      let json: any = null;
+      try { json = await res.json(); } catch { /* non-JSON body */ }
+      if (!res.ok || !json?.success) {
+        toast.error(json?.message || `Upload failed (HTTP ${res.status})`);
+        return;
+      }
+      toast.success(json.message || "Agreement marked completed.");
+      setManualSignedFile(null);
+      setManualAuditFile(null);
+      await reloadDealer();
+    } catch (err: any) {
+      toast.error(err?.message || "Something went wrong while uploading documents");
+    } finally {
+      setManualUploading(false);
+    }
+  };
+
   const handleAgreementAction = async (action: "initiate" | "refresh" | "reinitiate" | "retry") => {
     if (data?.onboardingStatus === "rejected") { toast.error("This application is rejected and locked."); return; }
     setAgreementActionLoading(action);
@@ -1033,6 +1084,15 @@ export default function DealerReviewPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
+            {(data.source || "web").toLowerCase() === "whatsapp" && (
+              <span
+                title={`Collected via the WhatsApp onboarding bot${data.waPhone ? ` (+${data.waPhone})` : ""}. Fields were auto-extracted; review the verification warnings below.`}
+                className="inline-flex items-center gap-1.5 rounded-2xl border border-green-200 bg-green-50 px-3 py-2 text-xs font-semibold text-green-700"
+              >
+                <MessageCircle className="h-3.5 w-3.5" />
+                WhatsApp{data.waPhone ? ` · +${data.waPhone}` : ""}
+              </span>
+            )}
             <StatusBadge value={data.onboardingStatus} />
             <StatusBadge value={data.reviewStatus} />
             {data.financeEnabled ? <AgreementBadge value={agreementStatusForUi} /> : null}
@@ -1068,6 +1128,28 @@ export default function DealerReviewPage() {
                 <p className="font-semibold">Application Rejected</p>
                 <p className="mt-1">This onboarding application has been rejected and is now locked.</p>
                 {data?.rejectionRemarks && <p className="mt-2 text-xs"><strong>Reason:</strong> {data.rejectionRemarks}</p>}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {Array.isArray(data.verificationWarnings) && data.verificationWarnings.length > 0 && (
+          <div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4" />
+              <div>
+                <p className="font-semibold">
+                  {data.verificationWarnings.length} verification warning
+                  {data.verificationWarnings.length !== 1 ? "s" : ""} from automated checks
+                </p>
+                <p className="mt-1 text-xs text-rose-600">
+                  The WhatsApp bot ran document checks (Decentro) during collection. These did not pass cleanly — verify manually before approving.
+                </p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+                  {data.verificationWarnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
               </div>
             </div>
           </div>
@@ -1359,6 +1441,68 @@ export default function DealerReviewPage() {
                   {auditTrailLoading ? "Downloading Audit Trail…" : "Download Audit Trail"}
                 </button>
               </div>
+
+              {/* Manual agreement completion — for agreements signed out-of-band
+                  on the Digio dashboard (e.g. an expired signer link). Upload the
+                  final PDFs to mark the agreement completed and unblock approval. */}
+              {MANUAL_COMPLETION_ALLOWLIST.has(dealerId) && hasInitiatedAgreement && !isAgreementCompleted && !isRejected && (
+                <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
+                  <div className="flex items-start gap-3">
+                    <UploadCloud className="mt-0.5 h-5 w-5 text-amber-600" />
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-amber-900">
+                        Agreement completed outside iTarang?
+                      </p>
+                      <p className="mt-1 text-xs text-amber-800">
+                        If all parties signed on the Digio dashboard (e.g. a signer&apos;s link
+                        expired here), upload the final <strong>signed agreement</strong> and
+                        <strong> audit trail</strong> PDFs. This stores both documents and marks
+                        the agreement <strong>completed</strong> so the dealer can be approved.
+                      </p>
+
+                      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div>
+                          <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+                            Signed Agreement (PDF)
+                          </label>
+                          <input
+                            type="file"
+                            accept="application/pdf,.pdf"
+                            onChange={(e) => setManualSignedFile(e.target.files?.[0] || null)}
+                            className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-amber-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-amber-800 hover:file:bg-amber-200"
+                          />
+                          {manualSignedFile && (
+                            <p className="mt-1 truncate text-xs text-emerald-700">✓ {manualSignedFile.name}</p>
+                          )}
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+                            Audit Trail (PDF)
+                          </label>
+                          <input
+                            type="file"
+                            accept="application/pdf,.pdf"
+                            onChange={(e) => setManualAuditFile(e.target.files?.[0] || null)}
+                            className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-amber-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-amber-800 hover:file:bg-amber-200"
+                          />
+                          {manualAuditFile && (
+                            <p className="mt-1 truncate text-xs text-emerald-700">✓ {manualAuditFile.name}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={handleManualUpload}
+                        disabled={manualUploading || !manualSignedFile || !manualAuditFile}
+                        className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <UploadCloud className="h-4 w-4" />
+                        {manualUploading ? "Saving…" : "Save & Mark Completed"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="mt-5 flex flex-wrap gap-3">
                 {!hasInitiatedAgreement && (
