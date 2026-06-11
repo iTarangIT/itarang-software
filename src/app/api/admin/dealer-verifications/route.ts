@@ -31,6 +31,10 @@ export async function GET() {
         salesManagerName: dealerOnboardingApplications.sales_manager_name,
         salesManagerEmail: dealerOnboardingApplications.sales_manager_email,
         salesManagerMobile: dealerOnboardingApplications.sales_manager_mobile,
+        // E-167: collection channel + bot-surfaced verification warnings so the
+        // queue can badge WhatsApp-collected applications and flag failed checks.
+        source: dealerOnboardingApplications.source,
+        verificationWarnings: dealerOnboardingApplications.verification_warnings,
       })
       .from(dealerOnboardingApplications)
       // Hide rows the dealer never finished. A pure draft (status = "draft"
@@ -139,6 +143,12 @@ export async function GET() {
         salesManagerMobile: item.salesManagerMobile,
         duplicateFlag,
         isBranchDealer: item.isBranchDealer,
+        // E-167: 'web' (default) | 'whatsapp'. warningCount drives a red flag on
+        // the row so admins notice bot checks that failed/mismatched.
+        source: (item.source || "web").toLowerCase(),
+        warningCount: Array.isArray(item.verificationWarnings)
+          ? item.verificationWarnings.length
+          : 0,
       };
     });
 

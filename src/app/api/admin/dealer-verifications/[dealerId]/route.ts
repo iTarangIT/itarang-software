@@ -284,6 +284,16 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         reviewStatus: row.review_status,
         submittedAt: row.submitted_at,
 
+        // E-167: collection channel + bot-surfaced warnings. For WhatsApp-
+        // collected applications the values were auto-extracted (Gemini) and
+        // verified (Decentro); warnings list any check that failed/mismatched so
+        // nothing passes silently (design §8, §16).
+        source: (row.source || "web").toLowerCase(),
+        waPhone: row.wa_phone || null,
+        verificationWarnings: Array.isArray(row.verification_warnings)
+          ? row.verification_warnings
+          : [],
+
         correctionRemarks: row.correction_remarks || null,
         rejectionRemarks: row.rejection_remarks || (row as any).rejectionReason || null,
 
