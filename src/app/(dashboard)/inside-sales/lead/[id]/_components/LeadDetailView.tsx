@@ -119,7 +119,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole }: Props) {
             )}
 
             <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-0">
-                <TouchpointHistoryPane touchpoints={bundle.touchpoints} statusHistory={bundle.status_history} />
+                <TouchpointHistoryPane leadId={leadId} touchpoints={bundle.touchpoints} statusHistory={bundle.status_history} />
                 <LeadDetailRightPane bundle={bundle} />
             </div>
 
@@ -165,7 +165,6 @@ export function LeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 open={activeModal === "mark_converted"}
                 onClose={() => setActiveModal(null)}
                 leadId={leadId}
-                hasFinalPrice={Boolean(bundle.current_commercials?.final_price)}
                 onSuccess={onActionSuccess}
             />
             <ReassignLeadModal

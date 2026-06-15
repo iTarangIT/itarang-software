@@ -30,14 +30,21 @@ function tabFilter(tab: AsmQueueTab, asmId: string) {
         case "today":
             return sql`dl.asm_id = ${asmId} AND lv.scheduled_date = CURRENT_DATE AND lv.visit_status IN ('scheduled','pending_scheduling') AND dl.is_active IS NOT FALSE`;
         case "territory":
-            return sql`EXISTS (
-                SELECT 1 FROM asm_territories t
-                WHERE t.asm_id = ${asmId}
-                  AND t.state = dl.state
-                  AND (t.city IS NULL OR t.city = dl.city)
-                  AND (t.active_from IS NULL OR t.active_from <= CURRENT_DATE)
-                  AND (t.active_to IS NULL OR t.active_to >= CURRENT_DATE)
-            ) AND dl.is_active IS NOT FALSE`;
+            // In-territory leads, OR any lead nobody owns yet — so the ASM sees
+            // the same unassigned pool the Inside Sales claim queue surfaces
+            // (manual-upload / scraped leads with NULL status included). Either
+            // way the lead must be active and not terminal.
+            return sql`(
+                EXISTS (
+                    SELECT 1 FROM asm_territories t
+                    WHERE t.asm_id = ${asmId}
+                      AND t.state = dl.state
+                      AND (t.city IS NULL OR t.city = dl.city)
+                      AND (t.active_from IS NULL OR t.active_from <= CURRENT_DATE)
+                      AND (t.active_to IS NULL OR t.active_to >= CURRENT_DATE)
+                )
+                OR dl.current_owner_id IS NULL
+            ) AND dl.lead_status IS DISTINCT FROM 'Converted' AND dl.lead_status IS DISTINCT FROM 'Lost' AND dl.is_active IS NOT FALSE`;
         case "my_closed":
             return sql`dl.closing_owner_id = ${asmId} AND dl.lead_status IN (${TERMINAL_LIST}) AND dl.closed_at >= NOW() - INTERVAL '90 days' AND dl.is_active IS NOT FALSE`;
     }

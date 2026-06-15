@@ -11,6 +11,7 @@ import {
     UserMinus2,
     Activity,
     Sparkles,
+    Download,
 } from "lucide-react";
 import type {
     LeadDetailStatusHistory,
@@ -19,6 +20,7 @@ import type {
 import type { TouchpointType } from "@/lib/lifecycle/touchpointTypes";
 
 type Props = {
+    leadId: string;
     touchpoints: LeadDetailTouchpoint[];
     statusHistory: LeadDetailStatusHistory[];
 };
@@ -85,14 +87,23 @@ function formatTime(iso: string): string {
     });
 }
 
-export function TouchpointHistoryPane({ touchpoints }: Props) {
+export function TouchpointHistoryPane({ leadId, touchpoints }: Props) {
     return (
         <div className="overflow-y-auto border-r border-gray-100 bg-white">
-            <div className="px-6 py-4 sticky top-0 bg-white border-b border-gray-100 z-[1]">
-                <h2 className="text-sm font-semibold text-gray-900">Touchpoint History</h2>
-                <p className="text-[11px] text-gray-500 mt-0.5">
-                    {touchpoints.length} {touchpoints.length === 1 ? "entry" : "entries"} · newest first
-                </p>
+            <div className="px-6 py-4 sticky top-0 bg-white border-b border-gray-100 z-[1] flex items-start justify-between gap-3">
+                <div>
+                    <h2 className="text-sm font-semibold text-gray-900">Touchpoint History</h2>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                        {touchpoints.length} {touchpoints.length === 1 ? "entry" : "entries"} · newest first
+                    </p>
+                </div>
+                <a
+                    href={`/api/inside-sales/lead/${encodeURIComponent(leadId)}/history/export.xlsx`}
+                    className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                >
+                    <Download className="h-3.5 w-3.5" />
+                    Export to Excel
+                </a>
             </div>
             <div className="px-6 py-4">
                 {touchpoints.length === 0 ? (
