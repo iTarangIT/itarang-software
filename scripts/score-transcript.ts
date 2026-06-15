@@ -34,42 +34,40 @@ async function main() {
     return;
   }
 
-  divider("EXTRACTED SIGNALS (LLM — evidence only, no score)");
+  divider("EXTRACTED SIGNALS (LLM — yes/no facts only, no band)");
   const s = result.signals;
-  const row = (k: string, level: string, evidence: string) =>
-    console.log(`  ${k.padEnd(20)} ${level.padEnd(16)} ${evidence}`);
-  row("budget", s.budget.level, s.budget.evidence);
-  row("authority", s.authority.level, s.authority.evidence);
-  row("need", s.need.level, s.need.evidence);
-  row("timeline", s.timeline.level, s.timeline.evidence);
-  row("engagement", s.engagement.level, s.engagement.evidence);
-  row("curiosity", s.curiosity.level, s.curiosity.evidence);
-  row("objection_quality", s.objection_quality.level, s.objection_quality.evidence);
-  console.log(`  facts:     ${JSON.stringify(s.facts)}`);
-  console.log(`  negatives: ${JSON.stringify(s.negatives)}`);
-  console.log(`  language:  ${s.language}`);
-  console.log(`  summary:   ${s.call_summary}`);
+  const row = (k: string, val: string, evidence: string) =>
+    console.log(`  ${k.padEnd(28)} ${val.padEnd(6)} ${evidence}`);
+  const ev = s.evidence;
+  row("relevant_dealer", s.relevant_dealer, ev.relevant_dealer);
+  row("battery_spec_shared", s.battery_spec_shared, ev.battery_spec_shared);
+  row("volume_shared", s.volume_shared, ev.volume_shared);
+  row("existing_financier_shared", s.existing_financier_shared, ev.existing_financier_shared);
+  row("financing_need_expressed", s.financing_need_expressed, ev.financing_need_expressed);
+  row("financing_value_acknowledged", s.financing_value_acknowledged, ev.financing_value_acknowledged);
+  row("pitch_heard", s.pitch_heard, "");
+  row("callback_agreed", s.callback_agreed, ev.callback_agreed);
+  console.log(`  dealer_segment : ${s.dealer_segment} · dealer_role : ${s.dealer_role}`);
+  console.log(`  disqualifier   : ${s.disqualifier}`);
+  console.log(`  language       : ${s.language}`);
+  console.log(`  summary        : ${s.call_summary}`);
 
-  divider("SCORE BREAKDOWN (deterministic — must SUM to the score)");
-  let running = 0;
+  divider("QUALIFICATION SIGNALS (yes/no checklist)");
   for (const c of result.score_breakdown) {
-    running += c.contribution;
-    const pts = `${c.contribution >= 0 ? "+" : ""}${c.contribution}`.padStart(5);
-    console.log(`  ${pts}  ${c.label.padEnd(28)} ${c.evidence}`);
+    const mark = c.present ? "✓" : "✗";
+    const info = c.info ? "[info]" : "      ";
+    console.log(`  ${mark} ${info} ${c.label.padEnd(28)} ${c.evidence}`);
   }
-  const sum = result.score_breakdown.reduce((a, c) => a + c.contribution, 0);
-  console.log(`  ${"".padStart(5)}  ${"—".repeat(28)}`);
-  console.log(`  ${`${sum}`.padStart(5)}  TOTAL (Σ breakdown)`);
 
   divider("VERDICT");
-  console.log(`  intent_score   : ${result.intent_score}`);
-  console.log(`  Σ breakdown    : ${sum}   ${sum === result.intent_score ? "✓ matches" : "✗ MISMATCH"}`);
-  console.log(`  qualified_gate : ${result.qualified_gate}`);
-  console.log(`  status         : ${result.route.status}`);
-  console.log(`  next action    : ${result.route.action}`);
-  console.log(`  outcome        : ${result.outcome}`);
-  console.log(`  scoring_version: ${result.scoring_version}`);
-  console.log(`  callback_time  : ${result.callback_time ?? "none"}`);
+  console.log(`  band               : ${result.band ?? "— (dropped_empty)"}`);
+  console.log(`  call_status        : ${result.call_status}`);
+  console.log(`  info_signals_count : ${result.info_signals_count}/5`);
+  console.log(`  lead_score         : ${result.intent_score}`);
+  console.log(`  interest_level     : ${result.interest_level ?? "—"}`);
+  console.log(`  next action        : ${result.action}`);
+  console.log(`  outcome            : ${result.outcome}`);
+  console.log(`  scoring_version    : ${result.scoring_version}`);
 }
 
 main().catch((err) => {
