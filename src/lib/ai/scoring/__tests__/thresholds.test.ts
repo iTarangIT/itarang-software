@@ -1,22 +1,25 @@
 import { describe, it, expect } from "vitest";
-import { INTENT_THRESHOLDS, leadStatusFor, decideRoute } from "../thresholds";
+import { INTENT_THRESHOLDS, leadStatusFor, bandToStatus } from "../thresholds";
+import { computeBand } from "../computeBand";
+import { mk } from "./_fixtures";
 
-// Routing AND the status label must read the SAME threshold table — this is the
-// test that locks out the historical 80-vs-75 / 50-vs-40 drift.
-describe("single threshold table", () => {
-  const ACTION_FOR_STATUS = {
-    qualified: "push_to_crm",
-    warm: "schedule_call",
-    cold: "follow_up",
-    disqualified: "stop",
-  } as const;
-
-  it("routing status === leadStatusFor for the same score (no overrides)", () => {
-    for (let score = 0; score <= 100; score++) {
-      const status = leadStatusFor(score);
-      const route = decideRoute(score, null);
-      expect(route.status).toBe(status);
-      expect(route.action).toBe(ACTION_FOR_STATUS[status]);
+// The band's lead_score (90/60/30/0) rides in the numeric field, so the numeric
+// classifier must agree with the band it came from — this locks the carried
+// score to the same tier so every downstream bucket/sort stays correct.
+describe("score↔band agreement", () => {
+  it("each band's lead_score classifies back to the same status", () => {
+    const cases: Array<[ReturnType<typeof computeBand>["band"], string]> = [
+      [computeBand(mk({ spec: true, volume: true, need: true })).band, "qualified"], // 90
+      [computeBand(mk({ volume: true })).band, "warm"], // 60
+      [computeBand(mk({ pitch: true })).band, "cold"], // 30
+      [computeBand(mk({ relevant: false })).band, "disqualified"], // 0
+    ];
+    expect(leadStatusFor(90)).toBe("qualified");
+    expect(leadStatusFor(60)).toBe("warm");
+    expect(leadStatusFor(30)).toBe("cold");
+    expect(leadStatusFor(0)).toBe("disqualified");
+    for (const [band, status] of cases) {
+      expect(bandToStatus(band)).toBe(status);
     }
   });
 
@@ -29,13 +32,7 @@ describe("single threshold table", () => {
     expect(leadStatusFor(INTENT_THRESHOLDS.COLD - 1)).toBe("disqualified");
   });
 
-  it("the qualified gate downgrades a high score to warm", () => {
-    expect(leadStatusFor(90, { qualified_gate: false })).toBe("warm");
-    expect(leadStatusFor(90, { qualified_gate: true })).toBe("qualified");
-  });
-
-  it("hard negatives force disqualified regardless of score", () => {
-    expect(leadStatusFor(95, { do_not_call: true })).toBe("disqualified");
-    expect(leadStatusFor(95, { explicit_not_interested: true })).toBe("disqualified");
+  it("bandToStatus returns null for a missing band (dropped_empty)", () => {
+    expect(bandToStatus(null)).toBe(null);
   });
 });

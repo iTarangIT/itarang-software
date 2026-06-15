@@ -18,7 +18,7 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { computeIntentScore, decideRoute, type IntentSignals } from "@/lib/ai/scoring";
+import { computeBand, bandToStatus, type IntentSignals } from "@/lib/ai/scoring";
 import { extractSignals } from "@/lib/ai/analysis/parser";
 import {
   readGolden,
@@ -35,9 +35,9 @@ const MIN_ACCURACY = Number(process.env.EVAL_MIN_ACCURACY ?? "0.8");
 const RUN_EXTRACTION = process.env.RUN_GOLDEN === "1" && !!process.env.OPENAI_API_KEY;
 
 function predict(signals: IntentSignals): { score: number; label: string } {
-  const s = computeIntentScore(signals);
-  const route = decideRoute(s.intent_score, signals, s.qualified_gate);
-  return { score: s.intent_score, label: route.status };
+  const r = computeBand(signals);
+  // dropped_empty has no band — treat as disqualified for label-accuracy purposes.
+  return { score: r.lead_score, label: bandToStatus(r.band) ?? "disqualified" };
 }
 
 interface Report {
