@@ -12,20 +12,15 @@ type Props = {
     open: boolean;
     onClose: () => void;
     leadId: string;
-    hasFinalPrice: boolean;
     onSuccess: () => void;
 };
 
-export function MarkConvertedModal({ open, onClose, leadId, hasFinalPrice, onSuccess }: Props) {
+export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) {
     const router = useRouter();
     const [notes, setNotes] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
     const submit = async () => {
-        if (!hasFinalPrice) {
-            toast.error("Set final_price on the current commercials row before marking Converted (BRD §0.10).");
-            return;
-        }
         setSubmitting(true);
         try {
             const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/mark-converted`, {
@@ -66,7 +61,7 @@ export function MarkConvertedModal({ open, onClose, leadId, hasFinalPrice, onSuc
                     <Button
                         type="button"
                         onClick={submit}
-                        disabled={submitting || !hasFinalPrice}
+                        disabled={submitting}
                         className="bg-emerald-600 hover:bg-emerald-700 text-white"
                     >
                         {submitting ? "Saving…" : "Mark Converted"}
@@ -86,11 +81,6 @@ export function MarkConvertedModal({ open, onClose, leadId, hasFinalPrice, onSuc
                         </p>
                     </div>
                 </div>
-                {!hasFinalPrice && (
-                    <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
-                        <span className="font-semibold">Blocked:</span> final_price must be set on the current commercials row. Use Update Commercials with event_type = final_terms first.
-                    </div>
-                )}
                 <div>
                     <Label>Conversion notes (optional)</Label>
                     <textarea

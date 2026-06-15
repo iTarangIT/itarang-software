@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { QueueTabs } from "./QueueTabs";
 import { LeadQueueTable } from "./LeadQueueTable";
+import { CreateLeadModal } from "./modals/CreateLeadModal";
 import {
     QUEUE_TABS,
     type QueueCounts,
@@ -27,6 +29,7 @@ const PAGE_SIZE = 25;
 
 export function QueueView({ viewerId }: Props) {
     const router = useRouter();
+    const queryClient = useQueryClient();
     const params = useSearchParams();
     const initialTab = parseTab(params.get("tab"));
     const initialPage = Math.max(1, Number(params.get("page") ?? "1"));
@@ -36,6 +39,7 @@ export function QueueView({ viewerId }: Props) {
     const [page, setPage] = useState(initialPage);
     const [search, setSearch] = useState(initialQ);
     const [searchDebounced, setSearchDebounced] = useState(initialQ);
+    const [createOpen, setCreateOpen] = useState(false);
 
     // Sync state → URL for back/forward + share.
     useEffect(() => {
@@ -124,6 +128,10 @@ export function QueueView({ viewerId }: Props) {
                     {rowsQuery.isFetching && (
                         <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                     )}
+                    <Button type="button" onClick={() => setCreateOpen(true)} className="ml-auto gap-1.5">
+                        <Plus className="h-4 w-4" />
+                        Create Lead
+                    </Button>
                 </div>
                 <LeadQueueTable
                     tab={tab}
@@ -138,6 +146,17 @@ export function QueueView({ viewerId }: Props) {
                     holidaySet={holidaySet}
                 />
             </div>
+            <CreateLeadModal
+                open={createOpen}
+                onClose={() => setCreateOpen(false)}
+                onSuccess={() => {
+                    setCreateOpen(false);
+                    queryClient.invalidateQueries({ queryKey: ["inside-sales-queue"] });
+                    queryClient.invalidateQueries({ queryKey: ["inside-sales-counts"] });
+                    setTab("unassigned");
+                    setPage(1);
+                }}
+            />
         </div>
     );
 }

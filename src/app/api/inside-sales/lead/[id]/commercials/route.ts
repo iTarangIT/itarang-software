@@ -111,12 +111,15 @@ export const POST = withErrorHandler(
 
         // Paired touchpoint (BRD §0.10 — quote events auto-log a touchpoint).
         if (body.event_type === "quote_issue" || body.event_type === "quote_revision") {
+            // Surface the deal total (product roll-up = final_price) on the
+            // touchpoint so the history log shows the value at a glance.
+            const total = body.final_price ?? body.price_quoted;
             await writeTouchpoint({
                 dealerLeadId: id,
                 touchpointType: "quote_sent",
                 performedBy: user.id,
                 remarks: `Quote ${body.event_type === "quote_issue" ? "issued" : "revised"}${
-                    body.price_quoted != null ? ` — ₹${body.price_quoted}` : ""
+                    total != null ? ` — ₹${total.toLocaleString("en-IN")}` : ""
                 }`,
                 attachments: body.quote_document_url
                     ? [{ url: body.quote_document_url, type: "quote" }]

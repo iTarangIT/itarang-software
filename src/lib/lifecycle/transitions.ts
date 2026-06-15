@@ -74,13 +74,17 @@ export type TransitionResult =
 // BRD §0.7 Status Transition Map. Each entry lists every legal target from
 // the from-state. Reactivation (Lost → Assigned_Not_Contacted) is handled
 // via the unified procedure in BRD §0.9 — modeled here as a legal transition.
+// "Converted" is reachable from every open status: a deal can close on the
+// first call without walking the full funnel, so the team can mark a lead
+// Converted immediately rather than stepping it through Commercials_Finalised.
 export const TRANSITION_MAP: Record<LeadStatus, LeadStatus[]> = {
-  New_Unassigned: ["Assigned_Not_Contacted"],
-  Assigned_Not_Contacted: ["Under_Discussion", "Lost"],
+  New_Unassigned: ["Assigned_Not_Contacted", "Converted"],
+  Assigned_Not_Contacted: ["Under_Discussion", "Converted", "Lost"],
   Under_Discussion: [
     "Commercials_Explained",
     "Awaiting_Customer_Decision",
     "Transferred_to_ASM",
+    "Converted",
     "Lost",
   ],
   Commercials_Explained: [
@@ -88,6 +92,7 @@ export const TRANSITION_MAP: Record<LeadStatus, LeadStatus[]> = {
     "Under_Discussion",
     "Awaiting_Customer_Decision",
     "Transferred_to_ASM",
+    "Converted",
     "Lost",
   ],
   Commercials_Finalised: ["Transferred_to_ASM", "Converted", "Lost"],
@@ -95,6 +100,7 @@ export const TRANSITION_MAP: Record<LeadStatus, LeadStatus[]> = {
     "Under_Discussion",
     "Commercials_Explained",
     "Commercials_Finalised",
+    "Converted",
     "Lost",
   ],
   Transferred_to_ASM: ["Converted", "Lost"],
@@ -188,9 +194,12 @@ export function canTransition(
     };
   }
 
-  // 6. Commercials_Finalised + Converted require final_price on current row.
+  // 6. Commercials_Finalised requires final_price on the current row.
+  //    Converted no longer does — a deal can be marked won on the first call
+  //    before any commercials are logged; final_price then flows from the
+  //    product roll-up if/when commercials are added.
   if (
-    (to === "Commercials_Finalised" || to === "Converted") &&
+    to === "Commercials_Finalised" &&
     (ctx.finalPrice === null || ctx.finalPrice === undefined)
   ) {
     return {

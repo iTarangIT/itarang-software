@@ -20,7 +20,7 @@ const sql = postgres(process.env.DATABASE_URL, {
 
 const ASM_EMAIL = 'asm.itarang@gmail.com';
 
-// Promote these 3 — they're owned by Sweety after Module 1's seed.
+// Promote these 3 — they're owned by Nidhi after Module 1's seed.
 //
 //   DL-IS-TEST-003 (Kohli, Punjab, Under_Discussion)   → scheduled today
 //   DL-IS-TEST-004 (Patel, Gujarat, Commercials_Explained) → visited productive
