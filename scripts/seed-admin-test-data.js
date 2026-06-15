@@ -40,10 +40,10 @@ async function run() {
 
     const reps = await sql`
         SELECT id::text AS id, email FROM users
-        WHERE email IN ('sweety.itarang@gmail.com', 'asm.itarang@gmail.com')
+        WHERE email IN ('nidhi.itarang@gmail.com', 'asm.itarang@gmail.com')
     `;
     const repId =
-        reps.find((r) => r.email.startsWith('sweety'))?.id ?? adminId;
+        reps.find((r) => r.email.startsWith('nidhi'))?.id ?? adminId;
 
     // Test leads.
     const leads = await sql`
