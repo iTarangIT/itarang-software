@@ -292,9 +292,13 @@ export async function finalizeBolnaCall(
     });
 
     await fetchAndPersistCallCost("bolna", callId);
+    // dropped_empty connected and produced a transcript — the line just dropped
+    // before any qualifying info was captured. It is NOT a telephony failure, so
+    // the campaign row is marked completed ("Done"), not failed. The Outcome
+    // column still carries "dropped_empty" to preserve the call-quality nuance.
     const dr = await completeCampaignLead({
       leadId: lead.id,
-      success: false,
+      success: true,
       bolnaCallId: callId || null,
       outcome: "dropped_empty",
       intentScore: null,
