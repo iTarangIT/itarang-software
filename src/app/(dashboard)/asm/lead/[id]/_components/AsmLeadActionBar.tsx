@@ -33,7 +33,6 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction }: Prop
     const lead = bundle.lead;
     const status = lead.lead_status as LeadStatus | null;
     const open = status ? isOpen(status) : false;
-    const hasFinalPrice = Boolean(bundle.current_commercials?.final_price);
     const isAdmin = viewerRole === "admin" || viewerRole === "ceo";
 
     if (!isOwner) {
@@ -47,8 +46,8 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction }: Prop
         );
     }
 
-    const canMarkConverted =
-        (status === "Commercials_Finalised" || status === "Transferred_to_ASM") && hasFinalPrice;
+    // A lead can be marked Converted from any open status (no funnel/price gate).
+    const canMarkConverted = open;
 
     return (
         <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-2">
@@ -66,11 +65,7 @@ export function AsmLeadActionBar({ bundle, isOwner, viewerRole, onAction }: Prop
                 icon={CheckCircle2}
                 onClick={() => onAction("mark_converted")}
                 disabled={!canMarkConverted}
-                disabledReason={
-                    !hasFinalPrice
-                        ? "Set final_price on the current commercials row first"
-                        : "Reach Commercials_Finalised or Transferred_to_ASM first"
-                }
+                disabledReason={!canMarkConverted ? "Lead is already closed" : undefined}
             >
                 Mark Converted
             </Btn>

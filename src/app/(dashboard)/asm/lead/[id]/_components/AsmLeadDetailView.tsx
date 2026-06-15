@@ -181,7 +181,6 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 open={activeModal === "mark_converted"}
                 onClose={() => setActiveModal(null)}
                 leadId={leadId}
-                hasFinalPrice={Boolean(bundle.current_commercials?.final_price)}
                 onSuccess={onActionSuccess}
             />
             <ReassignLeadModal

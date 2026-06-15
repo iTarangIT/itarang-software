@@ -31,7 +31,7 @@ login page enter the email + password.
 
 | Who | Email | Password | Lands on |
 |---|---|---|---|
-| **Sweety** — Inside Sales Rep | `sweety.itarang@gmail.com` | `password` | My Queue |
+| **Nidhi** — Inside Sales Rep | `nidhi.itarang@gmail.com` | `password` | My Queue |
 | **ASM** — Area Sales Manager | `asm.itarang@gmail.com` | `password` | My Visits |
 | **Anirudh** — Admin / Ops | *your Anirudh (sales_head) login* | *your password* | Sales Head dashboard |
 | **CEO** | *your CEO login* | *your password* | CEO dashboard |
@@ -48,14 +48,14 @@ login page enter the email + password.
 
 ---
 
-# PART 1 — The Inside Sales journey (Sweety)
+# PART 1 — The Inside Sales journey (Nidhi)
 
 This is the day-to-day work of an Inside Sales rep: picking up leads, recording
 calls, sharing prices, and moving the deal forward.
 
 ### Test 1.1 — See your work queue
 
-**Log in as:** Sweety
+**Log in as:** Nidhi
 
 **Steps:**
 1. After login you land on **My Queue** (the Inside Sales workspace).
@@ -72,7 +72,7 @@ message). Tab numbers/counts update. No errors.
 
 ### Test 1.2 — Claim a new lead
 
-**Log in as:** Sweety
+**Log in as:** Nidhi
 
 **Steps:**
 1. Click the **Unassigned (Claim)** tab.
@@ -88,7 +88,7 @@ becomes **Assigned**. It now appears under **My Open Leads**.
 
 ### Test 1.3 — Log a touchpoint (record a call)
 
-**Log in as:** Sweety
+**Log in as:** Nidhi
 
 **Steps:**
 1. Open one of **your** open leads (from **My Open Leads**).
@@ -106,7 +106,7 @@ left. If the lead was "Assigned", it can now move to **Under Discussion**.
 
 ### Test 1.4 — Update commercials (share a price)
 
-**Log in as:** Sweety
+**Log in as:** Nidhi
 
 **Steps:**
 1. On the same lead, click **Update Commercials**.
@@ -124,7 +124,7 @@ quote and the final price. The status can now reach **Commercials Finalised**.
 
 ### Test 1.5 — Mark a lead Lost (with a high-impact reason)
 
-**Log in as:** Sweety
+**Log in as:** Nidhi
 
 **Steps:**
 1. Open a *different* open lead (one you don't mind closing).
@@ -139,11 +139,11 @@ After confirming, the lead becomes **Lost** and moves to **My Closed Leads**.
 
 ---
 
-# PART 2 — Handing off to the field (Sweety → ASM)
+# PART 2 — Handing off to the field (Nidhi → ASM)
 
 ### Test 2.1 — Transfer a lead to an ASM
 
-**Log in as:** Sweety
+**Log in as:** Nidhi
 
 **Steps:**
 1. Open a lead that has a **Final Price** set (from Test 1.4).
@@ -166,7 +166,7 @@ to ASM** and it leaves your queue.
 1. After login you land on **My Visits**.
 2. Click the **My Active Visits** tab.
 
-**You should see:** The lead Sweety just transferred (plus the seeded practice
+**You should see:** The lead Nidhi just transferred (plus the seeded practice
 leads) appears in the list.
 
 **Result:** ☐ Pass ☐ Fail — Notes: ________________
@@ -210,7 +210,7 @@ automatically. Confirm it. The lead becomes **Converted**.
 
 ### Test 3.1 — Mark Converted hands the deal to onboarding
 
-**Log in as:** Sweety **or** ASM (whoever owns a finalised lead)
+**Log in as:** Nidhi **or** ASM (whoever owns a finalised lead)
 
 **Steps:**
 1. Open a lead in **Commercials Finalised** or **Transferred to ASM** that has a
@@ -236,7 +236,7 @@ the admin resolves.
 
 ### Test 4.1 — Raise an escalation
 
-**Log in as:** Sweety (or ASM)
+**Log in as:** Nidhi (or ASM)
 
 **Steps:**
 1. Open any **open** lead you own.
