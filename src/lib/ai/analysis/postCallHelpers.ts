@@ -1,9 +1,10 @@
 // Shared helpers used by both Bolna and ElevenLabs post-call pipelines.
 //
 // NOTE: the old `normalizeAnalysis` guardrail (which bumped callback scores to
-// 60/75) is GONE — scoring is now deterministic upstream (computeIntentScore),
-// so there is nothing to "normalize". What remains here is callback-time
-// parsing and next-call scheduling, which both pipelines still share.
+// 60/75) is GONE — banding is now deterministic upstream (computeBand), so there
+// is nothing to "normalize". What remains here is callback-time parsing and
+// next-call scheduling, which both pipelines still share. The score-tiered delay
+// reads the carried band lead_score (Warm 60 → 2h, etc).
 
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring";
 
