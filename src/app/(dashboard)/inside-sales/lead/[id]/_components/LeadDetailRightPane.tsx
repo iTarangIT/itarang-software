@@ -152,6 +152,14 @@ export function LeadDetailRightPane({ bundle }: Props) {
                                                                         </li>
                                                                     ))}
                                                                 </ul>
+                                                                <div className="mt-1 flex items-center justify-end gap-2 text-xs">
+                                                                    <span className="text-gray-500">Total</span>
+                                                                    <span className="font-semibold tabular-nums text-gray-900">
+                                                                        ₹{cc.product_lines
+                                                                            .reduce((s, p) => s + (p.unit_price != null ? p.unit_price * p.quantity : 0), 0)
+                                                                            .toLocaleString("en-IN")}
+                                                                    </span>
+                                                                </div>
                                                             </div>
                                                         ) : null}
                                                         <div className="col-span-2">
