@@ -42,7 +42,10 @@ function tabOrder(tab: QueueTab) {
         case "follow_ups":
             return sql`ORDER BY dl.next_follow_up_at ASC NULLS LAST`;
         case "unassigned":
-            return sql`ORDER BY dl.final_intent_score DESC NULLS LAST, dl.created_at DESC`;
+            // Band model: Qualified leads all share lead_score 90, so within a
+            // band the queue is ordered by facts disclosed (info_signals_count
+            // desc), per docs/intent_docs/intent_score.pdf §3.
+            return sql`ORDER BY dl.final_intent_score DESC NULLS LAST, dl.info_signals_count DESC NULLS LAST, dl.created_at DESC`;
         case "my_closed":
             return sql`ORDER BY dl.closed_at DESC NULLS LAST`;
         case "team":

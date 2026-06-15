@@ -36,6 +36,18 @@ interface Row {
   transcript: string | null;
 }
 
+// A signals blob is band-shaped (QualificationSignals) if it carries the yes/no
+// facts. Old BANT corrections (budget/need levels) are nulled out so the band
+// rubric never replays a stale signal shape; their label-only correction is
+// dropped too (no signals → not a rubric case).
+function bandSignalsOrNull(s: IntentSignals | null): IntentSignals | null {
+  if (!s || typeof s !== "object") return null;
+  const o = s as unknown as Record<string, unknown>;
+  return typeof o.callback_agreed === "string" || typeof o.relevant_dealer === "string"
+    ? s
+    : null;
+}
+
 async function fetchFromTarget(target: DbTarget): Promise<GoldenCase[]> {
   const sql = makeClient(target.url);
   try {
@@ -57,8 +69,8 @@ async function fetchFromTarget(target: DbTarget): Promise<GoldenCase[]> {
         label: r.corrected_status as LeadStatus,
         correctedScore: r.corrected_score ?? null,
         originalIntentScore: r.original_intent_score ?? null,
-        originalSignals: r.original_signals ?? null,
-        correctedSignals: r.corrected_signals ?? null,
+        originalSignals: bandSignalsOrNull(r.original_signals),
+        correctedSignals: bandSignalsOrNull(r.corrected_signals),
         source: target.label,
         createdAt:
           r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),

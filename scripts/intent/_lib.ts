@@ -128,22 +128,25 @@ export function truthSignals(c: GoldenCase): IntentSignals | null {
   return c.correctedSignals ?? c.originalSignals ?? null;
 }
 
-// The seven leveled signals a reviewer can correct — the keys whose extraction
-// accuracy we report. Mirrors CORRECTABLE_SIGNALS in the drawer.
+// The yes/no facts a reviewer can correct — the keys whose extraction accuracy
+// we report. Mirrors CORRECTABLE_FACTS in the drawer.
 export const LEVELED_KEYS = [
-  "need",
-  "budget",
-  "engagement",
-  "curiosity",
-  "timeline",
-  "objection_quality",
-  "authority",
+  "relevant_dealer",
+  "battery_spec_shared",
+  "volume_shared",
+  "existing_financier_shared",
+  "financing_need_expressed",
+  "financing_value_acknowledged",
+  "pitch_heard",
+  "callback_agreed",
+  "disqualifier",
 ] as const;
 
+// The yes/no (or disqualifier enum) value of a fact, for per-signal accuracy.
 export function signalLevel(signals: IntentSignals | null, key: string): string {
-  if (!signals) return "unknown";
-  const node = (signals as unknown as Record<string, { level?: string }>)[key];
-  return node?.level ?? "unknown";
+  if (!signals) return "no";
+  const v = (signals as unknown as Record<string, unknown>)[key];
+  return typeof v === "string" ? v : "no";
 }
 
 // Pretty confusion matrix over a fixed label order. Returns lines to print.
