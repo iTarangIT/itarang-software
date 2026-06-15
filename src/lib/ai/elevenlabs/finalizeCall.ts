@@ -233,14 +233,72 @@ export async function finalizeElevenLabsCall(
   }
 
   const analysis = result;
-  const route = analysis.route;
-  const negs = analysis.signals.negatives;
-  const hardNegative =
-    negs.do_not_call || negs.explicit_not_interested || negs.already_bought_competitor;
+  const action = analysis.action;
+  const hardNegative = analysis.hard_negative;
+
+  // ── dropped_empty: line dropped before anything was captured. No band is
+  // written; tag the call and let normal scheduling re-attempt it. ──
+  if (analysis.band === null) {
+    const history = (lead.follow_up_history as unknown[]) || [];
+    const droppedEntry = {
+      attempt: history.length + 1,
+      called_at: new Date().toISOString(),
+      outcome: "dropped_empty",
+      call_status: "dropped_empty",
+      transcript,
+      conversation: conversation ?? [],
+      signals: analysis.signals,
+      scoring_version: analysis.scoring_version,
+      provider: "elevenlabs",
+    };
+    await db
+      .update(dealerLeads)
+      .set({
+        follow_up_history: [...history, droppedEntry],
+        total_attempts: history.length + 1,
+        call_status: "dropped_empty",
+        provider: "elevenlabs",
+      })
+      .where(eq(dealerLeads.id, lead.id));
+
+    await upsertAiCallLog({
+      callId: conversationId,
+      leadId: lead.id,
+      status: status || "call-disconnected",
+      transcript,
+      summary: "dropped_empty — call cut off before anything was captured",
+      recordingUrl,
+      duration,
+      phone: phone ?? lead.phone,
+      intentScore: null,
+      intentReason: null,
+      nextAction: "auto_retry",
+      scoringVersion: analysis.scoring_version,
+      signals: analysis.signals,
+      scoreBreakdown: analysis.score_breakdown,
+      band: null,
+      callStatus: "dropped_empty",
+      infoSignalsCount: 0,
+    });
+
+    await fetchAndPersistCallCost("elevenlabs", conversationId);
+    const dr = await completeCampaignLead({
+      leadId: lead.id,
+      success: false,
+      bolnaCallId: conversationId || null,
+      outcome: "dropped_empty",
+      intentScore: null,
+    });
+    if (dr.campaignId) {
+      await advanceCampaign(dr.campaignId, { preCallDelayMs: ADVANCE_DELAY_MS });
+    }
+    return;
+  }
+
   const nextCallAt = resolveNextCallAt(
     { callback_time: analysis.callback_time, intent_score: analysis.intent_score },
     transcript,
-    route.action,
+    action,
   );
 
   const updatedLead = updateLeadAfterCall(
@@ -252,15 +310,16 @@ export async function finalizeElevenLabsCall(
       transcript,
       outcome: analysis.outcome,
       nextCallAt,
-      analysis: analysis.analysis,
       conversation: conversation ?? [],
       memory: analysis.memory,
       provider: "elevenlabs",
       intentScore: analysis.intent_score,
+      band: analysis.band,
+      callStatus: analysis.call_status,
+      infoSignalsCount: analysis.info_signals_count,
       signals: analysis.signals,
       scoreBreakdown: analysis.score_breakdown,
       scoringVersion: analysis.scoring_version,
-      qualifiedGate: analysis.qualified_gate,
       hardNegative,
     },
   );
@@ -272,6 +331,10 @@ export async function finalizeElevenLabsCall(
       total_attempts: updatedLead.total_attempts,
       final_intent_score: updatedLead.final_intent_score,
       current_status: updatedLead.current_status,
+      interest_level: updatedLead.interest_level,
+      call_status: updatedLead.call_status,
+      info_signals_count: updatedLead.info_signals_count,
+      intent_band: updatedLead.intent_band,
       memory: updatedLead.memory,
       next_call_at: nextCallAt,
       provider: "elevenlabs",
@@ -279,8 +342,8 @@ export async function finalizeElevenLabsCall(
     .where(eq(dealerLeads.id, lead.id));
 
   const summary = analysis.memory?.intent_summary
-    ? `${analysis.outcome} — ${analysis.memory.intent_summary}`
-    : `${analysis.outcome} — Intent: ${analysis.intent_score}/100`;
+    ? `${analysis.band} — ${analysis.memory.intent_summary}`
+    : `${analysis.band} — ${analysis.info_signals_count}/5 signals disclosed`;
 
   await upsertAiCallLog({
     callId: conversationId,
@@ -293,10 +356,13 @@ export async function finalizeElevenLabsCall(
     phone: phone ?? lead.phone,
     intentScore: analysis.intent_score,
     intentReason: analysis.memory?.intent_summary ?? null,
-    nextAction: route.action ?? null,
+    nextAction: action ?? null,
     scoringVersion: analysis.scoring_version,
     signals: analysis.signals,
     scoreBreakdown: analysis.score_breakdown,
+    band: analysis.band,
+    callStatus: analysis.call_status,
+    infoSignalsCount: analysis.info_signals_count,
   });
 
   // Capture per-call cost from ElevenLabs /v1/convai/conversations/{id}.
@@ -311,7 +377,7 @@ export async function finalizeElevenLabsCall(
     intentScore: analysis.intent_score,
   });
 
-  if (route.action === "schedule_call" && nextCallAt && phone) {
+  if (action === "schedule_call" && nextCallAt && phone) {
     const messageId = await scheduleElevenLabsCall({
       phone,
       leadId: lead.id,
@@ -323,13 +389,8 @@ export async function finalizeElevenLabsCall(
       );
     }
   }
-
-  if (route.action === "push_to_crm") {
-    await db
-      .update(dealerLeads)
-      .set({ current_status: "qualified" })
-      .where(eq(dealerLeads.id, lead.id));
-  }
+  // Qualified (action push_to_crm) already lands current_status="qualified" via
+  // updateLeadAfterCall above.
 
   appendSalesCallLog({
     leadId: lead.id,
@@ -401,6 +462,9 @@ async function upsertAiCallLog(opts: {
   scoringVersion?: string | null;
   signals?: unknown;
   scoreBreakdown?: unknown;
+  band?: string | null;
+  callStatus?: string | null;
+  infoSignalsCount?: number | null;
 }): Promise<void> {
   try {
     const existing = opts.callId
@@ -428,6 +492,9 @@ async function upsertAiCallLog(opts: {
           scoring_version: opts.scoringVersion ?? null,
           signals: opts.signals ?? null,
           score_breakdown: opts.scoreBreakdown ?? null,
+          band: opts.band ?? null,
+          call_status: opts.callStatus ?? null,
+          info_signals_count: opts.infoSignalsCount ?? null,
           ended_at: now,
           updated_at: now,
         })
@@ -453,6 +520,9 @@ async function upsertAiCallLog(opts: {
       scoring_version: opts.scoringVersion ?? null,
       signals: opts.signals ?? null,
       score_breakdown: opts.scoreBreakdown ?? null,
+      band: opts.band ?? null,
+      call_status: opts.callStatus ?? null,
+      info_signals_count: opts.infoSignalsCount ?? null,
       ended_at: now,
     });
   } catch (err) {
