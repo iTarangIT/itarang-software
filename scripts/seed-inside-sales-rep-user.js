@@ -1,7 +1,7 @@
 /**
  * Seeds an Inside Sales Rep test user (BRD §0.1 persona).
  *
- *   email:    sweety.itarang@gmail.com
+ *   email:    nidhi.itarang@gmail.com
  *   password: password
  *   role:     inside_sales_rep
  *
@@ -37,9 +37,9 @@ const sql = postgres(process.env.DATABASE_URL, {
 });
 
 const USER = {
-    email: 'sweety.itarang@gmail.com',
+    email: 'nidhi.itarang@gmail.com',
     password: 'password',
-    name: 'Sweety',
+    name: 'Nidhi',
     role: 'inside_sales_rep',
 };
 
