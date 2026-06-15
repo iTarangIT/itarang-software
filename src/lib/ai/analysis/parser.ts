@@ -1,21 +1,21 @@
 // (A) EXTRACTION — the LLM's ONLY job. It reads the transcript and returns
-// STRUCTURED SIGNALS WITH EVIDENCE (signals.ts). It must NOT return a final
-// score — the arithmetic lives in the deterministic scoring engine. This keeps
-// the score reproducible and auditable: change the prompt and the *signals* may
-// shift, but the score → signal mapping stays fixed and inspectable.
+// FACTUAL yes/no SIGNALS WITH EVIDENCE (signals.ts). It must NOT score and must
+// NOT band — the band lives in the deterministic engine (computeBand.ts). This
+// keeps the band reproducible and auditable: change the prompt and the *signals*
+// may shift, but the band → signal mapping stays fixed and inspectable.
+// (Spec: docs/intent_docs/intent_score.pdf §2.)
 
 import {
-  IntentSignalsSchema,
-  type IntentSignals,
-  SIGNAL_LEVELS,
-  AUTHORITY_LEVELS,
-  TIMELINE_LEVELS,
-  OBJECTION_LEVELS,
+  QualificationSignalsSchema,
+  type QualificationSignals,
+  DEALER_SEGMENTS,
+  DEALER_ROLES,
+  DISQUALIFIERS,
 } from "@/lib/ai/scoring";
 import { renderCalibrationExamples } from "./calibrationExamples";
 
 export type ExtractionResult =
-  | { status: "ok"; signals: IntentSignals }
+  | { status: "ok"; signals: QualificationSignals }
   | { status: "failed"; reason: string };
 
 function cleanJSON(text: string) {
@@ -24,10 +24,10 @@ function cleanJSON(text: string) {
 }
 
 function buildPrompt(transcript: string, now: string): string {
-  return `You are a deterministic sales-intelligence extraction engine for an
-outbound EV / lithium-ion battery dealer-calling agent (the agent "Priya" calls
-e-rickshaw / EV battery dealers across India, offering batteries with EMI
-financing and booking dealer visits).
+  return `You are analysing a transcript of an outbound sales call between iTarang's
+AI agent ("Priya") and a battery dealer. The agent pitched EV / lithium-ion
+batteries and an EMI financing scheme to e-rickshaw / EV battery dealers across
+India.
 
 CURRENT TIME (Asia/Kolkata): ${now}
 
@@ -37,88 +37,73 @@ speech-to-text errors):
 ${transcript}
 """
 
-YOUR JOB: read the conversation and emit STRUCTURED SIGNALS WITH EVIDENCE.
-You DO NOT score the lead. You only report what the DEALER said.
+Extract ONLY what the dealer actually said or did. Do NOT infer intent, do NOT
+score, do NOT band, do NOT be generous. If a signal is not clearly present, mark
+it "no". Each signal must be a FACT the dealer stated, not an impression — mark
+"yes" only on explicit disclosure, never infer from tone.
 
-RULES (read carefully):
-- Output STRICT JSON ONLY — no prose, no markdown, no code fences.
-- Judge the DEALER, never the agent. Do NOT penalise the dealer for the agent's
-  mistakes, repetitions, or awkward phrasing.
-- Be CONSERVATIVE. Do NOT infer enthusiasm, need, or budget that isn't actually
-  present. When the transcript doesn't support a signal, use "unknown" and set
-  evidence to "unknown". "unknown" is a real value — it is NOT the same as "none"
-  (none = the dealer actively showed no need / no interest).
-- A callback being OFFERED BY THE AGENT ("I'll call you later") is NOT a callback
-  request. Only set facts.callback_requested=true when the DEALER asks to be
-  called back or to talk later.
-- Interpret Hinglish charitably, but if a passage is garbled/unintelligible, mark
-  the affected signal "unknown".
-- THIN-CALL RULE: if the dealer contributes only a few substantive words (a bare
-  "yes/haan/ok", a one-line answer, or the line is garbled), the call is THIN.
-  On a thin call you have almost no evidence: cap engagement and curiosity at
-  "weak" at most, and prefer "unknown" for need, budget, and timeline. Naming a
-  current brand, or a single "yes", is NOT curiosity, need, or engagement — it is
-  just a fact. Do not manufacture intent from a near-empty exchange.
-- Each signal needs a short evidence string: a brief verbatim or paraphrased
-  quote from the dealer (or "unknown").
+Output STRICT JSON ONLY — no preamble, no markdown, no code fences.
 
-SIGNAL DEFINITIONS:
-- budget        — dealer's interest in / ability for EMI financing or funding the
-                  purchase. level: ${SIGNAL_LEVELS.join(" | ")}
-- authority     — is the speaker the owner / decision-maker? Single-prop dealers
-                  usually ARE the owner, so prefer "decision_maker" unless they
-                  clearly defer to someone else. level: ${AUTHORITY_LEVELS.join(" | ")}
-- need          — real demand: fleet/volume, current battery pain, replacement
-                  cycle. level: ${SIGNAL_LEVELS.join(" | ")}
-- timeline      — when the dealer will act. level: ${TIMELINE_LEVELS.join(" | ")}
-- engagement    — depth of the dealer's participation in the conversation.
-                  level: ${SIGNAL_LEVELS.join(" | ")}
-- curiosity     — dealer asking product questions (price, range, warranty, specs).
-                  level: ${SIGNAL_LEVELS.join(" | ")}
-- objection_quality — quality of objections raised. "substantive" = engaged buyer
-                  pushing back on real concerns; "low" = vague brush-off; "none" =
-                  no objections. level: ${OBJECTION_LEVELS.join(" | ")}
+RULES for each field:
+- relevant_dealer = "yes" if he manufactures, assembles, sells, OR trades
+  batteries, e-rickshaws, OR electric two-wheelers (any one qualifies); capture
+  which in dealer_segment.
+- dealer_segment = ${DEALER_SEGMENTS.join(" | ")} (which market he is in; context
+  only — no band impact).
+- dealer_role = ${DEALER_ROLES.join(" | ")} (oem if he makes/assembles the
+  product, dealer if he resells it, both if applicable, else unknown; context
+  only — no band impact).
+- battery_spec_shared = "yes" if he states the battery capacity he works on
+  (voltage / Ah, e.g. 48V/60V/72V, 100Ah, lithium / lead-acid).
+- volume_shared = "yes" if he gives a number: units per month, or business
+  volume / turnover.
+- existing_financier_shared = "yes" if he names/confirms a financier or NBFC he
+  works with (or explicitly states he uses none).
+- financing_need_expressed = "yes" if he says he needs financing, or that rising
+  battery prices make financing necessary.
+- financing_value_acknowledged = "yes" if he agrees financing would grow /
+  improve his business.
+- pitch_heard = "yes" if he stayed on the line through the battery + finance
+  pitch without cutting it off.
+- callback_agreed = "yes" if he agreed to a follow-up call. IMPORTANT: a PASSIVE
+  "ok / theek hai / haan" to an AGENT-OFFERED callback COUNTS as "yes". You do
+  NOT need the dealer to actively request the callback — agreement, even passive,
+  is enough.
+- disqualifier = "dont_call" (asked not to be called again), "hostile" (abusive),
+  "not_interested" (firm no after the pitch), "call_dropped" (the call ended
+  before its natural close), else "none". Allowed: ${DISQUALIFIERS.join(" | ")}.
 
-FACTS:
-- facts.quantity            — any quantity the dealer mentioned (e.g. "15 units"),
-                              else null.
-- facts.callback_requested  — true ONLY if the DEALER asked to talk later.
-- facts.competitor_named    — competitor brand the dealer named, else null.
-
-NEGATIVE SIGNALS (booleans — only true when clearly present):
-- negatives.explicit_not_interested   — dealer clearly declined.
-- negatives.already_bought_competitor — dealer already bought from a competitor.
-- negatives.do_not_call               — dealer asked not to be called again.
-- negatives.hostile                   — dealer was abusive / hostile.
-- negatives.call_too_short            — call was near-empty / cut short (< ~20s,
-                                        essentially no real exchange).
+EVIDENCE: for each listed field, give a short verbatim or paraphrased quote from
+the dealer (or "" if absent).
 
 ALSO:
-- language      — ${["hindi", "english", "hinglish", "unknown"].join(" | ")}
-- call_summary  — one neutral sentence describing what happened.
-- callback_time — if the dealer named a callback time ("2 minute baad", "kal",
-                  "shaam ko"), echo that phrase here, else null.
+- language = hindi | english | hinglish | unknown.
+- call_summary = one neutral sentence describing what happened.
 
 OUTPUT EXACTLY THIS JSON SHAPE (fill every field):
 {
-  "budget": { "level": "...", "evidence": "..." },
-  "authority": { "level": "...", "evidence": "..." },
-  "need": { "level": "...", "evidence": "..." },
-  "timeline": { "level": "...", "evidence": "..." },
-  "engagement": { "level": "...", "evidence": "..." },
-  "curiosity": { "level": "...", "evidence": "..." },
-  "objection_quality": { "level": "...", "evidence": "..." },
-  "facts": { "quantity": null, "callback_requested": false, "competitor_named": null },
-  "negatives": {
-    "explicit_not_interested": false,
-    "already_bought_competitor": false,
-    "do_not_call": false,
-    "hostile": false,
-    "call_too_short": false
+  "relevant_dealer": "yes" | "no",
+  "dealer_segment": "battery" | "e_rickshaw" | "e_2w" | "multiple" | "none",
+  "dealer_role": "oem" | "dealer" | "both" | "unknown",
+  "battery_spec_shared": "yes" | "no",
+  "volume_shared": "yes" | "no",
+  "existing_financier_shared": "yes" | "no",
+  "financing_need_expressed": "yes" | "no",
+  "financing_value_acknowledged": "yes" | "no",
+  "pitch_heard": "yes" | "no",
+  "callback_agreed": "yes" | "no",
+  "disqualifier": "none" | "dont_call" | "hostile" | "not_interested" | "call_dropped",
+  "evidence": {
+    "relevant_dealer": "<short quote/paraphrase>",
+    "battery_spec_shared": "<capacity / voltage / Ah / chemistry stated>",
+    "volume_shared": "<units per month or business volume stated>",
+    "existing_financier_shared": "<financier/NBFC named, or 'none'>",
+    "financing_need_expressed": "<what he said about needing financing>",
+    "financing_value_acknowledged": "<what he said about financing helping business>",
+    "callback_agreed": "<the line where they agreed>"
   },
-  "language": "...",
-  "call_summary": "...",
-  "callback_time": null
+  "language": "hindi" | "english" | "hinglish" | "unknown",
+  "call_summary": "..."
 }
 ${renderCalibrationExamples()}
 Return ONLY the JSON object.`;
@@ -144,7 +129,7 @@ export async function extractSignals(transcript: string): Promise<ExtractionResu
             {
               role: "system",
               content:
-                "You are a deterministic sales-intelligence extraction engine. You extract structured signals with evidence. You NEVER output a score. Return ONLY valid JSON — no markdown, no explanation, no code fences.",
+                "You are a factual call-signal extraction engine. You report ONLY what the dealer explicitly said as yes/no facts. You NEVER score and NEVER band. Return ONLY valid JSON — no markdown, no explanation, no code fences.",
             },
             { role: "user", content: prompt },
           ],
@@ -195,7 +180,7 @@ export async function extractSignals(transcript: string): Promise<ExtractionResu
         return { status: "failed", reason: "json_parse_error" };
       }
 
-      const parsed = IntentSignalsSchema.safeParse(raw);
+      const parsed = QualificationSignalsSchema.safeParse(raw);
       if (!parsed.success) {
         console.error("[OPENAI] Signal schema validation failed:", parsed.error.message);
         return { status: "failed", reason: "schema_validation_error" };
