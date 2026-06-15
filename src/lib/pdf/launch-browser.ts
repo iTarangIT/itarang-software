@@ -165,3 +165,23 @@ export async function launchBrowser() {
   return browserPromise;
 }
 
+/**
+ * Drop and close the shared browser so the next launchBrowser() starts a fresh
+ * Chrome. Call this when a render hangs or fails: the long-lived browser can go
+ * into a zombie state (OOM-killed renderer, leaked pages) where isConnected()
+ * still reports true but every new page.setContent() blocks until the 30s
+ * navigation timeout. Relaunching in-process mimics a `pm2 restart` without
+ * manual intervention. Best-effort — never throws.
+ */
+export async function resetBrowser() {
+  const current = browserPromise;
+  browserPromise = null;
+  if (!current) return;
+  try {
+    const browser = await current;
+    await (browser as unknown as { close?: () => Promise<void> }).close?.();
+  } catch {
+    // already dead / failed to launch — nothing to close
+  }
+}
+

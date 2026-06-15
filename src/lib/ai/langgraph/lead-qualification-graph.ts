@@ -6,7 +6,7 @@ import { eq, desc } from 'drizzle-orm';
 import { triggerCall } from '@/lib/ai/bolna-client';
 import { getAICallerEnabled } from '@/lib/ai/settings';
 import { analyzeTranscript } from '@/lib/ai/analysis';
-import { INTENT_THRESHOLDS, leadStatusFor } from '@/lib/ai/scoring';
+import { INTENT_THRESHOLDS, leadStatusFor, bandToStatus } from '@/lib/ai/scoring';
 
 // ─── State Definition ────────────────────────────────────────────────────────
 
@@ -33,6 +33,9 @@ const GraphState = Annotation.Root({
     signals: Annotation<Record<string, unknown> | null>({ reducer: (_, b) => b, default: () => null }),
     scoringVersion: Annotation<string>({ reducer: (_, b) => b, default: () => '' }),
     needsReview: Annotation<boolean>({ reducer: (_, b) => b, default: () => false }),
+    // Hard negative from the latest call (relevant_dealer=no OR a hard
+    // disqualifier). Carried straight from the band engine — never re-derived.
+    hardNegative: Annotation<boolean>({ reducer: (_, b) => b, default: () => false }),
 });
 
 type State = typeof GraphState.State;
@@ -120,9 +123,9 @@ async function summarizeConversation(state: State): Promise<Partial<State>> {
 
 // ─── Node 3: Score Purchase Intent ───────────────────────────────────────────
 //
-// The graph NO LONGER scores leads itself. The canonical intent number comes
-// ONLY from the shared, deterministic engine (latest signals-extraction prompt +
-// computeIntentScore), so the CEO dialer and the campaign dialer agree.
+// The graph NO LONGER scores leads itself. The canonical band + carried score
+// come ONLY from the shared, deterministic engine (facts-extraction prompt +
+// computeBand), so the CEO dialer and the campaign dialer agree.
 
 async function scorePurchaseIntent(state: State): Promise<Partial<State>> {
     const transcript = (state.latestTranscript || '').trim();
@@ -151,17 +154,24 @@ async function scorePurchaseIntent(state: State): Promise<Partial<State>> {
         };
     }
 
+    // dropped_empty (band=null): nothing captured before the line dropped —
+    // carry the prior score forward rather than banding on an empty call.
+    if (result.band === null) {
+        return {
+            intentScore: Number(state.lead?.intent_score) || 0,
+            intentReason: 'call dropped before anything was captured',
+        };
+    }
+
     return {
         intentScore: result.intent_score,
         intentReason: result.memory?.intent_summary || '',
-        intentBand: leadStatusFor(result.intent_score, { qualified_gate: result.qualified_gate }),
+        intentBand: bandToStatus(result.band) ?? leadStatusFor(result.intent_score),
         signals: result.signals as unknown as Record<string, unknown>,
         scoreBreakdown: result.score_breakdown,
         scoringVersion: result.scoring_version,
-        objections:
-            result.signals.objection_quality.level !== 'unknown'
-                ? result.signals.objection_quality.evidence
-                : '',
+        hardNegative: result.hard_negative,
+        objections: '',
         suggestedPitch: '',
     };
 }
@@ -184,11 +194,7 @@ async function decideNextAction(state: State): Promise<Partial<State>> {
     }
 
     // Hard negatives from the latest call → stop dialing, park far out.
-    const negs = state.signals?.negatives as Record<string, boolean> | undefined;
-    const hardStop = !!(
-        negs &&
-        (negs.do_not_call || negs.explicit_not_interested || negs.already_bought_competitor)
-    );
+    const hardStop = state.hardNegative;
     if (hardStop) {
         return {
             nextAction: 'mark_cold',
