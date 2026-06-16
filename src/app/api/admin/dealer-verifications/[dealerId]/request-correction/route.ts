@@ -13,18 +13,19 @@ import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import {
   CORRECTION_DOCUMENTS,
   CORRECTION_FIELDS,
-  FIELD_KEY_TO_COLUMN,
   documentLabel,
   fieldLabel,
+  fieldStore,
   isCorrectionDocumentKey,
   isCorrectionFieldKey,
-  type CorrectionFieldKey,
 } from "@/lib/onboarding/correction-catalog";
 import {
   buildCorrectionLink,
   correctionTokenExpiry,
   generateCorrectionToken,
 } from "@/lib/onboarding/correction-token";
+import { CATALOG_TO_WHATSAPP_DOC } from "@/lib/whatsapp/correction-map";
+import { startCorrectionOverWhatsApp } from "@/lib/whatsapp/orchestrator";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -46,20 +47,57 @@ function uniqueStrings(values: unknown): string[] {
   );
 }
 
-// Snapshot the current value of a field on the application row so the dealer
-// can see "you previously entered X" on the correction form. Catalog keys are
-// camelCase but the Drizzle row uses snake_case property names, so we look up
-// the column name via FIELD_KEY_TO_COLUMN before reading.
+function toStr(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const str = String(value).trim();
+  return str.length > 0 ? str : null;
+}
+
+function parseJson(value: unknown): Record<string, any> {
+  if (value && typeof value === "object") return value as Record<string, any>;
+  if (typeof value === "string") {
+    const t = value.trim();
+    if (t.startsWith("{") || t.startsWith("[")) {
+      try { return JSON.parse(t); } catch { return {}; }
+    }
+  }
+  return {};
+}
+
+// The dealer's current address line out of the business_address TEXT column,
+// which holds either a JSON { address } object or a plain string.
+function readBusinessAddress(application: Record<string, unknown>): string | null {
+  const raw = application.business_address;
+  if (typeof raw === "string") {
+    const t = raw.trim();
+    if (t.startsWith("{")) return toStr(parseJson(t).address);
+    return toStr(t);
+  }
+  if (raw && typeof raw === "object") return toStr((raw as Record<string, any>).address);
+  return null;
+}
+
+function readOwnershipSnapshot(application: Record<string, unknown>, key: string): string | null {
+  const provider = parseJson(application.provider_raw_response);
+  const ownership = provider?.submissionSnapshot?.ownership;
+  if (ownership && typeof ownership === "object") return toStr(ownership[key]);
+  return null;
+}
+
+// Snapshot the current value of a field so the dealer sees "you previously
+// entered X" on the correction form. Routes by where the field is stored:
+// plain column, the business_address JSON, or the snapshot ownership object.
 function snapshotFieldValue(
   application: Record<string, unknown>,
   fieldKey: string,
 ): string | null {
-  const column = FIELD_KEY_TO_COLUMN[fieldKey as CorrectionFieldKey];
-  if (!column) return null;
-  const value = application[column];
-  if (value === undefined || value === null) return null;
-  const str = String(value).trim();
-  return str.length > 0 ? str : null;
+  const store = fieldStore(fieldKey);
+  if (!store) return null;
+  if (store.kind === "column") return toStr(application[store.column]);
+  if (store.kind === "businessAddress") return readBusinessAddress(application);
+  if (store.kind === "snapshotOwnership")
+    return readOwnershipSnapshot(application, store.snapshotKey);
+  return null;
 }
 
 export async function POST(req: NextRequest, context: RouteContext) {
@@ -132,9 +170,26 @@ export async function POST(req: NextRequest, context: RouteContext) {
     const nextRoundNumber = (latestRoundRow[0]?.roundNumber ?? 0) + 1;
 
     // Resolve the most recent uploaded doc per requested type so the dealer
-    // sees their previous file alongside the re-upload box.
+    // sees their previous file alongside the re-upload box, and so apply-
+    // correction can later supersede it by id. The catalog keys
+    // (gst_certificate, …) are the WEB document types; WhatsApp-onboarded
+    // dealers store the same docs under shorter types (gst, …), so for them we
+    // query by the mapped WhatsApp type and key the result back to the catalog
+    // key the round/items use.
+    const isWhatsappDealer =
+      (application.source || "web").toLowerCase() === "whatsapp";
     const previousDocsByType = new Map<string, string>();
     if (requestedDocuments.length > 0) {
+      // catalog key → the document_type actually stored in the DB for this dealer.
+      const requestedPairs = requestedDocuments.map((catalogKey) => ({
+        catalogKey,
+        dbType: isWhatsappDealer
+          ? (CATALOG_TO_WHATSAPP_DOC as Record<string, string>)[catalogKey] ??
+            catalogKey
+          : catalogKey,
+      }));
+      const dbTypes = Array.from(new Set(requestedPairs.map((p) => p.dbType)));
+
       const docRows = await db
         .select({
           id: dealerOnboardingDocuments.id,
@@ -145,29 +200,25 @@ export async function POST(req: NextRequest, context: RouteContext) {
         .where(
           and(
             eq(dealerOnboardingDocuments.application_id, dealerId),
-            inArray(
-              dealerOnboardingDocuments.document_type,
-              requestedDocuments,
-            ),
+            inArray(dealerOnboardingDocuments.document_type, dbTypes),
           ),
         );
 
-      // Keep the most recent doc per type.
-      for (const doc of docRows) {
-        const existing = previousDocsByType.get(doc.documentType);
-        if (!existing) {
-          previousDocsByType.set(doc.documentType, doc.id);
-          continue;
+      // For each requested item, pick the most recent doc of its DB type and
+      // store it under the CATALOG key (what the correction item uses).
+      for (const { catalogKey, dbType } of requestedPairs) {
+        let winner: { id: string; uploadedAt: Date } | null = null;
+        for (const doc of docRows) {
+          if (doc.documentType !== dbType) continue;
+          if (
+            !winner ||
+            new Date(doc.uploadedAt).getTime() >
+              new Date(winner.uploadedAt).getTime()
+          ) {
+            winner = { id: doc.id, uploadedAt: doc.uploadedAt };
+          }
         }
-        // Compare against the existing winner; pick whichever uploaded later.
-        const winner = docRows.find((d) => d.id === existing);
-        if (
-          winner &&
-          new Date(doc.uploadedAt).getTime() >
-            new Date(winner.uploadedAt).getTime()
-        ) {
-          previousDocsByType.set(doc.documentType, doc.id);
-        }
+        if (winner) previousDocsByType.set(catalogKey, winner.id);
       }
     }
 
@@ -292,6 +343,34 @@ export async function POST(req: NextRequest, context: RouteContext) {
       }
     }
 
+    // WhatsApp-onboarded dealers fix the flagged items IN the chat: flip their
+    // session into CORRECTION mode and prompt the first item. Best-effort and
+    // additive — the email above (with the web fallback link) still goes out.
+    let whatsappCorrection: { ok: boolean; error?: string } | null = null;
+    if (isWhatsappDealer && application.wa_phone) {
+      try {
+        whatsappCorrection = await startCorrectionOverWhatsApp({
+          application: {
+            id: String(application.id),
+            wa_session_id: (application.wa_session_id as string | null) ?? null,
+            wa_phone: application.wa_phone as string,
+          },
+          roundId: round.id,
+          roundNumber: nextRoundNumber,
+          remarks,
+          requestedFields,
+          requestedDocuments,
+        });
+      } catch (waErr: any) {
+        whatsappCorrection = {
+          ok: false,
+          error: waErr?.message || "whatsapp_correction_error",
+        };
+        console.error("REQUEST CORRECTION — WhatsApp start threw:", waErr);
+      }
+      console.log("CORRECTION WHATSAPP:", { dealerId, whatsappCorrection });
+    }
+
     return NextResponse.json({
       success: true,
       message: emailResult.ok
@@ -301,6 +380,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       roundNumber: nextRoundNumber,
       notificationRecipients,
       emailResult,
+      whatsappCorrection,
     });
   } catch (error: any) {
     console.error("REQUEST CORRECTION ERROR:", error);

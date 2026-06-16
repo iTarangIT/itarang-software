@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import {
   dealerAgreementSigners,
   dealerOnboardingApplications,
+  whatsappMessages,
 } from "@/lib/db/schema";
 import {
   insertAgreementEvent,
@@ -11,6 +12,7 @@ import {
 } from "@/lib/agreement/tracking";
 import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { getAdapter } from "@/lib/whatsapp";
 import { POST as createDigioAgreement } from "@/app/api/integrations/digio/create-agreement/route";
 import { extractStampCertificateIds } from "@/lib/digio/parse-status";
 
@@ -308,6 +310,9 @@ export async function POST(
       );
     }
 
+    const isWhatsappDealer =
+      String(application.source || "").toLowerCase() === "whatsapp";
+
     const currentAgreementStatus = String(
       application.agreement_status || ""
     ).toLowerCase();
@@ -371,19 +376,26 @@ export async function POST(
     const itarang1Existing = existingSignerByRole.get("itarang_signatory_1");
     const itarang2Existing = existingSignerByRole.get("itarang_signatory_2");
 
+    // For WhatsApp-onboarded dealers there is no web Step-5 agreement config, so
+    // the incoming dealerSigner* fields are blank. Fall back to the application's
+    // owner contact (owner_name/email/phone) — captured during the WhatsApp flow —
+    // so the dealer signer is always valid without forcing a manual re-entry.
     const hydratedAgreement: AgreementConfig = {
       ...agreement,
       dealerSignerName:
         cleanString(agreement.dealerSignerName) ||
         dealerExisting?.signer_name ||
+        cleanString(application.owner_name) ||
         "",
       dealerSignerEmail:
         cleanString(agreement.dealerSignerEmail) ||
         dealerExisting?.signer_email ||
+        cleanString(application.owner_email) ||
         "",
       dealerSignerPhone:
         normalizePhone(agreement.dealerSignerPhone) ||
         dealerExisting?.signer_mobile ||
+        normalizePhone(application.owner_phone) ||
         "",
       dealerSigningMethod:
         cleanString(agreement.dealerSigningMethod) ||
@@ -521,7 +533,16 @@ export async function POST(
         signers,
         sequential: true,
         expireInDays: 30,
+        // Keep Digio's email/SMS notifications ON so the iTarang signer is
+        // notified by email (requirement). Digio's notify flag is global — there
+        // is no per-signer suppression — so the dealer may also receive a Digio
+        // email, but their PRIMARY channel is the WhatsApp link we send below.
+        suppressSignerEmails: false,
       },
+      applicationId: dealerId,
+      // Persist the unsigned PDF only for WhatsApp dealers — we send it as a
+      // WhatsApp document below. Web dealers don't need the extra storage.
+      storeUnsignedCopy: isWhatsappDealer,
     };
 
     console.log(
@@ -579,6 +600,11 @@ export async function POST(
     const providerDocumentId =
       extractProviderDocumentId(responseData) || requestId || null;
     const signingUrl = extractSigningUrl(responseData);
+    // Public URL of the unsigned agreement PDF (set for WhatsApp dealers). It's
+    // also persisted into provider_raw_response via mergeProviderRawResponse, so
+    // a later resend can reuse it.
+    const unsignedAgreementUrl =
+      (responseData as any)?.unsignedAgreementUrl || null;
     const rawStampStatus = extractStampStatus(responseData);
     const stampCertificateIds = extractStampCertificateIds(responseData);
     const stampStatus =
@@ -733,9 +759,97 @@ export async function POST(
       eventPayload: responseData,
     });
 
+    // WhatsApp-onboarded dealers receive their sign link over WhatsApp (their
+    // primary channel); the iTarang signer is notified by Digio email. This is a
+    // best-effort send — a WhatsApp failure must not fail the whole initiation.
+    const whatsappDelivery: {
+      attempted: boolean;
+      ok: boolean;
+      error?: string | null;
+    } = { attempted: false, ok: false, error: null };
+
+    const dealerSigningUrl =
+      getSignerUrl(dealerSignerRaw) || signingUrl || null;
+
+    if (isWhatsappDealer && application.wa_phone && dealerSigningUrl) {
+      whatsappDelivery.attempted = true;
+      try {
+        const adapter = getAdapter();
+
+        // Log helper — append an outbound send to whatsapp_messages (best-effort).
+        const logSend = async (
+          messageType: "document" | "text",
+          textBody: string,
+          res: { ok: boolean; providerMessageId: string | null; raw?: unknown },
+        ) => {
+          if (!application.wa_session_id) return;
+          await db.insert(whatsappMessages).values({
+            session_id: application.wa_session_id,
+            provider_message_id: res.providerMessageId,
+            direction: "outbound",
+            message_type: messageType,
+            text_body: textBody,
+            delivery_status: res.ok ? "sent" : "failed",
+            raw_payload: (res.raw ?? null) as any,
+          });
+        };
+
+        const linkMessage =
+          `Hi ${dealerSigner.name}, please review your iTarang dealer agreement ` +
+          `above, then *tap the link below to e-sign* it:\n\n${dealerSigningUrl}\n\n` +
+          `This link is unique to you. Reply here if you need any help.`;
+
+        if (unsignedAgreementUrl) {
+          // Send the actual agreement PDF as a document, then the sign link as a
+          // follow-up message so it renders as a tappable link.
+          const docRes = await adapter.sendDocument(
+            application.wa_phone,
+            unsignedAgreementUrl,
+            "iTarang-Dealer-Agreement.pdf",
+            "📄 Your iTarang dealer agreement — please review it, then tap the link in the next message to e-sign.",
+          );
+          await logSend("document", "iTarang-Dealer-Agreement.pdf", docRes);
+
+          const linkRes = await adapter.sendText(application.wa_phone, linkMessage);
+          await logSend("text", linkMessage, linkRes);
+
+          whatsappDelivery.ok = docRes.ok && linkRes.ok;
+          whatsappDelivery.error = docRes.error ?? linkRes.error ?? null;
+          if (!whatsappDelivery.ok) {
+            console.error("[INITIATE] WhatsApp agreement doc/link send failed:", {
+              doc: docRes.error,
+              link: linkRes.error,
+            });
+          }
+        } else {
+          // Fallback (no stored PDF) — single link message, as before.
+          const message =
+            `📄 *Your dealer agreement is ready to sign.*\n\n` +
+            `Hi ${dealerSigner.name}, please review and sign your iTarang dealer ` +
+            `agreement using your secure link below:\n\n${dealerSigningUrl}\n\n` +
+            `This link is unique to you. Reply here if you need any help.`;
+          const sendRes = await adapter.sendText(application.wa_phone, message);
+          await logSend("text", message, sendRes);
+          whatsappDelivery.ok = sendRes.ok;
+          whatsappDelivery.error = sendRes.error ?? null;
+          if (!sendRes.ok) {
+            console.error("[INITIATE] WhatsApp agreement send failed:", sendRes.error);
+          }
+        }
+      } catch (waErr: any) {
+        whatsappDelivery.error = waErr?.message || "whatsapp_send_error";
+        console.error("[INITIATE] WhatsApp agreement send threw:", waErr);
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      message: "Agreement initiated successfully",
+      message: whatsappDelivery.attempted
+        ? whatsappDelivery.ok
+          ? "Agreement initiated. Sign link sent to the dealer on WhatsApp; the iTarang signer was notified by email."
+          : "Agreement initiated and the iTarang signer was emailed, but the dealer's WhatsApp sign link could not be delivered (their 24-hour window may be closed). Use the Open Link action to share it manually."
+        : "Agreement initiated successfully",
+      whatsappDelivery,
       data: {
         ...responseData,
         requestId,

@@ -10,7 +10,7 @@ import {
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import {
   CORRECTION_FIELDS,
-  FIELD_KEY_TO_COLUMN,
+  fieldStore,
   type CorrectionFieldKey,
 } from "@/lib/onboarding/correction-catalog";
 
@@ -36,6 +36,26 @@ type RouteContext = {
 const ALLOWED_FIELD_KEYS = new Set<CorrectionFieldKey>(
   CORRECTION_FIELDS.map((f) => f.key),
 );
+
+// Parse a TEXT/jsonb column that may hold a JSON object (or a JSON string) into
+// a plain object; returns {} for plain strings / null so a merge never throws.
+function parseJsonObject(value: unknown): Record<string, any> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, any>;
+  }
+  if (typeof value === "string") {
+    const t = value.trim();
+    if (t.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(t);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+      } catch {
+        /* fall through */
+      }
+    }
+  }
+  return {};
+}
 
 export async function POST(req: NextRequest, context: RouteContext) {
   const auth = await requireSalesHead();
@@ -91,19 +111,27 @@ export async function POST(req: NextRequest, context: RouteContext) {
       .where(eq(dealerCorrectionItems.round_id, round.id));
 
     // ── Merge field updates ─────────────────────────────────────────────────
-    // Catalog keys are camelCase; the table columns are snake_case. Translate
-    // each key via FIELD_KEY_TO_COLUMN so Drizzle actually writes to the right
-    // column. Without this, Drizzle silently dropped every field update and
-    // the application row never picked up the dealer's new values.
+    // Route each field's new value by where it's stored: a plain column, the
+    // business_address JSON text, or the submissionSnapshot.ownership object.
     const fieldUpdates: Record<string, string> = {};
+    let businessAddressValue: string | null = null;
+    const ownershipPatch: Record<string, string> = {};
     for (const item of items) {
       if (item.kind !== "field") continue;
       if (!ALLOWED_FIELD_KEYS.has(item.key as CorrectionFieldKey)) continue;
       if (item.new_value === null || item.new_value === undefined) continue;
-      const column = FIELD_KEY_TO_COLUMN[item.key as CorrectionFieldKey];
-      if (!column) continue;
-      fieldUpdates[column] = item.new_value;
+      const store = fieldStore(item.key);
+      if (!store) continue;
+      if (store.kind === "column") {
+        fieldUpdates[store.column] = item.new_value;
+      } else if (store.kind === "businessAddress") {
+        businessAddressValue = item.new_value;
+      } else if (store.kind === "snapshotOwnership") {
+        ownershipPatch[store.snapshotKey] = item.new_value;
+      }
     }
+    const touchesJsonFields =
+      businessAddressValue !== null || Object.keys(ownershipPatch).length > 0;
 
     // ── Promote new docs / supersede old docs ───────────────────────────────
     const newDocIds = items
@@ -153,6 +181,8 @@ export async function POST(req: NextRequest, context: RouteContext) {
       .select({
         financeEnabled: dealerOnboardingApplications.finance_enabled,
         agreementStatus: dealerOnboardingApplications.agreement_status,
+        businessAddress: dealerOnboardingApplications.business_address,
+        providerRawResponse: dealerOnboardingApplications.provider_raw_response,
       })
       .from(dealerOnboardingApplications)
       .where(eq(dealerOnboardingApplications.id, dealerId))
@@ -162,10 +192,39 @@ export async function POST(req: NextRequest, context: RouteContext) {
       !!currentRow?.financeEnabled &&
       (currentRow?.agreementStatus || "").toLowerCase() === "completed";
 
+    // Merge the JSON-backed fields (company address text/JSON + snapshot
+    // ownership) without clobbering sibling keys — same read-merge-write the
+    // admin Edit/Save path uses.
+    const jsonUpdates: Record<string, unknown> = {};
+    if (touchesJsonFields) {
+      if (businessAddressValue !== null) {
+        const existingAddr = parseJsonObject(currentRow?.businessAddress);
+        jsonUpdates.business_address = JSON.stringify({
+          ...existingAddr,
+          address: businessAddressValue,
+        });
+      }
+      if (Object.keys(ownershipPatch).length > 0) {
+        const provider = parseJsonObject(currentRow?.providerRawResponse);
+        const snapshot =
+          provider.submissionSnapshot && typeof provider.submissionSnapshot === "object"
+            ? { ...(provider.submissionSnapshot as Record<string, any>) }
+            : {};
+        const ownership =
+          snapshot.ownership && typeof snapshot.ownership === "object"
+            ? { ...(snapshot.ownership as Record<string, any>) }
+            : {};
+        Object.assign(ownership, ownershipPatch);
+        snapshot.ownership = ownership;
+        jsonUpdates.provider_raw_response = { ...provider, submissionSnapshot: snapshot };
+      }
+    }
+
     await db
       .update(dealerOnboardingApplications)
       .set({
         ...fieldUpdates,
+        ...jsonUpdates,
         onboarding_status: "submitted",
         review_status: agreementAlreadyComplete
           ? "agreement_completed"
@@ -191,7 +250,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
     return NextResponse.json({
       success: true,
       message: "Correction applied. You can now approve the dealer.",
-      fieldsUpdated: Object.keys(fieldUpdates),
+      fieldsUpdated: [
+        ...Object.keys(fieldUpdates),
+        ...(businessAddressValue !== null ? ["business_address"] : []),
+        ...Object.keys(ownershipPatch),
+      ],
       documentsPromoted: newDocIds.length,
       documentsSuperseded: oldDocIds.length,
     });

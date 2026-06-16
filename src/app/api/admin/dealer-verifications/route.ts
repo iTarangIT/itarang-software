@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db/index";
 import { dealerOnboardingApplications, dealerOnboardingDocuments } from "@/lib/db/schema";
-import { desc, isNotNull, ne, or, sql } from "drizzle-orm";
+import { and, desc, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyApplicationsBatch } from "@/lib/dealer/duplicate-check";
+import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
 
 export async function GET() {
   const auth = await requireSalesHead();
@@ -22,10 +23,15 @@ export async function GET() {
         onboardingStatus: dealerOnboardingApplications.onboarding_status,
         reviewStatus: dealerOnboardingApplications.review_status,
         agreementStatus: dealerOnboardingApplications.agreement_status,
+        dealerAccountStatus: dealerOnboardingApplications.dealer_account_status,
         isBranchDealer: dealerOnboardingApplications.is_branch_dealer,
         submittedAt: dealerOnboardingApplications.submitted_at,
+        approvedAt: dealerOnboardingApplications.approved_at,
         updatedAt: dealerOnboardingApplications.updated_at,
         createdAt: dealerOnboardingApplications.created_at,
+        city: dealerOnboardingApplications.city,
+        state: dealerOnboardingApplications.state,
+        pincode: dealerOnboardingApplications.pincode,
         ownerName: dealerOnboardingApplications.owner_name,
         ownerEmail: dealerOnboardingApplications.owner_email,
         salesManagerName: dealerOnboardingApplications.sales_manager_name,
@@ -60,19 +66,55 @@ export async function GET() {
 
     const applicationIds = applications.map((a) => a.id);
 
+    // Count DISTINCT document types per application (not raw rows) and ignore
+    // superseded / pending_correction history — so the badge matches the unique
+    // set of documents the detail page shows, even if a dealer re-sent some.
     const docCounts = await db
       .select({
         applicationId: dealerOnboardingDocuments.application_id,
-        count: sql<number>`cast(count(*) as integer)`,
+        count: sql<number>`cast(count(distinct ${dealerOnboardingDocuments.document_type}) as integer)`,
       })
       .from(dealerOnboardingDocuments)
       .where(
-        sql`${dealerOnboardingDocuments.application_id} = ANY(ARRAY[${sql.join(
-          applicationIds.map((id) => sql`${id}::uuid`),
-          sql`, `
-        )}])`
+        and(
+          sql`${dealerOnboardingDocuments.application_id} = ANY(ARRAY[${sql.join(
+            applicationIds.map((id) => sql`${id}::uuid`),
+            sql`, `
+          )}])`,
+          notInArray(dealerOnboardingDocuments.doc_status, [
+            "superseded",
+            "pending_correction",
+          ]),
+        )
       )
       .groupBy(dealerOnboardingDocuments.application_id);
+
+    // Also gather the DISTINCT document types present per application, to compute
+    // which required documents are still missing (WhatsApp onboarding).
+    const typeRows = await db
+      .select({
+        applicationId: dealerOnboardingDocuments.application_id,
+        documentType: dealerOnboardingDocuments.document_type,
+      })
+      .from(dealerOnboardingDocuments)
+      .where(
+        and(
+          sql`${dealerOnboardingDocuments.application_id} = ANY(ARRAY[${sql.join(
+            applicationIds.map((id) => sql`${id}::uuid`),
+            sql`, `
+          )}])`,
+          notInArray(dealerOnboardingDocuments.doc_status, [
+            "superseded",
+            "pending_correction",
+          ]),
+        )
+      );
+    const typesByApp = new Map<string, Set<string>>();
+    for (const r of typeRows) {
+      const set = typesByApp.get(r.applicationId) ?? new Set<string>();
+      set.add(r.documentType);
+      typesByApp.set(r.applicationId, set);
+    }
 
     // Build a quick lookup map: applicationId → document count
     const docCountMap = new Map<string, number>();
@@ -101,11 +143,24 @@ export async function GET() {
       const onboardingStatus = (item.onboardingStatus || "draft").toLowerCase();
       const reviewStatus = (item.reviewStatus || "").toLowerCase();
 
-      // Human-readable document badge value
+      // Which required documents are still missing (WhatsApp onboarding — the
+      // checklist is entity-type specific). For web dealers we don't compute
+      // this, since they follow a different document set.
+      const isWhatsApp = (item.source || "web").toLowerCase() === "whatsapp";
+      const uploadedTypes = typesByApp.get(item.id) ?? new Set<string>();
+      const missingDocuments = isWhatsApp
+        ? requiredDocuments(item.companyType as CompanyType | null)
+            .filter((d) => !uploadedTypes.has(d.type))
+            .map((d) => d.label)
+        : [];
+
+      // Human-readable document badge value (+ a "N missing" hint when known)
       const documentsLabel =
         docCount === 0
           ? "None uploaded"
-          : `${docCount} uploaded`;
+          : missingDocuments.length > 0
+            ? `${docCount} uploaded · ${missingDocuments.length} missing`
+            : `${docCount} uploaded`;
 
       // Human-readable agreement badge value
       // If finance is not enabled, agreement is not applicable
@@ -130,11 +185,22 @@ export async function GET() {
         dealerDisplayName:
           item.ownerName || item.companyName || item.ownerEmail || "—",
         documents: documentsLabel,
+        // Names of required documents not yet uploaded (WhatsApp dealers only).
+        missingDocuments,
         agreement: agreementLabel,
+        // Raw agreement status (lowercased) for the agreement-status filter +
+        // CSV. "pending" in the filter maps to: finance-enabled, initiated, and
+        // not completed/failed/expired.
+        agreementStatus: (item.agreementStatus || "").toLowerCase(),
         // The admin table StatusBadge reads `status` — map from onboardingStatus
         legacyStatus: item.onboardingStatus ?? "draft",
         status,
+        dealerAccountStatus: (item.dealerAccountStatus || "").toLowerCase(),
         submittedAt: item.submittedAt,
+        approvedAt: item.approvedAt,
+        city: item.city || "",
+        state: item.state || "",
+        pincode: item.pincode || "",
         gstNumber: item.gstNumber,
         financeEnabled: item.financeEnabled,
         companyType: item.companyType,
