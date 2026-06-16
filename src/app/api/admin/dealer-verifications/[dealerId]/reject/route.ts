@@ -1,10 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db/index";
-import { dealerOnboardingApplications } from "@/lib/db/schema";
+import {
+  dealerOnboardingApplications,
+  whatsappOnboardingSessions,
+} from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { sendDealerRejectionNotificationEmail } from "@/lib/email/sendDealerRejectionNotificationEmail";
 import { getDealerNotificationRecipients } from "@/lib/email/dealer-notification-recipients";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import {
+  sendDealerRejectedWhatsApp,
+  type WhatsAppDelivery,
+} from "@/lib/whatsapp/notifications";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -104,6 +111,40 @@ export async function POST(req: NextRequest, context: RouteContext) {
       }
     }
 
+    // WhatsApp-onboarded dealers also get the rejection over WhatsApp (their
+    // primary channel). Best-effort, additive to the email. Also flip their
+    // session to REJECTED so a later "hi" gets the right reply instead of the
+    // "under review" message or a restarted onboarding.
+    let whatsappDelivery: WhatsAppDelivery | null = null;
+    if (
+      (application.source || "web").toLowerCase() === "whatsapp" &&
+      application.wa_phone
+    ) {
+      whatsappDelivery = await sendDealerRejectedWhatsApp({
+        waPhone: application.wa_phone,
+        waSessionId: application.wa_session_id ?? null,
+        dealerName:
+          application.owner_name || application.company_name || "Dealer",
+        companyName: application.company_name || "your company",
+        remarks,
+        supportEmail: process.env.DEALER_SUPPORT_EMAIL || "care@itarang.com",
+        supportPhone: process.env.DEALER_SUPPORT_PHONE || "+91-8076841497",
+      });
+      try {
+        await db
+          .update(whatsappOnboardingSessions)
+          .set({
+            current_state: "REJECTED",
+            session_status: "closed",
+            updated_at: new Date(),
+          })
+          .where(eq(whatsappOnboardingSessions.application_id, dealerId));
+      } catch (sessErr) {
+        console.error("REJECT — could not close WhatsApp session:", sessErr);
+      }
+      console.log("DEALER REJECT WHATSAPP:", { dealerId, whatsappDelivery });
+    }
+
     return NextResponse.json({
       success: true,
       message: emailResult.ok
@@ -111,6 +152,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
         : "Dealer rejected but email failed",
       notificationRecipients,
       emailResult,
+      whatsappDelivery,
     });
   } catch (error: any) {
     console.error("REJECT DEALER ERROR:", error);
