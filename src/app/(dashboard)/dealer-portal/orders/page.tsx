@@ -137,7 +137,9 @@ export default function OrdersPage() {
                 {orders.length === 0 ? (
                     <div className="p-8 text-center text-sm text-gray-500">No orders found for this filter.</div>
                 ) : (
-                    <div className="divide-y divide-gray-100">
+                  <>
+                    {/* Desktop list — unchanged */}
+                    <div className="hidden md:block divide-y divide-gray-100">
                         {orders.map(order => (
                             <div key={order.id} className="p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4 hover:bg-gray-50 transition-colors cursor-pointer">
                                 <div className="min-w-0">
@@ -164,6 +166,46 @@ export default function OrdersPage() {
                             </div>
                         ))}
                     </div>
+
+                    {/* Mobile cards — same data, stacked & readable on phones. */}
+                    <div className="md:hidden divide-y divide-gray-100">
+                        {orders.map(order => (
+                            <div key={order.id} className="p-4">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <div className="font-semibold text-gray-900 truncate">{order.product_name}</div>
+                                        <div className="text-gray-400 font-medium text-xs mt-0.5">{order.id}</div>
+                                    </div>
+                                    <div className="shrink-0">
+                                        <StatusBadge status={order.status} />
+                                    </div>
+                                </div>
+                                <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                                    <div>
+                                        <p className="text-[11px] uppercase tracking-wide text-gray-400">Quantity</p>
+                                        <p className="text-gray-700">{order.quantity}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-[11px] uppercase tracking-wide text-gray-400">Unit Price</p>
+                                        <p className="text-gray-700">₹{order.unit_price.toLocaleString()}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-[11px] uppercase tracking-wide text-gray-400">Ordered</p>
+                                        <p className="text-gray-600">{new Date(order.ordered_at).toLocaleDateString()}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-[11px] uppercase tracking-wide text-gray-400">ETA</p>
+                                        <p className="text-gray-600">{order.expected_delivery ? new Date(order.expected_delivery).toLocaleDateString() : '-'}</p>
+                                    </div>
+                                </div>
+                                <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between">
+                                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Total</p>
+                                    <p className="text-lg font-bold text-gray-900">₹{order.total_amount.toLocaleString()}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                  </>
                 )}
             </div>
 

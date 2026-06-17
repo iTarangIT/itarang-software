@@ -3,7 +3,7 @@
  * state, so Module 1's queue tabs and Lead Detail UI all have data to work
  * with end-to-end.
  *
- * Owner = sweety.itarang@gmail.com (seeded by scripts/seed-inside-sales-rep-user.js).
+ * Owner = nidhi.itarang@gmail.com (seeded by scripts/seed-inside-sales-rep-user.js).
  *
  * Idempotent — re-running first deletes any prior DL-IS-TEST-* rows (and
  * their touchpoints/commercials/status-history) before re-inserting.
@@ -20,7 +20,7 @@ const sql = postgres(process.env.DATABASE_URL, {
     max: 1,
 });
 
-const OWNER_EMAIL = 'sweety.itarang@gmail.com';
+const OWNER_EMAIL = 'nidhi.itarang@gmail.com';
 const ASM_EMAIL = 'asm.itarang@gmail.com';
 
 const SEEDS = [
@@ -221,7 +221,7 @@ async function run() {
     }
 
     console.log('\n──────────────────────────────────────────');
-    console.log('  6 test leads ready. Sign in as Sweety to see them.');
+    console.log('  6 test leads ready. Sign in as Nidhi to see them.');
     console.log('  Clean up: DELETE FROM dealer_leads WHERE id LIKE \'DL-IS-TEST-%\';');
     console.log('──────────────────────────────────────────\n');
 

@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
+import type { LeadStatus } from "@/lib/lifecycle/transitions";
 
 const MUTATE_ROLES = ["inside_sales_rep", "admin"];
 
@@ -26,15 +27,17 @@ export const POST = withErrorHandler(
         `);
         const row = rows[0];
         if (!row) return errorResponse("Lead not found", 404);
-        if (row.lead_status !== "New_Unassigned") {
-            return errorResponse(
-                `Lead is no longer claimable (status=${row.lead_status ?? "null"}).`,
-                409,
-            );
-        }
         if (row.current_owner_id) {
             return errorResponse(
                 "Lead has already been claimed by another rep.",
+                409,
+            );
+        }
+        // Claimable = unowned and not terminal. NULL / legacy-status manual
+        // leads are lifted into the pipeline on claim, same as New_Unassigned.
+        if (row.lead_status === "Converted" || row.lead_status === "Lost") {
+            return errorResponse(
+                `Lead is no longer claimable (status=${row.lead_status}).`,
                 409,
             );
         }
@@ -55,7 +58,7 @@ export const POST = withErrorHandler(
             performedBy: user.id,
             remarks: "Claimed from unassigned queue",
             statusChange: {
-                from: "New_Unassigned",
+                from: (row.lead_status as LeadStatus | null) ?? "New_Unassigned",
                 to: "Assigned_Not_Contacted",
             },
         });

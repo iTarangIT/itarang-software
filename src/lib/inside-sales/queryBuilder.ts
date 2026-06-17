@@ -29,7 +29,12 @@ function tabFilter(tab: QueueTab, userId: string) {
         case "follow_ups":
             return sql`dl.current_owner_id = ${userId} AND dl.next_follow_up_at IS NOT NULL AND dl.next_follow_up_at <= NOW() AND dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE`;
         case "unassigned":
-            return sql`dl.lead_status = 'New_Unassigned' AND dl.is_active IS NOT FALSE`;
+            // "Claimable" = anything nobody owns and isn't terminal — not just
+            // lead_status = 'New_Unassigned'. Manual-upload / scraped leads are
+            // inserted with lead_status = NULL on purpose (so the AI dialer can
+            // cold-dial them — see api/admin/leads/bulk) and so were invisible
+            // to every queue. Owner-IS-NULL + not-terminal surfaces them here.
+            return sql`dl.current_owner_id IS NULL AND dl.lead_status IS DISTINCT FROM 'Converted' AND dl.lead_status IS DISTINCT FROM 'Lost' AND dl.is_active IS NOT FALSE`;
         case "team":
             return sql`dl.lead_status IN (${OPEN_LIST}) AND dl.is_active IS NOT FALSE`;
         case "my_closed":
@@ -42,7 +47,10 @@ function tabOrder(tab: QueueTab) {
         case "follow_ups":
             return sql`ORDER BY dl.next_follow_up_at ASC NULLS LAST`;
         case "unassigned":
-            return sql`ORDER BY dl.final_intent_score DESC NULLS LAST, dl.created_at DESC`;
+            // Band model: Qualified leads all share lead_score 90, so within a
+            // band the queue is ordered by facts disclosed (info_signals_count
+            // desc), per docs/intent_docs/intent_score.pdf §3.
+            return sql`ORDER BY dl.final_intent_score DESC NULLS LAST, dl.info_signals_count DESC NULLS LAST, dl.created_at DESC`;
         case "my_closed":
             return sql`ORDER BY dl.closed_at DESC NULLS LAST`;
         case "team":

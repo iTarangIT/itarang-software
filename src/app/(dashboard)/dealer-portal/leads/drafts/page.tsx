@@ -61,6 +61,18 @@ function consentBadge(status: string) {
     );
 }
 
+// Routing matrix for Resume — shared by the desktop table and the mobile cards:
+//  • Step-1 wizard drafts (status INCOMPLETE) → new-lead wizard in edit mode.
+//  • Step 4 drafts → product-selection page.
+//  • Steps 1-3 KYC drafts → KYC wizard (self-routes between steps).
+function resolveResumeHref(d: Draft): string {
+    return d.is_step1
+        ? `/dealer-portal/leads/new?id=${d.id}`
+        : d.workflow_step >= 4
+            ? `/dealer-portal/leads/${d.id}/product-selection`
+            : `/dealer-portal/leads/${d.id}/kyc`;
+}
+
 export default function DraftsPage() {
     const router = useRouter();
     const queryClient = useQueryClient();
@@ -110,8 +122,11 @@ export default function DraftsPage() {
     });
 
     return (
-        <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        // -mx-6 cancels the dashboard layout's mobile p-6 so cards run
+        // edge-to-edge on phones; the header keeps a small gutter via px-4 on
+        // the title row. Reverts at sm+ (desktop/tablet unchanged).
+        <div className="space-y-6 -mx-6 sm:mx-0">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-4 sm:px-0">
                 <div>
                     <h1 className="text-2xl font-bold text-gray-900">My Drafts</h1>
                     <p className="text-gray-500 text-sm">KYC forms you&apos;ve saved to finish later. Auto-saved every 2 minutes while you work.</p>
@@ -164,7 +179,9 @@ export default function DraftsPage() {
                         <p className="text-sm mt-1">Open any KYC form and click <span className="font-semibold">Save Draft</span> to park it here. Auto-save will keep this list fresh as you work.</p>
                     </div>
                 ) : (
-                    <div className="overflow-x-auto">
+                  <>
+                    {/* Desktop table */}
+                    <div className="hidden md:block overflow-x-auto">
                         <table className="w-full text-left border-collapse">
                             <thead>
                                 <tr className="bg-gray-50 border-b border-gray-200 text-xs uppercase text-gray-500 font-semibold tracking-wider">
@@ -207,18 +224,7 @@ export default function DraftsPage() {
                                         <td className="px-6 py-4 text-right">
                                             <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                                 <button
-                                                    onClick={() => {
-                                                        // Routing matrix for Resume:
-                                                        //  • Step-1 wizard drafts (status INCOMPLETE) → new-lead wizard in edit mode.
-                                                        //  • Step 4 drafts → product-selection page.
-                                                        //  • Steps 1-3 KYC drafts → KYC wizard (self-routes between steps).
-                                                        const target = d.is_step1
-                                                            ? `/dealer-portal/leads/new?id=${d.id}`
-                                                            : d.workflow_step >= 4
-                                                                ? `/dealer-portal/leads/${d.id}/product-selection`
-                                                                : `/dealer-portal/leads/${d.id}/kyc`;
-                                                        router.push(target);
-                                                    }}
+                                                    onClick={() => router.push(resolveResumeHref(d))}
                                                     className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-brand-50 text-brand-700 hover:bg-brand-100 rounded-lg text-xs font-semibold transition-all"
                                                 >
                                                     Resume <ChevronRight className="w-3 h-3" />
@@ -237,6 +243,70 @@ export default function DraftsPage() {
                             </tbody>
                         </table>
                     </div>
+
+                    {/* Mobile cards — same data, stacked & readable on phones. */}
+                    <div className="md:hidden divide-y divide-gray-100">
+                        {drafts.map((d) => (
+                            <div key={d.id} className="p-4">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <div className="font-medium text-gray-900 truncate">{d.owner_name || 'Unnamed customer'}</div>
+                                        <div className="text-gray-500 text-xs truncate">{d.owner_contact || d.id}</div>
+                                    </div>
+                                    <span className="shrink-0">{consentBadge(d.consent_status)}</span>
+                                </div>
+
+                                <div className="mt-3">
+                                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Progress</p>
+                                    <div className="flex items-center gap-3 mt-1">
+                                        <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                                            <div
+                                                className={`h-full rounded-full transition-all ${d.progress_percent >= 75 ? 'bg-emerald-500' : d.progress_percent >= 25 ? 'bg-amber-500' : 'bg-gray-400'}`}
+                                                style={{ width: `${d.progress_percent}%` }}
+                                            />
+                                        </div>
+                                        <span className="text-xs font-semibold text-gray-700 w-8 text-right">{d.progress_percent}%</span>
+                                    </div>
+                                    {d.progress && (
+                                        <div className="text-xs text-gray-400 mt-1">
+                                            {d.progress.docsUploaded}/{d.progress.docsRequired} docs · consent {d.progress.consentComplete ? 'verified' : 'pending'}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                                    <div>
+                                        <p className="text-[11px] uppercase tracking-wide text-gray-400">Step</p>
+                                        <p className="text-gray-600 text-xs font-medium">Step {d.workflow_step}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-[11px] uppercase tracking-wide text-gray-400">Last saved</p>
+                                        <p className="text-gray-500 text-xs" title={d.last_saved_at ? new Date(d.last_saved_at).toLocaleString() : ''}>
+                                            {timeAgo(d.last_saved_at)}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="mt-4 flex items-center gap-2">
+                                    <button
+                                        onClick={() => router.push(resolveResumeHref(d))}
+                                        className="flex-1 inline-flex items-center justify-center gap-1 px-3 py-2 bg-brand-50 text-brand-700 hover:bg-brand-100 rounded-lg text-sm font-semibold transition-all"
+                                    >
+                                        Resume <ChevronRight className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => setDeleteTarget(d)}
+                                        className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                                        title="Delete draft"
+                                        aria-label="Delete draft"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                  </>
                 )}
             </div>
 
