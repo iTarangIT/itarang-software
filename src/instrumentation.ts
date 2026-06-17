@@ -17,7 +17,10 @@
 // and the build fails with "Module not found: Can't resolve 'http'".
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
-    const { startDialerTickers } = await import("./instrumentation-node");
+    const { startDialerTickers, startZohoSyncTicker } = await import(
+      "./instrumentation-node"
+    );
     await startDialerTickers();
+    await startZohoSyncTicker();
   }
 }
