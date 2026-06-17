@@ -105,9 +105,31 @@ function DealerLeadsContent() {
     // Highlight new lead
     const newLeadId = searchParams.get('new');
 
+    // Deep-link a lead to its CURRENT step (furthest reached). Shared by the
+    // desktop table and the mobile card list so the routing logic lives once.
+    const resolveLeadHref = (lead: any): string => {
+        const isHot = lead.interest_level === 'hot';
+        const cash = isCashMethod(lead.payment_method);
+        const finance = isFinanceMethod(lead.payment_method);
+        if (finance && lead.kyc_status === 'loan_sanctioned') return `/dealer-portal/leads/${lead.id}/step-5`;
+        if (lead.has_product_selection) return `/dealer-portal/leads/${lead.id}/product-selection`;
+        if (isHot && finance) return `/dealer-portal/leads/${lead.id}/kyc`;
+        if (isHot && cash) return `/dealer-portal/leads/${lead.id}/product-selection`;
+        return `/dealer-portal/leads/new?id=${lead.id}`;
+    };
+
+    // Prefer the product-selection FINAL PRICE; fall back to requested loan amount.
+    const formatLeadAmount = (lead: any): string => {
+        const amount = lead.final_price ?? lead.loan_amount;
+        return amount ? `₹${Number(amount).toLocaleString()}` : '-';
+    };
+
     return (
-        <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        // -mx-6 cancels the dashboard layout's mobile p-6 so cards run
+        // edge-to-edge on phones; the header keeps a small gutter via px-4 on
+        // the title row. Reverts at sm+ (desktop/tablet unchanged).
+        <div className="space-y-6 -mx-6 sm:mx-0">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-4 sm:px-0">
                 <div>
                     <h1 className="text-2xl font-bold text-gray-900">Lead Management</h1>
                     <p className="text-gray-500 text-sm">Track and manage your customer pipeline</p>
@@ -166,7 +188,9 @@ function DealerLeadsContent() {
                         <p>No leads found matching your criteria</p>
                     </div>
                 ) : (
-                    <div className="overflow-x-auto">
+                  <>
+                    {/* Desktop table */}
+                    <div className="hidden md:block overflow-x-auto">
                         <table className="w-full text-left border-collapse">
                             <thead>
                                 <tr className="bg-gray-50 border-b border-gray-200 text-xs uppercase text-gray-500 font-semibold tracking-wider">
@@ -267,6 +291,67 @@ function DealerLeadsContent() {
                             </tbody>
                         </table>
                     </div>
+
+                    {/* Mobile cards — same data, stacked & readable on phones. */}
+                    <div className="md:hidden divide-y divide-gray-100">
+                        {leads.map((lead: any) => (
+                            <div key={lead.id} className={`p-4 ${newLeadId === lead.id ? 'bg-brand-50' : ''}`}>
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <div className="font-medium text-gray-900 truncate">{lead.owner_name}</div>
+                                        <div className="text-gray-500 text-xs">{lead.owner_contact}</div>
+                                    </div>
+                                    <span className={`shrink-0 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize
+                                        ${lead.lead_status === 'new' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}`}>
+                                        {lead.lead_status}
+                                    </span>
+                                </div>
+                                <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                                    <div>
+                                        <p className="text-[11px] uppercase tracking-wide text-gray-400">Interest</p>
+                                        <span className="inline-flex items-center gap-1.5 capitalize text-gray-700">
+                                            <span className={`w-2 h-2 rounded-full
+                                                ${lead.interest_level === 'hot' ? 'bg-red-500' : lead.interest_level === 'warm' ? 'bg-yellow-500' : 'bg-blue-500'}`}></span>
+                                            {lead.interest_level}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <p className="text-[11px] uppercase tracking-wide text-gray-400">Loan Amount</p>
+                                        <p className="text-gray-700">{formatLeadAmount(lead)}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-[11px] uppercase tracking-wide text-gray-400">Created</p>
+                                        <p className="text-gray-600">{new Date(lead.created_at).toLocaleDateString()}</p>
+                                    </div>
+                                </div>
+                                <div className="mt-4 flex items-center gap-2">
+                                    <Link
+                                        href={resolveLeadHref(lead)}
+                                        className="flex-1 text-center px-3 py-2 bg-brand-50 text-brand-700 rounded-lg text-sm font-semibold hover:bg-brand-100 transition-colors"
+                                    >
+                                        View Details
+                                    </Link>
+                                    <button
+                                        onClick={() => openEdit(lead)}
+                                        className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                                        title="Edit lead"
+                                        aria-label="Edit lead"
+                                    >
+                                        <Pencil className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => setDeleteTarget(lead)}
+                                        className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                                        title="Delete lead"
+                                        aria-label="Delete lead"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                  </>
                 )}
             </div>
 

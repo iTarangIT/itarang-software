@@ -3,6 +3,7 @@ import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { extractDigioDocumentId } from "./parse-status";
+import { fetchDigioPdfWithRetry } from "./fetch-pdf-retry";
 
 type Application = typeof dealerOnboardingApplications.$inferSelect;
 
@@ -86,43 +87,13 @@ export async function ensureDealerAuditTrailUrl(
     application.provider_document_id
   )}`;
 
-  const response = await fetch(digioUrl, {
-    method: "GET",
-    headers: {
-      Authorization: authHeader,
-      Accept: "application/pdf",
-    },
-    cache: "no-store",
+  // DigiO's download_audit_trail intermittently returns HTTP 500 SYSTEM_ERROR
+  // even when the agreement is "completed" — retry a few times to catch a
+  // working window before giving up.
+  const pdfBuffer = await fetchDigioPdfWithRetry(digioUrl, authHeader, {
+    label: "ensureDealerAuditTrailUrl",
   });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    console.warn("[ensureDealerAuditTrailUrl] download non-ok", {
-      documentId: application.provider_document_id,
-      url: digioUrl,
-      status: response.status,
-      body: body.slice(0, 500),
-    });
-    return null;
-  }
-
-  const contentType = response.headers.get("content-type") || "";
-  if (contentType.includes("json")) {
-    const body = await response.text().catch(() => "");
-    console.warn("[ensureDealerAuditTrailUrl] download returned JSON", {
-      contentType,
-      body: body.slice(0, 500),
-    });
-    return null;
-  }
-
-  const pdfBuffer = await response.arrayBuffer();
-  if (pdfBuffer.byteLength < 100) {
-    console.warn("[ensureDealerAuditTrailUrl] pdf buffer too small / empty", {
-      byteLength: pdfBuffer.byteLength,
-    });
-    return null;
-  }
+  if (!pdfBuffer) return null;
 
   const supabase = createClient(supabaseUrl, serviceRoleKey);
   const bucketName = "dealer-documents";
