@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useMemo, useState, useEffect } from 'react';
+import { Dropdown } from '@/components/ui/select-dropdown';
 
 const MONTHS = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -93,46 +94,34 @@ export function DatePicker({
         }
     };
 
-    const selectClass = `h-11 bg-white border-2 rounded-xl outline-none transition-all text-sm px-3 focus:border-[#1D4ED8] focus:ring-4 focus:ring-blue-50/50 ${error ? 'border-red-500' : 'border-[#EBEBEB]'}`;
-
     return (
         <div className={className}>
             <div className="flex gap-2">
-                <select
+                <Dropdown
                     value={internalDay}
-                    onChange={e => handleChange('day', e.target.value)}
-                    className={`${selectClass} w-[90px]`}
-                    aria-label="Day"
-                >
-                    <option value="">Day</option>
-                    {days.map(d => (
-                        <option key={d} value={String(d)}>{d}</option>
-                    ))}
-                </select>
-
-                <select
+                    onChange={v => handleChange('day', v)}
+                    options={days.map(d => ({ value: String(d), label: String(d) }))}
+                    placeholder="Day"
+                    error={error}
+                    className="w-[90px]"
+                />
+                <Dropdown
                     value={internalMonth}
-                    onChange={e => handleChange('month', e.target.value)}
-                    className={`${selectClass} flex-1`}
-                    aria-label="Month"
-                >
-                    <option value="">Month</option>
-                    {MONTHS.map((m, i) => (
-                        <option key={m} value={String(i + 1)}>{m}</option>
-                    ))}
-                </select>
-
-                <select
+                    onChange={v => handleChange('month', v)}
+                    options={MONTHS.map((m, i) => ({ value: String(i + 1), label: m }))}
+                    placeholder="Month"
+                    error={error}
+                    className="flex-1"
+                    searchThreshold={12}
+                />
+                <Dropdown
                     value={internalYear}
-                    onChange={e => handleChange('year', e.target.value)}
-                    className={`${selectClass} w-[100px]`}
-                    aria-label="Year"
-                >
-                    <option value="">Year</option>
-                    {years.map(y => (
-                        <option key={y} value={String(y)}>{y}</option>
-                    ))}
-                </select>
+                    onChange={v => handleChange('year', v)}
+                    options={years.map(y => ({ value: String(y), label: String(y) }))}
+                    placeholder="Year"
+                    error={error}
+                    className="w-[100px]"
+                />
             </div>
 
             {age !== null && age >= 0 && (

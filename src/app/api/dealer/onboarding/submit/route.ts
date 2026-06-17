@@ -7,6 +7,8 @@ import {
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
+import { readDocument } from "@/lib/whatsapp/extraction";
+import { buildGstAddresses } from "@/lib/onboarding/gst-addresses";
 
 type UploadLike = {
   id?: string;
@@ -85,6 +87,33 @@ function isUuid(value: string | null) {
 
 function isUploadedFile(file: UploadLike | null | undefined) {
   return Boolean(file?.uploadedUrl && file?.storagePath && file?.bucketName);
+}
+
+// Best-effort GST OCR for the web path: fetch the uploaded GST certificate and
+// run the SAME Gemini extractor the WhatsApp flow uses, so the admin sees the
+// principal + every Additional Place of Business (and can tag billing/dispatch).
+// Never throws — on any failure the submission proceeds without gstAddresses and
+// the admin can add/edit addresses manually on the verification page.
+async function extractGstAddressesBestEffort(
+  gstCert: UploadLike | null | undefined,
+): Promise<ReturnType<typeof buildGstAddresses> | null> {
+  const url = cleanString(gstCert?.uploadedUrl);
+  if (!url) return null;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const mime =
+      res.headers.get("content-type") ||
+      cleanString(gstCert?.mimeType || gstCert?.type) ||
+      "application/pdf";
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const extracted = await readDocument(buffer, mime, "gst");
+    if (!extracted.ok) return null;
+    return buildGstAddresses(extracted.fields);
+  } catch (err) {
+    console.error("[onboarding/submit] GST address extraction failed:", err);
+    return null;
+  }
 }
 
 function getFileName(file: UploadLike) {
@@ -536,6 +565,12 @@ export async function POST(req: NextRequest) {
       existingApplication = null;
     }
 
+    // Web path GST OCR — reuse the WhatsApp Gemini extractor. Best-effort: a
+    // failure leaves gstAddresses unset and the admin adds them manually.
+    const gstAddresses = await extractGstAddressesBestEffort(
+      company?.gstCertificate,
+    );
+
     const providerRawResponse = {
       ...parseProviderRawResponse(existingApplication?.provider_raw_response),
       agreement,
@@ -545,6 +580,7 @@ export async function POST(req: NextRequest) {
         ownership,
         finance,
         reviewChecks,
+        ...(gstAddresses ? { gstAddresses } : {}),
       },
       source: "dealer_onboarding_submit",
     };

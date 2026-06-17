@@ -436,8 +436,8 @@ export default function Step5Page() {
       ? Math.max(0, Math.round((autoSoldAt.getTime() - Date.now()) / 3_600_000))
       : null;
     return (
-      <div className="min-h-screen bg-gradient-to-b from-emerald-50/50 to-gray-50">
-        <div className="max-w-3xl mx-auto p-6 sm:p-8 space-y-5">
+      <div className="min-h-screen bg-gradient-to-b from-emerald-50/50 to-gray-50 -mx-6 sm:mx-0">
+        <div className="max-w-3xl mx-auto px-0 py-6 sm:p-8 space-y-5">
           <ProgressHeader leadId={leadId} active={5} />
           <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
@@ -530,8 +530,8 @@ export default function Step5Page() {
   if (scenario === "loan_rejected") {
     const loan = data.loanSanction;
     return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="max-w-3xl mx-auto p-6 sm:p-8 space-y-5">
+      <div className="min-h-screen bg-gray-50 -mx-6 sm:mx-0">
+        <div className="max-w-3xl mx-auto px-0 py-6 sm:p-8 space-y-5">
           <ProgressHeader leadId={leadId} active={5} />
           <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
@@ -636,8 +636,8 @@ export default function Step5Page() {
   const paraphernaliaItems = formatParaphernalia(product?.paraphernalia);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-4xl mx-auto p-6 sm:p-8 space-y-5">
+    <div className="min-h-screen bg-gray-50 -mx-6 sm:mx-0">
+      <div className="max-w-4xl mx-auto px-0 py-6 sm:p-8 space-y-5">
         <ProgressHeader leadId={leadId} active={5} />
 
         <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">

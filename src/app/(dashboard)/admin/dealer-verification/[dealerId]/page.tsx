@@ -23,6 +23,7 @@ import {
   FileSignature,
   FileText,
   Pencil,
+  Plus,
   X,
   Save,
   Languages,
@@ -30,6 +31,7 @@ import {
   GitBranch,
   MessageCircle,
   UploadCloud,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -121,6 +123,24 @@ type OwnershipPerson = {
   pinCode?: string;
 };
 
+type AddressRoleUI = "billing" | "dispatch" | "other";
+type GstAddressUI = {
+  id: string;
+  label: string;
+  addressLine1: string;
+  city: string;
+  district: string;
+  state: string;
+  pincode: string;
+  raw: string;
+  roles: AddressRoleUI[];
+};
+type GstAddressesUI = {
+  additionalCount: number;
+  principal: GstAddressUI;
+  additional: GstAddressUI[];
+};
+
 type DealerReviewData = {
   id: string;
   dealerId: string;
@@ -158,11 +178,14 @@ type DealerReviewData = {
   rejectionRemarks?: string | null;
   correctionRound?: CorrectionRound | null;
   documents?: DocumentItem[];
+  missingDocuments?: { type: string; label: string }[];
   agreement?: AgreementData | null;
   // E-167: collection channel + bot verification warnings.
   source?: string | null;
   waPhone?: string | null;
   verificationWarnings?: string[];
+  // GST Principal + Additional Places of Business with billing/dispatch/other tags.
+  gstAddresses?: GstAddressesUI;
 };
 
 type AgreementSignerRow = {
@@ -229,13 +252,6 @@ type CompanyEditForm = {
   salesManagerMobile: string;
 };
 
-// Application IDs where manual (out-of-band) agreement completion is allowed.
-// Mirrors the server allowlist in upload-signed-agreement/route.ts — keep both
-// in sync. Scoped per-dealer because it bypasses the Digio completion gate.
-const MANUAL_COMPLETION_ALLOWLIST = new Set<string>([
-  "b4846be7-deb9-4830-bffb-a47624f4f3db", // EXNON
-  "4de51b0d-7298-43ab-83c5-d645782b14a7", // MAA PITAMBARA ENTERPRISES
-]);
 
 const AGREEMENT_LANGUAGE_OPTIONS = [
   { value: "english", label: "English Agreement" },
@@ -280,16 +296,68 @@ function SectionCard({
   );
 }
 
+// Document slots an admin can add/replace from the review panel. Values match
+// the document_type strings stored across the web + WhatsApp onboarding flows.
+const ADMIN_DOC_TYPES: { value: string; label: string }[] = [
+  { value: "gst", label: "GST Certificate" },
+  { value: "company_pan", label: "Company PAN" },
+  { value: "bank_statement", label: "Bank Statement" },
+  { value: "cancelled_cheque", label: "Cancelled Cheque" },
+  { value: "udyam", label: "Udyam Registration" },
+  { value: "itr", label: "ITR" },
+  { value: "owner_photo", label: "Owner Photo" },
+  { value: "partner_photo", label: "Partner Photo" },
+  { value: "partnership_deed", label: "Partnership Deed" },
+  { value: "mou", label: "MOU" },
+  { value: "aoa", label: "AOA" },
+];
+
 // ─── InfoField (read-only) ────────────────────────────────────────────────────
 
-function InfoField({ label, value }: { label: string; value?: string | null }) {
+function InfoField({
+  label,
+  value,
+  optional,
+}: {
+  label: string;
+  value?: string | null;
+  /** Truly-optional fields (landline, age, …) are not flagged when empty. */
+  optional?: boolean;
+}) {
+  const isEmpty = !(value && String(value).trim());
+  // Highlight empty/null values during review so the admin can spot gaps —
+  // unless the field is explicitly optional.
+  const flag = isEmpty && !optional;
   return (
-    <div className="rounded-2xl bg-slate-50 px-4 py-4">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+    <div
+      className={`rounded-2xl px-4 py-4 ${
+        flag ? "border border-amber-300 bg-amber-50/70" : "bg-slate-50"
+      }`}
+    >
+      <p
+        className={`text-[11px] font-semibold uppercase tracking-[0.16em] ${
+          flag ? "text-amber-700" : "text-slate-500"
+        }`}
+      >
         {label}
       </p>
-      <p className="mt-2 break-words text-sm font-medium text-slate-900">
-        {value && String(value).trim() ? value : "Not available"}
+      <p
+        className={`mt-2 break-words text-sm font-medium ${
+          flag ? "text-amber-700" : "text-slate-900"
+        }`}
+      >
+        {isEmpty ? (
+          <span className="inline-flex items-center gap-2">
+            Not available
+            {flag && (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                Missing
+              </span>
+            )}
+          </span>
+        ) : (
+          value
+        )}
       </p>
     </div>
   );
@@ -355,8 +423,8 @@ function OwnershipPersonCard({
         <InfoField label="Name" value={person?.name} />
         <InfoField label="Phone" value={person?.phone} />
         <InfoField label="Email" value={person?.email} />
-        <InfoField label="Landline" value={person?.landline} />
-        <InfoField label="Age" value={person?.age} />
+        <InfoField label="Landline" value={person?.landline} optional />
+        <InfoField label="Age" value={person?.age} optional />
         <div className="md:col-span-2">
           <InfoField label="Address Line 1" value={person?.addressLine1} />
         </div>
@@ -364,6 +432,104 @@ function OwnershipPersonCard({
         <InfoField label="District" value={person?.district} />
         <InfoField label="State" value={person?.state} />
         <InfoField label="Pin Code" value={person?.pinCode} />
+      </div>
+    </div>
+  );
+}
+
+// ─── GST Places of Business address cards ─────────────────────────────────────
+
+const GST_ROLE_OPTIONS: { value: AddressRoleUI; label: string }[] = [
+  { value: "billing", label: "Billing" },
+  { value: "dispatch", label: "Dispatch" },
+  { value: "other", label: "Other" },
+];
+
+function roleTextClasses(role: AddressRoleUI) {
+  switch (role) {
+    case "billing": return "font-semibold text-emerald-700";
+    case "dispatch": return "font-semibold text-blue-700";
+    default: return "font-semibold text-slate-700";
+  }
+}
+
+/** Human display line for an address in read mode. */
+function addressDisplay(a: GstAddressUI): string {
+  if (a.raw && a.raw.trim()) return a.raw;
+  return [a.addressLine1, a.city, a.district, a.state, a.pincode]
+    .map((s) => (s || "").trim())
+    .filter(Boolean)
+    .join(", ");
+}
+
+function GstAddressCard({
+  address,
+  editing,
+  onFieldChange,
+  onToggleRole,
+  onRemove,
+  removable,
+}: {
+  address: GstAddressUI;
+  editing: boolean;
+  onFieldChange: (field: keyof GstAddressUI, value: string) => void;
+  onToggleRole: (role: AddressRoleUI) => void;
+  onRemove?: () => void;
+  removable?: boolean;
+}) {
+  const roles = Array.isArray(address.roles) ? address.roles : [];
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold text-slate-700">{address.label}</h4>
+        {editing && removable && onRemove ? (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-100"
+          >
+            Remove
+          </button>
+        ) : null}
+      </div>
+
+      {editing ? (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="md:col-span-2">
+            <EditableField label="Address Line 1" value={address.addressLine1} onChange={(v) => onFieldChange("addressLine1", v)} />
+          </div>
+          <EditableField label="City"     value={address.city}     onChange={(v) => onFieldChange("city", v)} />
+          <EditableField label="District" value={address.district} onChange={(v) => onFieldChange("district", v)} />
+          <EditableField label="State"    value={address.state}    onChange={(v) => onFieldChange("state", v)} />
+          <EditableField label="Pin Code" value={address.pincode}  onChange={(v) => onFieldChange("pincode", v)} />
+        </div>
+      ) : (
+        <InfoField label="Address" value={addressDisplay(address)} />
+      )}
+
+      {/* Role checkboxes — always interactive (no edit mode needed). The admin
+          can tick one or several (Billing / Dispatch / Other) per address. */}
+      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+          Role
+        </span>
+        {GST_ROLE_OPTIONS.map((opt) => {
+          const active = roles.includes(opt.value);
+          return (
+            <label
+              key={opt.value}
+              className="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-700"
+            >
+              <input
+                type="checkbox"
+                checked={active}
+                onChange={() => onToggleRole(opt.value)}
+                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-200"
+              />
+              <span className={active ? roleTextClasses(opt.value) : ""}>{opt.label}</span>
+            </label>
+          );
+        })}
       </div>
     </div>
   );
@@ -623,6 +789,11 @@ export default function DealerReviewPage() {
     salesManagerName: "", salesManagerEmail: "", salesManagerMobile: "",
   });
 
+  // GST Places of Business (principal + additional) with billing/dispatch/other
+  // role tags. Edited in-place during edit mode; PATCHed alongside editForm.
+  const [gstAddresses, setGstAddresses] = useState<GstAddressesUI | null>(null);
+  const [gstSaving, setGstSaving] = useState(false);
+
   // ✅ NEW — agreement language state
   const [agreementLanguage, setAgreementLanguage] = useState("english");
   const [langSaving, setLangSaving]               = useState(false);
@@ -631,6 +802,39 @@ export default function DealerReviewPage() {
   const [agreementActionLoading, setAgreementActionLoading] = useState<
     "initiate" | "refresh" | "reinitiate" | "retry" | null
   >(null);
+  // iTarang-side counter-signers, entered by the reviewing admin. For WhatsApp
+  // dealers there is no Step-5 config, so these are the only source. Signer 1 is
+  // mandatory; signer 2 is optional (validated only if any field is filled).
+  const [itarangSigner, setItarangSigner] = useState({
+    name: "",
+    email: "",
+    mobile: "",
+  });
+  const [itarangSigner2, setItarangSigner2] = useState({
+    name: "",
+    email: "",
+    mobile: "",
+  });
+  // Signer 2 is hidden until the admin explicitly adds it via the + button.
+  const [showSigner2, setShowSigner2] = useState(false);
+
+  // Hard-coded iTarang Signer 1 default for WhatsApp dealers. WhatsApp dealers
+  // have no Step-5 wizard to carry a signatory, and the same authorized
+  // signatory counter-signs every WhatsApp agreement — so we pre-fill it once
+  // the application loads. Only fills when the fields are still empty, so an
+  // admin edit is never clobbered; the values remain editable before initiating.
+  useEffect(() => {
+    if ((data?.source || "").toLowerCase() !== "whatsapp") return;
+    setItarangSigner((s) =>
+      s.name || s.email || s.mobile
+        ? s
+        : {
+            name: "Chirag garg",
+            email: "chirag.itarang@gmail.com",
+            mobile: "8796278200",
+          },
+    );
+  }, [data?.source]);
   const [tracking, setTracking]             = useState<AgreementTrackingResponse | null>(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
   const [auditTrailLoading, setAuditTrailLoading] = useState(false);
@@ -641,6 +845,11 @@ export default function DealerReviewPage() {
   const [manualUploading, setManualUploading]   = useState(false);
   const [duplicate, setDuplicate] = useState<DuplicateCheckResult | null>(null);
   const [correctionDialogOpen, setCorrectionDialogOpen] = useState(false);
+  // Admin add/replace document
+  const [docUploadType, setDocUploadType] = useState("gst");
+  const [docUploadMode, setDocUploadMode] = useState<"add" | "replace">("add");
+  const [docUploadFile, setDocUploadFile] = useState<File | null>(null);
+  const [docUploading, setDocUploading] = useState(false);
 
   // ─── loaders ───────────────────────────────────────────────────────────────
 
@@ -694,15 +903,29 @@ export default function DealerReviewPage() {
             salesManagerEmail:  d.salesManagerEmail  || "",
             salesManagerMobile: d.salesManagerMobile || "",
           });
+          setGstAddresses(d.gstAddresses ?? null);
           setAgreementLanguage(d.agreementLanguage || "english");
         } else {
           setData(null);
         }
+      } catch (error) {
+        console.error("Failed to load dealer review data", error);
+        setData(null);
+        setTracking(null);
+      } finally {
+        // Render the page as soon as the (fast) detail fetch resolves. The
+        // agreement-tracking panel and duplicate-check load independently below
+        // with their own loading states — they must NOT block the page, because
+        // agreement-tracking can do a slow Digio sync.
+        setLoading(false);
+      }
 
-        await loadAgreementTracking();
+      // Agreement tracking — own loading state (trackingLoading); fire-and-forget.
+      loadAgreementTracking();
 
-        // Duplicate detection — non-blocking. If this errors we still show
-        // the review page, just without the alert card.
+      // Duplicate detection — non-blocking. If this errors we still show the
+      // review page, just without the alert card.
+      (async () => {
         try {
           const dupRes = await fetch(
             `/api/admin/dealer-verifications/${dealerId}/duplicate-check`
@@ -719,13 +942,7 @@ export default function DealerReviewPage() {
         } catch (dupErr) {
           console.error("Failed to load duplicate-check", dupErr);
         }
-      } catch (error) {
-        console.error("Failed to load dealer review data", error);
-        setData(null);
-        setTracking(null);
-      } finally {
-        setLoading(false);
-      }
+      })();
     };
 
     if (dealerId) loadDealer();
@@ -735,6 +952,115 @@ export default function DealerReviewPage() {
 
   const handleEditField = (field: keyof CompanyEditForm) => (value: string) =>
     setEditForm((prev) => ({ ...prev, [field]: value }));
+
+  // ─── GST address edit helpers ────────────────────────────────────────────────
+  // Map an id-keyed mutation across principal + additional cards.
+  const mutateGstAddress = (
+    id: string,
+    fn: (a: GstAddressUI) => GstAddressUI,
+  ) =>
+    setGstAddresses((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        principal: prev.principal.id === id ? fn(prev.principal) : prev.principal,
+        additional: prev.additional.map((a) => (a.id === id ? fn(a) : a)),
+      };
+    });
+
+  const handleGstFieldChange =
+    (id: string) => (field: keyof GstAddressUI, value: string) =>
+      mutateGstAddress(id, (a) => ({ ...a, [field]: value }));
+
+  // Persist the gstAddresses object on its own (role checkboxes auto-save so the
+  // admin can tag billing/dispatch/other directly, without entering edit mode).
+  const persistGstAddresses = async (next: GstAddressesUI) => {
+    try {
+      setGstSaving(true);
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gstAddresses: next }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setData((prev) => (prev ? { ...prev, gstAddresses: next } : prev));
+      } else {
+        toast.error(json.message || "Failed to save address roles");
+      }
+    } catch (err) {
+      console.error("Save GST roles error:", err);
+      toast.error("Failed to save address roles");
+    } finally {
+      setGstSaving(false);
+    }
+  };
+
+  // Toggle a role checkbox → update state AND auto-save immediately.
+  const handleGstToggleRole = (id: string) => (role: AddressRoleUI) => {
+    if (!gstAddresses) return;
+    const apply = (a: GstAddressUI): GstAddressUI => {
+      if (a.id !== id) return a;
+      const roles = Array.isArray(a.roles) ? a.roles : [];
+      return {
+        ...a,
+        roles: roles.includes(role)
+          ? roles.filter((r) => r !== role)
+          : [...roles, role],
+      };
+    };
+    const next: GstAddressesUI = {
+      ...gstAddresses,
+      principal: apply(gstAddresses.principal),
+      additional: gstAddresses.additional.map(apply),
+    };
+    setGstAddresses(next);
+    void persistGstAddresses(next);
+  };
+
+  const handleAddGstAddress = () =>
+    setGstAddresses((prev) => {
+      const base: GstAddressesUI =
+        prev ?? {
+          additionalCount: 0,
+          principal: {
+            id: "principal",
+            label: "Principal Place of Business",
+            addressLine1: "", city: "", district: "", state: "", pincode: "", raw: "",
+            roles: [],
+          },
+          additional: [],
+        };
+      const nextIndex = base.additional.length + 1;
+      return {
+        ...base,
+        additional: [
+          ...base.additional,
+          {
+            id: `add-${Date.now()}-${nextIndex}`,
+            label: `Additional Place ${nextIndex}`,
+            addressLine1: "", city: "", district: "", state: "", pincode: "", raw: "",
+            roles: [],
+          },
+        ],
+      };
+    });
+
+  const handleRemoveGstAddress = (id: string) =>
+    setGstAddresses((prev) =>
+      prev
+        ? { ...prev, additional: prev.additional.filter((a) => a.id !== id) }
+        : prev,
+    );
+
+  // Cards as a flat, ordered list for rendering + role-count validation.
+  const gstAddressCards: GstAddressUI[] = gstAddresses
+    ? [gstAddresses.principal, ...gstAddresses.additional]
+    : [];
+  const billingCount = gstAddressCards.filter((a) => a.roles?.includes("billing")).length;
+  const dispatchCount = gstAddressCards.filter((a) => a.roles?.includes("dispatch")).length;
+  const gstRoleWarning =
+    gstAddressCards.length > 0 && (billingCount !== 1 || dispatchCount !== 1);
 
   const handleCancelEdit = () => {
     if (!data) return;
@@ -763,6 +1089,7 @@ export default function DealerReviewPage() {
       salesManagerEmail:  data.salesManagerEmail  || "",
       salesManagerMobile: data.salesManagerMobile || "",
     });
+    setGstAddresses(data.gstAddresses ?? null);
     setIsEditing(false);
   };
 
@@ -772,13 +1099,18 @@ export default function DealerReviewPage() {
       const res  = await fetch(`/api/admin/dealer-verifications/${dealerId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editForm),
+        body: JSON.stringify({
+          ...editForm,
+          ...(gstAddresses ? { gstAddresses } : {}),
+        }),
       });
       const json = await res.json();
       if (!json.success) { toast.error(json.message || "Failed to save"); return; }
 
       // optimistic local update so UI reflects new values immediately
-      setData((prev) => prev ? { ...prev, ...editForm } : prev);
+      setData((prev) =>
+        prev ? { ...prev, ...editForm, ...(gstAddresses ? { gstAddresses } : {}) } : prev,
+      );
       setIsEditing(false);
     } catch (err) {
       console.error("Save error:", err);
@@ -843,6 +1175,11 @@ export default function DealerReviewPage() {
 
   const signedAgreementReady = ["signed","completed"].includes((agreementStatusForUi || "").toLowerCase());
   const isRejected           = (data?.onboardingStatus || "").toLowerCase() === "rejected";
+  // The iTarang counter-signer is only captured/shown on this page for WhatsApp
+  // dealers — web dealers carry their iTarang signatory from the Step-5 wizard
+  // config (data.agreement.itarangSignatory1), so the admin neither enters nor
+  // sees an iTarang Signers block for them.
+  const isWhatsAppDealer     = (data?.source || "web").toLowerCase() === "whatsapp";
 
   const reloadDealer = async () => {
     try {
@@ -856,6 +1193,35 @@ export default function DealerReviewPage() {
       if (tj.success) setTracking(tj.data);
     } catch (error) {
       console.error("Failed to refresh", error);
+    }
+  };
+
+  const handleDocUpload = async () => {
+    if (!docUploadFile) { toast.error("Choose a file to upload."); return; }
+    if (!docUploadType) { toast.error("Select a document type."); return; }
+    setDocUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", docUploadFile);
+      fd.append("documentType", docUploadType);
+      fd.append("mode", docUploadMode);
+      const res = await fetch(
+        `/api/admin/dealer-verifications/${dealerId}/upload-document`,
+        { method: "POST", body: fd },
+      );
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        toast.error(json.message || "Upload failed");
+        return;
+      }
+      toast.success(json.message || "Document uploaded");
+      setDocUploadFile(null);
+      await reloadDealer();
+    } catch (err) {
+      console.error("Admin doc upload failed", err);
+      toast.error("Upload failed");
+    } finally {
+      setDocUploading(false);
     }
   };
 
@@ -928,6 +1294,43 @@ export default function DealerReviewPage() {
 
   const handleAgreementAction = async (action: "initiate" | "refresh" | "reinitiate" | "retry") => {
     if (data?.onboardingStatus === "rejected") { toast.error("This application is rejected and locked."); return; }
+
+    // Resolve the iTarang signer: admin-entered form wins, else any saved config.
+    const itarang1 = (itarangSigner.name || itarangSigner.email || itarangSigner.mobile)
+      ? {
+          name: itarangSigner.name.trim(),
+          email: itarangSigner.email.trim(),
+          mobile: itarangSigner.mobile.replace(/[^\d]/g, ""),
+          signingMethod: "aadhaar_esign",
+        }
+      : data?.agreement?.itarangSignatory1 || null;
+
+    // iTarang signer 2 is optional: only included (and validated) if the admin
+    // started filling it in. Empty → null so we don't fabricate a 3rd signer.
+    const itarang2Started = showSigner2 && !!(itarangSigner2.name || itarangSigner2.email || itarangSigner2.mobile);
+    const itarang2 = itarang2Started
+      ? {
+          name: itarangSigner2.name.trim(),
+          email: itarangSigner2.email.trim(),
+          mobile: itarangSigner2.mobile.replace(/[^\d]/g, ""),
+          signingMethod: "aadhaar_esign",
+        }
+      : data?.agreement?.itarangSignatory2 || null;
+
+    if (action === "initiate" || action === "reinitiate") {
+      const isEmail = (v?: string | null) => !!v && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+      const isPhone = (v?: string | null) => !!v && v.replace(/[^\d]/g, "").length >= 10;
+
+      if (!itarang1?.name || !isEmail(itarang1?.email) || !isPhone(itarang1?.mobile)) {
+        toast.error("Enter the iTarang Signer 1 name, a valid email, and a 10-digit phone before initiating.");
+        return;
+      }
+      if (itarang2Started && (!itarang2?.name || !isEmail(itarang2?.email) || !isPhone(itarang2?.mobile))) {
+        toast.error("iTarang Signer 2 is optional, but if added it needs a valid name, email, and 10-digit phone.");
+        return;
+      }
+    }
+
     setAgreementActionLoading(action);
     try {
       const payload = action === "initiate" || action === "reinitiate"
@@ -943,8 +1346,8 @@ export default function DealerReviewPage() {
             dealerSignerPhone: data?.agreement?.dealerSignerPhone || "",
             dealerSigningMethod: data?.agreement?.dealerSigningMethod || "",
             financierSignatory: data?.agreement?.financierSignatory || null,
-            itarangSignatory1:  data?.agreement?.itarangSignatory1  || null,
-            itarangSignatory2:  data?.agreement?.itarangSignatory2  || null,
+            itarangSignatory1:  itarang1,
+            itarangSignatory2:  itarang2,
             signingOrder: ["dealer","financier","itarang_1","itarang_2"],
             isOemFinancing: !!data?.agreement?.isOemFinancing,
             vehicleType: data?.agreement?.vehicleType || "",
@@ -1077,7 +1480,7 @@ export default function DealerReviewPage() {
           <div>
             <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-400">Dealer Review</p>
             <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">
-              {data.companyName || "Dealer Application"}
+              {[data.ownerName, data.companyName].map((v) => (v || "").trim()).filter(Boolean).join(" / ") || "Dealer Application"}
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-500">
               Validate company data, uploaded documents, and agreement workflow before final activation.
@@ -1242,6 +1645,62 @@ export default function DealerReviewPage() {
               )}
             </div>
 
+            {/* GST Places of Business — principal + additional addresses the
+                admin tags as billing / dispatch / other. */}
+            {gstAddressCards.length > 0 && (
+              <>
+                <SubsectionHeading label="GST Places of Business" />
+                <p className="mb-3 flex items-center gap-2 text-xs text-slate-500">
+                  Tick the role(s) for each address — Billing, Dispatch and/or
+                  Other. You can tick one or several; changes save automatically.
+                  {gstSaving && (
+                    <span className="inline-flex items-center gap-1 text-blue-600">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+                    </span>
+                  )}
+                </p>
+                {gstRoleWarning && (
+                  <div className="mb-3 flex items-center gap-2 rounded-2xl border border-amber-300 bg-amber-50/70 px-4 py-3">
+                    <AlertTriangle className="h-4 w-4 text-amber-600" />
+                    <p className="text-sm font-medium text-amber-700">
+                      Assign exactly one Billing address and one Dispatch address
+                      ({billingCount} billing, {dispatchCount} dispatch selected).
+                    </p>
+                  </div>
+                )}
+                <div className="grid grid-cols-1 gap-4">
+                  {gstAddresses && (
+                    <GstAddressCard
+                      address={gstAddresses.principal}
+                      editing={isEditing}
+                      onFieldChange={handleGstFieldChange(gstAddresses.principal.id)}
+                      onToggleRole={handleGstToggleRole(gstAddresses.principal.id)}
+                    />
+                  )}
+                  {gstAddresses?.additional.map((addr) => (
+                    <GstAddressCard
+                      key={addr.id}
+                      address={addr}
+                      editing={isEditing}
+                      onFieldChange={handleGstFieldChange(addr.id)}
+                      onToggleRole={handleGstToggleRole(addr.id)}
+                      removable
+                      onRemove={() => handleRemoveGstAddress(addr.id)}
+                    />
+                  ))}
+                </div>
+                {isEditing && (
+                  <button
+                    type="button"
+                    onClick={handleAddGstAddress}
+                    className="mt-3 inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                  >
+                    + Add address
+                  </button>
+                )}
+              </>
+            )}
+
             {/* Owner residential address — only applies to sole proprietorship */}
             {(data.companyType === "sole_proprietorship" ||
               isEditing ||
@@ -1350,6 +1809,28 @@ export default function DealerReviewPage() {
             subtitle="Validate uploaded onboarding and compliance records."
             icon={<FileCheck2 className="h-5 w-5" />}
           >
+            {data.missingDocuments && data.missingDocuments.length > 0 && (
+              <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-600" />
+                  <p className="text-sm font-semibold text-amber-800">
+                    {data.missingDocuments.length} document
+                    {data.missingDocuments.length > 1 ? "s" : ""} missing
+                  </p>
+                </div>
+                <p className="mt-1 text-xs text-amber-700">
+                  {(data.ownerName || data.companyName || "This dealer")}
+                  {data.waPhone ? ` (WhatsApp +${data.waPhone})` : ""} hasn&apos;t provided:
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {data.missingDocuments.map((m) => (
+                    <li key={m.type} className="text-sm font-medium text-amber-900">
+                      • {m.label}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {data.documents && data.documents.length > 0 ? (
               <div className="space-y-3">
                 {data.documents.map((doc, index) => (
@@ -1379,6 +1860,69 @@ export default function DealerReviewPage() {
             ) : (
               <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
                 No uploaded documents available yet.
+              </div>
+            )}
+
+            {/* Admin add / replace document */}
+            {!isRejected && (
+              <div className="mt-6 rounded-2xl border border-blue-200 bg-blue-50/50 p-5">
+                <div className="flex items-start gap-3">
+                  <UploadCloud className="mt-0.5 h-5 w-5 text-blue-600" />
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-blue-900">Add or replace a document</p>
+                    <p className="mt-1 text-xs text-blue-800">
+                      Upload a missing document, or replace an existing one (the previous copy is
+                      kept as superseded history).
+                    </p>
+                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                      <div>
+                        <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">Document type</label>
+                        <select
+                          value={docUploadType}
+                          onChange={(e) => setDocUploadType(e.target.value)}
+                          className="mt-2 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        >
+                          {ADMIN_DOC_TYPES.map((d) => (
+                            <option key={d.value} value={d.value}>{d.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">Mode</label>
+                        <select
+                          value={docUploadMode}
+                          onChange={(e) => setDocUploadMode(e.target.value as "add" | "replace")}
+                          className="mt-2 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        >
+                          <option value="add">Add</option>
+                          <option value="replace">Replace</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">File (PDF / image)</label>
+                        <input
+                          type="file"
+                          accept="application/pdf,image/png,image/jpeg,image/webp,.pdf,.png,.jpg,.jpeg,.webp"
+                          onChange={(e) => setDocUploadFile(e.target.files?.[0] || null)}
+                          className="mt-2 block w-full text-xs text-slate-700 file:mr-3 file:rounded-xl file:border-0 file:bg-blue-100 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-blue-800 hover:file:bg-blue-200"
+                        />
+                      </div>
+                      <div className="flex items-end">
+                        <button
+                          onClick={handleDocUpload}
+                          disabled={docUploading || !docUploadFile}
+                          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          <UploadCloud className="h-4 w-4" />
+                          {docUploading ? "Uploading…" : docUploadMode === "replace" ? "Replace" : "Add"}
+                        </button>
+                      </div>
+                    </div>
+                    {docUploadFile && (
+                      <p className="mt-2 truncate text-xs text-emerald-700">✓ {docUploadFile.name}</p>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
           </SectionCard>
@@ -1442,10 +1986,13 @@ export default function DealerReviewPage() {
                 </button>
               </div>
 
-              {/* Manual agreement completion — for agreements signed out-of-band
-                  on the Digio dashboard (e.g. an expired signer link). Upload the
-                  final PDFs to mark the agreement completed and unblock approval. */}
-              {MANUAL_COMPLETION_ALLOWLIST.has(dealerId) && hasInitiatedAgreement && !isAgreementCompleted && !isRejected && (
+              {/* Manual agreement completion — for agreements whose completion
+                  can't be synced from Digio: an expired signer link, signing
+                  finished out-of-band on the Digio dashboard, or a document
+                  created in a different Digio environment that 404s here. Shown
+                  for any initiated-but-not-completed agreement. Upload the final
+                  PDFs to mark it completed and unblock approval. */}
+              {hasInitiatedAgreement && !isAgreementCompleted && !isRejected && (
                 <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
                   <div className="flex items-start gap-3">
                     <UploadCloud className="mt-0.5 h-5 w-5 text-amber-600" />
@@ -1500,6 +2047,137 @@ export default function DealerReviewPage() {
                         {manualUploading ? "Saving…" : "Save & Mark Completed"}
                       </button>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* iTarang Signer 1 — entered by the reviewing admin. Required to
+                  initiate; the dealer signer is auto-filled from the owner
+                  contact on the backend. WhatsApp-only: web dealers carry their
+                  iTarang signatory from the Step-5 wizard config. */}
+              {isWhatsAppDealer && !hasInitiatedAgreement && !isRejected && (
+                <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
+                  <div className="mb-1 flex items-center gap-2">
+                    <FileSignature className="h-4 w-4 text-slate-500" />
+                    <p className="text-sm font-semibold text-slate-800">iTarang Signer 1</p>
+                    <span className="text-xs text-rose-500">*required</span>
+                  </div>
+                  <p className="mb-3 text-xs text-slate-500">
+                    The iTarang authorized signatory who counter-signs this agreement.
+                    They&apos;ll be notified by <strong>email</strong>.
+                    {(data.source || "web").toLowerCase() === "whatsapp"
+                      ? " The dealer receives their sign link on WhatsApp."
+                      : ""}
+                  </p>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    <input
+                      value={itarangSigner.name}
+                      onChange={(e) => setItarangSigner((s) => ({ ...s, name: e.target.value }))}
+                      placeholder="Full name"
+                      className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                    />
+                    <input
+                      type="email"
+                      value={itarangSigner.email}
+                      onChange={(e) => setItarangSigner((s) => ({ ...s, email: e.target.value }))}
+                      placeholder="Email"
+                      className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                    />
+                    <input
+                      value={itarangSigner.mobile}
+                      onChange={(e) => setItarangSigner((s) => ({ ...s, mobile: e.target.value }))}
+                      placeholder="Phone (10 digits)"
+                      inputMode="numeric"
+                      className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                    />
+                  </div>
+
+                  {/* iTarang Signer 2 — optional. Hidden until the admin clicks
+                      "Add iTarang Signer 2". */}
+                  {!showSigner2 ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowSigner2(true)}
+                      className="mt-5 inline-flex items-center gap-2 rounded-2xl border border-dashed border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:border-blue-400 hover:text-blue-600"
+                    >
+                      <Plus className="h-4 w-4" /> Add iTarang Signer 2
+                    </button>
+                  ) : (
+                    <div className="mt-5 border-t border-slate-100 pt-4">
+                      <div className="mb-1 flex items-center gap-2">
+                        <FileSignature className="h-4 w-4 text-slate-400" />
+                        <p className="text-sm font-semibold text-slate-700">iTarang Signer 2</p>
+                        <span className="text-xs text-slate-400">optional</span>
+                        <button
+                          type="button"
+                          onClick={() => { setShowSigner2(false); setItarangSigner2({ name: "", email: "", mobile: "" }); }}
+                          className="ml-auto inline-flex items-center gap-1 text-xs font-semibold text-slate-400 transition hover:text-rose-500"
+                        >
+                          <X className="h-3.5 w-3.5" /> Remove
+                        </button>
+                      </div>
+                      <p className="mb-3 text-xs text-slate-500">
+                        Second iTarang authorized signatory. Also notified by <strong>email</strong>.
+                      </p>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                        <input
+                          value={itarangSigner2.name}
+                          onChange={(e) => setItarangSigner2((s) => ({ ...s, name: e.target.value }))}
+                          placeholder="Full name"
+                          className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        />
+                        <input
+                          type="email"
+                          value={itarangSigner2.email}
+                          onChange={(e) => setItarangSigner2((s) => ({ ...s, email: e.target.value }))}
+                          placeholder="Email"
+                          className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        />
+                        <input
+                          value={itarangSigner2.mobile}
+                          onChange={(e) => setItarangSigner2((s) => ({ ...s, mobile: e.target.value }))}
+                          placeholder="Phone (10 digits)"
+                          inputMode="numeric"
+                          className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* After initiation: show iTarang signers read-only (sourced from the
+                  persisted signer rows, so the values can't be edited).
+                  WhatsApp-only — web dealers don't surface an iTarang Signers
+                  block on this page. */}
+              {isWhatsAppDealer && hasInitiatedAgreement && (tracking?.signers?.some((s) => (s.signerRole || "").startsWith("itarang"))) && (
+                <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                  <div className="mb-3 flex items-center gap-2">
+                    <FileSignature className="h-4 w-4 text-slate-500" />
+                    <p className="text-sm font-semibold text-slate-800">iTarang Signers</p>
+                    <span className="text-xs text-slate-400">locked after initiation</span>
+                  </div>
+                  <div className="space-y-3">
+                    {tracking!.signers!
+                      .filter((s) => (s.signerRole || "").startsWith("itarang"))
+                      .map((s) => (
+                        <div key={s.id} className="grid grid-cols-1 gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 md:grid-cols-3">
+                          <div>
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                              {s.signerRole?.replaceAll("_", " ")}
+                            </p>
+                            <p className="text-sm font-medium text-slate-900">{s.signerName || "—"}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Email</p>
+                            <p className="text-sm text-slate-700">{s.signerEmail || "—"}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Phone</p>
+                            <p className="text-sm text-slate-700">{s.signerMobile || "—"}</p>
+                          </div>
+                        </div>
+                      ))}
                   </div>
                 </div>
               )}
