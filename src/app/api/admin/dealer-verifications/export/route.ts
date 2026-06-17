@@ -1,14 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db/index";
-import {
-  dealerOnboardingApplications,
-  dealerOnboardingDocuments,
-} from "@/lib/db/schema";
-import { and, desc, gte, ilike, lte, or, sql } from "drizzle-orm";
+import { dealerOnboardingApplications } from "@/lib/db/schema";
+import { desc, isNotNull, ne, or } from "drizzle-orm";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 
-// Parse "YYYY-MM-DD" as local midnight so the day boundary aligns with what
-// the admin picked in the UI (mirrors parseLocalDate in the page component).
+// CSV export of the dealer verification queue.
+//
+// Columns ADAPT to the active filters: a core set is always present; the
+// agreement-status filter adds agreement columns; a location/pincode filter
+// adds city/state/pincode. Rows mirror the on-screen queue's filtering + status
+// mapping, so the export matches what the admin sees.
+
+type Col = { key: string; label: string };
+
+// Parse "YYYY-MM-DD" as local midnight so the day boundary aligns with what the
+// admin picked in the UI (mirrors parseLocalDate in the page component).
 function parseLocalDate(value: string | null): Date | null {
   if (!value) return null;
   const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -16,43 +22,22 @@ function parseLocalDate(value: string | null): Date | null {
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 }
 
-function endOfLocalDay(value: string | null): Date | null {
-  const d = parseLocalDate(value);
-  if (!d) return null;
-  d.setHours(23, 59, 59, 999);
-  return d;
-}
-
 function csvEscape(value: unknown): string {
   if (value === null || value === undefined) return "";
   let str: string;
-  if (value instanceof Date) {
-    str = value.toISOString();
-  } else if (typeof value === "boolean") {
-    str = value ? "Yes" : "No";
-  } else {
-    str = String(value);
-  }
-  if (/[",\n\r]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
+  if (value instanceof Date) str = value.toISOString();
+  else if (typeof value === "boolean") str = value ? "Yes" : "No";
+  else str = String(value);
+  return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
 }
 
-function formatAddress(raw: unknown): string {
-  if (!raw || typeof raw !== "object") return "";
-  const a = raw as Record<string, unknown>;
-  const parts = [
-    a.line1,
-    a.line2,
-    a.city,
-    a.state,
-    a.pincode,
-    a.country,
-  ]
-    .map((p) => (p == null ? "" : String(p).trim()))
-    .filter((p) => p.length > 0);
-  return parts.join(", ");
+// Mirror the list route's status mapping so exported rows match the queue.
+function mapStatus(onboarding: string | null, review: string | null): string {
+  const o = (onboarding || "draft").toLowerCase();
+  const r = (review || "").toLowerCase();
+  if (["approved", "rejected", "correction_requested"].includes(o)) return o;
+  if (r && r !== "draft") return r;
+  return o;
 }
 
 export async function GET(req: NextRequest) {
@@ -60,178 +45,132 @@ export async function GET(req: NextRequest) {
   if (!auth.ok) return auth.response;
 
   try {
-    const url = new URL(req.url);
-    const dateFromRaw = url.searchParams.get("dateFrom");
-    const dateToRaw = url.searchParams.get("dateTo");
-    const q = (url.searchParams.get("q") || "").trim();
+    const sp = req.nextUrl.searchParams;
+    const q = (sp.get("q") || "").trim().toLowerCase();
+    const agreementStatus = (sp.get("agreementStatus") || "").trim();
+    const statusParam = (sp.get("status") || "").trim();
+    const stateParam = (sp.get("state") || "").trim().toLowerCase();
+    const cityParam = (sp.get("city") || "").trim().toLowerCase();
+    const pincodeParam = (sp.get("pincode") || "").trim();
 
-    const dateFrom = parseLocalDate(dateFromRaw);
-    const dateTo = endOfLocalDay(dateToRaw);
+    const fromD = parseLocalDate(sp.get("dateFrom"));
+    const toD = parseLocalDate(sp.get("dateTo"));
+    if (fromD) fromD.setHours(0, 0, 0, 0);
+    if (toD) toD.setHours(23, 59, 59, 999);
 
-    const conditions = [];
-    if (dateFrom) {
-      conditions.push(gte(dealerOnboardingApplications.submitted_at, dateFrom));
-    }
-    if (dateTo) {
-      conditions.push(lte(dealerOnboardingApplications.submitted_at, dateTo));
-    }
-    if (q) {
-      const like = `%${q}%`;
-      const search = or(
-        ilike(dealerOnboardingApplications.owner_name, like),
-        ilike(dealerOnboardingApplications.company_name, like),
-        ilike(dealerOnboardingApplications.gst_number, like),
-        ilike(dealerOnboardingApplications.onboarding_status, like),
-        ilike(dealerOnboardingApplications.company_type, like),
-      );
-      if (search) conditions.push(search);
-    }
-
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
+    // Same base visibility as the list route (hide pure drafts).
     const applications = await db
       .select()
       .from(dealerOnboardingApplications)
-      .where(whereClause)
+      .where(
+        or(
+          ne(dealerOnboardingApplications.onboarding_status, "draft"),
+          isNotNull(dealerOnboardingApplications.submitted_at),
+        ),
+      )
       .orderBy(
         desc(dealerOnboardingApplications.updated_at),
         desc(dealerOnboardingApplications.created_at),
       );
 
-    const docCountMap = new Map<string, number>();
-    if (applications.length > 0) {
-      const applicationIds = applications.map((a) => a.id);
-      const docCounts = await db
-        .select({
-          applicationId: dealerOnboardingDocuments.application_id,
-          count: sql<number>`cast(count(*) as integer)`,
-        })
-        .from(dealerOnboardingDocuments)
-        .where(
-          sql`${dealerOnboardingDocuments.application_id} = ANY(ARRAY[${sql.join(
-            applicationIds.map((id) => sql`${id}::uuid`),
-            sql`, `,
-          )}])`,
-        )
-        .groupBy(dealerOnboardingDocuments.application_id);
+    const filtered = applications.filter((a) => {
+      const status = mapStatus(a.onboarding_status, a.review_status);
+      const ag = (a.agreement_status || "").toLowerCase();
 
-      for (const row of docCounts) {
-        docCountMap.set(row.applicationId, row.count);
+      if (fromD || toD) {
+        if (!a.submitted_at) return false;
+        const s = new Date(a.submitted_at);
+        if (fromD && s < fromD) return false;
+        if (toD && s > toD) return false;
       }
-    }
-
-    const headers = [
-      "Dealer ID",
-      "Dealer Code",
-      "Company Name",
-      "Company Type",
-      "GST Number",
-      "PAN Number",
-      "CIN Number",
-      "Owner Name",
-      "Owner Email",
-      "Owner Phone",
-      "Owner Landline",
-      "Sales Manager Name",
-      "Sales Manager Email",
-      "Sales Manager Mobile",
-      "Business Address",
-      "Registered Address",
-      "Bank Name",
-      "Account Number",
-      "Beneficiary Name",
-      "IFSC Code",
-      "Onboarding Status",
-      "Review Status",
-      "Dealer Account Status",
-      "Source",
-      "Finance Enabled",
-      "Documents Uploaded",
-      "Agreement Status",
-      "Agreement Language",
-      "Stamp Status",
-      "Completion Status",
-      "Created At",
-      "Submitted At",
-      "Approved At",
-      "Rejected At",
-      "Signed At",
-      "Last Action At",
-      "Updated At",
-      "Admin Notes",
-      "Rejection Reason",
-      "Rejection Remarks",
-      "Correction Remarks",
-    ];
-
-    const rows = applications.map((a) => {
-      const agreement = !a.finance_enabled
-        ? "N/A"
-        : (a.agreement_status?.trim() || "not_generated");
-      const docCount = docCountMap.get(a.id) ?? 0;
-      const companyType = a.company_type
-        ? a.company_type.replaceAll("_", " ")
-        : "";
-
-      return [
-        a.id,
-        a.dealer_code,
-        a.company_name,
-        companyType,
-        a.gst_number,
-        a.pan_number,
-        a.cin_number,
-        a.owner_name,
-        a.owner_email,
-        a.owner_phone,
-        a.owner_landline,
-        a.sales_manager_name,
-        a.sales_manager_email,
-        a.sales_manager_mobile,
-        formatAddress(a.business_address),
-        formatAddress(a.registered_address),
-        a.bank_name,
-        a.account_number,
-        a.beneficiary_name,
-        a.ifsc_code,
-        a.onboarding_status,
-        a.review_status,
-        a.dealer_account_status,
-        (a.source || "web"),
-        a.finance_enabled,
-        docCount,
-        agreement,
-        a.agreement_language,
-        a.stamp_status,
-        a.completion_status,
-        a.created_at,
-        a.submitted_at,
-        a.approved_at,
-        a.rejected_at,
-        a.signed_at,
-        a.last_action_timestamp,
-        a.updated_at,
-        a.admin_notes,
-        a.rejection_reason,
-        a.rejection_remarks,
-        a.correction_remarks,
-      ];
+      if (agreementStatus) {
+        if (agreementStatus === "pending") {
+          if (!(a.finance_enabled && ["sent_for_signature", "partially_signed"].includes(ag)))
+            return false;
+        } else if (ag !== agreementStatus) {
+          return false;
+        }
+      }
+      if (statusParam && status !== statusParam) return false;
+      if (stateParam && !(a.state || "").toLowerCase().includes(stateParam)) return false;
+      if (cityParam && !(a.city || "").toLowerCase().includes(cityParam)) return false;
+      if (pincodeParam && !(a.pincode || "").includes(pincodeParam)) return false;
+      if (q) {
+        const hay = [
+          a.owner_name, a.company_name, a.gst_number,
+          status, a.company_type, a.sales_manager_name, a.owner_email,
+        ].filter(Boolean).join(" ").toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
     });
 
+    // ── Adaptive columns ──────────────────────────────────────────────────────
+    const columns: Col[] = [
+      { key: "dealerName", label: "Dealer Name" },
+      { key: "companyName", label: "Company Name" },
+      { key: "companyType", label: "Company Type" },
+      { key: "gstNumber", label: "GST Number" },
+      { key: "salesManager", label: "Sales Manager" },
+      { key: "source", label: "Source" },
+      { key: "status", label: "Status" },
+      { key: "submittedAt", label: "Submitted At" },
+    ];
+    if (agreementStatus) {
+      columns.push(
+        { key: "financeEnabled", label: "Finance Enabled" },
+        { key: "agreementStatus", label: "Agreement Status" },
+        { key: "stampStatus", label: "Stamp Status" },
+        { key: "signedAt", label: "Signed At" },
+        { key: "approvedAt", label: "Approved At" },
+      );
+    }
+    if (stateParam || cityParam || pincodeParam) {
+      columns.push(
+        { key: "city", label: "City" },
+        { key: "state", label: "State" },
+        { key: "pincode", label: "Pincode" },
+      );
+    }
+
+    const records = filtered.map((a) => ({
+      dealerName: a.owner_name || a.company_name || "—",
+      companyName: a.company_name || "—",
+      companyType: a.company_type ? a.company_type.replaceAll("_", " ") : "",
+      gstNumber: a.gst_number || "",
+      salesManager: a.sales_manager_name || "",
+      source: (a.source || "web").toLowerCase(),
+      status: mapStatus(a.onboarding_status, a.review_status),
+      submittedAt: a.submitted_at ? new Date(a.submitted_at).toISOString() : "",
+      financeEnabled: a.finance_enabled ? "Yes" : "No",
+      agreementStatus: !a.finance_enabled
+        ? "N/A"
+        : (a.agreement_status?.trim() || "not_generated"),
+      stampStatus: a.stamp_status || "",
+      signedAt: a.signed_at ? new Date(a.signed_at).toISOString() : "",
+      approvedAt: a.approved_at ? new Date(a.approved_at).toISOString() : "",
+      city: a.city || "",
+      state: a.state || "",
+      pincode: a.pincode || "",
+    }));
+
     const csvBody = [
-      headers.map(csvEscape).join(","),
-      ...rows.map((r) => r.map(csvEscape).join(",")),
+      columns.map((c) => csvEscape(c.label)).join(","),
+      ...records.map((rec) =>
+        columns.map((c) => csvEscape((rec as Record<string, unknown>)[c.key])).join(","),
+      ),
     ].join("\n");
 
-    // UTF-8 BOM so Excel detects encoding correctly for Indian names / ₹ / GST.
+    // UTF-8 BOM so Excel detects encoding for Indian names / GST.
     const csv = "﻿" + csvBody;
 
     const today = new Date().toISOString().slice(0, 10);
+    const suffix = agreementStatus === "pending" ? "agreement-pending" : "queue";
     return new NextResponse(csv, {
       status: 200,
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="dealer-applications-${today}.csv"`,
+        "Content-Disposition": `attachment; filename="dealer-verifications-${suffix}-${today}.csv"`,
         "Cache-Control": "no-store",
       },
     });

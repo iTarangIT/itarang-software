@@ -23,6 +23,7 @@ const FIELD_GROUPS: Array<{
 }> = [
   { id: "company",        label: "Company details" },
   { id: "owner",          label: "Owner details" },
+  { id: "address",        label: "Owner residential address" },
   { id: "bank",           label: "Bank account" },
   { id: "sales_manager",  label: "Sales manager" },
 ];

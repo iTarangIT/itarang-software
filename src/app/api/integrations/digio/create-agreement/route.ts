@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { launchBrowser, resetBrowser } from "@/lib/pdf/launch-browser";
 import { buildTarangDealerAgreementHtml } from "@/lib/agreement/dealer-agreement-template";
 import {
@@ -10,7 +11,49 @@ type AgreementPayload = {
   company?: any;
   ownership?: any;
   agreement?: any;
+  // Set by the admin initiate-agreement route for WhatsApp dealers: persist the
+  // generated (unsigned) PDF to storage so it can be sent as a WhatsApp document.
+  applicationId?: string;
+  storeUnsignedCopy?: boolean;
 };
+
+// Persist the freshly-generated (unsigned) agreement PDF to the public
+// dealer-documents bucket and return a public URL — mirrors the signed-agreement
+// upload in src/lib/digio/ensure-signed-agreement.ts. Best-effort: any failure
+// returns null and never blocks agreement creation.
+async function storeUnsignedAgreementPdf(
+  pdfBuffer: Buffer,
+  pathKey: string,
+): Promise<string | null> {
+  try {
+    const supabaseUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
+    const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
+    if (!supabaseUrl || !serviceRoleKey) {
+      console.warn("[create-agreement] supabase env missing — skip unsigned upload");
+      return null;
+    }
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    const bucketName = "dealer-documents";
+    const filePath = `agreements/${pathKey}/unsigned-agreement.pdf`;
+    const { error: uploadError } = await supabase.storage
+      .from(bucketName)
+      .upload(filePath, pdfBuffer, {
+        contentType: "application/pdf",
+        upsert: true,
+      });
+    if (uploadError) {
+      console.error("[create-agreement] unsigned upload failed:", uploadError.message);
+      return null;
+    }
+    const { data: publicUrlData } = supabase.storage
+      .from(bucketName)
+      .getPublicUrl(filePath);
+    return publicUrlData?.publicUrl || null;
+  } catch (err: any) {
+    console.error("[create-agreement] unsigned upload threw:", err?.message || err);
+    return null;
+  }
+}
 
 type SignerItem = {
   identifier: string;
@@ -256,6 +299,8 @@ export async function POST(req: NextRequest) {
     const agreement = body.agreement || {};
     const company = body.company || {};
     const ownership = body.ownership || {};
+    const storeUnsignedCopy = !!body.storeUnsignedCopy;
+    const applicationId = cleanString(body.applicationId);
 
     const dealerSigner = buildSigner(
       agreement.dealerSignerEmail,
@@ -435,12 +480,17 @@ export async function POST(req: NextRequest) {
       };
     });
 
+    // When the caller delivers the sign link itself (e.g. WhatsApp-only dealer
+    // onboarding), suppress Digio's own email/SMS notifications. We still pass
+    // include_authentication_url so the per-signer URLs come back in the response.
+    const suppressSignerEmails = !!agreement.suppressSignerEmails;
+
     const digioPayload: Record<string, unknown> = {
       file_name: `${cleanString(company.companyName) || "dealer"}-agreement.pdf`,
       file_data: agreementBase64,
       expire_in_days: 30,
-      notify_signers: true,
-      send_sign_link: true,
+      notify_signers: !suppressSignerEmails,
+      send_sign_link: !suppressSignerEmails,
       include_authentication_url: true,
       sequential: true,
       signers: digioSigners,
@@ -530,6 +580,17 @@ export async function POST(req: NextRequest) {
     const attachedEstampDetails = extractAttachedEstampDetails(parsed);
     const stampCertificateIds = extractStampCertificateIds(parsed);
 
+    const providerDocumentId = parsed?.document_id || parsed?.documentId || "";
+
+    // For WhatsApp dealers, persist the unsigned PDF so the initiate route can
+    // send the actual agreement document over WhatsApp (not just the link).
+    const unsignedAgreementUrl = storeUnsignedCopy
+      ? await storeUnsignedAgreementPdf(
+          pdfBuffer,
+          applicationId || providerDocumentId || `req-${parsed?.id || "unknown"}`,
+        )
+      : null;
+
     console.log(
       "DIGIO DEBUG -> ATTACHED ESTAMP DETAILS:",
       JSON.stringify(attachedEstampDetails),
@@ -543,8 +604,9 @@ export async function POST(req: NextRequest) {
       success: true,
       data: {
         requestId: parsed?.id || parsed?.request_id || "",
-        providerDocumentId: parsed?.document_id || parsed?.documentId || "",
+        providerDocumentId,
         signingUrl,
+        unsignedAgreementUrl,
         signerUrls: signingParties.map((party: any) => ({
           name: party?.name || "",
           reason: party?.reason || "",

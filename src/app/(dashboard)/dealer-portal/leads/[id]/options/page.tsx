@@ -306,12 +306,14 @@ export default function DealerOptionsPage() {
     }
 
     return (
-        <div className="min-h-screen bg-[#F8F9FB]">
-            <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
+        // -mx-6 cancels the dashboard layout's mobile p-6 so cards run edge-to-edge
+        // on phones; reverts at sm+ (desktop/tablet unchanged).
+        <div className="min-h-screen bg-[#F8F9FB] -mx-6 sm:mx-0">
+            <div className="max-w-[1200px] mx-auto px-0 sm:px-6 py-8 pb-40">
                 <ProgressHeader title="Loan Options" subtitle={`Lead: ${leadId}`} step={5} onBack={() => router.back()} />
                 <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} />
 
-                <main className="grid grid-cols-1 gap-6">
+                <main className="grid grid-cols-1 gap-4 sm:gap-6">
                     {/* ─── Selected Product ───────────────────────── */}
                     {lead && (
                         <div className="bg-gradient-to-r from-[#0047AB] to-[#1D4ED8] rounded-[24px] p-6 text-white">

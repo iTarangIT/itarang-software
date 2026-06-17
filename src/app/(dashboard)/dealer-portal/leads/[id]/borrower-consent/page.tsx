@@ -12,6 +12,7 @@ import {
     StickyBottomBar, ErrorBanner, PrimaryButton, SecondaryButton,
     OutlineButton, FullPageLoader, OCRModal,
 } from '@/components/dealer-portal/lead-wizard/shared';
+import { DatePicker } from '@/components/ui/date-picker';
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
 import OtherDocumentsSection, { type RequestedDoc as OtherRequestedDoc } from '@/components/dealer-portal/lead-wizard/OtherDocumentsSection';
 
@@ -1106,7 +1107,9 @@ export default function BorrowerConsentPage() {
     };
 
     return (
-        <div className="min-h-screen bg-[#F8F9FB]">
+        // -mx-6 cancels the dashboard layout's mobile p-6 so cards run edge-to-edge
+        // on phones; reverts at sm+ (desktop/tablet unchanged).
+        <div className="min-h-screen bg-[#F8F9FB] -mx-6 sm:mx-0">
             {/* OCR Modal — same Aadhaar autofill used on Step 1 */}
             <OCRModal open={showOCR} onClose={() => setShowOCR(false)} onResult={handleOCRResult} />
 
@@ -1119,7 +1122,7 @@ export default function BorrowerConsentPage() {
                 includeCoBorrower={!!step3Ctx?.requires_co_borrower}
             />
 
-            <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
+            <div className="max-w-[1200px] mx-auto px-0 sm:px-6 py-8 pb-40">
                 {/* Header */}
                 <ProgressHeader
                     title="Other Documents & Co-Borrower KYC"
@@ -1214,16 +1217,20 @@ export default function BorrowerConsentPage() {
                     </>
                 )}
 
-                <main className="grid grid-cols-1 gap-6">
+                <main className="grid grid-cols-1 gap-4 sm:gap-6">
                     {/* ─── Section B — Co-Borrower KYC (BRD §2.9.3.5) ──────
                         Visible only when admin requested co-borrower KYC. */}
                     {step3Ctx?.requires_co_borrower && (<>
                     {/* ─── Co-borrower Details (Editable) ───────────────── */}
                     <SectionCard title="Co-borrower Details">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-4 sm:gap-y-6">
                             <InputField label="Full Name" value={borrowerForm.full_name} onChange={v => updateField('full_name', v)} placeholder="John Doe" required error={borrowerErrors.full_name} />
                             <InputField label="Father / Husband Name" value={borrowerForm.father_or_husband_name} onChange={v => updateField('father_or_husband_name', v)} placeholder="Richard Doe" required error={borrowerErrors.father_or_husband_name} />
-                            <InputField label="Date of Birth" type="date" value={borrowerForm.dob} onChange={v => updateField('dob', v)} required error={borrowerErrors.dob} />
+                            <div className="space-y-1.5 sm:space-y-2">
+                                <label className="text-sm font-bold text-gray-900 px-1">Date of Birth <span className="text-red-500">*</span></label>
+                                <DatePicker value={borrowerForm.dob ?? ''} onChange={v => updateField('dob', v)} minAge={18} error={!!borrowerErrors.dob} />
+                                {borrowerErrors.dob && <p className="text-[10px] text-red-500 font-bold px-1">{borrowerErrors.dob}</p>}
+                            </div>
                             <InputField label="Phone" value={borrowerForm.phone} onChange={v => updateField('phone', v)} placeholder="9876543210" required inputMode="numeric" maxLength={10} error={borrowerErrors.phone} />
                             <InputField label="Email" value={borrowerForm.email} onChange={v => updateField('email', v)} placeholder="john@email.com" />
                             <InputField label="PAN Number" value={borrowerForm.pan_no} onChange={v => updateField('pan_no', v)} placeholder="ABCDE1234F" required maxLength={10} error={borrowerErrors.pan_no} />
