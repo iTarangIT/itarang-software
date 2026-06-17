@@ -272,6 +272,23 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
     });
   }
 
+  sendDocument(
+    to: string,
+    link: string,
+    filename: string,
+    caption?: string,
+  ): Promise<SendResult> {
+    return this.send({
+      to: normalizePhone(to),
+      type: "document",
+      document: {
+        link,
+        filename,
+        ...(caption ? { caption } : {}),
+      },
+    });
+  }
+
   sendInteractive(
     to: string,
     body: string,

@@ -2,10 +2,14 @@
 
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import {
-    ChevronLeft, ChevronRight, ChevronDown, Loader2, AlertCircle, X,
+    ChevronLeft, ChevronRight, Loader2, AlertCircle, X,
     Upload, CheckCircle2, XCircle, Clock, Scan, Eye, FileText,
     ShieldCheck
 } from 'lucide-react';
+import { Dropdown } from '@/components/ui/select-dropdown';
+
+// Re-export so existing `import { Dropdown } from './shared'` callers keep working.
+export { Dropdown };
 
 // ─── Section Card ───────────────────────────────────────────────────────────
 
@@ -15,15 +19,15 @@ export function SectionCard({ title, children, action }: {
     action?: ReactNode;
 }) {
     return (
-        <div className="bg-white rounded-[24px] border border-[#E9ECEF] shadow-[0_8px_30px_rgb(0,0,0,0.02)]">
-            <div className="flex items-center justify-between px-8 pt-8 pb-4">
-                <div className="flex items-center gap-4">
+        <div className="bg-white rounded-2xl sm:rounded-[24px] border border-[#E9ECEF] shadow-[0_8px_30px_rgb(0,0,0,0.02)]">
+            <div className="flex items-center justify-between px-4 pt-5 pb-3 sm:px-8 sm:pt-8 sm:pb-4">
+                <div className="flex items-center gap-3 sm:gap-4">
                     <div className="w-[3px] h-6 bg-[#0047AB] rounded-full" />
-                    <h3 className="text-lg font-black text-gray-900 tracking-tight">{title}</h3>
+                    <h3 className="text-base sm:text-lg font-black text-gray-900 tracking-tight">{title}</h3>
                 </div>
                 {action}
             </div>
-            <div className="px-8 pb-8 pt-2">{children}</div>
+            <div className="px-4 pb-5 pt-1 sm:px-8 sm:pb-8 sm:pt-2">{children}</div>
         </div>
     );
 }
@@ -45,7 +49,7 @@ export function InputField({ label, value, onChange, onBlur, error, placeholder,
     maxLength?: number;
 }) {
     return (
-        <div className={`space-y-2 ${className || ''}`}>
+        <div className={`space-y-1.5 sm:space-y-2 ${className || ''}`}>
             <label className="text-sm font-bold text-gray-900 px-1">
                 {label} {required && <span className="text-red-500">*</span>}
             </label>
@@ -58,7 +62,7 @@ export function InputField({ label, value, onChange, onBlur, error, placeholder,
                 disabled={disabled}
                 inputMode={inputMode}
                 maxLength={maxLength}
-                className={`w-full h-11 px-4 bg-white border-2 rounded-xl outline-none transition-all text-sm placeholder-gray-400 ${
+                className={`w-full h-10 sm:h-11 px-4 bg-white border-2 rounded-xl outline-none transition-all text-sm placeholder-gray-400 ${
                     disabled ? 'bg-gray-50 border-[#F5F5F5] text-gray-400' :
                     error ? 'border-red-400 focus:border-red-500' :
                     'border-[#EBEBEB] focus:border-[#1D4ED8] focus:ring-4 focus:ring-blue-50/50'
@@ -70,6 +74,9 @@ export function InputField({ label, value, onChange, onBlur, error, placeholder,
 }
 
 // ─── Select Field ───────────────────────────────────────────────────────────
+// The custom dropdown now lives in components/ui/select-dropdown.tsx (portal +
+// fixed positioning so it never overlaps the sticky navbar). Re-exported here
+// so existing `import { Dropdown } from './shared'` callers keep working.
 
 export function SelectField({ label, value, onChange, options, error, placeholder, required, disabled }: {
     label: string;
@@ -82,28 +89,18 @@ export function SelectField({ label, value, onChange, options, error, placeholde
     disabled?: boolean;
 }) {
     return (
-        <div className="space-y-2">
+        <div className="space-y-1.5 sm:space-y-2">
             <label className="text-sm font-bold text-gray-900 px-1">
                 {label} {required && <span className="text-red-500">*</span>}
             </label>
-            <div className="relative">
-                <select
-                    value={value ?? ''}
-                    onChange={e => onChange(e.target.value)}
-                    disabled={disabled}
-                    className={`w-full h-11 px-4 pr-10 bg-white border-2 rounded-xl outline-none transition-all text-sm appearance-none ${
-                        disabled ? 'bg-gray-50 border-[#F5F5F5] text-gray-400' :
-                        error ? 'border-red-400' :
-                        'border-[#EBEBEB] focus:border-[#1D4ED8] focus:ring-4 focus:ring-blue-50/50'
-                    } ${!value ? 'text-gray-400' : 'text-gray-900'}`}
-                >
-                    <option value="">{placeholder || 'Select...'}</option>
-                    {options.map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-            </div>
+            <Dropdown
+                value={value}
+                onChange={onChange}
+                options={options}
+                placeholder={placeholder}
+                disabled={disabled}
+                error={!!error}
+            />
             {error && <p className="text-[10px] text-red-500 font-bold px-1">{error}</p>}
         </div>
     );
@@ -122,7 +119,7 @@ export function TextAreaField({ label, value, onChange, error, placeholder, requ
     rows?: number;
 }) {
     return (
-        <div className="space-y-2">
+        <div className="space-y-1.5 sm:space-y-2">
             <label className="text-sm font-bold text-gray-900 px-1">
                 {label} {required && <span className="text-red-500">*</span>}
             </label>
@@ -327,7 +324,9 @@ export function ProgressHeader({
     // chevron stays enabled and is the dealer's escape hatch.
     const canGoNext = step < totalSteps;
     return (
-        <header className="mb-8 flex justify-between items-start gap-4">
+        // px-4 on mobile keeps the title + progress inset from the screen edge
+        // even though the page runs cards full-bleed (px-0); removed at sm+.
+        <header className="mb-8 px-4 sm:px-0 flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-start">
             <div className="flex gap-4">
                 <button
                     onClick={onBack}
@@ -337,16 +336,20 @@ export function ProgressHeader({
                     <ChevronLeft className="w-6 h-6 text-gray-900" />
                 </button>
                 <div>
-                    <h1 className="text-[28px] font-black text-gray-900 leading-tight tracking-tight">{title}</h1>
+                    <h1 className="text-2xl sm:text-[28px] font-black text-gray-900 leading-tight tracking-tight">{title}</h1>
                     {subtitle && <p className="text-sm text-gray-500 mt-0.5">{subtitle}</p>}
                 </div>
             </div>
-            <div className="flex flex-col items-end gap-4">
+            {/* On phones the progress block and the right-action (e.g. Refresh)
+                share one row — progress left, action bottom-aligned on the right —
+                so the action no longer floats on its own line. Desktop keeps the
+                stacked, right-aligned column. */}
+            <div className="flex flex-row items-center justify-between gap-4 w-full sm:flex-col sm:items-end sm:w-auto">
                 <div>
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest text-right mb-1.5">
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest text-left sm:text-right mb-1.5">
                         {workflowLabel}
                     </p>
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-3 sm:gap-4">
                         <span className="text-xs font-bold text-[#1D4ED8] whitespace-nowrap">
                             Step {step} of {totalSteps}
                         </span>
@@ -360,7 +363,9 @@ export function ProgressHeader({
                             >
                                 <ChevronLeft className="w-4 h-4" />
                             </button>
-                            <div className="flex gap-2.5">
+                            {/* Dot rail hidden on phones — it's wider than the
+                                viewport; "Step X of Y" + chevrons convey progress. */}
+                            <div className="hidden sm:flex gap-2.5">
                                 {Array.from({ length: totalSteps }, (_, i) => {
                                     const idx = i + 1;
                                     const reached = idx <= step;
@@ -375,7 +380,7 @@ export function ProgressHeader({
                                             aria-label={locked ? `Step ${idx} locked` : `Jump to step ${idx}`}
                                             aria-current={idx === step ? 'step' : undefined}
                                             title={locked ? 'Locked — complete the previous step first' : undefined}
-                                            className={`h-[6px] w-[50px] rounded-full transition-all duration-300 ${
+                                            className={`h-[6px] w-8 sm:w-[50px] rounded-full transition-all duration-300 ${
                                                 reached ? 'bg-[#0047AB]' : 'bg-gray-200'
                                             } ${locked ? 'opacity-40 cursor-not-allowed' : clickable ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
                                         />
@@ -406,16 +411,20 @@ export function StickyBottomBar({ children, lastSaved }: {
     children: ReactNode;
     lastSaved?: string | null;
 }) {
+    // A saved state shows a solid green dot; an unsaved one shows an open ring —
+    // a compact status indicator instead of the old full-width "NOT SAVED" pill.
+    const isSaved = !!lastSaved && lastSaved !== 'Not saved';
     return (
-        <div className="sticky bottom-0 left-0 right-0 bg-[#F8F9FB] pt-4 pb-8 z-30">
-            <div className="max-w-[1200px] mx-auto px-6">
-                <div className="flex justify-between items-center bg-white border border-gray-100 rounded-[20px] px-8 py-5 shadow-[0_-8px_30px_rgb(0,0,0,0.04)]">
-                    <div className="bg-gray-100 px-4 py-1.5 rounded-full">
-                        <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">
-                            {lastSaved || 'Not saved'}
-                        </span>
-                    </div>
-                    <div className="flex gap-4">{children}</div>
+        <div className="sticky bottom-0 left-0 right-0 z-30 bg-[#F8F9FB]/90 backdrop-blur-md border-t border-gray-200/70">
+            <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-10">
+                {/* Slim single row on desktop; on phones the status sits above a
+                    right-aligned action group so the bar stays compact. */}
+                <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                    <span className="flex items-center gap-2 text-xs font-medium text-gray-400 whitespace-nowrap">
+                        <span className={`inline-block w-2 h-2 rounded-full ${isSaved ? 'bg-green-500' : 'border border-gray-400'}`} />
+                        {lastSaved || 'Not saved'}
+                    </span>
+                    <div className="flex items-center justify-end gap-2 sm:gap-3">{children}</div>
                 </div>
             </div>
         </div>
@@ -452,7 +461,7 @@ export function PrimaryButton({ children, onClick, disabled, loading, className 
         <button
             onClick={onClick}
             disabled={disabled || loading}
-            className={`px-8 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${className || ''}`}
+            className={`px-4 sm:px-8 py-2.5 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] transition-all flex items-center justify-center gap-2 min-w-0 disabled:opacity-50 disabled:cursor-not-allowed ${className || ''}`}
         >
             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
             {children}
@@ -470,7 +479,7 @@ export function SecondaryButton({ children, onClick, disabled, loading }: {
         <button
             onClick={onClick}
             disabled={disabled || loading}
-            className="px-8 py-2.5 border-2 border-[#0047AB] rounded-xl text-sm font-bold text-[#0047AB] hover:bg-blue-50 transition-all flex items-center gap-2 disabled:opacity-50"
+            className="px-4 sm:px-8 py-2.5 border-2 border-[#0047AB] rounded-xl text-sm font-bold text-[#0047AB] hover:bg-blue-50 transition-all flex items-center justify-center gap-2 min-w-0 disabled:opacity-50"
         >
             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
             {children}
@@ -487,7 +496,7 @@ export function OutlineButton({ children, onClick, disabled }: {
         <button
             onClick={onClick}
             disabled={disabled}
-            className="px-8 py-2.5 border-2 border-[#EBEBEB] rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all disabled:opacity-50"
+            className="px-4 sm:px-8 py-2.5 border-2 border-[#EBEBEB] rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all min-w-0 disabled:opacity-50"
         >
             {children}
         </button>
@@ -596,8 +605,8 @@ export function OCRModal({ open, onClose, onResult }: {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 p-8">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 sm:p-8">
                 <div className="flex justify-between items-start mb-2">
                     <div>
                         <h3 className="text-xl font-black text-gray-900">Auto-fill Customer Details</h3>

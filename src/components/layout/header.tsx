@@ -1,18 +1,24 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Bell, LogOut, User, ChevronDown, Settings, CreditCard } from 'lucide-react';
+import { Search, Bell, LogOut, User, ChevronDown, Settings, CreditCard, Menu } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { GlobalSearchOverlay } from '@/components/search/GlobalSearchOverlay';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { useUIStore } from '@/store/uiStore';
 import { toast } from 'sonner';
 
 export function Header() {
     const router = useRouter();
+    const pathname = usePathname() ?? '';
     const supabase = createClient();
     const { user } = useAuth();
+    // Mobile hamburger → opens the shared nav drawer. Dealer portal only, so the
+    // button never appears for other roles (whose mobile chrome is untouched).
+    const openSidebar = useUIStore((s) => s.openSidebar);
+    const isDealerPortal = pathname.startsWith('/dealer-portal');
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [loggingOut, setLoggingOut] = useState(false);
@@ -67,6 +73,16 @@ export function Header() {
             <GlobalSearchOverlay isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
             {/* Search Bar */}
             <div className="flex items-center gap-4 flex-1 max-w-2xl">
+                {isDealerPortal && (
+                    <button
+                        type="button"
+                        onClick={openSidebar}
+                        aria-label="Open navigation menu"
+                        className="md:hidden p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                    >
+                        <Menu className="w-6 h-6" />
+                    </button>
+                )}
                 <img
                     src="/itarang-logo.png"
                     alt="iTarang"

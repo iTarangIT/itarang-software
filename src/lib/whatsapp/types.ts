@@ -91,6 +91,17 @@ export interface WhatsAppAdapter {
     bodyParams: string[],
   ): Promise<SendResult>;
 
+  /**
+   * Send a document (PDF etc.) by public URL — the provider fetches `link`
+   * itself. Valid only inside the 24h customer-service window (like sendText).
+   */
+  sendDocument(
+    to: string,
+    link: string,
+    filename: string,
+    caption?: string,
+  ): Promise<SendResult>;
+
   /** Interactive reply buttons (e.g. CONFIRM / CHANGE). */
   sendInteractive(
     to: string,

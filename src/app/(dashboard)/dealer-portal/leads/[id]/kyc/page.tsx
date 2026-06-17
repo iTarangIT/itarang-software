@@ -252,6 +252,11 @@ export default function KYCPage() {
         return { total: required.length, uploadedCount: uploaded.length, pending };
     }, [requiredDocs, uploadedDocs]);
 
+    // Split required vs optional docs so the required ones show up front,
+    // followed by the optional ones (both always visible).
+    const requiredOnlyDocs = useMemo(() => requiredDocs.filter(d => d.required), [requiredDocs]);
+    const optionalOnlyDocs = useMemo(() => requiredDocs.filter(d => !d.required), [requiredDocs]);
+
     // Submit-for-Verification gate: dealer can only submit when admin has
     // verified the customer consent AND every required document has a file
     // AND coupon is reserved. Optional documents (cheques, bank statement,
@@ -691,9 +696,11 @@ export default function KYCPage() {
         if (route) router.push(route);
     };
 
+    // -mx-6 cancels the dashboard layout's mobile p-6 so cards run edge-to-edge
+    // on phones; reverts at sm+ (desktop/tablet unchanged).
     return (
-        <div className="min-h-screen bg-[#F8F9FB]">
-            <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
+        <div className="min-h-screen bg-[#F8F9FB] -mx-6 sm:mx-0">
+            <div className="max-w-[1200px] mx-auto px-0 sm:px-6 py-8 pb-40">
                 {/* Header */}
                 <ProgressHeader
                     title="KYC"
@@ -733,7 +740,7 @@ export default function KYCPage() {
                     </div>
                 )}
 
-                <main className="grid grid-cols-1 gap-6">
+                <main className="grid grid-cols-1 gap-4 sm:gap-6">
                     {/* ─── Customer Consent ───────────────────────────── */}
                     <SectionCard title="Customer Consent" action={
                         <ConsentStatusBadge status={consentStatus} />
@@ -1041,25 +1048,28 @@ export default function KYCPage() {
                         </div>
                     }>
                         {/* Progress Bar */}
-                        <div className="mb-5">
-                            <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
-                                <div
-                                    className={`h-full rounded-full transition-all duration-500 ${
-                                        docStats.uploadedCount === docStats.total ? 'bg-emerald-500' : 'bg-[#0047AB]'
-                                    }`}
-                                    style={{ width: `${docStats.total > 0 ? (docStats.uploadedCount / docStats.total) * 100 : 0}%` }}
-                                />
-                            </div>
-                            {docStats.pending.length > 0 && (
-                                <p className="text-xs text-red-500 font-medium mt-2">
-                                    Missing: {docStats.pending.map(d => d.label).join(', ')}
-                                </p>
-                            )}
+                        <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden mb-4">
+                            <div
+                                className={`h-full rounded-full transition-all duration-500 ${
+                                    docStats.uploadedCount === docStats.total ? 'bg-emerald-500' : 'bg-[#0047AB]'
+                                }`}
+                                style={{ width: `${docStats.total > 0 ? (docStats.uploadedCount / docStats.total) * 100 : 0}%` }}
+                            />
                         </div>
 
-                        {/* Document Cards Grid */}
+                        {/* Required-docs-missing banner */}
+                        {docStats.pending.length > 0 && (
+                            <div className="mb-4 flex items-center gap-2 px-4 py-3 rounded-xl bg-red-50 border border-red-200">
+                                <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                                <p className="text-sm font-bold text-red-700">
+                                    {docStats.pending.length} required doc{docStats.pending.length === 1 ? '' : 's'} missing
+                                </p>
+                            </div>
+                        )}
+
+                        {/* Required Document Cards */}
                         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-                            {requiredDocs.map(doc => (
+                            {requiredOnlyDocs.map(doc => (
                                 <DocumentCard
                                     key={doc.key}
                                     label={doc.label}
@@ -1072,6 +1082,24 @@ export default function KYCPage() {
                                 />
                             ))}
                         </div>
+
+                        {/* Optional docs — always shown (desktop and mobile) */}
+                        {optionalOnlyDocs.length > 0 && (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 mt-4">
+                                {optionalOnlyDocs.map(doc => (
+                                    <DocumentCard
+                                        key={doc.key}
+                                        label={doc.label}
+                                        required={doc.required}
+                                        uploaded={!!uploadedDocs[doc.key]?.file_url}
+                                        status={uploadedDocs[doc.key]?.doc_status || uploadedDocs[doc.key]?.verification_status}
+                                        failedReason={uploadedDocs[doc.key]?.rejection_reason || uploadedDocs[doc.key]?.failed_reason}
+                                        onUpload={file => handleDocUpload(doc.key, file)}
+                                        fileUrl={uploadedDocs[doc.key]?.file_url}
+                                    />
+                                ))}
+                            </div>
+                        )}
                     </SectionCard>
 
                     {/* ─── Additional Documents (BRD §2.9.3) ──────────── */}
@@ -1194,7 +1222,53 @@ export default function KYCPage() {
 
                     {/* ─── Verification Status ────────────────────────── */}
                     <SectionCard title="Verification Status (Customer)">
-                            <div className="overflow-x-auto">
+                            {/* Mobile: each check rendered as a stacked card with all
+                                the same fields as the desktop table (the 5-col table
+                                below overflows on phones, so it's desktop-only). */}
+                            <div className="sm:hidden divide-y divide-gray-100">
+                                {customerVerificationRows.map((v, i) => {
+                                    const isVerified = v.status === 'success' || v.status === 'verified';
+                                    const canReupload = v.status === 'failed' || v.status === 'awaiting_action';
+                                    return (
+                                        <div key={`m-${v.type}-${i}`} className="py-3 space-y-1.5">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <span className="text-sm font-bold text-gray-900">{v.label}</span>
+                                                <StatusBadge status={v.status} />
+                                            </div>
+                                            <div className="flex items-start justify-between gap-3 text-xs">
+                                                <span className="text-gray-400">Last Update</span>
+                                                <span className="text-gray-600 text-right">{v.last_update ? new Date(v.last_update).toLocaleString() : '-'}</span>
+                                            </div>
+                                            <div className="flex items-start justify-between gap-3 text-xs">
+                                                <span className="text-gray-400">Action</span>
+                                                <span className="text-right">
+                                                    {isVerified ? (
+                                                        <span className="text-green-600 font-bold">Verified</span>
+                                                    ) : canReupload ? (
+                                                        <button
+                                                            onClick={() => triggerReupload(v.type)}
+                                                            disabled={reuploading && reuploadType === v.type}
+                                                            className="font-bold text-[#0047AB] hover:underline inline-flex items-center gap-1 disabled:opacity-50"
+                                                        >
+                                                            {reuploading && reuploadType === v.type
+                                                                ? <><Loader2 className="w-3 h-3 animate-spin" /> Uploading...</>
+                                                                : <><Upload className="w-3 h-3" /> Re-upload</>}
+                                                        </button>
+                                                    ) : (
+                                                        <span className="text-gray-400">—</span>
+                                                    )}
+                                                </span>
+                                            </div>
+                                            <div className="flex items-start justify-between gap-3 text-xs">
+                                                <span className="text-gray-400">Failed Reason</span>
+                                                <span className="text-red-600 text-right">{v.failed_reason || '-'}</span>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            <div className="hidden sm:block overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead>
                                         <tr className="border-b border-gray-100">
