@@ -135,6 +135,10 @@ type Ctx = {
   /** Index into SIGNER_FIELDS while the dealer is re-entering the signer
    *  (owner) name/phone/email via the "Change" button on the signer confirm. */
   signerIndex?: number;
+  /** True when the dealer is editing a SINGLE signer field (picked Name/Email/
+   *  Phone from the "Change" menu). After collecting that one field we loop back
+   *  to the signer confirmation instead of walking through the remaining fields. */
+  signerSingleEdit?: boolean;
   /** Document types the dealer couldn't provide / we gave up on — handled by the
    *  admin instead, so the flow doesn't get stuck. */
   skipped?: string[];
@@ -219,6 +223,8 @@ export async function runTurn(event: InboundEvent): Promise<void> {
         return await onField(session, event);
       case "CONFIRM_SIGNER":
         return await onSignerConfirm(session, event);
+      case "ASK_SIGNER_CHOICE":
+        return await onSignerChoice(session, event);
       case "ASK_SIGNER_FIELD":
         return await onSignerField(session, event);
       case "AWAIT_CONFIRM":
@@ -1141,19 +1147,71 @@ async function onSignerConfirm(
     return;
   }
   if (text === "CHANGE" || SIGNER_CHANGE_WORDS.test(text)) {
-    await mergeContext(session, (ctx) => {
-      ctx.signerIndex = 0;
-    });
-    await setSession(session.id, { current_state: "ASK_SIGNER_FIELD" });
-    await reply(session, "No problem — let's update the signer details.");
-    const fresh = await loadSession(session.id);
-    await reply(fresh, SIGNER_FIELDS[0].question);
+    await sendSignerFieldChoice(session);
     return;
   }
   await reply(
     session,
     "Tap *Correct* to submit, or *Change* to edit the signer details.",
   );
+}
+
+// Map the "Change" field-picker button id (or a typed word) → signer field key.
+function resolveSignerChoice(text: string): string | null {
+  if (text === "EDIT_NAME") return "ownerName";
+  if (text === "EDIT_EMAIL") return "ownerEmail";
+  if (text === "EDIT_PHONE") return "ownerPhone";
+  const t = text.trim().toLowerCase();
+  if (/^(name|naam)$/.test(t)) return "ownerName";
+  if (/^(email|e-?mail|mail)$/.test(t)) return "ownerEmail";
+  if (/^(phone|mobile|number|no|contact)$/.test(t)) return "ownerPhone";
+  return null;
+}
+
+// "Change" tapped on the signer confirmation → ask WHICH detail to change,
+// offering Name / Email / Phone as buttons. The dealer edits only the one they
+// pick (see onSignerChoice + the single-edit branch in onSignerField).
+async function sendSignerFieldChoice(session: SessionRow): Promise<void> {
+  await setSession(session.id, { current_state: "ASK_SIGNER_CHOICE" });
+  const buttons: ReplyButton[] = [
+    { id: "EDIT_NAME", title: "Name" },
+    { id: "EDIT_EMAIL", title: "Email" },
+    { id: "EDIT_PHONE", title: "Phone" },
+  ];
+  await reply(
+    session,
+    "No problem — which detail would you like to change?",
+    buttons,
+  );
+}
+
+// Dealer picked which signer detail to change. Point signerIndex at that field,
+// flag a single-field edit, and ask just that one question.
+async function onSignerChoice(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  const text = (event.text ?? "").trim();
+  const key = resolveSignerChoice(text);
+  if (!key) {
+    await reply(
+      session,
+      "Please tap *Name*, *Email*, or *Phone* to choose what to change.",
+    );
+    return;
+  }
+  const idx = SIGNER_FIELDS.findIndex((f) => f.key === key);
+  if (idx < 0) {
+    await sendSignerConfirm(session);
+    return;
+  }
+  await mergeContext(session, (ctx) => {
+    ctx.signerIndex = idx;
+    ctx.signerSingleEdit = true;
+  });
+  await setSession(session.id, { current_state: "ASK_SIGNER_FIELD" });
+  const fresh = await loadSession(session.id);
+  await reply(fresh, SIGNER_FIELDS[idx].question);
 }
 
 // Re-collect ONLY the signer fields (name/phone/email) after a "Change" tap,
@@ -1165,6 +1223,7 @@ async function onSignerField(
 ): Promise<void> {
   const ctx = (session.context ?? {}) as Ctx;
   const idx = ctx.signerIndex ?? 0;
+  const single = ctx.signerSingleEdit === true;
   const field = SIGNER_FIELDS[idx];
   if (!field) {
     await sendSignerConfirm(session);
@@ -1185,8 +1244,17 @@ async function onSignerField(
   await mergeContext(session, (c) => {
     c.answers = { ...(c.answers ?? {}), [field.key]: parsed };
     c.signerIndex = idx + 1;
+    if (single) c.signerSingleEdit = false;
   });
   await patchApplication(session.application_id, fieldToColumn(field.key, parsed));
+
+  // Single-field edit (dealer picked one of Name/Email/Phone) → straight back
+  // to the signer confirmation. Otherwise walk the remaining signer fields.
+  if (single) {
+    const fresh = await loadSession(session.id);
+    await sendSignerConfirm(fresh);
+    return;
+  }
 
   const next = SIGNER_FIELDS[idx + 1];
   if (next) {

@@ -239,14 +239,80 @@ export async function finalizeBolnaCall(
   }
 
   const analysis = result;
-  const route = analysis.route;
-  const negs = analysis.signals.negatives;
-  const hardNegative =
-    negs.do_not_call || negs.explicit_not_interested || negs.already_bought_competitor;
+  const action = analysis.action;
+  const hardNegative = analysis.hard_negative;
+
+  // ── dropped_empty: the line dropped before anything was captured (no info
+  // signals, no callback). No band is written — the lead is left untouched and
+  // the call is tagged so normal campaign scheduling re-attempts it. ──
+  if (analysis.band === null) {
+    const history = (lead.follow_up_history as unknown[]) || [];
+    const droppedEntry = {
+      attempt: history.length + 1,
+      called_at: new Date().toISOString(),
+      outcome: "dropped_empty",
+      call_status: "dropped_empty",
+      transcript,
+      conversation: conversation ?? [],
+      signals: analysis.signals,
+      scoring_version: analysis.scoring_version,
+      provider: "bolna",
+    };
+    await db
+      .update(dealerLeads)
+      .set({
+        follow_up_history: [...history, droppedEntry],
+        total_attempts: history.length + 1,
+        call_status: "dropped_empty",
+        // final_intent_score / current_status / interest_level intentionally
+        // untouched — a dropped_empty call never bands the lead.
+      })
+      .where(eq(dealerLeads.id, lead.id));
+
+    await upsertAiCallLog({
+      callId,
+      leadId: lead.id,
+      status: status || "call-disconnected",
+      transcript,
+      summary: analysis.memory?.intent_summary
+        ? `dropped_empty — ${analysis.memory.intent_summary}`
+        : "dropped_empty — call cut off before anything was captured",
+      recordingUrl,
+      duration,
+      phone: phone ?? lead.phone,
+      intentScore: null,
+      intentReason: null,
+      nextAction: "auto_retry",
+      scoringVersion: analysis.scoring_version,
+      signals: analysis.signals,
+      scoreBreakdown: analysis.score_breakdown,
+      band: null,
+      callStatus: "dropped_empty",
+      infoSignalsCount: 0,
+    });
+
+    await fetchAndPersistCallCost("bolna", callId);
+    // dropped_empty connected and produced a transcript — the line just dropped
+    // before any qualifying info was captured. It is NOT a telephony failure, so
+    // the campaign row is marked completed ("Done"), not failed. The Outcome
+    // column still carries "dropped_empty" to preserve the call-quality nuance.
+    const dr = await completeCampaignLead({
+      leadId: lead.id,
+      success: true,
+      bolnaCallId: callId || null,
+      outcome: "dropped_empty",
+      intentScore: null,
+    });
+    if (dr.campaignId) {
+      await advanceCampaign(dr.campaignId, { preCallDelayMs: ADVANCE_DELAY_MS });
+    }
+    return;
+  }
+
   const nextCallAt = resolveNextCallAt(
     { callback_time: analysis.callback_time, intent_score: analysis.intent_score },
     transcript,
-    route.action,
+    action,
   );
 
   const updatedLead = updateLeadAfterCall(
@@ -258,15 +324,16 @@ export async function finalizeBolnaCall(
       transcript,
       outcome: analysis.outcome,
       nextCallAt,
-      analysis: analysis.analysis,
       conversation: conversation ?? [],
       memory: analysis.memory,
       provider: "bolna",
       intentScore: analysis.intent_score,
+      band: analysis.band,
+      callStatus: analysis.call_status,
+      infoSignalsCount: analysis.info_signals_count,
       signals: analysis.signals,
       scoreBreakdown: analysis.score_breakdown,
       scoringVersion: analysis.scoring_version,
-      qualifiedGate: analysis.qualified_gate,
       hardNegative,
     },
   );
@@ -278,6 +345,10 @@ export async function finalizeBolnaCall(
       total_attempts: updatedLead.total_attempts,
       final_intent_score: updatedLead.final_intent_score,
       current_status: updatedLead.current_status,
+      interest_level: updatedLead.interest_level,
+      call_status: updatedLead.call_status,
+      info_signals_count: updatedLead.info_signals_count,
+      intent_band: updatedLead.intent_band,
       memory: updatedLead.memory,
       next_call_at: nextCallAt,
     })
@@ -295,8 +366,8 @@ export async function finalizeBolnaCall(
 
   // Summary text feeds both the sheet logger and the transcript drawer.
   const summary = analysis.memory?.intent_summary
-    ? `${analysis.outcome} — ${analysis.memory.intent_summary}`
-    : `${analysis.outcome} — Intent: ${analysis.intent_score}/100`;
+    ? `${analysis.band} — ${analysis.memory.intent_summary}`
+    : `${analysis.band} — ${analysis.info_signals_count}/5 signals disclosed`;
 
   // Persist into ai_call_logs so the campaign transcript drawer can render
   // this call. Idempotent — upsert on call_id.
@@ -311,10 +382,13 @@ export async function finalizeBolnaCall(
     phone: phone ?? lead.phone,
     intentScore: analysis.intent_score,
     intentReason: analysis.memory?.intent_summary ?? null,
-    nextAction: route.action ?? null,
+    nextAction: action ?? null,
     scoringVersion: analysis.scoring_version,
     signals: analysis.signals,
     scoreBreakdown: analysis.score_breakdown,
+    band: analysis.band,
+    callStatus: analysis.call_status,
+    infoSignalsCount: analysis.info_signals_count,
   });
 
   // Capture per-call cost from Bolna /executions/{id}. Best-effort: failure
@@ -329,7 +403,7 @@ export async function finalizeBolnaCall(
     intentScore: analysis.intent_score,
   });
 
-  if (route.action === "schedule_call" && nextCallAt && phone) {
+  if (action === "schedule_call" && nextCallAt && phone) {
     const messageId = await scheduleCall({
       phone,
       leadId: lead.id,
@@ -341,13 +415,8 @@ export async function finalizeBolnaCall(
       );
     }
   }
-
-  if (route.action === "push_to_crm") {
-    await db
-      .update(dealerLeads)
-      .set({ current_status: "qualified" })
-      .where(eq(dealerLeads.id, lead.id));
-  }
+  // Qualified (action push_to_crm) already lands current_status="qualified" via
+  // updateLeadAfterCall above — the inside-sales queue reads it from there.
 
   appendSalesCallLog({
     leadId: lead.id,
@@ -469,6 +538,9 @@ async function upsertAiCallLog(opts: {
   scoringVersion?: string | null;
   signals?: unknown;
   scoreBreakdown?: unknown;
+  band?: string | null;
+  callStatus?: string | null;
+  infoSignalsCount?: number | null;
 }): Promise<void> {
   try {
     const existing = opts.callId
@@ -496,6 +568,9 @@ async function upsertAiCallLog(opts: {
           scoring_version: opts.scoringVersion ?? null,
           signals: opts.signals ?? null,
           score_breakdown: opts.scoreBreakdown ?? null,
+          band: opts.band ?? null,
+          call_status: opts.callStatus ?? null,
+          info_signals_count: opts.infoSignalsCount ?? null,
           ended_at: now,
           updated_at: now,
         })
@@ -521,6 +596,9 @@ async function upsertAiCallLog(opts: {
       scoring_version: opts.scoringVersion ?? null,
       signals: opts.signals ?? null,
       score_breakdown: opts.scoreBreakdown ?? null,
+      band: opts.band ?? null,
+      call_status: opts.callStatus ?? null,
+      info_signals_count: opts.infoSignalsCount ?? null,
       ended_at: now,
     });
   } catch (err) {

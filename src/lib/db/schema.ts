@@ -982,6 +982,14 @@ export const aiCallLogs = pgTable(
     scoring_version: varchar("scoring_version", { length: 20 }),
     signals: jsonb("signals"),
     score_breakdown: jsonb("score_breakdown"),
+    // E-168: intent-qualification band model (docs/intent_docs/intent_score.pdf).
+    // `band` is the computed qualification band (Qualified|Warm|Cold|Disqualified;
+    // null for a dropped_empty call). `call_status` is complete|dropped_partial|
+    // dropped_empty. `info_signals_count` (0–5) is the disclosed-facts count that
+    // both qualifies (≥3) and orders the Qualified inside-sales queue.
+    band: varchar("band", { length: 20 }),
+    call_status: varchar("call_status", { length: 20 }),
+    info_signals_count: integer("info_signals_count"),
   },
   (table) => {
     return {
@@ -2929,6 +2937,13 @@ export const dealerLeads = pgTable("dealer_leads", {
   onboarding_dropout_reason: varchar("onboarding_dropout_reason", { length: 50 }),
   onboarding_dropout_notes: text("onboarding_dropout_notes"),
   interest_level: varchar("interest_level", { length: 20 }),
+  // E-168: intent-qualification band model. `intent_band` is the latest call's
+  // band, `call_status` its complete|dropped_partial|dropped_empty status, and
+  // `info_signals_count` (0–5) the disclosed-facts count used to order the
+  // Qualified inside-sales queue (more facts disclosed = higher priority).
+  intent_band: varchar("intent_band", { length: 20 }),
+  call_status: varchar("call_status", { length: 20 }),
+  info_signals_count: integer("info_signals_count"),
   preliminary_payment_intent: text("preliminary_payment_intent"),
   pre_transfer_status: varchar("pre_transfer_status", { length: 50 }),
   brochure_sent_at: timestamp("brochure_sent_at", { withTimezone: true }),

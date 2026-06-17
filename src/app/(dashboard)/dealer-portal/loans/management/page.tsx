@@ -111,6 +111,9 @@ export default function LoanManagementPage() {
                             <p className="font-bold">No loan files found</p>
                         </div>
                     ) : (
+                      <>
+                        {/* Desktop table */}
+                        <div className="hidden md:block overflow-x-auto">
                         <table className="w-full text-sm">
                             <thead>
                                 <tr className="border-b border-gray-100 bg-gray-50/50">
@@ -148,6 +151,56 @@ export default function LoanManagementPage() {
                                 ))}
                             </tbody>
                         </table>
+                        </div>
+
+                        {/* Mobile cards — same data, stacked & readable on phones. */}
+                        <div className="md:hidden divide-y divide-gray-100">
+                            {loans.map(loan => (
+                                <div
+                                    key={loan.id}
+                                    onClick={() => router.push(`/dealer-portal/loans/management/${loan.id}`)}
+                                    className="p-4 cursor-pointer active:bg-gray-50"
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className="font-bold text-gray-900 truncate">{loan.borrower_name}</div>
+                                            {loan.co_borrower_name && <div className="text-xs text-gray-400 truncate">Co: {loan.co_borrower_name}</div>}
+                                        </div>
+                                        <span className={`shrink-0 px-3 py-1 rounded-full text-xs font-bold capitalize ${getStatusColor(loan.loan_status)}`}>
+                                            {loan.loan_status}
+                                        </span>
+                                    </div>
+                                    <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                                        <div>
+                                            <p className="text-[11px] uppercase tracking-wide text-gray-400">Loan Amount</p>
+                                            <p className="font-medium text-gray-900">₹{parseFloat(loan.loan_amount).toLocaleString()}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-[11px] uppercase tracking-wide text-gray-400">EMI</p>
+                                            <p className="text-gray-600">₹{parseFloat(loan.emi_amount || '0').toLocaleString()}/mo</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-[11px] uppercase tracking-wide text-gray-400">Outstanding</p>
+                                            <p className="font-medium text-gray-900">₹{parseFloat(loan.total_outstanding || '0').toLocaleString()}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-[11px] uppercase tracking-wide text-gray-400">Overdue</p>
+                                            {loan.overdue_days > 0 ? (
+                                                <p className="text-red-600 font-bold">₹{parseFloat(loan.overdue_amount).toLocaleString()} ({loan.overdue_days}d)</p>
+                                            ) : <p className="text-green-600">-</p>}
+                                        </div>
+                                        <div>
+                                            <p className="text-[11px] uppercase tracking-wide text-gray-400">Next EMI</p>
+                                            <p className="text-gray-500 text-xs">{loan.next_emi_date ? new Date(loan.next_emi_date).toLocaleDateString() : '-'}</p>
+                                        </div>
+                                    </div>
+                                    <div className="mt-3 flex items-center justify-end text-[#0047AB] text-xs font-semibold">
+                                        View Details <ChevronRight className="w-4 h-4" />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                      </>
                     )}
                 </div>
             </div>

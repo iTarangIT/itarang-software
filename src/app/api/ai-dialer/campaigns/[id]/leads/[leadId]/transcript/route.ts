@@ -240,9 +240,15 @@ export const GET = withErrorHandler(
         status: aiCallLogs.status,
         nextAction: aiCallLogs.next_action,
         createdAt: aiCallLogs.created_at,
-        // Raw extracted signals — drives the deep-mode correction dropdowns so a
-        // reviewer can flip an over-read level (e.g. curiosity strong → none).
+        // Raw extracted signals — drives the yes/no correction toggles so a
+        // reviewer can flip a mis-read fact (e.g. callback_agreed no → yes).
         signals: aiCallLogs.signals,
+        // E-168 band model: the computed band, its dropped-call status, the
+        // disclosed-facts count, and the per-signal yes/no breakdown.
+        band: aiCallLogs.band,
+        bandCallStatus: aiCallLogs.call_status,
+        infoSignalsCount: aiCallLogs.info_signals_count,
+        scoreBreakdown: aiCallLogs.score_breakdown,
       })
       .from(aiCallLogs)
       .where(eq(aiCallLogs.lead_id, leadId))
@@ -420,8 +426,16 @@ export const GET = withErrorHandler(
       provider: lastHistory.provider,
       callStatus: latest?.status ?? null,
       nextAction: latest?.nextAction ?? null,
+      // E-168 band outputs (null on pre-band rows — drawer falls back to the
+      // legacy analysis bars then).
+      band: latest?.band ?? null,
+      bandCallStatus: latest?.bandCallStatus ?? null,
+      infoSignalsCount: latest?.infoSignalsCount ?? null,
       analysis: lastHistory.analysis,
-      scoreBreakdown: lastHistory.scoreBreakdown,
+      // Prefer the per-call breakdown from ai_call_logs (new SignalLine shape);
+      // fall back to the last follow_up_history entry for older rows.
+      scoreBreakdown:
+        (latest?.scoreBreakdown as unknown[] | null) ?? lastHistory.scoreBreakdown,
       scoringVersion: lastHistory.scoringVersion,
       attempts,
       convertedOnAttempt,

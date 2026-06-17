@@ -1,30 +1,16 @@
-// Back-compat bridges. The new engine produces signals + a truthful
-// score_breakdown, but a lot of stored data and secondary UI still expect the
-// legacy 6-field `analysis` object (0..10 bars), a coarse `outcome` label, and a
-// `memory` blob. These derive those shapes from the new signals so old rows and
-// untouched components keep rendering. The new drawer renders score_breakdown
-// directly; these are the fallback.
+// Back-compat bridges. The band engine produces signals + a yes/no
+// score_breakdown + a band, but stored data and some secondary callers still
+// expect a coarse `outcome` label and a `memory` blob. These derive those shapes
+// from the new signals so storage glue and untouched components keep working.
+// The drawer renders the band + breakdown directly; these are the fallback.
 
-import type { IntentSignals } from "./signals";
-import { LEVEL_FRACTION, TIMELINE_FRACTION, OBJECTION_FRACTION } from "./weights";
+import type { QualificationSignals } from "./signals";
 
 export type LegacyOutcome =
   | "interested"
   | "not_interested"
   | "callback_requested"
   | "unknown";
-
-// The historical 6-dimension analysis the existing UI bars read (each 0..10),
-// plus the canonical intent_score.
-export interface LegacySubScores {
-  next_step_commitment: number;
-  urgency_signals: number;
-  product_curiosity: number;
-  need_acknowledgment: number;
-  objection_quality: number;
-  engagement_depth: number;
-  intent_score: number;
-}
 
 export interface LegacyMemory {
   requirement: string | null;
@@ -34,49 +20,37 @@ export interface LegacyMemory {
   followup_reason: string | null;
 }
 
-const to10 = (frac: number) => Math.round(10 * frac);
-
-/** Derive the legacy 0..10 bars from new signals (for the fallback UI). */
-export function toLegacySubScores(
-  signals: IntentSignals,
-  intentScore: number,
-): LegacySubScores {
-  return {
-    next_step_commitment: to10(LEVEL_FRACTION[signals.budget.level]),
-    urgency_signals: to10(TIMELINE_FRACTION[signals.timeline.level]),
-    product_curiosity: to10(LEVEL_FRACTION[signals.curiosity.level]),
-    need_acknowledgment: to10(LEVEL_FRACTION[signals.need.level]),
-    objection_quality: to10(OBJECTION_FRACTION[signals.objection_quality.level]),
-    engagement_depth: to10(LEVEL_FRACTION[signals.engagement.level]),
-    intent_score: intentScore,
-  };
-}
-
-/** Derive the coarse outcome label from signals. */
-export function deriveOutcome(signals: IntentSignals): LegacyOutcome {
-  const n = signals.negatives;
-  if (n.do_not_call || n.explicit_not_interested || n.already_bought_competitor) {
+/** Derive the coarse outcome label from band signals. */
+export function deriveOutcome(signals: QualificationSignals): LegacyOutcome {
+  const d = signals.disqualifier;
+  if (d === "dont_call" || d === "hostile" || d === "not_interested") {
     return "not_interested";
   }
-  if (signals.facts.callback_requested) return "callback_requested";
+  if (signals.callback_agreed === "yes") return "callback_requested";
 
-  const strongish = (lvl: string) => lvl === "moderate" || lvl === "strong";
-  if (strongish(signals.need.level) || strongish(signals.budget.level) || signals.facts.quantity) {
-    return "interested";
-  }
+  const disclosedSomething =
+    signals.battery_spec_shared === "yes" ||
+    signals.volume_shared === "yes" ||
+    signals.existing_financier_shared === "yes" ||
+    signals.financing_need_expressed === "yes" ||
+    signals.financing_value_acknowledged === "yes";
+  if (disclosedSomething) return "interested";
   return "unknown";
 }
 
-/** Build the legacy memory blob (drives intent_reason + follow-up scheduling). */
-export function toLegacyMemory(signals: IntentSignals): LegacyMemory {
+/** Build the legacy memory blob (drives intent_reason + summary text). */
+export function toLegacyMemory(signals: QualificationSignals): LegacyMemory {
   const orNull = (s: string) => (s && s !== "unknown" ? s : null);
+  const ev = signals.evidence;
   return {
-    requirement: orNull(signals.need.evidence),
-    product_interest: orNull(signals.curiosity.evidence),
-    quantity: signals.facts.quantity,
+    requirement:
+      orNull(ev.financing_need_expressed) || orNull(ev.volume_shared) || null,
+    product_interest: orNull(ev.battery_spec_shared),
+    quantity: orNull(ev.volume_shared),
     intent_summary: signals.call_summary || "",
-    followup_reason: signals.facts.callback_requested
-      ? orNull(signals.timeline.evidence) || "callback requested"
-      : null,
+    followup_reason:
+      signals.callback_agreed === "yes"
+        ? orNull(ev.callback_agreed) || "callback agreed"
+        : null,
   };
 }

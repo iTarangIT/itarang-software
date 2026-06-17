@@ -1,56 +1,39 @@
-// Test helpers — build a fully-typed IntentSignals from a terse spec so the
-// scoring tests read like a table.
+// Test helper — build a fully-typed QualificationSignals from a terse spec so
+// the band tests read like a table.
 
-import type {
-  IntentSignals,
-  SignalLevel,
-  TimelineLevel,
-  ObjectionLevel,
-  AuthorityLevel,
-} from "../signals";
+import { EMPTY_SIGNALS, type QualificationSignals, type Disqualifier } from "../signals";
 
 export interface SignalSpec {
-  need?: SignalLevel;
-  budget?: SignalLevel;
-  engagement?: SignalLevel;
-  curiosity?: SignalLevel;
-  timeline?: TimelineLevel;
-  objection?: ObjectionLevel;
-  authority?: AuthorityLevel;
-  quantity?: string | null;
-  callback?: boolean;
-  competitor?: string | null;
-  not_interested?: boolean;
-  competitor_bought?: boolean;
-  do_not_call?: boolean;
-  hostile?: boolean;
-  too_short?: boolean;
+  relevant?: boolean; // relevant_dealer — default true
+  segment?: QualificationSignals["dealer_segment"];
+  role?: QualificationSignals["dealer_role"];
+  // the five info signals
+  spec?: boolean; // battery_spec_shared
+  volume?: boolean; // volume_shared
+  financier?: boolean; // existing_financier_shared
+  need?: boolean; // financing_need_expressed
+  value?: boolean; // financing_value_acknowledged
+  // progression
+  pitch?: boolean; // pitch_heard — default true
+  callback?: boolean; // callback_agreed
+  disqualifier?: Disqualifier;
 }
 
-export function mk(p: SignalSpec = {}): IntentSignals {
-  const lvl = <T>(level: T) => ({ level, evidence: "test" });
+const yn = (b: boolean | undefined): "yes" | "no" => (b ? "yes" : "no");
+
+export function mk(p: SignalSpec = {}): QualificationSignals {
   return {
-    need: lvl(p.need ?? "unknown"),
-    budget: lvl(p.budget ?? "unknown"),
-    engagement: lvl(p.engagement ?? "unknown"),
-    curiosity: lvl(p.curiosity ?? "unknown"),
-    timeline: lvl(p.timeline ?? "unknown"),
-    objection_quality: lvl(p.objection ?? "unknown"),
-    authority: lvl(p.authority ?? "unknown"),
-    facts: {
-      quantity: p.quantity ?? null,
-      callback_requested: !!p.callback,
-      competitor_named: p.competitor ?? null,
-    },
-    negatives: {
-      explicit_not_interested: !!p.not_interested,
-      already_bought_competitor: !!p.competitor_bought,
-      do_not_call: !!p.do_not_call,
-      hostile: !!p.hostile,
-      call_too_short: !!p.too_short,
-    },
-    language: "hinglish",
-    call_summary: "test summary",
-    callback_time: null,
+    ...EMPTY_SIGNALS,
+    relevant_dealer: yn(p.relevant ?? true),
+    dealer_segment: p.segment ?? "battery",
+    dealer_role: p.role ?? "dealer",
+    battery_spec_shared: yn(p.spec),
+    volume_shared: yn(p.volume),
+    existing_financier_shared: yn(p.financier),
+    financing_need_expressed: yn(p.need),
+    financing_value_acknowledged: yn(p.value),
+    pitch_heard: yn(p.pitch ?? true),
+    callback_agreed: yn(p.callback),
+    disqualifier: p.disqualifier ?? "none",
   };
 }
