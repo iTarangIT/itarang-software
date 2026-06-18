@@ -66,8 +66,14 @@ type DealerVerificationItem = {
   companyName: string;
   documents: string;
   agreement: string;
+  agreementStatus?: string | null;
   status: string;
+  dealerAccountStatus?: string | null;
   submittedAt?: string | null;
+  approvedAt?: string | null;
+  city?: string | null;
+  state?: string | null;
+  pincode?: string | null;
   gstNumber?: string | null;
   financeEnabled?: boolean | null;
   companyType?: string | null;
@@ -227,8 +233,25 @@ export default function DealerVerificationPage() {
   const [query, setQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [agreementFilter, setAgreementFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [stateFilter, setStateFilter] = useState("");
+  const [cityFilter, setCityFilter] = useState("");
+  const [pincodeFilter, setPincodeFilter] = useState("");
 
-  const isFilterActive = dateFrom !== "" || dateTo !== "";
+  const isFilterActive =
+    dateFrom !== "" ||
+    dateTo !== "" ||
+    agreementFilter !== "" ||
+    statusFilter !== "" ||
+    stateFilter !== "" ||
+    cityFilter !== "" ||
+    pincodeFilter !== "";
+
+  // "pending" = finance agreement initiated but not yet completed.
+  const isAgreementPending = (item: DealerVerificationItem) =>
+    item.financeEnabled &&
+    ["sent_for_signature", "partially_signed"].includes(item.agreementStatus || "");
 
   useEffect(() => {
     const loadApplications = async () => {
@@ -281,6 +304,26 @@ export default function DealerVerificationPage() {
       });
     }
 
+    if (agreementFilter) {
+      result =
+        agreementFilter === "pending"
+          ? result.filter(isAgreementPending)
+          : result.filter((item) => (item.agreementStatus || "") === agreementFilter);
+    }
+
+    if (statusFilter) {
+      result = result.filter((item) => (item.status || "") === statusFilter);
+    }
+
+    const sf = stateFilter.trim().toLowerCase();
+    if (sf) result = result.filter((item) => (item.state || "").toLowerCase().includes(sf));
+
+    const cf = cityFilter.trim().toLowerCase();
+    if (cf) result = result.filter((item) => (item.city || "").toLowerCase().includes(cf));
+
+    const pf = pincodeFilter.trim();
+    if (pf) result = result.filter((item) => (item.pincode || "").includes(pf));
+
     const q = query.trim().toLowerCase();
     if (q) {
       result = result.filter((item) =>
@@ -300,7 +343,17 @@ export default function DealerVerificationPage() {
     }
 
     return result;
-  }, [applications, query, dateFrom, dateTo]);
+  }, [
+    applications,
+    query,
+    dateFrom,
+    dateTo,
+    agreementFilter,
+    statusFilter,
+    stateFilter,
+    cityFilter,
+    pincodeFilter,
+  ]);
 
   const stats = useMemo(() => {
     const total = applications.length;
@@ -342,11 +395,25 @@ export default function DealerVerificationPage() {
     if (dateTo) params.set("dateTo", dateTo);
     const trimmedQuery = query.trim();
     if (trimmedQuery) params.set("q", trimmedQuery);
+    if (agreementFilter) params.set("agreementStatus", agreementFilter);
+    if (statusFilter) params.set("status", statusFilter);
+    if (stateFilter.trim()) params.set("state", stateFilter.trim());
+    if (cityFilter.trim()) params.set("city", cityFilter.trim());
+    if (pincodeFilter.trim()) params.set("pincode", pincodeFilter.trim());
     const qs = params.toString();
     return qs
       ? `/api/admin/dealer-verifications/export?${qs}`
       : `/api/admin/dealer-verifications/export`;
-  }, [dateFrom, dateTo, query]);
+  }, [
+    dateFrom,
+    dateTo,
+    query,
+    agreementFilter,
+    statusFilter,
+    stateFilter,
+    cityFilter,
+    pincodeFilter,
+  ]);
 
   const exportDisabled = loading || filtered.length === 0;
 
@@ -437,7 +504,11 @@ export default function DealerVerificationPage() {
 
               {isFilterActive && (
                 <button
-                  onClick={() => { setDateFrom(""); setDateTo(""); }}
+                  onClick={() => {
+                    setDateFrom(""); setDateTo("");
+                    setAgreementFilter(""); setStatusFilter("");
+                    setStateFilter(""); setCityFilter(""); setPincodeFilter("");
+                  }}
                   className="flex items-center gap-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500 transition hover:bg-slate-50"
                 >
                   <X className="h-3 w-3" />
@@ -463,6 +534,63 @@ export default function DealerVerificationPage() {
                 Export CSV
               </a>
             </div>
+          </div>
+
+          {/* Filter row — agreement / status / location */}
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <select
+              value={agreementFilter}
+              onChange={(e) => setAgreementFilter(e.target.value)}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="">Agreement: all</option>
+              <option value="pending">Agreement: pending</option>
+              <option value="not_generated">Not generated</option>
+              <option value="sent_for_signature">Sent for signature</option>
+              <option value="partially_signed">Partially signed</option>
+              <option value="completed">Completed</option>
+              <option value="failed">Failed</option>
+              <option value="expired">Expired</option>
+            </select>
+
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="">Status: all</option>
+              <option value="submitted">Submitted</option>
+              <option value="pending_admin_review">Pending admin review</option>
+              <option value="under_review">Under review</option>
+              <option value="agreement_in_progress">Agreement in progress</option>
+              <option value="agreement_completed">Agreement completed</option>
+              <option value="correction_requested">Correction requested</option>
+              <option value="under_correction">Under correction</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+            </select>
+
+            <input
+              type="text"
+              value={stateFilter}
+              onChange={(e) => setStateFilter(e.target.value)}
+              placeholder="State"
+              className="w-28 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            />
+            <input
+              type="text"
+              value={cityFilter}
+              onChange={(e) => setCityFilter(e.target.value)}
+              placeholder="City"
+              className="w-28 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            />
+            <input
+              type="text"
+              value={pincodeFilter}
+              onChange={(e) => setPincodeFilter(e.target.value)}
+              placeholder="Pincode"
+              className="w-28 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            />
           </div>
 
           {/* Active filter summary badge */}

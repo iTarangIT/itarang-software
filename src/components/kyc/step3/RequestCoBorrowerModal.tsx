@@ -72,7 +72,7 @@ export default function RequestCoBorrowerModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-gray-900">
             {isReplacement
@@ -88,7 +88,7 @@ export default function RequestCoBorrowerModal({
           </button>
         </div>
 
-        <div className="px-6 py-5 space-y-4">
+        <div className="px-6 py-5 space-y-4 overflow-y-auto min-h-0">
           <p className="text-sm text-gray-600">
             {isReplacement
               ? "The current co-borrower will be archived. The dealer will be asked to submit fresh co-borrower details."

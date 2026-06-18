@@ -3,6 +3,7 @@ import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { extractSignedAgreementUrl } from "./parse-status";
+import { fetchDigioPdfWithRetry } from "./fetch-pdf-retry";
 
 type Application = typeof dealerOnboardingApplications.$inferSelect;
 
@@ -121,45 +122,12 @@ export async function ensureDealerSignedAgreementUrl(
       application.provider_document_id
     )}`;
 
-    try {
-      const directRes = await fetch(directUrl, {
-        method: "GET",
-        headers: {
-          Authorization: authHeader,
-          Accept: "application/pdf",
-        },
-        cache: "no-store",
-      });
-
-      if (!directRes.ok) {
-        const body = await directRes.text().catch(() => "");
-        console.warn(
-          "[ensureDealerSignedAgreementUrl] direct download non-ok",
-          {
-            documentId: application.provider_document_id,
-            url: directUrl,
-            status: directRes.status,
-            body: body.slice(0, 500),
-          }
-        );
-        return null;
-      }
-
-      const contentType = directRes.headers.get("content-type") || "";
-      if (contentType.includes("json")) {
-        const body = await directRes.text().catch(() => "");
-        console.warn(
-          "[ensureDealerSignedAgreementUrl] direct download returned JSON",
-          { contentType, body: body.slice(0, 500) }
-        );
-        return null;
-      }
-
-      pdfBuffer = await directRes.arrayBuffer();
-    } catch (err) {
-      console.error("[ensureDealerSignedAgreementUrl] direct fetch failed:", err);
-      return null;
-    }
+    // DigiO's download endpoint intermittently returns HTTP 500 SYSTEM_ERROR
+    // even on a "completed" document — retry to catch a working window.
+    pdfBuffer = await fetchDigioPdfWithRetry(directUrl, authHeader, {
+      label: "ensureDealerSignedAgreementUrl",
+    });
+    if (!pdfBuffer) return null;
   }
 
   if (!pdfBuffer || pdfBuffer.byteLength < 100) {

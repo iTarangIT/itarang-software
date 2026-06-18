@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Plus, X, AlertCircle, Scan, Info, ChevronRight, ChevronDown, Loader2, ShieldCheck, UserPlus, ArrowRight } from 'lucide-react';
+import { Plus, X, AlertCircle, Scan, Info, ChevronDown, Loader2, ShieldCheck, UserPlus, ArrowRight } from 'lucide-react';
 import { State, City } from 'country-state-city';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { DatePicker } from '@/components/ui/date-picker';
@@ -10,7 +10,7 @@ import { confirmDialog } from '@/components/ui/confirm-dialog';
 import {
     SectionCard, InputField, SelectField, TextAreaField,
     ProgressHeader, StickyBottomBar, ErrorBanner,
-    PrimaryButton, SecondaryButton, OutlineButton, OCRModal, FullPageLoader,
+    PrimaryButton, SecondaryButton, OCRModal, FullPageLoader,
     DigilockerKycButton,
 } from '@/components/dealer-portal/lead-wizard/shared';
 import {
@@ -494,7 +494,9 @@ function NewLeadWizardContent() {
     const willStayAtStep1 = !isHotLead;                // Warm/Cold — parked at Step 1
 
     return (
-        <div className="min-h-screen bg-[#F8F9FB]">
+        // -mx-6 cancels the dashboard layout's mobile p-6 so cards run edge-to-edge
+        // on phones; reverts at sm+ (desktop/tablet unchanged).
+        <div className="min-h-screen bg-[#F8F9FB] -mx-6 sm:mx-0">
             {/* Draft Resume Modal */}
             {showDraftPrompt && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
@@ -621,7 +623,7 @@ function NewLeadWizardContent() {
             {/* OCR Modal */}
             <OCRModal open={showOCR} onClose={() => setShowOCR(false)} onResult={handleOCRResult} />
 
-            <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
+            <div className="max-w-[1600px] mx-auto px-0 sm:px-6 lg:px-10 py-8 pb-28">
                 {/* Header */}
                 <ProgressHeader
                     title="Create New Lead"
@@ -629,21 +631,27 @@ function NewLeadWizardContent() {
                     step={1}
                     onBack={() => router.back()}
                     rightAction={
-                        <div className="flex items-center gap-3">
-                            <button onClick={() => setShowHelp(true)} className="p-2 text-gray-400 hover:text-gray-600">
+                        // On mobile these stack full-width below the step row (per
+                        // the mockup); on desktop they sit inline as before. The Info
+                        // icon is desktop-only to keep the mobile header to two clean
+                        // action buttons. Colors unchanged.
+                        <div className="flex flex-col w-full gap-2 sm:flex-row sm:w-auto sm:items-center sm:gap-3">
+                            <button onClick={() => setShowHelp(true)} className="hidden sm:block p-2 text-gray-400 hover:text-gray-600">
                                 <Info className="w-5 h-5" />
                             </button>
                             <button
                                 onClick={() => setShowOCR(true)}
-                                className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 rounded-xl font-bold text-sm text-gray-800 shadow-sm hover:border-[#1D4ED8] hover:text-[#1D4ED8] transition-all"
+                                className="w-full justify-center sm:w-auto flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 rounded-xl font-bold text-sm text-gray-800 shadow-sm hover:border-[#1D4ED8] hover:text-[#1D4ED8] transition-all"
                             >
                                 <Scan className="w-4 h-4" /> Auto-fill from ID
                             </button>
-                            <DigilockerKycButton
-                                leadId={leadId}
-                                phone={formData.phone}
-                                onResult={handleOCRResult}
-                            />
+                            <div className="w-full sm:w-auto [&>div]:w-full sm:[&>div]:w-auto [&_button]:w-full [&_button]:justify-center sm:[&_button]:w-auto">
+                                <DigilockerKycButton
+                                    leadId={leadId}
+                                    phone={formData.phone}
+                                    onResult={handleOCRResult}
+                                />
+                            </div>
                         </div>
                     }
                 />
@@ -665,10 +673,10 @@ function NewLeadWizardContent() {
                     </div>
                 )}
 
-                <main className="grid grid-cols-1 gap-6">
+                <main className="grid grid-cols-1 gap-4 sm:gap-6">
                     {/* ─── Personal Information ──────────────────────────── */}
                     <SectionCard title="Personal Information">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-4 sm:gap-y-6">
                             <InputField label="Full Name" value={formData.full_name} onChange={v => updateField('full_name', v)} error={errors.full_name} placeholder="Vijay Sharma" required />
                             <InputField label={`Father/Husband Name${finFlow ? '' : ''}`} value={formData.father_or_husband_name} onChange={v => updateField('father_or_husband_name', v)} error={errors.father_or_husband_name} placeholder="Richard Doe" required={finFlow} />
 
@@ -841,7 +849,7 @@ function NewLeadWizardContent() {
                                 {!isVehicleCategory && (
                                     <p className="text-sm text-gray-400 font-medium px-1 mb-4">Vehicle details are only applicable for 2W/3W/4W categories.</p>
                                 )}
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-6">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 sm:gap-y-6">
                                     <InputField label="Vehicle Reg. Number" value={formData.vehicle_rc} onChange={v => updateField('vehicle_rc', v)} placeholder="HR 35 A 78989" />
                                     <SelectField
                                         label={`Vehicle Ownership${formData.vehicle_rc?.trim() ? ' *' : ''}`}
@@ -954,7 +962,7 @@ function NewLeadWizardContent() {
                         BRE's Owned/Rented housing-variant match at Product Selection. */}
                     {finFlow && (
                         <SectionCard title="Additional Finance Details">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-4 sm:gap-y-6">
                                 <div className="md:col-span-2 space-y-2">
                                     <label className="text-sm font-bold text-gray-900 px-1 block">
                                         Resident Status <span className="text-red-500">*</span>
@@ -1043,12 +1051,19 @@ function NewLeadWizardContent() {
                 {/* ─── Bottom Bar ────────────────────────────────────────── */}
                 {!showConfirm && (
                     <StickyBottomBar lastSaved={lastSaved}>
-                        <OutlineButton onClick={handleCancel}>Cancel</OutlineButton>
+                        {/* Cancel is a plain text link (per the mockup) so the two
+                            real actions read as the primary buttons. */}
+                        <button
+                            onClick={handleCancel}
+                            className="px-3 py-2 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors"
+                        >
+                            Cancel
+                        </button>
                         <SecondaryButton onClick={handleSaveDraft} loading={savingDraft} disabled={loading}>
                             Save Draft
                         </SecondaryButton>
                         <PrimaryButton onClick={commitStep} loading={loading} disabled={savingDraft}>
-                            <ChevronRight className="w-4 h-4" /> Create Lead
+                            <ArrowRight className="w-4 h-4" /> Create Lead
                         </PrimaryButton>
                     </StickyBottomBar>
                 )}

@@ -1284,8 +1284,10 @@ export default function ProductSelectionPage() {
   if (access.customerName) subtitleParts.push(access.customerName);
 
   return (
-    <div className="min-h-screen bg-[#F8F9FB]">
-      <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
+    // -mx-6 cancels the dashboard layout's mobile p-6 so cards run edge-to-edge
+    // on phones; reverts at sm+ (desktop/tablet unchanged).
+    <div className="min-h-screen bg-[#F8F9FB] -mx-6 sm:mx-0">
+      <div className="max-w-[1200px] mx-auto px-0 sm:px-6 py-8 pb-40">
         <ProgressHeader
           title="Product Selection"
           subtitle={subtitleParts.join(" — ")}

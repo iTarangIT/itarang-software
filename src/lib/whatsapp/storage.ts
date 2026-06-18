@@ -65,3 +65,21 @@ export async function saveMedia(params: {
     mimeType,
   };
 }
+
+// Best-effort delete of stored objects (used when a re-uploaded document
+// supersedes an older copy, so we don't leave orphaned files in the bucket). A
+// failure here is logged but never throws — the DB dedupe is what matters.
+export async function removeMedia(
+  bucket: string,
+  paths: string[],
+): Promise<void> {
+  if (paths.length === 0) return;
+  try {
+    const { error } = await supabaseAdmin.storage.from(bucket).remove(paths);
+    if (error) {
+      console.error("[WhatsApp/storage] remove failed:", error.message);
+    }
+  } catch (err) {
+    console.error("[WhatsApp/storage] remove threw:", err);
+  }
+}
