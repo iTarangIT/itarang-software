@@ -19,7 +19,16 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
       gstin: "the 15-character GSTIN",
       legal_name: "legal name of the business",
       trade_name: "trade name, if shown",
-      address: "principal place of business address",
+      address: "principal place of business address (full line)",
+      address_line1: "building/street part of the principal place of business, if shown",
+      city: "city of the principal place of business, if shown",
+      district: "district of the principal place of business, if shown",
+      state: "state of the principal place of business, if shown",
+      pincode: "the 6-digit PIN code of the principal place of business, if shown",
+      additional_places_count:
+        "the integer 'Total Number of Additional Places of Business in the State', or 0 if none shown",
+      additional_places:
+        'an ARRAY of the Additional Place(s) of Business in the State (these are often listed on a separate annexure page after the principal place). For EACH additional place return an object {"address_line1": <building/street>, "city": <city>, "district": <district>, "state": <state>, "pincode": <6-digit PIN>, "full_address": <full address line>}. Return [] if there are no additional places',
     },
   },
   company_pan: {
@@ -37,6 +46,12 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
       ifsc: "the IFSC code",
       account_holder_name: "the account holder's name",
       branch: "branch name, if shown",
+      account_type: "account type — 'savings' or 'current' — if shown",
+      address_line1: "the account holder's street/house address line, if shown",
+      city: "the account holder's city, if shown",
+      district: "the account holder's district, if shown",
+      state: "the account holder's state, if shown",
+      pincode: "the 6-digit PIN code of the account holder's address, if shown",
     },
   },
   cancelled_cheque: {
@@ -46,6 +61,8 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
       account_number: "the account number",
       ifsc: "the IFSC code",
       account_holder_name: "the account holder's name printed on the cheque",
+      branch: "branch name or branch address printed on the cheque, if shown",
+      account_type: "account type — 'savings' or 'current' — if shown",
     },
   },
   udyam: {
@@ -53,10 +70,24 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
     fields: {
       udyam_number: "the Udyam registration number (UDYAM-XX-00-0000000)",
       enterprise_name: "name of the enterprise",
+      owner_name: "name of the owner / entrepreneur / proprietor, if shown",
+      owner_mobile: "the registered mobile number, if shown",
+      owner_email: "the registered email address, if shown",
+      address_line1: "flat/door/building/street of the official enterprise address, if shown",
+      city: "city/town of the official enterprise address, if shown",
+      district: "district of the official enterprise address, if shown",
+      state: "state of the official enterprise address, if shown",
+      pincode: "the 6-digit PIN code of the official enterprise address, if shown",
     },
   },
   owner_photo: {
     description: "a passport-size photograph of a person",
+    fields: {
+      face_present: "true if a clear human face is visible, else false",
+    },
+  },
+  partner_photo: {
+    description: "a passport-size photograph of a business partner",
     fields: {
       face_present: "true if a clear human face is visible, else false",
     },
@@ -88,6 +119,55 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
 
 export function fieldKeysFor(docType: string): string[] {
   return Object.keys(DOC_FIELDS[docType]?.fields ?? {});
+}
+
+/** The document types the classifier may assign to an unlabelled file. */
+export const CLASSIFIABLE_DOC_TYPES = Object.keys(DOC_FIELDS);
+
+// Prompt for a ZIP / batch upload where the file is NOT pre-labelled: the model
+// first decides WHICH document type the file is, then extracts that type's
+// fields. Used by classifyDocument() so a dealer can dump every document at once
+// and the bot sorts them out (design: batch upload). The full field catalogue is
+// embedded so the model returns field names that match the per-type extraction
+// (fillFromDoc keys off document_type + those field names).
+export function buildClassifyPrompt(): string {
+  const typeLines = Object.entries(DOC_FIELDS)
+    .map(([type, spec]) => `  - "${type}": ${spec.description}`)
+    .join("\n");
+
+  const fieldCatalog = Object.entries(DOC_FIELDS)
+    .map(([type, spec]) => {
+      const fields = Object.entries(spec.fields)
+        .map(([k, hint]) => `      "${k}": <${hint}, or null>`)
+        .join(",\n");
+      return `  if document_type is "${type}":\n    "fields": {\n${fields}\n    }`;
+    })
+    .join("\n");
+
+  return [
+    "You are reading ONE Indian business document uploaded by a motor-vehicle dealer as part of a batch upload.",
+    "The file is UNLABELLED — first decide which document type it is, then extract that type's fields.",
+    "",
+    "Possible document types:",
+    typeLines,
+    "",
+    "Return ONLY a JSON object with EXACTLY this shape (no markdown, no commentary):",
+    "{",
+    '  "document_type": <one of the keys above, or "unknown" if it is none of them>,',
+    '  "legible": <true if clear enough to read, false if blurry/cropped/dark>,',
+    '  "confidence": <number 0 to 1 — your confidence in the type AND the extracted fields>,',
+    '  "fields": { <the fields for the detected document_type, per the catalogue below> }',
+    "}",
+    "",
+    "Field catalogue (return the field set matching the document_type you chose):",
+    fieldCatalog,
+    "",
+    "Rules:",
+    "- Read values EXACTLY as printed; do not guess or correct them.",
+    "- If a field is not present or not readable, return null for it.",
+    '- If the file is not a recognisable business document, set document_type="unknown", fields={}.',
+    "- Remove spaces from GSTIN / PAN / IFSC / account numbers.",
+  ].join("\n");
 }
 
 export function buildExtractionPrompt(docType: string): string {

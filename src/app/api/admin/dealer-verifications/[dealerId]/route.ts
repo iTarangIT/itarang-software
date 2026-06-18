@@ -13,6 +13,25 @@ import {
   documentLabel,
   fieldLabel,
 } from "@/lib/onboarding/correction-catalog";
+import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
+
+const AddressRoleEnum = z.enum(["billing", "dispatch", "other"]);
+const GstAddressSchema = z.object({
+  id: z.string(),
+  label: z.string().optional().default(""),
+  addressLine1: z.string().optional().default(""),
+  city: z.string().optional().default(""),
+  district: z.string().optional().default(""),
+  state: z.string().optional().default(""),
+  pincode: z.string().optional().default(""),
+  raw: z.string().optional().default(""),
+  roles: z.array(AddressRoleEnum).optional().default([]),
+});
+const GstAddressesSchema = z.object({
+  additionalCount: z.number().optional(),
+  principal: GstAddressSchema,
+  additional: z.array(GstAddressSchema).optional().default([]),
+});
 
 const PatchBodySchema = z.object({
   companyName: z.string().optional(),
@@ -46,6 +65,10 @@ const PatchBodySchema = z.object({
   salesManagerName: z.string().optional(),
   salesManagerEmail: z.string().optional(),
   salesManagerMobile: z.string().optional(),
+
+  // GST Places of Business + admin billing/dispatch/other role tags —
+  // persisted whole into providerRawResponse.submissionSnapshot.gstAddresses
+  gstAddresses: GstAddressesSchema.optional(),
 });
 
 type RouteContext = {
@@ -86,6 +109,56 @@ function extractAddress(value: unknown) {
   return "";
 }
 
+// Build the gstAddresses payload for the review page. Prefer the value stored
+// in the snapshot (WhatsApp-extracted or web GST-OCR); when absent (older
+// dealers / manual web entry) synthesize a single principal card from the
+// existing company address columns so the UI always has at least one card.
+function buildGstAddressesResponse(
+  snapshotGst: any,
+  fallback: { companyAddress: string; city?: string | null; state?: string | null; pincode?: string | null },
+) {
+  if (snapshotGst && typeof snapshotGst === "object" && snapshotGst.principal) {
+    const norm = (a: any, id: string, label: string) => ({
+      id: a?.id || id,
+      label: a?.label || label,
+      addressLine1: a?.addressLine1 || "",
+      city: a?.city || "",
+      district: a?.district || "",
+      state: a?.state || "",
+      pincode: a?.pincode || "",
+      raw: a?.raw || "",
+      roles: Array.isArray(a?.roles) ? a.roles : [],
+    });
+    const additional = Array.isArray(snapshotGst.additional) ? snapshotGst.additional : [];
+    return {
+      additionalCount:
+        typeof snapshotGst.additionalCount === "number"
+          ? snapshotGst.additionalCount
+          : additional.length,
+      principal: norm(snapshotGst.principal, "principal", "Principal Place of Business"),
+      additional: additional.map((a: any, i: number) =>
+        norm(a, `add-${i + 1}`, `Additional Place ${i + 1}`),
+      ),
+    };
+  }
+  // Synthesized fallback — principal carries both roles by default.
+  return {
+    additionalCount: 0,
+    principal: {
+      id: "principal",
+      label: "Principal Place of Business",
+      addressLine1: "",
+      city: fallback.city || "",
+      district: "",
+      state: fallback.state || "",
+      pincode: fallback.pincode || "",
+      raw: fallback.companyAddress || "",
+      roles: ["billing", "dispatch"],
+    },
+    additional: [],
+  };
+}
+
 // ─── GET ────────────────────────────────────────────────────────────────────
 
 export async function GET(_req: NextRequest, context: RouteContext) {
@@ -94,10 +167,27 @@ export async function GET(_req: NextRequest, context: RouteContext) {
   try {
     const { dealerId } = await context.params;
 
-    const application = await db
-      .select()
-      .from(dealerOnboardingApplications)
-      .where(eq(dealerOnboardingApplications.id, dealerId));
+    // Application + documents are both keyed by the same id (row.id === dealerId),
+    // so fetch them in parallel rather than awaiting one before the other.
+    // Documents query hides superseded (replaced via correction round) and
+    // pending_correction documents (those belong to the in-flight correction
+    // card, not the main verification list).
+    const [application, allDocuments] = await Promise.all([
+      db
+        .select()
+        .from(dealerOnboardingApplications)
+        .where(eq(dealerOnboardingApplications.id, dealerId)),
+      db
+        .select()
+        .from(dealerOnboardingDocuments)
+        .where(
+          and(
+            eq(dealerOnboardingDocuments.application_id, dealerId),
+            ne(dealerOnboardingDocuments.doc_status, "superseded"),
+            ne(dealerOnboardingDocuments.doc_status, "pending_correction"),
+          ),
+        ),
+    ]);
 
     const row = application[0];
 
@@ -108,21 +198,8 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    // Hide superseded documents (replaced via correction round) and
-    // pending_correction documents (those belong to the in-flight correction
-    // card, not the main verification list). Then keep only the most recent
-    // upload per document_type so the admin sees a single fresh row per item
-    // — no stale duplicates after re-upload.
-    const allDocuments = await db
-      .select()
-      .from(dealerOnboardingDocuments)
-      .where(
-        and(
-          eq(dealerOnboardingDocuments.application_id, row.id),
-          ne(dealerOnboardingDocuments.doc_status, "superseded"),
-          ne(dealerOnboardingDocuments.doc_status, "pending_correction"),
-        ),
-      );
+    // Keep only the most recent upload per document_type so the admin sees a
+    // single fresh row per item — no stale duplicates after re-upload.
 
     const latestPerType = new Map<string, (typeof allDocuments)[number]>();
     for (const doc of allDocuments) {
@@ -146,6 +223,18 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       uploadedAt: doc.uploaded_at,
       rejectionReason: doc.rejection_reason,
     }));
+
+    // Required documents not yet uploaded (WhatsApp onboarding — the checklist
+    // is entity-type specific). Surfaced as an alert on the review page so the
+    // admin can see exactly what's outstanding for this dealer. Web dealers
+    // follow a different document set, so we don't flag missing docs for them.
+    const uploadedTypes = new Set(documents.map((d) => d.documentType));
+    const missingDocuments =
+      (row.source || "web").toLowerCase() === "whatsapp"
+        ? requiredDocuments(row.company_type as CompanyType | null)
+            .filter((d) => !uploadedTypes.has(d.type))
+            .map((d) => ({ type: d.type, label: d.label }))
+        : [];
 
     // Latest correction round (any status). The review page renders the
     // "Correction Response" panel only when status === "submitted"; other
@@ -267,6 +356,18 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         ownerState: ownershipSnapshot?.ownerState || "",
         ownerPinCode: ownershipSnapshot?.ownerPinCode || "",
 
+        // GST Places of Business (principal + additional) with billing/dispatch/
+        // other role tags. Synthesized from company address for older dealers.
+        gstAddresses: buildGstAddressesResponse(
+          (providerData as any)?.submissionSnapshot?.gstAddresses,
+          {
+            companyAddress: extractAddress(row.business_address),
+            city: row.city,
+            state: row.state,
+            pincode: row.pincode,
+          },
+        ),
+
         // Partner / director lists — read-only reference for admins
         partners: partnersSnapshot,
         directors: directorsSnapshot,
@@ -300,6 +401,9 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         correctionRound,
 
         documents,
+        // Required-but-not-uploaded documents (WhatsApp dealers) — drives the
+        // "missing documents" alert in Section 2 of the review page.
+        missingDocuments,
 
         agreement: row.finance_enabled
           ? {
@@ -402,6 +506,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       salesManagerName,
       salesManagerEmail,
       salesManagerMobile,
+      gstAddresses,
     } = parsed.data;
 
     // If this application is a branch dealer (approved against an existing
@@ -490,8 +595,9 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
     const touchesSalesManagerSnapshot = Object.values(salesManagerSnapshotKeys).some(
       (v) => v !== undefined,
     );
+    const touchesGstAddresses = gstAddresses !== undefined;
 
-    if (touchesOwnershipSnapshot || touchesSalesManagerSnapshot) {
+    if (touchesOwnershipSnapshot || touchesSalesManagerSnapshot || touchesGstAddresses) {
       const [existingRow] = await db
         .select({ providerRawResponse: dealerOnboardingApplications.provider_raw_response })
         .from(dealerOnboardingApplications)
@@ -525,6 +631,12 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
 
       existingSnapshot.ownership = existingOwnership;
       existingAgreement.salesManager = existingSalesManager;
+
+      // Replace the whole gstAddresses object with the admin's edited version
+      // (role tags + any added/removed/edited address cards).
+      if (touchesGstAddresses) {
+        existingSnapshot.gstAddresses = gstAddresses;
+      }
 
       updatePayload.provider_raw_response = {
         ...(existingProvider as Record<string, any>),

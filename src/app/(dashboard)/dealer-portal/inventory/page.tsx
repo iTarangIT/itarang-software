@@ -351,7 +351,7 @@ export default function InventoryPage() {
 
             {/* Inventory Table */}
             <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
-                <div className="overflow-x-auto">
+                <div className="hidden md:block overflow-x-auto">
                     <table className="w-full text-sm">
                         <thead>
                             <tr className="border-b border-gray-100 bg-gray-50">
@@ -402,6 +402,55 @@ export default function InventoryPage() {
                             ))}
                         </tbody>
                     </table>
+                </div>
+
+                {/* Mobile cards — same data & handlers, stacked & readable on phones. */}
+                <div className="md:hidden divide-y divide-gray-100">
+                    {items.map(item => (
+                        <div
+                            key={item.id}
+                            onClick={() => setActiveItem(item)}
+                            className="p-4 hover:bg-gray-50 transition-colors cursor-pointer"
+                        >
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                    <div className="font-semibold text-gray-900 truncate">{item.product_name}</div>
+                                    <div className="text-xs text-gray-400">{item.warehouse_location || item.category}</div>
+                                    <div className="mt-1.5">
+                                        <CategoryBadge category={item.category} />
+                                    </div>
+                                </div>
+                                <span className="shrink-0">
+                                    <StockBadge status={item.status} />
+                                </span>
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-3">
+                                <div>
+                                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Available</p>
+                                    <p className="font-bold text-gray-900">{item.quantity_available}</p>
+                                </div>
+                                <div>
+                                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Reserved</p>
+                                    <p className="text-gray-500">{item.quantity_reserved}</p>
+                                </div>
+                                <div>
+                                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Sold</p>
+                                    <p className="text-gray-500">{item.quantity_sold}</p>
+                                </div>
+                                <div>
+                                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Received</p>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-gray-600">{fmtDate(item.received_at)}</span>
+                                        {item.is_new && <NewBadge />}
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Unit Price</p>
+                                    <p className="font-semibold text-gray-900">₹{item.unit_price.toLocaleString()}</p>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
                 </div>
                 {loadingInventory ? (
                     <div className="p-8 text-center text-sm text-gray-500">Loading inventory…</div>

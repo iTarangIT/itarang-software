@@ -7,7 +7,8 @@
 // "Add Another Product" row.
 
 import { useEffect, useState } from 'react';
-import { AlertCircle, ChevronDown, X } from 'lucide-react';
+import { AlertCircle, X } from 'lucide-react';
+import { Dropdown } from './shared';
 
 export type AssetKind = 'battery' | 'charger' | 'paraphernalia';
 
@@ -75,9 +76,6 @@ interface ProductSelectorProps {
     /** When set, renders an X button to remove this row (extra rows). */
     onRemove?: () => void;
 }
-
-const SELECT_BASE =
-    'w-full h-11 px-4 pr-10 bg-white border-2 rounded-xl outline-none appearance-none text-sm transition-all disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed';
 
 function productOptionLabel(p: ProductOption, outOfStock: boolean): string {
     // voltage / capacity are often absent (e.g. paraphernalia) — only render
@@ -217,19 +215,12 @@ export default function ProductSelector({
             <label className="text-sm font-bold text-gray-900 px-1">
                 Asset Type <span className="text-red-500">*</span>
             </label>
-            <div className="relative">
-                <select
-                    value={value.asset_type}
-                    onChange={e => handleAssetTypeChange(e.target.value)}
-                    className={`${SELECT_BASE} border-[#EBEBEB] focus:border-[#1D4ED8] ${!value.asset_type ? 'text-gray-400' : 'text-gray-900'}`}
-                >
-                    <option value="">Select asset type</option>
-                    {ASSET_KINDS.map(k => (
-                        <option key={k.value} value={k.value}>{k.label}</option>
-                    ))}
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-            </div>
+            <Dropdown
+                value={value.asset_type}
+                onChange={handleAssetTypeChange}
+                options={ASSET_KINDS.map(k => ({ value: k.value, label: k.label }))}
+                placeholder="Select asset type"
+            />
         </div>
     );
 
@@ -238,31 +229,25 @@ export default function ProductSelector({
             <label className="text-sm font-bold text-gray-900 px-1">
                 Product Category <span className="text-red-500">*</span>
             </label>
-            <div className="relative">
-                <select
-                    value={value.category_slug}
-                    disabled={!value.asset_type}
-                    onChange={e => handleCategoryChange(e.target.value)}
-                    className={`${SELECT_BASE} ${errors?.category ? 'border-red-400' : 'border-[#EBEBEB] focus:border-[#1D4ED8]'} ${!value.category_slug ? 'text-gray-400' : 'text-gray-900'}`}
-                >
-                    <option value="" disabled={categories.length === 0}>
-                        {!value.asset_type
-                            ? 'Select an asset type first'
-                            : loadingCategories
-                                ? 'Loading…'
-                                : categories.length === 0
-                                    ? 'No inventory available for this asset type'
-                                    : 'Select from Current Inventory'}
-                    </option>
-                    {categories.map(c => (
-                        <option key={c.id} value={c.slug}>
-                            {c.name}
-                            {typeof c.available_count === 'number' ? ` (${c.available_count} in stock)` : ''}
-                        </option>
-                    ))}
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-            </div>
+            <Dropdown
+                value={value.category_slug}
+                onChange={handleCategoryChange}
+                disabled={!value.asset_type}
+                error={!!errors?.category}
+                placeholder={
+                    !value.asset_type
+                        ? 'Select an asset type first'
+                        : loadingCategories
+                            ? 'Loading…'
+                            : categories.length === 0
+                                ? 'No inventory available for this asset type'
+                                : 'Select from Current Inventory'
+                }
+                options={categories.map(c => ({
+                    value: c.slug,
+                    label: `${c.name}${typeof c.available_count === 'number' ? ` (${c.available_count} in stock)` : ''}`,
+                }))}
+            />
             {errors?.category && <p className="text-[10px] text-red-500 font-bold px-1">{errors.category}</p>}
         </div>
     );
@@ -270,30 +255,25 @@ export default function ProductSelector({
     const productField = (
         <div className="space-y-2">
             <label className="text-sm font-bold text-gray-900 px-1">Product Type</label>
-            <div className="relative">
-                <select
-                    value={value.product_id}
-                    disabled={!value.category_slug}
-                    onChange={e => handleProductChange(e.target.value)}
-                    className={`${SELECT_BASE} ${errors?.product ? 'border-red-400' : 'border-[#EBEBEB] focus:border-[#1D4ED8]'} ${!value.product_id ? 'text-gray-400' : 'text-gray-900'}`}
-                >
-                    <option value="" disabled={products.length === 0}>
-                        {!value.category_slug
-                            ? 'Select a category first'
-                            : loadingProducts
-                                ? 'Loading…'
-                                : products.length === 0
-                                    ? 'No stock available in this category'
-                                    : 'Select Product type'}
-                    </option>
-                    {products.map(p => (
-                        <option key={p.id} value={p.id}>
-                            {productOptionLabel(p, outOfStock.has(p.id))}
-                        </option>
-                    ))}
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-            </div>
+            <Dropdown
+                value={value.product_id}
+                onChange={handleProductChange}
+                disabled={!value.category_slug}
+                error={!!errors?.product}
+                placeholder={
+                    !value.category_slug
+                        ? 'Select a category first'
+                        : loadingProducts
+                            ? 'Loading…'
+                            : products.length === 0
+                                ? 'No stock available in this category'
+                                : 'Select Product type'
+                }
+                options={products.map(p => ({
+                    value: p.id,
+                    label: productOptionLabel(p, outOfStock.has(p.id)),
+                }))}
+            />
 
             {value.product_id && outOfStock.has(value.product_id) && (
                 <div className="flex items-center justify-between gap-3 px-3 py-3 bg-amber-50 border border-amber-200 rounded-lg mt-2">

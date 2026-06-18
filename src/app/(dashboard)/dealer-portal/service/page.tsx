@@ -135,6 +135,9 @@ export default function ServiceManagementPage() {
                             <p className="font-bold">No service tickets</p>
                         </div>
                     ) : (
+                      <>
+                        {/* Desktop table */}
+                        <div className="hidden md:block overflow-x-auto">
                         <table className="w-full text-sm">
                             <thead>
                                 <tr className="border-b border-gray-100 bg-gray-50/50">
@@ -175,6 +178,48 @@ export default function ServiceManagementPage() {
                                 ))}
                             </tbody>
                         </table>
+                        </div>
+
+                        {/* Mobile cards — same data, stacked & readable on phones. */}
+                        <div className="md:hidden divide-y divide-gray-100">
+                            {tickets.map(t => (
+                                <div key={t.id} className="p-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className="font-bold text-[#0047AB]">{t.id}</div>
+                                            <div className="font-medium text-gray-900 truncate">{t.customer_name}</div>
+                                            <div className="text-xs text-gray-400">{t.customer_phone}</div>
+                                        </div>
+                                        <div className="shrink-0 flex flex-col items-end gap-1.5">
+                                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${statusColor(t.status)}`}>{t.status.replace(/_/g, ' ')}</span>
+                                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${priorityColor(t.priority)}`}>{t.priority}</span>
+                                        </div>
+                                    </div>
+                                    <div className="mt-3">
+                                        <p className="text-[11px] uppercase tracking-wide text-gray-400">Issue</p>
+                                        <p className="font-medium capitalize text-gray-800 text-sm">{t.issue_type.replace(/_/g, ' ')}</p>
+                                        <p className="text-xs text-gray-500 mt-0.5">{t.issue_description}</p>
+                                    </div>
+                                    <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
+                                        <div>
+                                            <p className="text-[11px] uppercase tracking-wide text-gray-400">Assigned To</p>
+                                            <p className="text-gray-700 text-xs">{t.assigned_to_name || <span className="text-gray-300">Unassigned</span>}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-[11px] uppercase tracking-wide text-gray-400">SLA</p>
+                                            <p className="text-xs">
+                                                {t.sla_breached ? <span className="text-red-600 font-bold">Breached</span> : t.sla_deadline ? <span className="text-gray-500">{new Date(t.sla_deadline).toLocaleDateString()}</span> : '-'}
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <p className="text-[11px] uppercase tracking-wide text-gray-400">Created</p>
+                                            <p className="text-gray-500 text-xs">{new Date(t.created_at).toLocaleDateString()}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                      </>
                     )}
                 </div>
 

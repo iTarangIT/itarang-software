@@ -13,6 +13,7 @@ import { ensureDealerSignedAgreementUrl } from "@/lib/digio/ensure-signed-agreem
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
+import { sendDealerWelcomeWhatsApp, type WhatsAppDelivery } from "@/lib/whatsapp/notifications";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -176,6 +177,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // with an empty welcome email.
     let signedAgreementPdf: Buffer | null = null;
     let auditTrailPdf: Buffer | null = null;
+    // Public Supabase URLs (cached by the ensure* helpers) — kept in outer
+    // scope so the WhatsApp welcome can attach them as document messages after
+    // the email send below.
+    let signedAgreementUrl: string | null = null;
+    let auditTrailUrl: string | null = null;
 
     if (application.finance_enabled) {
       const [signedUrl, auditUrl] = await Promise.all([
@@ -194,20 +200,28 @@ export async function POST(req: NextRequest, context: RouteContext) {
         downloadPdfBuffer(auditUrl),
       ]);
 
-      if (!signedBuf || !auditBuf) {
-        console.warn("APPROVE BLOCKED — agreement PDFs not ready", {
+      // The SIGNED agreement is the essential artifact — it proves signing is
+      // complete and is attached to the welcome email/WhatsApp. Block approval
+      // only if we can't obtain it.
+      //
+      // The AUDIT TRAIL is a supplementary compliance doc fetched live from
+      // Digio's download_audit_trail endpoint, which is flaky in practice
+      // (intermittent HTTP 500 "System error has occurred", even when the doc
+      // status is "completed"). A missing audit trail must NOT block dealer
+      // activation — it's attached when available and silently omitted
+      // otherwise (downloadPdfBuffer already returns null gracefully).
+      if (!signedBuf) {
+        console.warn("APPROVE BLOCKED — signed agreement PDF not ready", {
           applicationId: application.id,
           hasSignedUrl: Boolean(signedUrl),
-          hasAuditUrl: Boolean(auditUrl),
           hasSignedBuf: Boolean(signedBuf),
-          hasAuditBuf: Boolean(auditBuf),
         });
 
         return NextResponse.json(
           {
             success: false,
             message:
-              "Agreement PDFs are not ready yet — please retry once signing is fully complete.",
+              "Signed agreement is not ready yet — please retry once signing is fully complete.",
             details: {
               signedAgreementAvailable: Boolean(signedBuf),
               auditTrailAvailable: Boolean(auditBuf),
@@ -217,8 +231,20 @@ export async function POST(req: NextRequest, context: RouteContext) {
         );
       }
 
+      if (!auditBuf) {
+        console.warn(
+          "APPROVE — audit trail PDF unavailable; proceeding without it",
+          {
+            applicationId: application.id,
+            hasAuditUrl: Boolean(auditUrl),
+          }
+        );
+      }
+
       signedAgreementPdf = signedBuf;
       auditTrailPdf = auditBuf;
+      signedAgreementUrl = signedUrl;
+      auditTrailUrl = auditUrl;
     }
 
     const temporaryPassword = generateTemporaryPassword();
@@ -561,6 +587,34 @@ export async function POST(req: NextRequest, context: RouteContext) {
       });
     }
 
+    // WhatsApp-onboarded dealers also get their welcome + credentials and the
+    // agreement PDFs over WhatsApp (their primary channel). Additive — the
+    // welcome email above is unchanged. Best-effort: a WhatsApp failure (e.g.
+    // the 24h window is closed) must NOT fail an approval that already wrote the
+    // dealer/account/auth rows.
+    let whatsappDelivery: WhatsAppDelivery | null = null;
+    if (
+      (application.source || "web").toLowerCase() === "whatsapp" &&
+      application.wa_phone
+    ) {
+      whatsappDelivery = await sendDealerWelcomeWhatsApp({
+        waPhone: application.wa_phone,
+        waSessionId: application.wa_session_id ?? null,
+        dealerName: application.owner_name || application.company_name || "Dealer",
+        companyName: application.company_name || "iTarang Dealer",
+        dealerCode,
+        loginId: dealerLoginEmail,
+        password: temporaryPassword,
+        loginUrl: resolvedLoginUrl,
+        supportEmail: process.env.DEALER_SUPPORT_EMAIL || "care@itarang.com",
+        supportPhone: process.env.DEALER_SUPPORT_PHONE || "+91-8076841497",
+        financeEnabled: Boolean(application.finance_enabled),
+        signedAgreementUrl,
+        auditTrailUrl,
+      });
+      console.log("DEALER WELCOME WHATSAPP:", { dealerId, whatsappDelivery });
+    }
+
     console.log("DEALER APPROVED:", {
       dealerId,
       dealerCode,
@@ -584,6 +638,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       attachedSignedAgreement: Boolean(mailResult?.attachedSignedAgreement),
       attachedAuditTrail: Boolean(mailResult?.attachedAuditTrail),
       isBranchDealer,
+      whatsappDelivery,
     });
   } catch (error: any) {
     console.error("APPROVE DEALER ERROR:", error);

@@ -1,6 +1,6 @@
 export const runtime = "nodejs";
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { db } from "@/lib/db";
 import {
   dealerAgreementEvents,
@@ -37,35 +37,33 @@ export async function GET(_req: NextRequest, context: Context) {
       );
     }
 
-    let signerRows = await db
+    const signerRows = await db
       .select()
       .from(dealerAgreementSigners)
       .where(eq(dealerAgreementSigners.application_id, application.id));
 
-    // Auto-sync from Digio if we detect stale state — agreement is completed (or initiated
-    // at all) but any signer is still stuck at 'sent'. This catches the case where the
-    // agreement was signed but no manual refresh was ever triggered to sync per-signer rows.
+    // Self-heal stale state — agreement initiated but a signer is still stuck at
+    // 'sent'/'pending' (e.g. signed on Digio but never refreshed here). The Digio
+    // status call is SLOW (intermittent 500s + retries), so we run it in the
+    // BACKGROUND via after() instead of blocking this response — otherwise the
+    // whole review page hangs on it. The synced rows surface on the next load;
+    // the explicit "Refresh Status" button (refresh-agreement) still syncs live.
     const hasStaleSigner = signerRows.some((s) => {
       const status = String(s.signer_status || "").toLowerCase();
       return status === "sent" || status === "pending";
     });
     if (application.provider_document_id && signerRows.length > 0 && hasStaleSigner) {
-      try {
-        const parsed = await fetchDigioAndSyncSigners({
-          application_id: application.id,
-          providerDocumentId: application.provider_document_id,
-          requestId: application.request_id,
-        });
-        if (parsed) {
-          // Re-read signer rows after sync so the response reflects fresh data.
-          signerRows = await db
-            .select()
-            .from(dealerAgreementSigners)
-            .where(eq(dealerAgreementSigners.application_id, application.id));
+      after(async () => {
+        try {
+          await fetchDigioAndSyncSigners({
+            application_id: application.id,
+            providerDocumentId: application.provider_document_id!,
+            requestId: application.request_id,
+          });
+        } catch (syncErr) {
+          console.warn("[AGREEMENT TRACKING] background auto-sync failed:", syncErr);
         }
-      } catch (syncErr) {
-        console.warn("[AGREEMENT TRACKING] auto-sync failed (non-blocking):", syncErr);
-      }
+      });
     }
 
     const signerOrder = [

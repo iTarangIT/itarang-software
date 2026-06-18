@@ -9,20 +9,11 @@ import {
 import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { normalizeAgreementStatus } from "@/lib/agreement/status";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
 };
-
-// Manual agreement completion bypasses the Digio "completed" gate, so it is
-// deliberately restricted to an explicit allowlist of application IDs rather
-// than enabled for every finance dealer. Add an id here to permit a one-off
-// out-of-band completion (e.g. EXNON, whose iTarang signatory's link expired
-// but who was signed on the Digio dashboard).
-const MANUAL_COMPLETION_ALLOWLIST = new Set<string>([
-  "b4846be7-deb9-4830-bffb-a47624f4f3db", // EXNON
-  "4de51b0d-7298-43ab-83c5-d645782b14a7", // MAA PITAMBARA ENTERPRISES
-]);
 
 function cleanEnv(value?: string) {
   return value?.trim().replace(/^["']|["']$/g, "");
@@ -63,17 +54,6 @@ export async function POST(req: NextRequest, context: RouteContext) {
   try {
     const { dealerId } = await context.params;
 
-    if (!MANUAL_COMPLETION_ALLOWLIST.has(dealerId)) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "Manual agreement completion is not enabled for this dealer.",
-        },
-        { status: 403 }
-      );
-    }
-
     const [application] = await db
       .select()
       .from(dealerOnboardingApplications)
@@ -100,6 +80,35 @@ export async function POST(req: NextRequest, context: RouteContext) {
           success: false,
           message:
             "This dealer is not finance-enabled — no agreement to complete.",
+        },
+        { status: 400 }
+      );
+    }
+
+    // ─── initiated-but-not-completed gate ─────────────────────────────────
+    // Manual upload bypasses the Digio "completed" gate. It's the fallback for
+    // agreements whose completion can't be synced from Digio — an expired signer
+    // link, signing finished out-of-band on the Digio dashboard, or a document
+    // created in a different Digio environment that 404s here. We require only
+    // that an agreement was actually INITIATED (so there's a real document to
+    // complete) and isn't already completed. (finance_enabled + not-rejected are
+    // checked above.) The upload is admin-only and recorded as a
+    // "manual_completion" event for traceability.
+    if (!application.provider_document_id) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "Agreement has not been initiated yet — there is nothing to complete manually.",
+        },
+        { status: 400 }
+      );
+    }
+    if (normalizeAgreementStatus(application.agreement_status) === "completed") {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Agreement is already completed.",
         },
         { status: 400 }
       );
