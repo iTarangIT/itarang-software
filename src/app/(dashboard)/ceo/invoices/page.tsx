@@ -1,9 +1,10 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Loader2, Receipt, Download, Search } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Loader2, Receipt, Download, Search, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 const STATUS_OPTIONS = [
   "draft",
@@ -92,6 +93,21 @@ export default function CEOInvoicesPage() {
       });
       if (!r.ok) throw new Error("Failed to load invoices");
       return (await r.json()) as ApiResponse;
+    },
+  });
+
+  const queryClient = useQueryClient();
+  const refresh = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/admin/zoho/sync", { method: "POST" });
+      const json = await r.json();
+      if (!r.ok || !json.success) {
+        throw new Error(json?.error?.message ?? "Sync failed");
+      }
+      return json as { upserted: number };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ceo-invoices"] });
     },
   });
 
@@ -223,15 +239,37 @@ export default function CEOInvoicesPage() {
             )}
           </div>
 
-          <Button
-            data-testid="export-csv"
-            variant="outline"
-            onClick={exportCsv}
-            className="flex items-center gap-2 border-brand-200 text-brand-700 hover:bg-brand-50"
-          >
-            <Download className="w-4 h-4" />
-            Export CSV
-          </Button>
+          <div className="flex items-center gap-2">
+            {refresh.isError && (
+              <span
+                data-testid="refresh-error"
+                className="text-[11px] font-semibold text-rose-600"
+              >
+                {(refresh.error as Error).message}
+              </span>
+            )}
+            <Button
+              data-testid="refresh-zoho"
+              variant="outline"
+              onClick={() => refresh.mutate()}
+              disabled={refresh.isPending}
+              className="flex items-center gap-2 border-brand-200 text-brand-700 hover:bg-brand-50"
+            >
+              <RefreshCw
+                className={cn("w-4 h-4", refresh.isPending && "animate-spin")}
+              />
+              {refresh.isPending ? "Refreshing…" : "Refresh from Zoho"}
+            </Button>
+            <Button
+              data-testid="export-csv"
+              variant="outline"
+              onClick={exportCsv}
+              className="flex items-center gap-2 border-brand-200 text-brand-700 hover:bg-brand-50"
+            >
+              <Download className="w-4 h-4" />
+              Export CSV
+            </Button>
+          </div>
         </div>
       </div>
 
