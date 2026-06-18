@@ -1220,6 +1220,30 @@ export default function LeadsUnifiedPage() {
     setConvertedPage(1);
   };
 
+  // Local YYYY-MM-DD (avoids UTC off-by-one from toISOString()).
+  const toISODate = (d: Date) => {
+    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 10);
+  };
+  // Quick date presets for month-wise filtering. offset 0 = current month
+  // (start → today), -1 = previous full calendar month.
+  const applyMonthPreset = (offset: number) => {
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    const last =
+      offset === 0
+        ? now
+        : new Date(now.getFullYear(), now.getMonth() + offset + 1, 0);
+    setLeadsFrom(toISODate(first));
+    setLeadsTo(toISODate(last));
+    setLeadsPage(1);
+  };
+  const clearDateRange = () => {
+    setLeadsFrom("");
+    setLeadsTo("");
+    setLeadsPage(1);
+  };
+
   const triggerCall = useCallback(
     async (lead: any) => {
       setDialerPhase("calling");
@@ -1555,7 +1579,7 @@ export default function LeadsUnifiedPage() {
 
       {/* TABS + SEARCH */}
       <div className="flex items-center justify-between mb-4 gap-4">
-        <div className="flex items-center bg-white border border-gray-200 rounded-xl p-1 gap-1">
+        <div className="flex items-center bg-white border border-gray-200 rounded-xl p-1 gap-1 overflow-x-auto min-w-0">
           {(
             [
               { key: "scraper", label: "Scraper" },
@@ -1572,70 +1596,83 @@ export default function LeadsUnifiedPage() {
               onClick={() => {
                 setTab(key);
               }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab === key ? "bg-gray-900 text-white shadow-sm" : "text-gray-500 hover:text-gray-800"}`}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap shrink-0 ${tab === key ? "bg-gray-900 text-white shadow-sm" : "text-gray-500 hover:text-gray-800"}`}
             >
               {label}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2">
-          {/* Created-at date range — filters the cards AND the list below.
-              Leave both empty for all-time. */}
-          {tab === "leads" && (
-            <div className="flex items-center gap-1.5">
+        {tab !== "scraper" &&
+          tab !== "campaigns" &&
+          tab !== "cost-analytics" && (
+            <div className="relative shrink-0">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
-                type="date"
-                value={leadsFrom}
-                max={leadsTo || undefined}
-                onChange={(e) => {
-                  setLeadsFrom(e.target.value);
-                  setLeadsPage(1);
-                }}
-                title="From (lead created date)"
-                className="px-2.5 py-2 text-sm border border-gray-200 rounded-xl bg-white outline-none focus:border-gray-400"
+                type="text"
+                value={search}
+                onChange={(e) => handleSearch(e.target.value)}
+                placeholder="Search by name, phone, city..."
+                className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl bg-white outline-none focus:border-gray-400 w-64"
               />
-              <span className="text-gray-400 text-sm">–</span>
-              <input
-                type="date"
-                value={leadsTo}
-                min={leadsFrom || undefined}
-                onChange={(e) => {
-                  setLeadsTo(e.target.value);
-                  setLeadsPage(1);
-                }}
-                title="To (lead created date)"
-                className="px-2.5 py-2 text-sm border border-gray-200 rounded-xl bg-white outline-none focus:border-gray-400"
-              />
-              {(leadsFrom || leadsTo) && (
-                <button
-                  onClick={() => {
-                    setLeadsFrom("");
-                    setLeadsTo("");
-                    setLeadsPage(1);
-                  }}
-                  className="text-xs font-semibold text-rose-600 hover:underline px-1"
-                >
-                  Clear
-                </button>
-              )}
             </div>
           )}
-          {tab !== "scraper" &&
-            tab !== "campaigns" &&
-            tab !== "cost-analytics" && (
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => handleSearch(e.target.value)}
-                  placeholder="Search by name, phone, city..."
-                  className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl bg-white outline-none focus:border-gray-400 w-64"
-                />
-              </div>
-            )}
-        </div>
       </div>
+
+      {/* DATE RANGE FILTER (Leads tab) — filters the stat cards AND the list
+          below by lead created date. Empty range = all-time. */}
+      {tab === "leads" && (
+        <div className="flex flex-wrap items-center gap-2 mb-5">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mr-0.5">
+            Created
+          </span>
+          <div className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-1.5 shadow-sm transition-colors focus-within:border-gray-400">
+            <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
+            <input
+              type="date"
+              value={leadsFrom}
+              max={leadsTo || undefined}
+              onChange={(e) => {
+                setLeadsFrom(e.target.value);
+                setLeadsPage(1);
+              }}
+              aria-label="From (lead created date)"
+              className="bg-transparent text-sm text-gray-700 outline-none"
+            />
+            <span className="text-gray-300">–</span>
+            <input
+              type="date"
+              value={leadsTo}
+              min={leadsFrom || undefined}
+              onChange={(e) => {
+                setLeadsTo(e.target.value);
+                setLeadsPage(1);
+              }}
+              aria-label="To (lead created date)"
+              className="bg-transparent text-sm text-gray-700 outline-none"
+            />
+          </div>
+          <button
+            onClick={() => applyMonthPreset(0)}
+            className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-900"
+          >
+            This month
+          </button>
+          <button
+            onClick={() => applyMonthPreset(-1)}
+            className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-900"
+          >
+            Last month
+          </button>
+          {(leadsFrom || leadsTo) && (
+            <button
+              onClick={clearDateRange}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50"
+            >
+              <X className="w-3.5 h-3.5" /> Clear
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── TAB: SCRAPER ── */}
       {tab === "scraper" && (
