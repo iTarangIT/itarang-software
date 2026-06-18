@@ -11,7 +11,7 @@ import {
     UserPlus2,
 } from "lucide-react";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
-import { isOpen, type LeadStatus } from "@/lib/lifecycle/transitions";
+import { isOpen, isTerminal, type LeadStatus } from "@/lib/lifecycle/transitions";
 import type { ActiveModal } from "./LeadDetailView";
 
 type Props = {
@@ -24,7 +24,7 @@ type Props = {
 export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) {
     const lead = bundle.lead;
     const status = lead.lead_status as LeadStatus | null;
-    const isUnassigned = !lead.current_owner_id && status === "New_Unassigned";
+    const isUnassigned = !lead.current_owner_id && !(status && isTerminal(status));
     const open = status ? isOpen(status) : false;
     const isAdmin = viewerRole === "admin" || viewerRole === "ceo";
 
