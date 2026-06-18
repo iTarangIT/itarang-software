@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, Phone, MapPin, User } from "lucide-react";
 import { redirect } from "next/navigation";
 import { LeadDetailClient } from "./lead-detail-client";
+import { normalizeCalls } from "@/lib/leads/normalizeCalls";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,7 @@ export default async function LeadDetailPage({ params }: any) {
   }
 
   const history = (lead.follow_up_history as any[]) ?? [];
+  const calls = normalizeCalls([], history);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -69,7 +71,7 @@ export default async function LeadDetailPage({ params }: any) {
         </div>
 
         {/* CLIENT SECTION — summary + history */}
-        <LeadDetailClient history={history} lead={lead} />
+        <LeadDetailClient calls={calls} lead={lead} />
       </div>
     </div>
   );
