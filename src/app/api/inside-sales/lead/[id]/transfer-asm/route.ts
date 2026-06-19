@@ -10,7 +10,7 @@ import { leadVisits } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
-import { canTransition, type LeadStatus } from "@/lib/lifecycle/transitions";
+import { type LeadStatus } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
 
 const MUTATE_ROLES = ["inside_sales_rep", "admin"];
@@ -47,10 +47,9 @@ export const POST = withErrorHandler(
         const fromStatus = stateRows[0]?.lead_status as LeadStatus | null;
         if (!fromStatus) return errorResponse("Lead not found", 404);
 
-        const t = canTransition(fromStatus, "Transferred_to_ASM", {
-            actorRole: user.role,
-        });
-        if (!t.ok) return errorResponse(t.reason, 400);
+        // Lifecycle transition gate intentionally removed: a transfer to a chosen
+        // ASM is always allowed regardless of current lead_status. writeTouchpoint
+        // below still flips lead_status to Transferred_to_ASM + records history.
 
         await db.transaction(async (tx) => {
             await tx.execute(sql`
