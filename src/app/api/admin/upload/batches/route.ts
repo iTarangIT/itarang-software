@@ -10,7 +10,7 @@ import type { UploadBatchSummary } from "@/lib/admin/types";
 export const dynamic = "force-dynamic";
 
 export const GET = withErrorHandler(async () => {
-    await requireRole(["admin", "sales_head", "ceo"]);
+    await requireRole(["admin", "sales_head", "ceo", "sales_insight", "inside_sales_rep"]);
 
     const rows = await db.execute<UploadBatchSummary>(sql`
         SELECT b.batch_id, b.file_name, b.uploaded_by,

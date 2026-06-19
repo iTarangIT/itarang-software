@@ -19,7 +19,7 @@ const BodySchema = z.object({
 });
 
 export const POST = withErrorHandler(async (req: Request) => {
-    await requireRole(["admin", "sales_head"]);
+    await requireRole(["admin", "sales_head", "sales_insight", "inside_sales_rep"]);
     const b = BodySchema.parse(await req.json());
 
     const parsed = parseCsv(b.csv_text);
