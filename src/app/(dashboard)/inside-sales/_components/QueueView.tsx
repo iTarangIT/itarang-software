@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search, Loader2, Plus } from "lucide-react";
+import Link from "next/link";
+import { Search, Loader2, Plus, Upload } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { QueueTabs } from "./QueueTabs";
@@ -18,7 +19,11 @@ import {
 
 type Props = {
     viewerId: string;
+    viewerRole: string;
 };
+
+// Roles allowed to bulk-upload leads — must match the upload page + API gate.
+const UPLOAD_ROLES = ["inside_sales_rep", "admin", "sales_head", "sales_insight"];
 
 function parseTab(raw: string | null): QueueTab {
     if (raw && (QUEUE_TABS as readonly string[]).includes(raw)) return raw as QueueTab;
@@ -27,7 +32,8 @@ function parseTab(raw: string | null): QueueTab {
 
 const PAGE_SIZE = 25;
 
-export function QueueView({ viewerId }: Props) {
+export function QueueView({ viewerId, viewerRole }: Props) {
+    const canUpload = UPLOAD_ROLES.includes(viewerRole);
     const router = useRouter();
     const queryClient = useQueryClient();
     const params = useSearchParams();
@@ -128,10 +134,21 @@ export function QueueView({ viewerId }: Props) {
                     {rowsQuery.isFetching && (
                         <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                     )}
-                    <Button type="button" onClick={() => setCreateOpen(true)} className="ml-auto gap-1.5">
-                        <Plus className="h-4 w-4" />
-                        Create Lead
-                    </Button>
+                    <div className="ml-auto flex items-center gap-2">
+                        {canUpload && (
+                            <Link
+                                href="/inside-sales/upload"
+                                className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                            >
+                                <Upload className="h-4 w-4" />
+                                Upload Leads
+                            </Link>
+                        )}
+                        <Button type="button" onClick={() => setCreateOpen(true)} className="gap-1.5">
+                            <Plus className="h-4 w-4" />
+                            Create Lead
+                        </Button>
+                    </div>
                 </div>
                 <LeadQueueTable
                     tab={tab}
