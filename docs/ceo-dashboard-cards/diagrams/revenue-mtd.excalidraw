@@ -1,0 +1,11 @@
+{"type":"excalidraw","version":2,"source":"https://excalidraw.com","elements":[
+{"type":"rectangle","id":"b1","x":250,"y":70,"width":300,"height":60,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","strokeColor":"#4a9eed","label":{"text":"Zoho Invoices (synced)","fontSize":16}},
+{"type":"arrow","id":"a1","x":400,"y":130,"width":0,"height":30,"points":[[0,0],[0,30]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b2","x":190,"y":160,"width":420,"height":60,"roundness":{"type":3},"backgroundColor":"#fff3bf","fillStyle":"solid","strokeColor":"#f59e0b","label":{"text":"Keep: dated this month, not void/draft","fontSize":16}},
+{"type":"arrow","id":"a2","x":400,"y":220,"width":0,"height":30,"points":[[0,0],[0,30]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b3","x":250,"y":250,"width":300,"height":60,"roundness":{"type":3},"backgroundColor":"#d0bfff","fillStyle":"solid","strokeColor":"#8b5cf6","label":{"text":"SUM(total) = revenue_mtd","fontSize":16}},
+{"type":"arrow","id":"a3","x":400,"y":310,"width":0,"height":30,"points":[[0,0],[0,30]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b4","x":250,"y":340,"width":300,"height":60,"roundness":{"type":3},"backgroundColor":"#c3fae8","fillStyle":"solid","strokeColor":"#0d9488","label":{"text":"Show in lakhs (/100000, 1 dp)","fontSize":16}},
+{"type":"arrow","id":"a4","x":400,"y":400,"width":0,"height":30,"points":[[0,0],[0,30]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b5","x":260,"y":430,"width":280,"height":64,"roundness":{"type":3},"backgroundColor":"#b2f2bb","fillStyle":"solid","strokeColor":"#22c55e","label":{"text":"Card shows: Rs 12.5L","fontSize":18}}
+],"appState":{"viewBackgroundColor":"#ffffff"},"files":{}}

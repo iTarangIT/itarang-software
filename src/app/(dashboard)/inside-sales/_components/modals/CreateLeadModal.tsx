@@ -1,11 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Modal } from "../Modal";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Dropdown } from "@/components/ui/select-dropdown";
+import type { RegionsResponse } from "@/app/api/locations/regions/route";
 
 type Props = {
     open: boolean;
@@ -23,17 +26,43 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
     const [dealerName, setDealerName] = useState("");
     const [shopName, setShopName] = useState("");
     const [phone, setPhone] = useState("");
+    // stateCode drives the dependent city list; the lead row stores the state
+    // *name*, resolved at submit time from the loaded states list.
+    const [stateCode, setStateCode] = useState("");
     const [city, setCity] = useState("");
-    const [state, setState] = useState("");
     const [interest, setInterest] = useState<"hot" | "warm" | "cold" | "">("");
     const [submitting, setSubmitting] = useState(false);
+
+    // Canonical state + city reference lists (E-108/E-110/E-111). Loaded once
+    // when the modal first opens and cached by React Query.
+    const { data: regions } = useQuery<RegionsResponse>({
+        queryKey: ["locations-regions"],
+        queryFn: async () => {
+            const res = await fetch("/api/locations/regions", { cache: "no-store" });
+            if (!res.ok) throw new Error("Failed to load states/cities");
+            const json = await res.json();
+            return json.data as RegionsResponse;
+        },
+        enabled: open,
+        staleTime: 60 * 60 * 1000,
+    });
+
+    const stateOptions = (regions?.states ?? []).map((s) => ({
+        value: s.code,
+        label: s.name,
+    }));
+    const cityOptions = (
+        stateCode ? regions?.citiesByState[stateCode] ?? [] : []
+    ).map((c) => ({ value: c, label: c }));
+    const stateName =
+        regions?.states.find((s) => s.code === stateCode)?.name ?? "";
 
     const reset = () => {
         setDealerName("");
         setShopName("");
         setPhone("");
+        setStateCode("");
         setCity("");
-        setState("");
         setInterest("");
     };
 
@@ -62,8 +91,8 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                     dealer_name: dealerName.trim(),
                     shop_name: shopName.trim() || null,
                     phone: phoneDigits,
-                    city: city.trim() || null,
-                    state: state.trim() || null,
+                    city: city || null,
+                    state: stateName || null,
                     interest_level: interest || null,
                 }),
             });
@@ -117,12 +146,29 @@ export function CreateLeadModal({ open, onClose, onSuccess }: Props) {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                     <div>
-                        <Label>City</Label>
-                        <Input value={city} onChange={(e) => setCity(e.target.value)} className="mt-1" />
+                        <Label>State</Label>
+                        <Dropdown
+                            value={stateCode}
+                            onChange={(v) => {
+                                setStateCode(v);
+                                // Reset city — its options depend on the state.
+                                setCity("");
+                            }}
+                            options={stateOptions}
+                            placeholder="Select state"
+                            className="mt-1"
+                        />
                     </div>
                     <div>
-                        <Label>State</Label>
-                        <Input value={state} onChange={(e) => setState(e.target.value)} className="mt-1" />
+                        <Label>City</Label>
+                        <Dropdown
+                            value={city}
+                            onChange={setCity}
+                            options={cityOptions}
+                            placeholder={stateCode ? "Select city" : "Pick a state first"}
+                            disabled={!stateCode}
+                            className="mt-1"
+                        />
                     </div>
                 </div>
                 <div>

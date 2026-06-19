@@ -1,0 +1,6 @@
+{"type":"excalidraw","version":2,"source":"https://excalidraw.com","elements":[
+{"type":"rectangle","id":"b1","x":110,"y":170,"width":250,"height":80,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","strokeColor":"#4a9eed","label":{"text":"'Open Console' button","fontSize":16}},
+{"type":"arrow","id":"a1","x":360,"y":210,"width":120,"height":0,"points":[[0,0],[120,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e","label":{"text":"click","fontSize":14}},
+{"type":"rectangle","id":"b2","x":480,"y":170,"width":250,"height":80,"roundness":{"type":3},"backgroundColor":"#b2f2bb","fillStyle":"solid","strokeColor":"#22c55e","label":{"text":"Navigate to /hr page","fontSize":16}},
+{"type":"text","id":"note","x":270,"y":300,"text":"No data, no calculation","fontSize":16,"strokeColor":"#757575"}
+],"appState":{"viewBackgroundColor":"#ffffff"},"files":{}}
