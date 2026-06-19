@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 
 export const POST = withErrorHandler(
     async (_req: Request, ctx: { params: Promise<{ batchId: string }> }) => {
-        await requireRole(["admin", "sales_head"]);
+        await requireRole(["admin", "sales_head", "sales_insight", "inside_sales_rep"]);
         const { batchId } = await ctx.params;
         if (!batchId) return errorResponse("Batch id required.", 400);
 

@@ -1,0 +1,11 @@
+{"type":"excalidraw","version":2,"source":"https://excalidraw.com","elements":[
+{"type":"rectangle","id":"b1","x":60,"y":80,"width":200,"height":60,"roundness":{"type":3},"backgroundColor":"#b2f2bb","fillStyle":"solid","strokeColor":"#22c55e","label":{"text":"Sales to Dealer","fontSize":16}},
+{"type":"rectangle","id":"b2","x":300,"y":80,"width":200,"height":60,"roundness":{"type":3},"backgroundColor":"#ffc9c9","fillStyle":"solid","strokeColor":"#ef4444","label":{"text":"Purchases","fontSize":16}},
+{"type":"rectangle","id":"b3","x":540,"y":80,"width":200,"height":60,"roundness":{"type":3},"backgroundColor":"#ffd8a8","fillStyle":"solid","strokeColor":"#f59e0b","label":{"text":"Other Expenses","fontSize":16}},
+{"type":"arrow","id":"a1","x":160,"y":140,"width":180,"height":80,"points":[[0,0],[180,80]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"arrow","id":"a2","x":400,"y":140,"width":0,"height":80,"points":[[0,0],[0,80]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"arrow","id":"a3","x":640,"y":140,"width":-180,"height":80,"points":[[0,0],[-180,80]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b4","x":240,"y":220,"width":320,"height":60,"roundness":{"type":3},"backgroundColor":"#d0bfff","fillStyle":"solid","strokeColor":"#8b5cf6","label":{"text":"Sales - Purchases - Other Exp","fontSize":16}},
+{"type":"arrow","id":"a4","x":400,"y":280,"width":0,"height":40,"points":[[0,0],[0,40]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b5","x":250,"y":320,"width":300,"height":64,"roundness":{"type":3},"backgroundColor":"#fff3bf","fillStyle":"solid","strokeColor":"#f59e0b","label":{"text":"Net (MTD): green up / red down","fontSize":16}}
+],"appState":{"viewBackgroundColor":"#ffffff"},"files":{}}
