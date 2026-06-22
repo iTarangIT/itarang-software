@@ -16,6 +16,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Briefcase,
+  CalendarClock,
   ChartLine,
   ClipboardList,
   Cog,
@@ -53,6 +54,12 @@ const NAV_ITEMS: Array<{
     href: "/nbfc/leads",
     label: "Lead Intelligence",
     icon: Search,
+  },
+  {
+    id: "emi-tracker",
+    href: "/nbfc/emi-tracker",
+    label: "EMI Tracker",
+    icon: CalendarClock,
   },
   {
     id: "batteries",

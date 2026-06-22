@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { extractDigioDocumentId } from "./parse-status";
 import { fetchDigioPdfWithRetry } from "./fetch-pdf-retry";
+import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 
 type Application = typeof dealerOnboardingApplications.$inferSelect;
 
@@ -34,7 +35,7 @@ export async function ensureDealerAuditTrailUrl(
   const supabaseUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
   const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-  if (!clientId || !clientSecret || !supabaseUrl || !serviceRoleKey) {
+  if (!clientId || !clientSecret || (!isS3Backend && (!supabaseUrl || !serviceRoleKey))) {
     console.warn("[ensureDealerAuditTrailUrl] missing env vars", {
       hasClientId: Boolean(clientId),
       hasClientSecret: Boolean(clientSecret),
@@ -95,24 +96,37 @@ export async function ensureDealerAuditTrailUrl(
   });
   if (!pdfBuffer) return null;
 
-  const supabase = createClient(supabaseUrl, serviceRoleKey);
   const bucketName = "dealer-documents";
   const filePath = `agreements/${application.id}/audit-trail.pdf`;
 
-  const { error: uploadError } = await supabase.storage
-    .from(bucketName)
-    .upload(filePath, pdfBuffer, {
-      contentType: "application/pdf",
-      upsert: true,
-    });
+  let auditTrailUrl: string | undefined;
 
-  if (uploadError) return null;
+  if (isS3Backend) {
+    try {
+      await putObject(bucketName, filePath, Buffer.from(pdfBuffer), "application/pdf");
+    } catch {
+      return null;
+    }
+    auditTrailUrl = filesProxyPath(bucketName, filePath);
+  } else {
+    const supabase = createClient(supabaseUrl!, serviceRoleKey!);
 
-  const { data: publicUrlData } = supabase.storage
-    .from(bucketName)
-    .getPublicUrl(filePath);
+    const { error: uploadError } = await supabase.storage
+      .from(bucketName)
+      .upload(filePath, pdfBuffer, {
+        contentType: "application/pdf",
+        upsert: true,
+      });
 
-  const auditTrailUrl = publicUrlData?.publicUrl;
+    if (uploadError) return null;
+
+    const { data: publicUrlData } = supabase.storage
+      .from(bucketName)
+      .getPublicUrl(filePath);
+
+    auditTrailUrl = publicUrlData?.publicUrl;
+  }
+
   if (!auditTrailUrl) return null;
 
   await db

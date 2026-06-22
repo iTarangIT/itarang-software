@@ -4,6 +4,7 @@ import { leadDocuments } from '@/lib/db/schema';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
 import { v4 as uuidv4 } from 'uuid';
+import { isS3Backend, putObject } from '@/lib/storage/s3';
 
 export const POST = withErrorHandler(async (req: Request) => {
     const user = await requireRole(['dealer']);
@@ -28,23 +29,28 @@ export const POST = withErrorHandler(async (req: Request) => {
     const adminSupabase = supabaseAdmin;
     const bucketName = 'private-documents';
 
-    // Ensure bucket exists (simplified check)
-    const { data: buckets } = await adminSupabase.storage.listBuckets();
-    if (!buckets?.find(b => b.name === bucketName)) {
-        await adminSupabase.storage.createBucket(bucketName, { public: false });
-    }
-
     const fileExt = file.name.split('.').pop();
     const storagePath = `dealer_${user.dealer_id}/${leadId || 'temp'}/${Date.now()}-${uuidv4()}.${fileExt}`;
 
-    const { data, error } = await adminSupabase.storage
-        .from(bucketName)
-        .upload(storagePath, file, {
-            contentType: file.type,
-            upsert: false
-        });
+    if (isS3Backend) {
+        const buffer = Buffer.from(await file.arrayBuffer());
+        await putObject(bucketName, storagePath, buffer, file.type);
+    } else {
+        // Ensure bucket exists (simplified check)
+        const { data: buckets } = await adminSupabase.storage.listBuckets();
+        if (!buckets?.find(b => b.name === bucketName)) {
+            await adminSupabase.storage.createBucket(bucketName, { public: false });
+        }
 
-    if (error) return errorResponse(error.message, 500);
+        const { data, error } = await adminSupabase.storage
+            .from(bucketName)
+            .upload(storagePath, file, {
+                contentType: file.type,
+                upsert: false
+            });
+
+        if (error) return errorResponse(error.message, 500);
+    }
 
     const docId = `DOC-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 

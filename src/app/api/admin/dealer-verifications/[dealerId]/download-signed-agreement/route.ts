@@ -6,6 +6,7 @@ import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { isS3Backend, putObject, getObject, filesProxyPath } from "@/lib/storage/s3";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -61,33 +62,54 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
     let pdfBuffer: ArrayBuffer | null = null;
 
-    // 1. First try from Supabase storage path
+    // 1. First try from stored storage path
     if (application.signed_agreement_storage_path) {
-      console.log(
-        "[DOWNLOAD SIGNED AGREEMENT] Trying Supabase path:",
-        application.signed_agreement_storage_path
-      );
+      if (isS3Backend) {
+        const buf = await getObject(bucketName, application.signed_agreement_storage_path);
+        if (buf) {
+          const candidate = buf.buffer.slice(
+            buf.byteOffset,
+            buf.byteOffset + buf.byteLength
+          ) as ArrayBuffer;
+          if (isValidPdfBuffer(candidate)) {
+            pdfBuffer = candidate;
+          } else {
+            console.warn(
+              "[DOWNLOAD SIGNED AGREEMENT] S3 cache invalid (size=",
+              candidate.byteLength,
+              "), will re-fetch from Digio"
+            );
+          }
+        }
+      }
+      // Supabase read (also the fallback when S3 returned nothing)
+      if (!pdfBuffer) {
+        console.log(
+          "[DOWNLOAD SIGNED AGREEMENT] Trying Supabase path:",
+          application.signed_agreement_storage_path
+        );
 
-      const { data, error } = await supabase.storage
-        .from(bucketName)
-        .download(application.signed_agreement_storage_path);
+        const { data, error } = await supabase.storage
+          .from(bucketName)
+          .download(application.signed_agreement_storage_path);
 
-      if (!error && data) {
-        const candidate = await data.arrayBuffer();
-        if (isValidPdfBuffer(candidate)) {
-          pdfBuffer = candidate;
+        if (!error && data) {
+          const candidate = await data.arrayBuffer();
+          if (isValidPdfBuffer(candidate)) {
+            pdfBuffer = candidate;
+          } else {
+            console.warn(
+              "[DOWNLOAD SIGNED AGREEMENT] Supabase cache invalid (size=",
+              candidate.byteLength,
+              "), will re-fetch from Digio"
+            );
+          }
         } else {
-          console.warn(
-            "[DOWNLOAD SIGNED AGREEMENT] Supabase cache invalid (size=",
-            candidate.byteLength,
-            "), will re-fetch from Digio"
+          console.error(
+            "[DOWNLOAD SIGNED AGREEMENT] Supabase download error:",
+            error?.message
           );
         }
-      } else {
-        console.error(
-          "[DOWNLOAD SIGNED AGREEMENT] Supabase download error:",
-          error?.message
-        );
       }
     }
 
@@ -261,38 +283,56 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         );
       }
 
-      // Save to Supabase for future downloads
+      // Save to storage for future downloads
       const filePath =
         application.signed_agreement_storage_path ||
         `agreements/${dealerId}/signed-agreement.pdf`;
 
-      const { error: uploadError } = await supabase.storage
-        .from(bucketName)
-        .upload(filePath, pdfBuffer, {
-          contentType: "application/pdf",
-          upsert: true,
-        });
+      if (isS3Backend) {
+        try {
+          await putObject(bucketName, filePath, Buffer.from(pdfBuffer), "application/pdf");
+          const signedAgreementUrl = filesProxyPath(bucketName, filePath);
 
-      if (!uploadError) {
-        const { data: publicUrlData } = supabase.storage
-          .from(bucketName)
-          .getPublicUrl(filePath);
-
-        const signedAgreementUrl = publicUrlData?.publicUrl;
-
-        await db
-          .update(dealerOnboardingApplications)
-          .set({
-            signed_agreement_storage_path: filePath,
-            signed_agreement_url: signedAgreementUrl || application.signed_agreement_url,
-            updated_at: new Date(),
-          })
-          .where(eq(dealerOnboardingApplications.id, dealerId));
+          await db
+            .update(dealerOnboardingApplications)
+            .set({
+              signed_agreement_storage_path: filePath,
+              signed_agreement_url: signedAgreementUrl || application.signed_agreement_url,
+              updated_at: new Date(),
+            })
+            .where(eq(dealerOnboardingApplications.id, dealerId));
+        } catch (uploadErr) {
+          console.error("[DOWNLOAD SIGNED AGREEMENT] S3 upload failed:", uploadErr);
+        }
       } else {
-        console.error(
-          "[DOWNLOAD SIGNED AGREEMENT] Supabase upload failed:",
-          uploadError.message
-        );
+        const { error: uploadError } = await supabase.storage
+          .from(bucketName)
+          .upload(filePath, pdfBuffer, {
+            contentType: "application/pdf",
+            upsert: true,
+          });
+
+        if (!uploadError) {
+          const { data: publicUrlData } = supabase.storage
+            .from(bucketName)
+            .getPublicUrl(filePath);
+
+          const signedAgreementUrl = publicUrlData?.publicUrl;
+
+          await db
+            .update(dealerOnboardingApplications)
+            .set({
+              signed_agreement_storage_path: filePath,
+              signed_agreement_url: signedAgreementUrl || application.signed_agreement_url,
+              updated_at: new Date(),
+            })
+            .where(eq(dealerOnboardingApplications.id, dealerId));
+        } else {
+          console.error(
+            "[DOWNLOAD SIGNED AGREEMENT] Supabase upload failed:",
+            uploadError.message
+          );
+        }
       }
     }
 
