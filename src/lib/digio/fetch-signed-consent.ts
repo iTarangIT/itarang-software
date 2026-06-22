@@ -4,6 +4,7 @@ import {
     getDigioBaseUrl,
     getDigioBasicAuth,
 } from "./client";
+import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 
 function isValidPdfBuffer(buffer: ArrayBuffer | null | undefined): boolean {
     if (!buffer || buffer.byteLength < 500) return false;
@@ -71,7 +72,7 @@ export async function fetchAndStoreSignedConsent(
     const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
     const bucket = cleanEnv(process.env.CONSENT_STORAGE_BUCKET) || "documents";
 
-    if (!documentId || !leadId || !auth || !supabaseUrl || !serviceRoleKey) {
+    if (!documentId || !leadId || !auth || (!isS3Backend && (!supabaseUrl || !serviceRoleKey))) {
         console.warn("[fetchAndStoreSignedConsent] missing env or args", {
             hasDocId: !!documentId,
             hasLeadId: !!leadId,
@@ -147,9 +148,17 @@ export async function fetchAndStoreSignedConsent(
     }
 
     try {
-        const supabase = createSupabaseClient(supabaseUrl, serviceRoleKey);
         const timestamp = Date.now();
         const storagePath = `kyc/${leadId}/consent/signed-${timestamp}.pdf`;
+
+        if (isS3Backend) {
+            await putObject(bucket, storagePath, Buffer.from(pdfBuffer), "application/pdf");
+            const publicUrl = filesProxyPath(bucket, storagePath);
+            console.log("[fetchAndStoreSignedConsent] stored signed consent", { storagePath, documentId, leadId });
+            return { publicUrl, storagePath };
+        }
+
+        const supabase = createSupabaseClient(supabaseUrl!, serviceRoleKey!);
 
         const { error: upErr } = await supabase.storage
             .from(bucket)

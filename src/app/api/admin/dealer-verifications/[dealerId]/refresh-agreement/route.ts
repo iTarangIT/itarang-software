@@ -9,6 +9,7 @@ import { syncSignersFromDigio } from "@/lib/agreement/sync-signers";
 import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { extractStampCertificateIds } from "@/lib/digio/parse-status";
+import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -39,24 +40,33 @@ async function downloadAndCacheFile(url: string, path: string, headers?: Record<
     throw new Error(`Expected PDF but got JSON: ${text.slice(0, 200)}`);
   }
 
-  // Try caching to Supabase (non-blocking — don't fail if upload fails)
+  // Try caching to storage (non-blocking — don't fail if upload fails)
   let publicUrl: string | null = null;
-  try {
-    const { error } = await supabase.storage
-      .from("dealer-documents")
-      .upload(path, buffer, {
-        contentType: "application/pdf",
-        upsert: true,
-      });
-
-    if (!error) {
-      const { data } = supabase.storage.from("dealer-documents").getPublicUrl(path);
-      publicUrl = data.publicUrl;
-    } else {
-      console.warn("[REFRESH AGREEMENT] Supabase cache upload failed (non-blocking):", error.message);
+  if (isS3Backend) {
+    try {
+      await putObject("dealer-documents", path, Buffer.from(buffer), "application/pdf");
+      publicUrl = filesProxyPath("dealer-documents", path);
+    } catch (cacheErr) {
+      console.warn("[REFRESH AGREEMENT] S3 caching error (non-blocking):", cacheErr);
     }
-  } catch (cacheErr) {
-    console.warn("[REFRESH AGREEMENT] Supabase caching error (non-blocking):", cacheErr);
+  } else {
+    try {
+      const { error } = await supabase.storage
+        .from("dealer-documents")
+        .upload(path, buffer, {
+          contentType: "application/pdf",
+          upsert: true,
+        });
+
+      if (!error) {
+        const { data } = supabase.storage.from("dealer-documents").getPublicUrl(path);
+        publicUrl = data.publicUrl;
+      } else {
+        console.warn("[REFRESH AGREEMENT] Supabase cache upload failed (non-blocking):", error.message);
+      }
+    } catch (cacheErr) {
+      console.warn("[REFRESH AGREEMENT] Supabase caching error (non-blocking):", cacheErr);
+    }
   }
 
   return publicUrl;
@@ -294,29 +304,46 @@ export async function POST(_req: NextRequest, context: RouteContext) {
           if (directPdfRes.ok) {
             const buffer = await directPdfRes.arrayBuffer();
 
-            const { error } = await supabase.storage
-              .from("dealer-documents")
-              .upload(signedStoragePath, buffer, {
-                contentType: "application/pdf",
-                upsert: true,
-              });
+            if (isS3Backend) {
+              try {
+                await putObject("dealer-documents", signedStoragePath, Buffer.from(buffer), "application/pdf");
+                signedAgreementUrl = filesProxyPath("dealer-documents", signedStoragePath);
 
-            if (!error) {
-              const { data } = supabase.storage
-                .from("dealer-documents")
-                .getPublicUrl(signedStoragePath);
-
-              signedAgreementUrl = data.publicUrl;
-
-              await db
-                .update(dealerOnboardingApplications)
-                .set({
-                  signed_agreement_storage_path: signedStoragePath,
-                  signed_agreement_url: signedAgreementUrl,
-                })
-                .where(eq(dealerOnboardingApplications.id, dealerId));
+                await db
+                  .update(dealerOnboardingApplications)
+                  .set({
+                    signed_agreement_storage_path: signedStoragePath,
+                    signed_agreement_url: signedAgreementUrl,
+                  })
+                  .where(eq(dealerOnboardingApplications.id, dealerId));
+              } catch (uploadErr) {
+                console.error("[REFRESH AGREEMENT] S3 upload failed:", uploadErr);
+              }
             } else {
-              console.error("[REFRESH AGREEMENT] Supabase upload failed:", error.message);
+              const { error } = await supabase.storage
+                .from("dealer-documents")
+                .upload(signedStoragePath, buffer, {
+                  contentType: "application/pdf",
+                  upsert: true,
+                });
+
+              if (!error) {
+                const { data } = supabase.storage
+                  .from("dealer-documents")
+                  .getPublicUrl(signedStoragePath);
+
+                signedAgreementUrl = data.publicUrl;
+
+                await db
+                  .update(dealerOnboardingApplications)
+                  .set({
+                    signed_agreement_storage_path: signedStoragePath,
+                    signed_agreement_url: signedAgreementUrl,
+                  })
+                  .where(eq(dealerOnboardingApplications.id, dealerId));
+              } else {
+                console.error("[REFRESH AGREEMENT] Supabase upload failed:", error.message);
+              }
             }
           } else {
             const errText = await directPdfRes.text();
