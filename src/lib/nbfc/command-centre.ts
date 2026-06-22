@@ -298,9 +298,9 @@ async function computeKpiBlock(
   };
 }
 
-async function computeRecoveryInMotion(
+async function computeRecoveryInMotion(  
   tenantId: string,
-): Promise<{ count: number; amount_inr: number }> {
+): Promise<{ count: number; amount_inr: number }> { //big value                      
   const rows = await db
     .select({ v: nbfcRecoveryPipeline.estimated_recovery_value })
     .from(nbfcRecoveryPipeline)
@@ -394,7 +394,7 @@ async function deltaDelinquencyMoM(tenantId: string): Promise<KpiDelta | null> {
     return (overdue.length / active.length) * 100;
   };
 
-  const [current, prior] = await Promise.all([
+  const [current, prior] = await Promise.all([                                                  
     rateAsOf(now),
     rateAsOf(monthStart),
   ]);

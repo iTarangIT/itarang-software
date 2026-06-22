@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { coBorrowerDocuments, coBorrowers } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
+import { isS3Backend, putObject, filesProxyPath } from '@/lib/storage/s3';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ leadId: string }> }) {
     try {
@@ -28,15 +29,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const fileName = `kyc/${leadId}/coborrower/${docType}_${Date.now()}.${file.name.split('.').pop()}`;
         const buffer = Buffer.from(await file.arrayBuffer());
 
-        const { error: uploadError } = await supabase.storage
-            .from('documents')
-            .upload(fileName, buffer, { contentType: file.type, upsert: true });
+        let documentUrl: string;
+        if (isS3Backend) {
+            await putObject('documents', fileName, buffer, file.type);
+            documentUrl = filesProxyPath('documents', fileName);
+        } else {
+            const { error: uploadError } = await supabase.storage
+                .from('documents')
+                .upload(fileName, buffer, { contentType: file.type, upsert: true });
 
-        if (uploadError) {
-            return NextResponse.json({ success: false, error: { message: 'Upload failed' } }, { status: 500 });
+            if (uploadError) {
+                return NextResponse.json({ success: false, error: { message: 'Upload failed' } }, { status: 500 });
+            }
+
+            const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
+            documentUrl = urlData.publicUrl;
         }
-
-        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
 
         const now = new Date();
         const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
@@ -47,7 +55,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             co_borrower_id: coBorrowerId || '',
             lead_id: leadId,
             document_type: docType,
-            document_url: urlData.publicUrl,
+            document_url: documentUrl,
             file_name: file.name,
             file_size: file.size,
             verification_status: 'pending',
@@ -55,7 +63,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             updated_at: now,
         });
 
-        return NextResponse.json({ success: true, file_url: urlData.publicUrl });
+        return NextResponse.json({ success: true, file_url: documentUrl });
     } catch (error) {
         return NextResponse.json({ success: false, error: { message: 'Server error' } }, { status: 500 });
     }

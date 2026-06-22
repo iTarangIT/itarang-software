@@ -85,19 +85,19 @@ export default function ServiceManagementPage() {
 
     return (
         <div className="min-h-screen bg-[#F8F9FB]">
-            <div className="max-w-[1400px] mx-auto px-6 py-8">
-                <header className="mb-8 flex justify-between items-start">
+            <div className="max-w-[1400px] mx-auto px-4 sm:px-6 py-6 sm:py-8">
+                <header className="mb-6 sm:mb-8 flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
                     <div>
-                        <h1 className="text-[28px] font-black text-gray-900 tracking-tight">Service Management</h1>
+                        <h1 className="text-2xl sm:text-[28px] font-black text-gray-900 tracking-tight">Service Management</h1>
                         <p className="text-sm text-gray-500 mt-1">Track service tickets, repairs, and warranty claims</p>
                     </div>
-                    <button onClick={() => setShowNewTicket(true)} className="px-6 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] flex items-center gap-2">
+                    <button onClick={() => setShowNewTicket(true)} className="w-full sm:w-auto px-6 py-3 bg-[#0047AB] text-white rounded-xl text-sm font-bold hover:bg-[#003580] flex items-center justify-center gap-2">
                         <Plus className="w-4 h-4" /> New Service Ticket
                     </button>
                 </header>
 
                 {/* KPI Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-6 sm:mb-8">
                     <KPICard icon={<Wrench className="w-5 h-5" />} label="Total Tickets" value={tickets.length.toString()} color="blue" />
                     <KPICard icon={<Clock className="w-5 h-5" />} label="Open" value={openTickets.length.toString()} color="amber" />
                     <KPICard icon={<CheckCircle2 className="w-5 h-5" />} label="Resolved" value={tickets.filter(t => t.status === 'resolved').length.toString()} color="green" />
@@ -105,23 +105,27 @@ export default function ServiceManagementPage() {
                 </div>
 
                 {/* Filters */}
-                <div className="flex items-center gap-3 mb-6">
-                    {['all', 'open', 'assigned', 'in_progress', 'resolved', 'closed', 'escalated'].map(s => (
-                        <button key={s} onClick={() => setFilterStatus(s)} className={`px-3 py-1.5 rounded-lg text-xs font-bold capitalize ${filterStatus === s ? 'bg-[#0047AB] text-white' : 'bg-white border border-gray-200 text-gray-600'}`}>
-                            {s.replace(/_/g, ' ')}
-                        </button>
-                    ))}
-                    <div className="flex-1" />
-                    <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)} className="px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-bold bg-white">
-                        <option value="all">All Priority</option>
-                        <option value="critical">Critical</option>
-                        <option value="high">High</option>
-                        <option value="medium">Medium</option>
-                        <option value="low">Low</option>
-                    </select>
-                    <div className="relative">
-                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                        <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search..." className="pl-10 pr-4 py-2 border border-gray-200 rounded-xl text-sm w-48 outline-none focus:border-[#1D4ED8]" />
+                <div className="flex flex-col gap-3 mb-6">
+                    {/* Status chips — horizontal scroll on mobile so they never widen the page */}
+                    <div className="flex items-center gap-2 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap pb-1 sm:pb-0">
+                        {['all', 'open', 'assigned', 'in_progress', 'resolved', 'closed', 'escalated'].map(s => (
+                            <button key={s} onClick={() => setFilterStatus(s)} className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold capitalize ${filterStatus === s ? 'bg-[#0047AB] text-white' : 'bg-white border border-gray-200 text-gray-600'}`}>
+                                {s.replace(/_/g, ' ')}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)} className="shrink-0 px-3 py-2 border border-gray-200 rounded-lg text-xs font-bold bg-white">
+                            <option value="all">All Priority</option>
+                            <option value="critical">Critical</option>
+                            <option value="high">High</option>
+                            <option value="medium">Medium</option>
+                            <option value="low">Low</option>
+                        </select>
+                        <div className="relative flex-1 sm:flex-none">
+                            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                            <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search..." className="w-full sm:w-48 pl-10 pr-4 py-2 border border-gray-200 rounded-xl text-sm outline-none focus:border-[#1D4ED8]" />
+                        </div>
                     </div>
                 </div>
 
@@ -226,7 +230,7 @@ export default function ServiceManagementPage() {
                 {/* New Ticket Modal */}
                 {showNewTicket && (
                     <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-                        <div className="bg-white rounded-3xl w-full max-w-lg p-8 shadow-2xl">
+                        <div className="bg-white rounded-3xl w-full max-w-lg p-6 sm:p-8 shadow-2xl max-h-[90vh] overflow-y-auto">
                             <h2 className="text-xl font-bold text-gray-900 mb-6">New Service Ticket</h2>
                             <div className="space-y-4">
                                 <input value={newTicket.customer_name} onChange={e => setNewTicket(p => ({ ...p, customer_name: e.target.value }))} placeholder="Customer Name *" className="w-full h-11 px-4 border-2 border-[#EBEBEB] rounded-xl text-sm outline-none focus:border-[#1D4ED8]" />

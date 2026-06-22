@@ -5,7 +5,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { inventory, leads, productSelections } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
-import { generateId } from "@/lib/api-utils";
+import { generateId, storedFileUrl } from "@/lib/api-utils";
 import { finalizeSale } from "@/lib/sales/sale-finalization";
 import { toPaymentMode } from "@/lib/sales/payment-mode";
 import { notifyProductSelectionSubmitted } from "@/lib/notifications";
@@ -59,8 +59,8 @@ const BodySchema = z.object({
   // E-130 / Addendum V0.1 §5.1 — battery/charger photos apply to cash too
   // (Sections B/C are shared). Section G fields are finance-only and ignored
   // here, but accepted for forwards-compat.
-  batteryPhotoUrls: z.array(z.string().url()).optional(),
-  chargerPhotoUrls: z.array(z.string().url()).optional(),
+  batteryPhotoUrls: z.array(storedFileUrl).optional(),
+  chargerPhotoUrls: z.array(storedFileUrl).optional(),
 });
 
 export async function POST(

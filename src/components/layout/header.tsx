@@ -15,10 +15,11 @@ export function Header() {
     const pathname = usePathname() ?? '';
     const supabase = createClient();
     const { user } = useAuth();
-    // Mobile hamburger → opens the shared nav drawer. Dealer portal only, so the
-    // button never appears for other roles (whose mobile chrome is untouched).
+    // Mobile hamburger → opens the shared nav drawer. Shown on the dealer portal
+    // and on the shared /expenses pages (a common route any role can reach, where
+    // the user would otherwise be stranded with no way to open navigation).
     const openSidebar = useUIStore((s) => s.openSidebar);
-    const isDealerPortal = pathname.startsWith('/dealer-portal');
+    const showMobileNav = pathname.startsWith('/dealer-portal') || pathname.startsWith('/expenses');
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [loggingOut, setLoggingOut] = useState(false);
@@ -73,7 +74,7 @@ export function Header() {
             <GlobalSearchOverlay isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
             {/* Search Bar */}
             <div className="flex items-center gap-4 flex-1 max-w-2xl">
-                {isDealerPortal && (
+                {showMobileNav && (
                     <button
                         type="button"
                         onClick={openSidebar}

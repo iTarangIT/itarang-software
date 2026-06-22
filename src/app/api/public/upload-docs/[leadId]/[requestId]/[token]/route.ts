@@ -3,6 +3,7 @@ import { otherDocumentRequests } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { withErrorHandler, successResponse, errorResponse } from '@/lib/api-utils';
 import { createClient } from '@supabase/supabase-js';
+import { isS3Backend, putObject, filesProxyPath } from '@/lib/storage/s3';
 
 const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -70,15 +71,24 @@ export const POST = withErrorHandler(async (req: Request, { params }: { params: 
     const ext = file.name.split('.').pop() ?? 'jpg';
     const path = `public-uploads/${leadId}/${requestId}-${Date.now()}.${ext}`;
 
-    const { error } = await supabase.storage
-        .from('private-documents')
-        .upload(path, file, { upsert: false });
+    let publicUrl: string;
 
-    if (error) return errorResponse('File upload failed', 500);
+    if (isS3Backend) {
+        const buffer = Buffer.from(await file.arrayBuffer());
+        await putObject('private-documents', path, buffer, file.type);
+        publicUrl = filesProxyPath('private-documents', path);
+    } else {
+        const { error } = await supabase.storage
+            .from('private-documents')
+            .upload(path, file, { upsert: false });
 
-    const { data: { publicUrl } } = supabase.storage
-        .from('private-documents')
-        .getPublicUrl(path);
+        if (error) return errorResponse('File upload failed', 500);
+
+        const { data } = supabase.storage
+            .from('private-documents')
+            .getPublicUrl(path);
+        publicUrl = data.publicUrl;
+    }
 
     await db.update(otherDocumentRequests).set({
         file_url: publicUrl,
