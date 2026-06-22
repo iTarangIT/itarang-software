@@ -136,10 +136,10 @@ export default function NewCampaignPage() {
     return (
         <div className="space-y-6">
             <div className="flex items-start justify-between gap-4">
-                <div className="flex items-start gap-3">
+                <div className="flex flex-col sm:flex-row items-start gap-3">
                     <Link
                         href="/dealer-portal"
-                        className="mt-1 inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold"
+                        className="sm:mt-1 inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-white border border-gray-200 hover:bg-gray-50 text-sm font-semibold"
                     >
                         <ArrowLeft className="w-4 h-4" />
                         Back

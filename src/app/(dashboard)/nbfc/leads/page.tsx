@@ -54,7 +54,11 @@ const STAGES = [
   { id: "sanctioned", label: "Sanctioned", match: ["sanctioned"] },
   { id: "dealer_approved", label: "Dealer Approved", match: ["dealer_approved"] },
   { id: "disbursed", label: "Disbursed", match: ["disbursed"] },
-  { id: "active", label: "Active", match: ["active", "disbursed"] },
+  // "Active" = the whole live book (money out, not yet closed): disbursed +
+  // overdue, plus any literal "active" status. This mirrors the Portfolio
+  // page's Active Loans count (disbursed AND closed_at IS NULL) so the two
+  // pages agree. Disbursed/Overdue remain as lifecycle sub-buckets below.
+  { id: "active", label: "Active", match: ["active", "disbursed", "overdue"] },
   { id: "overdue", label: "Overdue", match: ["overdue"] },
   { id: "closed", label: "Closed", match: ["closed", "foreclosed"] },
 ];

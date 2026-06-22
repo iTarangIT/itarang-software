@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { isS3Backend, putObject, filesProxyPath } from '@/lib/storage/s3';
 import { videoLiveness } from '@/lib/decentro';
 import { db } from '@/lib/db';
 import { kycVerifications } from '@/lib/db/schema';
@@ -66,19 +67,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // Upload with the BASE content-type (Supabase + most browsers play the
         // file fine without the codec hint, and some CDN/proxy stacks reject
         // contentType values containing semicolons).
-        const { error: uploadError } = await supabase.storage
-            .from('documents')
-            .upload(fileName, buffer, { contentType: base || 'video/webm', upsert: true });
+        let videoUrl: string;
+        if (isS3Backend) {
+            await putObject('documents', fileName, buffer, base || 'video/webm');
+            videoUrl = filesProxyPath('documents', fileName);
+        } else {
+            const { error: uploadError } = await supabase.storage
+                .from('documents')
+                .upload(fileName, buffer, { contentType: base || 'video/webm', upsert: true });
 
-        if (uploadError) {
-            return NextResponse.json(
-                { success: false, error: { message: `Storage upload failed: ${uploadError.message}` } },
-                { status: 500 },
-            );
+            if (uploadError) {
+                return NextResponse.json(
+                    { success: false, error: { message: `Storage upload failed: ${uploadError.message}` } },
+                    { status: 500 },
+                );
+            }
+
+            const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
+            videoUrl = urlData.publicUrl;
         }
-
-        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
-        const videoUrl = urlData.publicUrl;
 
         const blob = new Blob([buffer], { type: base || 'video/webm' });
         const decentroRes = await videoLiveness(blob, 'Customer video liveness for loan KYC', `liveness.${ext}`);

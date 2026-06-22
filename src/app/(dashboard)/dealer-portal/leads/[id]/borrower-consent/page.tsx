@@ -1185,12 +1185,14 @@ export default function BorrowerConsentPage() {
                                             </li>
                                         )}
                                         {step3Ctx.requires_co_borrower && (
-                                            <li className="flex items-center gap-2">
-                                                <span className="w-1.5 h-1.5 rounded-full bg-blue-600 flex-shrink-0" />
-                                                Co-Borrower KYC
-                                                {step3Ctx.latest_co_borrower_request?.reason && (
-                                                    <span className="italic text-blue-700"> — {step3Ctx.latest_co_borrower_request.reason}</span>
-                                                )}
+                                            <li className="flex items-start gap-2">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-blue-600 flex-shrink-0 mt-1.5" />
+                                                <span className="flex-1 min-w-0">
+                                                    <span className="block">Co-Borrower KYC</span>
+                                                    {step3Ctx.latest_co_borrower_request?.reason && (
+                                                        <span className="block italic text-blue-700 mt-0.5">{step3Ctx.latest_co_borrower_request.reason}</span>
+                                                    )}
+                                                </span>
                                             </li>
                                         )}
                                     </ul>

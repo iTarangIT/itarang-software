@@ -4,6 +4,7 @@ import { leadDocuments } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { successResponse, errorResponse, withErrorHandler } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
+import { isS3Backend, signObject } from '@/lib/storage/s3';
 
 export const GET = withErrorHandler(async (req: Request) => {
     const user = await requireRole(['dealer', 'ceo', 'sales_manager']);
@@ -22,6 +23,12 @@ export const GET = withErrorHandler(async (req: Request) => {
     }
 
     if (!doc.storage_path) return errorResponse('Document has no storage_path', 404);
+
+    if (isS3Backend) {
+        const signedUrl = await signObject('private-documents', doc.storage_path, 900); // 15 mins
+        if (!signedUrl) return errorResponse('Failed to sign document', 500);
+        return successResponse({ signedUrl });
+    }
 
     const adminSupabase = supabaseAdmin;
     const { data, error } = await adminSupabase.storage
