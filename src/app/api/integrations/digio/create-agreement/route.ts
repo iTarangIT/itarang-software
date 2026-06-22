@@ -6,6 +6,7 @@ import {
   extractAttachedEstampDetails,
   extractStampCertificateIds,
 } from "@/lib/digio/parse-status";
+import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 
 type AgreementPayload = {
   company?: any;
@@ -26,6 +27,12 @@ async function storeUnsignedAgreementPdf(
   pathKey: string,
 ): Promise<string | null> {
   try {
+    const bucketName = "dealer-documents";
+    const filePath = `agreements/${pathKey}/unsigned-agreement.pdf`;
+    if (isS3Backend) {
+      await putObject(bucketName, filePath, pdfBuffer, "application/pdf");
+      return filesProxyPath(bucketName, filePath);
+    }
     const supabaseUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
     const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
     if (!supabaseUrl || !serviceRoleKey) {
@@ -33,8 +40,6 @@ async function storeUnsignedAgreementPdf(
       return null;
     }
     const supabase = createClient(supabaseUrl, serviceRoleKey);
-    const bucketName = "dealer-documents";
-    const filePath = `agreements/${pathKey}/unsigned-agreement.pdf`;
     const { error: uploadError } = await supabase.storage
       .from(bucketName)
       .upload(filePath, pdfBuffer, {

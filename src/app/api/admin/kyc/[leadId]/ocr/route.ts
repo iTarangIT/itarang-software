@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import { isS3Backend, signObject } from '@/lib/storage/s3';
 import { db } from '@/lib/db';
 import { kycDocuments, personalDetails } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
@@ -20,6 +21,11 @@ async function resolveFetchableUrl(storedUrl: string): Promise<string> {
         const signMatch = u.pathname.match(/\/storage\/v1\/object\/sign\/([^/]+)\/(.+)$/);
         if (signMatch) {
             const [, bucket, objectPath] = signMatch;
+            if (isS3Backend) {
+                const signed = await signObject(bucket, decodeURIComponent(objectPath), 120);
+                if (signed) return signed;
+                // Fall back to Supabase for objects not yet migrated to S3.
+            }
             const { data, error } = await supabaseAdmin.storage
                 .from(bucket)
                 .createSignedUrl(decodeURIComponent(objectPath), 120);

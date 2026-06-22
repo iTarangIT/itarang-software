@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { coBorrowers, leads, consentRecords } from '@/lib/db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
+import { isS3Backend, putObject, filesProxyPath } from '@/lib/storage/s3';
 import {
     buildDealerEditLockMessage,
     ensureAdminKycQueueEntry,
@@ -45,15 +46,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const fileName = `kyc/${leadId}/signed_consent_${Date.now()}.pdf`;
         const buffer = Buffer.from(await file.arrayBuffer());
 
-        const { error: uploadError } = await supabase.storage
-            .from('documents')
-            .upload(fileName, buffer, { contentType: 'application/pdf', upsert: true });
+        let signedConsentUrl: string;
+        if (isS3Backend) {
+            await putObject('documents', fileName, buffer, 'application/pdf');
+            signedConsentUrl = filesProxyPath('documents', fileName);
+        } else {
+            const { error: uploadError } = await supabase.storage
+                .from('documents')
+                .upload(fileName, buffer, { contentType: 'application/pdf', upsert: true });
 
-        if (uploadError) {
-            return NextResponse.json({ success: false, error: { message: 'Upload failed' } }, { status: 500 });
+            if (uploadError) {
+                return NextResponse.json({ success: false, error: { message: 'Upload failed' } }, { status: 500 });
+            }
+
+            const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
+            signedConsentUrl = urlData.publicUrl;
         }
-
-        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
         const now = new Date();
 
         // Prefer updating the row that generate-consent-pdf already created for
@@ -76,7 +84,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 .set({
                     consent_type: 'manual',
                     consent_status: 'admin_review_pending',
-                    signed_consent_url: urlData.publicUrl,
+                    signed_consent_url: signedConsentUrl,
                     signed_at: now,
                     updated_at: now,
                 })
@@ -90,7 +98,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 consent_for: dbConsentFor,
                 consent_type: 'manual',
                 consent_status: 'admin_review_pending',
-                signed_consent_url: urlData.publicUrl,
+                signed_consent_url: signedConsentUrl,
                 signed_at: now,
                 created_at: now,
                 updated_at: now,
@@ -120,7 +128,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // can't submit until consent is admin-verified — chicken-and-egg.
         await ensureAdminKycQueueEntry(leadId);
 
-        return NextResponse.json({ success: true, fileUrl: urlData.publicUrl });
+        return NextResponse.json({ success: true, fileUrl: signedConsentUrl });
     } catch (error) {
         console.error('[Upload Signed Consent] Error:', error);
         const message = error instanceof Error ? error.message : 'Server error';
