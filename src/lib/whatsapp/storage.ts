@@ -6,6 +6,7 @@
 import crypto from "crypto";
 
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { isS3Backend, putObject, removeObjects, filesProxyPath } from "@/lib/storage/s3";
 
 const BUCKET = process.env.WHATSAPP_DOCS_BUCKET || "documents";
 
@@ -47,6 +48,18 @@ export async function saveMedia(params: {
   const objectName = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
   const path = `whatsapp/${applicationId}/${docType}/${objectName}`;
 
+  if (isS3Backend) {
+    await putObject(BUCKET, path, buffer, mimeType);
+    return {
+      bucket: BUCKET,
+      path,
+      fileUrl: filesProxyPath(BUCKET, path),
+      fileName: fileName || objectName,
+      fileSize: buffer.length,
+      mimeType,
+    };
+  }
+
   const { error } = await supabaseAdmin.storage
     .from(BUCKET)
     .upload(path, buffer, { contentType: mimeType, upsert: true });
@@ -75,6 +88,10 @@ export async function removeMedia(
 ): Promise<void> {
   if (paths.length === 0) return;
   try {
+    if (isS3Backend) {
+      await removeObjects(bucket, paths);
+      return;
+    }
     const { error } = await supabaseAdmin.storage.from(bucket).remove(paths);
     if (error) {
       console.error("[WhatsApp/storage] remove failed:", error.message);

@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { extractSignedAgreementUrl } from "./parse-status";
 import { fetchDigioPdfWithRetry } from "./fetch-pdf-retry";
+import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 
 type Application = typeof dealerOnboardingApplications.$inferSelect;
 
@@ -36,7 +37,7 @@ export async function ensureDealerSignedAgreementUrl(
   const supabaseUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
   const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-  if (!clientId || !clientSecret || !supabaseUrl || !serviceRoleKey) {
+  if (!clientId || !clientSecret || (!isS3Backend && (!supabaseUrl || !serviceRoleKey))) {
     console.warn("[ensureDealerSignedAgreementUrl] missing env vars", {
       hasClientId: Boolean(clientId),
       hasClientSecret: Boolean(clientSecret),
@@ -138,30 +139,44 @@ export async function ensureDealerSignedAgreementUrl(
     return null;
   }
 
-  const supabase = createClient(supabaseUrl, serviceRoleKey);
   const bucketName = "dealer-documents";
   const filePath = `agreements/${application.id}/signed-agreement.pdf`;
 
-  const { error: uploadError } = await supabase.storage
-    .from(bucketName)
-    .upload(filePath, pdfBuffer, {
-      contentType: "application/pdf",
-      upsert: true,
-    });
+  let signedAgreementUrl: string | undefined;
 
-  if (uploadError) {
-    console.error(
-      "[ensureDealerSignedAgreementUrl] supabase upload failed:",
-      uploadError.message
-    );
-    return null;
+  if (isS3Backend) {
+    try {
+      await putObject(bucketName, filePath, Buffer.from(pdfBuffer), "application/pdf");
+    } catch (uploadErr) {
+      console.error("[ensureDealerSignedAgreementUrl] S3 upload failed:", uploadErr);
+      return null;
+    }
+    signedAgreementUrl = filesProxyPath(bucketName, filePath);
+  } else {
+    const supabase = createClient(supabaseUrl!, serviceRoleKey!);
+
+    const { error: uploadError } = await supabase.storage
+      .from(bucketName)
+      .upload(filePath, pdfBuffer, {
+        contentType: "application/pdf",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.error(
+        "[ensureDealerSignedAgreementUrl] supabase upload failed:",
+        uploadError.message
+      );
+      return null;
+    }
+
+    const { data: publicUrlData } = supabase.storage
+      .from(bucketName)
+      .getPublicUrl(filePath);
+
+    signedAgreementUrl = publicUrlData?.publicUrl;
   }
 
-  const { data: publicUrlData } = supabase.storage
-    .from(bucketName)
-    .getPublicUrl(filePath);
-
-  const signedAgreementUrl = publicUrlData?.publicUrl;
   if (!signedAgreementUrl) return null;
 
   await db

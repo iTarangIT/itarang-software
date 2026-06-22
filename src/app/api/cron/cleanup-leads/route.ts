@@ -4,6 +4,7 @@ import { eq, and, lt } from 'drizzle-orm';
 import { successResponse, withErrorHandler } from '@/lib/api-utils';
 import { checkCronAuth } from '@/lib/cron-auth';
 import { supabaseAdmin } from '@/lib/supabase/admin';
+import { isS3Backend, removeObjects } from '@/lib/storage/s3';
 
 export const GET = withErrorHandler(async (req: Request) => {
     if (process.env.NODE_ENV === 'production') {
@@ -32,7 +33,11 @@ export const GET = withErrorHandler(async (req: Request) => {
 
         for (const doc of docs) {
             if (!doc.storage_path) continue;
-            await adminSupabase.storage.from('private-documents').remove([doc.storage_path]);
+            if (isS3Backend) {
+                await removeObjects('private-documents', [doc.storage_path]);
+            } else {
+                await adminSupabase.storage.from('private-documents').remove([doc.storage_path]);
+            }
         }
 
         // Hard delete lead as it never progressed past Step 1

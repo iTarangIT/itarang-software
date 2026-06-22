@@ -12,10 +12,17 @@
 // review sheet still has a link.
 
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { isS3Backend, putObject, filesProxyUrl } from "@/lib/storage/s3";
 
 // Public bucket — create once in the Supabase project (Storage → New bucket →
 // Public). Service-role uploads bypass RLS; public objects are served at
 // /storage/v1/object/public/<bucket>/<key> with no auth.
+//
+// NOTE (S3 backend): under STORAGE_BACKEND=s3 the bucket is private and the
+// returned URL is the AUTHENTICATED /api/files proxy (absolute, via
+// NEXT_PUBLIC_APP_URL). Recording links written into external review sheets
+// therefore require an app login to play — they are no longer anonymously
+// public the way the Supabase public bucket was.
 const BUCKET = "call-recordings";
 
 const ELEVENLABS_BASE =
@@ -68,6 +75,12 @@ export async function rehostRecording(opts: {
     const ext = extFor(contentType);
     const buffer = Buffer.from(await res.arrayBuffer());
     const key = `${envPrefix()}${sanitize(provider)}/${sanitize(callId)}.${ext}`;
+
+    if (isS3Backend) {
+      await putObject(BUCKET, key, buffer, contentType);
+      console.log(`[recordingStore] re-hosted ${provider} recording ${callId} (S3)`);
+      return filesProxyUrl(BUCKET, key);
+    }
 
     const { error } = await supabaseAdmin.storage
       .from(BUCKET)
@@ -144,6 +157,15 @@ export async function rehostElevenLabsRecording(
     }
 
     const key = `${envPrefix()}elevenlabs/${sanitize(conversationId)}.${ext}`;
+
+    if (isS3Backend) {
+      await putObject(BUCKET, key, buffer, contentType);
+      console.log(
+        `[recordingStore] re-hosted ElevenLabs audio ${conversationId} (${buffer.byteLength} bytes, S3)`,
+      );
+      return filesProxyUrl(BUCKET, key);
+    }
+
     const { error } = await supabaseAdmin.storage
       .from(BUCKET)
       .upload(key, buffer, { contentType, upsert: true });

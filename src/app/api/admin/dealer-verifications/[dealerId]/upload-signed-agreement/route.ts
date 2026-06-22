@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { normalizeAgreementStatus } from "@/lib/agreement/status";
+import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -155,17 +156,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       );
     }
 
-    // ─── upload to Supabase storage ───────────────────────────────────────
-    const supabaseUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
-    const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
-    if (!supabaseUrl || !serviceRoleKey) {
-      return NextResponse.json(
-        { success: false, message: "Missing Supabase configuration" },
-        { status: 500 }
-      );
-    }
-
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    // ─── upload to storage ────────────────────────────────────────────────
     const bucketName = "dealer-documents";
 
     // Canonical paths — identical to ensureDealer*Url() and the download routes
@@ -173,34 +164,55 @@ export async function POST(req: NextRequest, context: RouteContext) {
     const signedPath = `agreements/${dealerId}/signed-agreement.pdf`;
     const auditPath = `agreements/${dealerId}/audit-trail.pdf`;
 
-    const [signedUpload, auditUpload] = await Promise.all([
-      supabase.storage.from(bucketName).upload(signedPath, signedBuffer, {
-        contentType: "application/pdf",
-        upsert: true,
-      }),
-      supabase.storage.from(bucketName).upload(auditPath, auditBuffer, {
-        contentType: "application/pdf",
-        upsert: true,
-      }),
-    ]);
+    let signedAgreementUrl: string | undefined;
+    let auditTrailUrl: string | undefined;
 
-    if (signedUpload.error || auditUpload.error) {
-      console.error("[UPLOAD SIGNED AGREEMENT] supabase upload failed", {
-        signed: signedUpload.error?.message,
-        audit: auditUpload.error?.message,
-      });
-      return NextResponse.json(
-        { success: false, message: "Failed to store the uploaded documents." },
-        { status: 500 }
-      );
+    if (isS3Backend) {
+      await putObject(bucketName, signedPath, Buffer.from(signedBuffer), "application/pdf");
+      await putObject(bucketName, auditPath, Buffer.from(auditBuffer), "application/pdf");
+      signedAgreementUrl = filesProxyPath(bucketName, signedPath);
+      auditTrailUrl = filesProxyPath(bucketName, auditPath);
+    } else {
+      const supabaseUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
+      const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
+      if (!supabaseUrl || !serviceRoleKey) {
+        return NextResponse.json(
+          { success: false, message: "Missing Supabase configuration" },
+          { status: 500 }
+        );
+      }
+
+      const supabase = createClient(supabaseUrl, serviceRoleKey);
+
+      const [signedUpload, auditUpload] = await Promise.all([
+        supabase.storage.from(bucketName).upload(signedPath, signedBuffer, {
+          contentType: "application/pdf",
+          upsert: true,
+        }),
+        supabase.storage.from(bucketName).upload(auditPath, auditBuffer, {
+          contentType: "application/pdf",
+          upsert: true,
+        }),
+      ]);
+
+      if (signedUpload.error || auditUpload.error) {
+        console.error("[UPLOAD SIGNED AGREEMENT] supabase upload failed", {
+          signed: signedUpload.error?.message,
+          audit: auditUpload.error?.message,
+        });
+        return NextResponse.json(
+          { success: false, message: "Failed to store the uploaded documents." },
+          { status: 500 }
+        );
+      }
+
+      signedAgreementUrl = supabase.storage
+        .from(bucketName)
+        .getPublicUrl(signedPath).data?.publicUrl;
+      auditTrailUrl = supabase.storage
+        .from(bucketName)
+        .getPublicUrl(auditPath).data?.publicUrl;
     }
-
-    const signedAgreementUrl = supabase.storage
-      .from(bucketName)
-      .getPublicUrl(signedPath).data?.publicUrl;
-    const auditTrailUrl = supabase.storage
-      .from(bucketName)
-      .getPublicUrl(auditPath).data?.publicUrl;
 
     // ─── flip agreement to completed (mirrors refresh-agreement) ──────────
     const now = new Date();

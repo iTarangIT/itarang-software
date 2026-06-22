@@ -13,6 +13,7 @@ import { db } from "@/lib/db";
 import { expenseSubmissions } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { createClient } from "@/lib/supabase/server";
+import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -72,24 +73,30 @@ export async function POST(req: NextRequest) {
           { status: 400 },
         );
       }
-      const supabase = await createClient();
       const ext = file.name.split(".").pop() || "bin";
       const path = `expenses/${user.id}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
       const buffer = Buffer.from(await file.arrayBuffer());
 
-      const { error: uploadError } = await supabase.storage
-        .from("documents")
-        .upload(path, buffer, { contentType: file.type, upsert: false });
+      if (isS3Backend) {
+        await putObject("documents", path, buffer, file.type);
+        billUrl = filesProxyPath("documents", path);
+        billStoragePath = path;
+      } else {
+        const supabase = await createClient();
+        const { error: uploadError } = await supabase.storage
+          .from("documents")
+          .upload(path, buffer, { contentType: file.type, upsert: false });
 
-      if (uploadError) {
-        return NextResponse.json(
-          { success: false, error: { message: `Upload failed: ${uploadError.message}` } },
-          { status: 500 },
-        );
+        if (uploadError) {
+          return NextResponse.json(
+            { success: false, error: { message: `Upload failed: ${uploadError.message}` } },
+            { status: 500 },
+          );
+        }
+        const { data: urlData } = supabase.storage.from("documents").getPublicUrl(path);
+        billUrl = urlData.publicUrl;
+        billStoragePath = path;
       }
-      const { data: urlData } = supabase.storage.from("documents").getPublicUrl(path);
-      billUrl = urlData.publicUrl;
-      billStoragePath = path;
     }
 
     const [inserted] = await db

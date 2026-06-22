@@ -4330,8 +4330,21 @@ export const emiSchedules = pgTable(
     loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
     due_date: date("due_date").notNull(),
     paid_at: timestamp("paid_at", { withTimezone: true }),
+    // Canonical set: scheduled | overdue | missed | paid | paid_late | failed
     status: varchar({ length: 16 }).notNull(),
     days_overdue: integer("days_overdue"),
+    // E-171 — EMI Tracker per-installment fields.
+    emi_seq: integer("emi_seq"),
+    amount: numeric("amount", { precision: 12, scale: 2 }),
+    // E-173 — cumulative amount collected against this installment (partial
+    // payments). Fully settled when amount_paid >= amount.
+    amount_paid: numeric("amount_paid", { precision: 12, scale: 2 }).default("0").notNull(),
+    principal_component: numeric("principal_component", { precision: 12, scale: 2 }),
+    interest_component: numeric("interest_component", { precision: 12, scale: 2 }),
+    attempt_count: integer("attempt_count").default(0).notNull(),
+    last_attempt_at: timestamp("last_attempt_at", { withTimezone: true }),
+    payment_ref: varchar("payment_ref", { length: 64 }),
+    collection_mode: varchar("collection_mode", { length: 16 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -4340,6 +4353,59 @@ export const emiSchedules = pgTable(
       table.loan_sanction_id,
       table.due_date,
     ),
+    statusDueIdx: index("emi_schedules_status_due_idx").on(
+      table.status,
+      table.due_date,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-172 — EMI Tracker: per-attempt collection ledger.
+// -----------------------------------------------------------------------------
+// One row per auto-debit / collection attempt against an emi_schedules row.
+// emi_schedules holds installment STATE; this holds the EVENTS (every try, with
+// Razorpay correlation handles + raw payload). The UNIQUE index on
+// idempotency_key is the hard double-debit guard — the auto-debit cron inserts
+// ON CONFLICT DO NOTHING with a deterministic per-(emi, cycle) key.
+// -----------------------------------------------------------------------------
+export const emiPaymentAttempts = pgTable(
+  "emi_payment_attempts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    emi_schedule_id: uuid("emi_schedule_id").notNull(),
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    idempotency_key: varchar("idempotency_key", { length: 80 }).notNull(),
+    // 'simulate' | 'live' | 'manual'
+    mode: varchar("mode", { length: 16 }).notNull(),
+    // 'enach' | 'upi_link' | 'cash' | 'upi' | 'bank_transfer' | 'cheque' | 'qr'
+    channel: varchar("channel", { length: 16 }).notNull(),
+    razorpay_order_id: varchar("razorpay_order_id", { length: 64 }),
+    razorpay_payment_id: varchar("razorpay_payment_id", { length: 64 }),
+    razorpay_customer_id: varchar("razorpay_customer_id", { length: 64 }),
+    razorpay_token_id: varchar("razorpay_token_id", { length: 64 }),
+    amount_paise: integer("amount_paise").notNull(),
+    // 'initiated' | 'submitted' | 'succeeded' | 'failed' | 'simulated'
+    status: varchar({ length: 20 }).notNull(),
+    provider_raw_status: varchar("provider_raw_status", { length: 120 }),
+    failure_reason: text("failure_reason"),
+    provider_raw_payload: jsonb("provider_raw_payload"),
+    // E-173 — manual-collection metadata.
+    reference_no: varchar("reference_no", { length: 80 }),
+    document_url: text("document_url"),
+    collected_at: timestamp("collected_at", { withTimezone: true }),
+    note: text("note"),
+    actor_user_id: uuid("actor_user_id"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    idemUnique: uniqueIndex("emi_payment_attempts_idem_uniq").on(table.idempotency_key),
+    tenantIdx: index("emi_payment_attempts_tenant_idx").on(table.tenant_id),
+    emiIdx: index("emi_payment_attempts_emi_idx").on(table.emi_schedule_id),
+    orderIdx: index("emi_payment_attempts_order_idx").on(table.razorpay_order_id),
+    paymentIdx: index("emi_payment_attempts_payment_idx").on(table.razorpay_payment_id),
   }),
 );
 
