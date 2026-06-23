@@ -31,6 +31,8 @@ export type LeadRow = {
   loan_amount: number | null;
   loan_file_number: string | null;
   status: string;
+  recovery_flagged: boolean;
+  recovery_flagged_at: string | null;
   current_dpd: number | null;
   outstanding_amount: number | null;
   overdue_days: number | null;
@@ -66,6 +68,38 @@ function StatusPill({ status }: { status: string }) {
     <span className={`status-pill ${statusTone(status)} capitalize`}>
       {status || "—"}
     </span>
+  );
+}
+
+/**
+ * Distinct badge for loans already flagged for recovery (loan_sanctions.
+ * recovery_flagged_at is set). Kept separate from the lifecycle status pill —
+ * a flagged loan still carries its own status (overdue / disbursed) — and given
+ * a purple tone so it reads as an escalation, not a normal stage.
+ */
+function RecoveryBadge() {
+  return (
+    <span
+      className="status-pill"
+      title="This loan has been flagged for recovery"
+      style={{
+        background: "#f5f3ff",
+        color: "#6d28d9",
+        border: "1px solid #ddd6fe",
+      }}
+    >
+      <span aria-hidden="true">⚑</span> Flagged for Recovery
+    </span>
+  );
+}
+
+/** Status cell: lifecycle status + a recovery escalation badge when flagged. */
+function StatusCell({ row }: { row: LeadRow }) {
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <StatusPill status={row.status} />
+      {row.recovery_flagged ? <RecoveryBadge /> : null}
+    </div>
   );
 }
 
@@ -148,8 +182,9 @@ function LeadDetailDrawer({
         </header>
 
         <div className="space-y-5 px-5 py-5">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <StatusPill status={row.status} />
+            {row.recovery_flagged ? <RecoveryBadge /> : null}
             <span className="text-xs text-[color:var(--color-ink-muted)]">
               Read-only — NBFC partners cannot modify leads.
             </span>
@@ -248,13 +283,38 @@ function LeadDetailDrawer({
                     Flag for recovery
                     <span className="font-normal"> · irreversible, Risk Head</span>
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => setFlagOpen(true)}
-                    className="btn-danger text-sm"
-                  >
-                    Flag for Recovery
-                  </button>
+                  {row.recovery_flagged ? (
+                    <div
+                      className="rounded-lg border px-3 py-2 text-xs"
+                      style={{
+                        background: "#f5f3ff",
+                        borderColor: "#ddd6fe",
+                        color: "#6d28d9",
+                      }}
+                    >
+                      <span className="font-semibold">
+                        ⚑ Already flagged for recovery
+                      </span>
+                      {row.recovery_flagged_at ? (
+                        <span className="block text-[color:var(--color-ink-muted)]">
+                          Flagged on {fmtDate(row.recovery_flagged_at)} · track it
+                          in the Recovery &amp; Auction queue.
+                        </span>
+                      ) : (
+                        <span className="block text-[color:var(--color-ink-muted)]">
+                          Track it in the Recovery &amp; Auction queue.
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setFlagOpen(true)}
+                      className="btn-danger text-sm"
+                    >
+                      Flag for Recovery
+                    </button>
+                  )}
                 </div>
               </div>
             </section>
@@ -358,7 +418,7 @@ export default function LeadsTable({
       header: "Status",
       mobile: "primary",
       align: "right",
-      render: (r) => <StatusPill status={r.status} />,
+      render: (r) => <StatusCell row={r} />,
     },
     {
       key: "dealer",
