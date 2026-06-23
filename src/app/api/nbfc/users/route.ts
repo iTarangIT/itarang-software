@@ -14,15 +14,16 @@ import { db } from "@/lib/db";
 import { and, eq } from "drizzle-orm";
 import { nbfcRoles, nbfcUsers, users } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
-import { NBFC_ORIGINATION_ROLES } from "@/lib/nbfc/origination-roles";
+import { NBFC_ASSIGNABLE_SYSTEM_ROLES } from "@/lib/nbfc/origination-roles";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const Body = z.object({
   email: z.string().email(),
-  // Addendum V0.2 §7.2 — five origination roles.
-  role: z.enum(NBFC_ORIGINATION_ROLES).default("viewer"),
+  // Addendum V0.2 §7.2 — five origination roles, plus the Monitor/Recover roles
+  // (nbfc_risk_manager / nbfc_risk_head) for the battery-immobilisation gate.
+  role: z.enum(NBFC_ASSIGNABLE_SYSTEM_ROLES).default("viewer"),
   // E-162 — optional custom RBAC role (§15.8). When set, `role` is derived from
   // the custom role's base_role for the legacy coarse checks.
   role_id: z.string().uuid().optional().nullable(),

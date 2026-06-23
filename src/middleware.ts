@@ -122,6 +122,7 @@ export async function middleware(request: NextRequest) {
     Object.values(roleDashboards).some((dashboardPath) =>
       path.startsWith(dashboardPath),
     ) ||
+    path.startsWith("/risk-head") ||
     path.startsWith("/inventory") ||
     path.startsWith("/product-catalog") ||
     path.startsWith("/oem-onboarding") ||
@@ -188,7 +189,7 @@ export async function middleware(request: NextRequest) {
   // users.must_change_password=true; /api/auth/change-password clears it.
   if (
     role === "nbfc_partner" &&
-    path.startsWith("/nbfc") &&
+    (path.startsWith("/nbfc") || path.startsWith("/risk-head")) &&
     path !== "/change-password"
   ) {
     const { data: mustChange } = await supabase
@@ -214,6 +215,11 @@ export async function middleware(request: NextRequest) {
 
   // Shared access routes
   const sharedRouteAccess: Record<string, string[]> = {
+    // NBFC Risk Head dashboard — the second-approver surface of the
+    // battery-immobilisation gate. All NBFC users sign in as `nbfc_partner`;
+    // the layout does the fine-grained nbfc_users.role === 'nbfc_risk_head'
+    // gate. admin/ceo retain support access.
+    "/risk-head": ["nbfc_partner", "admin", "ceo"],
     "/admin/dealer-verification": ["sales_head"],
     "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
     // NBFC onboarding (BRD §6.0): sales_head submits, CEO approves. Admin and
