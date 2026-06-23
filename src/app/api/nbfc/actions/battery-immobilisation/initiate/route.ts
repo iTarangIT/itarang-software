@@ -27,7 +27,19 @@ const Body = z.object({
   reviewed_evidence_ack: z.literal(true),
 });
 
-const RISK_MANAGER_ROLES = new Set(["nbfc_risk_manager", "risk_manager"]);
+// Who may INITIATE a battery-immobilisation request on the partner dashboard.
+// By design this is the Monitor/Recover role `nbfc_risk_manager`. NBFC partners
+// that run a leaner team (no dedicated Risk Manager) initiate as the account
+// owner `nbfc_admin` instead — the two-person gate is still preserved because
+// approval is a SEPARATE role (`nbfc_risk_head`) and the engine enforces
+// initiator ≠ approver, so the admin can never self-approve. `admin` is the
+// legacy seed value `normalizeNbfcRole` maps to `nbfc_admin`; accept both.
+const RISK_MANAGER_ROLES = new Set([
+  "nbfc_risk_manager",
+  "risk_manager",
+  "nbfc_admin",
+  "admin",
+]);
 
 function statusFromError(msg: string): number {
   if (msg.startsWith("UNAUTHORIZED")) return 401;

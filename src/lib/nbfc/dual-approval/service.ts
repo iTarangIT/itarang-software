@@ -26,12 +26,14 @@ export const DUAL_APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 // in the CEO queue; the 24h TTL above remains the hard backstop.
 export const FINANCING_OFFER_DEVIATION_ACTION = "financing_offer_deviation";
 
-// Per BRD §6.4.3 / user direction (2026-05-04): NBFC creates the
-// battery_immobilisation request; the iTarang `sales_head` approves it.
-// (Was previously `nbfc_risk_head` — kept here for posterity in commit
-// history.)
+// Per the two-dashboard immobilisation design (2026-06-23): the whole flow is
+// NBFC-side. The NBFC `nbfc_risk_manager` creates the battery_immobilisation
+// request on the partner dashboard (/nbfc); the NBFC `nbfc_risk_head` approves
+// it on the dedicated Risk Head dashboard (/risk-head). (Previously routed to
+// the iTarang `sales_head` under the 2026-05-04 direction — reverted here so
+// approval stays within the NBFC partner's own roles.)
 const FALLBACK_APPROVER_ROLES: Record<string, string> = {
-  battery_immobilisation: "sales_head",
+  battery_immobilisation: "nbfc_risk_head",
   loan_restructuring: "nbfc_credit_manager",
   risk_rule_threshold_change: "itarang_risk_head",
   bulk_immobilisation: "itarang_admin",
