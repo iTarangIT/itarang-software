@@ -205,6 +205,7 @@ export default async function NbfcLeadsPage({
       loan_amount: loanSanctions.loan_amount,
       loan_file_number: loanSanctions.loan_file_number,
       sanction_status: loanSanctions.status,
+      recovery_flagged_at: loanSanctions.recovery_flagged_at,
       sanctioned_at: loanSanctions.sanctioned_at,
       lead_id: loanSanctions.lead_id,
       reference_id: leads.reference_id,
@@ -239,6 +240,7 @@ export default async function NbfcLeadsPage({
     loan_amount: string | null;
     loan_file_number: string | null;
     sanction_status: string | null;
+    recovery_flagged_at: Date | null;
     sanctioned_at: Date | null;
     lead_id: string | null;
     reference_id: string | null;
@@ -336,6 +338,10 @@ export default async function NbfcLeadsPage({
       loan_amount: r.loan_amount != null ? Number(r.loan_amount) : null,
       loan_file_number: r.loan_file_number,
       status: effective_status,
+      recovery_flagged: r.recovery_flagged_at != null,
+      recovery_flagged_at: r.recovery_flagged_at
+        ? r.recovery_flagged_at.toISOString()
+        : null,
       current_dpd: r.current_dpd,
       outstanding_amount:
         r.outstanding_amount != null ? Number(r.outstanding_amount) : null,
