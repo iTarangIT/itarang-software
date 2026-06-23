@@ -2,7 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { NBFC_ORIGINATION_ROLES, NBFC_ROLE_LABELS } from "@/lib/nbfc/origination-roles";
+import {
+  NBFC_ORIGINATION_ROLES,
+  NBFC_MONITORING_ROLES,
+  NBFC_ROLE_LABELS,
+} from "@/lib/nbfc/origination-roles";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 interface Member {
@@ -189,6 +193,13 @@ export default function UsersSection({ currentUserId, members }: Props) {
                   {roleLabel(r)}
                 </option>
               ))}
+              <optgroup label="Monitoring & Recovery">
+                {NBFC_MONITORING_ROLES.map((r) => (
+                  <option key={r} value={`sys:${r}`}>
+                    {roleLabel(r)}
+                  </option>
+                ))}
+              </optgroup>
               {customRoles.length > 0 && (
                 <optgroup label="Custom roles">
                   {customRoles.map((r) => (

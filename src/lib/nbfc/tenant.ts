@@ -18,6 +18,7 @@ import { db } from "@/lib/db";
 import { eq, and } from "drizzle-orm";
 import { nbfcLoans, nbfcTenants, nbfcUsers, users } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
+import { normalizeNbfcRole } from "@/lib/nbfc/origination-roles";
 
 export interface TenantContext {
   id: string;
@@ -190,6 +191,33 @@ export async function requireNbfcAccess(tenantId: string): Promise<SessionUser |
     .limit(1);
   if (!rows[0]) throw new Error(`FORBIDDEN: user ${session.email} is not a member of tenant ${tenantId}`);
   return session;
+}
+
+/**
+ * Resolve the current session's NBFC role within a tenant.
+ *
+ * Returns the normalised `nbfc_users.role` for the logged-in user in `tenantId`,
+ * or null if they have no membership. Internal admin/ceo sessions (which have no
+ * nbfc_users row) are reported as their CRM role so callers can grant support
+ * access. Used by dashboard layouts to gate role-specific surfaces (e.g. the
+ * Risk Head dashboard) — the distinction Risk Manager vs Risk Head lives only in
+ * nbfc_users.role, never in the CRM users.role.
+ */
+export async function getCurrentNbfcRole(
+  tenantId: string,
+): Promise<string | null> {
+  const session = await getSessionUser();
+  if (!session) return null;
+  if (session.role === "admin" || session.role === "ceo") return session.role;
+  const rows = await db
+    .select({ role: nbfcUsers.role })
+    .from(nbfcUsers)
+    .where(
+      and(eq(nbfcUsers.user_id, session.id), eq(nbfcUsers.tenant_id, tenantId)),
+    )
+    .limit(1);
+  if (!rows[0]) return null;
+  return normalizeNbfcRole(rows[0].role);
 }
 
 /**
