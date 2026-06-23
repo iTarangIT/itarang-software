@@ -30,6 +30,18 @@ export const dynamic = "force-dynamic";
 // route at /api/nbfc-uploads).
 const ALLOWED_BUCKETS = new Set(["documents", "dealer-documents", "call-recordings"]);
 
+// Buckets that require an authenticated Supabase session to read.
+//
+// `dealer-documents` is intentionally EXCLUDED: dealer onboarding is a public,
+// pre-login flow (the login page's "Create one" link lands a prospective dealer
+// on /dealer-onboarding with no session) and its upload endpoint
+// (/api/uploads/dealer-documents) is itself unauthenticated. Requiring a session
+// to read what an anonymous user just uploaded is the bug — the dealer clicks
+// "View uploaded file" and gets {"error":"Unauthorized"}. This bucket was also
+// a public Supabase bucket before the S3 migration, so anonymous reads here just
+// restore the prior behavior. Keys are random UUIDs (not enumerable).
+const AUTH_REQUIRED_BUCKETS = new Set(["documents", "call-recordings"]);
+
 const CONTENT_TYPES: Record<string, string> = {
   ".pdf": "application/pdf",
   ".jpg": "image/jpeg",
@@ -67,13 +79,17 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Require an authenticated session — these are PII documents.
-  try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  } catch {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Require an authenticated session for PII buckets. `dealer-documents` is
+  // served without a session because its write side is anonymous (public
+  // onboarding) — see AUTH_REQUIRED_BUCKETS above.
+  if (AUTH_REQUIRED_BUCKETS.has(bucket)) {
+    try {
+      const supabase = await createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    } catch {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
   }
 
   // Reject path traversal / absolute segments.
