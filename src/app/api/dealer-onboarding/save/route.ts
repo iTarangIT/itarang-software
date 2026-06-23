@@ -345,7 +345,17 @@ export async function POST(req: NextRequest) {
       itarang_signatory_2_name: itarangSignatory2Name,
       itarang_signatory_2_email: itarangSignatory2Email,
       itarang_signatory_2_mobile: itarangSignatory2Mobile,
-      provider_raw_response: { agreement: agreementConfig },
+      // Merge — never replace — the jsonb provider_raw_response. The dealer
+      // submit route writes the full `submissionSnapshot` (owner residential
+      // address, bank branch/account type, GST places of business) under this
+      // same column; a naive `{ agreement }` replace here wiped that snapshot
+      // whenever an autosave fired after submission, so the admin verification
+      // page rendered those fields as "Not available / MISSING". Keep every
+      // existing key (submissionSnapshot, source, …) and update only agreement.
+      provider_raw_response: {
+        ...cleanObject(application?.provider_raw_response),
+        agreement: agreementConfig,
+      },
       last_action_timestamp: new Date(),
     };
 
