@@ -135,7 +135,7 @@ const ADMIN_PERMISSIONS = [...NBFC_PERMISSIONS];
  * could already do (Appendix A matrix), so layering permissions on top of the
  * existing role checks changes nothing for an un-customised tenant.
  */
-export const DEFAULT_ROLE_PERMISSIONS: Record<NbfcOriginationRole, string[]> = {
+export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   nbfc_admin: ADMIN_PERMISSIONS,
   credit_underwriting: [
     "lead.view_pipeline",
@@ -171,6 +171,23 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<NbfcOriginationRole, string[]> = {
     "enach.record_manual",
   ],
   viewer: ["lead.view_pipeline", "lead.view_detail", "lead.view_activity", "audit.view_logs"],
+  // Monitor/Recover roles for the battery-immobilisation gate. Both get
+  // read-only oversight (leads, activity, audit, reports); the immobilisation
+  // initiate/approve actions are gated by role string, not by these keys.
+  nbfc_risk_manager: [
+    "lead.view_pipeline",
+    "lead.view_detail",
+    "lead.view_activity",
+    "audit.view_logs",
+    "reports.view",
+  ],
+  nbfc_risk_head: [
+    "lead.view_pipeline",
+    "lead.view_detail",
+    "lead.view_activity",
+    "audit.view_logs",
+    "reports.view",
+  ],
 };
 
 /** The default permission set for a (possibly legacy/normalised) role string. */

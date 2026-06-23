@@ -122,7 +122,7 @@ export function ImmobilisationModal({
           What will happen
         </p>
         <ol className="ml-1 list-decimal space-y-1 pl-5 text-sm">
-          <li>Request routed to Risk Head + Ops Lead for dual approval (governance check)</li>
+          <li>Request routed to your Risk Head for approval (two-person governance check)</li>
           <li>On approval, immobilisation command sent only when battery is stationary &amp; ignition off</li>
           <li>Borrower notified via SMS + App with lender identity, LSP identity, grievance URL and reversal path</li>
           <li>Audit log entry records requester, both approvers, reason code and reversibility window</li>
@@ -131,14 +131,11 @@ export function ImmobilisationModal({
 
       <section className="rounded-lg border border-sky-200 bg-sky-50/60 p-3">
         <p className="text-[10px] font-bold uppercase tracking-widest text-sky-700">
-          🛡 Approvals required
+          🛡 Approval required
         </p>
         <ul className="mt-1 space-y-0.5 text-sm">
           <li>
             <span className="font-semibold">Risk Head</span> · ~2 hrs
-          </li>
-          <li>
-            <span className="font-semibold">Ops Lead</span> · ~2–4 hrs
           </li>
         </ul>
       </section>
@@ -224,7 +221,7 @@ export function ImmobilisationModal({
         batteryCode={batteryCode}
         actionLabel="Request Immobilisation"
         reason={choice?.label ?? ""}
-        approverChain={["Risk Head", "Ops Lead"]}
+        approverChain={["Risk Head"]}
         includesBorrowerNotice
       />
 
