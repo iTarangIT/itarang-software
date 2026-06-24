@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { extractSignedAgreementUrl } from "./parse-status";
 import { fetchDigioPdfWithRetry } from "./fetch-pdf-retry";
-import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
+import { isS3Backend, putObject, getObject, filesProxyPath } from "@/lib/storage/s3";
 
 type Application = typeof dealerOnboardingApplications.$inferSelect;
 
@@ -27,7 +27,41 @@ function basicAuthHeader(clientId: string, clientSecret: string) {
 export async function ensureDealerSignedAgreementUrl(
   application: Application
 ): Promise<string | null> {
-  if (application.signed_agreement_url) return application.signed_agreement_url;
+  // A cached URL is only trustworthy if the object it points at is actually
+  // retrievable. On the S3 backend a cached files-proxy URL can point at an
+  // object that was never persisted (an earlier store failed, the key was
+  // wrong, etc.). When that happens, dealer approval fails forever with
+  // "Signed agreement is not ready yet" even though the agreement is fully
+  // signed — because downloadPdfBuffer() reads S3, gets NoSuchKey, and returns
+  // null. The "Download Signed Agreement" button doesn't hit this because it
+  // falls back to a live Digio download. So: verify the S3 object exists before
+  // trusting the cached URL; if it's missing, fall through and re-fetch from
+  // Digio below (which re-stores it), exactly like the download route does.
+  if (application.signed_agreement_url) {
+    if (!isS3Backend) return application.signed_agreement_url;
+
+    const cachedPath =
+      application.signed_agreement_storage_path ||
+      `agreements/${application.id}/signed-agreement.pdf`;
+    try {
+      const existing = await getObject("dealer-documents", cachedPath);
+      if (existing && existing.byteLength >= 100) {
+        return application.signed_agreement_url;
+      }
+      console.warn(
+        "[ensureDealerSignedAgreementUrl] cached URL present but S3 object missing/too small — re-fetching from Digio",
+        { applicationId: application.id, cachedPath }
+      );
+    } catch (err) {
+      console.warn(
+        "[ensureDealerSignedAgreementUrl] S3 existence check failed — re-fetching from Digio",
+        err
+      );
+    }
+    // Fall through to the Digio re-fetch when we can; otherwise the cached URL
+    // is the best (broken) answer we have.
+    if (!application.provider_document_id) return application.signed_agreement_url;
+  }
   if (!application.provider_document_id) return null;
 
   const clientId = cleanEnv(process.env.DIGIO_CLIENT_ID);
