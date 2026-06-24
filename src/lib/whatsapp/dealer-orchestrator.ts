@@ -16,6 +16,11 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db/index";
 import { leads, whatsappDealerSessions, whatsappMessages } from "@/lib/db/schema";
 import { getInventorySummary } from "@/lib/inventory/summary";
+import {
+  getLeadDraft,
+  initializeDraftLead,
+  saveLeadDraftFields,
+} from "@/lib/leads/draftService";
 
 import type { WhatsAppDealer } from "./dealer-identity";
 import { getAdapter } from "./index";
@@ -67,7 +72,7 @@ export async function runDealerTurn(
 
     // 1) Global commands (button ids OR typed keywords) — intercepted first.
     if (event.text === BTN_NEW_LEAD || NEW_LEAD_TRIGGERS.test(text)) {
-      return await onNewLead(session);
+      return await onNewLead(session, dealer);
     }
     if (event.text === BTN_DRAFTS || DRAFTS_TRIGGERS.test(text)) {
       return await onMyDrafts(session, dealer);
@@ -90,12 +95,30 @@ export async function runDealerTurn(
       ));
     }
 
+    // 1b) Numeric reply right after "my drafts" → resume that draft.
+    if (/^\d+$/.test(text)) {
+      const idx = (session.context as any)?.draftIndex as string[] | undefined;
+      if (Array.isArray(idx) && idx.length > 0) {
+        const pick = Number(text) - 1;
+        if (pick >= 0 && pick < idx.length) {
+          return await resumeDraft(session, idx[pick]);
+        }
+      }
+    }
+
     // 2) Otherwise route by current state.
     switch (session.current_state) {
       case "MENU":
         return await onMenu(session);
-      // Lead capture / KYC / financing states (plan Parts 3/4/10) — not yet
-      // implemented; acknowledge so the dealer isn't left hanging.
+      case "CAP_NAME":
+        return await onCaptureName(session, text);
+      case "CAP_MOBILE":
+        return await onCaptureMobile(session, text);
+      case "CAP_EMAIL":
+        return await onCaptureEmail(session, text);
+      case "CAP_ADDRESS":
+        return await onCaptureAddress(session, text);
+      // KYC / financing states (plan Parts 4/10) — not in this increment.
       default:
         return await onCaptureStub(session);
     }
@@ -203,23 +226,158 @@ async function onMyDrafts(
   );
 }
 
-async function onNewLead(session: DealerSession): Promise<void> {
-  // Entry point for lead creation. The full capture state machine (extract from
-  // Aadhaar/PAN, ask mobile/email/product/interest/payment, autosave a draft) is
-  // the next increment (plan Part 3). For now, open the flow and park the state.
-  await setDealerSession(session.id, { current_state: "LEAD_START" });
+async function onNewLead(
+  session: DealerSession,
+  dealer: WhatsAppDealer,
+): Promise<void> {
+  // Create (or resume) a real INCOMPLETE draft lead, then collect Step-1 fields
+  // one per turn, autosaving each. The draft appears in "My Drafts" here AND in
+  // the portal, where product/payment can be completed (plan: drafts are shared).
+  const draft = await initializeDraftLead({
+    dealerCode: dealer.dealerCode,
+    dealerUserId: dealer.dealerUserId,
+  });
+  await setDealerSession(session.id, {
+    active_lead_id: draft.leadId,
+    current_state: "CAP_NAME",
+  });
+  const ref = draft.referenceId ? ` (${draft.referenceId})` : "";
   await dealerReply(
     session,
-    "🆕 *New lead.* Send the customer's *Aadhaar* and *PAN* photos, or type their name to begin.",
+    draft.resumed
+      ? `🔁 Resuming your open draft${ref}. What's the customer's *full name*?`
+      : `🆕 *New lead*${ref}. What's the customer's *full name*?`,
   );
 }
 
-async function onCaptureStub(session: DealerSession): Promise<void> {
-  // Reached when the dealer is mid lead-capture/KYC/financing — states whose
-  // handlers are not in this increment. Keep the UX honest and offer the menu.
+// ── Step-1 capture: name → mobile → email → address (autosave each turn) ──────
+
+async function onCaptureName(
+  session: DealerSession,
+  text: string,
+): Promise<void> {
+  const name = text.trim();
+  if (name.length < 2) {
+    return void (await dealerReply(
+      session,
+      "Please type the customer's full name (at least 2 characters).",
+    ));
+  }
+  if (!session.active_lead_id) return await onMenu(session);
+  await saveLeadDraftFields(session.active_lead_id, { full_name: name });
+  await setDealerSession(session.id, { current_state: "CAP_MOBILE" });
+  await dealerReply(session, `Got it — *${name}*. Customer's *mobile number*?`);
+}
+
+async function onCaptureMobile(
+  session: DealerSession,
+  text: string,
+): Promise<void> {
+  const digits = text.replace(/\D/g, "");
+  const ok = digits.length === 10 || (digits.length === 12 && digits.startsWith("91"));
+  if (!ok) {
+    return void (await dealerReply(
+      session,
+      "Please send a valid 10-digit mobile number.",
+    ));
+  }
+  if (!session.active_lead_id) return await onMenu(session);
+  await saveLeadDraftFields(session.active_lead_id, { phone: text });
+  await setDealerSession(session.id, { current_state: "CAP_EMAIL" });
   await dealerReply(
     session,
-    "✍️ Lead capture over WhatsApp is being finalised. Your *drafts* and *inventory* are live — send *menu* to use them.",
+    "Customer's *email*? (needed for the loan agreement) — or type *skip*.",
+  );
+}
+
+async function onCaptureEmail(
+  session: DealerSession,
+  text: string,
+): Promise<void> {
+  if (!session.active_lead_id) return await onMenu(session);
+  const v = text.trim();
+  if (!/^skip$/i.test(v)) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+      return void (await dealerReply(
+        session,
+        "That doesn't look like a valid email. Please re-enter it, or type *skip*.",
+      ));
+    }
+    await saveLeadDraftFields(session.active_lead_id, { email: v });
+  }
+  await setDealerSession(session.id, { current_state: "CAP_ADDRESS" });
+  await dealerReply(session, "Customer's *current address*? — or type *skip*.");
+}
+
+async function onCaptureAddress(
+  session: DealerSession,
+  text: string,
+): Promise<void> {
+  if (!session.active_lead_id) return await onMenu(session);
+  const v = text.trim();
+  if (!/^skip$/i.test(v) && v.length > 0) {
+    await saveLeadDraftFields(session.active_lead_id, { current_address: v });
+  }
+  await setDealerSession(session.id, { current_state: "MENU" });
+  await dealerReply(
+    session,
+    [
+      "✅ *Draft saved.* It's in *My Drafts* on WhatsApp and in your dealer portal.",
+      "",
+      "Finish product, payment & KYC in the portal — or send *my drafts* to resume here.",
+    ].join("\n"),
+    MENU_BUTTONS,
+  );
+}
+
+/** Resume an existing draft: point the session at it and jump to the next
+ *  missing Step-1 field. */
+async function resumeDraft(
+  session: DealerSession,
+  leadId: string,
+): Promise<void> {
+  const lead = await getLeadDraft(leadId);
+  if (!lead) {
+    return void (await dealerReply(
+      session,
+      "That draft is no longer available. Send *my drafts* for the current list.",
+      MENU_BUTTONS,
+    ));
+  }
+  const next = nextCaptureState(lead);
+  await setDealerSession(session.id, {
+    active_lead_id: leadId,
+    current_state: next.state,
+  });
+  const who = lead.full_name || lead.owner_name || "this customer";
+  await dealerReply(session, `🔁 Resuming *${who}*. ${next.prompt}`);
+}
+
+function nextCaptureState(lead: {
+  full_name: string | null;
+  phone: string | null;
+  owner_email: string | null;
+  current_address: string | null;
+}): { state: string; prompt: string } {
+  if (!lead.full_name || lead.full_name === "DRAFT")
+    return { state: "CAP_NAME", prompt: "What's the customer's *full name*?" };
+  if (!lead.phone)
+    return { state: "CAP_MOBILE", prompt: "Customer's *mobile number*?" };
+  if (!lead.owner_email)
+    return { state: "CAP_EMAIL", prompt: "Customer's *email*? — or type *skip*." };
+  if (!lead.current_address)
+    return { state: "CAP_ADDRESS", prompt: "Customer's *current address*? — or type *skip*." };
+  return {
+    state: "MENU",
+    prompt: "All Step-1 details are saved — finish product & payment in the portal.",
+  };
+}
+
+async function onCaptureStub(session: DealerSession): Promise<void> {
+  // Reached only for KYC / financing states not in this increment.
+  await dealerReply(
+    session,
+    "✍️ This step is being finalised. Your *drafts* and *inventory* are live — send *menu*.",
     MENU_BUTTONS,
   );
 }
