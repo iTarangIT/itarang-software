@@ -103,23 +103,23 @@ function DealerApprovalModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 p-4">
-      <div className="w-full max-w-2xl rounded-[32px] border border-slate-200 bg-white shadow-2xl">
-        <div className="px-8 pt-8 pb-6">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-slate-900/50 p-3 sm:p-4">
+      <div className="my-auto max-h-[calc(100vh-1.5rem)] w-full max-w-2xl overflow-y-auto rounded-3xl border border-slate-200 bg-white shadow-2xl sm:max-h-[calc(100vh-2rem)] sm:rounded-[32px]">
+        <div className="px-5 pt-6 pb-5 sm:px-8 sm:pt-8 sm:pb-6">
           <div className="flex justify-center">
-            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-50 ring-8 ring-emerald-50/60">
-              <CheckCircle2 className="h-10 w-10 text-emerald-600" />
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 ring-8 ring-emerald-50/60 sm:h-20 sm:w-20">
+              <CheckCircle2 className="h-8 w-8 text-emerald-600 sm:h-10 sm:w-10" />
             </div>
           </div>
 
-          <div className="mt-6 text-center">
-            <p className="text-sm font-semibold uppercase tracking-[0.22em] text-emerald-600">
+          <div className="mt-5 text-center sm:mt-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-600 sm:text-sm">
               Account Approved
             </p>
-            <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-900">
+            <h2 className="mt-3 text-xl font-bold tracking-tight text-slate-900 sm:text-3xl">
               Congratulations, your iTarang dealer account is now active
             </h2>
-            <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-slate-600">
+            <p className="mx-auto mt-4 max-w-xl text-sm leading-6 text-slate-600 sm:text-base sm:leading-7">
               Your onboarding review has been completed successfully. Full dashboard
               access has been enabled, and you can now manage leads, orders,
               inventory, service operations, and finance workflows from your
@@ -127,7 +127,7 @@ function DealerApprovalModal({
             </p>
           </div>
 
-          <div className="mt-8 grid grid-cols-1 gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-5 md:grid-cols-3">
+          <div className="mt-6 grid grid-cols-1 gap-3 rounded-3xl border border-slate-200 bg-slate-50 p-4 sm:mt-8 sm:gap-4 sm:p-5 md:grid-cols-3">
             <div className="rounded-2xl bg-white p-4">
               <div className="flex items-center gap-2 text-slate-500">
                 <Building2 className="h-4 w-4" />
@@ -165,12 +165,12 @@ function DealerApprovalModal({
             </div>
           </div>
 
-          <div className="mt-6 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+          <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 sm:mt-6 sm:py-4">
             Your account has been activated securely and no further action is required at this time.
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 border-t border-slate-200 px-8 py-6 sm:flex-row sm:justify-center">
+        <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-5 sm:flex-row sm:justify-center sm:px-8 sm:py-6">
           <button
             onClick={onClose}
             className="inline-flex items-center justify-center rounded-2xl bg-[#1F5C8F] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[#173F63]"
