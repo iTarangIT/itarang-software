@@ -2816,6 +2816,9 @@ export const whatsappMessages = pgTable(
     template_name: text("template_name"),
     delivery_status: varchar("delivery_status", { length: 16 }),
     raw_payload: jsonb("raw_payload"),
+    // E-170: dealer self-service (post-approval) sessions. session_id FKs to the
+    // onboarding sessions table; this nullable column links dealer-mode messages.
+    dealer_session_id: uuid("dealer_session_id"),
     created_at: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -2826,6 +2829,49 @@ export const whatsappMessages = pgTable(
     ).on(table.provider_message_id),
     sessionIdIdx: index("whatsapp_messages_session_id_idx").on(
       table.session_id,
+    ),
+    dealerSessionIdIdx: index("whatsapp_messages_dealer_session_id_idx").on(
+      table.dealer_session_id,
+    ),
+  }),
+);
+
+// E-170 — one row per APPROVED dealer's WhatsApp self-service conversation
+// (create leads, customer KYC, inventory, financing). Separate from
+// whatsapp_onboarding_sessions (E-167): onboarding is dealer-FIRST and ends at
+// approval; this picks up AFTER approval. Keyed by wa_phone. current_state /
+// session_status are code-owned (src/lib/whatsapp/dealer-orchestrator.ts) — no
+// migration needed to add a state.
+export const whatsappDealerSessions = pgTable(
+  "whatsapp_dealer_sessions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    wa_phone: varchar("wa_phone", { length: 20 }).notNull(),
+    dealer_code: varchar("dealer_code", { length: 50 }).notNull(),
+    dealer_user_id: uuid("dealer_user_id"),
+    current_state: varchar("current_state", { length: 32 })
+      .default("MENU")
+      .notNull(),
+    active_lead_id: varchar("active_lead_id", { length: 255 }),
+    context: jsonb("context").default({}).notNull(),
+    session_status: varchar("session_status", { length: 24 })
+      .default("active")
+      .notNull(),
+    last_inbound_at: timestamp("last_inbound_at", { withTimezone: true }),
+    last_outbound_at: timestamp("last_outbound_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    waPhoneIdx: index("whatsapp_dealer_sessions_wa_phone_idx").on(
+      table.wa_phone,
+    ),
+    dealerCodeIdx: index("whatsapp_dealer_sessions_dealer_code_idx").on(
+      table.dealer_code,
     ),
   }),
 );

@@ -49,6 +49,8 @@ import {
   parseCompanyType,
   requiredDocuments,
 } from "./checklist";
+import { resolveWhatsAppDealer } from "./dealer-identity";
+import { runDealerTurn } from "./dealer-orchestrator";
 import { classifyDocument } from "./extraction";
 import { maskAccount, maskGstin, maskIfsc, maskPan } from "./masking";
 import { removeMedia, saveMedia } from "./storage";
@@ -194,6 +196,21 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   if (event.type === "status") {
     await updateDeliveryStatus(event);
     return;
+  }
+
+  // E-170 — dealer self-service fork. If this number belongs to an APPROVED /
+  // active dealer, route to the dealer dashboard flow (lead creation, KYC,
+  // inventory, financing). Unknown numbers fall through to onboarding unchanged.
+  // Done BEFORE getOrCreateSession so an approved dealer never spawns a stray
+  // onboarding application.
+  try {
+    const dealer = await resolveWhatsAppDealer(event.waPhone);
+    if (dealer) {
+      return await runDealerTurn(event, dealer);
+    }
+  } catch (err) {
+    console.error("[WhatsApp/orchestrator] dealer-fork lookup failed:", err);
+    // Fall through to onboarding rather than dropping the message.
   }
 
   const session = await getOrCreateSession(event);
