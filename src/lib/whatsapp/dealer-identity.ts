@@ -1,0 +1,107 @@
+// E-170 — map an inbound WhatsApp number to an APPROVED / active dealer.
+//
+// This is the fork point of the WhatsApp bot: if the sender is an approved
+// dealer, they get the dealer self-service flow (lead creation, KYC, inventory,
+// financing). Otherwise the message falls through to the existing onboarding
+// flow (orchestrator.ts). Eligibility = ANY approved/active dealer, whether they
+// onboarded via WhatsApp (matched on dealer_onboarding_applications.wa_phone) or
+// the web (matched on dealers.owner_phone).
+
+import { and, eq, inArray } from "drizzle-orm";
+
+import { db } from "@/lib/db/index";
+import {
+  dealerOnboardingApplications,
+  dealers,
+  users,
+} from "@/lib/db/schema";
+import { phoneLookupVariants } from "@/lib/ai/phone";
+
+export interface WhatsAppDealer {
+  /** dealers.dealer_id — used as leads.dealer_id (satisfies the E-105 gate). */
+  dealerCode: string;
+  /** users.id (role=dealer) — used as leads.uploader_id. May be null if the
+   *  canonical user row can't be resolved (rare; dealer can still be served). */
+  dealerUserId: string | null;
+  financeEnabled: boolean;
+  /** "whatsapp" if matched via the onboarding application's wa_phone, else "web". */
+  matchedVia: "whatsapp" | "web";
+}
+
+/**
+ * Every storage variant an inbound wa_phone ("919876543210", no '+') might be
+ * stored as across dealers.owner_phone / applications.wa_phone:
+ *   - the raw inbound form ("919876543210")
+ *   - E.164 ("+919876543210") and 10-digit ("9876543210") via phoneLookupVariants
+ */
+function phoneVariants(waPhone: string): string[] {
+  const set = new Set<string>([waPhone, ...phoneLookupVariants(waPhone)]);
+  return [...set];
+}
+
+/**
+ * Resolve an inbound WhatsApp phone to an approved/active dealer, or null.
+ * Null → the caller falls through to the onboarding flow.
+ */
+export async function resolveWhatsAppDealer(
+  waPhone: string,
+): Promise<WhatsAppDealer | null> {
+  if (!waPhone) return null;
+  const variants = phoneVariants(waPhone);
+
+  // 1) WhatsApp-onboarded: an approved application whose wa_phone matches.
+  const [app] = await db
+    .select({
+      dealerCode: dealerOnboardingApplications.dealer_code,
+      dealerUserId: dealerOnboardingApplications.dealer_user_id,
+      financeEnabled: dealerOnboardingApplications.finance_enabled,
+    })
+    .from(dealerOnboardingApplications)
+    .where(
+      and(
+        inArray(dealerOnboardingApplications.wa_phone, variants),
+        eq(dealerOnboardingApplications.onboarding_status, "approved"),
+      ),
+    )
+    .limit(1);
+
+  if (app?.dealerCode) {
+    return {
+      dealerCode: app.dealerCode,
+      dealerUserId: app.dealerUserId ?? null,
+      financeEnabled: Boolean(app.financeEnabled),
+      matchedVia: "whatsapp",
+    };
+  }
+
+  // 2) Any active dealer matched on owner_phone (covers web-onboarded dealers).
+  const [dealer] = await db
+    .select({
+      dealerCode: dealers.dealer_id,
+      financeEnabled: dealers.finance_enabled,
+    })
+    .from(dealers)
+    .where(
+      and(
+        inArray(dealers.owner_phone, variants),
+        eq(dealers.onboarding_status, "active"),
+      ),
+    )
+    .limit(1);
+
+  if (!dealer?.dealerCode) return null;
+
+  // Resolve the canonical dealer login user (leads.uploader_id).
+  const [u] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.dealer_id, dealer.dealerCode), eq(users.role, "dealer")))
+    .limit(1);
+
+  return {
+    dealerCode: dealer.dealerCode,
+    dealerUserId: u?.id ?? null,
+    financeEnabled: Boolean(dealer.financeEnabled),
+    matchedVia: "web",
+  };
+}
