@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { otherDocumentRequests } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
+import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 
 /**
  * GET — Fetch all document requests for a lead (from admin "Request More Docs")
@@ -88,33 +89,40 @@ export async function POST(
             );
         }
 
-        // Upload to Supabase storage
-        const { createClient } = await import("@supabase/supabase-js");
-        const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
-        const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+        // Upload to storage
         const bucket = (process.env.CONSENT_STORAGE_BUCKET || "documents").trim();
-
-        const supabase = createClient(supabaseUrl, serviceKey);
         const arrayBuffer = await file.arrayBuffer();
         const storagePath = `kyc/${leadId}/requested-docs/${requestId}-${Date.now()}.${file.name.split('.').pop()}`;
 
-        const { error: uploadError } = await supabase.storage
-            .from(bucket)
-            .upload(storagePath, arrayBuffer, {
-                contentType: file.type,
-                upsert: true,
-            });
+        let fileUrl: string;
+        if (isS3Backend) {
+            await putObject(bucket, storagePath, Buffer.from(arrayBuffer), file.type);
+            fileUrl = filesProxyPath(bucket, storagePath);
+        } else {
+            const { createClient } = await import("@supabase/supabase-js");
+            const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+            const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
-        if (uploadError) {
-            console.error("[Requested Docs] Upload error:", uploadError);
-            return NextResponse.json(
-                { success: false, error: { message: "File upload failed" } },
-                { status: 500 }
-            );
+            const supabase = createClient(supabaseUrl, serviceKey);
+
+            const { error: uploadError } = await supabase.storage
+                .from(bucket)
+                .upload(storagePath, arrayBuffer, {
+                    contentType: file.type,
+                    upsert: true,
+                });
+
+            if (uploadError) {
+                console.error("[Requested Docs] Upload error:", uploadError);
+                return NextResponse.json(
+                    { success: false, error: { message: "File upload failed" } },
+                    { status: 500 }
+                );
+            }
+
+            const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+            fileUrl = urlData?.publicUrl || "";
         }
-
-        const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(storagePath);
-        const fileUrl = urlData?.publicUrl || "";
 
         // Update the request record
         await db

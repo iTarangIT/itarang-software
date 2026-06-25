@@ -6,11 +6,12 @@ import { Header } from "@/components/layout/header";
 
 export function LayoutWrapper({ children }: { children: React.ReactNode }) {
     const pathname = usePathname() ?? "";
-    // /nbfc/* renders its own full chrome (NbfcPortalSidebar). Without this
-    // skip, the admin sidebar + header + ml-64 stack on top of the NBFC
-    // layout's sidebar + ml-64, pushing the page content into a sliver on
-    // the right and breaking responsive layout at narrow viewports.
-    if (pathname.startsWith("/nbfc")) {
+    // /nbfc/* and /risk-head/* render their own full chrome (NbfcPortalShell /
+    // RiskHeadShell). Without this skip, the admin sidebar + header + ml-64
+    // stack on top of that layout's sidebar + ml-64, pushing the page content
+    // into a sliver on the right and duplicating the header — exactly the
+    // double-chrome seen on the Risk Head Battery Monitoring page.
+    if (pathname.startsWith("/nbfc") || pathname.startsWith("/risk-head")) {
         return <>{children}</>;
     }
     return (

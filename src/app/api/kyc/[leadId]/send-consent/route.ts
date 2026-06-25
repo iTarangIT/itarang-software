@@ -9,6 +9,7 @@ import { requireRole } from "@/lib/auth-utils";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
 import { createDigioAgreement } from "@/lib/digio/service";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 import { createWorkflowId } from "@/lib/kyc/admin-workflow";
 import { launchBrowser } from "@/lib/pdf/launch-browser";
 type RouteContext = {
@@ -240,8 +241,18 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
     const bucket = (process.env.CONSENT_STORAGE_BUCKET || "documents").trim();
 
-    const storageUploadPromise: Promise<string | null> =
-      supabaseUrl && serviceRoleKey
+    const storageUploadPromise: Promise<string | null> = isS3Backend
+      ? (async () => {
+          try {
+            const storagePath = `kyc/${leadId}/consent/unsigned-${Date.now()}.pdf`;
+            await putObject(bucket, storagePath, pdfBuffer, "application/pdf");
+            return filesProxyPath(bucket, storagePath);
+          } catch (e) {
+            console.warn("[Send Consent] Unsigned PDF storage error:", e);
+            return null;
+          }
+        })()
+      : supabaseUrl && serviceRoleKey
         ? (async () => {
             try {
               const supabase = createSupabaseClient(supabaseUrl, serviceRoleKey);

@@ -122,6 +122,7 @@ export async function middleware(request: NextRequest) {
     Object.values(roleDashboards).some((dashboardPath) =>
       path.startsWith(dashboardPath),
     ) ||
+    path.startsWith("/risk-head") ||
     path.startsWith("/inventory") ||
     path.startsWith("/product-catalog") ||
     path.startsWith("/oem-onboarding") ||
@@ -188,7 +189,7 @@ export async function middleware(request: NextRequest) {
   // users.must_change_password=true; /api/auth/change-password clears it.
   if (
     role === "nbfc_partner" &&
-    path.startsWith("/nbfc") &&
+    (path.startsWith("/nbfc") || path.startsWith("/risk-head")) &&
     path !== "/change-password"
   ) {
     const { data: mustChange } = await supabase
@@ -214,6 +215,11 @@ export async function middleware(request: NextRequest) {
 
   // Shared access routes
   const sharedRouteAccess: Record<string, string[]> = {
+    // NBFC Risk Head dashboard — the second-approver surface of the
+    // battery-immobilisation gate. All NBFC users sign in as `nbfc_partner`;
+    // the layout does the fine-grained nbfc_users.role === 'nbfc_risk_head'
+    // gate. admin/ceo retain support access.
+    "/risk-head": ["nbfc_partner", "admin", "ceo"],
     "/admin/dealer-verification": ["sales_head"],
     "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
     // NBFC onboarding (BRD §6.0): sales_head submits, CEO approves. Admin and
@@ -275,9 +281,18 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     // Skip Next internals, favicon, image assets, and uploaded PDFs served
-    // from public/nbfc-uploads/. Without `.pdf` in this list, PDF iframes
-    // hit the auth middleware and get redirected to the user's role
+    // statically (e.g. /nbfc-uploads/*.pdf). Without `.pdf` in this list, PDF
+    // iframes hit the auth middleware and get redirected to the user's role
     // dashboard instead of returning the file.
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf)$).*)",
+    //
+    // The `(?!api/)` guard keeps the extension-skip from also swallowing the
+    // AUTHENTICATED file proxy at /api/files/<bucket>/<key>.<ext>. Those URLs
+    // MUST run through middleware so the Supabase session cookie gets refreshed
+    // — otherwise, once the short-lived access token expires, every image/PDF
+    // document view 401s ("Unauthorized") even for a logged-in user, while the
+    // rest of the app (which is refreshed on each request) keeps working.
+    // Middleware passes /api/* through without a redirect (isPublicRoute), so
+    // this only adds the refresh, never a dashboard bounce.
+    "/((?!_next/static|_next/image|favicon.ico|(?!api/).*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf)$).*)",
   ],
 };

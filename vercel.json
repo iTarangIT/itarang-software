@@ -55,6 +55,14 @@
     {
       "path": "/api/cron/dealer-agreement-expiry-reminder",
       "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/nbfc/run-emi-aging",
+      "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/cron/nbfc/run-emi-autodebit",
+      "schedule": "0 6 * * *"
     }
   ],
   "functions": {

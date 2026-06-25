@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { getCurrentTenant } from "@/lib/nbfc/tenant";
+import { redirect } from "next/navigation";
+import { getCurrentTenant, getCurrentNbfcRole } from "@/lib/nbfc/tenant";
 import NbfcPortalShell from "@/components/nbfc-portal/NbfcPortalShell";
 
 /**
@@ -12,6 +13,15 @@ import NbfcPortalShell from "@/components/nbfc-portal/NbfcPortalShell";
  */
 export default async function NbfcLayout({ children }: { children: ReactNode }) {
   const tenant = await getCurrentTenant();
+
+  // The Risk Head is the second approver in the immobilisation gate; their
+  // surface is the dedicated /risk-head dashboard. Send them there instead of
+  // the partner (Risk Manager) portal. Other roles stay on /nbfc.
+  const role = await getCurrentNbfcRole(tenant.id);
+  if (role === "nbfc_risk_head") {
+    redirect("/risk-head");
+  }
+
   return (
     <NbfcPortalShell
       tenantName={tenant.display_name}
