@@ -12,6 +12,8 @@ import type { ZohoInvoice, ZohoListInvoicesResponse } from "./types";
 export interface ListInvoicesOptions {
   page?: number;
   perPage?: number;
+  /** Zoho organization to pull from. Defaults to the primary org. */
+  organizationId?: string;
 }
 
 export async function listInvoicesPage(
@@ -22,15 +24,21 @@ export async function listInvoicesPage(
     per_page: opts.perPage ?? 200,
   };
 
-  const res = await zohoFetch("/invoices", { method: "GET", query });
+  const res = await zohoFetch("/invoices", {
+    method: "GET",
+    query,
+    organizationId: opts.organizationId,
+  });
   return (await res.json()) as ZohoListInvoicesResponse;
 }
 
-export async function* iterateAllInvoices(): AsyncGenerator<ZohoInvoice> {
+export async function* iterateAllInvoices(
+  organizationId?: string,
+): AsyncGenerator<ZohoInvoice> {
   let page = 1;
   // Cap pages defensively — 200 pages * 200 per page = 40k invoices/run.
   for (let i = 0; i < 200; i++) {
-    const data = await listInvoicesPage({ page });
+    const data = await listInvoicesPage({ page, organizationId });
     for (const inv of data.invoices ?? []) {
       yield inv;
     }

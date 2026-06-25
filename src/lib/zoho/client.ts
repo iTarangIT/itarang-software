@@ -7,7 +7,10 @@
 //   ZOHO_CLIENT_ID
 //   ZOHO_CLIENT_SECRET
 //   ZOHO_REFRESH_TOKEN     (generated once via the one-time curl in Phase 0)
-//   ZOHO_ORGANIZATION_ID
+//   ZOHO_ORGANIZATION_ID   (primary org — used as the default for single-org calls)
+//   ZOHO_ORGANIZATION_IDS  (optional, comma-separated — every org the sync pulls
+//                           from, e.g. "60060919257,60064046518" for Haryana +
+//                           Delhi. Falls back to ZOHO_ORGANIZATION_ID if unset.)
 //   ZOHO_REGION            ("in" or "com" — defaults to "in")
 
 const ZOHO_REGION = process.env.ZOHO_REGION || "in";
@@ -15,6 +18,7 @@ const ZOHO_CLIENT_ID = process.env.ZOHO_CLIENT_ID;
 const ZOHO_CLIENT_SECRET = process.env.ZOHO_CLIENT_SECRET;
 const ZOHO_REFRESH_TOKEN = process.env.ZOHO_REFRESH_TOKEN;
 const ZOHO_ORGANIZATION_ID = process.env.ZOHO_ORGANIZATION_ID;
+const ZOHO_ORGANIZATION_IDS = process.env.ZOHO_ORGANIZATION_IDS;
 
 const ACCOUNTS_BASE = `https://accounts.zoho.${ZOHO_REGION}`;
 const API_BASE = `https://www.zohoapis.${ZOHO_REGION}/invoice/v3`;
@@ -27,9 +31,10 @@ interface TokenCache {
 let cached: TokenCache | null = null;
 
 function assertConfigured() {
-  if (!ZOHO_CLIENT_ID || !ZOHO_CLIENT_SECRET || !ZOHO_REFRESH_TOKEN || !ZOHO_ORGANIZATION_ID) {
+  const hasOrg = !!(ZOHO_ORGANIZATION_ID || ZOHO_ORGANIZATION_IDS);
+  if (!ZOHO_CLIENT_ID || !ZOHO_CLIENT_SECRET || !ZOHO_REFRESH_TOKEN || !hasOrg) {
     throw new Error(
-      "Zoho credentials missing. Set ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN, ZOHO_ORGANIZATION_ID in .env.local.",
+      "Zoho credentials missing. Set ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN, and ZOHO_ORGANIZATION_ID (or ZOHO_ORGANIZATION_IDS) in .env.local.",
     );
   }
 }
@@ -73,18 +78,36 @@ export async function getAccessToken(): Promise<string> {
   return cached.accessToken;
 }
 
+// Every org the sync should pull from. Prefer the explicit comma-separated
+// list; otherwise fall back to the single primary org.
+export function getOrganizationIds(): string[] {
+  assertConfigured();
+  if (ZOHO_ORGANIZATION_IDS) {
+    const ids = ZOHO_ORGANIZATION_IDS.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (ids.length) return ids;
+  }
+  return [ZOHO_ORGANIZATION_ID!];
+}
+
+// Primary org — the default target for single-org calls (e.g. the invoices
+// list endpoint when no org is specified).
 export function getOrganizationId(): string {
   assertConfigured();
-  return ZOHO_ORGANIZATION_ID!;
+  return ZOHO_ORGANIZATION_ID ?? getOrganizationIds()[0];
 }
 
 export async function zohoFetch(
   path: string,
-  init: RequestInit & { query?: Record<string, string | number | undefined> } = {},
+  init: RequestInit & {
+    query?: Record<string, string | number | undefined>;
+    organizationId?: string;
+  } = {},
 ): Promise<Response> {
   const token = await getAccessToken();
   const url = new URL(`${API_BASE}${path}`);
-  url.searchParams.set("organization_id", getOrganizationId());
+  url.searchParams.set("organization_id", init.organizationId ?? getOrganizationId());
   if (init.query) {
     for (const [k, v] of Object.entries(init.query)) {
       if (v !== undefined) url.searchParams.set(k, String(v));
