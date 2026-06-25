@@ -9,6 +9,7 @@ import {
   ArrowRight,
   ShoppingBag,
 } from "lucide-react";
+import { formatINRCompact } from "@/lib/format";
 
 interface RecentInvoice {
   id: string;
@@ -27,18 +28,19 @@ interface RecentExpense {
   submitter_name: string | null;
 }
 
+type SnapshotMetric = "purchases" | "sales" | "expenses";
+
 interface Props {
   purchasesMtd: number;
   salesMtd: number;
   otherExpensesMtd: number;
   recentInvoices?: RecentInvoice[];
   recentExpenses?: RecentExpense[];
+  /** Open a drill-down for the clicked tile. When omitted, tiles are static. */
+  onTileClick?: (metric: SnapshotMetric, title: string) => void;
 }
 
-function formatINR(n: number): string {
-  if (n >= 1_00_000) return `₹${(n / 1_00_000).toFixed(2)}L`;
-  return `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
-}
+const formatINR = (n: number) => formatINRCompact(n);
 
 export function BusinessSnapshotPanel({
   purchasesMtd,
@@ -46,6 +48,7 @@ export function BusinessSnapshotPanel({
   otherExpensesMtd,
   recentInvoices = [],
   recentExpenses = [],
+  onTileClick,
 }: Props) {
   const netMtd = salesMtd - purchasesMtd - otherExpensesMtd;
 
@@ -64,30 +67,27 @@ export function BusinessSnapshotPanel({
       </div>
 
       <div className="grid grid-cols-3 gap-3">
-        <div data-testid="tile-oem-purchases" className="p-3 rounded-xl bg-rose-50/60 border border-rose-100/60">
-          <p className="text-[10px] uppercase tracking-wider font-bold text-rose-700/70">
-            Purchases from OEM
-          </p>
-          <p data-testid="tile-oem-purchases-value" className="text-lg font-bold text-rose-900 mt-1">
-            {formatINR(purchasesMtd)}
-          </p>
-        </div>
-        <div data-testid="tile-sales-to-dealer" className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-100/60">
-          <p className="text-[10px] uppercase tracking-wider font-bold text-emerald-700/70">
-            Sales to Dealer
-          </p>
-          <p data-testid="tile-sales-to-dealer-value" className="text-lg font-bold text-emerald-900 mt-1">
-            {formatINR(salesMtd)}
-          </p>
-        </div>
-        <div data-testid="tile-other-expenses" className="p-3 rounded-xl bg-amber-50/60 border border-amber-100/60">
-          <p className="text-[10px] uppercase tracking-wider font-bold text-amber-700/70">
-            Other Expenses
-          </p>
-          <p data-testid="tile-other-expenses-value" className="text-lg font-bold text-amber-900 mt-1">
-            {formatINR(otherExpensesMtd)}
-          </p>
-        </div>
+        <Tile
+          testid="tile-oem-purchases"
+          label="Purchases from OEM"
+          value={formatINR(purchasesMtd)}
+          tone="rose"
+          onClick={onTileClick ? () => onTileClick("purchases", "Purchases from OEM (MTD)") : undefined}
+        />
+        <Tile
+          testid="tile-sales-to-dealer"
+          label="Sales to Dealer"
+          value={formatINR(salesMtd)}
+          tone="emerald"
+          onClick={onTileClick ? () => onTileClick("sales", "Sales to Dealer (MTD)") : undefined}
+        />
+        <Tile
+          testid="tile-other-expenses"
+          label="Other Expenses"
+          value={formatINR(otherExpensesMtd)}
+          tone="amber"
+          onClick={onTileClick ? () => onTileClick("expenses", "Other Expenses (MTD)") : undefined}
+        />
       </div>
 
       <div data-testid="net-mtd" className="mt-4 p-3 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between">
@@ -111,7 +111,7 @@ export function BusinessSnapshotPanel({
 
       <div className="mt-5 grid grid-cols-1 gap-4">
         <div>
-          <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 mb-2">
+          <p className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">
             Recent Zoho Invoices
           </p>
           {recentInvoices.length === 0 ? (
@@ -141,7 +141,7 @@ export function BusinessSnapshotPanel({
         </div>
 
         <div>
-          <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 mb-2 flex items-center gap-1">
+          <p className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2 flex items-center gap-1">
             <Receipt className="w-3 h-3" />
             Recent Approved Expenses
           </p>
@@ -171,6 +171,57 @@ export function BusinessSnapshotPanel({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+const TILE_TONES = {
+  rose: { bg: "bg-rose-50/60 border-rose-100/60", label: "text-rose-700/70", value: "text-rose-900" },
+  emerald: {
+    bg: "bg-emerald-50/60 border-emerald-100/60",
+    label: "text-emerald-700/70",
+    value: "text-emerald-900",
+  },
+  amber: { bg: "bg-amber-50/60 border-amber-100/60", label: "text-amber-700/70", value: "text-amber-900" },
+} as const;
+
+function Tile({
+  testid,
+  label,
+  value,
+  tone,
+  onClick,
+}: {
+  testid: string;
+  label: string;
+  value: string;
+  tone: keyof typeof TILE_TONES;
+  onClick?: () => void;
+}) {
+  const t = TILE_TONES[tone];
+  const content = (
+    <>
+      <p className={`text-[11px] uppercase tracking-wider font-bold ${t.label}`}>{label}</p>
+      <p data-testid={`${testid}-value`} className={`text-lg font-bold ${t.value} mt-1`}>
+        {value}
+      </p>
+    </>
+  );
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        data-testid={testid}
+        onClick={onClick}
+        className={`text-left p-3 rounded-xl border ${t.bg} transition-all hover:shadow-sm hover:-translate-y-0.5 cursor-pointer`}
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <div data-testid={testid} className={`p-3 rounded-xl border ${t.bg}`}>
+      {content}
     </div>
   );
 }
