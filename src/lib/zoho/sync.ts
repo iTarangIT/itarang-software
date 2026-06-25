@@ -1,11 +1,17 @@
 // Full-pull sync: Zoho Invoice v3 doesn't expose a modified-time filter,
 // so each run pulls every invoice and upserts into zoho_invoices keyed on
 // zoho_invoice_id. zoho_sync_state tracks last-run status for observability.
+//
+// Multi-org (E-171): the Zoho login owns more than one organization (Haryana +
+// Delhi). We pull from every org returned by getOrganizationIds() into the one
+// zoho_invoices table so the CEO dashboard totals are company-wide. Zoho
+// invoice_id is globally unique across a login's orgs, so the upsert key holds.
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { zohoInvoices, zohoSyncState } from "@/lib/db/schema";
 import { iterateAllInvoices } from "./invoices";
+import { getOrganizationIds } from "./client";
 import type { ZohoInvoice } from "./types";
 
 export interface SyncResult {
@@ -42,9 +48,11 @@ export async function syncInvoicesSinceLastRun(): Promise<SyncResult> {
   let upserted = 0;
 
   try {
-    for await (const inv of iterateAllInvoices()) {
-      await upsertInvoice(inv);
-      upserted += 1;
+    for (const organizationId of getOrganizationIds()) {
+      for await (const inv of iterateAllInvoices(organizationId)) {
+        await upsertInvoice(inv, organizationId);
+        upserted += 1;
+      }
     }
 
     const now = new Date();
@@ -76,13 +84,17 @@ export async function syncInvoicesSinceLastRun(): Promise<SyncResult> {
   }
 }
 
-async function upsertInvoice(inv: ZohoInvoice): Promise<void> {
+async function upsertInvoice(
+  inv: ZohoInvoice,
+  organizationId: string,
+): Promise<void> {
   if (!inv.invoice_id) return;
   const now = new Date();
   await db
     .insert(zohoInvoices)
     .values({
       zoho_invoice_id: inv.invoice_id,
+      organization_id: organizationId,
       invoice_number: inv.invoice_number ?? null,
       customer_id: inv.customer_id ?? null,
       customer_name: inv.customer_name ?? null,
@@ -99,6 +111,7 @@ async function upsertInvoice(inv: ZohoInvoice): Promise<void> {
     .onConflictDoUpdate({
       target: zohoInvoices.zoho_invoice_id,
       set: {
+        organization_id: organizationId,
         invoice_number: inv.invoice_number ?? null,
         customer_id: inv.customer_id ?? null,
         customer_name: inv.customer_name ?? null,
