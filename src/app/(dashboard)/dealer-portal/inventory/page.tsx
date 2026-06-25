@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import {
     Package, Search, Filter, Plus, AlertTriangle,
     BarChart3, Truck, Bell,
-    QrCode, Download,
+    QrCode, Download, ChevronRight,
 } from 'lucide-react';
 import DealerInventoryDetailModal from '@/components/dealer-dashboard/DealerInventoryDetailModal';
 
@@ -404,52 +404,32 @@ export default function InventoryPage() {
                     </table>
                 </div>
 
-                {/* Mobile cards — same data & handlers, stacked & readable on phones. */}
+                {/* Mobile rows — compact single line per item; tap a row to open
+                    the full detail modal (same handler as the desktop table). */}
                 <div className="md:hidden divide-y divide-gray-100">
                     {items.map(item => (
-                        <div
+                        <button
                             key={item.id}
+                            type="button"
                             onClick={() => setActiveItem(item)}
-                            className="p-4 hover:bg-gray-50 transition-colors cursor-pointer"
+                            className="flex w-full items-center gap-3 p-4 text-left hover:bg-gray-50 active:bg-gray-100 transition-colors"
                         >
-                            <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                    <div className="font-semibold text-gray-900 truncate">{item.product_name}</div>
-                                    <div className="text-xs text-gray-400">{item.warehouse_location || item.category}</div>
-                                    <div className="mt-1.5">
-                                        <CategoryBadge category={item.category} />
-                                    </div>
+                            <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                    <span className="font-semibold text-gray-900 truncate">{item.product_name}</span>
+                                    {item.is_new && <NewBadge />}
                                 </div>
-                                <span className="shrink-0">
-                                    <StockBadge status={item.status} />
-                                </span>
+                                <div className="mt-0.5 text-xs text-gray-400 truncate">{item.warehouse_location || categoryLabel(item.category)}</div>
                             </div>
-                            <div className="mt-3 grid grid-cols-2 gap-3">
-                                <div>
-                                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Available</p>
-                                    <p className="font-bold text-gray-900">{item.quantity_available}</p>
-                                </div>
-                                <div>
-                                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Reserved</p>
-                                    <p className="text-gray-500">{item.quantity_reserved}</p>
-                                </div>
-                                <div>
-                                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Sold</p>
-                                    <p className="text-gray-500">{item.quantity_sold}</p>
-                                </div>
-                                <div>
-                                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Received</p>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-gray-600">{fmtDate(item.received_at)}</span>
-                                        {item.is_new && <NewBadge />}
-                                    </div>
-                                </div>
-                                <div>
-                                    <p className="text-[11px] uppercase tracking-wide text-gray-400">Unit Price</p>
-                                    <p className="font-semibold text-gray-900">₹{item.unit_price.toLocaleString()}</p>
-                                </div>
-                            </div>
-                        </div>
+                            <span className="shrink-0 text-right">
+                                <span className="block text-[11px] uppercase tracking-wide text-gray-400">Available</span>
+                                <span className="block font-bold text-gray-900 leading-none">{item.quantity_available}</span>
+                            </span>
+                            <span className="shrink-0">
+                                <StockBadge status={item.status} />
+                            </span>
+                            <ChevronRight className="h-4 w-4 shrink-0 text-gray-300" />
+                        </button>
                     ))}
                 </div>
                 {loadingInventory ? (

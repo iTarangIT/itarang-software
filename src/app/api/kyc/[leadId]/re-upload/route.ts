@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { kycDocuments, kycVerifications } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
+import { isS3Backend, putObject, filesProxyPath } from '@/lib/storage/s3';
 import {
     buildDealerEditLockMessage,
     isDealerKycEditsLocked,
@@ -35,15 +36,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const fileName = `kyc/${leadId}/${verificationType}_reupload_${Date.now()}.${file.name.split('.').pop()}`;
         const buffer = Buffer.from(await file.arrayBuffer());
 
-        const { error: uploadError } = await supabase.storage
-            .from('documents')
-            .upload(fileName, buffer, { contentType: file.type, upsert: true });
+        let fileUrl: string;
+        if (isS3Backend) {
+            await putObject('documents', fileName, buffer, file.type);
+            fileUrl = filesProxyPath('documents', fileName);
+        } else {
+            const { error: uploadError } = await supabase.storage
+                .from('documents')
+                .upload(fileName, buffer, { contentType: file.type, upsert: true });
 
-        if (uploadError) {
-            return NextResponse.json({ success: false, error: { message: 'Upload failed' } }, { status: 500 });
+            if (uploadError) {
+                return NextResponse.json({ success: false, error: { message: 'Upload failed' } }, { status: 500 });
+            }
+
+            const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
+            fileUrl = urlData.publicUrl;
         }
-
-        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
 
         // Update document record
         const docTypeMap: Record<string, string> = {
@@ -60,7 +68,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // Update document (scoped by doc_for so customer/borrower rows stay independent)
         await db.update(kycDocuments)
             .set({
-                file_url: urlData.publicUrl,
+                file_url: fileUrl,
                 verification_status: 'pending',
                 failed_reason: null,
                 updated_at: now,

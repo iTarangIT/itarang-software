@@ -20,6 +20,7 @@ import {
   type AuditSignerDetail,
 } from "@/lib/agreement/audit-trail-template";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { isS3Backend, putObject, getObject, filesProxyPath } from "@/lib/storage/s3";
 
 function pickString(...values: unknown[]): string | null {
   for (const v of values) {
@@ -368,28 +369,49 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 
     let fileBuffer: ArrayBuffer | null = null;
 
-    // 1. Try existing Supabase stored file first
+    // 1. Try existing stored file first
     if (application.audit_trail_storage_path) {
-      const { data, error } = await supabase.storage
-        .from(bucketName)
-        .download(application.audit_trail_storage_path);
+      if (isS3Backend) {
+        const buf = await getObject(bucketName, application.audit_trail_storage_path);
+        if (buf) {
+          const candidate = buf.buffer.slice(
+            buf.byteOffset,
+            buf.byteOffset + buf.byteLength
+          ) as ArrayBuffer;
+          if (isValidPdfBuffer(candidate)) {
+            fileBuffer = candidate;
+          } else {
+            console.warn(
+              "[AUDIT TRAIL DOWNLOAD] S3 cache invalid (size=",
+              candidate.byteLength,
+              "), will re-fetch from Digio"
+            );
+          }
+        }
+      }
+      // Supabase read (also the fallback when S3 returned nothing)
+      if (!fileBuffer) {
+        const { data, error } = await supabase.storage
+          .from(bucketName)
+          .download(application.audit_trail_storage_path);
 
-      if (!error && data) {
-        const candidate = await data.arrayBuffer();
-        if (isValidPdfBuffer(candidate)) {
-          fileBuffer = candidate;
+        if (!error && data) {
+          const candidate = await data.arrayBuffer();
+          if (isValidPdfBuffer(candidate)) {
+            fileBuffer = candidate;
+          } else {
+            console.warn(
+              "[AUDIT TRAIL DOWNLOAD] Supabase cache invalid (size=",
+              candidate.byteLength,
+              "), will re-fetch from Digio"
+            );
+          }
         } else {
-          console.warn(
-            "[AUDIT TRAIL DOWNLOAD] Supabase cache invalid (size=",
-            candidate.byteLength,
-            "), will re-fetch from Digio"
+          console.error(
+            "[AUDIT TRAIL DOWNLOAD] Supabase stored file download failed:",
+            error?.message
           );
         }
-      } else {
-        console.error(
-          "[AUDIT TRAIL DOWNLOAD] Supabase stored file download failed:",
-          error?.message
-        );
       }
     }
 
@@ -461,37 +483,54 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         );
       }
 
-      // Try to cache in Supabase storage for future downloads (non-blocking)
-      try {
-        const { error: uploadError } = await supabase.storage
-          .from(bucketName)
-          .upload(filePath, fileBuffer, {
-            contentType: effectiveContentType,
-            upsert: true,
-          });
-
-        if (!uploadError) {
-          const { data: publicUrlData } = supabase.storage
-            .from(bucketName)
-            .getPublicUrl(filePath);
-
-          const auditTrailUrl = publicUrlData?.publicUrl;
-
-          if (auditTrailUrl) {
-            await db
-              .update(dealerOnboardingApplications)
-              .set({
-                audit_trail_url: auditTrailUrl,
-                audit_trail_storage_path: filePath,
-                updated_at: new Date(),
-              })
-              .where(eq(dealerOnboardingApplications.id, dealerId));
-          }
-        } else {
-          console.warn("[AUDIT TRAIL] Supabase cache upload failed (non-blocking):", uploadError.message);
+      // Try to cache in storage for future downloads (non-blocking)
+      if (isS3Backend) {
+        try {
+          await putObject(bucketName, filePath, Buffer.from(fileBuffer), effectiveContentType);
+          const auditTrailUrl = filesProxyPath(bucketName, filePath);
+          await db
+            .update(dealerOnboardingApplications)
+            .set({
+              audit_trail_url: auditTrailUrl,
+              audit_trail_storage_path: filePath,
+              updated_at: new Date(),
+            })
+            .where(eq(dealerOnboardingApplications.id, dealerId));
+        } catch (cacheErr) {
+          console.warn("[AUDIT TRAIL] S3 caching error (non-blocking):", cacheErr);
         }
-      } catch (cacheErr) {
-        console.warn("[AUDIT TRAIL] Supabase caching error (non-blocking):", cacheErr);
+      } else {
+        try {
+          const { error: uploadError } = await supabase.storage
+            .from(bucketName)
+            .upload(filePath, fileBuffer, {
+              contentType: effectiveContentType,
+              upsert: true,
+            });
+
+          if (!uploadError) {
+            const { data: publicUrlData } = supabase.storage
+              .from(bucketName)
+              .getPublicUrl(filePath);
+
+            const auditTrailUrl = publicUrlData?.publicUrl;
+
+            if (auditTrailUrl) {
+              await db
+                .update(dealerOnboardingApplications)
+                .set({
+                  audit_trail_url: auditTrailUrl,
+                  audit_trail_storage_path: filePath,
+                  updated_at: new Date(),
+                })
+                .where(eq(dealerOnboardingApplications.id, dealerId));
+            }
+          } else {
+            console.warn("[AUDIT TRAIL] Supabase cache upload failed (non-blocking):", uploadError.message);
+          }
+        } catch (cacheErr) {
+          console.warn("[AUDIT TRAIL] Supabase caching error (non-blocking):", cacheErr);
+        }
       }
     }
 

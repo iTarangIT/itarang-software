@@ -1136,9 +1136,12 @@ export function Sidebar() {
     }));
   }
 
-  // The mobile drawer is dealer-portal-only (per product decision). The desktop
-  // sidebar is unchanged for every role.
-  const isDealerPortal = pathname.startsWith("/dealer-portal");
+  // The mobile drawer shows on the dealer portal and on the shared /expenses
+  // pages (a common route reachable by any role — without this the user lands
+  // there on mobile with no way to open navigation). The desktop sidebar is
+  // unchanged for every role.
+  const showMobileDrawer =
+    pathname.startsWith("/dealer-portal") || pathname.startsWith("/expenses");
 
   // BRD §6.B sidebar — solid #02314e navy, 9px ALL CAPS section labels at
   // rgba(255,255,255,0.30), 13px DM Sans Medium nav items, 3px transparent
@@ -1157,10 +1160,10 @@ export function Sidebar() {
         />
       </div>
 
-      {/* Mobile drawer — phone-only (md:hidden), dealer portal only. Mirrors the
-          NbfcPortalSidebar pattern: backdrop + left slide-in panel, driven by the
-          shared uiStore and the header hamburger. */}
-      {isDealerPortal && (
+      {/* Mobile drawer — phone-only (md:hidden), shown on dealer portal + shared
+          /expenses pages. Mirrors the NbfcPortalSidebar pattern: backdrop + left
+          slide-in panel, driven by the shared uiStore and the header hamburger. */}
+      {showMobileDrawer && (
         <div
           className={`md:hidden fixed inset-0 z-50 ${
             sidebarOpen ? "" : "pointer-events-none"
