@@ -34,37 +34,9 @@ import {
   users,
 } from "@/lib/db/schema";
 import { launchBrowser } from "@/lib/pdf/launch-browser";
+import { extOf, safeSlug, fetchAsBuffer } from "@/lib/export/zip-helpers";
 
 // ---------- helpers ---------------------------------------------------------
-
-function extOf(fileName: string | null | undefined, fallback = "bin"): string {
-  if (!fileName) return fallback;
-  const m = fileName.match(/\.([a-zA-Z0-9]{1,8})$/);
-  return m ? m[1].toLowerCase() : fallback;
-}
-
-function safeSlug(s: string): string {
-  return s.replace(/[^a-zA-Z0-9_.-]+/g, "_").replace(/_+/g, "_").slice(0, 80);
-}
-
-async function fetchAsBuffer(url: string): Promise<Buffer | null> {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) {
-      console.warn(`[Profile Export] fetch ${url} -> HTTP ${res.status}`);
-      return null;
-    }
-    const ab = await res.arrayBuffer();
-    if (ab.byteLength === 0) return null;
-    return Buffer.from(ab);
-  } catch (err) {
-    console.warn(
-      `[Profile Export] fetch ${url} failed:`,
-      err instanceof Error ? err.message : err,
-    );
-    return null;
-  }
-}
 
 function maskAadhaar(raw: string | null | undefined): string {
   if (!raw) return "—";
