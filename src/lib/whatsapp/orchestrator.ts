@@ -2411,7 +2411,7 @@ function fromKycDocType(kycType: string): string | null {
       : kycType === "cheque_1"
         ? "cancelled_cheque"
         : kycType;
-  return (REQUIRED_CUSTOMER_DOCS as readonly string[]).includes(wa) ? wa : null;
+  return (ACCEPTED_CUSTOMER_DOCS as readonly string[]).includes(wa) ? wa : null;
 }
 
 /** Rebuild the in-context customer-doc set for a lead from kyc_documents, so a
@@ -3205,9 +3205,21 @@ const REQUIRED_CUSTOMER_DOCS = [
   "aadhaar_front",
   "aadhaar_back",
   "pan_card",
-  "customer_photo",
   "rc_copy",
-  "cancelled_cheque",
+] as const;
+
+// Documents the customer MAY send but that never block completion. The
+// passport-size photo and the bank cheque / passbook are optional — a lead can
+// be submitted without them, but if the dealer does upload one we still
+// classify, extract, and store it.
+const OPTIONAL_CUSTOMER_DOCS = ["customer_photo", "cancelled_cheque"] as const;
+
+// Every customer doc type we accept on upload (required + optional). Used by the
+// classifiers so an optional cheque/passbook is still recognized and stored,
+// even though it isn't part of the required set.
+const ACCEPTED_CUSTOMER_DOCS = [
+  ...REQUIRED_CUSTOMER_DOCS,
+  ...OPTIONAL_CUSTOMER_DOCS,
 ] as const;
 
 function customerDocLabel(type: string): string {
@@ -3225,7 +3237,7 @@ function customerDocLabel(type: string): string {
     case "rc_copy":
       return "RC copy";
     case "cancelled_cheque":
-      return "Bank cheque";
+      return "Bank cheque / passbook";
     default:
       return type;
   }
@@ -3237,12 +3249,15 @@ function customerDocsChecklistMessage(): string {
     "",
     "Please send these (one by one, or all together — photos, PDFs, or a ZIP):",
     "",
+    "*Required:*",
     "1️⃣ Aadhaar — *front*",
     "2️⃣ Aadhaar — *back*",
     "3️⃣ PAN card",
-    "4️⃣ Passport-size *photo*",
-    "5️⃣ *RC copy* (vehicle Registration Certificate)",
-    "6️⃣ *Bank cheque* (cancelled cheque)",
+    "4️⃣ *RC copy* (vehicle Registration Certificate)",
+    "",
+    "*Optional* (send if you have them):",
+    "▫️ Passport-size *photo*",
+    "▫️ *Bank cheque* (cancelled cheque) or *passbook photo*",
     "",
     "Type *done* when you've sent everything.",
   ].join("\n");
@@ -3318,7 +3333,7 @@ function normalizeCustomerDocType(raw: string): string | null {
     case "company_pan":
       return "pan_card";
     default:
-      return (REQUIRED_CUSTOMER_DOCS as readonly string[]).includes(raw)
+      return (ACCEPTED_CUSTOMER_DOCS as readonly string[]).includes(raw)
         ? raw
         : null;
   }
@@ -3668,7 +3683,10 @@ async function ingestCustomerDoc(
     }
   });
 
-  const haveCount = Object.keys((await getLeadCtx(session)).docs ?? {}).length;
+  // Progress counts REQUIRED docs only — an optional cheque/passbook shouldn't
+  // push the tally past the denominator (e.g. "6/5").
+  const haveDocs = Object.keys((await getLeadCtx(session)).docs ?? {});
+  const haveCount = REQUIRED_CUSTOMER_DOCS.filter((d) => haveDocs.includes(d)).length;
   await reply(
     session,
     `Got *${customerDocLabel(docType)}* ✅ (${haveCount}/${REQUIRED_CUSTOMER_DOCS.length})`,
