@@ -26,6 +26,7 @@ interface InvoiceRow {
   total: string | null;
   balance: string | null;
   status: string | null;
+  payment_reference: string | null;
 }
 
 interface ApiResponse {
@@ -323,6 +324,7 @@ export default function CEOInvoicesPage() {
                     <th className="py-2 font-semibold">Date</th>
                     <th className="py-2 font-semibold">Customer</th>
                     <th className="py-2 font-semibold">Status</th>
+                    <th className="py-2 font-semibold">Transaction ID</th>
                     <th className="py-2 font-semibold text-right">Total</th>
                     <th className="py-2 font-semibold text-right">Balance</th>
                   </tr>
@@ -341,6 +343,9 @@ export default function CEOInvoicesPage() {
                       </td>
                       <td className="py-3">
                         <StatusBadge status={r.status} />
+                      </td>
+                      <td className="py-3 text-xs text-gray-600 font-mono">
+                        {r.payment_reference || "—"}
                       </td>
                       <td className="py-3 text-xs font-bold text-gray-900 text-right">
                         {formatINR(Number(r.total || 0))}

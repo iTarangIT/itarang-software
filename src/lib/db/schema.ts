@@ -6386,6 +6386,12 @@ export const zohoInvoices = pgTable(
     total: numeric("total", { precision: 14, scale: 2 }),
     balance: numeric("balance", { precision: 14, scale: 2 }),
     status: varchar({ length: 32 }),
+    // E-174 — latest applied payment's reference (UTR / bank txn id), id and
+    // date, pulled from Zoho /customerpayments so the CEO can see the txn id
+    // behind a paid invoice.
+    payment_reference: text("payment_reference"),
+    payment_id: varchar("payment_id", { length: 64 }),
+    last_payment_date: date("last_payment_date"),
     raw_json: jsonb("raw_json"),
     synced_at: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
