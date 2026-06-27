@@ -44,6 +44,8 @@ interface LeadInfo {
   shopName: string;
   location: string;
   currentStatus: string;
+  /** Origin channel — 'whatsapp' for leads from the WhatsApp dealer console. */
+  sourceChannel: string | null;
 }
 
 interface PersonalDetails {
@@ -575,6 +577,17 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
     if (data.coBorrower && buckets.has("co_borrower")) out.push(buckets.get("co_borrower")!);
     return out;
   })();
+  // Documents + verification cards are normally gated behind a consumed coupon
+  // (the web "Submit for Verification" step). The WhatsApp dealer console has no
+  // coupon step, so for WhatsApp leads we unlock them once the admin has VERIFIED
+  // the consent instead (the consent card is always visible above this gate).
+  const isWhatsappLead = lead.sourceChannel === "whatsapp";
+  const consentVerifiedByAdmin = consent.some(
+    (c) => c.consentStatus === "verified" || c.consentStatus === "digitally_signed",
+  );
+  const docsUnlocked =
+    metadata?.couponStatus === "used" ||
+    (isWhatsappLead && consentVerifiedByAdmin);
   const isFinalDecided = metadata?.finalDecision === "approved" || metadata?.finalDecision === "rejected";
   const initials = (lead.name || "?")
     .split(/\s+/)
@@ -1072,16 +1085,20 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           to 'used'. Until then (no coupon, or coupon merely 'reserved' after
           validate-coupon), the admin sees a placeholder — early review of
           documents the dealer might still be replacing is not allowed. */}
-      {metadata?.couponStatus !== "used" ? (
+      {!docsUnlocked ? (
         <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-sm">
           <div className="w-12 h-12 rounded-full bg-amber-50 ring-1 ring-amber-200 mx-auto mb-3 flex items-center justify-center">
             <svg className="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </div>
-          <p className="text-sm font-bold text-gray-900">Awaiting Dealer Submission</p>
+          <p className="text-sm font-bold text-gray-900">
+            {isWhatsappLead ? "Verify Consent to Unlock Documents" : "Awaiting Dealer Submission"}
+          </p>
           <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
-            {metadata?.couponStatus === "reserved"
+            {isWhatsappLead
+              ? "This lead was created over WhatsApp. Review and verify the customer's consent above — the documents and verification cards will unlock here once the consent is verified."
+              : metadata?.couponStatus === "reserved"
               ? "Dealer has validated the coupon but has not yet clicked Submit for Verification. Documents will appear here once the dealer formally submits."
               : "Documents and verification cards will appear here once the dealer uploads documents, validates the coupon, and clicks Submit for Verification."}
           </p>

@@ -309,6 +309,10 @@ export const leads = pgTable("leads", {
   kyc_draft_data: jsonb("kyc_draft_data"),
   step_status: jsonb("step_status"),
   source: varchar({ length: 50 }),
+  // E-174 — channel the lead was CREATED through ('whatsapp' for the post-approval
+  // WhatsApp dealer console; NULL for web/other). Distinguishes WhatsApp leads,
+  // which share lead_source='dealer_referral' with web-dealer leads.
+  source_channel: varchar("source_channel", { length: 20 }),
   remarks: text(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

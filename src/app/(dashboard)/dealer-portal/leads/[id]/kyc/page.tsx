@@ -1074,6 +1074,7 @@ export default function KYCPage() {
                                     key={doc.key}
                                     label={doc.label}
                                     required={doc.required}
+                                    hint={(doc as { hint?: string }).hint}
                                     uploaded={!!uploadedDocs[doc.key]?.file_url}
                                     status={uploadedDocs[doc.key]?.doc_status || uploadedDocs[doc.key]?.verification_status}
                                     failedReason={uploadedDocs[doc.key]?.rejection_reason || uploadedDocs[doc.key]?.failed_reason}
@@ -1091,6 +1092,7 @@ export default function KYCPage() {
                                         key={doc.key}
                                         label={doc.label}
                                         required={doc.required}
+                                        hint={(doc as { hint?: string }).hint}
                                         uploaded={!!uploadedDocs[doc.key]?.file_url}
                                         status={uploadedDocs[doc.key]?.doc_status || uploadedDocs[doc.key]?.verification_status}
                                         failedReason={uploadedDocs[doc.key]?.rejection_reason || uploadedDocs[doc.key]?.failed_reason}

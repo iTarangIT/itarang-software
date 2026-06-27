@@ -74,6 +74,9 @@ type DealerVerificationItem = {
   city?: string | null;
   state?: string | null;
   pincode?: string | null;
+  // Combined location text (structured columns + free-text address) used by the
+  // state/city/pincode filters, since the flat columns are usually empty.
+  location?: string | null;
   gstNumber?: string | null;
   financeEnabled?: boolean | null;
   companyType?: string | null;
@@ -235,6 +238,8 @@ export default function DealerVerificationPage() {
   const [dateTo, setDateTo] = useState("");
   const [agreementFilter, setAgreementFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [companyTypeFilter, setCompanyTypeFilter] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("");
   const [stateFilter, setStateFilter] = useState("");
   const [cityFilter, setCityFilter] = useState("");
   const [pincodeFilter, setPincodeFilter] = useState("");
@@ -244,6 +249,8 @@ export default function DealerVerificationPage() {
     dateTo !== "" ||
     agreementFilter !== "" ||
     statusFilter !== "" ||
+    companyTypeFilter !== "" ||
+    sourceFilter !== "" ||
     stateFilter !== "" ||
     cityFilter !== "" ||
     pincodeFilter !== "";
@@ -315,14 +322,33 @@ export default function DealerVerificationPage() {
       result = result.filter((item) => (item.status || "") === statusFilter);
     }
 
+    if (companyTypeFilter) {
+      result = result.filter(
+        (item) => (item.companyType || "").toLowerCase() === companyTypeFilter.toLowerCase(),
+      );
+    }
+
+    if (sourceFilter) {
+      result = result.filter(
+        (item) => (item.source || "web").toLowerCase() === sourceFilter,
+      );
+    }
+
+    // State/city/pincode match the combined location haystack (structured
+    // columns + free-text address). The flat city/state columns are empty for
+    // most rows, so matching the address text is what actually filters.
+    const locationOf = (item: DealerVerificationItem) =>
+      (item.location || [item.city, item.state, item.pincode].filter(Boolean).join(" "))
+        .toLowerCase();
+
     const sf = stateFilter.trim().toLowerCase();
-    if (sf) result = result.filter((item) => (item.state || "").toLowerCase().includes(sf));
+    if (sf) result = result.filter((item) => locationOf(item).includes(sf));
 
     const cf = cityFilter.trim().toLowerCase();
-    if (cf) result = result.filter((item) => (item.city || "").toLowerCase().includes(cf));
+    if (cf) result = result.filter((item) => locationOf(item).includes(cf));
 
-    const pf = pincodeFilter.trim();
-    if (pf) result = result.filter((item) => (item.pincode || "").includes(pf));
+    const pf = pincodeFilter.trim().toLowerCase();
+    if (pf) result = result.filter((item) => locationOf(item).includes(pf));
 
     const q = query.trim().toLowerCase();
     if (q) {
@@ -350,10 +376,23 @@ export default function DealerVerificationPage() {
     dateTo,
     agreementFilter,
     statusFilter,
+    companyTypeFilter,
+    sourceFilter,
     stateFilter,
     cityFilter,
     pincodeFilter,
   ]);
+
+  // Company-type options derived from the loaded applications, so the dropdown
+  // always reflects the values actually present in the queue.
+  const companyTypeOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of applications) {
+      const t = (a.companyType || "").trim();
+      if (t) set.add(t);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [applications]);
 
   const stats = useMemo(() => {
     const total = applications.length;
@@ -397,6 +436,8 @@ export default function DealerVerificationPage() {
     if (trimmedQuery) params.set("q", trimmedQuery);
     if (agreementFilter) params.set("agreementStatus", agreementFilter);
     if (statusFilter) params.set("status", statusFilter);
+    if (companyTypeFilter) params.set("companyType", companyTypeFilter);
+    if (sourceFilter) params.set("source", sourceFilter);
     if (stateFilter.trim()) params.set("state", stateFilter.trim());
     if (cityFilter.trim()) params.set("city", cityFilter.trim());
     if (pincodeFilter.trim()) params.set("pincode", pincodeFilter.trim());
@@ -410,6 +451,8 @@ export default function DealerVerificationPage() {
     query,
     agreementFilter,
     statusFilter,
+    companyTypeFilter,
+    sourceFilter,
     stateFilter,
     cityFilter,
     pincodeFilter,
@@ -507,6 +550,7 @@ export default function DealerVerificationPage() {
                   onClick={() => {
                     setDateFrom(""); setDateTo("");
                     setAgreementFilter(""); setStatusFilter("");
+                    setCompanyTypeFilter(""); setSourceFilter("");
                     setStateFilter(""); setCityFilter(""); setPincodeFilter("");
                   }}
                   className="flex items-center gap-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500 transition hover:bg-slate-50"
@@ -522,7 +566,7 @@ export default function DealerVerificationPage() {
                 title={
                   exportDisabled
                     ? "No applications to export"
-                    : "Download the current queue as CSV"
+                    : "Download the current queue as a formatted Excel sheet"
                 }
                 className={`flex items-center gap-1.5 rounded-2xl border px-3 py-2 text-xs font-semibold transition ${
                   exportDisabled
@@ -531,7 +575,7 @@ export default function DealerVerificationPage() {
                 }`}
               >
                 <Download className="h-3.5 w-3.5" />
-                Export CSV
+                Export Excel
               </a>
             </div>
           </div>
@@ -568,6 +612,29 @@ export default function DealerVerificationPage() {
               <option value="under_correction">Under correction</option>
               <option value="approved">Approved</option>
               <option value="rejected">Rejected</option>
+            </select>
+
+            <select
+              value={companyTypeFilter}
+              onChange={(e) => setCompanyTypeFilter(e.target.value)}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs capitalize text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="">Company type: all</option>
+              {companyTypeOptions.map((t) => (
+                <option key={t} value={t} className="capitalize">
+                  {t.replaceAll("_", " ")}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="">Source: all</option>
+              <option value="web">Web</option>
+              <option value="whatsapp">WhatsApp</option>
             </select>
 
             <input
