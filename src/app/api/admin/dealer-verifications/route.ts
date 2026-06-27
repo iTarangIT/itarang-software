@@ -5,6 +5,7 @@ import { and, desc, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyApplicationsBatch } from "@/lib/dealer/duplicate-check";
 import { type CompanyType, requiredDocuments } from "@/lib/whatsapp/checklist";
+import { buildLocationHaystack } from "@/lib/dealer/location-haystack";
 
 export async function GET() {
   const auth = await requireSalesHead();
@@ -18,6 +19,8 @@ export async function GET() {
         gstNumber: dealerOnboardingApplications.gst_number,
         panNumber: dealerOnboardingApplications.pan_number,
         businessAddress: dealerOnboardingApplications.business_address,
+        registeredAddress: dealerOnboardingApplications.registered_address,
+        providerRawResponse: dealerOnboardingApplications.provider_raw_response,
         dealerCode: dealerOnboardingApplications.dealer_code,
         financeEnabled: dealerOnboardingApplications.finance_enabled,
         onboardingStatus: dealerOnboardingApplications.onboarding_status,
@@ -201,6 +204,18 @@ export async function GET() {
         city: item.city || "",
         state: item.state || "",
         pincode: item.pincode || "",
+        // Combined location haystack (flat columns + free-text address +
+        // submissionSnapshot owner address & GST places) so the
+        // state/city/pincode filters work even when the flat columns are empty —
+        // which they are for most web/WhatsApp onboarding rows.
+        location: buildLocationHaystack({
+          city: item.city,
+          state: item.state,
+          pincode: item.pincode,
+          business_address: item.businessAddress,
+          registered_address: item.registeredAddress,
+          provider_raw_response: item.providerRawResponse,
+        }),
         gstNumber: item.gstNumber,
         financeEnabled: item.financeEnabled,
         companyType: item.companyType,

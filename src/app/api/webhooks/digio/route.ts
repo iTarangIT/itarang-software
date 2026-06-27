@@ -12,6 +12,7 @@ import { and, eq } from "drizzle-orm";
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
 import { ensureAdminKycQueueEntry } from "@/lib/kyc/admin-workflow";
 import { fetchSignedLspPdfAndAuditTrail } from "@/lib/queue/jobs/fetchSignedLspPdfJob";
+import { pushSignedConsentToWhatsApp } from "@/lib/whatsapp/orchestrator";
 
 /**
  * Map a raw Digio webhook status (case-insensitive) onto the shared 7-state
@@ -356,6 +357,20 @@ export async function POST(req: NextRequest) {
       // Surface the lead on /admin/kyc-review now that the customer has signed
       // — admin still needs to verify the consent before the dealer can submit.
       await ensureAdminKycQueueEntry(record.lead_id);
+
+      // If this lead was created over WhatsApp and the dealer is parked at the
+      // consent step, push "✅ Customer signed" + the signed PDF into the chat.
+      // No-op for web-portal leads. Non-fatal — never block the webhook ack.
+      if (record.consent_for === "primary") {
+        try {
+          await pushSignedConsentToWhatsApp(
+            record.lead_id,
+            updates.signed_consent_url ?? record.signed_consent_url ?? null,
+          );
+        } catch (e) {
+          console.error("[DigiO Webhook] WhatsApp push failed:", e);
+        }
+      }
 
     } else if (failedStatuses.includes(rawStatus)) {
       console.log("[DigiO Webhook] Document failed:", documentId, rawStatus);

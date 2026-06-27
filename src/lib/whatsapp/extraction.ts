@@ -39,9 +39,18 @@ function isSupportedMime(mime: string): boolean {
   );
 }
 
+// Transient failures we retry: a connection-level "fetch failed" (intermittent
+// DNS/TLS/network blip to generativelanguage.googleapis.com — the usual cause of
+// a document the bot WOULD have read coming back as "unknown"), plus 429/5xx.
+const MAX_GEMINI_ATTEMPTS = 3;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 // Single inline-media generateContent call. Returns the parsed JSON object the
 // model produced, or an {error} discriminant the callers turn into a blank
 // result. Shared by readDocument (known type) and classifyDocument (batch/ZIP).
+// Retries transient network / 429 / 5xx failures so one blip doesn't make the
+// bot reject a perfectly good document.
 async function generate(
   buffer: Buffer,
   mimeType: string,
@@ -51,47 +60,68 @@ async function generate(
   if (!key) return { error: "gemini_key_missing" };
   if (!isSupportedMime(mimeType)) return { error: `unsupported_mime:${mimeType}` };
 
-  try {
-    const res = await fetch(`${GENAI_BASE}/${MODEL}:generateContent?key=${key}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { inline_data: { mime_type: mimeType, data: buffer.toString("base64") } },
-              { text: prompt },
-            ],
-          },
+  const requestBody = JSON.stringify({
+    contents: [
+      {
+        parts: [
+          { inline_data: { mime_type: mimeType, data: buffer.toString("base64") } },
+          { text: prompt },
         ],
-        generationConfig: {
-          temperature: 0,
-          responseMimeType: "application/json",
-          // 2048 (not 1024) so GST certs with several Additional Places of
-          // Business — each a full address object — aren't truncated.
-          maxOutputTokens: 2048,
-        },
-      }),
-    });
+      },
+    ],
+    generationConfig: {
+      temperature: 0,
+      responseMimeType: "application/json",
+      // 2048 (not 1024) so GST certs with several Additional Places of
+      // Business — each a full address object — aren't truncated.
+      maxOutputTokens: 2048,
+    },
+  });
 
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const error = data?.error?.message ?? `gemini_http_${res.status}`;
-      console.error("[WhatsApp/extraction] Gemini error:", error);
-      return { error };
+  let lastError = "network_error";
+  for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(`${GENAI_BASE}/${MODEL}:generateContent?key=${key}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: requestBody,
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        lastError = data?.error?.message ?? `gemini_http_${res.status}`;
+        // 429 (rate limit) and 5xx are transient — retry; 4xx (bad key, bad
+        // request) won't change on retry, so fail fast.
+        const retryable = res.status === 429 || res.status >= 500;
+        if (retryable && attempt < MAX_GEMINI_ATTEMPTS) {
+          await sleep(300 * attempt);
+          continue;
+        }
+        console.error("[WhatsApp/extraction] Gemini error:", lastError);
+        return { error: lastError };
+      }
+
+      const raw: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!raw) return { error: "gemini_empty_response" };
+
+      const parsed = safeParse(raw);
+      if (!parsed) return { error: "gemini_unparseable_json" };
+      return { parsed };
+    } catch (err) {
+      // Connection-level failure ("fetch failed") — always transient, retry.
+      lastError = err instanceof Error ? err.message : "network_error";
+      if (attempt < MAX_GEMINI_ATTEMPTS) {
+        await sleep(300 * attempt);
+        continue;
+      }
     }
-
-    const raw: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!raw) return { error: "gemini_empty_response" };
-
-    const parsed = safeParse(raw);
-    if (!parsed) return { error: "gemini_unparseable_json" };
-    return { parsed };
-  } catch (err) {
-    const error = err instanceof Error ? err.message : "network_error";
-    console.error("[WhatsApp/extraction] failed:", error);
-    return { error };
   }
+
+  console.error(
+    `[WhatsApp/extraction] failed after ${MAX_GEMINI_ATTEMPTS} attempts:`,
+    lastError,
+  );
+  return { error: lastError };
 }
 
 export async function readDocument(

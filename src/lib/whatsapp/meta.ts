@@ -15,6 +15,7 @@ import crypto from "crypto";
 import type {
   DownloadedMedia,
   InboundEvent,
+  ListRow,
   ReplyButton,
   SendResult,
   WhatsAppAdapter,
@@ -289,6 +290,67 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
     });
   }
 
+  /** Upload raw bytes to the resumable-less media endpoint; returns the media id. */
+  private async uploadMedia(
+    bytes: Buffer,
+    mimeType: string,
+    filename: string,
+  ): Promise<{ id: string | null; error?: string }> {
+    if (!token() || !phoneNumberId()) {
+      return { id: null, error: "meta_credentials_missing" };
+    }
+    try {
+      const form = new FormData();
+      form.append("messaging_product", "whatsapp");
+      form.append("type", mimeType);
+      // Buffer is a Uint8Array — wrap in a Blob so fetch sends multipart/form-data.
+      form.append("file", new Blob([bytes], { type: mimeType }), filename);
+      const res = await fetch(`${GRAPH_BASE}/${phoneNumberId()}/media`, {
+        method: "POST",
+        // Do NOT set Content-Type — fetch adds the multipart boundary itself.
+        headers: { Authorization: `Bearer ${token()}` },
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const error = data?.error?.message ?? `HTTP ${res.status}`;
+        console.error("[WhatsApp/meta] media upload failed:", error);
+        return { id: null, error };
+      }
+      return { id: data?.id ?? null };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : "network_error";
+      console.error("[WhatsApp/meta] media upload error:", error);
+      return { id: null, error };
+    }
+  }
+
+  async sendDocumentBytes(
+    to: string,
+    bytes: Buffer,
+    mimeType: string,
+    filename: string,
+    caption?: string,
+  ): Promise<SendResult> {
+    const up = await this.uploadMedia(bytes, mimeType, filename);
+    if (!up.id) {
+      return {
+        ok: false,
+        providerMessageId: null,
+        error: up.error ?? "media_upload_failed",
+      };
+    }
+    return this.send({
+      to: normalizePhone(to),
+      type: "document",
+      document: {
+        id: up.id,
+        filename,
+        ...(caption ? { caption } : {}),
+      },
+    });
+  }
+
   sendInteractive(
     to: string,
     body: string,
@@ -306,6 +368,37 @@ export class MetaWhatsAppAdapter implements WhatsAppAdapter {
             type: "reply",
             reply: { id: b.id, title: b.title.slice(0, 20) },
           })),
+        },
+      },
+    });
+  }
+
+  sendList(
+    to: string,
+    body: string,
+    button: string,
+    rows: ListRow[],
+  ): Promise<SendResult> {
+    return this.send({
+      to: normalizePhone(to),
+      type: "interactive",
+      interactive: {
+        type: "list",
+        body: { text: body },
+        action: {
+          // List opener label ≤20 chars; ≤10 rows total; titles ≤24, desc ≤72.
+          button: button.slice(0, 20),
+          sections: [
+            {
+              rows: rows.slice(0, 10).map((r) => ({
+                id: r.id,
+                title: r.title.slice(0, 24),
+                ...(r.description
+                  ? { description: r.description.slice(0, 72) }
+                  : {}),
+              })),
+            },
+          ],
         },
       },
     });
