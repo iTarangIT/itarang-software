@@ -115,6 +115,69 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
     description: "Articles of Association (AoA)",
     fields: { entity_name: "name of the company/entity" },
   },
+
+  // ── Customer KYC documents (WhatsApp dealer-console "New Lead" flow) ─────────
+  aadhaar_front: {
+    description: "the FRONT of an Indian Aadhaar card (photo side with name & DOB)",
+    fields: {
+      aadhaar_number: "the 12-digit Aadhaar number (digits only)",
+      name: "the cardholder's full name",
+      dob: "date of birth as printed (DD/MM/YYYY or YYYY)",
+      gender: "gender — 'male', 'female' or 'other' — if shown",
+    },
+  },
+  aadhaar_back: {
+    description: "the BACK of an Indian Aadhaar card (address side)",
+    fields: {
+      aadhaar_number: "the 12-digit Aadhaar number, if shown (digits only)",
+      address_line1: "house/street part of the address",
+      city: "city/town/village, if shown",
+      district: "district, if shown",
+      state: "state, if shown",
+      pincode: "the 6-digit PIN code, if shown",
+      full_address: "the full address as printed",
+    },
+  },
+  pan_card: {
+    description: "an Indian individual PAN card",
+    fields: {
+      pan: "the 10-character PAN (no spaces)",
+      name: "the name printed on the card",
+      father_name: "the father's name, if shown",
+      dob: "date of birth as printed (DD/MM/YYYY)",
+    },
+  },
+  customer_photo: {
+    description: "a passport-size photograph of the customer",
+    fields: {
+      face_present: "true if a clear human face is visible, else false",
+    },
+  },
+  address_proof: {
+    description:
+      "an Indian address proof document (Aadhaar, utility bill, voter ID, passport, or any document showing a residential address)",
+    fields: {
+      name: "the person's name, if shown",
+      address_line1: "house/street part of the residential address",
+      city: "city/town, if shown",
+      district: "district, if shown",
+      state: "state, if shown",
+      pincode: "the 6-digit PIN code, if shown",
+      full_address: "the full residential address as printed",
+    },
+  },
+  rc_copy: {
+    description:
+      "an Indian vehicle Registration Certificate (RC / RC smart card / RC book)",
+    fields: {
+      registration_number: "the vehicle registration number (e.g. MH12AB1234)",
+      owner_name: "the registered owner's name, if shown",
+      vehicle_class: "the vehicle class / type, if shown",
+      maker_model: "the maker's name and model, if shown",
+      chassis_number: "the chassis number, if shown",
+      engine_number: "the engine number, if shown",
+    },
+  },
 };
 
 export function fieldKeysFor(docType: string): string[] {

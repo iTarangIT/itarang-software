@@ -15,7 +15,7 @@
 // Decentro / Meta network calls — that would tie up a connection from the small
 // (max 5) pool for seconds. Rapid interleaved uploads are a Phase-2 concern.
 
-import { and, desc, eq, inArray, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import {
@@ -23,11 +23,16 @@ import {
   dealerCorrectionRounds,
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
+  documents as leadDocuments,
+  kycDocuments,
+  leads,
+  personalDetails,
   whatsappMessages,
   whatsappOnboardingSessions,
 } from "@/lib/db/schema";
 
 import JSZip from "jszip";
+import { City, State } from "country-state-city";
 
 import {
   documentLabel as correctionDocumentLabel,
@@ -50,9 +55,31 @@ import {
   requiredDocuments,
 } from "./checklist";
 import { classifyDocument } from "./extraction";
+import {
+  generateManualConsentPdf,
+  getSignedConsentForLead,
+  renderConsentPreviewPdf,
+  sendConsentForLead,
+  storeSignedConsent,
+} from "@/lib/kyc/consent-service";
+import { ensureAdminKycQueueEntry } from "@/lib/kyc/admin-workflow";
+import {
+  type ActiveDealer,
+  type DealerDraft,
+  type InterestLevel,
+  type PaymentMethod,
+  createCustomerLead,
+  getDealerAvailableStock,
+  getDealerDraft,
+  listDealerDrafts,
+  loadApplication,
+  normalizeMobile,
+  requiresConsent,
+  resolveActiveDealer,
+} from "./customer-lead";
 import { maskAccount, maskGstin, maskIfsc, maskPan } from "./masking";
 import { removeMedia, saveMedia } from "./storage";
-import type { InboundEvent, ReplyButton } from "./types";
+import type { InboundEvent, ListRow, ReplyButton } from "./types";
 
 const MIN_CONFIDENCE = Number(process.env.WHATSAPP_MIN_CONFIDENCE ?? 0.55);
 const PLACEHOLDER_COMPANY = "WhatsApp onboarding (pending)";
@@ -155,6 +182,22 @@ type Ctx = {
     /** Index into `queue` of the item we're currently collecting. */
     index: number;
   };
+  /** Active customer-lead being created in the post-approval dealer console
+   *  (states prefixed DC_*). Independent of the onboarding fields above. */
+  lead?: {
+    leadId?: string;
+    mobile?: string;
+    /** Customer name established from the first ID document (Aadhaar/PAN); used
+     *  to reject a later ID that belongs to a different person. */
+    customerName?: string;
+    interest?: "hot" | "warm" | "cold";
+    paymentMethod?: "finance" | "cash" | "other_finance";
+    /** Customer KYC document types collected so far (DC_LEAD_DOCS). */
+    docs?: Record<string, true>;
+    /** Index into ADDITIONAL_FINANCE_QUESTIONS while collecting the post-consent
+     *  resident-status / health- / life-insurance answers (DC_LEAD_FINANCE_Q). */
+    financeQIndex?: number;
+  };
 };
 
 // After this many failed attempts at one document (illegible / wrong type /
@@ -198,6 +241,16 @@ export async function runTurn(event: InboundEvent): Promise<void> {
 
   const session = await getOrCreateSession(event);
   await setSession(session.id, { last_inbound_at: new Date() });
+
+  // Post-approval dealer console: once the dealer's onboarding application is
+  // admin-approved, the SAME WhatsApp number switches from the onboarding state
+  // machine to the lead-creation console. This must run BEFORE isGreetingTrigger
+  // so an approved dealer's "hi" opens the menu instead of restarting onboarding.
+  const application = await loadApplication(session.application_id);
+  const dealer = resolveActiveDealer(application);
+  if (dealer) {
+    return await runConsoleTurn(session, event, dealer);
+  }
 
   try {
     // A greeting word (hi/hello/onboarding/start…) restarts the flow from the
@@ -2073,6 +2126,26 @@ async function reply(
   await setSession(session.id, { last_outbound_at: new Date() });
 }
 
+/** Send an interactive List (for >3 choices, e.g. the dealer console menu). */
+async function replyList(
+  session: SessionRow,
+  body: string,
+  button: string,
+  rows: ListRow[],
+): Promise<void> {
+  const res = await getAdapter().sendList(session.wa_phone, body, button, rows);
+  await db.insert(whatsappMessages).values({
+    session_id: session.id,
+    provider_message_id: res.providerMessageId,
+    direction: "outbound",
+    message_type: "interactive",
+    text_body: body,
+    delivery_status: res.ok ? "sent" : "failed",
+    raw_payload: (res.raw ?? null) as any,
+  });
+  await setSession(session.id, { last_outbound_at: new Date() });
+}
+
 function parseFieldValue(
   kind: "text" | "phone" | "email" | "yesno",
   raw: string,
@@ -2127,4 +2200,1730 @@ function humanCompanyType(ct: CompanyType | null): string {
     default:
       return "—";
   }
+}
+
+// ── Post-approval dealer console (DC_* states) ───────────────────────────────
+// Once a dealer's onboarding application is admin-approved, their WhatsApp
+// number drives this menu-based console instead of the onboarding flow. The
+// "New Lead" path is built end-to-end (capture → consent → documents); the other
+// menu items are stubs for now.
+
+// A greeting / "menu" in the console always returns the dealer to the main menu.
+const CONSOLE_MENU_TRIGGERS =
+  /^(hi+|hey+|hello+|helo|hii+|menu|start|home|back|namaste)$/i;
+
+const DEALER_MENU_ROWS: ListRow[] = [
+  { id: "menu_new_lead", title: "🆕 New Lead", description: "Create a new customer lead" },
+  { id: "menu_drafts", title: "📝 Save Drafts", description: "Resume a saved lead" },
+  { id: "menu_inventory", title: "📦 Inventory", description: "View available stock" },
+  { id: "menu_help", title: "❓ Help", description: "Support & how it works" },
+];
+
+const INTEREST_BUTTONS: ReplyButton[] = [
+  { id: "interest_hot", title: "🔥 Hot" },
+  { id: "interest_warm", title: "🌤 Warm" },
+  { id: "interest_cold", title: "❄ Cold" },
+];
+
+const PAYMENT_BUTTONS: ReplyButton[] = [
+  { id: "pay_finance", title: "iTarang Finance" },
+  { id: "pay_cash", title: "Cash" },
+  { id: "pay_other", title: "Other Finance" },
+];
+
+/** One turn for an admin-approved dealer (the post-onboarding console). */
+async function runConsoleTurn(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+): Promise<void> {
+  try {
+    const text = (event.text ?? "").trim();
+    // A typed greeting / "menu" is always an escape back to the main menu.
+    if (event.type === "text" && CONSOLE_MENU_TRIGGERS.test(text)) {
+      return await showDealerMenu(session, dealer);
+    }
+
+    switch (session.current_state) {
+      case "DC_MENU":
+        return await onMenuChoice(session, event, dealer);
+      case "DC_DRAFTS":
+        return await onDraftSelection(session, event, dealer);
+      case "DC_LEAD_MOBILE":
+        return await onLeadMobile(session, event);
+      case "DC_LEAD_INTEREST":
+        return await onLeadInterest(session, event);
+      case "DC_LEAD_PAYMENT":
+        return await onLeadPayment(session, event, dealer);
+      case "DC_LEAD_DOCS_MODE":
+        return await onLeadDocsMode(session, event, dealer);
+      case "DC_LEAD_DOCS":
+        return await onLeadDocs(session, event, dealer);
+      case "DC_LEAD_CONSENT_CHANNEL":
+        return await onConsentChannel(session, event, dealer);
+      case "DC_LEAD_CONSENT_WAIT":
+        return await onConsentWait(session, event);
+      case "DC_LEAD_FINANCE_Q":
+        return await onLeadFinanceQuestion(session, event);
+      case "DC_LEAD_CONSENT_REVIEW":
+        return await onConsentReview(session, event);
+      default:
+        // Any other state (an onboarding-terminal state, or a stale DC_* not yet
+        // handled) drops the dealer back to the menu.
+        return await showDealerMenu(session, dealer);
+    }
+  } catch (err) {
+    console.error("[WhatsApp/console] turn failed:", err);
+    await reply(
+      session,
+      "Sorry, something went wrong on our side. Please send *menu* to start again.",
+    );
+  }
+}
+
+async function showDealerMenu(
+  session: SessionRow,
+  dealer: ActiveDealer,
+): Promise<void> {
+  await mergeContext(session, (ctx) => {
+    ctx.lead = undefined;
+  });
+  await setSession(session.id, { current_state: "DC_MENU" });
+  await replyList(
+    session,
+    `👋 Hi *${dealer.dealerName}*!\n\nWhat would you like to do?`,
+    "Open Menu",
+    DEALER_MENU_ROWS,
+  );
+}
+
+async function onMenuChoice(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const id = (event.text ?? "").trim();
+  switch (id) {
+    case "menu_new_lead":
+      return await startNewLead(session);
+    case "menu_drafts":
+      return await showDrafts(session, dealer);
+    case "menu_inventory":
+      return await showInventory(session, dealer);
+    case "menu_help":
+      await reply(session, consoleHelpText());
+      return;
+    default:
+      // Unrecognized free text while at the menu → re-show the menu.
+      return await showDealerMenu(session, dealer);
+  }
+}
+
+function consoleHelpText(): string {
+  return [
+    "❓ *iTarang Dealer Help*",
+    "",
+    "• Send *menu* any time to see your options.",
+    "• *New Lead* — create a customer lead step by step.",
+    "• *Save Drafts* — resume a lead you started earlier.",
+    "• *Inventory* — see your available stock.",
+    "• Need a person? Email support@itarang.com.",
+  ].join("\n");
+}
+
+// ── Console: Save Drafts (resume an unsubmitted lead) ─────────────────────────
+
+/** Clip a string to `max` chars (WhatsApp list title ≤24 / description ≤72). */
+function clip(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+function titleCase(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
+}
+
+/** Secondary line for a draft list row: mobile · interest · payment. */
+function draftRowDescription(d: DealerDraft): string {
+  const parts: string[] = [];
+  if (d.mobile && d.mobile !== "—") parts.push(d.mobile);
+  if (d.interest) parts.push(titleCase(d.interest));
+  if (d.paymentMethod) parts.push(humanPayment(d.paymentMethod));
+  return clip(parts.join(" · ") || "Saved lead", 72);
+}
+
+// Show the dealer's unsubmitted WhatsApp leads as a tappable list. Tapping one
+// resumes it at the next incomplete step (onDraftSelection → resumeDraft).
+async function showDrafts(
+  session: SessionRow,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const drafts = await listDealerDrafts(dealer.dealerCode);
+  if (drafts.length === 0) {
+    await setSession(session.id, { current_state: "DC_MENU" });
+    await reply(
+      session,
+      "📝 You don't have any saved drafts right now.\n\nTap *New Lead* from the menu to start one. Send *menu* to go back.",
+    );
+    return;
+  }
+  const rows: ListRow[] = drafts.map((d) => ({
+    id: `draft_${d.leadId}`,
+    title: clip(d.customerName, 24),
+    description: draftRowDescription(d),
+  }));
+  await setSession(session.id, { current_state: "DC_DRAFTS" });
+  await replyList(
+    session,
+    `📝 *Your saved drafts* (${drafts.length})\n\nTap a lead to resume it 👇`,
+    "View drafts",
+    rows,
+  );
+}
+
+async function onDraftSelection(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const id = (event.text ?? "").trim();
+  if (!id.startsWith("draft_")) {
+    // Anything other than a draft tap → re-show the list.
+    return await showDrafts(session, dealer);
+  }
+  const leadId = id.slice("draft_".length);
+  const draft = await getDealerDraft(dealer.dealerCode, leadId);
+  if (!draft) {
+    await reply(
+      session,
+      "I couldn't find that draft — it may have been submitted already. Send *menu* to go back.",
+    );
+    return await showDealerMenu(session, dealer);
+  }
+  await resumeDraft(session, dealer, draft);
+}
+
+// Reverse of toKycDocType: map a stored kyc_documents.doc_type back to the
+// WhatsApp customer doc type, or null if it isn't one of the required ones.
+function fromKycDocType(kycType: string): string | null {
+  const wa =
+    kycType === "passport_photo"
+      ? "customer_photo"
+      : kycType === "cheque_1"
+        ? "cancelled_cheque"
+        : kycType;
+  return (REQUIRED_CUSTOMER_DOCS as readonly string[]).includes(wa) ? wa : null;
+}
+
+/** Rebuild the in-context customer-doc set for a lead from kyc_documents, so a
+ *  resumed draft knows which documents are already in. */
+async function loadCustomerDocsAsCtx(
+  leadId: string,
+): Promise<Record<string, true>> {
+  const rows = await db
+    .select({ docType: kycDocuments.doc_type })
+    .from(kycDocuments)
+    .where(
+      and(eq(kycDocuments.lead_id, leadId), eq(kycDocuments.doc_for, "customer")),
+    );
+  const docs: Record<string, true> = {};
+  for (const r of rows) {
+    const wa = fromKycDocType(r.docType);
+    if (wa) docs[wa] = true;
+  }
+  return docs;
+}
+
+/** True once all three post-consent finance answers are recorded on the lead. */
+async function financeQuestionsAnswered(leadId: string): Promise<boolean> {
+  const [row] = await db
+    .select({
+      resident: leads.resident_status,
+      health: leads.has_health_insurance,
+      life: leads.has_life_insurance,
+    })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+  if (!row) return false;
+  return !!row.resident && row.health !== null && row.life !== null;
+}
+
+// Resume a draft: rehydrate ctx.lead and jump to the earliest incomplete step.
+//   Hot + finance: documents → consent → finance questions → submit.
+//   Anything else: nothing left to capture on WhatsApp (finished on the portal).
+async function resumeDraft(
+  session: SessionRow,
+  dealer: ActiveDealer,
+  draft: DealerDraft,
+): Promise<void> {
+  const docs = await loadCustomerDocsAsCtx(draft.leadId);
+  await mergeContext(session, (ctx) => {
+    ctx.lead = {
+      leadId: draft.leadId,
+      mobile: draft.mobile,
+      customerName: draft.customerName,
+      interest: draft.interest ?? undefined,
+      paymentMethod: draft.paymentMethod ?? undefined,
+      docs,
+    };
+  });
+
+  const { interest, paymentMethod } = draft;
+
+  // Non-finance (or unclassified) leads have no further WhatsApp steps.
+  if (!interest || !paymentMethod || !requiresConsent(interest, paymentMethod)) {
+    await setSession(session.id, { current_state: "DC_MENU" });
+    await reply(
+      session,
+      `📄 *${draft.customerName}* — ${humanPayment(paymentMethod ?? "cash")} lead is saved.\n\n` +
+        "There's nothing more to capture here; finish the remaining steps on the dealer portal. Send *menu* to go back.",
+    );
+    return;
+  }
+
+  await reply(
+    session,
+    `▶️ Resuming *${draft.customerName}* (${draft.mobile}).`,
+  );
+
+  // 1) Documents incomplete → back to the documents step.
+  if (!REQUIRED_CUSTOMER_DOCS.every((d) => docs[d])) {
+    await startDocs(session);
+    return;
+  }
+
+  // 2) Documents in, consent not signed yet → re-issue the consent.
+  const signed = await getSignedConsentForLead(draft.leadId);
+  if (!signed.signed) {
+    await reply(
+      session,
+      "Documents are all in. Now let's get the customer's *KYC consent*. Generating the consent form…",
+    );
+    await startConsent(await loadSession(session.id), dealer, draft.leadId);
+    return;
+  }
+
+  // 3) Consent signed → resume the finance questions, or go straight to submit.
+  if (!(await financeQuestionsAnswered(draft.leadId))) {
+    await startFinanceQuestions(await loadSession(session.id));
+    return;
+  }
+  await promptSubmitToITarang(await loadSession(session.id));
+}
+
+// ── Console: Inventory (available stock) ─────────────────────────────────────
+
+async function showInventory(
+  session: SessionRow,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const { rows, totalAvailable } = await getDealerAvailableStock(
+    dealer.dealerCode,
+  );
+  await setSession(session.id, { current_state: "DC_MENU" });
+
+  if (rows.length === 0) {
+    await reply(
+      session,
+      "📦 You have no available stock right now.\n\nSend *menu* to go back.",
+    );
+    return;
+  }
+
+  // Group the per-product rows by category for a tidy summary.
+  const byCategory = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const list = byCategory.get(r.category) ?? [];
+    list.push(r);
+    byCategory.set(r.category, list);
+  }
+
+  const lines: string[] = ["📦 *Available Inventory*", ""];
+  for (const [category, items] of byCategory) {
+    lines.push(`*${titleCase(category)}*`);
+    for (const it of items) {
+      lines.push(`• ${clip(it.label, 40)} — *${it.available}*`);
+    }
+    lines.push("");
+  }
+  lines.push(`*Total available units:* ${totalAvailable}`);
+  lines.push("", "Send *menu* to go back.");
+  await reply(session, lines.join("\n"));
+}
+
+async function startNewLead(session: SessionRow): Promise<void> {
+  await mergeContext(session, (ctx) => {
+    ctx.lead = {};
+  });
+  await setSession(session.id, { current_state: "DC_LEAD_MOBILE" });
+  await reply(
+    session,
+    "🆕 *New Lead*\n\nPlease enter the *customer's mobile number* (10 digits).",
+  );
+}
+
+async function onLeadMobile(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  const mobile =
+    event.type === "text" ? normalizeMobile(event.text ?? "") : null;
+  if (!mobile) {
+    await reply(
+      session,
+      "That doesn't look right. Please enter the customer's *10-digit mobile number*.",
+    );
+    return;
+  }
+  await mergeContext(session, (ctx) => {
+    ctx.lead = { ...(ctx.lead ?? {}), mobile };
+  });
+  // We deliberately don't ask the dealer to type the customer's name — it's
+  // extracted from the PAN / Aadhaar in the documents step
+  // (fillCustomerLeadFromDoc), so we go straight to the interest level.
+  await setSession(session.id, { current_state: "DC_LEAD_INTEREST" });
+  await reply(
+    session,
+    "Got it ✅\n\n*Lead Classification*\n_Lead interest level_\n\nTap the customer's interest level 👇",
+    INTEREST_BUTTONS,
+  );
+}
+
+function parseInterest(event: InboundEvent): InterestLevel | null {
+  const t = (event.text ?? "").trim().toLowerCase();
+  if (event.type === "interactive") {
+    if (t === "interest_hot") return "hot";
+    if (t === "interest_warm") return "warm";
+    if (t === "interest_cold") return "cold";
+  }
+  if (/\bhot\b/.test(t)) return "hot";
+  if (/\bwarm\b/.test(t)) return "warm";
+  if (/\bcold\b/.test(t)) return "cold";
+  return null;
+}
+
+async function onLeadInterest(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  const interest = parseInterest(event);
+  if (!interest) {
+    await reply(
+      session,
+      "Please tap one of *Hot*, *Warm* or *Cold*.",
+      INTEREST_BUTTONS,
+    );
+    return;
+  }
+  await mergeContext(session, (ctx) => {
+    ctx.lead = { ...(ctx.lead ?? {}), interest };
+  });
+  await setSession(session.id, { current_state: "DC_LEAD_PAYMENT" });
+  await reply(
+    session,
+    "*Payment method*\n\nHow will the customer pay? Tap an option 👇",
+    PAYMENT_BUTTONS,
+  );
+}
+
+function parsePayment(event: InboundEvent): PaymentMethod | null {
+  const t = (event.text ?? "").trim().toLowerCase();
+  if (event.type === "interactive") {
+    if (t === "pay_finance") return "finance";
+    if (t === "pay_cash") return "cash";
+    if (t === "pay_other") return "other_finance";
+  }
+  if (/other/.test(t)) return "other_finance";
+  if (/itarang|finance/.test(t)) return "finance";
+  if (/cash/.test(t)) return "cash";
+  return null;
+}
+
+async function onLeadPayment(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const paymentMethod = parsePayment(event);
+  if (!paymentMethod) {
+    await reply(
+      session,
+      "Please tap *iTarang Finance*, *Cash* or *Other Finance*.",
+      PAYMENT_BUTTONS,
+    );
+    return;
+  }
+
+  const fresh = await loadSession(session.id);
+  const draft = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
+  if (!draft.mobile || !draft.interest) {
+    // Context lost (e.g. server restart mid-flow) — restart cleanly.
+    await reply(session, "Let's start over.");
+    return await startNewLead(session);
+  }
+
+  // Create the lead now so consent + documents can key off a real lead id. The
+  // customer name is stored as a placeholder and filled from the PAN / Aadhaar
+  // once the documents are read (fillCustomerLeadFromDoc).
+  const leadId = await createCustomerLead({
+    dealer,
+    mobile: draft.mobile,
+    interest: draft.interest,
+    paymentMethod,
+  });
+  await mergeContext(session, (ctx) => {
+    ctx.lead = { ...(ctx.lead ?? {}), paymentMethod, leadId };
+  });
+
+  if (!requiresConsent(draft.interest, paymentMethod)) {
+    await setSession(session.id, { current_state: "DC_MENU" });
+    await reply(
+      session,
+      `✅ *Lead saved!*\n\n` +
+        `Mobile: ${draft.mobile}\n` +
+        `Interest: ${draft.interest}\n` +
+        `Payment: ${humanPayment(paymentMethod)}\n\n` +
+        `You can complete the rest on the dealer portal. Send *menu* for more.`,
+    );
+    return;
+  }
+
+  // Hot + finance → collect the customer's KYC documents FIRST (so the name,
+  // PAN, Aadhaar and address are extracted), THEN take the consent.
+  await reply(
+    session,
+    `✅ *Lead saved.*\n\n` +
+      `This is a *Hot* finance lead, so we'll need the customer's *KYC documents* ` +
+      `and then their *consent*.\n\nLet's start with the documents 👇`,
+  );
+  await startDocs(session);
+}
+
+function humanPayment(p: PaymentMethod): string {
+  return p === "finance"
+    ? "iTarang Finance"
+    : p === "other_finance"
+      ? "Other Finance"
+      : "Cash";
+}
+
+// ── Console: customer KYC consent (Hot + finance leads) ──────────────────────
+
+const CONSENT_CHANNEL_BUTTONS: ReplyButton[] = [
+  { id: "consent_sms", title: "📩 SMS" },
+  { id: "consent_whatsapp", title: "💬 WhatsApp" },
+  { id: "consent_manual", title: "✍ Manual" },
+];
+
+const CONSENT_SEND_BUTTON: ReplyButton = {
+  id: "consent_send",
+  title: "📤 Submit to iTarang",
+};
+
+// At the digital-consent wait step the dealer can pull the latest signing status
+// (so they aren't stranded if the async Digio webhook is delayed).
+const CONSENT_CHECK_BUTTON: ReplyButton = {
+  id: "consent_check",
+  title: "✅ Check if signed",
+};
+
+/** Read the active lead context off the (freshly loaded) session. */
+async function getLeadCtx(
+  session: SessionRow,
+): Promise<NonNullable<Ctx["lead"]>> {
+  const fresh = await loadSession(session.id);
+  return ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
+}
+
+/** Send a document (PDF) to the dealer by public URL and log it. */
+async function replyDocument(
+  session: SessionRow,
+  link: string,
+  filename: string,
+  caption?: string,
+): Promise<void> {
+  const res = await getAdapter().sendDocument(
+    session.wa_phone,
+    link,
+    filename,
+    caption,
+  );
+  await logDocumentSend(session, res, caption);
+}
+
+/** Send a document (PDF) to the dealer by uploading its BYTES — used for the
+ *  consent PDFs, whose storage URL (S3 files proxy / localhost) isn't reachable
+ *  by Meta. The provider hosts the bytes, so this works in dev and prod. */
+async function replyDocumentBytes(
+  session: SessionRow,
+  bytes: Buffer,
+  mimeType: string,
+  filename: string,
+  caption?: string,
+): Promise<void> {
+  const res = await getAdapter().sendDocumentBytes(
+    session.wa_phone,
+    bytes,
+    mimeType,
+    filename,
+    caption,
+  );
+  await logDocumentSend(session, res, caption);
+}
+
+async function logDocumentSend(
+  session: SessionRow,
+  res: { ok: boolean; providerMessageId: string | null; raw?: unknown },
+  caption?: string,
+): Promise<void> {
+  await db.insert(whatsappMessages).values({
+    session_id: session.id,
+    provider_message_id: res.providerMessageId,
+    direction: "outbound",
+    message_type: "document",
+    text_body: caption ?? null,
+    delivery_status: res.ok ? "sent" : "failed",
+    raw_payload: (res.raw ?? null) as any,
+  });
+  await setSession(session.id, { last_outbound_at: new Date() });
+}
+
+/** Render the unsigned consent PDF preview and ask the dealer for a delivery
+ *  channel. Called right after a Hot + finance lead is saved. */
+async function startConsent(
+  session: SessionRow,
+  dealer: ActiveDealer,
+  leadId: string,
+): Promise<void> {
+  const preview = await renderConsentPreviewPdf({
+    leadId,
+    dealerName: dealer.dealerName,
+  });
+  if (preview.ok) {
+    await replyDocumentBytes(
+      session,
+      preview.pdfBuffer,
+      "application/pdf",
+      `consent-${leadId}.pdf`,
+      "📄 Customer KYC consent form",
+    );
+  }
+  await setSession(session.id, { current_state: "DC_LEAD_CONSENT_CHANNEL" });
+  await reply(
+    session,
+    "How would you like to get the customer's *signature* on the consent?",
+    CONSENT_CHANNEL_BUTTONS,
+  );
+}
+
+async function onConsentChannel(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const id = (event.text ?? "").trim().toLowerCase();
+  const lead = await getLeadCtx(session);
+  if (!lead.leadId) {
+    await reply(session, "Something went wrong. Send *menu* to start again.");
+    return;
+  }
+
+  const isManual = id === "consent_manual" || /manual/.test(id);
+  const isWhatsapp = id === "consent_whatsapp" || /whatsapp/.test(id);
+  const isSms = id === "consent_sms" || /\bsms\b/.test(id);
+
+  if (isManual) {
+    const gen = await generateManualConsentPdf({
+      leadId: lead.leadId,
+      dealerName: dealer.dealerName,
+    });
+    if (!gen.ok) {
+      await reply(
+        session,
+        `Couldn't generate the consent PDF: ${gen.error}. Please try again.`,
+        CONSENT_CHANNEL_BUTTONS,
+      );
+      return;
+    }
+    await replyDocumentBytes(
+      session,
+      gen.pdfBuffer,
+      "application/pdf",
+      gen.fileName,
+      "✍ Print this, get the customer's signature, then *upload the signed PDF here*.",
+    );
+    await setSession(session.id, { current_state: "DC_LEAD_CONSENT_WAIT" });
+    return;
+  }
+
+  if (isSms || isWhatsapp) {
+    const channel = isWhatsapp ? "whatsapp" : "sms";
+    const res = await sendConsentForLead({
+      leadId: lead.leadId,
+      channel,
+      dealerName: dealer.dealerName,
+    });
+    if (!res.ok) {
+      await reply(
+        session,
+        `Couldn't send the consent: ${res.error}. Please try again, or pick *Manual*.`,
+        CONSENT_CHANNEL_BUTTONS,
+      );
+      return;
+    }
+    await setSession(session.id, { current_state: "DC_LEAD_CONSENT_WAIT" });
+    await reply(
+      session,
+      `📨 Consent link sent to the customer via *${isWhatsapp ? "WhatsApp" : "SMS"}* on ${res.phone}.\n\n` +
+        `I'll notify you here as soon as they sign — or tap *Check if signed* once the customer has signed. ` +
+        `(Collecting the signature manually instead? Just upload the signed PDF here.)`,
+      [CONSENT_CHECK_BUTTON],
+    );
+    return;
+  }
+
+  await reply(
+    session,
+    "Please tap *SMS*, *WhatsApp* or *Manual*.",
+    CONSENT_CHANNEL_BUTTONS,
+  );
+}
+
+async function onConsentWait(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  // A manually-signed consent comes back as a document/image upload.
+  if (event.type === "document" || event.type === "image") {
+    const lead = await getLeadCtx(session);
+    if (!lead.leadId) {
+      await reply(session, "Send *menu* to start again.");
+      return;
+    }
+    if (!event.mediaProviderId) {
+      await reply(session, "I couldn't read that file. Please resend the signed consent PDF.");
+      return;
+    }
+    let media;
+    try {
+      media = await getAdapter().downloadMedia(event.mediaProviderId);
+    } catch {
+      await reply(session, "I couldn't download that file. Please resend it.");
+      return;
+    }
+    const res = await storeSignedConsent({
+      leadId: lead.leadId,
+      buffer: media.buffer,
+    });
+    if (!res.ok) {
+      await reply(session, `Couldn't save the signed consent: ${res.error}. Please resend.`);
+      return;
+    }
+    await presentSignedConsent(
+      session,
+      res.fileUrl,
+      "✅ *Signed consent received.*",
+      media.buffer,
+    );
+    return;
+  }
+
+  // Dealer is pulling the digital-signing status (button tap or typed "check").
+  const t = (event.text ?? "").trim().toLowerCase();
+  const wantsCheck =
+    t === "consent_check" || /\b(check|status|signed|done|verify)\b/.test(t);
+  if (wantsCheck) {
+    const lead = await getLeadCtx(session);
+    if (!lead.leadId) {
+      await reply(session, "Send *menu* to start again.");
+      return;
+    }
+    await reply(session, "⏳ Checking the signing status…");
+    const signed = await getSignedConsentForLead(lead.leadId);
+    if (signed.signed) {
+      await presentSignedConsent(
+        session,
+        signed.url,
+        "✅ *Customer signed the consent successfully!*",
+        signed.pdfBuffer ?? undefined,
+      );
+    } else {
+      await reply(
+        session,
+        "The customer hasn't signed yet. I'll notify you as soon as they do — or tap *Check if signed* again in a moment.",
+        [CONSENT_CHECK_BUTTON],
+      );
+    }
+    return;
+  }
+
+  await reply(
+    session,
+    "⏳ Waiting for the customer to sign the consent — tap *Check if signed* once they have, and I'll confirm here.\n\n" +
+      "Collecting the signature *manually*? Upload the signed PDF here. Send *menu* to exit.",
+    [CONSENT_CHECK_BUTTON],
+  );
+}
+
+/** Show the signed consent + the "Send to iTarang" button, moving to review.
+ *  Prefers sending the bytes (when we have them, e.g. the dealer's upload) so
+ *  the file reaches Meta even when its storage URL isn't publicly reachable. */
+async function presentSignedConsent(
+  session: SessionRow,
+  url: string | null,
+  headline: string,
+  bytes?: Buffer,
+): Promise<void> {
+  if (bytes) {
+    await replyDocumentBytes(
+      session,
+      bytes,
+      "application/pdf",
+      "signed-consent.pdf",
+      headline,
+    );
+  } else if (url) {
+    await replyDocument(session, url, "signed-consent.pdf", headline);
+  } else {
+    await reply(session, headline);
+  }
+
+  // For Hot + iTarang-finance / Hot + other-finance leads we collect three
+  // additional finance details (resident status + existing health / life
+  // insurance) AFTER the signed consent, before the dealer submits to iTarang.
+  // Any other combination (shouldn't normally reach here, since consent is only
+  // taken for those) skips straight to the submit step.
+  const lead = await getLeadCtx(session);
+  if (
+    lead.interest &&
+    lead.paymentMethod &&
+    requiresConsent(lead.interest, lead.paymentMethod)
+  ) {
+    await startFinanceQuestions(session);
+    return;
+  }
+  await promptSubmitToITarang(session);
+}
+
+/** Move to the consent-review step and show the "Submit to iTarang" button. */
+async function promptSubmitToITarang(session: SessionRow): Promise<void> {
+  await setSession(session.id, { current_state: "DC_LEAD_CONSENT_REVIEW" });
+  await reply(
+    session,
+    "Review the signed consent above. When ready, tap *Submit to iTarang* — the documents, extracted details and signed consent all go to the iTarang team for KYC review.",
+    [CONSENT_SEND_BUTTON],
+  );
+}
+
+// ── Console: additional finance details (post-consent, Hot + finance leads) ──
+// Three quick taps mirroring the web "Additional Finance Details" card: resident
+// status (Owned/Rented) + existing health / life insurance (Yes/No). Stored on
+// the leads row (resident_status / has_health_insurance / has_life_insurance —
+// E-130) so the WhatsApp lead matches a web-created finance lead before it
+// reaches admin KYC review. Asked one at a time so each is a single tap.
+
+type FinanceQuestion = {
+  /** Target leads column for this answer. */
+  key: "resident_status" | "has_health_insurance" | "has_life_insurance";
+  body: string;
+  buttons: ReplyButton[];
+  /** Map a button id / typed answer → the value written to the leads column. */
+  parse: (event: InboundEvent) => string | boolean | null;
+};
+
+const ADDITIONAL_FINANCE_QUESTIONS: FinanceQuestion[] = [
+  {
+    key: "resident_status",
+    body: "📋 *Additional Finance Details* (1/3)\n\n*Resident Status*\nDoes the customer *own* or *rent* their current residence?",
+    buttons: [
+      { id: "resident_owned", title: "🏠 Owned" },
+      { id: "resident_rented", title: "🔑 Rented" },
+    ],
+    parse: (event) => {
+      const t = (event.text ?? "").trim().toLowerCase();
+      if (t === "resident_owned" || /\bown(ed)?\b/.test(t)) return "owned";
+      if (t === "resident_rented" || /\brent(ed)?\b/.test(t)) return "rented";
+      return null;
+    },
+  },
+  {
+    key: "has_health_insurance",
+    body: "🩺 *Existing Health Insurance* (2/3)\n\nDoes the customer currently hold their own *health insurance* policy?",
+    buttons: [
+      { id: "health_yes", title: "Yes" },
+      { id: "health_no", title: "No" },
+    ],
+    parse: (event) => parseYesNo(event, "health"),
+  },
+  {
+    key: "has_life_insurance",
+    body: "💚 *Existing Life Insurance* (3/3)\n\nDoes the customer currently hold their own *life insurance* policy?",
+    buttons: [
+      { id: "life_yes", title: "Yes" },
+      { id: "life_no", title: "No" },
+    ],
+    parse: (event) => parseYesNo(event, "life"),
+  },
+];
+
+/** Resolve a Yes/No answer from a button tap (prefixed id) or typed text. */
+function parseYesNo(event: InboundEvent, prefix: string): boolean | null {
+  const t = (event.text ?? "").trim().toLowerCase();
+  if (event.type === "interactive") {
+    if (t === `${prefix}_yes`) return true;
+    if (t === `${prefix}_no`) return false;
+  }
+  if (/^(yes|y|haan|ha|yep|sure|hai)$/i.test(t)) return true;
+  if (/^(no|n|nahi|nope|nahin)$/i.test(t)) return false;
+  return null;
+}
+
+/** Begin the 3-question additional-finance step at question 1. */
+async function startFinanceQuestions(session: SessionRow): Promise<void> {
+  await mergeContext(session, (ctx) => {
+    ctx.lead = { ...(ctx.lead ?? {}), financeQIndex: 0 };
+  });
+  await setSession(session.id, { current_state: "DC_LEAD_FINANCE_Q" });
+  await reply(
+    session,
+    ADDITIONAL_FINANCE_QUESTIONS[0].body,
+    ADDITIONAL_FINANCE_QUESTIONS[0].buttons,
+  );
+}
+
+async function onLeadFinanceQuestion(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  const lead = await getLeadCtx(session);
+  const idx = lead.financeQIndex ?? 0;
+  const question = ADDITIONAL_FINANCE_QUESTIONS[idx];
+
+  // Context lost (e.g. restart mid-flow) — fall back to the submit step.
+  if (!question || !lead.leadId) {
+    await promptSubmitToITarang(session);
+    return;
+  }
+
+  const value = question.parse(event);
+  if (value === null) {
+    await reply(
+      session,
+      `Please tap one of the options below.\n\n${question.body}`,
+      question.buttons,
+    );
+    return;
+  }
+
+  // Persist this answer onto the lead immediately so partial progress survives.
+  await db
+    .update(leads)
+    .set({ [question.key]: value, updated_at: new Date() } as any)
+    .where(eq(leads.id, lead.leadId));
+
+  const nextIdx = idx + 1;
+  const next = ADDITIONAL_FINANCE_QUESTIONS[nextIdx];
+  if (next) {
+    await mergeContext(session, (ctx) => {
+      ctx.lead = { ...(ctx.lead ?? {}), financeQIndex: nextIdx };
+    });
+    await reply(session, next.body, next.buttons);
+    return;
+  }
+
+  // All three answered → on to the Submit-to-iTarang review step.
+  await reply(session, "Thanks — that's all the finance details. ✅");
+  await promptSubmitToITarang(await loadSession(session.id));
+}
+
+async function onConsentReview(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  const id = (event.text ?? "").trim().toLowerCase();
+  if (id === "consent_send" || /\b(send|submit)\b/.test(id)) {
+    return await finalizeLead(session);
+  }
+  await reply(
+    session,
+    "Tap *Submit to iTarang* to send the documents and signed consent for KYC review, or send *menu* to exit.",
+    [CONSENT_SEND_BUTTON],
+  );
+}
+
+/**
+ * Push the signed consent into an active WhatsApp lead conversation. Called by
+ * the Digio webhook once the customer e-signs, so the dealer sees "✅ Customer
+ * signed" + the signed PDF without polling. No-op if no console session is
+ * parked at the consent-wait step for this lead.
+ */
+export async function pushSignedConsentToWhatsApp(
+  leadId: string,
+  signedUrl: string | null,
+): Promise<void> {
+  try {
+    const rows = await db
+      .select()
+      .from(whatsappOnboardingSessions)
+      .where(
+        and(
+          sql`${whatsappOnboardingSessions.context} -> 'lead' ->> 'leadId' = ${leadId}`,
+          eq(whatsappOnboardingSessions.current_state, "DC_LEAD_CONSENT_WAIT"),
+        ),
+      )
+      .orderBy(desc(whatsappOnboardingSessions.updated_at))
+      .limit(1);
+    const session = rows[0];
+    if (!session) return;
+    // Fetch the signed PDF bytes so it sends reliably (its storage URL may not
+    // be publicly reachable by Meta); fall back to the URL the webhook passed.
+    let bytes: Buffer | undefined;
+    let url = signedUrl;
+    try {
+      const lookup = await getSignedConsentForLead(leadId);
+      if (lookup.signed) {
+        bytes = lookup.pdfBuffer ?? undefined;
+        url = url ?? lookup.url;
+      }
+    } catch {
+      /* best-effort — fall back to the URL */
+    }
+    await presentSignedConsent(
+      session,
+      url,
+      "✅ *Customer signed the consent successfully!*",
+      bytes,
+    );
+  } catch (err) {
+    console.error("[WhatsApp/console] pushSignedConsent failed:", err);
+  }
+}
+
+// ── Console: customer KYC documents + extraction ─────────────────────────────
+
+const REQUIRED_CUSTOMER_DOCS = [
+  "aadhaar_front",
+  "aadhaar_back",
+  "pan_card",
+  "customer_photo",
+  "rc_copy",
+  "cancelled_cheque",
+] as const;
+
+function customerDocLabel(type: string): string {
+  switch (type) {
+    case "aadhaar_front":
+      return "Aadhaar (front)";
+    case "aadhaar_back":
+      return "Aadhaar (back)";
+    case "pan_card":
+      return "PAN card";
+    case "customer_photo":
+      return "Passport-size photo";
+    case "address_proof":
+      return "Address proof";
+    case "rc_copy":
+      return "RC copy";
+    case "cancelled_cheque":
+      return "Bank cheque";
+    default:
+      return type;
+  }
+}
+
+function customerDocsChecklistMessage(): string {
+  return [
+    "📎 *Customer documents needed*",
+    "",
+    "Please send these (one by one, or all together — photos, PDFs, or a ZIP):",
+    "",
+    "1️⃣ Aadhaar — *front*",
+    "2️⃣ Aadhaar — *back*",
+    "3️⃣ PAN card",
+    "4️⃣ Passport-size *photo*",
+    "5️⃣ *RC copy* (vehicle Registration Certificate)",
+    "6️⃣ *Bank cheque* (cancelled cheque)",
+    "",
+    "Type *done* when you've sent everything.",
+  ].join("\n");
+}
+
+async function startDocs(session: SessionRow): Promise<void> {
+  await mergeContext(session, (ctx) => {
+    if (ctx.lead) ctx.lead.docs = ctx.lead.docs ?? {};
+  });
+  // Show the required-document list, then ask HOW they want to send them —
+  // one at a time or all together in a folder (ZIP).
+  await setSession(session.id, { current_state: "DC_LEAD_DOCS_MODE" });
+  await reply(session, customerDocsChecklistMessage());
+  await reply(
+    session,
+    "How would you like to send them? Put *all documents in one folder (ZIP)* and upload together, or send them *one at a time*. 👇",
+    UPLOAD_MODE_BUTTONS,
+  );
+}
+
+// Dealer picked how to send the customer documents (ZIP vs one-by-one). Either
+// way the ingestion (onLeadDocs) accepts both; this just sets expectations. If
+// they skip the choice and send a file straight away, treat it as an upload.
+async function onLeadDocsMode(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+): Promise<void> {
+  if (event.mediaProviderId) {
+    await setSession(session.id, { current_state: "DC_LEAD_DOCS" });
+    return await onLeadDocs(await loadSession(session.id), event, dealer);
+  }
+
+  const id = event.type === "interactive" ? (event.text ?? "") : "";
+  const text = (event.text ?? "").toLowerCase();
+  const wantsZip =
+    id === "upload_zip" || /\b(zip|folder|all|together|batch)\b/.test(text);
+  const wantsOne =
+    id === "upload_one" || /\b(one|single|individual|by\s*one|ek)\b/.test(text);
+
+  if (wantsZip) {
+    await setSession(session.id, { current_state: "DC_LEAD_DOCS" });
+    await reply(
+      session,
+      "📦 Great — attach a *single .zip file* containing all the documents from the list above. I'll read them all. Type *done* when finished.",
+    );
+    return;
+  }
+  if (wantsOne) {
+    await setSession(session.id, { current_state: "DC_LEAD_DOCS" });
+    await reply(
+      session,
+      "📄 No problem — send each document one at a time as a *photo or PDF*. Type *done* when finished.",
+    );
+    return;
+  }
+
+  await reply(
+    session,
+    "Please tap *Upload all (ZIP)* or *Send one by one*.",
+    UPLOAD_MODE_BUTTONS,
+  );
+}
+
+/** Normalize a classifier guess to one of the 5 customer doc types, or null.
+ *  Business photo / company-PAN guesses are folded into their customer cousins
+ *  because the dealer is explicitly in the customer-document step. */
+function normalizeCustomerDocType(raw: string): string | null {
+  switch (raw) {
+    case "owner_photo":
+    case "partner_photo":
+      return "customer_photo";
+    case "company_pan":
+      return "pan_card";
+    default:
+      return (REQUIRED_CUSTOMER_DOCS as readonly string[]).includes(raw)
+        ? raw
+        : null;
+  }
+}
+
+function mimeFromName(name: string): string | null {
+  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "png") return "image/png";
+  if (ext === "webp") return "image/webp";
+  if (ext === "pdf") return "application/pdf";
+  return null;
+}
+
+async function onLeadDocs(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+): Promise<void> {
+  if (event.type === "text") {
+    const t = (event.text ?? "").trim();
+    if (/^(done|finish|finished|complete|completed|that'?s all|bas|ho gaya)$/i.test(t)) {
+      return await proceedToConsent(session, dealer);
+    }
+    await reply(
+      session,
+      "Send the customer's documents as photos or PDFs. Type *done* when finished.",
+    );
+    return;
+  }
+
+  if (event.type === "document" || event.type === "image") {
+    if (!event.mediaProviderId) {
+      await reply(session, "I couldn't read that file. Please resend it.");
+      return;
+    }
+    let media;
+    try {
+      media = await getAdapter().downloadMedia(event.mediaProviderId);
+    } catch {
+      await reply(session, "I couldn't download that file. Please resend it.");
+      return;
+    }
+
+    const isZip =
+      /zip/i.test(media.mimeType) ||
+      /\.zip$/i.test(media.fileName ?? event.fileName ?? "");
+    if (isZip) {
+      await ingestCustomerZip(session, media.buffer);
+    } else {
+      await ingestCustomerDoc(
+        session,
+        media.buffer,
+        media.mimeType,
+        media.fileName ?? event.fileName,
+      );
+    }
+
+    const lead = await getLeadCtx(session);
+    const have = Object.keys(lead.docs ?? {});
+    if (REQUIRED_CUSTOMER_DOCS.every((d) => have.includes(d))) {
+      return await proceedToConsent(session, dealer);
+    }
+    return;
+  }
+
+  await reply(session, "Please send the documents as photos or PDFs, or type *done*.");
+}
+
+/** Save a customer document, link it to the lead, and fill its extracted
+ *  fields. No messaging — callers report progress / summaries themselves. */
+async function persistCustomerDoc(
+  leadId: string,
+  docType: string,
+  buffer: Buffer,
+  mimeType: string,
+  fileName: string | undefined,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  const saved = await saveMedia({
+    buffer,
+    mimeType,
+    keyPrefix: `leads/${leadId}/whatsapp`,
+    docType,
+    fileName,
+  });
+  await db.insert(leadDocuments).values({
+    id: crypto.randomUUID(),
+    lead_id: leadId,
+    type: docType,
+    document_type: docType,
+    url: saved.fileUrl,
+    file_url: saved.fileUrl,
+  });
+
+  // Also surface the file to the admin KYC review, which reads kyc_documents
+  // (NOT the `documents` table above). doc_type is kept identical to the web KYC
+  // types where they match (aadhaar_front/aadhaar_back/pan_card/rc_copy/
+  // address_proof) so the admin verification cards + OCR lookups resolve; the
+  // two WhatsApp-only types are mapped to their nearest web slots. Replace any
+  // earlier row of the same type so a re-upload doesn't leave duplicates.
+  const kycDocType = toKycDocType(docType);
+  await db
+    .delete(kycDocuments)
+    .where(
+      and(
+        eq(kycDocuments.lead_id, leadId),
+        eq(kycDocuments.doc_type, kycDocType),
+        eq(kycDocuments.doc_for, "customer"),
+      ),
+    );
+  await db.insert(kycDocuments).values({
+    id: crypto.randomUUID(),
+    lead_id: leadId,
+    doc_type: kycDocType,
+    doc_for: "customer",
+    file_url: saved.fileUrl,
+    file_name: fileName ?? null,
+    file_type: mimeType,
+    verification_status: "pending",
+    doc_status: "uploaded",
+    ocr_data: fields as any,
+  });
+
+  await fillCustomerLeadFromDoc(leadId, docType, fields);
+}
+
+/** Map a WhatsApp customer doc type to the canonical kyc_documents.doc_type the
+ *  admin KYC review keys on. Matching types pass through unchanged. */
+function toKycDocType(waType: string): string {
+  switch (waType) {
+    case "customer_photo":
+      return "passport_photo";
+    case "cancelled_cheque":
+      return "cheque_1";
+    default:
+      return waType;
+  }
+}
+
+const MAX_CUSTOMER_ZIP_ENTRIES = 25;
+
+/**
+ * Scan a ZIP of customer documents in one shot: classify every file, verify the
+ * ID documents all belong to ONE person, save the consistent ones, and report a
+ * single consolidated result — a mismatch warning if two people's documents are
+ * mixed, otherwise an "all documents are correct" success.
+ */
+async function ingestCustomerZip(
+  session: SessionRow,
+  buffer: Buffer,
+): Promise<void> {
+  const lead = await getLeadCtx(session);
+  if (!lead.leadId) {
+    await reply(session, "Send *menu* to start again.");
+    return;
+  }
+
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(buffer);
+  } catch {
+    await reply(
+      session,
+      "I couldn't open that ZIP. Please resend it, or send the files one by one.",
+    );
+    return;
+  }
+
+  // Pull out the readable image/PDF entries (skip dirs, macOS forks, others).
+  const files: { name: string; buffer: Buffer; mime: string }[] = [];
+  for (const f of Object.values(zip.files)) {
+    if (f.dir) continue;
+    const base = f.name.split("/").pop() ?? f.name;
+    if (f.name.startsWith("__MACOSX/") || base.startsWith(".")) continue;
+    const mime = mimeFromName(base);
+    if (!mime) continue;
+    files.push({ name: base, buffer: await f.async("nodebuffer"), mime });
+    if (files.length >= MAX_CUSTOMER_ZIP_ENTRIES) break;
+  }
+  if (files.length === 0) {
+    await reply(
+      session,
+      "That ZIP didn't contain any readable images or PDFs. Please send JPG/PNG/PDF files, or send each document one by one.",
+    );
+    return;
+  }
+
+  await reply(
+    session,
+    "📦 Got your ZIP — scanning all the documents now, one moment…",
+  );
+
+  // Classify every file in parallel (the slow part).
+  const classifications = await Promise.all(
+    files.map((f) => classifyDocument(f.buffer, f.mime)),
+  );
+
+  // Recognise each file → a customer doc type (+ its name for ID docs).
+  type Recognized = {
+    file: { name: string; buffer: Buffer; mime: string };
+    docType: string;
+    name: string;
+    fields: Record<string, unknown>;
+  };
+  const recognized: Recognized[] = [];
+  const unreadable: string[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const c = classifications[i];
+    const docType = c.ok ? normalizeCustomerDocType(c.documentType) : null;
+    if (!docType) {
+      unreadable.push(files[i].name);
+      continue;
+    }
+    recognized.push({
+      file: files[i],
+      docType,
+      name: NAME_BEARING_DOCS.has(docType) ? str(c.fields.name) : "",
+      fields: c.fields,
+    });
+  }
+
+  // Establish the customer's name: a name already locked in, else the first
+  // name-bearing ID document in this batch.
+  let canonical = str(lead.customerName);
+  if (!canonical) canonical = recognized.find((r) => r.name)?.name ?? "";
+
+  // Save the documents consistent with the customer; collect the mismatched ID
+  // documents (a different person) WITHOUT saving them.
+  const acceptedLabels = new Set<string>();
+  const savedTypes: string[] = [];
+  const mismatched: { label: string; name: string }[] = [];
+  for (const r of recognized) {
+    if (r.name && canonical && !namesMatch(canonical, r.name)) {
+      mismatched.push({ label: customerDocLabel(r.docType), name: r.name });
+      continue;
+    }
+    await persistCustomerDoc(
+      lead.leadId,
+      r.docType,
+      r.file.buffer,
+      r.file.mime,
+      r.file.name,
+      r.fields,
+    );
+    savedTypes.push(r.docType);
+    acceptedLabels.add(customerDocLabel(r.docType));
+  }
+
+  // Persist the saved docs + the locked-in customer name.
+  await mergeContext(session, (ctx) => {
+    if (!ctx.lead) ctx.lead = {};
+    const docs = { ...(ctx.lead.docs ?? {}) };
+    for (const t of savedTypes) docs[t] = true;
+    ctx.lead.docs = docs;
+    if (canonical && !str(ctx.lead.customerName)) ctx.lead.customerName = canonical;
+  });
+
+  // Build the consolidated result message.
+  const have = Object.keys((await getLeadCtx(session)).docs ?? {});
+  const missing = REQUIRED_CUSTOMER_DOCS.filter((d) => !have.includes(d)).map(
+    customerDocLabel,
+  );
+
+  const parts: string[] = [];
+  if (acceptedLabels.size) {
+    parts.push(
+      "✅ Received:\n" + [...acceptedLabels].map((l) => `• ${l}`).join("\n"),
+    );
+  }
+  if (mismatched.length) {
+    parts.push(
+      `⚠️ *Document mismatch* — these don't belong to the same customer:\n` +
+        `• *Customer:* ${canonical || "—"}\n` +
+        mismatched.map((m) => `• *${m.label}:* ${m.name}`).join("\n") +
+        `\n\nPlease check and resend the correct *${mismatched
+          .map((m) => m.label)
+          .join(", ")}* for *${canonical || "the customer"}*.`,
+    );
+  }
+  if (unreadable.length) {
+    parts.push(
+      "🚫 Couldn't read / identify:\n" +
+        unreadable.map((n) => `• ${n}`).join("\n"),
+    );
+  }
+  if (!mismatched.length && missing.length) {
+    parts.push("Still needed:\n" + missing.map((l) => `• ${l}`).join("\n"));
+  }
+  if (!mismatched.length && missing.length === 0) {
+    parts.push(
+      `🎉 *All documents are correct* — every document belongs to *${canonical || "the customer"}*.`,
+    );
+  }
+  await reply(session, parts.join("\n\n"));
+}
+
+async function ingestCustomerDoc(
+  session: SessionRow,
+  buffer: Buffer,
+  mimeType: string,
+  fileName?: string,
+): Promise<void> {
+  const lead = await getLeadCtx(session);
+  if (!lead.leadId) {
+    await reply(session, "Send *menu* to start again.");
+    return;
+  }
+
+  const cls = await classifyDocument(buffer, mimeType);
+  const docType = cls.ok ? normalizeCustomerDocType(cls.documentType) : null;
+  if (!docType) {
+    await reply(
+      session,
+      "I couldn't tell which document that is. Please send a clear photo of the *Aadhaar*, *PAN*, *photo* or *address proof*.",
+    );
+    return;
+  }
+
+  // Cross-document identity check: all the ID documents must belong to ONE
+  // person. The first name-bearing ID (Aadhaar front / PAN) establishes the
+  // customer's name; a later ID whose name doesn't match is rejected — so two
+  // different people's documents can't be mixed onto one lead.
+  const docName = str(cls.fields.name);
+  if (NAME_BEARING_DOCS.has(docType) && docName) {
+    const established = str(lead.customerName);
+    if (established && !namesMatch(established, docName)) {
+      await reply(
+        session,
+        `⚠️ This document doesn't match the customer.\n\n` +
+          `*Customer name:* ${established}\n` +
+          `*${customerDocLabel(docType)} name:* ${docName}\n\n` +
+          `Please check and send the *${customerDocLabel(docType)}* that belongs to *${established}*.`,
+      );
+      return;
+    }
+  }
+
+  await persistCustomerDoc(lead.leadId, docType, buffer, mimeType, fileName, cls.fields);
+
+  await mergeContext(session, (ctx) => {
+    if (!ctx.lead) ctx.lead = {};
+    ctx.lead.docs = { ...(ctx.lead.docs ?? {}), [docType]: true };
+    // Lock in the customer's name from the first name-bearing ID document.
+    if (NAME_BEARING_DOCS.has(docType) && docName && !str(ctx.lead.customerName)) {
+      ctx.lead.customerName = docName;
+    }
+  });
+
+  const haveCount = Object.keys((await getLeadCtx(session)).docs ?? {}).length;
+  await reply(
+    session,
+    `Got *${customerDocLabel(docType)}* ✅ (${haveCount}/${REQUIRED_CUSTOMER_DOCS.length})`,
+  );
+}
+
+// ID documents that print the customer's name — used for the cross-document
+// identity match. Aadhaar back (address only) and the photo carry no name.
+const NAME_BEARING_DOCS = new Set<string>(["aadhaar_front", "pan_card"]);
+
+// Honorifics / titles stripped before comparing names so "Mr. Yogendra" matches
+// "Yogendra".
+const NAME_HONORIFICS = new Set([
+  "mr", "mrs", "ms", "miss", "shri", "sri", "smt", "kumari", "km", "dr", "late",
+]);
+
+/** Normalize a printed name to lowercase alphabetic tokens (titles removed). */
+function nameTokens(raw: string): string[] {
+  return str(raw)
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t && !NAME_HONORIFICS.has(t));
+}
+
+/** True if two name tokens are the "same" — equal, or an initial of the other. */
+function tokenMatches(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.length === 1 && b.startsWith(a)) return true;
+  if (b.length === 1 && a.startsWith(b)) return true;
+  return false;
+}
+
+/**
+ * Fuzzy person-name match across ID documents. Tolerant of a missing middle
+ * name, initials (Y → Yogendra) and title/spacing/case differences, but rejects
+ * a clearly different person (no shared tokens). Empty/unreadable names are
+ * treated as a match so a missing extraction never blocks the dealer.
+ */
+function namesMatch(nameA: string, nameB: string): boolean {
+  const a = nameTokens(nameA);
+  const b = nameTokens(nameB);
+  if (!a.length || !b.length) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  const used = new Array(long.length).fill(false);
+  let matched = 0;
+  for (const t of short) {
+    const idx = long.findIndex((u, i) => !used[i] && tokenMatches(t, u));
+    if (idx >= 0) {
+      used[idx] = true;
+      matched++;
+    }
+  }
+  // Require at least half the shorter name's tokens to line up (always ≥ 1).
+  return matched >= Math.ceil(short.length / 2);
+}
+
+function digitsOnly(v: unknown): string {
+  return str(v).replace(/\D/g, "");
+}
+
+/**
+ * Resolve free-text state/city (from OCR) to the canonical `country-state-city`
+ * names the dealer Step-1 dropdowns use (the wizard's State/City <select>s are
+ * built from this same package — value must match a name exactly to pre-select).
+ * Returns only confident matches; an unmatched value is left undefined so the
+ * dealer picks it manually rather than us storing a value the dropdown can't show.
+ */
+function resolveStateCity(
+  rawState: string,
+  rawCity: string,
+): { state?: string; city?: string } {
+  const out: { state?: string; city?: string } = {};
+  const s = rawState.trim().toLowerCase();
+  if (!s) return out;
+  const stateMatch = State.getStatesOfCountry("IN").find(
+    (st) => st.name.toLowerCase() === s,
+  );
+  if (!stateMatch) return out;
+  out.state = stateMatch.name;
+
+  const c = rawCity.trim().toLowerCase();
+  if (!c) return out;
+  const cities = City.getCitiesOfState("IN", stateMatch.isoCode);
+  // Exact (case-insensitive) first; else tolerate the "Allahabad" ⇄
+  // "Allahabad City" prefix difference between OCR text and the package name.
+  const cityMatch =
+    cities.find((ct) => ct.name.toLowerCase() === c) ||
+    cities.find((ct) => {
+      const n = ct.name.toLowerCase();
+      return c.startsWith(n) || n.startsWith(c);
+    });
+  if (cityMatch) out.city = cityMatch.name;
+  return out;
+}
+
+function parseDobValue(v: unknown): Date | null {
+  const s = str(v);
+  if (!s) return null;
+  // DD/MM/YYYY or DD-MM-YYYY
+  const m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (m) {
+    const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Map a customer document's extracted fields into the lead's personal_details. */
+async function fillCustomerLeadFromDoc(
+  leadId: string,
+  docType: string,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  // Customer name — we no longer ask the dealer to type it, so we take it from
+  // the PAN / Aadhaar (the authoritative sources) and write it onto the lead,
+  // overwriting the "Customer" placeholder set at lead creation.
+  const extractedName = str(fields.name);
+  if (extractedName && (docType === "aadhaar_front" || docType === "pan_card")) {
+    await db
+      .update(leads)
+      .set({
+        full_name: extractedName,
+        owner_name: extractedName,
+        updated_at: new Date(),
+      })
+      .where(eq(leads.id, leadId));
+  }
+
+  // RC copy → the lead's vehicle registration number.
+  if (docType === "rc_copy") {
+    const rc = str(fields.registration_number).toUpperCase().replace(/\s+/g, "");
+    if (rc) {
+      await db
+        .update(leads)
+        .set({ vehicle_rc: rc, updated_at: new Date() })
+        .where(eq(leads.id, leadId));
+    }
+  }
+
+  const patch: Record<string, unknown> = {};
+
+  if (docType === "aadhaar_front") {
+    const a = digitsOnly(fields.aadhaar_number);
+    if (a.length === 12) patch.aadhaar_no = a;
+    const dob = parseDobValue(fields.dob);
+    if (dob) patch.dob = dob;
+  } else if (docType === "pan_card") {
+    const pan = str(fields.pan).toUpperCase().replace(/\s/g, "");
+    if (pan) patch.pan_no = pan;
+    const father = str(fields.father_name);
+    if (father) patch.father_husband_name = father;
+    const dob = parseDobValue(fields.dob);
+    if (dob) patch.dob = dob;
+  } else if (docType === "aadhaar_back" || docType === "address_proof") {
+    const addr =
+      str(fields.full_address) ||
+      [
+        str(fields.address_line1),
+        str(fields.city),
+        str(fields.state),
+        str(fields.pincode),
+      ]
+        .filter(Boolean)
+        .join(", ");
+    if (addr) {
+      patch.permanent_address = addr;
+      patch.local_address = addr;
+    }
+  }
+
+  if (Object.keys(patch).length === 0) return;
+  patch.ocr_processed_at = new Date();
+  await db
+    .update(personalDetails)
+    .set(patch as any)
+    .where(eq(personalDetails.lead_id, leadId));
+
+  // Mirror the lead-facing fields onto the leads table too. The web dealer Step-1
+  // form (GET /api/dealer/leads/[id]) reads dob / father / addresses straight off
+  // `leads`, NOT personal_details — so without this they show blank when a
+  // WhatsApp lead is opened for editing. Matches the web PATCH, which writes both.
+  const leadPatch: Record<string, unknown> = {};
+  if (patch.dob !== undefined) leadPatch.dob = patch.dob;
+  if (patch.father_husband_name !== undefined)
+    leadPatch.father_or_husband_name = patch.father_husband_name;
+  if (patch.permanent_address !== undefined) {
+    leadPatch.permanent_address = patch.permanent_address;
+    leadPatch.current_address = patch.local_address ?? patch.permanent_address;
+  }
+  // Address docs also carry state/city — resolve them to the canonical dropdown
+  // names so the wizard's State/City selects pre-populate (overwriting the
+  // "Unknown" placeholder set at lead creation).
+  if (docType === "aadhaar_back" || docType === "address_proof") {
+    const loc = resolveStateCity(str(fields.state), str(fields.city));
+    if (loc.state) leadPatch.state = loc.state;
+    if (loc.city) leadPatch.city = loc.city;
+  }
+  if (Object.keys(leadPatch).length > 0) {
+    leadPatch.updated_at = new Date();
+    await db.update(leads).set(leadPatch as any).where(eq(leads.id, leadId));
+  }
+}
+
+/**
+ * Customer documents are in — move on to the KYC consent. Documents come BEFORE
+ * consent so the name / PAN / Aadhaar / address extracted from them populate the
+ * consent form. Surfaces a heads-up about any still-missing required documents,
+ * but doesn't block (the dealer can add them later on the portal).
+ */
+async function proceedToConsent(
+  session: SessionRow,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const lead = await getLeadCtx(session);
+  if (!lead.leadId) {
+    await showDealerMenu(session, dealer);
+    return;
+  }
+  const have = Object.keys(lead.docs ?? {});
+  const missing = REQUIRED_CUSTOMER_DOCS.filter((d) => !have.includes(d)).map(
+    customerDocLabel,
+  );
+  let ack = "Thanks — documents received and details extracted. ✅";
+  if (missing.length) {
+    ack += `\n\n⚠️ Still missing: ${missing.join(", ")}. You can add these later on the dealer portal.`;
+  }
+  ack += "\n\nNow let's get the customer's *KYC consent*. Generating the consent form…";
+  await reply(session, ack);
+  await startConsent(session, dealer, lead.leadId);
+}
+
+async function finalizeLead(session: SessionRow): Promise<void> {
+  // Terminal step for a Hot + finance lead: documents collected, consent signed.
+  // Submitting surfaces the lead — documents, extracted details and consent — to
+  // the admin KYC review queue in one shot, then clears the draft.
+  const lead = await getLeadCtx(session);
+  if (lead.leadId) {
+    try {
+      await ensureAdminKycQueueEntry(lead.leadId);
+    } catch (e) {
+      console.error("[WhatsApp/console] admin KYC queue entry failed:", e);
+    }
+  }
+
+  await mergeContext(session, (ctx) => {
+    ctx.lead = undefined;
+  });
+  await setSession(session.id, { current_state: "DC_MENU" });
+
+  await reply(
+    session,
+    "🎉 *Lead submitted to iTarang for KYC review!*\n\n" +
+      "The customer's documents, extracted details and signed consent have all been sent for verification.\n\n" +
+      "Send *menu* to create another lead.",
+  );
 }
