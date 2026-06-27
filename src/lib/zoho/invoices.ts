@@ -32,6 +32,22 @@ export async function listInvoicesPage(
   return (await res.json()) as ZohoListInvoicesResponse;
 }
 
+// Download a single invoice as a PDF from Zoho. `accept=pdf` makes the
+// /invoices/{id} endpoint return the rendered tax-invoice PDF instead of JSON.
+// organizationId is required for multi-org logins so Zoho resolves the invoice
+// against the entity that actually owns it.
+export async function fetchInvoicePdf(
+  invoiceId: string,
+  organizationId?: string,
+): Promise<ArrayBuffer> {
+  const res = await zohoFetch(`/invoices/${invoiceId}`, {
+    method: "GET",
+    query: { accept: "pdf" },
+    organizationId,
+  });
+  return res.arrayBuffer();
+}
+
 export async function* iterateAllInvoices(
   organizationId?: string,
 ): AsyncGenerator<ZohoInvoice> {

@@ -138,45 +138,14 @@ export default function CEODashboard() {
           <RevenueMtdCard
             base={Number(m.revenue_mtd ?? m.revenue ?? 0)}
             voidAmount={Number(m.revenue_void_mtd ?? 0)}
-            draftAmount={Number(m.revenue_draft_mtd ?? 0)}
             fyBase={Number(m.revenue_fytd ?? 0)}
             fyVoidAmount={Number(m.revenue_void_fytd ?? 0)}
-            fyDraftAmount={Number(m.revenue_draft_fytd ?? 0)}
             fyStartLabel={m.fyStartLabel}
             change={
               typeof m.revenueChange === "number" ? m.revenueChange : null
             }
           />
         </div>
-        <KPICard
-          title="Lead Qualification Rate"
-          value={`${Number(m.conversionRate ?? 0).toFixed(1)}%`}
-          subtitle={
-            leadsTotal > 0
-              ? `${leadsConverted} of ${leadsTotal} leads this month`
-              : "No leads this month"
-          }
-          change={
-            typeof m.conversionChange === "number"
-              ? {
-                  value: Number(Math.abs(m.conversionChange).toFixed(1)),
-                  period: "vs last month",
-                  isPositive: m.conversionChange >= 0,
-                }
-              : undefined
-          }
-          icon={TrendingUp}
-        />
-        <KPICard
-          title="Inventory Value"
-          value={formatINRCompact(Number(m.inventoryValue ?? 0))}
-          exactValue={formatINRExact(Number(m.inventoryValue ?? 0))}
-          subtitle="Total stock on hand"
-          icon={Package}
-          onClick={() =>
-            setDrill({ metric: "inventory", title: "Inventory on Hand" })
-          }
-        />
         <KPICard
           title="Outstanding Credits"
           value={formatINRCompact(Number(m.outstandingCredits ?? 0))}
@@ -196,6 +165,35 @@ export default function CEODashboard() {
               params: period,
             })
           }
+        />
+        <KPICard
+          title="Inventory Value"
+          value={formatINRCompact(Number(m.inventoryValue ?? 0))}
+          exactValue={formatINRExact(Number(m.inventoryValue ?? 0))}
+          subtitle="Total stock on hand"
+          icon={Package}
+          onClick={() =>
+            setDrill({ metric: "inventory", title: "Inventory on Hand" })
+          }
+        />
+        <KPICard
+          title="Lead Qualification Rate"
+          value={`${Number(m.conversionRate ?? 0).toFixed(1)}%`}
+          subtitle={
+            leadsTotal > 0
+              ? `${leadsConverted} of ${leadsTotal} leads this month`
+              : "No leads this month"
+          }
+          change={
+            typeof m.conversionChange === "number"
+              ? {
+                  value: Number(Math.abs(m.conversionChange).toFixed(1)),
+                  period: "vs last month",
+                  isPositive: m.conversionChange >= 0,
+                }
+              : undefined
+          }
+          icon={TrendingUp}
         />
       </div>
 

@@ -65,7 +65,7 @@ export const GET = withErrorHandler(
       const sixMonthsAgoStr = sixMonthsAgoDate.toISOString().slice(0, 10);
 
       // Revenue MTD — sum totals from synced Zoho invoices for current month,
-      // excluding void/draft (the dashboard's default, "real" revenue figure).
+      // excluding only void (drafts are counted as revenue per CEO request).
       const [zohoRevenue] = await db
         .select({
           revenue_mtd: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)`,
@@ -74,7 +74,7 @@ export const GET = withErrorHandler(
         .where(
           and(
             gte(zohoInvoices.invoice_date, startOfMonthDateStr),
-            sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void', 'draft'))`,
+            sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
           ),
         );
 
@@ -88,7 +88,7 @@ export const GET = withErrorHandler(
         .from(zohoInvoices)
         .where(gte(zohoInvoices.invoice_date, startOfMonthDateStr));
 
-      // Last-month revenue (same void/draft exclusion) for the real MoM badge.
+      // Last-month revenue (same void-only exclusion) for the real MoM badge.
       const [zohoRevenueLastMonth] = await db
         .select({
           revenue: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)`,
@@ -98,16 +98,16 @@ export const GET = withErrorHandler(
           and(
             gte(zohoInvoices.invoice_date, startOfLastMonthDateStr),
             lt(zohoInvoices.invoice_date, startOfMonthDateStr),
-            sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void', 'draft'))`,
+            sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
           ),
         );
 
-      // Financial-year-to-date revenue (since 1 April) — base excludes
-      // void/draft; void/draft returned separately so the same filter
-      // toggles work in FY mode without a refetch.
+      // Financial-year-to-date revenue (since 1 April) — base excludes only
+      // void (drafts counted); void returned separately so the void filter
+      // toggle works in FY mode without a refetch.
       const [zohoFy] = await db
         .select({
-          base: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void', 'draft')), 0)`,
+          base: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void')), 0)`,
           void_amt: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'void'), 0)`,
           draft_amt: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'draft'), 0)`,
         })

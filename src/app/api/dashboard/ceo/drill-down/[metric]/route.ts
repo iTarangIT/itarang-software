@@ -99,11 +99,12 @@ export async function GET(
     } else if (metric === "sales") {
       const conds = [
         gte(zohoInvoices.invoice_date, startStr),
-        sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void', 'draft'))`,
+        sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
       ];
       if (endStr) conds.push(lt(zohoInvoices.invoice_date, endStr));
       rows = await db
         .select({
+          zoho_invoice_id: zohoInvoices.zoho_invoice_id,
           invoice_number: zohoInvoices.invoice_number,
           customer_name: zohoInvoices.customer_name,
           invoice_date: zohoInvoices.invoice_date,
@@ -157,6 +158,7 @@ export async function GET(
           invoice_number: zohoInvoices.invoice_number,
           customer_name: zohoInvoices.customer_name,
           invoice_date: zohoInvoices.invoice_date,
+          due_date: zohoInvoices.due_date,
           total: zohoInvoices.total,
           balance: zohoInvoices.balance,
           status: zohoInvoices.status,

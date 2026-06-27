@@ -15,18 +15,14 @@ import { formatINRCompact, formatINRExact } from "@/lib/format";
 type Period = "mtd" | "fy";
 
 interface RevenueMtdCardProps {
-    /** Month-to-date revenue, excluding void & draft (the default figure). */
+    /** Month-to-date revenue, excluding void (drafts are included). */
     base: number;
     /** Sum of void invoices this month. */
     voidAmount: number;
-    /** Sum of draft invoices this month. */
-    draftAmount: number;
-    /** Financial-year-to-date revenue (since 1 Apr), excluding void & draft. */
+    /** Financial-year-to-date revenue (since 1 Apr), excluding void. */
     fyBase: number;
     /** Sum of void invoices this financial year. */
     fyVoidAmount: number;
-    /** Sum of draft invoices this financial year. */
-    fyDraftAmount: number;
     /** Label for the FY start, e.g. "1 Apr 2026". */
     fyStartLabel?: string;
     /** Month-over-month change in percent (MTD only). Omit/null to hide. */
@@ -38,17 +34,14 @@ const formatLakhs = (v: number) => formatINRCompact(v);
 export function RevenueMtdCard({
     base,
     voidAmount,
-    draftAmount,
     fyBase,
     fyVoidAmount,
-    fyDraftAmount,
     fyStartLabel,
     change,
 }: RevenueMtdCardProps) {
     const [open, setOpen] = useState(false);
     const [period, setPeriod] = useState<Period>("mtd");
     const [includeVoid, setIncludeVoid] = useState(false);
-    const [includeDraft, setIncludeDraft] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Close the popover on outside-click and Escape.
@@ -76,18 +69,11 @@ export function RevenueMtdCard({
     const isFy = period === "fy";
     const activeBase = isFy ? fyBase : base;
     const activeVoid = isFy ? fyVoidAmount : voidAmount;
-    const activeDraft = isFy ? fyDraftAmount : draftAmount;
 
-    const displayed =
-        activeBase +
-        (includeVoid ? activeVoid : 0) +
-        (includeDraft ? activeDraft : 0);
-    const filtersActive = includeVoid || includeDraft;
+    const displayed = activeBase + (includeVoid ? activeVoid : 0);
+    const filtersActive = includeVoid;
     const nonDefault = filtersActive || isFy;
-    const activeLabels = [
-        includeVoid ? "void" : null,
-        includeDraft ? "draft" : null,
-    ].filter(Boolean);
+    const activeLabels = [includeVoid ? "void" : null].filter(Boolean);
 
     // MoM change only applies to the month-to-date figure.
     const hasChange = !isFy && typeof change === "number" && isFinite(change);
@@ -217,19 +203,13 @@ export function RevenueMtdCard({
                             checked={includeVoid}
                             onToggle={() => setIncludeVoid((v) => !v)}
                         />
-                        <FilterToggle
-                            testid="toggle-draft"
-                            label="Draft invoices"
-                            amount={formatLakhs(activeDraft)}
-                            checked={includeDraft}
-                            onToggle={() => setIncludeDraft((v) => !v)}
-                        />
 
                         <p className="text-[11px] text-gray-400 leading-relaxed mt-3 pt-3 border-t border-gray-50">
                             {isFy
                                 ? `Showing revenue since ${fyStartLabel ?? "1 Apr"}.`
                                 : "Showing this month's revenue."}{" "}
-                            Void &amp; draft are excluded unless toggled on.
+                            Drafts are included; void invoices are excluded unless
+                            toggled on.
                         </p>
                     </motion.div>
                 )}

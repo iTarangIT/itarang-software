@@ -2,7 +2,7 @@
 
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { Loader2, FileText } from "lucide-react";
 import { Modal } from "@/components/leads/lead-v2-modals";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
 import { expenseDepartmentLabel } from "@/lib/expenses";
@@ -34,6 +34,18 @@ const dateIN = (v: unknown) =>
   v ? new Date(v as string).toLocaleDateString("en-IN") : "—";
 const txt = (v: unknown) => (v == null || v === "" ? "—" : String(v));
 
+// Whole days a due date is past today (0 if not yet due / no due date).
+const overdueDays = (v: unknown): number => {
+  if (!v) return 0;
+  const due = new Date(v as string);
+  if (Number.isNaN(due.getTime())) return 0;
+  const today = new Date();
+  const days = Math.floor(
+    (today.setHours(0, 0, 0, 0) - due.setHours(0, 0, 0, 0)) / 86400000,
+  );
+  return days > 0 ? days : 0;
+};
+
 const COLUMNS: Record<DrillMetric, Col[]> = {
   purchases: [
     { key: "oem_invoice_number", label: "OEM Inv #", render: (r) => txt(r.oem_invoice_number) },
@@ -50,6 +62,24 @@ const COLUMNS: Record<DrillMetric, Col[]> = {
     { key: "invoice_date", label: "Date", render: (r) => dateIN(r.invoice_date) },
     { key: "status", label: "Status", render: (r) => txt(r.status) },
     { key: "total", label: "Total", align: "right", render: (r) => money(r.total) },
+    {
+      key: "invoice",
+      label: "Invoice",
+      render: (r) => {
+        const id = r.zoho_invoice_id;
+        if (!id) return "—";
+        return (
+          <a
+            href={`/api/admin/zoho/invoices/${id}/pdf`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-brand-700 font-semibold hover:underline"
+          >
+            <FileText className="w-3.5 h-3.5" /> View
+          </a>
+        );
+      },
+    },
   ],
   expenses: [
     { key: "invoice_number", label: "Invoice #", render: (r) => txt(r.invoice_number) },
@@ -70,8 +100,22 @@ const COLUMNS: Record<DrillMetric, Col[]> = {
     { key: "invoice_number", label: "Invoice #", render: (r) => txt(r.invoice_number) },
     { key: "customer_name", label: "Customer", render: (r) => txt(r.customer_name) },
     { key: "invoice_date", label: "Date", render: (r) => dateIN(r.invoice_date) },
+    { key: "due_date", label: "Due", render: (r) => dateIN(r.due_date) },
     { key: "total", label: "Total", align: "right", render: (r) => money(r.total) },
     { key: "balance", label: "Balance", align: "right", render: (r) => money(r.balance) },
+    {
+      key: "overdue",
+      label: "Overdue",
+      align: "right",
+      render: (r) => {
+        const d = overdueDays(r.due_date);
+        return d > 0 ? (
+          <span className="font-semibold text-rose-600">{d}d</span>
+        ) : (
+          "—"
+        );
+      },
+    },
   ],
 };
 
