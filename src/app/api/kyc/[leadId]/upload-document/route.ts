@@ -86,6 +86,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                     file_url: fileUrl,
                     file_name: file.name,
                     file_size: file.size,
+                    file_type: file.type,
                     verification_status: 'pending',
                     failed_reason: null,
                     updated_at: now,
@@ -102,6 +103,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 file_url: fileUrl,
                 file_name: file.name,
                 file_size: file.size,
+                file_type: file.type,
                 verification_status: 'pending',
             });
         }
