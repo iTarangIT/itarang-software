@@ -309,6 +309,10 @@ export const leads = pgTable("leads", {
   kyc_draft_data: jsonb("kyc_draft_data"),
   step_status: jsonb("step_status"),
   source: varchar({ length: 50 }),
+  // E-174 — channel the lead was CREATED through ('whatsapp' for the post-approval
+  // WhatsApp dealer console; NULL for web/other). Distinguishes WhatsApp leads,
+  // which share lead_source='dealer_referral' with web-dealer leads.
+  source_channel: varchar("source_channel", { length: 20 }),
   remarks: text(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -6420,6 +6424,9 @@ export const zohoInvoices = pgTable(
   {
     id: uuid().defaultRandom().primaryKey().notNull(),
     zoho_invoice_id: varchar("zoho_invoice_id", { length: 64 }).notNull(),
+    // E-171 — which Zoho organization (entity) this invoice belongs to. The
+    // sync pulls from multiple orgs (Haryana + Delhi) into this one table.
+    organization_id: varchar("organization_id", { length: 64 }),
     invoice_number: varchar("invoice_number", { length: 64 }),
     customer_id: varchar("customer_id", { length: 64 }),
     customer_name: text("customer_name"),
@@ -6429,6 +6436,12 @@ export const zohoInvoices = pgTable(
     total: numeric("total", { precision: 14, scale: 2 }),
     balance: numeric("balance", { precision: 14, scale: 2 }),
     status: varchar({ length: 32 }),
+    // E-174 — latest applied payment's reference (UTR / bank txn id), id and
+    // date, pulled from Zoho /customerpayments so the CEO can see the txn id
+    // behind a paid invoice.
+    payment_reference: text("payment_reference"),
+    payment_id: varchar("payment_id", { length: 64 }),
+    last_payment_date: date("last_payment_date"),
     raw_json: jsonb("raw_json"),
     synced_at: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -6442,6 +6455,9 @@ export const zohoInvoices = pgTable(
       table.invoice_date,
     ),
     zohoInvoicesStatusIdx: index("zoho_invoices_status_idx").on(table.status),
+    zohoInvoicesOrganizationIdIdx: index(
+      "zoho_invoices_organization_id_idx",
+    ).on(table.organization_id),
   }),
 );
 
@@ -6459,6 +6475,16 @@ export const expenseSubmissions = pgTable(
     approved_by: uuid("approved_by"),
     approved_at: timestamp("approved_at", { withTimezone: true }),
     rejection_reason: text("rejection_reason"),
+    // E-106 — AI invoice tracker fields
+    department: varchar("department", { length: 32 }),
+    project_tag: varchar("project_tag", { length: 80 }),
+    vendor: varchar("vendor", { length: 160 }),
+    expense_date: date("expense_date"),
+    source: varchar("source", { length: 16 }).default("manual"),
+    ai_raw: jsonb("ai_raw"),
+    // E-172 — invoice number (dedup key for AI rows) + original upload filename.
+    invoice_number: varchar("invoice_number", { length: 120 }),
+    file_name: varchar("file_name", { length: 255 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -6472,6 +6498,17 @@ export const expenseSubmissions = pgTable(
     expenseSubmissionsApprovedAtIdx: index(
       "expense_submissions_approved_at_idx",
     ).on(table.approved_at),
+    expenseSubmissionsDepartmentIdx: index(
+      "expense_submissions_department_idx",
+    ).on(table.department),
+    expenseSubmissionsDepartmentProjectIdx: index(
+      "expense_submissions_department_project_idx",
+    ).on(table.department, table.project_tag),
+    // E-172 — case-insensitive lookup for invoice-number dedup. The partial
+    // unique index (AI rows, non-blank number) lives in the migration only.
+    expenseSubmissionsInvoiceNumberIdx: index(
+      "expense_submissions_invoice_number_idx",
+    ).on(sql`lower(${table.invoice_number})`),
   }),
 );
 

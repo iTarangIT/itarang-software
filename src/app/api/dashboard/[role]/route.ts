@@ -17,7 +17,7 @@ import {
   nbfcLspAgreementSigners,
 } from "@/lib/db/schema";
 
-import { eq, gte, sql, and, desc, count, inArray } from "drizzle-orm";
+import { eq, gte, lt, sql, and, desc, count, inArray } from "drizzle-orm";
 import { requireAuth } from "@/lib/auth-utils";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { LSP_IN_FLIGHT_STATUSES } from "@/components/admin/nbfc/lspStatusTone";
@@ -38,10 +38,34 @@ export const GET = withErrorHandler(
 
     // ================= CEO =================
     if (role === "ceo") {
-      const startOfMonthDateStr = startOfMonthDate.toISOString().slice(0, 10);
+      // Build the date-window strings directly from local Y/M/D so the
+      // boundary lands exactly on the 1st regardless of server timezone
+      // (toISOString() can shift a local midnight back a day under +TZ).
+      const pad2 = (n: number) => String(n).padStart(2, "0");
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth(); // 0-indexed
+      const startOfMonthDateStr = `${curYear}-${pad2(curMonth + 1)}-01`;
 
-      // Revenue MTD — sum totals from synced Zoho invoices for current month
-      // excluding voided / draft. Source: hourly /api/cron/zoho-sync.
+      const lastMonth = curMonth === 0 ? 11 : curMonth - 1;
+      const lastMonthYear = curMonth === 0 ? curYear - 1 : curYear;
+      const startOfLastMonthDateStr = `${lastMonthYear}-${pad2(lastMonth + 1)}-01`;
+      const startOfLastMonthDate = new Date(lastMonthYear, lastMonth, 1);
+
+      // Financial year (India): starts 1 April. Before April we're still in
+      // the FY that began last calendar year.
+      const fyStartYear = curMonth >= 3 ? curYear : curYear - 1;
+      const fyStartStr = `${fyStartYear}-04-01`;
+
+      // First day of the month 5 months back → 6-month trend window incl. current.
+      const sixMonthsAgoDate = new Date(
+        now.getFullYear(),
+        now.getMonth() - 5,
+        1,
+      );
+      const sixMonthsAgoStr = sixMonthsAgoDate.toISOString().slice(0, 10);
+
+      // Revenue MTD — sum totals from synced Zoho invoices for current month,
+      // excluding only void (drafts are counted as revenue per CEO request).
       const [zohoRevenue] = await db
         .select({
           revenue_mtd: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)`,
@@ -50,8 +74,66 @@ export const GET = withErrorHandler(
         .where(
           and(
             gte(zohoInvoices.invoice_date, startOfMonthDateStr),
-            sql`${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void', 'draft')`,
+            sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
           ),
+        );
+
+      // Void/draft MTD sub-totals — returned separately so the CEO can toggle
+      // them into the Revenue card client-side without a refetch.
+      const [zohoBreakdown] = await db
+        .select({
+          void_mtd: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'void'), 0)`,
+          draft_mtd: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'draft'), 0)`,
+        })
+        .from(zohoInvoices)
+        .where(gte(zohoInvoices.invoice_date, startOfMonthDateStr));
+
+      // Last-month revenue (same void-only exclusion) for the real MoM badge.
+      const [zohoRevenueLastMonth] = await db
+        .select({
+          revenue: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)`,
+        })
+        .from(zohoInvoices)
+        .where(
+          and(
+            gte(zohoInvoices.invoice_date, startOfLastMonthDateStr),
+            lt(zohoInvoices.invoice_date, startOfMonthDateStr),
+            sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
+          ),
+        );
+
+      // Financial-year-to-date revenue (since 1 April) — base excludes only
+      // void (drafts counted); void returned separately so the void filter
+      // toggle works in FY mode without a refetch.
+      const [zohoFy] = await db
+        .select({
+          base: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void')), 0)`,
+          void_amt: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'void'), 0)`,
+          draft_amt: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'draft'), 0)`,
+        })
+        .from(zohoInvoices)
+        .where(gte(zohoInvoices.invoice_date, fyStartStr));
+
+      // Inventory value — total capital across all inventory rows.
+      const [inventoryAgg] = await db
+        .select({
+          inventory_value: sql<string>`COALESCE(SUM(${inventory.final_amount}), 0)`,
+        })
+        .from(inventory);
+
+      // Outstanding credits — receivables: unpaid invoice balances owed to us.
+      // Exclude paid (balance 0), void (cancelled), and draft (unsent — not a
+      // real receivable; Zoho's "Total Receivables"/"Unpaid" view excludes them
+      // too). Without the draft exclusion this over-reports by the full draft
+      // total (e.g. ₹1.08Cr of drafts inflated the figure to ₹1.16Cr vs the
+      // true ₹7.89L of overdue balances).
+      const [outstandingAgg] = await db
+        .select({
+          outstanding: sql<string>`COALESCE(SUM(${zohoInvoices.balance}), 0)`,
+        })
+        .from(zohoInvoices)
+        .where(
+          sql`${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('paid', 'void', 'draft')`,
         );
 
       // OEM purchases MTD — aggregate from inventory.oem_invoice_date /
@@ -65,18 +147,41 @@ export const GET = withErrorHandler(
         .from(inventory)
         .where(gte(inventory.oem_invoice_date, startOfMonthDate));
 
-      // Other business expenses MTD — only CEO-approved entries count.
+      // Other business expenses MTD — only approved entries count.
+      const approvedThisMonth = and(
+        eq(expenseSubmissions.status, "approved"),
+        gte(expenseSubmissions.approved_at, startOfMonthDate),
+      );
+
       const [expensesAgg] = await db
         .select({
           other_expenses_mtd: sql<string>`COALESCE(SUM(${expenseSubmissions.amount}), 0)`,
         })
         .from(expenseSubmissions)
-        .where(
-          and(
-            eq(expenseSubmissions.status, "approved"),
-            gte(expenseSubmissions.approved_at, startOfMonthDate),
-          ),
-        );
+        .where(approvedThisMonth);
+
+      // E-106 — expense breakdown by department and project tag (MTD).
+      const deptExpr = sql<string>`COALESCE(${expenseSubmissions.department}, 'unassigned')`;
+      const projectExpr = sql<string>`COALESCE(${expenseSubmissions.project_tag}, 'Unassigned')`;
+
+      const expensesByDepartment = await db
+        .select({
+          department: deptExpr,
+          total: sql<string>`COALESCE(SUM(${expenseSubmissions.amount}), 0)`,
+        })
+        .from(expenseSubmissions)
+        .where(approvedThisMonth)
+        .groupBy(deptExpr);
+
+      const expensesByProject = await db
+        .select({
+          department: deptExpr,
+          project_tag: projectExpr,
+          total: sql<string>`COALESCE(SUM(${expenseSubmissions.amount}), 0)`,
+        })
+        .from(expenseSubmissions)
+        .where(approvedThisMonth)
+        .groupBy(deptExpr, projectExpr);
 
       const recentInvoices = await db
         .select({
@@ -105,6 +210,27 @@ export const GET = withErrorHandler(
         .orderBy(desc(expenseSubmissions.approved_at))
         .limit(5);
 
+      // E-106 — full AI-tracked expense ledger for the CEO read-only view.
+      const aiExpenses = await db
+        .select({
+          id: expenseSubmissions.id,
+          vendor: expenseSubmissions.vendor,
+          amount: expenseSubmissions.amount,
+          description: expenseSubmissions.description,
+          department: expenseSubmissions.department,
+          project_tag: expenseSubmissions.project_tag,
+          expense_date: expenseSubmissions.expense_date,
+          bill_url: expenseSubmissions.bill_url,
+          created_at: expenseSubmissions.created_at,
+          submitter_name: users.name,
+        })
+        .from(expenseSubmissions)
+        .leftJoin(users, eq(expenseSubmissions.submitted_by, users.id))
+        .where(eq(expenseSubmissions.source, "ai"))
+        .orderBy(desc(expenseSubmissions.created_at))
+        .limit(200);
+
+        // conversion rate
       const [conversionResult] = await db
         .select({
           total_leads: sql<number>`COUNT(*)`,
@@ -112,6 +238,65 @@ export const GET = withErrorHandler(
         })
         .from(dealerLeads)
         .where(gte(dealerLeads.created_at, startOfMonthDate));
+
+      // Last-month conversion rate — for the real MoM change badge.
+      const [conversionLastMonth] = await db
+        .select({
+          total_leads: sql<number>`COUNT(*)`,
+          conversions: sql<number>`COUNT(*) FILTER (WHERE current_status = 'qualified')`,
+        })
+        .from(dealerLeads)
+        .where(
+          and(
+            gte(dealerLeads.created_at, startOfLastMonthDate),
+            lt(dealerLeads.created_at, startOfMonthDate),
+          ),
+        );
+
+      // Procurement overview — pending approvals + active (in-flight) value.
+      const [procurementAgg] = await db
+        .select({
+          pending_approvals: sql<number>`COUNT(*) FILTER (WHERE ${provisions.status} = 'pending')`,
+          active_value: sql<string>`COALESCE(SUM(${provisions.amount}) FILTER (WHERE ${provisions.status} NOT IN ('cancelled', 'completed')), 0)`,
+        })
+        .from(provisions);
+
+      // Revenue trend — monthly totals for the last 6 months (excl. void/draft).
+      const revenueTrendRows = await db
+        .select({
+          bucket: sql<string>`date_trunc('month', ${zohoInvoices.invoice_date})`,
+          name: sql<string>`to_char(date_trunc('month', ${zohoInvoices.invoice_date}), 'Mon')`,
+          revenue: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)`,
+        })
+        .from(zohoInvoices)
+        .where(
+          and(
+            gte(zohoInvoices.invoice_date, sixMonthsAgoStr),
+            sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void', 'draft'))`,
+          ),
+        )
+        .groupBy(sql`date_trunc('month', ${zohoInvoices.invoice_date})`)
+        .orderBy(sql`date_trunc('month', ${zohoInvoices.invoice_date})`);
+
+      // Top sales managers — ranked by qualified conversions on owned leads.
+      const topManagerRows = await db
+        .select({
+          id: users.id,
+          name: users.name,
+          total: sql<number>`COUNT(${dealerLeads.id})`,
+          qualified: sql<number>`COUNT(*) FILTER (WHERE ${dealerLeads.current_status} = 'qualified')`,
+        })
+        .from(leadAssignments)
+        .innerJoin(users, eq(users.id, leadAssignments.lead_owner))
+        .innerJoin(dealerLeads, eq(dealerLeads.id, leadAssignments.lead_id))
+        .where(eq(users.role, "sales_manager"))
+        .groupBy(users.id, users.name)
+        .orderBy(
+          desc(
+            sql`COUNT(*) FILTER (WHERE ${dealerLeads.current_status} = 'qualified')`,
+          ),
+        )
+        .limit(3);
 
       // NBFC LSP agreements currently in flight — Digio has the auto-filled
       // PDF and signers are working through the sequence. Surfaces on the CEO
@@ -183,18 +368,81 @@ export const GET = withErrorHandler(
         };
       });
 
+      const revenueMtd = Number(zohoRevenue?.revenue_mtd || 0);
+      const revenueLastMonth = Number(zohoRevenueLastMonth?.revenue || 0);
+      const revenueChange =
+        revenueLastMonth > 0
+          ? ((revenueMtd - revenueLastMonth) / revenueLastMonth) * 100
+          : null;
+
+      const conversionRate = conversionResult?.total_leads
+        ? (Number(conversionResult.conversions) /
+            Number(conversionResult.total_leads)) *
+          100
+        : 0;
+      const conversionRateLastMonth = conversionLastMonth?.total_leads
+        ? (Number(conversionLastMonth.conversions) /
+            Number(conversionLastMonth.total_leads)) *
+          100
+        : null;
+      // Conversion is a percentage already; report the change in percentage points.
+      const conversionChange =
+        conversionRateLastMonth !== null
+          ? conversionRate - conversionRateLastMonth
+          : null;
+
+      const topSalesManagers = topManagerRows.map((r) => {
+        const total = Number(r.total) || 0;
+        const qualified = Number(r.qualified) || 0;
+        const pct = total > 0 ? Math.round((qualified / total) * 100) : 0;
+        return {
+          id: r.id,
+          name: r.name,
+          // `users` has no region column — surface lead volume instead.
+          region: `${total} lead${total === 1 ? "" : "s"}`,
+          conversion: `${pct}%`,
+        };
+      });
+
       return successResponse({
-        revenue: Number(zohoRevenue?.revenue_mtd || 0),
-        revenue_mtd: Number(zohoRevenue?.revenue_mtd || 0),
+        revenue: revenueMtd,
+        revenue_mtd: revenueMtd,
+        revenue_void_mtd: Number(zohoBreakdown?.void_mtd || 0),
+        revenue_draft_mtd: Number(zohoBreakdown?.draft_mtd || 0),
+        revenue_fytd: Number(zohoFy?.base || 0),
+        revenue_void_fytd: Number(zohoFy?.void_amt || 0),
+        revenue_draft_fytd: Number(zohoFy?.draft_amt || 0),
+        fyStartLabel: `1 Apr ${fyStartYear}`,
+        revenueChange,
         purchases_mtd: Number(purchasesAgg?.purchases_mtd || 0),
         other_expenses_mtd: Number(expensesAgg?.other_expenses_mtd || 0),
+        expenses_by_department: expensesByDepartment.map((r) => ({
+          department: r.department,
+          total: Number(r.total),
+        })),
+        expenses_by_project: expensesByProject.map((r) => ({
+          department: r.department,
+          project_tag: r.project_tag,
+          total: Number(r.total),
+        })),
+        ai_expenses: aiExpenses,
+        inventoryValue: Number(inventoryAgg?.inventory_value || 0),
+        outstandingCredits: Number(outstandingAgg?.outstanding || 0),
         recent_invoices: recentInvoices,
         recent_expenses: recentExpenses,
-        conversionRate: conversionResult?.total_leads
-          ? (Number(conversionResult.conversions) /
-              Number(conversionResult.total_leads)) *
-            100
-          : 0,
+        conversionRate,
+        conversionChange,
+        leadsTotal: Number(conversionResult?.total_leads || 0),
+        leadsConverted: Number(conversionResult?.conversions || 0),
+        procurementStats: {
+          pendingApprovals: Number(procurementAgg?.pending_approvals || 0),
+          activeValue: Number(procurementAgg?.active_value || 0),
+        },
+        revenueTrend: revenueTrendRows.map((r) => ({
+          name: r.name,
+          revenue: Number(r.revenue) / 100000, // ₹ lakhs for a readable axis
+        })),
+        topSalesManagers,
         nbfcSigningQueue,
         lastUpdated: new Date().toISOString(),
       });

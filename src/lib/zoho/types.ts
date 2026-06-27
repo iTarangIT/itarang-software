@@ -31,3 +31,28 @@ export interface ZohoListInvoicesResponse {
   invoices: ZohoInvoice[];
   page_context: ZohoPageContext;
 }
+
+// A customer payment from Zoho /customerpayments. A single payment can settle
+// multiple invoices, listed in `invoices[]`. `reference_number` is the UTR /
+// bank transaction id the dealer paid with.
+export interface ZohoPaymentInvoiceLink {
+  invoice_id: string;
+  amount_applied?: number;
+}
+
+export interface ZohoPayment {
+  payment_id: string;
+  reference_number?: string;
+  date?: string; // ISO date "YYYY-MM-DD"
+  amount?: number;
+  payment_mode?: string;
+  invoices?: ZohoPaymentInvoiceLink[];
+  [key: string]: unknown;
+}
+
+export interface ZohoListPaymentsResponse {
+  code: number;
+  message: string;
+  customerpayments: ZohoPayment[];
+  page_context: ZohoPageContext;
+}
