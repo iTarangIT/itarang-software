@@ -18,6 +18,10 @@ const nextConfig: NextConfig = {
     "puppeteer",
     "puppeteer-core",
     "@sparticuz/chromium",
+    // mupdf ships a wasm asset and is ESM-only; let the runtime load it
+    // directly instead of webpack trying to bundle the wasm into the
+    // standalone server. Used by src/lib/ocr/pdfToImage.ts to rasterize PDFs.
+    "mupdf",
   ],
   outputFileTracingExcludes: {
     "/api/kyc/*/generate-consent-pdf": [
