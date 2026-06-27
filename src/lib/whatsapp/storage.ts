@@ -39,14 +39,19 @@ function extFor(mimeType: string, fileName?: string): string {
 export async function saveMedia(params: {
   buffer: Buffer;
   mimeType: string;
-  applicationId: string;
+  /** Onboarding application id — used to build the default path prefix. */
+  applicationId?: string;
+  /** Override the path prefix (e.g. "leads/<leadId>/whatsapp" for customer-lead
+   *  KYC docs). Falls back to `whatsapp/<applicationId>` when omitted. */
+  keyPrefix?: string;
   docType: string;
   fileName?: string;
 }): Promise<SavedMedia> {
-  const { buffer, mimeType, applicationId, docType, fileName } = params;
+  const { buffer, mimeType, applicationId, keyPrefix, docType, fileName } = params;
   const ext = extFor(mimeType, fileName);
   const objectName = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
-  const path = `whatsapp/${applicationId}/${docType}/${objectName}`;
+  const base = keyPrefix ?? `whatsapp/${applicationId ?? "unknown"}`;
+  const path = `${base}/${docType}/${objectName}`;
 
   if (isS3Backend) {
     await putObject(BUCKET, path, buffer, mimeType);

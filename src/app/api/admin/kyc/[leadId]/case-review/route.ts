@@ -199,6 +199,10 @@ export async function GET(
             ? `${lead.city}${lead.state ? ", " + lead.state : ""}`
             : lead.shop_address || "",
           currentStatus: lead.status || lead.kyc_status || "",
+          // E-174 — origin channel ('whatsapp' for the WhatsApp dealer console).
+          // The admin gate unlocks documents for WhatsApp leads (no coupon step)
+          // once the consent is admin-verified.
+          sourceChannel: lead.source_channel || null,
         },
         personalDetails: personal
           ? {

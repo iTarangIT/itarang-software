@@ -8,6 +8,7 @@ import { eq, and } from 'drizzle-orm';
 import { extractDocumentOcr, type OcrDocType } from '@/lib/decentro';
 import { extractTextFromImageBuffer } from '@/lib/ocr/tesseractOcr';
 import { parseBankDocument } from '@/lib/ocr/bankDocParser';
+import { isPdf, rasterizePdfFirstPage } from '@/lib/ocr/pdfToImage';
 
 // Supabase signed URLs expire (default 1 hour). Old leads have stale URLs in
 // kyc_documents.file_url, so a direct fetch returns 403 → the catch block
@@ -260,9 +261,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                     const fetchUrl = await resolveFetchableUrl(candidate.fileUrl);
                     const fileRes = await fetch(fetchUrl);
                     if (!fileRes.ok) { console.log(`[OCR Fallback] Failed to fetch file for doc ${candidate.id}: ${fileRes.status}`); continue; }
-                    const buf = Buffer.from(await fileRes.arrayBuffer());
-                    const ct = fileRes.headers.get('content-type') || 'image/jpeg';
-                    const fname = candidate.fileName || 'doc.jpg';
+                    let buf = Buffer.from(await fileRes.arrayBuffer());
+                    let ct = fileRes.headers.get('content-type') || 'image/jpeg';
+                    let fname = candidate.fileName || 'doc.jpg';
+
+                    // PDF candidates must be rasterized to PNG before any OCR
+                    // strategy can identify them (mirrors the primary path).
+                    if (isPdf(ct, candidate.fileName || candidate.fileUrl)) {
+                        try {
+                            buf = await rasterizePdfFirstPage(buf);
+                            ct = 'image/png';
+                            fname = fname.replace(/\.pdf($|\?)/i, '.png');
+                            if (!/\.png$/i.test(fname)) fname = 'doc.png';
+                        } catch (e) {
+                            console.log(`[OCR Fallback] PDF rasterization failed for doc ${candidate.id}:`, e);
+                            continue;
+                        }
+                    }
 
                     // Strategy 1: Try Decentro OCR directly with expected type — if extraction succeeds, it's the right doc
                     const decentroOcrType = DECENTRO_OCR_MAP[doc_type];
@@ -418,6 +433,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const contentType = fileRes.headers.get('content-type') || 'image/jpeg';
         const fileName = doc.fileName || `${doc_type}.jpg`;
 
+        // OCR (Decentro + Tesseract) only understands image bytes. Dealers can
+        // upload KYC docs as PDFs, so rasterize page 1 → PNG before OCR.
+        // Falls through unchanged for image uploads.
+        let ocrBuffer = fileBuffer;
+        let ocrContentType = contentType;
+        let ocrFileName = fileName;
+        if (isPdf(contentType, doc.fileName || doc.fileUrl)) {
+            try {
+                ocrBuffer = await rasterizePdfFirstPage(fileBuffer);
+                ocrContentType = 'image/png';
+                ocrFileName = fileName.replace(/\.pdf($|\?)/i, '.png');
+                if (!/\.png$/i.test(ocrFileName)) ocrFileName = `${doc_type}.png`;
+            } catch (pdfErr) {
+                console.error(`[Admin OCR] PDF rasterization failed for doc ${doc.id} on lead ${leadId}:`, pdfErr);
+                return NextResponse.json({
+                    success: false,
+                    error: "Couldn't read the PDF document. Ask the dealer to re-upload a clearer PDF or an image.",
+                }, { status: 422 });
+            }
+        }
+
         let ocrData: Record<string, unknown> = {};
         let source: 'decentro' | 'tesseract' = 'decentro';
         // Capture Decentro's own error message when extraction fails so the
@@ -430,7 +466,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         if (decentroType) {
             // Use Decentro OCR for supported types
-            const blob = new Blob([fileBuffer], { type: contentType });
+            const blob = new Blob([ocrBuffer], { type: ocrContentType });
             const side: 'FRONT' | 'BACK' | undefined =
                 doc_type === 'aadhaar_front' ? 'FRONT'
                 : doc_type === 'aadhaar_back' ? 'BACK'
@@ -438,7 +474,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             const decentroRes = await extractDocumentOcr(
                 decentroType,
                 blob,
-                fileName,
+                ocrFileName,
                 side,
                 undefined,
                 undefined,
@@ -494,7 +530,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
                 // Fallback to Tesseract — and salvage what we can from the raw
                 // text so the admin still gets autofill in degraded mode.
-                const text = await extractTextFromImageBuffer(fileBuffer);
+                const text = await extractTextFromImageBuffer(ocrBuffer);
                 ocrData = { rawText: text, source: 'tesseract_fallback' };
                 source = 'tesseract';
 
@@ -508,7 +544,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             }
         } else if (TESSERACT_TYPES.includes(doc_type)) {
             // Use Tesseract for bank docs and RC
-            const text = await extractTextFromImageBuffer(fileBuffer);
+            const text = await extractTextFromImageBuffer(ocrBuffer);
             source = 'tesseract';
 
             if (doc_type === 'rc_copy') {

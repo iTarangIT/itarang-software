@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { FileText } from "lucide-react";
 import AadhaarCard from "./cards/AadhaarCard";
 import PANCard from "./cards/PANCard";
 import BankCard from "./cards/BankCard";
@@ -43,6 +44,8 @@ interface LeadInfo {
   shopName: string;
   location: string;
   currentStatus: string;
+  /** Origin channel — 'whatsapp' for leads from the WhatsApp dealer console. */
+  sourceChannel: string | null;
 }
 
 interface PersonalDetails {
@@ -177,6 +180,10 @@ function prettyConsentFor(value: string): string {
   return value.replace(/_/g, " ");
 }
 
+// KYC docs can be uploaded as images or PDFs. PDFs can't render in <Image>,
+// so detect them by URL and show a file icon + open them in the iframe modal.
+const isPdfUrl = (u?: string | null) => !!u && /\.pdf($|\?)/i.test(u);
+
 const DOC_TYPE_LABELS: Record<string, string> = {
   aadhaar_front: "Aadhaar Front",
   aadhaar_back: "Aadhaar Back",
@@ -197,6 +204,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<"verifications" | "documents">("verifications");
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [pdfViewer, setPdfViewer] = useState<{ url: string; title: string } | null>(null);
   const [decision, setDecision] = useState<"approved" | "rejected" | "">("");
   const [decisionNotes, setDecisionNotes] = useState("");
   const [rejectionReason, setRejectionReason] = useState("");
@@ -569,6 +577,17 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
     if (data.coBorrower && buckets.has("co_borrower")) out.push(buckets.get("co_borrower")!);
     return out;
   })();
+  // Documents + verification cards are normally gated behind a consumed coupon
+  // (the web "Submit for Verification" step). The WhatsApp dealer console has no
+  // coupon step, so for WhatsApp leads we unlock them once the admin has VERIFIED
+  // the consent instead (the consent card is always visible above this gate).
+  const isWhatsappLead = lead.sourceChannel === "whatsapp";
+  const consentVerifiedByAdmin = consent.some(
+    (c) => c.consentStatus === "verified" || c.consentStatus === "digitally_signed",
+  );
+  const docsUnlocked =
+    metadata?.couponStatus === "used" ||
+    (isWhatsappLead && consentVerifiedByAdmin);
   const isFinalDecided = metadata?.finalDecision === "approved" || metadata?.finalDecision === "rejected";
   const initials = (lead.name || "?")
     .split(/\s+/)
@@ -1066,16 +1085,20 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           to 'used'. Until then (no coupon, or coupon merely 'reserved' after
           validate-coupon), the admin sees a placeholder — early review of
           documents the dealer might still be replacing is not allowed. */}
-      {metadata?.couponStatus !== "used" ? (
+      {!docsUnlocked ? (
         <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center shadow-sm">
           <div className="w-12 h-12 rounded-full bg-amber-50 ring-1 ring-amber-200 mx-auto mb-3 flex items-center justify-center">
             <svg className="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </div>
-          <p className="text-sm font-bold text-gray-900">Awaiting Dealer Submission</p>
+          <p className="text-sm font-bold text-gray-900">
+            {isWhatsappLead ? "Verify Consent to Unlock Documents" : "Awaiting Dealer Submission"}
+          </p>
           <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
-            {metadata?.couponStatus === "reserved"
+            {isWhatsappLead
+              ? "This lead was created over WhatsApp. Review and verify the customer's consent above — the documents and verification cards will unlock here once the consent is verified."
+              : metadata?.couponStatus === "reserved"
               ? "Dealer has validated the coupon but has not yet clicked Submit for Verification. Documents will appear here once the dealer formally submits."
               : "Documents and verification cards will appear here once the dealer uploads documents, validates the coupon, and clicks Submit for Verification."}
           </p>
@@ -1296,13 +1319,30 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
           !d.docFor || d.docFor === "customer" || d.docFor === "primary";
         const primaryDocs = documents.filter(isPrimaryDoc);
         const coBorrowerDocs = documents.filter((d) => !isPrimaryDoc(d));
-        const renderDocCard = (doc: Document) => (
-          <button key={doc.id} onClick={() => setLightboxUrl(doc.fileUrl)}
+        const renderDocCard = (doc: Document) => {
+          const label = DOC_TYPE_LABELS[doc.docType] || doc.docType;
+          const docIsPdf = isPdfUrl(doc.fileUrl);
+          const openDoc = () => {
+            if (!doc.fileUrl) return;
+            if (docIsPdf) setPdfViewer({ url: doc.fileUrl, title: label });
+            else setLightboxUrl(doc.fileUrl);
+          };
+          return (
+          <button key={doc.id} onClick={openDoc}
             className="group bg-white border border-gray-100 rounded-2xl p-3 hover:border-teal-300 hover:shadow-lg hover:-translate-y-0.5 transition-all text-left shadow-sm">
             <div className="aspect-[4/3] bg-gradient-to-br from-gray-100 to-gray-50 rounded-xl mb-3 overflow-hidden flex items-center justify-center relative ring-1 ring-gray-100">
               {doc.fileUrl ? (
-                <Image src={doc.fileUrl} alt={doc.docType} fill
-                  className="object-cover group-hover:scale-110 transition-transform duration-300" />
+                docIsPdf ? (
+                  <div className="w-full h-full flex flex-col items-center justify-center">
+                    <div className="w-12 h-14 bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col items-center justify-center">
+                      <FileText className="w-6 h-6 text-red-400" strokeWidth={2.2} />
+                      <span className="text-[8px] font-black text-red-500 tracking-wider mt-0.5">PDF</span>
+                    </div>
+                  </div>
+                ) : (
+                  <Image src={doc.fileUrl} alt={doc.docType} fill
+                    className="object-cover group-hover:scale-110 transition-transform duration-300" />
+                )
               ) : (
                 <svg className="w-8 h-8 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -1311,7 +1351,7 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>
             <p className="text-[13px] font-semibold text-gray-800 truncate group-hover:text-teal-700 transition-colors">
-              {DOC_TYPE_LABELS[doc.docType] || doc.docType}
+              {label}
             </p>
             <span className={`inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold ring-1 ring-inset capitalize ${
               doc.verificationStatus === "success" ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20" :
@@ -1328,7 +1368,8 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               {doc.verificationStatus.replace(/_/g, " ")}
             </span>
           </button>
-        );
+          );
+        };
 
         if (documents.length === 0) {
           return (
@@ -1400,6 +1441,18 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
               className="max-h-[80vh] w-auto rounded-lg shadow-2xl" />
           </div>
         </div>
+      )}
+
+      {/* PDF document viewer — dealers can upload KYC docs as PDFs, which the
+          image lightbox can't render. Reuse the iframe-based modal (with its
+          open-in-new-tab fallback) used for consent PDFs. */}
+      {pdfViewer && (
+        <ConsentPdfViewerModal
+          open
+          onClose={() => setPdfViewer(null)}
+          pdfUrl={pdfViewer.url}
+          title={pdfViewer.title}
+        />
       )}
 
       {/* Consent PDF Viewer — only open with a signed URL; handleConsentClick

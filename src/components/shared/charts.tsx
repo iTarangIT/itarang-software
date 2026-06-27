@@ -23,6 +23,8 @@ interface MetricsChartProps {
     categoryKey: string;
     height?: number;
     colors?: string[];
+    /** Optional formatter for Y-axis ticks and tooltip values (e.g. ₹ lakhs). */
+    valueFormatter?: (n: number) => string;
 }
 
 export function MetricsChart({
@@ -32,8 +34,15 @@ export function MetricsChart({
     dataKeys,
     categoryKey,
     height = 300,
-    colors = ["#10b981", "#3b82f6", "#f59e0b", "#6366f1"]
+    colors = ["#10b981", "#3b82f6", "#f59e0b", "#6366f1"],
+    valueFormatter
 }: MetricsChartProps) {
+    const tooltipFormatter = valueFormatter
+        ? (value: number | string) => valueFormatter(Number(value))
+        : undefined;
+    const yTickFormatter = valueFormatter
+        ? (value: number) => valueFormatter(Number(value))
+        : undefined;
     const [mounted, setMounted] = React.useState(false);
 
     React.useEffect(() => {
@@ -45,6 +54,20 @@ export function MetricsChart({
             <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm h-full flex flex-col">
                 <h3 className="text-sm font-semibold text-gray-900 mb-6">{title}</h3>
                 <div className="flex-1" style={{ width: '100%', minHeight: height || 300, height: height || 300 }} />
+            </div>
+        );
+    }
+
+    if (!Array.isArray(data) || data.length === 0) {
+        return (
+            <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm h-full flex flex-col">
+                <h3 className="text-sm font-semibold text-gray-900 mb-6">{title}</h3>
+                <div
+                    className="flex-1 flex items-center justify-center text-sm text-gray-400"
+                    style={{ minHeight: height || 300 }}
+                >
+                    No data to display for this period.
+                </div>
             </div>
         );
     }
@@ -76,8 +99,10 @@ export function MetricsChart({
                                 axisLine={false}
                                 tickLine={false}
                                 tick={{ fontSize: 12, fill: '#94a3b8' }}
+                                tickFormatter={yTickFormatter}
                             />
                             <Tooltip
+                                formatter={tooltipFormatter}
                                 contentStyle={{
                                     borderRadius: '12px',
                                     border: 'none',
@@ -110,9 +135,11 @@ export function MetricsChart({
                                 axisLine={false}
                                 tickLine={false}
                                 tick={{ fontSize: 12, fill: '#94a3b8' }}
+                                tickFormatter={yTickFormatter}
                             />
                             <Tooltip
                                 cursor={{ fill: '#f8fafc' }}
+                                formatter={tooltipFormatter}
                                 contentStyle={{
                                     borderRadius: '12px',
                                     border: 'none',
@@ -143,8 +170,10 @@ export function MetricsChart({
                                 axisLine={false}
                                 tickLine={false}
                                 tick={{ fontSize: 12, fill: '#94a3b8' }}
+                                tickFormatter={yTickFormatter}
                             />
                             <Tooltip
+                                formatter={tooltipFormatter}
                                 contentStyle={{
                                     borderRadius: '12px',
                                     border: 'none',

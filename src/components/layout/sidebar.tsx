@@ -365,6 +365,17 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    {
+      section: "EXPENSES",
+      items: [
+        {
+          id: "sh-ai-expense-tracker",
+          label: "AI Expense Tracker",
+          icon: Receipt,
+          href: "/admin/expense-tracker",
+        },
+      ],
+    },
   ],
 
   sales_manager: [
@@ -564,6 +575,17 @@ const roleNavigation: Record<string, any[]> = {
           label: "Transfer",
           icon: ShoppingCart,
           href: "/admin/inventory/transfer",
+        },
+      ],
+    },
+    {
+      section: "EXPENSES",
+      items: [
+        {
+          id: "admin-ai-expense-tracker",
+          label: "AI Expense Tracker",
+          icon: Receipt,
+          href: "/admin/expense-tracker",
         },
       ],
     },
