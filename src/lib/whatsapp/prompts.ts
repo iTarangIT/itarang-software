@@ -55,13 +55,14 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
     },
   },
   cancelled_cheque: {
-    description: "Indian bank cancelled cheque leaf",
+    description:
+      "an Indian bank cancelled cheque leaf OR a bank passbook page (either one shows the account number & IFSC)",
     fields: {
       bank_name: "name of the bank",
       account_number: "the account number",
       ifsc: "the IFSC code",
-      account_holder_name: "the account holder's name printed on the cheque",
-      branch: "branch name or branch address printed on the cheque, if shown",
+      account_holder_name: "the account holder's name printed on the cheque or passbook",
+      branch: "branch name or branch address printed on the cheque or passbook, if shown",
       account_type: "account type — 'savings' or 'current' — if shown",
     },
   },
