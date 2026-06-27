@@ -155,7 +155,7 @@ function getDealerStatus(uploaded: boolean, status?: string): { label: string; c
     return { label: 'Uploaded - Pending Review', color: 'text-blue-600', dotColor: 'bg-amber-500', icon: 'clock' };
 }
 
-export function DocumentCard({ label, required, uploaded, status, failedReason, onUpload, disabled, fileUrl }: {
+export function DocumentCard({ label, required, uploaded, status, failedReason, onUpload, disabled, fileUrl, hint }: {
     label: string;
     required?: boolean;
     uploaded: boolean;
@@ -164,6 +164,9 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
     onUpload: (file: File) => void;
     disabled?: boolean;
     fileUrl?: string | null;
+    // Optional helper text shown under the label (e.g. which documents are
+    // acceptable for this slot). Hidden once a file has been uploaded.
+    hint?: string | null;
 }) {
     const dealerStatus = getDealerStatus(uploaded, status);
     const isPdf = !!fileUrl && /\.pdf($|\?)/i.test(fileUrl);
@@ -266,6 +269,9 @@ export function DocumentCard({ label, required, uploaded, status, failedReason, 
                             {pill.label}
                         </span>
                     </div>
+                    {hint && !uploaded && (
+                        <p className="text-[10px] text-gray-500 mt-1.5 leading-snug">{hint}</p>
+                    )}
                     {failedReason && (
                         <p className="text-[10px] text-red-500 mt-1.5 leading-snug line-clamp-2">{failedReason}</p>
                     )}

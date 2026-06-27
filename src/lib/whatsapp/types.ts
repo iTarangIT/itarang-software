@@ -61,6 +61,16 @@ export interface ReplyButton {
   title: string;
 }
 
+/** A row in an interactive List message (e.g. the dealer console menu). */
+export interface ListRow {
+  /** Stable id echoed back as `InboundEvent.text` when the dealer taps it. */
+  id: string;
+  /** Row title shown to the dealer (≤24 chars per WhatsApp). */
+  title: string;
+  /** Optional secondary line under the title (≤72 chars). */
+  description?: string;
+}
+
 export interface WhatsAppAdapter {
   /** Provider key, e.g. 'meta'. */
   readonly provider: string;
@@ -102,10 +112,36 @@ export interface WhatsAppAdapter {
     caption?: string,
   ): Promise<SendResult>;
 
+  /**
+   * Send a document by uploading its BYTES to the provider first, then sending
+   * by the returned media id. Use this when the file has no publicly-reachable
+   * URL (local dev, or auth-gated storage like the S3 files proxy) — the
+   * provider hosts the bytes, so it never needs to fetch our server.
+   */
+  sendDocumentBytes(
+    to: string,
+    bytes: Buffer,
+    mimeType: string,
+    filename: string,
+    caption?: string,
+  ): Promise<SendResult>;
+
   /** Interactive reply buttons (e.g. CONFIRM / CHANGE). */
   sendInteractive(
     to: string,
     body: string,
     buttons: ReplyButton[],
+  ): Promise<SendResult>;
+
+  /**
+   * Interactive single-section List — used when more than 3 choices are needed
+   * (reply buttons cap at 3). `button` is the label on the list-opener (≤20
+   * chars); each tapped row echoes its `id` back as `InboundEvent.text`.
+   */
+  sendList(
+    to: string,
+    body: string,
+    button: string,
+    rows: ListRow[],
   ): Promise<SendResult>;
 }
