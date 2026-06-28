@@ -3,6 +3,11 @@ import { db } from "@/lib/db";
 import { consentRecords, leads } from "@/lib/db/schema";
 import { fetchAndStoreSignedConsent } from "./fetch-signed-consent";
 import { getDigioBaseUrl, getDigioBasicAuth } from "./client";
+import {
+  aadhaarMismatchMessage,
+  checkAadhaarMatch,
+  getCustomerAadhaarForLead,
+} from "./aadhaar-match";
 
 export const CONSENT_WAITING_STATUSES = [
   "link_sent",
@@ -100,6 +105,49 @@ export async function syncConsentStatusFromDigio(
     firstParty?.signer_aadhaar ||
     record.signer_aadhaar_masked ||
     null;
+
+  // Integrity gate (mirror of the webhook): reject a consent signed with an
+  // Aadhaar that doesn't match the customer's captured Aadhaar. Primary only;
+  // never block when not comparable. Read consent_for / retry count straight
+  // from the DB so we don't depend on the caller's record shape (a co-borrower
+  // must NOT be compared against the primary's Aadhaar).
+  const [meta] = await db
+    .select({
+      consent_for: consentRecords.consent_for,
+      esign_retry_count: consentRecords.esign_retry_count,
+    })
+    .from(consentRecords)
+    .where(eq(consentRecords.id, record.id))
+    .limit(1);
+  if (meta && meta.consent_for !== "co_borrower") {
+    const expected = await getCustomerAadhaarForLead(record.lead_id);
+    const check = checkAadhaarMatch(expected, signerAadhaar);
+    if (check.comparable && !check.match) {
+      const retryCount = (meta.esign_retry_count || 0) + 1;
+      const newStatus = retryCount >= 3 ? "esign_blocked" : "esign_failed";
+      console.warn("[sync-consent-status] Aadhaar mismatch — rejecting consent", {
+        documentId: record.esign_transaction_id,
+        leadId: record.lead_id,
+        signerLast4: check.signerLast4,
+        expectedLast4: check.expectedLast4,
+      });
+      await db
+        .update(consentRecords)
+        .set({
+          consent_status: newStatus,
+          signer_aadhaar_masked: signerAadhaar,
+          esign_retry_count: retryCount,
+          esign_error_message: aadhaarMismatchMessage(check),
+          updated_at: now,
+        })
+        .where(eq(consentRecords.id, record.id));
+      await db
+        .update(leads)
+        .set({ consent_status: newStatus, updated_at: now })
+        .where(eq(leads.id, record.lead_id));
+      return null;
+    }
+  }
 
   let signedUrl = record.signed_consent_url;
   if (!signedUrl) {

@@ -6,10 +6,10 @@ export const FINANCE_DOCUMENTS = [
     {
         key: 'address_proof',
         label: 'Address Proof',
-        required: true,
+        required: false,
         hint: 'Any document showing the customer’s address — e.g. Aadhaar, Passport, Voter ID, Driving Licence, utility bill (electricity/water/gas), bank passbook, or rent agreement.',
     },
-    { key: 'rc_copy', label: 'RC Copy', required: false },
+    { key: 'rc_copy', label: 'RC Copy', required: true },
     { key: 'bank_statement', label: 'Bank Statement', required: false },
     { key: 'cheque_1', label: 'Undated Cheque 1', required: false },
     { key: 'cheque_2', label: 'Undated Cheque 2', required: false },

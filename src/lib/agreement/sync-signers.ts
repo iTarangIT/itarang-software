@@ -3,8 +3,11 @@ import { db } from "@/lib/db";
 import {
   dealerAgreementEvents,
   dealerAgreementSigners,
+  dealerOnboardingApplications,
 } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+
+import { checkAadhaarMatch } from "@/lib/digio/aadhaar-match";
 
 function pickString(...values: unknown[]): string | null {
   for (const v of values) {
@@ -54,21 +57,39 @@ export async function syncSignersFromDigio(
   providerDocumentId: string | null,
   requestId: string | null,
   parsed: any,
-): Promise<{ updated: number; transitions: number }> {
+): Promise<{
+  updated: number;
+  transitions: number;
+  dealerAadhaarMismatch: boolean;
+  mismatchReason?: string;
+}> {
   const signingParties: any[] = Array.isArray(parsed?.signing_parties)
     ? parsed.signing_parties
     : Array.isArray(parsed?.signingParties)
       ? parsed.signingParties
       : [];
 
-  if (!signingParties.length) return { updated: 0, transitions: 0 };
+  if (!signingParties.length)
+    return { updated: 0, transitions: 0, dealerAadhaarMismatch: false };
 
   const existing = await db
     .select()
     .from(dealerAgreementSigners)
     .where(eq(dealerAgreementSigners.application_id, applicationId));
 
-  if (!existing.length) return { updated: 0, transitions: 0 };
+  if (!existing.length)
+    return { updated: 0, transitions: 0, dealerAadhaarMismatch: false };
+
+  // E-175 — the owner's captured Aadhaar, to verify the DEALER signed with their
+  // own Aadhaar (Aadhaar eSign). null → can't compare → don't block.
+  const [appRow] = await db
+    .select({ ownerAadhaar: dealerOnboardingApplications.owner_aadhaar_no })
+    .from(dealerOnboardingApplications)
+    .where(eq(dealerOnboardingApplications.id, applicationId))
+    .limit(1);
+  const ownerAadhaar = appRow?.ownerAadhaar ?? null;
+  let dealerAadhaarMismatch = false;
+  let mismatchReason: string | undefined;
 
   let updated = 0;
   let transitions = 0;
@@ -99,11 +120,41 @@ export async function syncSignersFromDigio(
     if (!match) continue;
 
     const newStatus = normalizeSignerStatus(party?.status);
+
+    // E-175 — reject a DEALER signature made with an Aadhaar that doesn't match
+    // the owner's captured Aadhaar. The signer is forced to 'failed' so the
+    // agreement can't complete; the caller turns this into a failed agreement.
+    let effectiveStatus = newStatus;
+    if (
+      String(match.signer_role || "").toLowerCase() === "dealer" &&
+      newStatus === "signed"
+    ) {
+      const signerAadhaar =
+        (party?.aadhaar_masked as string | undefined) ||
+        (party?.signer_aadhaar as string | undefined) ||
+        (party?.aadhaar as string | undefined) ||
+        null;
+      const check = checkAadhaarMatch(ownerAadhaar, signerAadhaar);
+      if (check.comparable && !check.match) {
+        effectiveStatus = "failed";
+        dealerAadhaarMismatch = true;
+        mismatchReason =
+          `Aadhaar mismatch: the dealer agreement was signed with an Aadhaar ending ` +
+          `${check.signerLast4}, but the owner's Aadhaar on file ends ` +
+          `${check.expectedLast4}. The owner must re-sign with their own Aadhaar.`;
+        console.warn("[SYNC SIGNERS] dealer Aadhaar mismatch — rejecting", {
+          applicationId,
+          signerLast4: check.signerLast4,
+          expectedLast4: check.expectedLast4,
+        });
+      }
+    }
+
     const signedOnRaw = party?.signed_on || party?.signed_at || party?.signedOn;
     const parsedSignedAt =
       typeof signedOnRaw === "string" && signedOnRaw.trim()
         ? new Date(signedOnRaw)
-        : newStatus === "signed"
+        : effectiveStatus === "signed"
           ? new Date()
           : null;
     const signedAt =
@@ -116,7 +167,7 @@ export async function syncSignersFromDigio(
       party?.type,
     );
 
-    const statusChanged = newStatus !== match.signer_status;
+    const statusChanged = effectiveStatus !== match.signer_status;
     const signedAtChanged =
       !!signedAt && (!match.signed_at || match.signed_at.getTime() !== signedAt.getTime());
 
@@ -131,8 +182,8 @@ export async function syncSignersFromDigio(
     await db
       .update(dealerAgreementSigners)
       .set({
-        signer_status: newStatus,
-        signed_at: signedAt ?? match.signed_at,
+        signer_status: effectiveStatus,
+        signed_at: effectiveStatus === "signed" ? signedAt ?? match.signed_at : match.signed_at,
         last_event_at: new Date(),
         signing_method: newSigningMethod ?? match.signing_method,
         provider_raw_response: party,
@@ -148,9 +199,10 @@ export async function syncSignersFromDigio(
           application_id: applicationId,
           provider_document_id: providerDocumentId,
           request_id: requestId,
-          event_type: newStatus === "signed" ? "signer_signed" : `signer_${newStatus}`,
+          event_type:
+            effectiveStatus === "signed" ? "signer_signed" : `signer_${effectiveStatus}`,
           signer_role: match.signer_role,
-          event_status: newStatus,
+          event_status: effectiveStatus,
           event_payload: party,
           created_at: new Date(),
         });
@@ -160,7 +212,23 @@ export async function syncSignersFromDigio(
     }
   }
 
-  return { updated, transitions };
+  // On a dealer Aadhaar mismatch, fail the agreement so it can't complete. This
+  // covers callers (e.g. agreement-tracking) that don't write agreement_status
+  // themselves; refresh-agreement additionally honours the returned flag so its
+  // own status write doesn't overwrite this back to "completed".
+  if (dealerAadhaarMismatch) {
+    await db
+      .update(dealerOnboardingApplications)
+      .set({
+        agreement_status: "failed",
+        agreement_failure_reason: mismatchReason,
+        agreement_failed_at: new Date(),
+        updated_at: new Date(),
+      })
+      .where(eq(dealerOnboardingApplications.id, applicationId));
+  }
+
+  return { updated, transitions, dealerAadhaarMismatch, mismatchReason };
 }
 
 /**
