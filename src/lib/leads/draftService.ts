@@ -41,7 +41,9 @@ function normalizePhone(phone?: string | null): string | null {
 
 // Numeric-max reference sequence (not lexical) — see create route comment: a
 // lexical max can reset the counter onto an existing id. #IT-<year>-<7 digits>.
-async function nextReference(): Promise<string> {
+// Exported so WhatsApp-created leads (customer-lead.ts) get the same reference
+// format as web/draft leads.
+export async function nextReference(): Promise<string> {
   const prefix = `#IT-${new Date().getFullYear()}`;
   const [row] = await db
     .select({

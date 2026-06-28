@@ -15,8 +15,8 @@ const FINANCE_DOCUMENTS = [
     { key: "aadhaar_back", label: "Aadhaar Back", required: true },
     { key: "pan_card", label: "PAN Card", required: true },
     { key: "passport_photo", label: "Passport Size Photo", required: true },
-    { key: "address_proof", label: "Address Proof", required: true },
-    { key: "rc_copy", label: "RC Copy", required: false, conditional: true },
+    { key: "address_proof", label: "Address Proof", required: false },
+    { key: "rc_copy", label: "RC Copy", required: true },
     { key: "bank_statement", label: "Bank Statement", required: true },
     { key: "cheque_1", label: "Undated Cheque 1", required: false },
     { key: "cheque_2", label: "Undated Cheque 2", required: false },
@@ -106,14 +106,7 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
             paymentMethod
         );
 
-        const assetModel = String(lead.asset_model || "").toUpperCase();
-        const isVehicleCategory =
-            assetModel.includes("2W") ||
-            assetModel.includes("3W") ||
-            assetModel.includes("4W");
-
         const requiredDocs = (isFinance ? FINANCE_DOCUMENTS : UPFRONT_DOCUMENTS)
-            .map((doc) => (doc.key === "rc_copy" ? { ...doc, required: isVehicleCategory } : doc))
             .filter((doc) => doc.required)
             .map((doc) => doc.key);
 

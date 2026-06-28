@@ -2654,6 +2654,13 @@ export const dealerOnboardingApplications = pgTable(
     verification_warnings: jsonb("verification_warnings").default([]).notNull(),
     extraction_summary: jsonb("extraction_summary").default({}).notNull(),
     dealer_confirmed_at: timestamp("dealer_confirmed_at"),
+    // ---- E-175 owner Aadhaar (for dealer-agreement signer verification) ----
+    // The owner's Aadhaar number, extracted from the Aadhaar uploaded during
+    // onboarding. At dealer-agreement signing (Aadhaar eSign) the signer's
+    // masked Aadhaar from Digio is matched against this so the agreement can't be
+    // signed with a different person's Aadhaar. Mirrors the customer-consent gate.
+    owner_aadhaar_no: varchar("owner_aadhaar_no", { length: 12 }),
+    owner_aadhaar_verified: boolean("owner_aadhaar_verified").default(false).notNull(),
   },
 );
 

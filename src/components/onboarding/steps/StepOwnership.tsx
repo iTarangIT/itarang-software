@@ -348,6 +348,23 @@ export default function StepOwnership() {
                 placeholder="Age (18 – 90)"
                 error={errors.ownerAge}
               />
+
+              {/* E-175 — owner Aadhaar; matched against the Aadhaar used to sign
+                  the onboarding agreement (Digio Aadhaar eSign). */}
+              <TextInput
+                label="Owner Aadhaar Number"
+                required
+                value={(ownership as any).ownerAadhaarNumber || ""}
+                onChange={(value) =>
+                  setField(
+                    "ownership",
+                    "ownerAadhaarNumber",
+                    value.replace(/[^0-9]/g, "").slice(0, 12)
+                  )
+                }
+                placeholder="12-digit Aadhaar number"
+                error={errors.ownerAadhaarNumber}
+              />
             </div>
 
             <div className="mt-5">

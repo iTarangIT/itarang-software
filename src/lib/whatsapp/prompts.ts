@@ -117,6 +117,19 @@ const DOC_FIELDS: Record<string, DocFieldSpec> = {
     fields: { entity_name: "name of the company/entity" },
   },
 
+  // ── Dealer onboarding: owner Aadhaar (E-175) ────────────────────────────────
+  // Captured so the owner's Aadhaar number can be matched against the Aadhaar
+  // used to sign the onboarding agreement (Digio Aadhaar eSign).
+  owner_aadhaar: {
+    description:
+      "an Indian Aadhaar card belonging to the business OWNER (the side showing the 12-digit Aadhaar number)",
+    fields: {
+      aadhaar_number: "the 12-digit Aadhaar number (digits only)",
+      name: "the cardholder's full name",
+      dob: "date of birth as printed (DD/MM/YYYY or YYYY), if shown",
+    },
+  },
+
   // ── Customer KYC documents (WhatsApp dealer-console "New Lead" flow) ─────────
   aadhaar_front: {
     description: "the FRONT of an Indian Aadhaar card (photo side with name & DOB)",

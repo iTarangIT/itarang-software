@@ -203,6 +203,7 @@ const initialState: DealerOnboardingState = {
     ownerLandline: "",
     ownerEmail: "",
     ownerAge: "",
+    ownerAadhaarNumber: "",
     ownerPhoto: makeUploadItem("Owner Photograph"),
     ownerAddressLine1: "",
     ownerCity: "",

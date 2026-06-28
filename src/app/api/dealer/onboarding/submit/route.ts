@@ -613,6 +613,11 @@ export async function POST(req: NextRequest) {
       owner_phone: primaryOwner.ownerPhone,
       owner_landline: resolveOwnerLandline(body),
       owner_email: primaryOwner.ownerEmail,
+      // E-175 — owner Aadhaar (typed in the web wizard), normalized to 12 digits.
+      owner_aadhaar_no: (() => {
+        const d = (cleanString(ownership.ownerAadhaarNumber) || "").replace(/\D/g, "");
+        return d.length === 12 ? d : null;
+      })(),
 
       sales_manager_name: toNullable(agreement?.salesManager?.name),
       sales_manager_email: toNullableEmail(agreement?.salesManager?.email),

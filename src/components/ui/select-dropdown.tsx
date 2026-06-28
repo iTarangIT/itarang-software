@@ -4,10 +4,13 @@
 // drawn by the browser/OS as an overlay that can't be clipped to a layout — in
 // the mobile preview it spilled past the edges of the phone frame. This renders
 // the list in a portal with FIXED positioning, computed from the trigger:
-//   • top is clamped below the sticky page header (z-20, ~64px) so the panel
-//     never overlaps the navbar, regardless of scroll position / open direction;
-//   • height is capped to the available band and the list scrolls internally;
-//   • it flips upward only when there isn't room below.
+//   • the panel always opens directly BELOW the trigger so it stays visually
+//     attached to its field (it does NOT flip upward — an upward panel anchored
+//     by its top floated detached over unrelated fields when its option list
+//     was shorter than the reserved height);
+//   • height is capped to the space remaining below the trigger and the list
+//     scrolls internally;
+//   • width is widened/clamped to stay readable and on-screen.
 // Reused by SelectField, ProductSelector, and the DatePicker.
 
 import { useEffect, useRef, useState } from 'react';
@@ -16,8 +19,6 @@ import { ChevronDown, Check, Search } from 'lucide-react';
 
 export type DropdownOption = { value: string; label: string };
 
-// Sticky header is `sticky top-0 z-20` and ~64px tall (see layout/header.tsx).
-const NAV_SAFE = 72;   // top bound: header height + a little margin
 const EDGE_SAFE = 12;  // bottom/viewport edge margin
 const GAP = 8;         // gap between trigger and panel
 const MAX_H = 320;
@@ -53,18 +54,12 @@ export function Dropdown({
         const el = triggerRef.current;
         if (!el) return;
         const rect = el.getBoundingClientRect();
-        const spaceBelow = window.innerHeight - rect.bottom - EDGE_SAFE;
-        const spaceAbove = rect.top - NAV_SAFE - EDGE_SAFE;
-        const up = spaceBelow < 220 && spaceAbove > spaceBelow;
-        let top: number;
-        let maxHeight: number;
-        if (up) {
-            maxHeight = Math.max(MIN_H, Math.min(spaceAbove, MAX_H));
-            top = Math.max(NAV_SAFE, rect.top - GAP - maxHeight);
-        } else {
-            top = Math.max(NAV_SAFE, rect.bottom + GAP);
-            maxHeight = Math.max(MIN_H, Math.min(window.innerHeight - top - EDGE_SAFE, MAX_H));
-        }
+        // Always open directly below the trigger, anchored to its bottom edge,
+        // so the panel stays attached to the field regardless of how many
+        // options it holds. Height is capped to the room below and the list
+        // scrolls internally.
+        const top = rect.bottom + GAP;
+        const maxHeight = Math.max(MIN_H, Math.min(window.innerHeight - top - EDGE_SAFE, MAX_H));
         // Narrow triggers (e.g. Day/Year) can't show the search box or full
         // option labels at their own width — widen the panel to a usable minimum
         // when needed, then clamp left so it never spills past the viewport edge.
