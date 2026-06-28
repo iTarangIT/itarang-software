@@ -241,8 +241,8 @@ export default function KYCPage() {
 
     // ─── Document Stats ─────────────────────────────────────────────────────
 
-    // RC Copy and Bank Statement are always optional; every other document
-    // in FINANCE_DOCUMENTS is required regardless of asset type.
+    // Each document's required/optional flag is the source of truth in
+    // FINANCE_DOCUMENTS (constants.ts), used as-is regardless of asset type.
     const requiredDocs = useMemo(() => FINANCE_DOCUMENTS.map(doc => ({ ...doc })), []);
 
     const docStats = useMemo(() => {

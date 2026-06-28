@@ -54,6 +54,10 @@ import {
   parseCompanyType,
   requiredDocuments,
 } from "./checklist";
+// E-170 dealer self-service fork disabled — see runTurn(). Re-enable both
+// imports when switching back to the dealer-orchestrator increment.
+// import { resolveWhatsAppDealer } from "./dealer-identity";
+// import { runDealerTurn } from "./dealer-orchestrator";
 import { classifyDocument } from "./extraction";
 import {
   generateManualConsentPdf,
@@ -69,7 +73,10 @@ import {
   type InterestLevel,
   type PaymentMethod,
   createCustomerLead,
+  findInProcessLeadByIdentity,
   getDealerAvailableStock,
+  getDealerProductOptions,
+  setLeadProduct,
   getDealerDraft,
   listDealerDrafts,
   loadApplication,
@@ -194,6 +201,14 @@ type Ctx = {
     paymentMethod?: "finance" | "cash" | "other_finance";
     /** Customer KYC document types collected so far (DC_LEAD_DOCS). */
     docs?: Record<string, true>;
+    /** The product list offered at DC_LEAD_PRODUCT, so a tapped row resolves
+     *  back to its catalogue ids. */
+    productOptions?: Array<{
+      productId: string;
+      categoryId: string;
+      name: string;
+      assetType: string | null;
+    }>;
     /** Index into ADDITIONAL_FINANCE_QUESTIONS while collecting the post-consent
      *  resident-status / health- / life-insurance answers (DC_LEAD_FINANCE_Q). */
     financeQIndex?: number;
@@ -238,6 +253,23 @@ export async function runTurn(event: InboundEvent): Promise<void> {
     await updateDeliveryStatus(event);
     return;
   }
+
+  // E-170 — dealer self-service fork. DISABLED: this WIP simpler flow
+  // (dealer-orchestrator.ts: name→mobile→email→address→"finish in portal")
+  // was intercepting approved dealers before they reached the complete
+  // post-approval console (runConsoleTurn below: mobile→interest→payment→KYC
+  // docs→consent). Approved dealers now fall through to runConsoleTurn so they
+  // get the full New-Lead flow. Re-enable this block to switch back to the
+  // dealer-orchestrator increment once it reaches feature parity.
+  // try {
+  //   const dealer = await resolveWhatsAppDealer(event.waPhone);
+  //   if (dealer) {
+  //     return await runDealerTurn(event, dealer);
+  //   }
+  // } catch (err) {
+  //   console.error("[WhatsApp/orchestrator] dealer-fork lookup failed:", err);
+  //   // Fall through to onboarding rather than dropping the message.
+  // }
 
   const session = await getOrCreateSession(event);
   await setSession(session.id, { last_inbound_at: new Date() });
@@ -2004,6 +2036,13 @@ async function fillFromDoc(
     case "company_pan":
       if (str(fields.pan)) patch.pan_number = str(fields.pan);
       break;
+    case "owner_aadhaar": {
+      // E-175 — store the owner's 12-digit Aadhaar; matched against the Digio
+      // signer Aadhaar at agreement signing (sync-signers.ts).
+      const a = str(fields.aadhaar_number).replace(/\D/g, "");
+      if (a.length === 12) patch.owner_aadhaar_no = a;
+      break;
+    }
     case "bank_statement":
     case "cancelled_cheque": {
       if (str(fields.bank_name)) patch.bank_name = str(fields.bank_name);
@@ -2255,6 +2294,12 @@ async function runConsoleTurn(
         return await onLeadInterest(session, event);
       case "DC_LEAD_PAYMENT":
         return await onLeadPayment(session, event, dealer);
+      case "DC_LEAD_PRODUCT":
+        return await onLeadProduct(session, event, dealer);
+      case "DC_LEAD_CASH_RC":
+        return await onLeadCashRc(session, event, dealer);
+      case "DC_LEAD_CASH_DOCS":
+        return await onLeadCashDocs(session, event, dealer);
       case "DC_LEAD_DOCS_MODE":
         return await onLeadDocsMode(session, event, dealer);
       case "DC_LEAD_DOCS":
@@ -2575,6 +2620,10 @@ async function onLeadMobile(
     );
     return;
   }
+
+  // NOTE: the "number already used for finance" check is NOT done here — at this
+  // point we don't yet know if the lead is cash or finance, and cash leads have
+  // no such restriction. It runs in onLeadPayment, gated on finance methods.
   await mergeContext(session, (ctx) => {
     ctx.lead = { ...(ctx.lead ?? {}), mobile };
   });
@@ -2662,6 +2711,10 @@ async function onLeadPayment(
     return await startNewLead(session);
   }
 
+  // NOTE: no mobile-number duplicate check. The SAME mobile may be reused (cash
+  // or finance). For FINANCE, uniqueness is enforced on the customer's DOCUMENTS
+  // instead (PAN / Aadhaar) during the KYC documents step (DC_LEAD_DOCS).
+
   // Create the lead now so consent + documents can key off a real lead id. The
   // customer name is stored as a placeholder and filled from the PAN / Aadhaar
   // once the documents are read (fillCustomerLeadFromDoc).
@@ -2675,28 +2728,12 @@ async function onLeadPayment(
     ctx.lead = { ...(ctx.lead ?? {}), paymentMethod, leadId };
   });
 
-  if (!requiresConsent(draft.interest, paymentMethod)) {
-    await setSession(session.id, { current_state: "DC_MENU" });
-    await reply(
-      session,
-      `✅ *Lead saved!*\n\n` +
-        `Mobile: ${draft.mobile}\n` +
-        `Interest: ${draft.interest}\n` +
-        `Payment: ${humanPayment(paymentMethod)}\n\n` +
-        `You can complete the rest on the dealer portal. Send *menu* for more.`,
-    );
-    return;
-  }
-
-  // Hot + finance → collect the customer's KYC documents FIRST (so the name,
-  // PAN, Aadhaar and address are extracted), THEN take the consent.
-  await reply(
-    session,
-    `✅ *Lead saved.*\n\n` +
-      `This is a *Hot* finance lead, so we'll need the customer's *KYC documents* ` +
-      `and then their *consent*.\n\nLet's start with the documents 👇`,
-  );
-  await startDocs(session);
+  // Every lead now captures *product details* next (DC_LEAD_PRODUCT). The
+  // payment-specific steps run afterwards in afterProductStep():
+  //   • cash → Vehicle Reg. Number → Aadhaar front+back (extract + fill) → save
+  //   • hot finance → KYC documents → consent
+  //   • warm/cold finance → save (finish on the portal)
+  await startProductStep(session, dealer);
 }
 
 function humanPayment(p: PaymentMethod): string {
@@ -2705,6 +2742,273 @@ function humanPayment(p: PaymentMethod): string {
     : p === "other_finance"
       ? "Other Finance"
       : "Cash";
+}
+
+// ── Console: product details (all leads) → cash extras (reg + Aadhaar) ───────
+
+const PRODUCT_PICK_PREFIX = "prod_";
+
+/** DC_LEAD_PRODUCT — show the dealer's available products as a tappable list.
+ *  With no available stock, skip straight to the payment-specific step. */
+async function startProductStep(
+  session: SessionRow,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const options = await getDealerProductOptions(dealer.dealerCode);
+  if (options.length === 0) {
+    await reply(
+      session,
+      "_No available stock to attach right now — you can set the product on the dealer portal._",
+    );
+    return await afterProductStep(session, dealer);
+  }
+
+  const top = options.slice(0, 10); // WhatsApp lists allow ≤10 rows.
+  await mergeContext(session, (ctx) => {
+    if (!ctx.lead) ctx.lead = {};
+    ctx.lead.productOptions = top.map((o) => ({
+      productId: o.productId,
+      categoryId: o.categoryId,
+      name: o.name,
+      assetType: o.assetType,
+    }));
+  });
+
+  const rows: ListRow[] = top.map((o, i) => ({
+    id: `${PRODUCT_PICK_PREFIX}${i}`,
+    title: clip(o.name, 24),
+    description: clip(`${o.assetType ?? "Product"} · ${o.available} in stock`, 72),
+  }));
+  await setSession(session.id, { current_state: "DC_LEAD_PRODUCT" });
+  await replyList(
+    session,
+    "*Product details*\n\nWhich product is this lead for? Tap one 👇",
+    "Choose product",
+    rows,
+  );
+}
+
+/** DC_LEAD_PRODUCT — resolve the tapped product, write it to the lead, continue. */
+async function onLeadProduct(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const fresh = await loadSession(session.id);
+  const draft = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
+  const opts = draft.productOptions ?? [];
+  const id = (event.text ?? "").trim();
+  const idx = id.startsWith(PRODUCT_PICK_PREFIX)
+    ? Number(id.slice(PRODUCT_PICK_PREFIX.length))
+    : NaN;
+  const picked = Number.isInteger(idx) ? opts[idx] : undefined;
+  if (!picked || !draft.leadId) {
+    await reply(session, "Please tap a product from the list above.");
+    return;
+  }
+  await setLeadProduct(draft.leadId, picked);
+  await mergeContext(session, (ctx) => {
+    if (ctx.lead) ctx.lead.productOptions = undefined;
+  });
+  await afterProductStep(session, dealer);
+}
+
+/** Route by payment method once the product is chosen. */
+async function afterProductStep(
+  session: SessionRow,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const fresh = await loadSession(session.id);
+  const draft = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
+  const interest = (draft.interest ?? "cold") as InterestLevel;
+  const paymentMethod = (draft.paymentMethod ?? "cash") as PaymentMethod;
+
+  // Cash → Vehicle Reg. Number, then Aadhaar front + back.
+  if (paymentMethod === "cash") {
+    await setSession(session.id, { current_state: "DC_LEAD_CASH_RC" });
+    await reply(
+      session,
+      "🚗 What's the *vehicle registration number*? (e.g. HR 35 A 7898)",
+    );
+    return;
+  }
+
+  // Hot finance → KYC documents → consent.
+  if (requiresConsent(interest, paymentMethod)) {
+    await reply(
+      session,
+      `✅ *Product saved.*\n\n` +
+        `This is a *Hot* finance lead, so we'll need the customer's *KYC documents* ` +
+        `and then their *consent*.\n\nLet's start with the documents 👇`,
+    );
+    await startDocs(session);
+    return;
+  }
+
+  // Warm / cold finance → save; finish on the portal.
+  await setSession(session.id, { current_state: "DC_MENU" });
+  await reply(
+    session,
+    `✅ *Lead saved!*\n\n` +
+      `Mobile: ${draft.mobile ?? "—"}\n` +
+      `Interest: ${interest}\n` +
+      `Payment: ${humanPayment(paymentMethod)}\n\n` +
+      `You can complete the rest on the dealer portal. Send *menu* for more.`,
+  );
+}
+
+/** DC_LEAD_CASH_RC — capture the typed vehicle registration number (cash flow). */
+async function onLeadCashRc(
+  session: SessionRow,
+  event: InboundEvent,
+  _dealer: ActiveDealer,
+): Promise<void> {
+  const rc = (event.text ?? "").trim().toUpperCase().replace(/\s+/g, "");
+  if (rc.length < 6 || !/^[A-Z0-9]+$/.test(rc)) {
+    await reply(
+      session,
+      "Please send a valid *vehicle registration number* (e.g. HR 35 A 7898).",
+    );
+    return;
+  }
+  const fresh = await loadSession(session.id);
+  const draft = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
+  if (!draft.leadId) {
+    await reply(session, "Let's start over.");
+    return await startNewLead(session);
+  }
+  await db
+    .update(leads)
+    .set({ vehicle_rc: rc, updated_at: new Date() })
+    .where(eq(leads.id, draft.leadId));
+
+  await setSession(session.id, { current_state: "DC_LEAD_CASH_DOCS" });
+  await reply(
+    session,
+    "📎 Now send the customer's *Aadhaar — front and back* (photos or PDF, one at a time). " +
+      "Both are required; I'll read the name, date of birth and address from them.",
+  );
+}
+
+/** DC_LEAD_CASH_DOCS — collect Aadhaar front + back (both required), extract and
+ *  fill the lead, then save once both are in. */
+async function onLeadCashDocs(
+  session: SessionRow,
+  event: InboundEvent,
+  _dealer: ActiveDealer,
+): Promise<void> {
+  if (event.type !== "document" && event.type !== "image") {
+    await reply(
+      session,
+      "Please send the customer's *Aadhaar front* and *back* as photos or a PDF.",
+    );
+    return;
+  }
+  if (!event.mediaProviderId) {
+    await reply(session, "I couldn't read that file. Please resend it.");
+    return;
+  }
+
+  const lead = await getLeadCtx(session);
+  if (!lead.leadId) {
+    await reply(session, "Send *menu* to start again.");
+    return;
+  }
+
+  let media;
+  try {
+    media = await getAdapter().downloadMedia(event.mediaProviderId);
+  } catch {
+    await reply(session, "I couldn't download that file. Please resend it.");
+    return;
+  }
+  if (
+    /zip/i.test(media.mimeType) ||
+    /\.zip$/i.test(media.fileName ?? event.fileName ?? "")
+  ) {
+    await reply(
+      session,
+      "Please send the Aadhaar *front* and *back* as separate photos (not a ZIP).",
+    );
+    return;
+  }
+
+  const cls = await classifyDocument(media.buffer, media.mimeType);
+  const docType = cls.ok ? normalizeCustomerDocType(cls.documentType) : null;
+  if (docType !== "aadhaar_front" && docType !== "aadhaar_back") {
+    await reply(
+      session,
+      "That doesn't look like an *Aadhaar* card. Please send the Aadhaar *front* and *back*.",
+    );
+    return;
+  }
+
+  // No duplicate-identity check here: CASH leads may be created repeatedly for
+  // the same customer / documents (the duplicate guard applies to finance only,
+  // in the DC_LEAD_DOCS flow).
+  await persistCustomerDoc(
+    lead.leadId,
+    docType,
+    media.buffer,
+    media.mimeType,
+    media.fileName ?? event.fileName,
+    cls.fields,
+  );
+  await mergeContext(session, (ctx) => {
+    if (!ctx.lead) ctx.lead = {};
+    ctx.lead.docs = { ...(ctx.lead.docs ?? {}), [docType]: true };
+  });
+  await reply(session, `Got *${customerDocLabel(docType)}* ✅`);
+
+  // Both sides in → save the lead; else say which side is still needed.
+  const have = Object.keys((await getLeadCtx(session)).docs ?? {});
+  if (have.includes("aadhaar_front") && have.includes("aadhaar_back")) {
+    return await finalizeCashLead(session);
+  }
+  const still = ["aadhaar_front", "aadhaar_back"].filter((d) => !have.includes(d));
+  await reply(
+    session,
+    "Still needed:\n" + still.map((d) => `• ${customerDocLabel(d)}`).join("\n"),
+  );
+}
+
+/** Confirm + save a cash lead once Aadhaar front + back are in. */
+async function finalizeCashLead(session: SessionRow): Promise<void> {
+  const fresh = await loadSession(session.id);
+  const draft = ((fresh.context as Ctx)?.lead ?? {}) as NonNullable<Ctx["lead"]>;
+  await setSession(session.id, { current_state: "DC_MENU" });
+
+  // Name / vehicle / product were written onto the lead (Aadhaar extraction +
+  // the earlier steps) — read them back for the confirmation.
+  let line = { name: "—", rc: "—", model: "—" };
+  if (draft.leadId) {
+    const [row] = await db
+      .select({
+        full_name: leads.full_name,
+        owner_name: leads.owner_name,
+        rc: leads.vehicle_rc,
+        model: leads.asset_model,
+      })
+      .from(leads)
+      .where(eq(leads.id, draft.leadId))
+      .limit(1);
+    line = {
+      name: str(row?.full_name) || str(row?.owner_name) || "—",
+      rc: str(row?.rc) || "—",
+      model: str(row?.model) || "—",
+    };
+  }
+
+  await reply(
+    session,
+    `✅ *Lead saved!*\n\n` +
+      `Name: ${line.name}\n` +
+      `Mobile: ${draft.mobile ?? "—"}\n` +
+      `Vehicle: ${line.rc}\n` +
+      `Product: ${line.model}\n` +
+      `Payment: Cash\n\n` +
+      `You can complete the rest on the dealer portal. Send *menu* for more.`,
+  );
 }
 
 // ── Console: customer KYC consent (Hot + finance leads) ──────────────────────
@@ -3206,13 +3510,13 @@ const REQUIRED_CUSTOMER_DOCS = [
   "aadhaar_back",
   "pan_card",
   "rc_copy",
+  "customer_photo",
 ] as const;
 
-// Documents the customer MAY send but that never block completion. The
-// passport-size photo and the bank cheque / passbook are optional — a lead can
-// be submitted without them, but if the dealer does upload one we still
-// classify, extract, and store it.
-const OPTIONAL_CUSTOMER_DOCS = ["customer_photo", "cancelled_cheque"] as const;
+// Documents the customer MAY send but that never block completion. The bank
+// cheque / passbook is optional — a lead can be submitted without it, but if
+// the dealer does upload one we still classify, extract, and store it.
+const OPTIONAL_CUSTOMER_DOCS = ["cancelled_cheque"] as const;
 
 // Every customer doc type we accept on upload (required + optional). Used by the
 // classifiers so an optional cheque/passbook is still recognized and stored,
@@ -3254,9 +3558,9 @@ function customerDocsChecklistMessage(): string {
     "2️⃣ Aadhaar — *back*",
     "3️⃣ PAN card",
     "4️⃣ *RC copy* (vehicle Registration Certificate)",
+    "5️⃣ Passport-size *photo*",
     "",
     "*Optional* (send if you have them):",
-    "▫️ Passport-size *photo*",
     "▫️ *Bank cheque* (cancelled cheque) or *passbook photo*",
     "",
     "Type *done* when you've sent everything.",
@@ -3561,6 +3865,18 @@ async function ingestCustomerZip(
   let canonical = str(lead.customerName);
   if (!canonical) canonical = recognized.find((r) => r.name)?.name ?? "";
 
+  // Cross-LEAD duplicate check: if any ID document in this batch belongs to a
+  // customer already in process with iTarang, refuse the whole batch before
+  // saving anything — the same customer can't be re-created on a new lead.
+  for (const r of recognized) {
+    const dup = await duplicateInProcessLead(lead.leadId, r.docType, r.fields);
+    if (dup) {
+      await setSession(session.id, { current_state: "DC_MENU" });
+      await reply(session, duplicateLeadMessage(dup.referenceId));
+      return;
+    }
+  }
+
   // Save the documents consistent with the customer; collect the mismatched ID
   // documents (a different person) WITHOUT saving them.
   const acceptedLabels = new Set<string>();
@@ -3672,6 +3988,15 @@ async function ingestCustomerDoc(
     }
   }
 
+  // Cross-LEAD duplicate check: if this PAN / Aadhaar already belongs to another
+  // lead in process with iTarang, refuse — the same customer can't be re-created.
+  const dup = await duplicateInProcessLead(lead.leadId, docType, cls.fields);
+  if (dup) {
+    await setSession(session.id, { current_state: "DC_MENU" });
+    await reply(session, duplicateLeadMessage(dup.referenceId));
+    return;
+  }
+
   await persistCustomerDoc(lead.leadId, docType, buffer, mimeType, fileName, cls.fields);
 
   await mergeContext(session, (ctx) => {
@@ -3696,6 +4021,37 @@ async function ingestCustomerDoc(
 // ID documents that print the customer's name — used for the cross-document
 // identity match. Aadhaar back (address only) and the photo carry no name.
 const NAME_BEARING_DOCS = new Set<string>(["aadhaar_front", "pan_card"]);
+
+/** If the PAN / Aadhaar read off this document already belongs to a DIFFERENT
+ *  lead that's in process with iTarang, return that lead; else null. Lets the
+ *  ingest paths block a duplicate customer before the document is saved. */
+async function duplicateInProcessLead(
+  leadId: string,
+  docType: string,
+  fields: Record<string, unknown>,
+) {
+  let pan: string | undefined;
+  let aadhaar: string | undefined;
+  if (docType === "pan_card") {
+    const p = str(fields.pan).toUpperCase().replace(/\s/g, "");
+    if (p) pan = p;
+  } else if (docType === "aadhaar_front") {
+    const a = digitsOnly(fields.aadhaar_number);
+    if (a.length === 12) aadhaar = a;
+  }
+  if (!pan && !aadhaar) return null;
+  return findInProcessLeadByIdentity({ pan, aadhaar, excludeLeadId: leadId });
+}
+
+function duplicateLeadMessage(ref: string | null): string {
+  return (
+    "⚠️ This customer already has a lead in process with iTarang" +
+    (ref ? ` (*${ref}*)` : "") +
+    ".\n\nThese documents are already linked to that lead, so you can't create a " +
+    "new lead for this customer — iTarang already has this lead in process.\n\n" +
+    "Send *menu* to go back."
+  );
+}
 
 // Honorifics / titles stripped before comparing names so "Mr. Yogendra" matches
 // "Yogendra".

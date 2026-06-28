@@ -10,6 +10,11 @@ import {
 } from "@/lib/db/schema";
 import { and, eq } from "drizzle-orm";
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
+import {
+  aadhaarMismatchMessage,
+  checkAadhaarMatch,
+  getCustomerAadhaarForLead,
+} from "@/lib/digio/aadhaar-match";
 import { ensureAdminKycQueueEntry } from "@/lib/kyc/admin-workflow";
 import { fetchSignedLspPdfAndAuditTrail } from "@/lib/queue/jobs/fetchSignedLspPdfJob";
 import { pushSignedConsentToWhatsApp } from "@/lib/whatsapp/orchestrator";
@@ -332,8 +337,47 @@ export async function POST(req: NextRequest) {
       // Extract signer details from webhook payload
       const signingParties = body.signing_parties || [];
       const signer = signingParties[0];
-      if (signer?.aadhaar_masked || signer?.signer_aadhaar) {
-        updates.signer_aadhaar_masked = signer.aadhaar_masked || signer.signer_aadhaar;
+      const signerAadhaarMasked =
+        signer?.aadhaar_masked || signer?.signer_aadhaar || null;
+      if (signerAadhaarMasked) {
+        updates.signer_aadhaar_masked = signerAadhaarMasked;
+      }
+
+      // Integrity gate: the Aadhaar that SIGNED must match the customer's
+      // captured Aadhaar. Digio happily signs with any Aadhaar, so a consent
+      // signed with a different person's Aadhaar must be rejected (hard block →
+      // force re-sign). Only enforced for the primary customer's consent; we
+      // never block when we can't compare (missing OCR / masked aadhaar).
+      if (record.consent_for !== "co_borrower") {
+        const expected = await getCustomerAadhaarForLead(record.lead_id);
+        const check = checkAadhaarMatch(expected, signerAadhaarMasked);
+        if (check.comparable && !check.match) {
+          const retryCount = (record.esign_retry_count || 0) + 1;
+          const newStatus = retryCount >= 3 ? "esign_blocked" : "esign_failed";
+          console.warn("[DigiO Webhook] Aadhaar mismatch — rejecting consent", {
+            documentId,
+            leadId: record.lead_id,
+            signerLast4: check.signerLast4,
+            expectedLast4: check.expectedLast4,
+          });
+          await db
+            .update(consentRecords)
+            .set({
+              consent_status: newStatus,
+              signer_aadhaar_masked: signerAadhaarMasked,
+              esign_retry_count: retryCount,
+              esign_error_message: aadhaarMismatchMessage(check),
+              updated_at: now,
+            })
+            .where(eq(consentRecords.id, record.id));
+          await syncApplicantConsentStatus(
+            record.consent_for,
+            record.lead_id,
+            newStatus,
+            now,
+          );
+          return NextResponse.json({ received: true });
+        }
       }
 
       // Download signed PDF from DigiO and store in Supabase
