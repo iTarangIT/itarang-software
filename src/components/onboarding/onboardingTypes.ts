@@ -68,6 +68,9 @@ export type OwnershipBankingData = {
   ownerLandline?: string;
   ownerEmail: string;
   ownerAge?: string;
+  // E-175 — owner's 12-digit Aadhaar number, matched against the Aadhaar used to
+  // sign the onboarding agreement (Digio Aadhaar eSign).
+  ownerAadhaarNumber?: string;
   ownerPhoto?: UploadFileItem | null;
   ownerAddressLine1?: string;
   ownerCity?: string;

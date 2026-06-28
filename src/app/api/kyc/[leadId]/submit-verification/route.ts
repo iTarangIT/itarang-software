@@ -85,14 +85,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         // Required doc keys must match the keys persisted by /upload-document
         // (which mirror FINANCE_DOCUMENTS in the dealer-portal constants).
-        // RC Copy, Bank Statement, and the 4 undated cheques are optional —
-        // only the 5 core identity documents block submission.
+        // Address Proof, Bank Statement, and the 4 undated cheques are optional;
+        // the 4 identity documents plus the vehicle RC Copy block submission.
         const requiredDocTypes = [
             'aadhaar_front',
             'aadhaar_back',
             'pan_card',
             'passport_photo',
-            'address_proof',
+            'rc_copy',
         ];
         const docsAllUploaded = requiredDocTypes.every((t) => uploadedTypes.has(t));
 
