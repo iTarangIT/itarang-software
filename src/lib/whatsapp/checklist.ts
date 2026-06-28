@@ -56,6 +56,15 @@ const COMMON_DOCS: DocSpec[] = [
     label: "Owner Photograph",
     request: "Please send a *passport-size photograph* of the owner.",
   },
+  {
+    // E-175 — the owner's Aadhaar number is matched against the Aadhaar used to
+    // sign the onboarding agreement (Digio Aadhaar eSign), so the agreement
+    // can't be signed with a different person's Aadhaar.
+    type: "owner_aadhaar",
+    label: "Owner Aadhaar",
+    request:
+      "Please send the *owner's Aadhaar card* (the side showing the 12-digit Aadhaar number).",
+  },
 ];
 
 // Legal documents specific to the entity type.
@@ -182,6 +191,7 @@ export const KEY_FIELDS: Record<string, string[]> = {
   cancelled_cheque: ["account_number", "ifsc"],
   udyam: ["udyam_number"],
   owner_photo: ["face_present"],
+  owner_aadhaar: ["aadhaar_number"],
   partner_photo: ["face_present"],
   partnership_deed: ["partner_names"],
   mou: ["entity_name"],

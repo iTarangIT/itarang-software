@@ -13,10 +13,11 @@
 // and dealer_user_id (= the Supabase auth uuid = leads.uploader_id). See the
 // approve route (admin/dealer-verifications/[dealerId]/approve) for the wiring.
 
-import { and, desc, eq, inArray, isNotNull, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
 
 import { generateId } from "@/lib/api-utils";
 import { db } from "@/lib/db/index";
+import { nextReference } from "@/lib/leads/draftService";
 import {
   adminVerificationQueue,
   dealerOnboardingApplications,
@@ -117,10 +118,14 @@ export async function createCustomerLead(
   const { dealer, mobile, customerName, interest, paymentMethod } = params;
   const name = (customerName ?? "").trim() || PENDING_CUSTOMER_NAME;
   const leadId = await generateId("LEAD", leads);
+  // Same #IT-<year>-<7 digits> reference as web/draft leads so the lead shows a
+  // proper Lead ID (not the #IT-XXXX-XXXXXXX placeholder) when opened on the web.
+  const referenceId = await nextReference();
 
   await db.transaction(async (tx) => {
     await tx.insert(leads).values({
       id: leadId,
+      reference_id: referenceId,
       dealer_id: dealer.dealerCode,
       owner_name: name,
       owner_contact: mobile,
@@ -151,6 +156,54 @@ export async function createCustomerLead(
   });
 
   return leadId;
+}
+
+/**
+ * A lead already in process with iTarang (submitted for KYC review). Returned by
+ * the document-identity duplicate check below. (Mobile number is NOT a uniqueness
+ * key — the same number may be reused; finance uniqueness is on the documents.)
+ */
+export interface ExistingFinanceLead {
+  leadId: string;
+  referenceId: string | null;
+  createdAt: Date | null;
+}
+
+/**
+ * Find a DIFFERENT lead that's already in process with iTarang (submitted for
+ * KYC review) whose extracted identity matches the given PAN and/or Aadhaar.
+ * Returns the most recent match, or null.
+ *
+ * Used when a dealer uploads customer documents over WhatsApp: if the PAN /
+ * Aadhaar read off the uploaded docs already belongs to a submitted lead, a new
+ * lead must not be created for the same person.
+ */
+export async function findInProcessLeadByIdentity(opts: {
+  pan?: string | null;
+  aadhaar?: string | null;
+  excludeLeadId: string;
+}): Promise<ExistingFinanceLead | null> {
+  const idMatches = [];
+  if (opts.pan) idMatches.push(eq(personalDetails.pan_no, opts.pan));
+  if (opts.aadhaar) idMatches.push(eq(personalDetails.aadhaar_no, opts.aadhaar));
+  if (idMatches.length === 0) return null;
+
+  const [row] = await db
+    .select({
+      leadId: leads.id,
+      referenceId: leads.reference_id,
+      createdAt: leads.created_at,
+    })
+    .from(personalDetails)
+    .innerJoin(leads, eq(leads.id, personalDetails.lead_id))
+    .innerJoin(
+      adminVerificationQueue,
+      eq(adminVerificationQueue.lead_id, leads.id),
+    )
+    .where(and(or(...idMatches), ne(leads.id, opts.excludeLeadId)))
+    .orderBy(desc(leads.created_at))
+    .limit(1);
+  return row ?? null;
 }
 
 // ── Dealer console: drafts ───────────────────────────────────────────────────
@@ -279,6 +332,70 @@ export interface DealerStockSummary {
 // Serialized inventory statuses that count as on-hand available stock. Mirrors
 // getInventorySummary()/the dealer inventory route so the numbers agree.
 const AVAILABLE_STATUSES = ["available", "transferred_in"];
+
+/** A pickable product for the WhatsApp lead "Product details" step — one row
+ *  per distinct product the dealer has available stock of, with the catalogue
+ *  ids needed to populate the lead the same way the web form does. */
+export interface DealerProductOption {
+  productId: string;
+  categoryId: string;
+  name: string;
+  assetType: string | null;
+  available: number;
+}
+
+/**
+ * Products the dealer has AVAILABLE serialized stock of (battery / charger),
+ * grouped by product, with the catalogue ids. Used to build the WhatsApp
+ * "pick a product" list and write product_type_id / product_category_id /
+ * asset_type / asset_model onto the lead — matching the web Step-1 product cascade.
+ */
+export async function getDealerProductOptions(
+  dealerCode: string,
+): Promise<DealerProductOption[]> {
+  const rows = await db
+    .select({
+      productId: products.id,
+      categoryId: products.category_id,
+      name: products.name,
+      assetType: products.asset_type,
+      available: sql<number>`count(*)::int`,
+    })
+    .from(inventory)
+    .innerJoin(products, eq(inventory.product_id, products.id))
+    .where(
+      and(
+        eq(inventory.dealer_id, dealerCode),
+        inArray(inventory.status, AVAILABLE_STATUSES),
+        sql`${inventory.inventory_type} is distinct from 'paraphernalia_lot'`,
+      ),
+    )
+    .groupBy(products.id, products.category_id, products.name, products.asset_type)
+    .orderBy(sql`count(*) desc`);
+  return rows.filter((r) => r.available > 0);
+}
+
+/** Write the chosen product onto the lead (mirrors the web Step-1 product fields). */
+export async function setLeadProduct(
+  leadId: string,
+  option: {
+    productId: string;
+    categoryId: string;
+    name: string;
+    assetType: string | null;
+  },
+): Promise<void> {
+  await db
+    .update(leads)
+    .set({
+      product_type_id: option.productId,
+      product_category_id: option.categoryId,
+      asset_type: option.assetType ?? null,
+      asset_model: option.name,
+      updated_at: new Date(),
+    })
+    .where(eq(leads.id, leadId));
+}
 
 /**
  * Per-product AVAILABLE stock for a dealer, for the WhatsApp "Inventory" view.
