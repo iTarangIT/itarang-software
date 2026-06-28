@@ -2885,13 +2885,17 @@ async function onLeadCashRc(
   await setSession(session.id, { current_state: "DC_LEAD_CASH_DOCS" });
   await reply(
     session,
-    "📎 Now send the customer's *Aadhaar — front and back* (photos or PDF, one at a time). " +
-      "Both are required; I'll read the name, date of birth and address from them.",
+    "📎 Now send the customer's *Aadhaar (front & back)* and *PAN card* " +
+      "(photos or PDF, one at a time). All three are required; I'll read the " +
+      "name, date of birth and address from them.",
   );
 }
 
-/** DC_LEAD_CASH_DOCS — collect Aadhaar front + back (both required), extract and
- *  fill the lead, then save once both are in. */
+// Cash leads require the customer's Aadhaar (front + back) and PAN card.
+const CASH_REQUIRED_DOCS = ["aadhaar_front", "aadhaar_back", "pan_card"] as const;
+
+/** DC_LEAD_CASH_DOCS — collect Aadhaar front + back + PAN card (all required),
+ *  extract and fill the lead, then save once all are in. */
 async function onLeadCashDocs(
   session: SessionRow,
   event: InboundEvent,
@@ -2900,7 +2904,7 @@ async function onLeadCashDocs(
   if (event.type !== "document" && event.type !== "image") {
     await reply(
       session,
-      "Please send the customer's *Aadhaar front* and *back* as photos or a PDF.",
+      "Please send the customer's *Aadhaar (front & back)* and *PAN card* as photos or a PDF.",
     );
     return;
   }
@@ -2935,10 +2939,11 @@ async function onLeadCashDocs(
 
   const cls = await classifyDocument(media.buffer, media.mimeType);
   const docType = cls.ok ? normalizeCustomerDocType(cls.documentType) : null;
-  if (docType !== "aadhaar_front" && docType !== "aadhaar_back") {
+  if (!docType || !CASH_REQUIRED_DOCS.includes(docType as (typeof CASH_REQUIRED_DOCS)[number])) {
     await reply(
       session,
-      "That doesn't look like an *Aadhaar* card. Please send the Aadhaar *front* and *back*.",
+      "I couldn't tell which document that is. Please send the customer's " +
+        "*Aadhaar front*, *Aadhaar back* or *PAN card*.",
     );
     return;
   }
@@ -2960,12 +2965,12 @@ async function onLeadCashDocs(
   });
   await reply(session, `Got *${customerDocLabel(docType)}* ✅`);
 
-  // Both sides in → save the lead; else say which side is still needed.
+  // All required docs in → save the lead; else say which are still needed.
   const have = Object.keys((await getLeadCtx(session)).docs ?? {});
-  if (have.includes("aadhaar_front") && have.includes("aadhaar_back")) {
+  if (CASH_REQUIRED_DOCS.every((d) => have.includes(d))) {
     return await finalizeCashLead(session);
   }
-  const still = ["aadhaar_front", "aadhaar_back"].filter((d) => !have.includes(d));
+  const still = CASH_REQUIRED_DOCS.filter((d) => !have.includes(d));
   await reply(
     session,
     "Still needed:\n" + still.map((d) => `• ${customerDocLabel(d)}`).join("\n"),
