@@ -71,6 +71,7 @@ const FIELD_LABELS: Record<string, string> = {
     permanent_address: 'Permanent Address',
     product_category_id: 'Product Category',
     primary_product_id: 'Product',
+    vehicle_rc: 'Vehicle Reg. Number',
     vehicle_ownership: 'Vehicle Ownership',
     vehicle_owner_name: 'Vehicle Owner Name',
     vehicle_owner_phone: 'Vehicle Owner Phone',
@@ -328,6 +329,7 @@ function NewLeadWizardContent() {
         }
 
         const isVehicle = formData.is_vehicle_category;
+        if (isVehicle && !formData.vehicle_rc?.trim()) e.vehicle_rc = 'Required';
         if (isVehicle && formData.vehicle_rc?.trim()) {
             if (!formData.vehicle_ownership) e.vehicle_ownership = 'Required';
             if (!formData.vehicle_owner_name?.trim()) e.vehicle_owner_name = 'Required';
@@ -850,7 +852,7 @@ function NewLeadWizardContent() {
                                     <p className="text-sm text-gray-400 font-medium px-1 mb-4">Vehicle details are only applicable for 2W/3W/4W categories.</p>
                                 )}
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 sm:gap-y-6">
-                                    <InputField label="Vehicle Reg. Number" value={formData.vehicle_rc} onChange={v => updateField('vehicle_rc', v)} placeholder="HR 35 A 78989" />
+                                    <InputField label={`Vehicle Reg. Number${isVehicleCategory ? ' *' : ''}`} value={formData.vehicle_rc} onChange={v => updateField('vehicle_rc', v)} placeholder="HR 35 A 78989" error={errors.vehicle_rc} />
                                     <SelectField
                                         label={`Vehicle Ownership${formData.vehicle_rc?.trim() ? ' *' : ''}`}
                                         value={formData.vehicle_ownership}

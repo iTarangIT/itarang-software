@@ -118,6 +118,11 @@ export function validateStep(
         if (msg) errors.ownerAge = msg.replace("Age", "Owner age");
       }
 
+      // E-175 — owner Aadhaar (12 digits), matched against the agreement signer.
+      if (!/^\d{12}$/.test((state.ownership.ownerAadhaarNumber || "").trim())) {
+        errors.ownerAadhaarNumber = "Enter the owner's 12-digit Aadhaar number";
+      }
+
       if (!hasUploadedDoc(state.ownership.ownerPhoto)) {
         errors.ownerPhoto = "Upload owner photograph";
       }

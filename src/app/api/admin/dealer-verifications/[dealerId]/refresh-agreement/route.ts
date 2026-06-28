@@ -218,19 +218,28 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    const normalizedStatus = normalizeAgreementStatus(
+    let normalizedStatus = normalizeAgreementStatus(
       parsed?.agreement_status || parsed?.status
     );
+    let aadhaarMismatchReason: string | null = null;
 
     // Sync per-signer status from Digio's signing_parties array — this is what fixes the
     // "Sent" badge never flipping to "Signed" after a signer completes the agreement.
     try {
-      await syncSignersFromDigio(
+      const sync = await syncSignersFromDigio(
         dealerId,
         application.provider_document_id,
         application.request_id,
         parsed,
       );
+      // E-175 — if the dealer signed with an Aadhaar that doesn't match the
+      // owner's captured Aadhaar, fail the agreement regardless of what Digio
+      // reported (e.g. "completed"), forcing a re-sign with the correct Aadhaar.
+      if (sync.dealerAadhaarMismatch) {
+        normalizedStatus = "failed";
+        aadhaarMismatchReason =
+          sync.mismatchReason ?? "Aadhaar mismatch on the dealer signature.";
+      }
     } catch (signerSyncErr) {
       console.error("[REFRESH AGREEMENT] signer sync failed (non-blocking):", signerSyncErr);
     }
@@ -391,6 +400,12 @@ export async function POST(_req: NextRequest, context: RouteContext) {
             ? "attached"
             : application.stamp_status || null,
         completion_status: normalizedStatus === "completed" ? "completed" : "pending",
+        ...(aadhaarMismatchReason
+          ? {
+              agreement_failure_reason: aadhaarMismatchReason,
+              agreement_failed_at: new Date(),
+            }
+          : {}),
         review_status:
           normalizedStatus === "completed"
             ? "agreement_completed"
