@@ -365,7 +365,19 @@ function isGreetingTrigger(event: InboundEvent, session: SessionRow): boolean {
   ) {
     return false;
   }
-  return GREETING_TRIGGERS.test((event.text ?? "").trim());
+  if (!GREETING_TRIGGERS.test((event.text ?? "").trim())) return false;
+  // Don't let a stray "hi" mid-flow wipe real progress. Dealers often type "hi"
+  // out of impatience while a ZIP/document is still being read (Gemini takes a
+  // few seconds), and the old behaviour restarted onboarding — clearing every
+  // collected document and re-greeting in a loop. Only treat a greeting as a
+  // fresh start at the very beginning: before a company type is chosen AND
+  // before any document has been collected. Past that, the greeting falls
+  // through to the current state handler, which simply re-prompts the step.
+  const ctx = (session.context ?? {}) as Ctx;
+  const hasProgress =
+    !!session.detected_company_type ||
+    Object.keys(ctx.docs ?? {}).length > 0;
+  return !hasProgress;
 }
 
 // Clear any collected progress and re-greet, so "hi" mid-flow is a genuine
@@ -564,13 +576,19 @@ async function onDocument(
 }
 
 // During dealer ONBOARDING, a proprietor's/partner's personal PAN doubles as the
-// business PAN. The shared document classifier may tag a PAN as the individual
-// "pan_card" type (used by the customer-KYC console), which isn't on the
-// onboarding required list — so the dealer's PAN would be rejected as "not a
-// required document". Alias it to the onboarding "company_pan" slot. Applied ONLY
-// on the onboarding ingest paths below; the customer console keeps "pan_card".
+// business PAN, and the owner's Aadhaar is the same physical card the customer-KYC
+// console calls "aadhaar_front"/"aadhaar_back". The shared document classifier may
+// tag these as the individual "pan_card"/"aadhaar_front"/"aadhaar_back" types,
+// none of which are on the onboarding required list — so the dealer's own PAN or
+// Aadhaar would be rejected as "not a required document". Alias them to the
+// onboarding "company_pan"/"owner_aadhaar" slots. Applied ONLY on the onboarding
+// ingest paths below; the customer console keeps the original types.
 function normalizeOnboardingDocType(documentType: string): string {
-  return documentType === "pan_card" ? "company_pan" : documentType;
+  if (documentType === "pan_card") return "company_pan";
+  if (documentType === "aadhaar_front" || documentType === "aadhaar_back") {
+    return "owner_aadhaar";
+  }
+  return documentType;
 }
 
 // Classify an uploaded file and route it:
