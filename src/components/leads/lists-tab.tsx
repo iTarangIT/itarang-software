@@ -41,6 +41,7 @@ interface CreateSummary {
   total: number;
   imported: number;
   reused: number;
+  updated: number;
   invalid: number;
   queued: number;
 }
@@ -630,6 +631,7 @@ export function ListsTab({
           <span>
             <b>{summary.name}</b> ready — <b>{summary.queued}</b> to dial
             {summary.reused > 0 ? ` · ${summary.reused} reused` : ""}
+            {summary.updated > 0 ? ` · ${summary.updated} updated` : ""}
             {summary.invalid > 0 ? ` · ${summary.invalid} skipped` : ""}.
             Press Start below.
           </span>

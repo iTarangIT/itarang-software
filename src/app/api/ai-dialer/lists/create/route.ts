@@ -93,6 +93,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         total: summary.total,
         imported: summary.imported,
         reused: summary.reused,
+        updated: summary.updated,
         invalid: summary.invalid,
       },
     },
@@ -111,6 +112,7 @@ export const POST = withErrorHandler(async (req: Request) => {
     total: summary.total,
     imported: summary.imported,
     reused: summary.reused,
+    updated: summary.updated,
     invalid: summary.invalid,
     queued: summary.queueIds.length,
   });
