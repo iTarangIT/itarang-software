@@ -19,6 +19,12 @@ export interface SyncResult {
   upserted: number;
   durationMs: number;
   lastRunAt: string;
+  // "ok" = clean run, "partial" = some orgs/phases failed but invoices landed
+  // for at least one org, "error" = every org's invoice pull failed.
+  status: "ok" | "partial" | "error";
+  // Per-org / per-phase failures that were tolerated (not aborted on). Empty on
+  // a clean run. Also mirrored into zoho_sync_state.last_error for observability.
+  errors: string[];
 }
 
 function parseInvoiceDate(s: string | undefined): string | null {
@@ -37,6 +43,24 @@ function parseAmount(v: unknown): string | null {
   return n.toFixed(2);
 }
 
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function recordSyncState(
+  status: SyncResult["status"],
+  error: string | null,
+): Promise<void> {
+  await db
+    .update(zohoSyncState)
+    .set({
+      last_run_at: new Date(),
+      last_status: status,
+      last_error: error ? error.slice(0, 1000) : null,
+    })
+    .where(sql`id = 1`);
+}
+
 export async function syncInvoicesSinceLastRun(): Promise<SyncResult> {
   const start = Date.now();
 
@@ -47,47 +71,71 @@ export async function syncInvoicesSinceLastRun(): Promise<SyncResult> {
     .onConflictDoNothing({ target: zohoSyncState.id });
 
   let upserted = 0;
+  let orgsWithInvoices = 0; // orgs whose invoice pull completed cleanly
+  const errors: string[] = [];
 
   try {
     for (const organizationId of getOrganizationIds()) {
-      for await (const inv of iterateAllInvoices(organizationId)) {
-        await upsertInvoice(inv, organizationId);
-        upserted += 1;
+      // Invoices are revenue-critical. Isolate each org so one org's failure
+      // (bad token, transient 5xx) doesn't starve the others. On failure we
+      // skip this org's payments too and move on to the next org.
+      try {
+        for await (const inv of iterateAllInvoices(organizationId)) {
+          await upsertInvoice(inv, organizationId);
+          upserted += 1;
+        }
+        orgsWithInvoices += 1;
+      } catch (err) {
+        const msg = `org ${organizationId} invoices: ${errMsg(err)}`;
+        errors.push(msg);
+        console.error(`[zoho-sync] ${msg}`);
+        continue;
       }
-      // After invoices land, stamp each invoice with the reference of the
-      // latest payment that settled it (E-174).
-      for await (const pmt of iterateAllPayments(organizationId)) {
-        await applyPaymentReference(pmt);
+
+      // Payments (E-174) only stamp a txn reference onto already-synced
+      // invoices — pure enrichment. A failure here (e.g. the token lacks the
+      // ZohoInvoice.customerpayments scope → 401) must NOT abort invoice
+      // syncing or block other orgs, or CEO revenue totals silently go stale.
+      try {
+        for await (const pmt of iterateAllPayments(organizationId)) {
+          await applyPaymentReference(pmt);
+        }
+      } catch (err) {
+        const msg = `org ${organizationId} payments: ${errMsg(err)}`;
+        errors.push(msg);
+        console.error(
+          `[zoho-sync] ${msg} — invoices for this org synced OK; payment references skipped this run`,
+        );
       }
     }
-
-    const now = new Date();
-    await db
-      .update(zohoSyncState)
-      .set({
-        last_run_at: now,
-        last_status: "ok",
-        last_error: null,
-      })
-      .where(sql`id = 1`);
-
-    return {
-      upserted,
-      durationMs: Date.now() - start,
-      lastRunAt: now.toISOString(),
-    };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    await db
-      .update(zohoSyncState)
-      .set({
-        last_run_at: new Date(),
-        last_status: "error",
-        last_error: msg.slice(0, 1000),
-      })
-      .where(sql`id = 1`);
+    // Failure outside the per-org guards (e.g. getOrganizationIds() config
+    // assertion, or the DB itself). Record and propagate — this is unexpected.
+    const msg = errMsg(err);
+    await recordSyncState("error", msg);
     throw err;
   }
+
+  const status: SyncResult["status"] =
+    errors.length === 0 ? "ok" : orgsWithInvoices > 0 ? "partial" : "error";
+
+  await recordSyncState(status, errors.length ? errors.join(" | ") : null);
+
+  // Total failure (no org's invoices landed) still throws so the cron/admin
+  // caller returns a 5xx and the failure stays alertable. Partial success
+  // returns normally with the failures surfaced in `errors` + zoho_sync_state,
+  // so a payments-scope 401 can no longer blank out the whole company's totals.
+  if (status === "error") {
+    throw new Error(`Zoho sync failed for all orgs: ${errors.join(" | ")}`);
+  }
+
+  return {
+    upserted,
+    durationMs: Date.now() - start,
+    lastRunAt: new Date().toISOString(),
+    status,
+    errors,
+  };
 }
 
 async function upsertInvoice(
