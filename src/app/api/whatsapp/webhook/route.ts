@@ -35,6 +35,32 @@ export async function POST(req: Request): Promise<Response> {
   // Raw body is required for HMAC verification — read it before parsing.
   const rawBody = await req.text();
 
+  // TEMP DEBUG (remove): persist EVERY raw inbound POST before any parsing or
+  // filtering, so we can see whether Meta delivers image-type webhooks at all.
+  try {
+    const fs = await import("node:fs/promises");
+    const path = process.env.WA_WEBHOOK_DEBUG_LOG;
+    if (path) {
+      let kinds = "?";
+      try {
+        const j = JSON.parse(rawBody);
+        kinds = (j?.entry ?? [])
+          .flatMap((e: any) => e?.changes ?? [])
+          .flatMap((c: any) => c?.value?.messages ?? [])
+          .map((m: any) => m?.type)
+          .join(",") || "(no messages: statuses/other)";
+      } catch {
+        kinds = "(unparseable)";
+      }
+      await fs.appendFile(
+        path,
+        `${new Date().toISOString()} len=${rawBody.length} types=[${kinds}]\n`,
+      );
+    }
+  } catch {
+    // never let debug logging break the webhook
+  }
+
   if (!adapter.verifyInbound(req.headers, rawBody)) {
     console.error("[WhatsApp/webhook] signature verification failed");
     return NextResponse.json({ error: "invalid signature" }, { status: 401 });
