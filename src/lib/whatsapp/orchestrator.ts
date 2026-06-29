@@ -563,6 +563,16 @@ async function onDocument(
   return await ingestClassifiedFile(session, event, ct);
 }
 
+// During dealer ONBOARDING, a proprietor's/partner's personal PAN doubles as the
+// business PAN. The shared document classifier may tag a PAN as the individual
+// "pan_card" type (used by the customer-KYC console), which isn't on the
+// onboarding required list — so the dealer's PAN would be rejected as "not a
+// required document". Alias it to the onboarding "company_pan" slot. Applied ONLY
+// on the onboarding ingest paths below; the customer console keeps "pan_card".
+function normalizeOnboardingDocType(documentType: string): string {
+  return documentType === "pan_card" ? "company_pan" : documentType;
+}
+
 // Classify an uploaded file and route it:
 //   • unreadable / unidentifiable → don't store; ask to resend (auto-skip the
 //     expected document after repeated bad tries so the dealer is never stuck);
@@ -580,6 +590,8 @@ async function ingestClassifiedFile(
 
   const media = await getAdapter().downloadMedia(event.mediaProviderId!);
   const c = await classifyDocument(media.buffer, media.mimeType);
+  // Dealer's personal PAN == company PAN for onboarding (see helper above).
+  c.documentType = normalizeOnboardingDocType(c.documentType);
 
   // Couldn't read / identify → don't store; ask to resend.
   if (!c.ok || !c.legible || c.documentType === "unknown") {
@@ -749,6 +761,9 @@ async function onZipUpload(
       unreadable.push(entry.name);
       continue;
     }
+
+    // Dealer's personal PAN == company PAN for onboarding (see helper above).
+    c.documentType = normalizeOnboardingDocType(c.documentType);
 
     const spec = docSpec(ct, c.documentType);
 
