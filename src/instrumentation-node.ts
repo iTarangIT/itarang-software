@@ -168,8 +168,13 @@ export async function startZohoSyncTicker() {
     try {
       const r = await syncInvoicesSinceLastRun();
       console.log(
-        `[instrumentation:zoho-sync] upserted=${r.upserted} durationMs=${r.durationMs}`,
+        `[instrumentation:zoho-sync] status=${r.status} upserted=${r.upserted} durationMs=${r.durationMs}`,
       );
+      if (r.errors.length) {
+        console.error(
+          `[instrumentation:zoho-sync] partial run — ${r.errors.length} error(s): ${r.errors.join(" | ")}`,
+        );
+      }
     } catch (err) {
       // syncInvoicesSinceLastRun already records the failure to
       // zoho_sync_state.last_error; just surface it in the logs.
