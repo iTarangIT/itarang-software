@@ -365,7 +365,19 @@ function isGreetingTrigger(event: InboundEvent, session: SessionRow): boolean {
   ) {
     return false;
   }
-  return GREETING_TRIGGERS.test((event.text ?? "").trim());
+  if (!GREETING_TRIGGERS.test((event.text ?? "").trim())) return false;
+  // Don't let a stray "hi" mid-flow wipe real progress. Dealers often type "hi"
+  // out of impatience while a ZIP/document is still being read (Gemini takes a
+  // few seconds), and the old behaviour restarted onboarding — clearing every
+  // collected document and re-greeting in a loop. Only treat a greeting as a
+  // fresh start at the very beginning: before a company type is chosen AND
+  // before any document has been collected. Past that, the greeting falls
+  // through to the current state handler, which simply re-prompts the step.
+  const ctx = (session.context ?? {}) as Ctx;
+  const hasProgress =
+    !!session.detected_company_type ||
+    Object.keys(ctx.docs ?? {}).length > 0;
+  return !hasProgress;
 }
 
 // Clear any collected progress and re-greet, so "hi" mid-flow is a genuine
