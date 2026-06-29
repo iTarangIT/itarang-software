@@ -452,6 +452,35 @@ export async function POST(
       );
     }
 
+    // E-175 — Aadhaar signer-match enforcement (no sign mismatch). When the
+    // dealer signs via Aadhaar eSign, the Aadhaar actually used to sign is
+    // matched (last 4 digits, all Digio exposes) against the owner's captured
+    // Aadhaar at signing time (lib/agreement/sync-signers.ts). That match is
+    // impossible when we never captured the owner's Aadhaar — the gate would
+    // silently pass ANY signer's Aadhaar. So block initiation until the owner's
+    // 12-digit Aadhaar is on file, guaranteeing every Aadhaar-eSigned dealer
+    // agreement can be verified against the owner's Aadhaar card.
+    const dealerOwnerAadhaar = String(application.owner_aadhaar_no || "").replace(
+      /\D/g,
+      ""
+    );
+    if (
+      dealerSigner.signingMethod === "aadhaar_esign" &&
+      dealerOwnerAadhaar.length !== 12
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "Owner Aadhaar is not on file, so the dealer's Aadhaar e-sign can't be " +
+            "matched against the Aadhaar card. Capture the owner's 12-digit Aadhaar " +
+            "(re-upload the Owner Aadhaar document) before initiating the agreement, " +
+            "or switch the dealer's signing method off Aadhaar eSign.",
+        },
+        { status: 400 }
+      );
+    }
+
     const signer2Started =
       !!hydratedAgreement.itarangSignatory2?.name ||
       !!hydratedAgreement.itarangSignatory2?.email ||
