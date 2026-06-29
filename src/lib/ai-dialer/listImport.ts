@@ -11,7 +11,7 @@
 // import summary the create route surfaces to the user.
 
 import crypto from "crypto";
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { normalizePhone } from "@/lib/admin/csvUpload";
@@ -69,6 +69,8 @@ export interface ListImportResult {
   imported: number;
   /** Existing dealer_leads matched by phone and reused. */
   reused: number;
+  /** Reused leads whose name/location was (re)written from the file. */
+  updated: number;
   /** Rows dropped — no valid phone, or an in-file duplicate phone. */
   invalid: number;
 }
@@ -144,7 +146,7 @@ export async function importListRows(
   }
 
   if (mapped.length === 0) {
-    return { queueIds: [], total, imported: 0, reused: 0, invalid };
+    return { queueIds: [], total, imported: 0, reused: 0, updated: 0, invalid };
   }
 
   const phones = mapped.map((m) => m.phone);
@@ -198,6 +200,36 @@ export async function importListRows(
     imported += insertedRows.length;
   }
 
+  // 3b. Backfill reused leads. The freshly-uploaded file is the source of truth,
+  //     so overwrite name/location with any value the file provides — but a blank
+  //     file cell never clears existing data (only non-empty values are written).
+  //     Without this, re-uploading a phone that already exists as a bare row keeps
+  //     its null name and the campaign UI falls back to "Lead N".
+  const toUpdate = mapped.filter((m) => existingPhones.has(m.phone));
+  let updated = 0;
+  for (const m of toUpdate) {
+    const city = normalizeCity(m.city ?? undefined) ?? m.city ?? null;
+    const state =
+      normalizeState(m.state ?? undefined) ??
+      inferStateFromCity(city) ??
+      null;
+
+    const set: Partial<typeof dealerLeads.$inferInsert> = {};
+    if (m.name) set.dealer_name = m.name;
+    if (m.shop_name) set.shop_name = m.shop_name;
+    if (city) {
+      set.city = city;
+      set.location = city;
+    }
+    if (state) set.state = state;
+    if (m.language) set.language = m.language;
+
+    if (Object.keys(set).length === 0) continue;
+
+    await db.update(dealerLeads).set(set).where(eq(dealerLeads.phone, m.phone));
+    updated++;
+  }
+
   // 4. Re-resolve every phone → id. Covers reused leads, freshly inserted
   //    leads, and any that lost an insert race to onConflictDoNothing.
   const resolvedRows = (await db
@@ -220,5 +252,5 @@ export async function importListRows(
   }
 
   const reused = mapped.length - imported;
-  return { queueIds, total, imported, reused, invalid };
+  return { queueIds, total, imported, reused, updated, invalid };
 }
