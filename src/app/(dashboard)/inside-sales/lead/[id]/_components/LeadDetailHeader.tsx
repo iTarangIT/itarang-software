@@ -5,12 +5,17 @@ import { ArrowLeft, Phone, MapPin, AlarmCheck, AlertCircle, RotateCcw, ShieldAle
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
 import { StatusChip } from "../../../_components/StatusChip";
 import { IntentBadge } from "../../../_components/IntentBadge";
-import { InterestChip } from "../../../_components/InterestChip";
+import { InterestLevelEditor } from "../../../_components/InterestLevelEditor";
 import { OwnerIndicator } from "../../../_components/OwnerIndicator";
+
+// Roles permitted to override a lead's temperature (mirrors the PATCH route).
+const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin"];
 
 type Props = {
     bundle: LeadDetailBundle;
     viewerId: string;
+    viewerRole?: string;
+    onUpdated?: () => void;
 };
 
 function daysAgo(iso: string | null): string {
@@ -43,8 +48,9 @@ function formatOnboardingStatus(s: string | null): string {
     return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ");
 }
 
-export function LeadDetailHeader({ bundle, viewerId }: Props) {
+export function LeadDetailHeader({ bundle, viewerId, viewerRole, onUpdated }: Props) {
     const lead = bundle.lead;
+    const canEditInterest = INTEREST_EDIT_ROLES.includes(viewerRole ?? "");
     const isOwner = lead.current_owner_id === viewerId;
     const isUnassigned = !lead.current_owner_id;
     const isEscalated = lead.escalation_status === "pending_review";
@@ -66,7 +72,12 @@ export function LeadDetailHeader({ bundle, viewerId }: Props) {
                             {lead.dealer_name || lead.shop_name || "(unnamed dealer)"}
                         </h1>
                         <StatusChip status={lead.lead_status} />
-                        <InterestChip level={lead.interest_level} />
+                        <InterestLevelEditor
+                            leadId={lead.id}
+                            value={lead.interest_level}
+                            editable={canEditInterest}
+                            onUpdated={onUpdated}
+                        />
                         <IntentBadge score={lead.final_intent_score} />
                     </div>
                     {lead.shop_name && lead.dealer_name && (

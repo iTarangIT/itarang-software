@@ -25,6 +25,17 @@ interface MetricsChartProps {
     colors?: string[];
     /** Optional formatter for Y-axis ticks and tooltip values (e.g. ₹ lakhs). */
     valueFormatter?: (n: number) => string;
+    /** Optional controls rendered on the right of the card header (filters, toggles). */
+    headerActions?: React.ReactNode;
+}
+
+function ChartHeader({ title, headerActions }: { title: string; headerActions?: React.ReactNode }) {
+    return (
+        <div className="flex items-start justify-between gap-3 mb-6 flex-wrap">
+            <h3 className="text-sm font-semibold text-gray-900 pt-1">{title}</h3>
+            {headerActions ? <div className="flex items-center">{headerActions}</div> : null}
+        </div>
+    );
 }
 
 export function MetricsChart({
@@ -35,7 +46,8 @@ export function MetricsChart({
     categoryKey,
     height = 300,
     colors = ["#10b981", "#3b82f6", "#f59e0b", "#6366f1"],
-    valueFormatter
+    valueFormatter,
+    headerActions
 }: MetricsChartProps) {
     const tooltipFormatter = valueFormatter
         ? (value: number | string) => valueFormatter(Number(value))
@@ -52,7 +64,7 @@ export function MetricsChart({
     if (!mounted) {
         return (
             <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm h-full flex flex-col">
-                <h3 className="text-sm font-semibold text-gray-900 mb-6">{title}</h3>
+                <ChartHeader title={title} headerActions={headerActions} />
                 <div className="flex-1" style={{ width: '100%', minHeight: height || 300, height: height || 300 }} />
             </div>
         );
@@ -61,7 +73,7 @@ export function MetricsChart({
     if (!Array.isArray(data) || data.length === 0) {
         return (
             <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm h-full flex flex-col">
-                <h3 className="text-sm font-semibold text-gray-900 mb-6">{title}</h3>
+                <ChartHeader title={title} headerActions={headerActions} />
                 <div
                     className="flex-1 flex items-center justify-center text-sm text-gray-400"
                     style={{ minHeight: height || 300 }}
@@ -74,7 +86,7 @@ export function MetricsChart({
 
     return (
         <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm h-full flex flex-col">
-            <h3 className="text-sm font-semibold text-gray-900 mb-6">{title}</h3>
+            <ChartHeader title={title} headerActions={headerActions} />
             <div className="flex-1" style={{ width: '100%', minHeight: height || 300, height: height || 300, minWidth: 0 }}>
                 <ResponsiveContainer width="100%" height="100%">
                     {type === 'area' ? (

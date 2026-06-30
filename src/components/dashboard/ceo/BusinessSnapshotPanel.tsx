@@ -10,6 +10,7 @@ import {
   ShoppingBag,
 } from "lucide-react";
 import { formatINRCompact } from "@/lib/format";
+import { ManualSalesUpload } from "./ManualSalesUpload";
 
 interface RecentInvoice {
   id: string;
@@ -54,16 +55,21 @@ export function BusinessSnapshotPanel({
 
   return (
     <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center justify-between gap-3 mb-5 flex-wrap">
         <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
           <ShoppingBag className="w-4 h-4 text-brand-600" />
           Business Snapshot (MTD)
         </h3>
-        <Link href="/ceo/expenses">
-          <button className="text-[11px] font-semibold text-brand-700 hover:underline flex items-center gap-1">
+        <div className="flex items-center gap-2 text-[11px] font-semibold">
+          <ManualSalesUpload />
+          <span className="text-gray-200">|</span>
+          <Link
+            href="/ceo/expenses"
+            className="text-brand-700 hover:underline flex items-center gap-1"
+          >
             Review Expenses <ArrowRight className="w-3 h-3" />
-          </button>
-        </Link>
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-3">

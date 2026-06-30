@@ -6529,6 +6529,28 @@ export const zohoSyncState = pgTable("zoho_sync_state", {
   last_error: text("last_error"),
 });
 
+// E-176 — Manual / offline dealer sales bulk-uploaded by the CEO, surfaced
+// alongside Zoho invoices in the "Sales to Dealer" drill-down.
+export const manualDealerSales = pgTable(
+  "manual_dealer_sales",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    sale_date: date("sale_date").notNull(),
+    customer_name: text("customer_name"),
+    product_name: text("product_name"),
+    quantity: numeric("quantity", { precision: 12, scale: 2 }),
+    amount: numeric("amount", { precision: 14, scale: 2 }).default("0").notNull(),
+    invoice_number: text("invoice_number"),
+    uploaded_by: text("uploaded_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    saleDateIdx: index("manual_dealer_sales_sale_date_idx").on(t.sale_date),
+  }),
+);
+
 // ─────────────────────────────────────────────────────────────────────────
 // Part 0 BRD support tables (E-113 .. E-124).
 // dealer_lead_id columns are text — matches dealer_leads.id (legacy text PK,
