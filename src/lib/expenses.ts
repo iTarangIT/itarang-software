@@ -13,6 +13,7 @@ export const EXPENSE_DEPARTMENTS = [
   { value: "tech", label: "Tech" },
   { value: "hr", label: "HR" },
   { value: "finance", label: "Finance" },
+  { value: "admin", label: "Admin" },
 ] as const;
 
 export type ExpenseDepartment = (typeof EXPENSE_DEPARTMENTS)[number]["value"];

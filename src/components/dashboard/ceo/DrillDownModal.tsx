@@ -57,17 +57,21 @@ const COLUMNS: Record<DrillMetric, Col[]> = {
     { key: "final_amount", label: "Amount", align: "right", render: (r) => money(r.final_amount) },
   ],
   sales: [
-    { key: "invoice_number", label: "Invoice #", render: (r) => txt(r.invoice_number) },
-    { key: "customer_name", label: "Customer", render: (r) => txt(r.customer_name) },
-    { key: "invoice_date", label: "Date", render: (r) => dateIN(r.invoice_date) },
-    { key: "status", label: "Status", render: (r) => txt(r.status) },
-    { key: "total", label: "Total", align: "right", render: (r) => money(r.total) },
+    // Invoice-level fields render only on the first row of each invoice group so
+    // multi-product invoices read as grouped rows, not duplicated headers.
+    { key: "invoice_number", label: "Invoice #", render: (r) => (r._first ? txt(r.invoice_number) : "") },
+    { key: "customer_name", label: "Customer", render: (r) => (r._first ? txt(r.customer_name) : "") },
+    { key: "invoice_date", label: "Date", render: (r) => (r._first ? dateIN(r.invoice_date) : "") },
+    { key: "product_name", label: "Product", render: (r) => txt(r.product_name) },
+    { key: "quantity", label: "Qty", align: "right", render: (r) => txt(r.quantity) },
+    { key: "status", label: "Status", render: (r) => (r._first ? txt(r.status) : "") },
+    { key: "total", label: "Total", align: "right", render: (r) => (r._first ? money(r.total) : "") },
     {
       key: "invoice",
       label: "Invoice",
       render: (r) => {
         const id = r.zoho_invoice_id;
-        if (!id) return "—";
+        if (!id || !r._first) return "—";
         return (
           <a
             href={`/api/admin/zoho/invoices/${id}/pdf`}
@@ -86,8 +90,27 @@ const COLUMNS: Record<DrillMetric, Col[]> = {
     { key: "vendor", label: "Vendor", render: (r) => txt(r.vendor) },
     { key: "department", label: "Dept", render: (r) => expenseDepartmentLabel(r.department as string) },
     { key: "project_tag", label: "Project", render: (r) => txt(r.project_tag) },
-    { key: "expense_date", label: "Date", render: (r) => dateIN(r.expense_date) },
+    { key: "created_at", label: "Date Added", render: (r) => dateIN(r.created_at) },
+    { key: "expense_date", label: "Invoice Date", render: (r) => dateIN(r.expense_date) },
     { key: "amount", label: "Amount", align: "right", render: (r) => money(r.amount) },
+    {
+      key: "bill",
+      label: "Bill",
+      render: (r) => {
+        const url = r.bill_url;
+        if (!url) return "—";
+        return (
+          <a
+            href={String(url)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-brand-700 font-semibold hover:underline"
+          >
+            <FileText className="w-3.5 h-3.5" /> View
+          </a>
+        );
+      },
+    },
   ],
   inventory: [
     { key: "serial_number", label: "Serial", render: (r) => txt(r.serial_number) },

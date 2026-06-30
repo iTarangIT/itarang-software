@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { CreateLeadModal } from "@/app/(dashboard)/inside-sales/_components/modals/CreateLeadModal";
 import { AsmQueueTabs } from "./AsmQueueTabs";
 import { AsmQueueTable } from "./AsmQueueTable";
 import {
@@ -28,10 +30,12 @@ function parseTab(raw: string | null): AsmQueueTab {
 export function AsmQueueView({ viewerId }: Props) {
     const router = useRouter();
     const params = useSearchParams();
+    const queryClient = useQueryClient();
     const [tab, setTab] = useState<AsmQueueTab>(parseTab(params.get("tab")));
     const [page, setPage] = useState(Math.max(1, Number(params.get("page") ?? "1")));
     const [search, setSearch] = useState(params.get("q") ?? "");
     const [searchDebounced, setSearchDebounced] = useState(params.get("q") ?? "");
+    const [createOpen, setCreateOpen] = useState(false);
 
     useEffect(() => {
         const next = new URLSearchParams();
@@ -100,6 +104,12 @@ export function AsmQueueView({ viewerId }: Props) {
                 {rowsQuery.isFetching && (
                     <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                 )}
+                <div className="ml-auto">
+                    <Button type="button" onClick={() => setCreateOpen(true)} className="gap-1.5">
+                        <Plus className="h-4 w-4" />
+                        Create Lead
+                    </Button>
+                </div>
             </div>
             <AsmQueueTable
                 tab={tab}
@@ -111,6 +121,15 @@ export function AsmQueueView({ viewerId }: Props) {
                 error={rowsQuery.error ? (rowsQuery.error as Error).message : null}
                 onPageChange={setPage}
                 viewerId={viewerId}
+            />
+            <CreateLeadModal
+                open={createOpen}
+                onClose={() => setCreateOpen(false)}
+                onSuccess={() => {
+                    setCreateOpen(false);
+                    queryClient.invalidateQueries({ queryKey: ["asm-queue"] });
+                    queryClient.invalidateQueries({ queryKey: ["asm-counts"] });
+                }}
             />
         </div>
     );
