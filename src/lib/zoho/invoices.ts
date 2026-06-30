@@ -48,6 +48,33 @@ export async function fetchInvoicePdf(
   return res.arrayBuffer();
 }
 
+/** A single line item on a Zoho invoice (the fields we surface). */
+export interface ZohoInvoiceLineItem {
+  name: string;
+  description?: string;
+  quantity: number;
+  rate?: number;
+  item_total?: number;
+}
+
+// Fetch a single invoice's full JSON detail — the ONLY place Zoho returns
+// `line_items` (the list endpoint used by sync.ts omits them). Same endpoint as
+// fetchInvoicePdf but WITHOUT `accept=pdf`, so Zoho returns JSON. Returns the
+// line items, or [] when the invoice/detail can't be read.
+export async function fetchInvoiceLineItems(
+  invoiceId: string,
+  organizationId?: string,
+): Promise<ZohoInvoiceLineItem[]> {
+  const res = await zohoFetch(`/invoices/${invoiceId}`, {
+    method: "GET",
+    organizationId,
+  });
+  const json = (await res.json()) as {
+    invoice?: { line_items?: ZohoInvoiceLineItem[] };
+  };
+  return json.invoice?.line_items ?? [];
+}
+
 export async function* iterateAllInvoices(
   organizationId?: string,
 ): AsyncGenerator<ZohoInvoice> {
