@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { kycVerifications, kycDocuments, leads, couponCodes, adminVerificationQueue, consentRecords, kycVerificationMetadata } from '@/lib/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { validateDocument, verifyBankAccount } from '@/lib/decentro';
 import { createWorkflowId, determineCaseType, getOpenQueueEntryForLead } from '@/lib/kyc/admin-workflow';
 
@@ -66,10 +66,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         // reserved. The client mirrors this; we recheck so a forged request
         // can't bypass it. Optional docs (cheques, bank statement, RC for
         // non-vehicle leads) are never required.
+        // Look at the LATEST PRIMARY consent — matching the consent/status endpoint
+        // the UI reads (consent_for='primary', newest first). A lead can accumulate
+        // several consent rows (re-generate / reject / re-verify cycles); without the
+        // filter+ordering this picked an arbitrary stale row and falsely reported the
+        // consent unverified even though the latest one is admin-verified.
         const consentRows = await db
             .select({ status: consentRecords.consent_status })
             .from(consentRecords)
-            .where(eq(consentRecords.lead_id, leadId))
+            .where(and(eq(consentRecords.lead_id, leadId), eq(consentRecords.consent_for, 'primary')))
+            .orderBy(desc(consentRecords.updated_at))
             .limit(1);
         const consentStatusVal = (consentRows[0]?.status || lead[0].consent_status || '').toLowerCase();
         const consentAdminVerified =
