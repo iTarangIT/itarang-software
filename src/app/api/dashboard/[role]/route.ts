@@ -64,6 +64,47 @@ export const GET = withErrorHandler(
       );
       const sixMonthsAgoStr = sixMonthsAgoDate.toISOString().slice(0, 10);
 
+      // Revenue-trend granularity (month | week | day). Drives both the
+      // date_trunc bucket and the to_char label below, plus the default lookback
+      // window: month → last 6 months, week → last 8 weeks, day → last 30 days.
+      // An explicit ?trendStart=YYYY-MM-DD&trendEnd=YYYY-MM-DD overrides the
+      // window so the CEO can compare a chosen calendar range.
+      const trendParams = new URL(req.url).searchParams;
+      const granRaw = (trendParams.get("trendGranularity") || "month").toLowerCase();
+      const trendGranularity = (["month", "week", "day"] as const).includes(
+        granRaw as "month" | "week" | "day",
+      )
+        ? (granRaw as "month" | "week" | "day")
+        : "month";
+      const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+      const customStart = trendParams.get("trendStart");
+      const customEnd = trendParams.get("trendEnd");
+      let trendStartStr: string;
+      let trendEndStr: string | null = null;
+      // Year-qualified labels so a custom range spanning >1 year stays unambiguous.
+      let trendLabelFmt: string;
+      if (trendGranularity === "day") {
+        const d = new Date(curYear, curMonth, now.getDate() - 29);
+        trendStartStr = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+        trendLabelFmt = "DD Mon";
+      } else if (trendGranularity === "week") {
+        const d = new Date(curYear, curMonth, now.getDate() - 7 * 7);
+        trendStartStr = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+        trendLabelFmt = "DD Mon";
+      } else {
+        trendStartStr = sixMonthsAgoStr;
+        trendLabelFmt = "Mon YYYY";
+      }
+      if (customStart && dateRe.test(customStart)) {
+        trendStartStr = customStart;
+      }
+      if (customEnd && dateRe.test(customEnd)) {
+        // Make the end date inclusive: bucket up to and including customEnd.
+        const d = new Date(`${customEnd}T00:00:00`);
+        d.setDate(d.getDate() + 1);
+        trendEndStr = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+      }
+
       // Revenue MTD — sum totals from synced Zoho invoices for current month,
       // excluding only void (drafts are counted as revenue per CEO request).
       const [zohoRevenue] = await db
@@ -261,22 +302,31 @@ export const GET = withErrorHandler(
         })
         .from(provisions);
 
-      // Revenue trend — monthly totals for the last 6 months (excl. void/draft).
+      // Revenue trend — totals bucketed by the requested granularity over the
+      // matching lookback window (excl. void/draft). The date_trunc unit is
+      // inlined as a literal (trendGranularity is whitelisted to month/week/day
+      // above) so the SAME expression text appears in SELECT, GROUP BY and ORDER
+      // BY — a bound param would emit different placeholders ($1 vs $5) and
+      // Postgres would reject invoice_date as "not grouped".
+      const truncBucket = sql.raw(
+        `date_trunc('${trendGranularity}', "zoho_invoices"."invoice_date")`,
+      );
       const revenueTrendRows = await db
         .select({
-          bucket: sql<string>`date_trunc('month', ${zohoInvoices.invoice_date})`,
-          name: sql<string>`to_char(date_trunc('month', ${zohoInvoices.invoice_date}), 'Mon')`,
+          bucket: sql<string>`${truncBucket}`,
+          name: sql<string>`to_char(${truncBucket}, ${trendLabelFmt})`,
           revenue: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)`,
         })
         .from(zohoInvoices)
         .where(
           and(
-            gte(zohoInvoices.invoice_date, sixMonthsAgoStr),
+            gte(zohoInvoices.invoice_date, trendStartStr),
+            ...(trendEndStr ? [lt(zohoInvoices.invoice_date, trendEndStr)] : []),
             sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void', 'draft'))`,
           ),
         )
-        .groupBy(sql`date_trunc('month', ${zohoInvoices.invoice_date})`)
-        .orderBy(sql`date_trunc('month', ${zohoInvoices.invoice_date})`);
+        .groupBy(truncBucket)
+        .orderBy(truncBucket);
 
       // Top sales managers — ranked by qualified conversions on owned leads.
       const topManagerRows = await db
