@@ -11,9 +11,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { expenseSubmissions, inventory, users, zohoInvoices } from "@/lib/db/schema";
+import { expenseSubmissions, inventory, manualDealerSales, users, zohoInvoices } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
 import { errorMessage, isNextRedirectError } from "@/lib/api-utils";
+import { fetchInvoiceLineItems } from "@/lib/zoho/invoices";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +22,25 @@ export const dynamic = "force-dynamic";
 const ALLOWED_ROLES = new Set(["ceo", "admin", "sales_head"]);
 const METRICS = new Set(["purchases", "sales", "expenses", "inventory", "outstanding"]);
 const ROW_CAP = 500;
+// Live Zoho line-item enrichment is N detail calls (one per invoice), so bound
+// it: only the most recent DETAIL_CAP invoices in the window are expanded into
+// per-product rows; older ones fall back to a single invoice-level row.
+const DETAIL_CAP = 120;
+const DETAIL_CONCURRENCY = 5;
+
+// Run async tasks in fixed-size batches to avoid hammering the Zoho API.
+async function inBatches<T, R>(
+  items: T[],
+  size: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += size) {
+    const batch = items.slice(i, i + size);
+    out.push(...(await Promise.all(batch.map(fn))));
+  }
+  return out;
+}
 
 export async function GET(
   req: NextRequest,
@@ -102,9 +122,10 @@ export async function GET(
         sql`(${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void'))`,
       ];
       if (endStr) conds.push(lt(zohoInvoices.invoice_date, endStr));
-      rows = await db
+      const invoiceRows = await db
         .select({
           zoho_invoice_id: zohoInvoices.zoho_invoice_id,
+          organization_id: zohoInvoices.organization_id,
           invoice_number: zohoInvoices.invoice_number,
           customer_name: zohoInvoices.customer_name,
           invoice_date: zohoInvoices.invoice_date,
@@ -115,7 +136,77 @@ export async function GET(
         .where(and(...conds))
         .orderBy(desc(zohoInvoices.invoice_date))
         .limit(ROW_CAP);
-      total = rows.reduce((s, r) => s + Number(r.total || 0), 0);
+      // Total reconciles with the card: sum of INVOICE totals (not line items).
+      total = invoiceRows.reduce((s, r) => s + Number(r.total || 0), 0);
+
+      // Enrich the most recent invoices with line items (quantity + product
+      // name) via live Zoho detail calls, then expand to one row per product.
+      const toEnrich = invoiceRows.slice(0, DETAIL_CAP);
+      const lineItemsByInvoice = new Map<string, Awaited<ReturnType<typeof fetchInvoiceLineItems>>>();
+      await inBatches(toEnrich, DETAIL_CONCURRENCY, async (inv) => {
+        try {
+          const items = await fetchInvoiceLineItems(
+            inv.zoho_invoice_id,
+            inv.organization_id ?? undefined,
+          );
+          lineItemsByInvoice.set(inv.zoho_invoice_id, items);
+        } catch {
+          // Degrade gracefully — invoice still shows as a single row below.
+          lineItemsByInvoice.set(inv.zoho_invoice_id, []);
+        }
+        return null;
+      });
+
+      rows = invoiceRows.flatMap((inv) => {
+        const base = {
+          zoho_invoice_id: inv.zoho_invoice_id,
+          invoice_number: inv.invoice_number,
+          customer_name: inv.customer_name,
+          invoice_date: inv.invoice_date,
+          total: inv.total,
+          status: inv.status,
+        };
+        const items = lineItemsByInvoice.get(inv.zoho_invoice_id);
+        if (!items || items.length === 0) {
+          return [{ ...base, _first: true, product_name: null, quantity: null }];
+        }
+        return items.map((li, idx) => ({
+          ...base,
+          _first: idx === 0,
+          product_name: li.name ?? null,
+          quantity: li.quantity ?? null,
+        }));
+      });
+
+      // Merge manual / offline dealer sales (E-176) for the same window — they
+      // show alongside the Zoho rows and count toward the total. Guarded: if the
+      // table hasn't been migrated yet, skip rather than failing the drill-down.
+      try {
+        const manualConds = [gte(manualDealerSales.sale_date, startStr)];
+        if (endStr) manualConds.push(lt(manualDealerSales.sale_date, endStr));
+        const manualRows = await db
+          .select()
+          .from(manualDealerSales)
+          .where(and(...manualConds))
+          .orderBy(desc(manualDealerSales.sale_date))
+          .limit(ROW_CAP);
+        const manualMapped = manualRows.map((m) => ({
+          _first: true,
+          zoho_invoice_id: null,
+          invoice_number: m.invoice_number,
+          customer_name: m.customer_name,
+          invoice_date: m.sale_date,
+          product_name: m.product_name,
+          quantity: m.quantity,
+          total: m.amount,
+          status: "offline",
+        }));
+        rows = [...manualMapped, ...rows];
+        total += manualRows.reduce((s, m) => s + Number(m.amount || 0), 0);
+      } catch (e) {
+        // 42P01 undefined_table → migration not applied yet; ignore manual sales.
+        console.warn("[drill-down/sales] manual_dealer_sales unavailable:", errorMessage(e));
+      }
     } else if (metric === "expenses") {
       const conds = [
         eq(expenseSubmissions.status, "approved"),
@@ -130,6 +221,7 @@ export async function GET(
           project_tag: expenseSubmissions.project_tag,
           amount: expenseSubmissions.amount,
           expense_date: expenseSubmissions.expense_date,
+          created_at: expenseSubmissions.created_at,
           bill_url: expenseSubmissions.bill_url,
           submitter_name: users.name,
         })

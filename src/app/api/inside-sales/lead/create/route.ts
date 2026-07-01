@@ -13,7 +13,7 @@ import { dealerLeads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 
-const MUTATE_ROLES = ["inside_sales_rep", "admin"];
+const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
 
 const BodySchema = z.object({
     dealer_name: z.string().trim().min(2).max(200),
@@ -45,6 +45,12 @@ export const POST = withErrorHandler(async (req: Request) => {
     const id = `DL-${Date.now()}-${nanoid(8)}`;
     const now = new Date();
 
+    // An ASM creating a lead owns it immediately — it should land in their
+    // "My Active Visits" queue (current_owner_id = ASM, non-terminal status),
+    // not the unassigned claim pool. Inside Sales / admin keep the claim-queue
+    // behaviour (New_Unassigned, no owner).
+    const isAsm = user.role === "asm";
+
     try {
         await db.insert(dealerLeads).values({
             id,
@@ -56,12 +62,13 @@ export const POST = withErrorHandler(async (req: Request) => {
             location: body.city || null,
             language: body.language || "hindi",
             interest_level: body.interest_level || null,
-            // Land in the claim queue: a real lifecycle status, no owner.
-            lead_status: "New_Unassigned",
+            lead_status: isAsm ? "Assigned_Not_Contacted" : "New_Unassigned",
             current_status: "new",
             source: "manual_upload_lead",
             originator_id: user.id,
-            current_owner_id: null,
+            current_owner_id: isAsm ? user.id : null,
+            asm_id: isAsm ? user.id : null,
+            assigned_at: isAsm ? now : null,
             is_active: true,
             total_attempts: 0,
             final_intent_score: 0,

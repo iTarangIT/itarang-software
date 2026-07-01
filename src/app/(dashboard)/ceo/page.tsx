@@ -26,6 +26,8 @@ import {
   FileSignature,
   Clock,
   RefreshCw,
+  CalendarRange,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -47,6 +49,13 @@ export default function CEODashboard() {
     params?: string;
   } | null>(null);
 
+  const [trendGranularity, setTrendGranularity] = React.useState<
+    "month" | "week" | "day"
+  >("month");
+  // Optional calendar range to compare a chosen span; empty = default lookback.
+  const [trendStart, setTrendStart] = React.useState("");
+  const [trendEnd, setTrendEnd] = React.useState("");
+
   const {
     data: metrics,
     isLoading,
@@ -54,9 +63,12 @@ export default function CEODashboard() {
     refetch,
     isFetching,
   } = useQuery({
-    queryKey: ["dashboard-metrics", "ceo"],
+    queryKey: ["dashboard-metrics", "ceo", trendGranularity, trendStart, trendEnd],
     queryFn: async () => {
-      const response = await fetch("/api/dashboard/ceo");
+      const params = new URLSearchParams({ trendGranularity });
+      if (trendStart) params.set("trendStart", trendStart);
+      if (trendEnd) params.set("trendEnd", trendEnd);
+      const response = await fetch(`/api/dashboard/ceo?${params.toString()}`);
       if (!response.ok) throw new Error("Failed to fetch dashboard metrics");
       const result = await response.json();
       return result.data; // API returns { data: ... }
@@ -133,7 +145,7 @@ export default function CEODashboard() {
       </div>
 
       {/* KPI Section */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         <div data-testid="kpi-revenue-mtd">
           <RevenueMtdCard
             base={Number(m.revenue_mtd ?? m.revenue ?? 0)}
@@ -201,7 +213,7 @@ export default function CEODashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
         {/* Left rail: revenue trend + operational cards */}
         <div className="lg:col-span-2 space-y-6">
-          <div className="h-[400px]">
+          <div className="h-[440px]">
             <MetricsChart
               title="Revenue Performance Trend"
               data={m.revenueTrend || []}
@@ -210,6 +222,59 @@ export default function CEODashboard() {
               type="bar"
               height={300}
               valueFormatter={(v) => `₹${Number(v).toFixed(1)}L`}
+              headerActions={
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <div className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2 h-8">
+                    <CalendarRange className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                    <input
+                      type="date"
+                      value={trendStart}
+                      max={trendEnd || undefined}
+                      onChange={(e) => setTrendStart(e.target.value)}
+                      aria-label="Compare from"
+                      className="bg-transparent text-xs text-gray-600 outline-none w-[104px]"
+                    />
+                    <span className="text-gray-300">–</span>
+                    <input
+                      type="date"
+                      value={trendEnd}
+                      min={trendStart || undefined}
+                      onChange={(e) => setTrendEnd(e.target.value)}
+                      aria-label="Compare to"
+                      className="bg-transparent text-xs text-gray-600 outline-none w-[104px]"
+                    />
+                    {(trendStart || trendEnd) && (
+                      <button
+                        type="button"
+                        aria-label="Clear date range"
+                        onClick={() => {
+                          setTrendStart("");
+                          setTrendEnd("");
+                        }}
+                        className="ml-0.5 grid place-items-center h-5 w-5 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="inline-flex items-center gap-0.5 rounded-lg bg-gray-100 p-0.5">
+                    {(["day", "week", "month"] as const).map((g) => (
+                      <button
+                        key={g}
+                        type="button"
+                        onClick={() => setTrendGranularity(g)}
+                        className={`px-3 h-7 text-xs font-semibold rounded-md transition-colors ${
+                          trendGranularity === g
+                            ? "bg-white text-gray-900 shadow-sm"
+                            : "text-gray-500 hover:text-gray-700"
+                        }`}
+                      >
+                        {g === "day" ? "Daily" : g === "week" ? "Weekly" : "Monthly"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              }
             />
           </div>
 
