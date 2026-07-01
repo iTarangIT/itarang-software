@@ -17,7 +17,7 @@
 import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { personalDetails } from "@/lib/db/schema";
+import { coBorrowers, personalDetails } from "@/lib/db/schema";
 
 /** Last 4 digits of an Aadhaar-ish string (handles masked "XXXXXXXX1234" + full). */
 export function aadhaarLast4(value: string | null | undefined): string | null {
@@ -63,6 +63,32 @@ export async function getCustomerAadhaarForLead(
     .where(eq(personalDetails.lead_id, leadId))
     .limit(1);
   return pd?.aadhaar_no ?? null;
+}
+
+/** The Aadhaar captured for a lead's co-borrower, or null. */
+export async function getCoBorrowerAadhaarForLead(
+  leadId: string,
+): Promise<string | null> {
+  const [cb] = await db
+    .select({ aadhaar_no: coBorrowers.aadhaar_no })
+    .from(coBorrowers)
+    .where(eq(coBorrowers.lead_id, leadId))
+    .limit(1);
+  return cb?.aadhaar_no ?? null;
+}
+
+/**
+ * Resolve the expected Aadhaar for a consent record by applicant role. Primary
+ * compares against the customer's OCR Aadhaar; a co-borrower must compare against
+ * the co-borrower's own Aadhaar (never the primary's).
+ */
+export async function getExpectedConsentAadhaar(
+  leadId: string,
+  consentFor: string | null | undefined,
+): Promise<string | null> {
+  return consentFor === "co_borrower"
+    ? getCoBorrowerAadhaarForLead(leadId)
+    : getCustomerAadhaarForLead(leadId);
 }
 
 /** Human-readable mismatch reason for esign_error_message / audit. */

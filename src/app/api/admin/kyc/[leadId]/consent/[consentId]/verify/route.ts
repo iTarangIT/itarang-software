@@ -54,7 +54,8 @@ export async function POST(
     const record = existing[0];
     if (
       record.consent_status === "verified" ||
-      record.consent_status === "rejected"
+      record.consent_status === "rejected" ||
+      record.consent_status === "admin_rejected"
     ) {
       return NextResponse.json(
         {
@@ -68,7 +69,10 @@ export async function POST(
     }
 
     const now = new Date();
-    const nextStatus = action === "approve" ? "verified" : "rejected";
+    // Canonical reject value is "admin_rejected" — the value the KYC-review queue
+    // filters on and the dealer ConsentStatusBadge renders. (Older rows may hold
+    // the legacy "rejected"; consumers accept both.)
+    const nextStatus = action === "approve" ? "verified" : "admin_rejected";
 
     const [updated] = await db
       .update(consentRecords)

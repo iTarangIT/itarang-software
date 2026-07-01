@@ -1573,6 +1573,9 @@ export const consentRecords = pgTable("consent_records", {
   esign_error_code: varchar("esign_error_code", { length: 50 }),
   esign_error_message: text("esign_error_message"),
   signer_aadhaar_masked: varchar("signer_aadhaar_masked", { length: 20 }),
+  // Digio's name-match score (0-100) comparing the Aadhaar-holder name to the
+  // registered signer name — a secondary signal surfaced to admins (E-176).
+  signer_name_match_score: integer("signer_name_match_score"),
   rejected_by: uuid("rejected_by"),
   rejected_at: timestamp("rejected_at", { withTimezone: true }),
   rejection_reason: varchar("rejection_reason", { length: 255 }),

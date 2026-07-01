@@ -26,6 +26,7 @@ import {
   paraphernaliaStock,
   personalDetails,
   products,
+  users,
 } from "@/lib/db/schema";
 
 type Application = typeof dealerOnboardingApplications.$inferSelect;
@@ -61,6 +62,35 @@ export function resolveActiveDealer(
     dealerName:
       application.owner_name || application.company_name || "there",
   };
+}
+
+/** Email of the fixed "house" dealer that owns WhatsApp customer-onboarding
+ *  leads (entry-chooser option 2). Overridable via env. */
+const HOUSE_DEALER_EMAIL =
+  process.env.WHATSAPP_HOUSE_DEALER_EMAIL?.trim().toLowerCase() ||
+  "dealer@itarang.com";
+
+/**
+ * Resolve the house dealer (dealer@itarang.com) as an ActiveDealer so a customer
+ * self-onboarding over WhatsApp gets their lead attributed to that account. The
+ * mapping mirrors an approved dealer: dealer_code = users.dealer_id
+ * (= accounts.id = leads.dealer_id FK target); uploader_id = users.id. Returns
+ * null when the account is missing, inactive, or not wired to a dealer_id — the
+ * caller degrades gracefully instead of creating an orphan lead.
+ */
+export async function resolveHouseDealer(): Promise<ActiveDealer | null> {
+  const [u] = await db
+    .select({ id: users.id, dealerId: users.dealer_id })
+    .from(users)
+    .where(
+      and(
+        eq(sql`lower(${users.email})`, HOUSE_DEALER_EMAIL),
+        eq(users.is_active, true),
+      ),
+    )
+    .limit(1);
+  if (!u || !u.dealerId) return null;
+  return { dealerCode: u.dealerId, uploaderId: u.id, dealerName: "iTarang" };
 }
 
 export type InterestLevel = "hot" | "warm" | "cold";
