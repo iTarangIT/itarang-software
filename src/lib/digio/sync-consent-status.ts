@@ -1,13 +1,14 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { consentRecords, leads } from "@/lib/db/schema";
+import { coBorrowers, consentRecords, leads } from "@/lib/db/schema";
 import { fetchAndStoreSignedConsent } from "./fetch-signed-consent";
 import { getDigioBaseUrl, getDigioBasicAuth } from "./client";
 import {
   aadhaarMismatchMessage,
   checkAadhaarMatch,
-  getCustomerAadhaarForLead,
+  getExpectedConsentAadhaar,
 } from "./aadhaar-match";
+import { getConsentSignerIdentity } from "./signer-aadhaar";
 
 export const CONSENT_WAITING_STATUSES = [
   "link_sent",
@@ -100,17 +101,21 @@ export async function syncConsentStatusFromDigio(
   if (!SIGNED_STATUSES.includes(rawStatus)) return null;
 
   const now = new Date();
+  // Read the signer's Aadhaar from pki_signature_details.aadhaar_suffix (the real
+  // field), with legacy fallbacks.
+  const signerIdentity = getConsentSignerIdentity(parsed);
   const signerAadhaar =
+    signerIdentity.suffix ||
     firstParty?.aadhaar_masked ||
     firstParty?.signer_aadhaar ||
     record.signer_aadhaar_masked ||
     null;
 
   // Integrity gate (mirror of the webhook): reject a consent signed with an
-  // Aadhaar that doesn't match the customer's captured Aadhaar. Primary only;
-  // never block when not comparable. Read consent_for / retry count straight
-  // from the DB so we don't depend on the caller's record shape (a co-borrower
-  // must NOT be compared against the primary's Aadhaar).
+  // Aadhaar that doesn't match the captured Aadhaar (primary → customer,
+  // co-borrower → co-borrower). Never block when not comparable. Read
+  // consent_for / retry count straight from the DB so a co-borrower is compared
+  // against the co-borrower's own Aadhaar, never the primary's.
   const [meta] = await db
     .select({
       consent_for: consentRecords.consent_for,
@@ -119,8 +124,11 @@ export async function syncConsentStatusFromDigio(
     .from(consentRecords)
     .where(eq(consentRecords.id, record.id))
     .limit(1);
-  if (meta && meta.consent_for !== "co_borrower") {
-    const expected = await getCustomerAadhaarForLead(record.lead_id);
+  if (meta) {
+    const expected = await getExpectedConsentAadhaar(
+      record.lead_id,
+      meta.consent_for,
+    );
     const check = checkAadhaarMatch(expected, signerAadhaar);
     if (check.comparable && !check.match) {
       const retryCount = (meta.esign_retry_count || 0) + 1;
@@ -128,6 +136,7 @@ export async function syncConsentStatusFromDigio(
       console.warn("[sync-consent-status] Aadhaar mismatch — rejecting consent", {
         documentId: record.esign_transaction_id,
         leadId: record.lead_id,
+        consentFor: meta.consent_for,
         signerLast4: check.signerLast4,
         expectedLast4: check.expectedLast4,
       });
@@ -136,15 +145,28 @@ export async function syncConsentStatusFromDigio(
         .set({
           consent_status: newStatus,
           signer_aadhaar_masked: signerAadhaar,
+          signer_name_match_score: signerIdentity.nameScore,
           esign_retry_count: retryCount,
           esign_error_message: aadhaarMismatchMessage(check),
           updated_at: now,
         })
         .where(eq(consentRecords.id, record.id));
-      await db
-        .update(leads)
-        .set({ consent_status: newStatus, updated_at: now })
-        .where(eq(leads.id, record.lead_id));
+      // Reflect on the correct applicant row.
+      if (meta.consent_for === "co_borrower") {
+        await db
+          .update(coBorrowers)
+          .set({ consent_status: newStatus, updated_at: now })
+          .where(eq(coBorrowers.lead_id, record.lead_id));
+        await db
+          .update(leads)
+          .set({ borrower_consent_status: newStatus, updated_at: now })
+          .where(eq(leads.id, record.lead_id));
+      } else {
+        await db
+          .update(leads)
+          .set({ consent_status: newStatus, updated_at: now })
+          .where(eq(leads.id, record.lead_id));
+      }
       return null;
     }
   }
@@ -170,6 +192,7 @@ export async function syncConsentStatusFromDigio(
     consent_status: "esign_completed",
     signed_at: now,
     signer_aadhaar_masked: signerAadhaar,
+    signer_name_match_score: signerIdentity.nameScore,
     ...(signedUrl ? { signed_consent_url: signedUrl } : {}),
     updated_at: now,
   };

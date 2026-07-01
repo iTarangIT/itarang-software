@@ -153,6 +153,7 @@ type DealerReviewData = {
   ownerName?: string;
   ownerPhone?: string;
   ownerEmail?: string;
+  ownerAadhaarNo?: string;
   bankName?: string;
   accountNumber?: string;
   beneficiaryName?: string;
@@ -236,6 +237,7 @@ type CompanyEditForm = {
   ownerName: string;
   ownerPhone: string;
   ownerEmail: string;
+  ownerAadhaarNo: string;
   bankName: string;
   accountNumber: string;
   beneficiaryName: string;
@@ -783,7 +785,7 @@ export default function DealerReviewPage() {
   const [editForm, setEditForm]     = useState<CompanyEditForm>({
     companyName: "", companyAddress: "", gstNumber: "", panNumber: "",
     cinNumber: "", companyType: "", ownerName: "", ownerPhone: "",
-    ownerEmail: "", bankName: "", accountNumber: "", beneficiaryName: "", ifscCode: "",
+    ownerEmail: "", ownerAadhaarNo: "", bankName: "", accountNumber: "", beneficiaryName: "", ifscCode: "",
     bankBranch: "", accountType: "",
     ownerAddressLine1: "", ownerCity: "", ownerDistrict: "", ownerState: "", ownerPinCode: "",
     salesManagerName: "", salesManagerEmail: "", salesManagerMobile: "",
@@ -888,6 +890,7 @@ export default function DealerReviewPage() {
             ownerName:      d.ownerName      || "",
             ownerPhone:     d.ownerPhone     || "",
             ownerEmail:     d.ownerEmail     || "",
+            ownerAadhaarNo: d.ownerAadhaarNo || "",
             bankName:       d.bankName       || "",
             accountNumber:  d.accountNumber  || "",
             beneficiaryName: d.beneficiaryName || "",
@@ -1074,6 +1077,7 @@ export default function DealerReviewPage() {
       ownerName:      data.ownerName      || "",
       ownerPhone:     data.ownerPhone     || "",
       ownerEmail:     data.ownerEmail     || "",
+      ownerAadhaarNo: data.ownerAadhaarNo || "",
       bankName:       data.bankName       || "",
       accountNumber:  data.accountNumber  || "",
       beneficiaryName: data.beneficiaryName || "",
@@ -1629,6 +1633,7 @@ export default function DealerReviewPage() {
                   <EditableField label="Primary Contact Name"   value={editForm.ownerName}      onChange={handleEditField("ownerName")} />
                   <EditableField label="Primary Contact Phone"  value={editForm.ownerPhone}     onChange={handleEditField("ownerPhone")} />
                   <EditableField label="Primary Contact Email"  value={editForm.ownerEmail}     onChange={handleEditField("ownerEmail")} />
+                  <EditableField label="Owner Aadhaar (12 digits)" value={editForm.ownerAadhaarNo} onChange={handleEditField("ownerAadhaarNo")} />
                 </>
               ) : (
                 <>
@@ -1641,6 +1646,7 @@ export default function DealerReviewPage() {
                   <InfoField label="Primary Contact Name"  value={data.ownerName} />
                   <InfoField label="Primary Contact Phone" value={data.ownerPhone} />
                   <InfoField label="Primary Contact Email" value={data.ownerEmail} />
+                  <InfoField label="Owner Aadhaar"         value={data.ownerAadhaarNo ? `XXXX XXXX ${data.ownerAadhaarNo.slice(-4)}` : "Not on file"} />
                 </>
               )}
             </div>

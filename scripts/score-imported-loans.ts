@@ -24,7 +24,11 @@ import { pciFromEmis } from "@/lib/nbfc/pci/computePci";
 import { randomUUID } from "node:crypto";
 
 const TENANT_ID = "02bda647-c164-4e81-809b-01cfe159cdb6";
-const TODAY = "2026-06-17"; // currentDate; scores the repayment record up to today
+// Score the repayment record up to *today*, computed live so the stored score
+// never goes stale relative to the EMI window shown in the explainability
+// drawer. (Was hardcoded to a fixed date, which let the stored value drift
+// behind newly-elapsed / re-statused EMIs.)
+const TODAY = new Date().toISOString().slice(0, 10);
 
 async function main() {
   const host = (process.env.DATABASE_URL || "").match(/@([^/:]+)/)?.[1];

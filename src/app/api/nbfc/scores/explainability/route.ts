@@ -22,15 +22,23 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lte } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   borrowerRiskScores,
   emiSchedules,
   nbfcLoanRestructures,
+  telemetryIngestionLog,
 } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
-import { emiWeight, recencyMultiplier } from "@/lib/nbfc/cds/computeCds";
+import {
+  computeCdsBreakdown,
+  computeCdsForLoan,
+  CDS_EMI_WEIGHT_RULES,
+  CDS_RECENCY_SCHEDULE,
+  CDS_STREAK_RULE,
+  CDS_TELEMETRY_RULE,
+} from "@/lib/nbfc/cds/computeCds";
 import { emiScore, EMI_HISTORY_DEPTH } from "@/lib/nbfc/pci/computePci";
 
 export const runtime = "nodejs";
@@ -99,28 +107,85 @@ export async function GET(req: NextRequest) {
     }
     const score_value = Number(rawValue);
 
-    // Last 6 EMIs, newest first.
+    // Last 6 ELAPSED EMIs (due on/before today), newest first — the borrower's
+    // trailing repayment record, which is the window the score is computed
+    // from (see score-imported-loans.ts). Without the `due_date <= today`
+    // filter this returned the furthest-FUTURE scheduled installments (all
+    // status='scheduled', zero contribution, blank amount/days-late), so the
+    // drawer described EMIs that hadn't happened yet.
+    const today = new Date().toISOString().slice(0, 10);
     const emis = await db
       .select({
         due_date: emiSchedules.due_date,
         paid_at: emiSchedules.paid_at,
         status: emiSchedules.status,
         days_overdue: emiSchedules.days_overdue,
+        amount: emiSchedules.amount,
       })
       .from(emiSchedules)
-      .where(eq(emiSchedules.loan_sanction_id, loan_sanction_id))
+      .where(
+        and(
+          eq(emiSchedules.loan_sanction_id, loan_sanction_id),
+          lte(emiSchedules.due_date, today),
+        ),
+      )
       .orderBy(desc(emiSchedules.due_date))
       .limit(6);
 
     const n = Math.min(emis.length, EMI_HISTORY_DEPTH);
     const pciTotalWeight = (n * (n + 1)) / 2;
 
-    // Per-row contribution, using the same weighting the nightly jobs apply.
+    // ---- CDS breakdown (single source of truth shared with the nightly job) --
+    // For CDS we reproduce the FULL derivation — per-EMI weight × recency,
+    // streak penalty, telemetry term and the 0..100 normalisation — using the
+    // freshest telemetry for the caller's tenant and the score's own
+    // computed_at as `now`, so the surfaced math reconstructs the same number
+    // the job stored (modulo telemetry that has changed since).
+    let breakdown: ReturnType<typeof computeCdsBreakdown> | null = null;
+    let reference: {
+      formula: string;
+      emi_weight_rules: typeof CDS_EMI_WEIGHT_RULES;
+      recency_schedule: typeof CDS_RECENCY_SCHEDULE;
+      streak_rule: string;
+      telemetry_rule: string;
+    } | null = null;
+
+    if (score_type === "cds") {
+      const [tel] = await db
+        .select({ ingested_at: telemetryIngestionLog.ingested_at })
+        .from(telemetryIngestionLog)
+        .where(eq(telemetryIngestionLog.tenant_id, actor.tenant_id))
+        .orderBy(desc(telemetryIngestionLog.ingested_at))
+        .limit(1);
+      breakdown = computeCdsBreakdown({
+        emis: emis.map((e) => ({
+          status: e.status,
+          days_overdue: e.days_overdue ?? null,
+        })),
+        telemetryIngestedAt: tel?.ingested_at ?? null,
+        now: score.computed_at,
+      });
+      reference = {
+        formula: FORMULA_CDS,
+        emi_weight_rules: CDS_EMI_WEIGHT_RULES,
+        recency_schedule: CDS_RECENCY_SCHEDULE,
+        streak_rule: CDS_STREAK_RULE,
+        telemetry_rule: CDS_TELEMETRY_RULE,
+      };
+    }
+
+    // Per-row inputs. CDS rows carry the weight × recency terms straight from
+    // the breakdown (same index order); PCI keeps its recency-weighted score.
     const last_6_emis = emis.map((e, idx) => {
       const days = e.days_overdue ?? null;
       let contribution: number;
+      let emi_weight: number | null = null;
+      let recency_multiplier: number | null = null;
       if (score_type === "cds") {
-        contribution = emiWeight(e.status, days) * recencyMultiplier(idx);
+        const row = breakdown!.per_emi[idx];
+        emi_weight = row?.emi_weight ?? null;
+        recency_multiplier = row?.recency_multiplier ?? null;
+        contribution = row?.contribution ?? 0;
       } else {
         const weight = n - idx; // most-recent gets the highest weight
         contribution =
@@ -137,9 +202,11 @@ export async function GET(req: NextRequest) {
       }
       return {
         due_date: e.due_date ? new Date(e.due_date).toISOString() : null,
-        amount: null as number | null,
+        amount: e.amount != null ? Number(e.amount) : null,
         status: e.status ?? null,
         days_late: days,
+        emi_weight,
+        recency_multiplier,
         contribution: Math.round(contribution * 100) / 100,
       };
     });
@@ -173,6 +240,8 @@ export async function GET(req: NextRequest) {
       score_value,
       formula_text: score_type === "cds" ? FORMULA_CDS : FORMULA_PCI,
       inputs: { last_6_emis },
+      breakdown,
+      reference,
       confidence: { level, reasons },
       when_not_to_trust: [...WHEN_NOT_TO_TRUST],
       override: { available: true, required_role: "nbfc_risk_manager" },
