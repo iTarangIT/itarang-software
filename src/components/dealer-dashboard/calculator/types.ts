@@ -53,6 +53,7 @@ export interface CalcResponse {
   footer: { disclaimer: string; phone: string; email: string; whatsapp: string };
   cardDisclaimer: string;
   leadId: string;
+  waResults?: { status: "sent" | "failed" | "skipped" };
 }
 
 export const inr = (n: number) =>

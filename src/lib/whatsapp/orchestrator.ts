@@ -54,11 +54,12 @@ import {
   parseCompanyType,
   requiredDocuments,
 } from "./checklist";
-// E-170 dealer self-service fork disabled — see runTurn(). Re-enable both
-// imports when switching back to the dealer-orchestrator increment.
-// import { resolveWhatsAppDealer } from "./dealer-identity";
+// E-170 dealer self-service fork disabled — see runTurn(). Re-enable
+// runDealerTurn when switching back to the dealer-orchestrator increment.
 // import { runDealerTurn } from "./dealer-orchestrator";
+import { resolveKnownContact, resolveWhatsAppDealer } from "./dealer-identity";
 import { classifyDocument } from "./extraction";
+import { answerGeneralQuestion } from "./general-info";
 import {
   generateManualConsentPdf,
   getSignedConsentForLead,
@@ -129,11 +130,13 @@ const COMPANY_TYPE_BUTTONS: ReplyButton[] = [
   { id: "private_limited_firm", title: "Private Limited" },
 ];
 
-// Entry chooser shown on the very first greeting: dealer onboarding vs. a
-// customer self-onboarding a new lead. Two tappable reply buttons (≤3, ≤20 chars).
+// Entry chooser shown on the very first greeting: dealer onboarding, a customer
+// self-onboarding a new lead, or free-form Q&A. Exactly 3 reply buttons (Meta's
+// cap) with titles ≤20 chars.
 const FLOW_CHOICE_BUTTONS: ReplyButton[] = [
   { id: "flow_dealer", title: "Dealer Onboarding" },
-  { id: "flow_customer", title: "Customer (New Lead)" },
+  { id: "flow_customer", title: "Customer Onboarding" },
+  { id: "flow_info", title: "General Information" },
 ];
 
 const KNOWN_COMPANY_TYPES: readonly string[] = [
@@ -201,6 +204,16 @@ type Ctx = {
    *  option 2) rather than dealer onboarding. Routes to runCustomerTurn and
    *  attributes the created lead to the house dealer (dealer@itarang.com). */
   flow?: "customer";
+  /** Active "General Information" Q&A (entry-chooser option 3). `turns` caps
+   *  the LLM spend per session; `history` (last few Q/A pairs, answers
+   *  truncated) gives follow-up questions their context. */
+  info?: { turns: number; history: Array<{ q: string; a: string }> };
+  /** The onboarding state we interrupted with the Resume/Start-Over prompt
+   *  (ASK_RESUME); restored verbatim when the applicant taps Resume. */
+  resumeState?: string;
+  /** Recognized-contact stamp from the greeting-time phone lookup (staff /
+   *  existing lead), kept for reuse so we don't re-query every greeting. */
+  known?: { kind: "staff" | "lead"; name: string; role?: string };
   /** Active customer-lead being created in the post-approval dealer console
    *  (states prefixed DC_*). Independent of the onboarding fields above. */
   lead?: {
@@ -288,12 +301,32 @@ export async function runTurn(event: InboundEvent): Promise<void> {
 
   // Post-approval dealer console: once the dealer's onboarding application is
   // admin-approved, the SAME WhatsApp number switches from the onboarding state
-  // machine to the lead-creation console. This must run BEFORE isGreetingTrigger
+  // machine to the lead-creation console. This must run BEFORE the greeting
   // so an approved dealer's "hi" opens the menu instead of restarting onboarding.
   const application = await loadApplication(session.application_id);
   const dealer = resolveActiveDealer(application);
   if (dealer) {
     return await runConsoleTurn(session, event, dealer);
+  }
+
+  // Web-onboarded approved dealer: their number matches dealers.owner_phone but
+  // their session's application row is just a stray WhatsApp draft, so the gate
+  // above misses them. Route to the SAME post-approval console. Only the "web"
+  // match is honoured here — the approved-application ("whatsapp") match is
+  // owned by resolveActiveDealer above, which also checks the account status.
+  // This must never call the disabled E-170 runDealerTurn fork.
+  try {
+    const webDealer = await resolveWhatsAppDealer(event.waPhone);
+    if (webDealer?.matchedVia === "web" && webDealer.dealerUserId) {
+      return await runConsoleTurn(session, event, {
+        dealerCode: webDealer.dealerCode,
+        uploaderId: webDealer.dealerUserId,
+        dealerName: webDealer.dealerName || session.wa_contact_name || "there",
+      });
+    }
+  } catch (err) {
+    console.error("[WhatsApp/orchestrator] web-dealer lookup failed:", err);
+    // Fall through to onboarding rather than dropping the message.
   }
 
   // Customer self-onboarding (entry-chooser option 2): a non-dealer building a
@@ -305,19 +338,33 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   }
 
   try {
-    // A greeting word (hi/hello/onboarding/start…) restarts the flow from the
-    // welcome + company-type question — unless the dealer has already submitted
-    // (then we keep the "under review" reply), or the session is brand-new and
-    // already in GREETING (the switch handles that below).
-    if (isGreetingTrigger(event, session)) {
-      return await restartOnboarding(session);
+    // A greeting word (hi/hello/menu/start…) at the entry of the flow re-greets
+    // (with known-contact recognition); mid-application it offers Resume /
+    // Start Over instead of restarting. Post-submission states keep their own
+    // replies (see GREETING_EXCLUDED_STATES).
+    if (
+      isGreetingWord(event) &&
+      !GREETING_EXCLUDED_STATES.has(session.current_state)
+    ) {
+      if (!hasOnboardingProgress(session)) {
+        return await greetEntry(session, event);
+      }
+      if (RESUMABLE_STATES.has(session.current_state)) {
+        return await askResume(session);
+      }
+      // Progress in a non-resumable state — fall through; the state handler
+      // simply re-prompts (e.g. an impatient "hi" during a document read).
     }
 
     switch (session.current_state) {
       case "GREETING":
-        return await onGreeting(session);
+        return await greetEntry(session, event);
       case "CHOOSE_FLOW":
         return await onChooseFlow(session, event);
+      case "GENERAL_INFO":
+        return await onGeneralInfo(session, event);
+      case "ASK_RESUME":
+        return await onAskResume(session, event);
       case "ASK_COMPANY_TYPE":
         return await onCompanyType(session, event);
       case "ASK_UPLOAD_MODE":
@@ -349,7 +396,7 @@ export async function runTurn(event: InboundEvent): Promise<void> {
           "Your application is already submitted and under review. Our team will contact you shortly.",
         ));
       default:
-        return await onGreeting(session);
+        return await greetEntry(session, event);
     }
   } catch (err) {
     console.error("[WhatsApp/orchestrator] turn failed:", err);
@@ -363,13 +410,14 @@ export async function runTurn(event: InboundEvent): Promise<void> {
 // ── State handlers ──────────────────────────────────────────────────────────
 
 async function onGreeting(session: SessionRow): Promise<void> {
-  // First contact: ask WHICH kind of onboarding before starting either flow.
+  // First contact: ask what the sender needs before starting any flow.
   // (1) Dealer Onboarding → the existing company-type document collection.
-  // (2) Customer (New Lead) → a customer self-registers a lead, attributed to
+  // (2) Customer Onboarding → a customer self-registers a lead, attributed to
   //     the house dealer (dealer@itarang.com).
+  // (3) General Information → grounded AI Q&A about iTarang.
   await reply(
     session,
-    "👋 Welcome to *iTarang*!\n\nWhich type of onboarding would you like? Tap an option below 👇",
+    "👋 Welcome to *iTarang*, how can I help?\n\nTap an option below 👇",
     FLOW_CHOICE_BUTTONS,
   );
   await setSession(session.id, { current_state: "CHOOSE_FLOW" });
@@ -384,8 +432,22 @@ async function onChooseFlow(
   event: InboundEvent,
 ): Promise<void> {
   const t = (event.text ?? "").trim().toLowerCase();
+
+  // "Main Menu" button on the recognized-contact greetings → re-show the chooser.
+  if (t === "show_menu") {
+    await reply(
+      session,
+      "👋 Welcome to *iTarang*, how can I help?\n\nTap an option below 👇",
+      FLOW_CHOICE_BUTTONS,
+    );
+    return;
+  }
+
   const wantsDealer = t === "flow_dealer" || /\bdealer\b/.test(t);
   const wantsCustomer = t === "flow_customer" || /\b(customer|lead)\b/.test(t);
+  // Checked LAST so "dealer information" still routes to dealer onboarding.
+  const wantsInfo =
+    t === "flow_info" || /\b(info|information|question|ask)\b/.test(t);
 
   if (wantsDealer) {
     // Reuse the exact original welcome prefix so dealer onboarding step 1 is
@@ -415,12 +477,109 @@ async function onChooseFlow(
     return await startNewLead(await loadSession(session.id));
   }
 
+  if (wantsInfo) {
+    return await startGeneralInfo(session);
+  }
+
   // Unrecognized reply — re-show the chooser.
   await reply(
     session,
-    "Please tap *Dealer Onboarding* or *Customer (New Lead)* 👇",
+    "Please tap *Dealer Onboarding*, *Customer Onboarding* or *General Information* 👇",
     FLOW_CHOICE_BUTTONS,
   );
+}
+
+// ── GENERAL_INFO — grounded AI Q&A (entry-chooser option 3) ─────────────────
+
+// Words that leave the Q&A and return to the entry menu. "menu"/"hi" etc. also
+// exit earlier via the greeting-word check (an info session has no onboarding
+// progress); this covers back/exit/stop, which aren't greeting triggers.
+const INFO_EXIT_WORDS = /^(menu|back|exit|stop|home|main\s*menu)$/i;
+// LLM-spend guardrails per info session.
+const INFO_MAX_TURNS = 15;
+const INFO_HISTORY_PAIRS = 4;
+const INFO_ANSWER_HISTORY_CHARS = 300;
+
+async function startGeneralInfo(session: SessionRow): Promise<void> {
+  await mergeContext(session, (ctx) => {
+    ctx.info = { turns: 0, history: [] };
+  });
+  await setSession(session.id, { current_state: "GENERAL_INFO" });
+  await reply(
+    session,
+    "💬 Sure! Ask me anything about iTarang — dealer onboarding, customer registration or financing.\n\n_Type *menu* anytime to go back to the main options._",
+  );
+}
+
+async function onGeneralInfo(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  const t = (event.text ?? "").trim();
+
+  // A tap on a (possibly stale) entry-menu button still routes normally.
+  if (event.type === "interactive" && /^(flow_\w+|show_menu)$/.test(t)) {
+    return await onChooseFlow(session, event);
+  }
+
+  if (event.type === "text" && INFO_EXIT_WORDS.test(t)) {
+    await mergeContext(session, (ctx) => {
+      ctx.info = undefined;
+    });
+    return await onGreeting(session);
+  }
+
+  if (event.type !== "text" || !t) {
+    await reply(
+      session,
+      "I can only answer typed questions here — type *menu* for the main options.",
+    );
+    return;
+  }
+
+  const info = ((session.context ?? {}) as Ctx).info ?? {
+    turns: 0,
+    history: [],
+  };
+
+  if (info.turns >= INFO_MAX_TURNS) {
+    await reply(
+      session,
+      "We've covered a lot in this chat! For anything more, our team is happy to help — email *support@itarang.com*, or pick an option below 👇",
+      FLOW_CHOICE_BUTTONS,
+    );
+    await setSession(session.id, { current_state: "CHOOSE_FLOW" });
+    return;
+  }
+
+  const res = await answerGeneralQuestion(
+    t,
+    (info.history ?? []).slice(-INFO_HISTORY_PAIRS),
+  );
+  if (!res.ok || !res.answer) {
+    await reply(
+      session,
+      "Sorry, I couldn't fetch that right now 🙏 Here's what I can help with 👇",
+      FLOW_CHOICE_BUTTONS,
+    );
+    await setSession(session.id, { current_state: "CHOOSE_FLOW" });
+    return;
+  }
+
+  const turns = info.turns + 1;
+  // Re-surface the escape hatch every few answers without nagging on each one.
+  const suffix =
+    turns % 3 === 0 ? "\n\n_Type *menu* to go back to the main options._" : "";
+  await reply(session, res.answer + suffix);
+  await mergeContext(session, (ctx) => {
+    const prev = ctx.info ?? { turns: 0, history: [] };
+    prev.turns = turns;
+    prev.history = [
+      ...(prev.history ?? []),
+      { q: t, a: (res.answer ?? "").slice(0, INFO_ANSWER_HISTORY_CHARS) },
+    ].slice(-INFO_HISTORY_PAIRS);
+    ctx.info = prev;
+  });
 }
 
 // One turn for a CUSTOMER self-onboarding a lead (entry-chooser option 2). A
@@ -510,35 +669,201 @@ async function finishCustomerFlow(
   );
 }
 
-// True when a typed message should restart the flow: a greeting word, in any
-// state except SUBMITTED (keep the "under review" reply) and GREETING (the
-// switch already runs onGreeting there).
-function isGreetingTrigger(event: InboundEvent, session: SessionRow): boolean {
-  if (event.type !== "text") return false;
-  // SUBMITTED / GREETING keep their own replies; CORRECTION / REJECTED are
-  // post-submission states where a stray "hi" must NOT wipe progress — the
-  // dealer is mid-correction or already declined.
-  if (
-    session.current_state === "SUBMITTED" ||
-    session.current_state === "GREETING" ||
-    session.current_state === "CORRECTION" ||
-    session.current_state === "REJECTED"
-  ) {
-    return false;
-  }
-  if (!GREETING_TRIGGERS.test((event.text ?? "").trim())) return false;
-  // Don't let a stray "hi" mid-flow wipe real progress. Dealers often type "hi"
-  // out of impatience while a ZIP/document is still being read (Gemini takes a
-  // few seconds), and the old behaviour restarted onboarding — clearing every
-  // collected document and re-greeting in a loop. Only treat a greeting as a
-  // fresh start at the very beginning: before a company type is chosen AND
-  // before any document has been collected. Past that, the greeting falls
-  // through to the current state handler, which simply re-prompts the step.
+// ── Greeting entry: known-contact recognition + mid-flow resume ─────────────
+
+/** A typed greeting word (hi/hello/menu/start…). */
+function isGreetingWord(event: InboundEvent): boolean {
+  return (
+    event.type === "text" && GREETING_TRIGGERS.test((event.text ?? "").trim())
+  );
+}
+
+// States where a greeting word keeps the state's own reply instead of
+// re-greeting: SUBMITTED ("under review"), CORRECTION / REJECTED (a stray "hi"
+// must NOT wipe a mid-correction or declined application), GREETING (the
+// switch already greets) and the resume prompt itself.
+const GREETING_EXCLUDED_STATES = new Set([
+  "GREETING",
+  "SUBMITTED",
+  "CORRECTION",
+  "REJECTED",
+  "ASK_RESUME",
+]);
+
+// Mid-application states we can safely interrupt with the Resume / Start Over
+// prompt and later re-prompt (promptForState) without losing collected
+// progress. Anything else with progress falls through to its state handler —
+// dealers often type "hi" out of impatience during a slow document read, and
+// the handler simply re-prompts the step.
+const RESUMABLE_STATES = new Set([
+  "ASK_COMPANY_TYPE",
+  "ASK_UPLOAD_MODE",
+  "COLLECTING_DOC",
+  "ASK_FINANCE",
+  "ASK_FIELD",
+  "CONFIRM_SIGNER",
+  "ASK_SIGNER_CHOICE",
+  "ASK_SIGNER_FIELD",
+  "AWAIT_CONFIRM",
+]);
+
+/** Real progress = a chosen company type or at least one collected document. */
+function hasOnboardingProgress(session: SessionRow): boolean {
   const ctx = (session.context ?? {}) as Ctx;
-  const hasProgress =
-    !!session.detected_company_type ||
-    Object.keys(ctx.docs ?? {}).length > 0;
-  return !hasProgress;
+  return (
+    !!session.detected_company_type || Object.keys(ctx.docs ?? {}).length > 0
+  );
+}
+
+// Buttons on the recognized-contact greetings (staff / returning customer):
+// they aren't onboarding, so lead with an escape into the chooser + Q&A.
+const KNOWN_CONTACT_BUTTONS: ReplyButton[] = [
+  { id: "show_menu", title: "Main Menu" },
+  { id: "flow_info", title: "General Information" },
+];
+
+function humanizeRole(role: string): string {
+  return role
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+// Entry greeting with known-contact recognition: internal staff and returning
+// customers (matched on the registered mobile number) get a personalised
+// greeting with a Main-Menu escape; everyone else gets the standard 3-option
+// chooser via a clean restart. Approved dealers never reach here — the console
+// gates in runTurn own them.
+async function greetEntry(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  try {
+    const known = await resolveKnownContact(event.waPhone || session.wa_phone);
+    if (known?.kind === "staff") {
+      await mergeContext(session, (ctx) => {
+        ctx.known = { kind: "staff", name: known.name, role: known.role };
+      });
+      await reply(
+        session,
+        `Hi *${known.name}* 👋 You're registered with iTarang as *${humanizeRole(known.role)}*.\n\nThis channel handles dealer & customer onboarding and product questions — tap an option below 👇`,
+        KNOWN_CONTACT_BUTTONS,
+      );
+      await setSession(session.id, { current_state: "CHOOSE_FLOW" });
+      return;
+    }
+    if (known?.kind === "lead") {
+      // The extraction placeholder name ("Customer") isn't worth greeting with.
+      const name =
+        known.name && known.name !== "Customer" ? ` *${known.name}*` : "";
+      const ref = known.referenceId ? ` *${known.referenceId}*` : "";
+      const status = (known.status || "in process").replace(/_/g, " ");
+      await mergeContext(session, (ctx) => {
+        ctx.known = { kind: "lead", name: known.name ?? "" };
+      });
+      await reply(
+        session,
+        `Welcome back${name}! 👋 We already have your enquiry${ref} on file — current status: *${status}*. Our team will follow up.\n\nNeed anything else? Tap an option below 👇`,
+        KNOWN_CONTACT_BUTTONS,
+      );
+      await setSession(session.id, { current_state: "CHOOSE_FLOW" });
+      return;
+    }
+  } catch (err) {
+    // Recognition is best-effort — never block the greeting on a lookup error.
+    console.error("[WhatsApp/orchestrator] known-contact lookup failed:", err);
+  }
+  await restartOnboarding(session);
+}
+
+const RESUME_BUTTONS: ReplyButton[] = [
+  { id: "resume_app", title: "Resume" },
+  { id: "restart_app", title: "Start Over" },
+];
+
+// A greeting word arrived mid-application (real progress + resumable state):
+// offer to continue or start fresh instead of silently re-prompting.
+async function askResume(session: SessionRow): Promise<void> {
+  const application = await loadApplication(session.application_id);
+  const name =
+    application?.owner_name || session.wa_contact_name || "there";
+  await mergeContext(session, (ctx) => {
+    ctx.resumeState = session.current_state;
+  });
+  await setSession(session.id, { current_state: "ASK_RESUME" });
+  await reply(
+    session,
+    `Hi *${name}* 👋 You have a dealer application in progress.\n\nContinue where you left off, or start fresh?`,
+    RESUME_BUTTONS,
+  );
+}
+
+async function onAskResume(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  const t = (event.text ?? "").trim().toLowerCase();
+  const prior = ((session.context ?? {}) as Ctx).resumeState;
+
+  if (t === "resume_app" || /^(resume|continue|yes|y|haan|ha)$/i.test(t)) {
+    await mergeContext(session, (ctx) => {
+      ctx.resumeState = undefined;
+    });
+    if (!prior || !RESUMABLE_STATES.has(prior)) {
+      return await restartOnboarding(session);
+    }
+    await setSession(session.id, { current_state: prior });
+    return await promptForState(await loadSession(session.id), prior);
+  }
+
+  if (t === "restart_app" || /^(restart|start\s*over|start\s*fresh|new)$/i.test(t)) {
+    await mergeContext(session, (ctx) => {
+      ctx.resumeState = undefined;
+    });
+    return await restartOnboarding(session);
+  }
+
+  await reply(
+    session,
+    "Please tap *Resume* to continue your application, or *Start Over* to begin again 👇",
+    RESUME_BUTTONS,
+  );
+}
+
+// Re-issue the question a resumed state is waiting on. The ask* helpers set
+// current_state themselves, so the restored state stays consistent.
+async function promptForState(
+  session: SessionRow,
+  state: string,
+): Promise<void> {
+  const CONTINUING = "Great — continuing where you left off.";
+  switch (state) {
+    case "ASK_COMPANY_TYPE":
+      return await askCompanyType(session, CONTINUING);
+    case "ASK_UPLOAD_MODE":
+      return await askUploadMode(session, CONTINUING);
+    case "COLLECTING_DOC":
+      // advanceDocument recomputes the next missing/blank document and asks
+      // for it (also re-setting expected_document_type).
+      await reply(session, CONTINUING);
+      return await advanceDocument(session);
+    case "ASK_FINANCE":
+      return await askFinance(session, CONTINUING);
+    case "CONFIRM_SIGNER":
+    case "ASK_SIGNER_CHOICE":
+    case "ASK_SIGNER_FIELD":
+      await reply(session, CONTINUING);
+      return await sendSignerConfirm(session);
+    case "AWAIT_CONFIRM":
+      await reply(session, CONTINUING);
+      return await sendSummary(session);
+    default:
+      return await reply(
+        session,
+        `${CONTINUING} Please reply to the last question above 👆`,
+      );
+  }
 }
 
 // Clear any collected progress and re-greet, so "hi" mid-flow is a genuine
@@ -551,6 +876,8 @@ async function restartOnboarding(session: SessionRow): Promise<void> {
     ctx.fieldIndex = 0;
     ctx.skipped = [];
     ctx.attempts = {};
+    ctx.info = undefined;
+    ctx.resumeState = undefined;
   });
   await setSession(session.id, {
     detected_company_type: null,
