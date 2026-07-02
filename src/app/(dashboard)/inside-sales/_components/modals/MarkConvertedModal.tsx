@@ -7,6 +7,7 @@ import { CheckCircle2, Globe, MessageCircle } from "lucide-react";
 import { Modal } from "../Modal";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { whatsappOnboardingChatUrl } from "@/lib/whatsapp/chat-link";
 
 type Props = {
     open: boolean;
@@ -81,6 +82,11 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) 
 
     const startWhatsAppOnboarding = async () => {
         setWaSending(true);
+        // Opened synchronously inside the click gesture — window.open after the
+        // await would be popup-blocked. Navigated to the WhatsApp chat page on
+        // success, closed again on failure.
+        const chatTab = window.open("", "_blank");
+        if (chatTab) chatTab.opener = null;
         try {
             const res = await fetch(
                 `/api/inside-sales/lead/${encodeURIComponent(leadId)}/whatsapp-onboarding`,
@@ -95,9 +101,11 @@ export function MarkConvertedModal({ open, onClose, leadId, onSuccess }: Props) 
                     "Onboarding set up, but the WhatsApp invite couldn't be delivered (the dealer's 24-hour window may be closed). They can message us to begin.",
                 );
             }
+            if (chatTab) chatTab.location.href = whatsappOnboardingChatUrl();
             reset();
             onSuccess();
         } catch (err) {
+            chatTab?.close();
             toast.error((err as Error).message);
         } finally {
             setWaSending(false);
