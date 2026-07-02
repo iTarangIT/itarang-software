@@ -30,6 +30,12 @@ import {
   getDigioDocumentStatus,
 } from "@/lib/digio/service";
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
+import { getConsentSignerIdentity } from "@/lib/digio/signer-aadhaar";
+import {
+  aadhaarMismatchMessage,
+  checkAadhaarMatch,
+  getExpectedConsentAadhaar,
+} from "@/lib/digio/aadhaar-match";
 import { createWorkflowId } from "@/lib/kyc/admin-workflow";
 import { ensureAdminKycQueueEntry } from "@/lib/kyc/admin-workflow";
 import { launchBrowser } from "@/lib/pdf/launch-browser";
@@ -265,8 +271,37 @@ export async function sendConsentForLead(opts: {
       sentAt: active.consent_link_sent_at?.toISOString() ?? new Date().toISOString(),
     };
   }
+
+  // Fail-closed: we're about to issue a NEW Aadhaar eSign link, and Digio will
+  // accept ANY Aadhaar. We can only catch a wrong-Aadhaar signature if we have
+  // the applicant's own Aadhaar on file to compare the signer's suffix against.
+  // So refuse to send an unverifiable link until that Aadhaar is captured.
+  // (Checked AFTER the active-reuse path so an already-sent/signed consent is
+  // still returned.)
+  const expectedAadhaar = await getExpectedConsentAadhaar(opts.leadId, role);
+  if (!expectedAadhaar || expectedAadhaar.replace(/\D/g, "").length !== 12) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        role === "co_borrower"
+          ? "Capture the co-borrower's 12-digit Aadhaar (upload the Aadhaar card) before sending the consent e-sign link, so the signing Aadhaar can be verified."
+          : "Capture the customer's 12-digit Aadhaar (upload the Aadhaar card) before sending the consent e-sign link, so the signing Aadhaar can be verified.",
+    };
+  }
+  // Refreshable = any terminal-but-not-active state, including the Aadhaar
+  // mismatch outcomes (esign_failed / esign_blocked) and an admin rejection — so
+  // "Regenerate Consent" after a mismatch re-issues a fresh link in place.
+  const REFRESHABLE = new Set([
+    "failed",
+    "expired",
+    "rejected",
+    "esign_failed",
+    "esign_blocked",
+    "admin_rejected",
+  ]);
   const refreshable = existing
-    .filter((r) => ["failed", "expired", "rejected"].includes(r.consent_status || ""))
+    .filter((r) => REFRESHABLE.has(r.consent_status || ""))
     .sort(
       (a, b) =>
         (b.updated_at?.getTime?.() ?? 0) - (a.updated_at?.getTime?.() ?? 0),
@@ -358,6 +393,18 @@ export async function sendConsentForLead(opts: {
         consent_link_sent_at: now,
         esign_transaction_id: digioDocumentId,
         generated_pdf_url: generatedPdfUrl,
+        // Fresh start: clear the previous signer + mismatch outcome and reset the
+        // retry ladder so a regenerated consent gets a clean set of attempts.
+        signer_aadhaar_masked: null,
+        signer_name_match_score: null,
+        esign_retry_count: 0,
+        esign_error_message: null,
+        signed_at: null,
+        signed_consent_url: null,
+        verified_by: null,
+        verified_at: null,
+        rejected_by: null,
+        rejected_at: null,
         updated_at: now,
       })
       .where(eq(consentRecords.id, refreshable.id));
@@ -646,7 +693,43 @@ export async function getSignedConsentForLead(
       const raw = String(
         (status as any)?.agreement_status || (status as any)?.status || "",
       ).toLowerCase();
-      isSigned = ["signed", "completed", "executed", "success"].includes(raw);
+      const digioSigned = ["signed", "completed", "executed", "success"].includes(raw);
+
+      if (digioSigned) {
+        // Integrity gate (mirror of the webhook). Digio reporting "completed" is
+        // NOT enough — the Aadhaar that signed must match the captured Aadhaar.
+        // Without this, the chat "Check if signed" path would show a mismatched
+        // signature as success, bypassing the webhook's rejection.
+        const signerIdentity = getConsentSignerIdentity(status);
+        const expected = await getExpectedConsentAadhaar(leadId, role);
+        const check = checkAadhaarMatch(expected, signerIdentity.suffix);
+        if (check.comparable && !check.match) {
+          const nowMismatch = new Date();
+          const retryCount = (record.esign_retry_count || 0) + 1;
+          const newStatus = retryCount >= 3 ? "esign_blocked" : "esign_failed";
+          console.warn("[consent-service] Aadhaar mismatch — rejecting consent", {
+            documentId: docId,
+            leadId,
+            consentFor: role,
+            signerLast4: check.signerLast4,
+            expectedLast4: check.expectedLast4,
+          });
+          await db
+            .update(consentRecords)
+            .set({
+              consent_status: newStatus,
+              signer_aadhaar_masked: signerIdentity.suffix,
+              signer_name_match_score: signerIdentity.nameScore,
+              esign_retry_count: retryCount,
+              esign_error_message: aadhaarMismatchMessage(check),
+              updated_at: nowMismatch,
+            })
+            .where(eq(consentRecords.id, record.id));
+          await syncApplicantStatus(role, leadId, newStatus, nowMismatch);
+          return { signed: false };
+        }
+        isSigned = true;
+      }
     } catch (e) {
       console.warn("[consent-service] Digio status poll failed:", e);
     }
