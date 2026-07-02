@@ -23,6 +23,8 @@
     "db:seed-test": "tsx scripts/seed-test-data.ts",
     "db:seed-step4": "tsx scripts/seed-step4-inventory.ts",
     "seed:nbfc-cc": "node --import tsx --env-file=.env.local scripts/seed-nbfc-command-centre.ts",
+    "seed:calculator": "node --import tsx --env-file=.env.local scripts/seed-loan-calculator.ts",
+    "verify:calculator": "node --import tsx scripts/verify-calculator-engine.ts",
     "db:catalog": "tsx scripts/db-catalog.ts",
     "db:drift": "tsx scripts/db-drift.ts",
     "db:sandbox-excel": "tsx scripts/db-sandbox-excel.ts",
