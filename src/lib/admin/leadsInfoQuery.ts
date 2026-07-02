@@ -5,6 +5,7 @@
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
 
 export type LeadsInfoRow = {
     id: string;
@@ -39,6 +40,10 @@ export type LeadsInfoFilters = {
     search?: string | null;
 };
 
+// Re-exported for existing server-side callers. Definition lives in the
+// client-safe leadsInfoFilters.ts (see import above).
+export { UNASSIGNED_FILTER };
+
 export type LeadsInfoFacets = {
     owners: { id: string; name: string | null; role: string | null }[];
     asms: { id: string; name: string | null }[];
@@ -59,7 +64,11 @@ const LATEST_VISIT_JOIN = sql`
 
 function buildWhere(f: LeadsInfoFilters) {
     const conds = [sql`dl.is_active IS NOT FALSE`];
-    if (f.status) conds.push(sql`dl.lead_status = ${f.status}`);
+    if (f.status === UNASSIGNED_FILTER) {
+        conds.push(sql`dl.current_owner_id IS NULL`);
+    } else if (f.status) {
+        conds.push(sql`dl.lead_status = ${f.status}`);
+    }
     if (f.ownerId) conds.push(sql`dl.current_owner_id = ${f.ownerId}`);
     if (f.asmId) conds.push(sql`dl.asm_id = ${f.asmId}`);
     if (f.source) conds.push(sql`dl.source = ${f.source}`);

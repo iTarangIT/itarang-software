@@ -16,8 +16,14 @@ import {
     successResponse,
     withErrorHandler,
 } from "@/lib/api-utils";
-import { MAX_UPLOAD_ROWS, parseCsv, validateUpload } from "@/lib/admin/csvUpload";
+import {
+    MAX_UPLOAD_ROWS,
+    parseCsv,
+    parseHeaders,
+    validateUpload,
+} from "@/lib/admin/csvUpload";
 import { reactivateLead } from "@/lib/leads/reactivation";
+import { writeTouchpoint } from "@/lib/touchpoints/write";
 import type { UploadBatchSummary } from "@/lib/admin/types";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +51,7 @@ export const POST = withErrorHandler(async (req: Request) => {
         );
     }
 
-    const result = await validateUpload(parsed);
+    const result = await validateUpload(parsed, parseHeaders(b.csv_text));
 
     // Create the batch row.
     const batchRows = await db.execute<{ batch_id: string }>(sql`
@@ -82,19 +88,44 @@ export const POST = withErrorHandler(async (req: Request) => {
                     current_supplier: p.current_supplier,
                 },
             });
+
+            // A resolved assignee sends the lead straight into that person's
+            // queue and overrides the AI-routing toggle (assignment wins). We
+            // land it at Assigned_Not_Contacted for both reps and ASMs — the
+            // same status the ASM self-assign create flow uses so it appears in
+            // their active list; ASM targets also get asm_id set.
+            const owner = p.assigned_owner_id;
+            const isAsm = p.assigned_owner_role === "asm";
+            const rowLeadStatus = owner ? "Assigned_Not_Contacted" : leadStatus;
+            const rowAiRecall = owner ? "qualified" : aiRecall;
+            const rowInterest = owner ? "warm" : interest;
+
             await db.execute(sql`
                 INSERT INTO dealer_leads
                     (id, phone, dealer_name, city, state, language, segments,
                      preliminary_payment_intent, source, upload_batch_id,
                      lead_status, ai_recall_status, interest_level,
-                     final_intent_score, is_active, memory, created_at, updated_at)
+                     final_intent_score, is_active, memory,
+                     current_owner_id, originator_id, asm_id, assigned_at,
+                     created_at, updated_at)
                 VALUES (${id}, ${p.phone}, ${p.dealer_name}, ${p.city}, ${p.state},
                     ${p.language}, ${JSON.stringify(p.segments)}::jsonb,
                     ${p.preliminary_payment_intent}, 'manual_upload_lead',
-                    ${batchId}, ${leadStatus}, ${aiRecall}, ${interest},
-                    NULL, TRUE, ${memory}::jsonb, NOW(), NOW())
+                    ${batchId}, ${rowLeadStatus}, ${rowAiRecall}, ${rowInterest},
+                    NULL, TRUE, ${memory}::jsonb,
+                    ${owner}, ${owner ? user.id : null},
+                    ${isAsm ? owner : null}, ${owner ? sql`NOW()` : null},
+                    NOW(), NOW())
                 ON CONFLICT (phone) DO NOTHING
             `);
+            if (owner) {
+                await writeTouchpoint({
+                    dealerLeadId: id,
+                    touchpointType: "ownership_transfer",
+                    performedBy: user.id,
+                    remarks: `Assigned via bulk upload (batch ${batchId}).`,
+                });
+            }
             if (p.prior_call_notes) {
                 await db.execute(sql`
                     INSERT INTO lead_touchpoints
