@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>iTarang — How Data Travels from UI to DB</title>
+<style>
+  :root {
+    --bg: #f6f7fb;
+    --card: #ffffff;
+    --ink: #1c2230;
+    --muted: #5b6478;
+    --line: #e3e7f0;
+    --blue: #2563eb;
+    --blue-soft: #eaf1ff;
+    --green: #16a34a;
+    --green-soft: #e9f9ef;
+    --amber: #b45309;
+    --amber-soft: #fdf3e3;
+    --red: #dc2626;
+    --red-soft: #fdeaea;
+    --purple: #7c3aed;
+    --purple-soft: #f3edff;
+    --code-bg: #171c28;
+    --code-ink: #d7deeb;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.6;
+    padding: 32px 16px 80px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+
+  header { text-align: center; margin-bottom: 12px; }
+  header h1 { font-size: 1.9rem; letter-spacing: -0.02em; }
+  header p.sub { color: var(--muted); max-width: 620px; margin: 10px auto 0; }
+  .pill {
+    display: inline-block; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--blue); background: var(--blue-soft);
+    padding: 4px 12px; border-radius: 999px; margin-bottom: 14px;
+  }
+
+  /* ---------- big-picture strip ---------- */
+  .strip {
+    display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
+    gap: 6px; margin: 28px auto 8px; padding: 18px 14px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+  }
+  .strip .node {
+    font-size: 0.82rem; font-weight: 600; padding: 8px 12px; border-radius: 10px;
+    background: var(--blue-soft); color: var(--blue); white-space: nowrap;
+  }
+  .strip .node.db { background: var(--green-soft); color: var(--green); }
+  .strip .arrow { color: var(--muted); font-weight: 700; }
+  .strip-caption { text-align: center; color: var(--muted); font-size: 0.85rem; margin-bottom: 8px; }
+
+  /* ---------- section headings ---------- */
+  h2.section {
+    font-size: 1.3rem; margin: 48px 0 6px; letter-spacing: -0.01em;
+  }
+  p.section-sub { color: var(--muted); margin-bottom: 22px; }
+
+  /* ---------- journey timeline ---------- */
+  .journey { position: relative; padding-left: 56px; }
+  .journey::before {
+    content: ""; position: absolute; left: 22px; top: 8px; bottom: 8px;
+    width: 3px; border-radius: 3px;
+    background: linear-gradient(to bottom, var(--blue) 0%, var(--blue) 62%, var(--green) 62%, var(--green) 100%);
+    opacity: 0.35;
+  }
+  .step { position: relative; margin-bottom: 26px; }
+  .step .dot {
+    position: absolute; left: -48px; top: 6px; width: 34px; height: 34px;
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 0.9rem; color: #fff; background: var(--blue);
+    box-shadow: 0 0 0 5px var(--bg);
+  }
+  .step.back .dot { background: var(--green); }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px 20px; box-shadow: 0 1px 2px rgba(20,30,60,0.04);
+  }
+  .card .dir {
+    font-size: 0.7rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--blue); background: var(--blue-soft); padding: 2px 9px; border-radius: 999px;
+  }
+  .step.back .dir { color: var(--green); background: var(--green-soft); }
+  .card h3 { font-size: 1.05rem; margin: 8px 0 2px; }
+  .card .plain { color: var(--muted); font-size: 0.95rem; margin-bottom: 10px; }
+  .file {
+    display: inline-block; font-family: var(--mono); font-size: 0.78rem;
+    background: var(--purple-soft); color: var(--purple); border-radius: 7px;
+    padding: 3px 9px; margin-bottom: 10px; word-break: break-all;
+  }
+  .card p.note { font-size: 0.9rem; color: var(--ink); margin-top: 10px; }
+  .card p.note strong { color: var(--blue); }
+  .step.back .card p.note strong { color: var(--green); }
+
+  pre {
+    background: var(--code-bg); color: var(--code-ink); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; font-family: var(--mono);
+    font-size: 0.78rem; line-height: 1.55;
+  }
+  pre .c { color: #7d8aa5; }        /* comment */
+  pre .k { color: #8ab4ff; }        /* keyword-ish highlight */
+  pre .s { color: #a5d6a7; }        /* string */
+
+  .turnaround {
+    margin: 6px 0 30px; margin-left: -56px; text-align: center;
+  }
+  .turnaround span {
+    display: inline-block; background: var(--green-soft); color: var(--green);
+    font-weight: 700; font-size: 0.85rem; padding: 8px 18px; border-radius: 999px;
+  }
+
+  /* ---------- callout ---------- */
+  .callout {
+    display: flex; gap: 14px; background: var(--amber-soft); border: 1px solid #f3dfba;
+    border-radius: 14px; padding: 16px 18px; margin-top: 34px;
+  }
+  .callout .icon { font-size: 1.4rem; }
+  .callout h4 { font-size: 0.98rem; margin-bottom: 4px; color: var(--amber); }
+  .callout p { font-size: 0.92rem; color: var(--ink); }
+  .callout code { font-family: var(--mono); font-size: 0.82em; background: rgba(0,0,0,0.05); padding: 1px 5px; border-radius: 5px; }
+
+  /* ---------- cheat sheet ---------- */
+  .cheat { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px) { .cheat { grid-template-columns: 1fr; } }
+  .cheat .item {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  }
+  .cheat .item code {
+    font-family: var(--mono); font-size: 0.78rem; color: var(--purple);
+    background: var(--purple-soft); padding: 2px 8px; border-radius: 6px; word-break: break-all;
+  }
+  .cheat .item p { font-size: 0.88rem; color: var(--muted); margin-top: 7px; }
+  .cheat .item p b { color: var(--ink); }
+
+  /* ---------- errors ---------- */
+  .errors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  @media (max-width: 700px) { .errors { grid-template-columns: 1fr; } }
+  .err {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; border-top: 4px solid var(--red);
+  }
+  .err .code { font-size: 1.35rem; font-weight: 800; color: var(--red); }
+  .err h4 { font-size: 0.95rem; margin: 4px 0 6px; }
+  .err p { font-size: 0.85rem; color: var(--muted); }
+  .err p code { font-family: var(--mono); font-size: 0.9em; }
+
+  footer { text-align: center; color: var(--muted); font-size: 0.82rem; margin-top: 56px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="pill">iTarang codebase field guide</div>
+    <h1>How Data Travels from the UI to the Database</h1>
+    <p class="sub">
+      The full round trip, told through one <strong>real feature</strong> in this repo:
+      the <strong>“Create Lead”</strong> form in the Inside Sales dashboard.
+      Every file path and code snippet below is real — open them and follow along.
+    </p>
+  </header>
+
+  <div class="strip">
+    <span class="node">🖥️ Form</span><span class="arrow">→</span>
+    <span class="node">📡 fetch()</span><span class="arrow">→</span>
+    <span class="node">🚪 Middleware</span><span class="arrow">→</span>
+    <span class="node">⚙️ API Route</span><span class="arrow">→</span>
+    <span class="node">✅ Zod</span><span class="arrow">→</span>
+    <span class="node">🗺️ Drizzle</span><span class="arrow">→</span>
+    <span class="node db">🐘 PostgreSQL</span>
+  </div>
+  <p class="strip-caption">…then the response travels all the way back up, and the screen refreshes. That’s the whole loop.</p>
+
+  <h2 class="section">The journey, step by step</h2>
+  <p class="section-sub">Blue steps = the request going <strong>down</strong>. Green steps = the response coming <strong>back up</strong>.</p>
+
+  <div class="journey">
+
+    <!-- STEP 1 -->
+    <div class="step">
+      <div class="dot">1</div>
+      <div class="card">
+        <span class="dir">Request ↓</span>
+        <h3>The form — where data is born</h3>
+        <p class="plain">A sales rep types a dealer’s name and phone into a modal. React keeps each field in <code>useState</code> — the data only exists in the browser’s memory at this point.</p>
+        <span class="file">src/app/(dashboard)/inside-sales/_components/modals/CreateLeadModal.tsx</span>
+<pre>const [dealerName, setDealerName] = useState("");
+const [phone, setPhone] = useState("");
+<span class="c">// ...user types; React re-renders the inputs on every keystroke</span></pre>
+        <p class="note"><strong>Simple version:</strong> the data starts as plain JavaScript variables in the browser. Nothing is saved yet — refresh the page and it’s gone.</p>
+      </div>
+    </div>
+
+    <!-- STEP 2 -->
+    <div class="step">
+      <div class="dot">2</div>
+      <div class="card">
+        <span class="dir">Request ↓</span>
+        <h3>Submit — the data leaves the browser</h3>
+        <p class="plain">On submit, the component packs the fields into JSON and mails it to the server with <code>fetch()</code>. This is the moment data leaves the UI.</p>
+        <span class="file">CreateLeadModal.tsx — lines 87–98</span>
+<pre>const res = <span class="k">await</span> fetch(<span class="s">"/api/inside-sales/lead/create"</span>, {
+    method: <span class="s">"POST"</span>,
+    headers: { <span class="s">"Content-Type"</span>: <span class="s">"application/json"</span> },
+    body: JSON.stringify({
+        dealer_name: dealerName.trim(),
+        phone: phoneDigits,          <span class="c">// "9876543210"</span>
+        city: city || null,
+        interest_level: interest || null,
+    }),
+});</pre>
+        <p class="note"><strong>Simple version:</strong> think of it as putting the form data in an envelope (JSON) and addressing it to a URL. The URL <em>is</em> the address of a server file (see step 4).</p>
+      </div>
+    </div>
+
+    <!-- STEP 3 -->
+    <div class="step">
+      <div class="dot">3</div>
+      <div class="card">
+        <span class="dir">Request ↓</span>
+        <h3>Middleware — the doorman in the lobby</h3>
+        <p class="plain">Every request passes through <code>middleware.ts</code> first. For pages it redirects users based on their role; for <code>/api/*</code> requests it just refreshes the Supabase login cookie and waves them through — real security happens inside the route.</p>
+        <span class="file">src/middleware.ts</span>
+<pre><span class="c">// API routes handle their own auth — middleware only refreshes the session</span>
+<span class="k">const</span> isPublicRoute = path.startsWith(<span class="s">"/api"</span>) || ...;
+<span class="k">await</span> supabase.auth.getUser(); <span class="c">// keeps the login cookie fresh</span></pre>
+        <p class="note"><strong>Simple version:</strong> a doorman who checks your badge is still valid, but doesn’t decide what rooms you can enter. That check comes next.</p>
+      </div>
+    </div>
+
+    <!-- STEP 4 -->
+    <div class="step">
+      <div class="dot">4</div>
+      <div class="card">
+        <span class="dir">Request ↓</span>
+        <h3>The API route — the server-side handler</h3>
+        <p class="plain">Next.js maps the URL to a folder: <code>/api/inside-sales/lead/create</code> → <code>src/app/api/inside-sales/lead/create/route.ts</code>. The exported <code>POST</code> function runs. First job: <strong>who are you, and are you allowed?</strong></p>
+        <span class="file">src/app/api/inside-sales/lead/create/route.ts — lines 31–33</span>
+<pre><span class="k">export const</span> POST = withErrorHandler(<span class="k">async</span> (req) => {
+    <span class="k">const</span> user = <span class="k">await</span> requireRole([<span class="s">"inside_sales_rep"</span>, <span class="s">"asm"</span>, <span class="s">"admin"</span>]);
+    <span class="c">// ↑ checks the Supabase login + your role. Wrong role → 403.</span></pre>
+        <p class="note"><strong>Simple version:</strong> the URL in step 2 and the folder path here always match — that’s how you find any endpoint’s code in this repo. <code>requireRole</code> (in <code>src/lib/auth-utils.ts</code>) is the real bouncer.</p>
+      </div>
+    </div>
+
+    <!-- STEP 5 -->
+    <div class="step">
+      <div class="dot">5</div>
+      <div class="card">
+        <span class="dir">Request ↓</span>
+        <h3>Zod validation — the quality inspector</h3>
+        <p class="plain">Never trust what the browser sends. A Zod schema describes exactly what valid data looks like; <code>parse()</code> throws if anything is off, and the wrapper turns that into a clean <strong>400</strong> error.</p>
+        <span class="file">route.ts — lines 18–33</span>
+<pre><span class="k">const</span> BodySchema = z.object({
+    dealer_name: z.string().trim().min(2).max(200),
+    phone: z.string().trim().regex(<span class="s">/^\d{10}$/</span>, <span class="s">"Phone must be exactly 10 digits"</span>),
+    interest_level: z.enum([<span class="s">"hot"</span>, <span class="s">"warm"</span>, <span class="s">"cold"</span>]).optional().nullable(),
+});
+<span class="k">const</span> body = BodySchema.parse(<span class="k">await</span> req.json()); <span class="c">// throws → 400 if invalid</span></pre>
+        <p class="note"><strong>Simple version:</strong> a checklist at the door — “name at least 2 letters, phone exactly 10 digits.” Fail the checklist and the data never reaches the database.</p>
+      </div>
+    </div>
+
+    <!-- STEP 6 -->
+    <div class="step">
+      <div class="dot">6</div>
+      <div class="card">
+        <span class="dir">Request ↓</span>
+        <h3>Drizzle — the translator that speaks SQL</h3>
+        <p class="plain">The route calls <code>db.insert(...)</code>. Drizzle (the ORM) turns this TypeScript into a real SQL <code>INSERT INTO dealer_leads ...</code> and sends it over the connection defined in <code>src/lib/db/index.ts</code>.</p>
+        <span class="file">route.ts — lines 55–78</span>
+<pre><span class="k">await</span> db.insert(dealerLeads).values({
+    id,                              <span class="c">// "DL-1719900000000-aB3xK9pQ"</span>
+    dealer_name: body.dealer_name,
+    phone: body.phone,
+    lead_status: <span class="s">"New_Unassigned"</span>,
+    source: <span class="s">"manual_upload_lead"</span>,
+    created_at: now,
+});</pre>
+        <p class="note"><strong>Simple version:</strong> you write TypeScript, Drizzle writes the SQL. The shape of what you can insert comes from the table definition in the schema file (next step).</p>
+      </div>
+    </div>
+
+    <!-- STEP 7 -->
+    <div class="step">
+      <div class="dot">7</div>
+      <div class="card">
+        <span class="dir">Request ↓</span>
+        <h3>PostgreSQL — the data finally lands</h3>
+        <p class="plain">The row is written to the <code>dealer_leads</code> table in PostgreSQL (AWS RDS). The table’s shape lives in one giant file every developer here should bookmark: <code>schema.ts</code>.</p>
+        <span class="file">src/lib/db/schema.ts — line 2954</span>
+<pre><span class="k">export const</span> dealerLeads = pgTable(<span class="s">"dealer_leads"</span>, {
+    id: text().primaryKey().notNull(),
+    dealer_name: text(<span class="s">"dealer_name"</span>),
+    phone: text().unique(<span class="s">"dealer_leads_phone_unique"</span>), <span class="c">// ← no duplicate phones</span>
+    lead_status: varchar(<span class="s">"lead_status"</span>, { length: 50 }),
+    created_at: timestamp(<span class="s">"created_at"</span>).defaultNow(),
+    ...
+});</pre>
+        <p class="note"><strong>Simple version:</strong> the data is now permanent — it survives refreshes, restarts, everything. The <code>UNIQUE</code> rule on phone is enforced by the database itself, the last line of defense.</p>
+      </div>
+    </div>
+
+    <div class="turnaround"><span>🔄 The turn-around — now the answer travels back up</span></div>
+
+    <!-- STEP 8 -->
+    <div class="step back">
+      <div class="dot">8</div>
+      <div class="card">
+        <span class="dir">Response ↑</span>
+        <h3>The route replies with JSON</h3>
+        <p class="plain">The insert succeeded, so the route sends back a small JSON receipt using the shared helper <code>successResponse</code> (from <code>src/lib/api-utils.ts</code>).</p>
+        <span class="file">route.ts — line 87</span>
+<pre><span class="k">return</span> successResponse({ id });
+<span class="c">// browser receives: { "success": true, "data": { "id": "DL-…" }, "timestamp": … }</span></pre>
+        <p class="note"><strong>Simple version:</strong> the server mails an envelope back: “Done. Here’s the new lead’s ID.”</p>
+      </div>
+    </div>
+
+    <!-- STEP 9 -->
+    <div class="step back">
+      <div class="dot">9</div>
+      <div class="card">
+        <span class="dir">Response ↑</span>
+        <h3>The UI reacts — toast + refresh</h3>
+        <p class="plain">Back in the modal, the <code>await fetch()</code> from step 2 resolves. On success: a toast pops, the form resets, and the parent invalidates React Query caches — which automatically re-fetches the lead list so the new lead appears on screen.</p>
+        <span class="file">CreateLeadModal.tsx (lines 99–103) → QueueView.tsx (lines 169–175)</span>
+<pre><span class="c">// CreateLeadModal.tsx</span>
+toast.success(<span class="s">"Lead created — find it in the Unassigned (Claim) tab."</span>);
+onSuccess();
+
+<span class="c">// QueueView.tsx — the parent decides what "refresh" means</span>
+queryClient.invalidateQueries({ queryKey: [<span class="s">"inside-sales-queue"</span>] });
+queryClient.invalidateQueries({ queryKey: [<span class="s">"inside-sales-counts"</span>] });</pre>
+        <p class="note"><strong>Simple version:</strong> “invalidate” = “this cached list is stale, go fetch it again.” That re-fetch is a brand-new trip through steps 2–8 (a GET this time), and the new lead shows up. Full circle. ✅</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="callout">
+    <div class="icon">💡</div>
+    <div>
+      <h4>One thing that surprises everyone: there are TWO databases</h4>
+      <p>
+        <strong>Supabase</strong> only handles <em>identity</em> — logins, sessions, cookies.
+        All <em>business data</em> (leads, dealers, calls…) lives in <strong>AWS RDS PostgreSQL</strong>,
+        reached through Drizzle via <code>src/lib/db/index.ts</code>. So <code>requireRole</code> asks
+        Supabase “who is this?”, then asks the RDS <code>users</code> table “what’s their role?”.
+      </p>
+    </div>
+  </div>
+
+  <h2 class="section">“Where do I look?” — the navigation cheat sheet</h2>
+  <p class="section-sub">The same pattern repeats for every feature. Learn these five locations and you can trace any flow in the repo.</p>
+  <div class="cheat">
+    <div class="item">
+      <code>src/app/(dashboard)/…</code>
+      <p><b>The screens.</b> Pages & components users see, grouped by role (inside-sales, admin, dealer-portal…). Forms and buttons start here.</p>
+    </div>
+    <div class="item">
+      <code>src/app/api/…/route.ts</code>
+      <p><b>The endpoints.</b> The URL path mirrors the folder path exactly. See a <code>fetch("/api/x/y")</code> in a component? The handler is at <code>src/app/api/x/y/route.ts</code>.</p>
+    </div>
+    <div class="item">
+      <code>src/lib/db/schema.ts</code>
+      <p><b>The tables.</b> Every one of the 40+ database tables, defined in TypeScript. Ctrl+F a table name to see its columns.</p>
+    </div>
+    <div class="item">
+      <code>src/lib/auth-utils.ts</code>
+      <p><b>The bouncer.</b> <code>requireAuth</code> / <code>requireRole</code> — called at the top of almost every API route to check login + role.</p>
+    </div>
+    <div class="item">
+      <code>src/middleware.ts</code>
+      <p><b>The doorman.</b> Runs before every request: refreshes the session cookie and redirects page visits based on role. Doesn’t gate <code>/api/*</code>.</p>
+    </div>
+    <div class="item">
+      <code>src/lib/api-utils.ts</code>
+      <p><b>The envelope factory.</b> <code>successResponse</code>, <code>errorResponse</code>, <code>withErrorHandler</code> — every API reply is shaped here, so all responses look the same.</p>
+    </div>
+  </div>
+
+  <h2 class="section">When things go wrong — errors travel the same road back</h2>
+  <p class="section-sub">A rejected request just turns around earlier. The status code tells you which checkpoint said no.</p>
+  <div class="errors">
+    <div class="err">
+      <div class="code">400</div>
+      <h4>Zod said no</h4>
+      <p>Data failed validation (step 5) — e.g. a 9-digit phone. <code>withErrorHandler</code> catches the ZodError and replies with field-level details. Never reached the DB.</p>
+    </div>
+    <div class="err">
+      <div class="code">401 / 403</div>
+      <h4>Auth said no</h4>
+      <p><code>requireRole</code> (step 4) found no valid login (401) or a role that isn’t allowed to create leads (403). Rejected before validation even ran.</p>
+    </div>
+    <div class="err">
+      <div class="code">409</div>
+      <h4>The database said no</h4>
+      <p>A lead with that phone already exists. The route pre-checks it, and the <code>UNIQUE</code> constraint on <code>dealer_leads.phone</code> backs it up at the DB level.</p>
+    </div>
+  </div>
+  <p style="color: var(--muted); font-size: 0.9rem; margin-top: 16px;">
+    In every case the modal’s <code>catch</code> block (step 9’s twin) shows the message in a red toast — errors ride the exact same response path as successes.
+  </p>
+
+  <footer>
+    Traced from the live code on 2026-07-02 · Example flow: Inside Sales → Create Lead · iTarang dealer management CRM
+  </footer>
+
+</div>
+</body>
+</html>
