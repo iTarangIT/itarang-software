@@ -7,12 +7,13 @@
 // onboarded via WhatsApp (matched on dealer_onboarding_applications.wa_phone) or
 // the web (matched on dealers.owner_phone).
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, or } from "drizzle-orm";
 
 import { db } from "@/lib/db/index";
 import {
   dealerOnboardingApplications,
   dealers,
+  leads,
   users,
 } from "@/lib/db/schema";
 import { phoneLookupVariants } from "@/lib/ai/phone";
@@ -24,6 +25,8 @@ export interface WhatsAppDealer {
    *  canonical user row can't be resolved (rare; dealer can still be served). */
   dealerUserId: string | null;
   financeEnabled: boolean;
+  /** Display name for greetings (owner/company name), when available. */
+  dealerName: string | null;
   /** "whatsapp" if matched via the onboarding application's wa_phone, else "web". */
   matchedVia: "whatsapp" | "web";
 }
@@ -55,6 +58,8 @@ export async function resolveWhatsAppDealer(
       dealerCode: dealerOnboardingApplications.dealer_code,
       dealerUserId: dealerOnboardingApplications.dealer_user_id,
       financeEnabled: dealerOnboardingApplications.finance_enabled,
+      ownerName: dealerOnboardingApplications.owner_name,
+      companyName: dealerOnboardingApplications.company_name,
     })
     .from(dealerOnboardingApplications)
     .where(
@@ -70,6 +75,7 @@ export async function resolveWhatsAppDealer(
       dealerCode: app.dealerCode,
       dealerUserId: app.dealerUserId ?? null,
       financeEnabled: Boolean(app.financeEnabled),
+      dealerName: app.ownerName || app.companyName || null,
       matchedVia: "whatsapp",
     };
   }
@@ -79,6 +85,7 @@ export async function resolveWhatsAppDealer(
     .select({
       dealerCode: dealers.dealer_id,
       financeEnabled: dealers.finance_enabled,
+      companyName: dealers.company_name,
     })
     .from(dealers)
     .where(
@@ -102,6 +109,74 @@ export async function resolveWhatsAppDealer(
     dealerCode: dealer.dealerCode,
     dealerUserId: u?.id ?? null,
     financeEnabled: Boolean(dealer.financeEnabled),
+    dealerName: dealer.companyName || null,
     matchedVia: "web",
   };
+}
+
+// ── Known-contact recognition (greeting-time, non-dealer) ───────────────────
+
+/** A sender recognized by phone as internal staff or an existing lead — greeted
+ *  with a role/status-specific message instead of the generic entry menu. */
+export type KnownContact =
+  | { kind: "staff"; name: string; role: string }
+  | {
+      kind: "lead";
+      name: string | null;
+      status: string | null;
+      referenceId: string | null;
+    };
+
+/**
+ * Resolve an inbound WhatsApp phone to a known non-dealer contact, or null.
+ * Checked only at greeting time (approved dealers are resolved separately and
+ * take priority): (1) an active internal user (any role except dealer) matched
+ * on users.phone; (2) the newest lead whose mobile/phone/owner_contact matches
+ * (WhatsApp-created leads store "+91…" in all three).
+ */
+export async function resolveKnownContact(
+  waPhone: string,
+): Promise<KnownContact | null> {
+  if (!waPhone) return null;
+  const variants = phoneVariants(waPhone);
+
+  const [staff] = await db
+    .select({ name: users.name, role: users.role })
+    .from(users)
+    .where(
+      and(
+        inArray(users.phone, variants),
+        eq(users.is_active, true),
+        ne(users.role, "dealer"),
+      ),
+    )
+    .limit(1);
+  if (staff) return { kind: "staff", name: staff.name, role: staff.role };
+
+  const [lead] = await db
+    .select({
+      name: leads.owner_name,
+      status: leads.lead_status,
+      referenceId: leads.reference_id,
+    })
+    .from(leads)
+    .where(
+      or(
+        inArray(leads.mobile, variants),
+        inArray(leads.phone, variants),
+        inArray(leads.owner_contact, variants),
+      ),
+    )
+    .orderBy(desc(leads.created_at))
+    .limit(1);
+  if (lead) {
+    return {
+      kind: "lead",
+      name: lead.name,
+      status: lead.status,
+      referenceId: lead.referenceId,
+    };
+  }
+
+  return null;
 }

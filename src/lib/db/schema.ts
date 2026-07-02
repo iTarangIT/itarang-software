@@ -1,5 +1,6 @@
 import {
   pgTable,
+  pgEnum,
   text,
   timestamp,
   integer,
@@ -6903,3 +6904,344 @@ export const userPreferences = pgTable(
     ),
   }),
 );
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * LOAN CALCULATOR (dealer-portal EMI calculator + admin console)
+ * Ported from the verified handoff schema. All tables prefixed calc_ to avoid
+ * collision with existing project tables (leads/settings/schemes/nbfcs/...).
+ * Money in PAISE (1 rupee = 100); rates as numeric. Config is effective-dated
+ * (valid_from/valid_to) + versioned (calc_config_versions) for quote reproduction.
+ * Guard constraints (partial-unique "one current row", checks) live in migration
+ * drizzle/E-177_loan_calculator.sql. Engine: src/lib/calculator/engine.ts.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+export const calcEngineVariant = pgEnum("calc_engine_variant", ["A", "B"]);
+export const calcRecordStatus = pgEnum("calc_record_status", ["active", "disabled"]);
+export const calcAuditAction = pgEnum("calc_audit_action", ["create", "update", "delete"]);
+export const calcCoverageType = pgEnum("calc_coverage_type", ["CITY", "PAN_INDIA"]);
+export const calcComponentKind = pgEnum("calc_component_kind", [
+  "battery",
+  "charger",
+  "harness",
+  "soc",
+  "iot",
+]);
+export const calcLeadFilterOutcome = pgEnum("calc_lead_filter_outcome", [
+  "qualified",
+  "stretch_only",
+  "none",
+]);
+
+// One row per published state of config. Every admin save inserts a new version
+// and stamps the changed rows' valid_from with it (config-as-of-version resolution).
+export const calcConfigVersions = pgTable(
+  "calc_config_versions",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdBy: uuid("created_by").notNull(),
+    note: text("note"),
+    changeSummary: jsonb("change_summary"),
+  },
+  (t) => ({
+    createdAtIdx: index("calc_config_versions_created_at_idx").on(t.createdAt),
+  }),
+);
+
+// One row per mutation on any config table (who/what/before->after) for the
+// version-history & rollback screen.
+export const calcAuditLog = pgTable(
+  "calc_audit_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+    actorId: uuid("actor_id").notNull(),
+    action: calcAuditAction("action").notNull(),
+    entity: text("entity").notNull(),
+    entityId: text("entity_id").notNull(),
+    before: jsonb("before"),
+    after: jsonb("after"),
+    configVersionId: bigint("config_version_id", { mode: "number" }).references(
+      () => calcConfigVersions.id,
+    ),
+  },
+  (t) => ({
+    entityIdx: index("calc_audit_log_entity_idx").on(t.entity, t.entityId),
+    atIdx: index("calc_audit_log_at_idx").on(t.at),
+    actorIdx: index("calc_audit_log_actor_idx").on(t.actorId),
+  }),
+);
+
+// Global settings (effective-dated, single current row). dealer margin, near-best
+// window, disclaimer, filter-required toggles, Card-2 footer contacts.
+export const calcSettings = pgTable(
+  "calc_settings",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    dealerMarginPaise: bigint("dealer_margin_paise", { mode: "number" }).notNull(),
+    nearBestWindowPct: numeric("near_best_window_pct", { precision: 5, scale: 2 })
+      .default("25")
+      .notNull(),
+    expectedEmiFilterRequired: boolean("expected_emi_filter_required").default(false).notNull(),
+    upfrontFilterRequired: boolean("upfront_filter_required").default(false).notNull(),
+    disclaimerText: text("disclaimer_text").notNull(),
+    cardFooterDisclaimer: text("card_footer_disclaimer").notNull(),
+    contactPhone: text("contact_phone").notNull(),
+    contactEmail: text("contact_email").notNull(),
+    contactWhatsapp: text("contact_whatsapp").notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    currentIdx: index("calc_settings_valid_to_idx").on(t.validTo),
+  }),
+);
+
+export const calcBatteryModels = pgTable(
+  "calc_battery_models",
+  {
+    id: serial("id").primaryKey(),
+    skuCode: text("sku_code").notNull(),
+    displayName: text("display_name").notNull(),
+    voltage: numeric("voltage", { precision: 5, scale: 1 }),
+    capacityAh: integer("capacity_ah"),
+    chargerSku: text("charger_sku"),
+    status: calcRecordStatus("status").default("active").notNull(),
+  },
+  (t) => ({
+    skuUq: uniqueIndex("calc_battery_models_sku_uq").on(t.skuCode),
+  }),
+);
+
+// price_with_gst = (battery+harness+soc+iot)*1.18 + charger*1.05 (per-component gst stored).
+export const calcComponentPrices = pgTable(
+  "calc_component_prices",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    modelId: integer("model_id")
+      .references(() => calcBatteryModels.id)
+      .notNull(),
+    component: calcComponentKind("component").notNull(),
+    amountPaise: bigint("amount_paise", { mode: "number" }).notNull(),
+    gstMultiplier: numeric("gst_multiplier", { precision: 5, scale: 4 }).notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    lookupIdx: index("calc_component_prices_lookup_idx").on(t.modelId, t.component, t.validTo),
+  }),
+);
+
+// Optional per-model dealer-margin override. Precedence: model override -> settings.
+export const calcDealerMarginOverrides = pgTable(
+  "calc_dealer_margin_overrides",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    modelId: integer("model_id")
+      .references(() => calcBatteryModels.id)
+      .notNull(),
+    dealerMarginPaise: bigint("dealer_margin_paise", { mode: "number" }).notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    lookupIdx: index("calc_dealer_margin_overrides_lookup_idx").on(t.modelId, t.validTo),
+  }),
+);
+
+// Variant A: flatMaxLoan + flatInterestRate used. Variant B: those are null; cap is
+// per-model (calc_nbfc_model_caps), rate is per-scheme (calc_schemes).
+export const calcNbfcs = pgTable(
+  "calc_nbfcs",
+  {
+    id: serial("id").primaryKey(),
+    nbfcCode: text("nbfc_code").notNull(),
+    name: text("name").notNull(),
+    variant: calcEngineVariant("variant").notNull(),
+    maxLoanCapPaise: bigint("max_loan_cap_paise", { mode: "number" }),
+    flatInterestRate: numeric("flat_interest_rate", { precision: 10, scale: 7 }),
+    fileFeePaise: bigint("file_fee_paise", { mode: "number" }).notNull(),
+    defaultProcessingFeePaise: bigint("default_processing_fee_paise", {
+      mode: "number",
+    }).notNull(),
+    status: calcRecordStatus("status").default("active").notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    nameUq: uniqueIndex("calc_nbfcs_name_uq").on(t.name, t.validTo),
+    statusIdx: index("calc_nbfcs_status_idx").on(t.status, t.validTo),
+  }),
+);
+
+export const calcNbfcModelCaps = pgTable(
+  "calc_nbfc_model_caps",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    nbfcId: integer("nbfc_id")
+      .references(() => calcNbfcs.id)
+      .notNull(),
+    modelId: integer("model_id")
+      .references(() => calcBatteryModels.id)
+      .notNull(),
+    maxLoanCapPaise: bigint("max_loan_cap_paise", { mode: "number" }).notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    lookupIdx: index("calc_nbfc_model_caps_lookup_idx").on(t.nbfcId, t.modelId, t.validTo),
+  }),
+);
+
+// code "XbyY" derived from (tenure, advance). appliedInterestRate = the rate actually
+// used in interest = loan*rate*tenure/12 (NOT a display/MBD rate). advance < tenure.
+export const calcSchemes = pgTable(
+  "calc_schemes",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    nbfcId: integer("nbfc_id")
+      .references(() => calcNbfcs.id)
+      .notNull(),
+    tenureMonths: integer("tenure_months").notNull(),
+    advanceMonths: integer("advance_months").notNull(),
+    code: text("code").notNull(),
+    appliedInterestRate: numeric("applied_interest_rate", { precision: 10, scale: 7 }),
+    processingFeePaise: bigint("processing_fee_paise", { mode: "number" }),
+    advanceInterestRate: numeric("advance_interest_rate", { precision: 10, scale: 7 }),
+    status: calcRecordStatus("status").default("active").notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    nbfcIdx: index("calc_schemes_nbfc_idx").on(t.nbfcId, t.status, t.validTo),
+    codeIdx: index("calc_schemes_code_idx").on(t.nbfcId, t.code),
+  }),
+);
+
+// An NBFC is either PAN_INDIA (city_normalized NULL) or has explicit CITY rows.
+// A city may map to multiple NBFCs (intended).
+export const calcNbfcCoverage = pgTable(
+  "calc_nbfc_coverage",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    nbfcId: integer("nbfc_id")
+      .references(() => calcNbfcs.id)
+      .notNull(),
+    coverageType: calcCoverageType("coverage_type").notNull(),
+    cityNormalized: text("city_normalized"),
+    stateCode: text("state_code"),
+    cityDisplay: text("city_display"),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    cityIdx: index("calc_nbfc_coverage_city_idx").on(t.cityNormalized, t.validTo),
+    nbfcIdx: index("calc_nbfc_coverage_nbfc_idx").on(t.nbfcId, t.validTo),
+  }),
+);
+
+// E-178: WhatsApp OTP sessions for the calculator gate. Matched by
+// (created_by, phone) — users.dealer_id can be NULL, so the user id is the key.
+export const calcOtpVerifications = pgTable(
+  "calc_otp_verifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdBy: uuid("created_by").notNull(),
+    dealerId: varchar("dealer_id", { length: 255 }),
+    phone: text("phone").notNull(), // normalized digits: 91XXXXXXXXXX
+    customerName: text("customer_name"),
+    otpHash: text("otp_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    sendCount: integer("send_count").default(1).notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    waStatus: text("wa_status"), // 'sent' | 'dev_hardcoded' | 'failed'
+  },
+  (t) => ({
+    lookupIdx: index("calc_otp_verif_lookup_idx").on(t.createdBy, t.phone, t.createdAt),
+  }),
+);
+
+// Saved quotes - one row per dealer calculation. Stamped with the outcome, the
+// exact config version used, and a snapshot of the cards shown (dispute reproduction).
+export const calcLeads = pgTable(
+  "calc_leads",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    dealerId: varchar("dealer_id", { length: 255 }),
+    customerName: text("customer_name").notNull(),
+    phone: text("phone").notNull(),
+    pincode: text("pincode"),
+    city: text("city"),
+    state: text("state"),
+    expectedEmiPaise: bigint("expected_emi_paise", { mode: "number" }),
+    upfrontAbilityPaise: bigint("upfront_ability_paise", { mode: "number" }),
+    tenureMonths: integer("tenure_months"),
+    modelId: integer("model_id").references(() => calcBatteryModels.id),
+    filterOutcome: calcLeadFilterOutcome("filter_outcome"),
+    configVersionId: bigint("config_version_id", { mode: "number" }).references(
+      () => calcConfigVersions.id,
+    ),
+    resultSnapshot: jsonb("result_snapshot"),
+    crmLeadId: text("crm_lead_id"),
+    crmSyncedAt: timestamp("crm_synced_at", { withTimezone: true }),
+    idempotencyKey: text("idempotency_key"),
+    // E-178: OTP gate + WhatsApp results delivery stamps
+    otpVerificationId: uuid("otp_verification_id").references(() => calcOtpVerifications.id),
+    otpVerifiedAt: timestamp("otp_verified_at", { withTimezone: true }),
+    waResultsStatus: text("wa_results_status"), // 'sent' | 'failed' | 'skipped'
+    waResultsSentAt: timestamp("wa_results_sent_at", { withTimezone: true }),
+  },
+  (t) => ({
+    phoneIdx: index("calc_leads_phone_idx").on(t.phone),
+    createdAtIdx: index("calc_leads_created_at_idx").on(t.createdAt),
+    dealerIdx: index("calc_leads_dealer_idx").on(t.dealerId),
+  }),
+);
+
+export const calcNbfcsRelations = relations(calcNbfcs, ({ many }) => ({
+  schemes: many(calcSchemes),
+  modelCaps: many(calcNbfcModelCaps),
+  coverage: many(calcNbfcCoverage),
+}));
+
+export const calcSchemesRelations = relations(calcSchemes, ({ one }) => ({
+  nbfc: one(calcNbfcs, { fields: [calcSchemes.nbfcId], references: [calcNbfcs.id] }),
+}));
+
+export const calcBatteryModelsRelations = relations(calcBatteryModels, ({ many }) => ({
+  componentPrices: many(calcComponentPrices),
+  modelCaps: many(calcNbfcModelCaps),
+}));
+
+export const calcComponentPricesRelations = relations(calcComponentPrices, ({ one }) => ({
+  model: one(calcBatteryModels, {
+    fields: [calcComponentPrices.modelId],
+    references: [calcBatteryModels.id],
+  }),
+}));
