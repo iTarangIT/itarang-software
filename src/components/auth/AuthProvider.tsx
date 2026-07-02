@@ -31,6 +31,30 @@ const AuthContext = createContext<AuthContextType>({
   logout: async () => {},
 });
 
+// Session-scoped profile snapshot. Every hard navigation remounts this
+// provider and would otherwise block the whole tree on a fresh
+// /api/user/profile round-trip; the snapshot renders immediately while the
+// fetch below revalidates in the background. Cleared on sign-out/logout.
+const PROFILE_SNAPSHOT_KEY = "itarang:profile:v1";
+
+function readProfileSnapshot(): AppUser | null {
+  try {
+    const raw = sessionStorage.getItem(PROFILE_SNAPSHOT_KEY);
+    return raw ? (JSON.parse(raw) as AppUser) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeProfileSnapshot(user: AppUser | null) {
+  try {
+    if (user) sessionStorage.setItem(PROFILE_SNAPSHOT_KEY, JSON.stringify(user));
+    else sessionStorage.removeItem(PROFILE_SNAPSHOT_KEY);
+  } catch {
+    // Storage full/unavailable — snapshot is an optimisation only.
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const supabase = useMemo(() => createClient(), []);
   const [user, setUser] = useState<AppUser | null>(null);
@@ -55,27 +79,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (response.ok) {
         const json = await response.json();
-        setUser(json?.data ?? null);
+        const fetched = (json?.data ?? null) as AppUser | null;
+        setUser(fetched);
+        writeProfileSnapshot(fetched);
         return;
       }
 
       setUser(null);
+      writeProfileSnapshot(null);
     } catch (error) {
       console.error("[AuthProvider] Failed to fetch user profile:", error);
       setUser(null);
+      writeProfileSnapshot(null);
     } finally {
       if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchUser();
+    // Hydrate instantly from the session snapshot (if any), then revalidate
+    // against the server in the background. A role changed server-side is
+    // stale for at most one render — the silent refetch corrects it, and
+    // every API route still authorises requests server-side regardless.
+    const snapshot = readProfileSnapshot();
+    if (snapshot) {
+      setUser(snapshot);
+      setLoading(false);
+      fetchUser({ silent: true });
+    } else {
+      fetchUser();
+    }
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event) => {
       if (event === "SIGNED_OUT") {
         setUser(null);
+        writeProfileSnapshot(null);
         return;
       }
       // Only refetch the profile on real identity changes. INITIAL_SESSION
@@ -96,6 +136,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       setLoading(true);
       setUser(null);
+      writeProfileSnapshot(null);
       // Route through /api/auth/logout — relative, hits the current public
       // host. Server clears sb-* cookies and redirects to /login using
       // X-Forwarded-Host so browsers never land on the internal upstream.
