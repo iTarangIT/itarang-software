@@ -33,6 +33,7 @@ import {
   BarChart3,
   GitMerge,
   UserMinus,
+  History,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -386,6 +387,12 @@ const roleNavigation: Record<string, any[]> = {
           icon: Calculator,
           href: "/admin/calculator",
         },
+        {
+          id: "sh-calculator-history",
+          label: "Search History",
+          icon: History,
+          href: "/admin/calculator/search-history",
+        },
       ],
     },
   ],
@@ -609,6 +616,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "Loan Calculator",
           icon: Calculator,
           href: "/admin/calculator",
+        },
+        {
+          id: "admin-calculator-history",
+          label: "Search History",
+          icon: History,
+          href: "/admin/calculator/search-history",
         },
       ],
     },

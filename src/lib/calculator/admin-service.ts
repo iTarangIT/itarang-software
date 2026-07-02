@@ -19,6 +19,8 @@ import {
   calcSchemes,
   calcNbfcModelCaps,
   calcNbfcCoverage,
+  calcLeads,
+  dealers,
 } from "@/lib/db/schema";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -163,6 +165,92 @@ export async function getAuditFeed(limit = 100) {
   return { logs, versions };
 }
 
+// One scheme line as stored inside calc_leads.result_snapshot (engine SchemeCard).
+interface SnapshotScheme {
+  nbfc: string;
+  schemeCode: string;
+  tenure: number;
+  emi: number;
+  totalUpfront: number;
+  estimatedTotalPayable: number;
+  recommended?: boolean;
+}
+
+export interface SearchHistoryEntry {
+  id: string;
+  createdAt: string;
+  dealerCode: string | null;
+  dealerName: string | null;
+  customerName: string;
+  phone: string;
+  city: string | null;
+  modelName: string | null;
+  tenureMonths: number | null;
+  expectedEmi: number | null; // rupees
+  upfrontAbility: number | null; // rupees
+  outcome: "qualified" | "stretch_only" | "none" | null;
+  configVersionId: number | null;
+  otpVerifiedAt: string | null;
+  waResultsStatus: string | null;
+  waResultsSentAt: string | null;
+  qualified: SnapshotScheme[];
+  stretch: SnapshotScheme[];
+}
+
+const paiseToRupees = (p: number | null) => (p == null ? null : Math.round(p / 100));
+
+function schemeLines(raw: unknown): SnapshotScheme[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((c: any) => ({
+    nbfc: String(c?.nbfc ?? ""),
+    schemeCode: String(c?.schemeCode ?? ""),
+    tenure: Number(c?.tenure ?? 0),
+    emi: Number(c?.emi ?? 0),
+    totalUpfront: Number(c?.totalUpfront ?? 0),
+    estimatedTotalPayable: Number(c?.estimatedTotalPayable ?? 0),
+    recommended: !!c?.recommended,
+  }));
+}
+
+/** Verified customer searches, newest first — the admin Search History feed. */
+export async function getSearchHistory(limit = 200): Promise<SearchHistoryEntry[]> {
+  const rows = await db
+    .select({
+      lead: calcLeads,
+      modelName: calcBatteryModels.displayName,
+      dealerName: dealers.company_name,
+    })
+    .from(calcLeads)
+    .leftJoin(calcBatteryModels, eq(calcBatteryModels.id, calcLeads.modelId))
+    .leftJoin(dealers, eq(dealers.dealer_id, calcLeads.dealerId))
+    .orderBy(desc(calcLeads.createdAt))
+    .limit(limit);
+
+  return rows.map(({ lead, modelName, dealerName }) => {
+    const snap = (lead.resultSnapshot ?? {}) as { qualified?: unknown; stretch?: unknown };
+    return {
+      id: lead.id,
+      createdAt: lead.createdAt.toISOString(),
+      dealerCode: lead.dealerId,
+      dealerName,
+      customerName: lead.customerName,
+      phone: lead.phone,
+      city: lead.city,
+      modelName,
+      tenureMonths: lead.tenureMonths,
+      expectedEmi: paiseToRupees(lead.expectedEmiPaise),
+      upfrontAbility: paiseToRupees(lead.upfrontAbilityPaise),
+      outcome: lead.filterOutcome,
+      configVersionId: lead.configVersionId,
+      otpVerifiedAt: lead.otpVerifiedAt?.toISOString() ?? null,
+      waResultsStatus: lead.waResultsStatus,
+      waResultsSentAt: lead.waResultsSentAt?.toISOString() ?? null,
+      qualified: schemeLines(snap.qualified),
+      stretch: schemeLines(snap.stretch),
+    };
+  });
+}
+
 /* ── MUTATIONS (versioned + audited) ────────────────────────────────────── */
 
 export interface SettingsPatch {
@@ -280,6 +368,15 @@ export async function saveNbfc(actorId: string, nbfcId: number, patch: NbfcPatch
         configVersionId: cv,
       })
       .returning();
+    // Carry LIVE children to the new parent id — schemes/coverage/caps reference
+    // calc_nbfcs.id, so without this the fresh NBFC row has no coverage (drops out
+    // of eligibility) and no schemes/caps. Closed child rows keep the old id.
+    for (const child of [calcSchemes, calcNbfcCoverage, calcNbfcModelCaps] as const) {
+      await tx
+        .update(child)
+        .set({ nbfcId: inserted.id })
+        .where(and(eq(child.nbfcId, current.id), isNull(child.validTo)));
+    }
     await audit(tx, actorId, "update", "calc_nbfcs", current.id, current, inserted, cv);
     return inserted;
   });

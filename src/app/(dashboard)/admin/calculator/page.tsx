@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { SlidersHorizontal, Tag, MapPin, History, AlertTriangle } from "lucide-react";
+import { SlidersHorizontal, Tag, MapPin, History, AlertTriangle, Search } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
 import { requireAuth } from "@/lib/auth-utils";
 import { getOverview } from "@/lib/calculator/admin-service";
@@ -13,6 +13,7 @@ const LINKS = [
   { href: "/admin/calculator/eligibility", label: "City → NBFC Eligibility", desc: "Which cities each NBFC serves", icon: MapPin },
   { href: "/admin/calculator/settings", label: "Calculator Settings", desc: "Margin, stretch window, disclaimer, footer", icon: SlidersHorizontal },
   { href: "/admin/calculator/audit", label: "Version History & Audit", desc: "Every config change, before → after", icon: History },
+  { href: "/admin/calculator/search-history", label: "Search History", desc: "Verified customer searches + schemes sent on WhatsApp", icon: Search },
 ];
 
 export default async function CalculatorAdminPage() {
