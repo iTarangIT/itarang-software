@@ -100,6 +100,10 @@ interface Consent {
   verifiedAt: string | null;
   adminViewedBy: string | null;
   adminViewedAt: string | null;
+  signerAadhaarMasked: string | null;
+  signerNameMatchScore: number | null;
+  esignErrorMessage: string | null;
+  deliveryChannel: string | null;
 }
 
 interface Metadata {
@@ -267,6 +271,59 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                     ...item,
                     consentStatus: json.consent.consentStatus,
                     verifiedAt: json.consent.verifiedAt,
+                  }
+                : item,
+            ),
+          };
+        });
+      } catch {
+        setConsentActionError("Network error");
+      } finally {
+        setConsentActionLoading(null);
+      }
+    },
+    [leadId],
+  );
+
+  // Regenerate (re-send) a consent after rejection or an Aadhaar mismatch. Reuses
+  // the shared send-consent route, which refreshes the existing record in place.
+  const handleRegenerateConsent = useCallback(
+    async (c: Consent) => {
+      setConsentActionError(null);
+      setConsentActionLoading(`${c.id}:regenerate`);
+      try {
+        const channel = (c.deliveryChannel || "sms").toLowerCase() === "whatsapp"
+          ? "whatsapp"
+          : "sms";
+        const res = await fetch(`/api/kyc/${leadId}/send-consent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            channel,
+            consent_for: c.consentFor === "co_borrower" ? "borrower" : "customer",
+          }),
+        });
+        const json = await res.json();
+        if (!json.success) {
+          setConsentActionError(
+            json.error?.message || "Failed to regenerate consent",
+          );
+          return;
+        }
+        setData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            consent: prev.consent.map((item) =>
+              item.id === c.id
+                ? {
+                    ...item,
+                    consentStatus: "link_sent",
+                    esignErrorMessage: null,
+                    signerAadhaarMasked: null,
+                    signerNameMatchScore: null,
+                    signedConsentUrl: null,
+                    verifiedAt: null,
                   }
                 : item,
             ),
@@ -947,7 +1004,10 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                       // by consentId and is already scope-agnostic.
                       const isViewable = !!pdfUrl;
                       const isVerified = c.consentStatus === "verified" || c.consentStatus === "digitally_signed";
-                      const isRejected = c.consentStatus === "rejected";
+                      // Accept both the canonical "admin_rejected" and the legacy "rejected".
+                      const isRejected = c.consentStatus === "rejected" || c.consentStatus === "admin_rejected";
+                      // Aadhaar-mismatch / eSign failure outcomes.
+                      const isMismatch = c.consentStatus === "esign_failed" || c.consentStatus === "esign_blocked";
                       const isViewed = !!c.adminViewedAt && !isVerified && !isRejected;
                       const isEsignCompleted = c.consentStatus === "esign_completed" || c.consentStatus === "admin_review_pending";
                       // Signed PDF is pullable any time an eSign transaction
@@ -955,6 +1015,9 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                       // but DigiO already has the signed document.
                       const canFetchSigned = !pdfUrl && !!c.esignTransactionId;
                       const canDecide = !isVerified && !isRejected && (isViewable || isEsignCompleted);
+                      // Re-issue a fresh consent after rejection or an Aadhaar mismatch/failure.
+                      const canRegenerate = isRejected || isMismatch;
+                      const isRegeneratingThis = consentActionLoading === `${c.id}:regenerate`;
                       const isConfirmingReject = pendingRejectId === c.id;
                       const isApprovingThis = consentActionLoading === `${c.id}:approve`;
                       const isRejectingThis = consentActionLoading === `${c.id}:reject`;
@@ -1009,6 +1072,18 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                               {isRejected && verifiedRelative && (
                                 <p className="text-[10px] text-red-700">Rejected by admin {verifiedRelative}</p>
                               )}
+                              {c.signerAadhaarMasked && (
+                                <p className="text-[10px] text-gray-600">
+                                  Signed with Aadhaar ending{" "}
+                                  <span className="font-semibold">{c.signerAadhaarMasked}</span>
+                                  {typeof c.signerNameMatchScore === "number" && (
+                                    <span className="text-gray-400"> · name match {c.signerNameMatchScore}%</span>
+                                  )}
+                                </p>
+                              )}
+                              {isMismatch && c.esignErrorMessage && (
+                                <p className="text-[10px] text-red-700 mt-0.5">{c.esignErrorMessage}</p>
+                              )}
                               {canFetchSigned && (
                                 <button type="button"
                                   disabled={fetchingPdfId === c.id}
@@ -1023,8 +1098,15 @@ export default function CaseReview({ leadId }: CaseReviewProps) {
                             </div>
                           </div>
 
-                          {(isViewable || canDecide || isEsignCompleted) && (
+                          {(isViewable || canDecide || isEsignCompleted || canRegenerate) && (
                             <div className="mt-2 pt-2 border-t border-gray-100 flex items-center gap-1.5 flex-wrap">
+                              {canRegenerate && (
+                                <button type="button" disabled={consentActionLoading !== null}
+                                  onClick={() => handleRegenerateConsent(c)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md text-white bg-teal-600 hover:bg-teal-700 disabled:opacity-50 transition-colors">
+                                  {isRegeneratingThis ? "Regenerating..." : "Regenerate Consent"}
+                                </button>
+                              )}
                               {isViewable && (
                                 <button type="button" onClick={() => handleConsentClick(c)}
                                   className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md border border-gray-200 text-gray-700 bg-white hover:bg-gray-50 transition-colors">

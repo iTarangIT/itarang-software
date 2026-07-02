@@ -43,6 +43,10 @@ const PatchBodySchema = z.object({
   ownerName: z.string().optional(),
   ownerPhone: z.string().optional(),
   ownerEmail: z.string().optional(),
+  // Owner's 12-digit Aadhaar — required before a dealer Aadhaar e-sign can be
+  // matched against the owner's Aadhaar card (E-175). Lets an admin capture it
+  // for dealers onboarded before the field existed.
+  ownerAadhaarNo: z.string().optional(),
   bankName: z.string().optional(),
   accountNumber: z.string().optional(),
   beneficiaryName: z.string().optional(),
@@ -339,6 +343,7 @@ export async function GET(_req: NextRequest, context: RouteContext) {
         ownerName: row.owner_name,
         ownerPhone: row.owner_phone,
         ownerEmail: row.owner_email,
+        ownerAadhaarNo: row.owner_aadhaar_no || "",
 
         bankName: row.bank_name,
         accountNumber: row.account_number,
@@ -491,6 +496,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       ownerName,
       ownerPhone,
       ownerEmail,
+      ownerAadhaarNo,
       bankName,
       accountNumber,
       beneficiaryName,
@@ -562,6 +568,12 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
     if (ownerName       !== undefined) updatePayload.owner_name        = ownerName;
     if (ownerPhone      !== undefined) updatePayload.owner_phone       = ownerPhone;
     if (ownerEmail      !== undefined) updatePayload.owner_email       = ownerEmail;
+    if (ownerAadhaarNo  !== undefined) {
+      // Store only a valid 12-digit Aadhaar; blank/invalid clears it so the
+      // E-175 guard keeps blocking until a real number is on file.
+      const digits = String(ownerAadhaarNo).replace(/\D/g, "");
+      updatePayload.owner_aadhaar_no = digits.length === 12 ? digits : null;
+    }
     if (bankName        !== undefined) updatePayload.bank_name         = bankName;
     if (accountNumber   !== undefined) updatePayload.account_number    = accountNumber;
     if (beneficiaryName !== undefined) updatePayload.beneficiary_name  = beneficiaryName;

@@ -83,6 +83,7 @@ import {
   normalizeMobile,
   requiresConsent,
   resolveActiveDealer,
+  resolveHouseDealer,
 } from "./customer-lead";
 import { maskAccount, maskGstin, maskIfsc, maskPan } from "./masking";
 import { removeMedia, saveMedia } from "./storage";
@@ -126,6 +127,13 @@ const COMPANY_TYPE_BUTTONS: ReplyButton[] = [
   { id: "sole_proprietorship", title: "Sole Proprietor" },
   { id: "partnership_firm", title: "Partnership" },
   { id: "private_limited_firm", title: "Private Limited" },
+];
+
+// Entry chooser shown on the very first greeting: dealer onboarding vs. a
+// customer self-onboarding a new lead. Two tappable reply buttons (≤3, ≤20 chars).
+const FLOW_CHOICE_BUTTONS: ReplyButton[] = [
+  { id: "flow_dealer", title: "Dealer Onboarding" },
+  { id: "flow_customer", title: "Customer (New Lead)" },
 ];
 
 const KNOWN_COMPANY_TYPES: readonly string[] = [
@@ -189,6 +197,10 @@ type Ctx = {
     /** Index into `queue` of the item we're currently collecting. */
     index: number;
   };
+  /** When set, this session is a CUSTOMER self-onboarding a lead (entry-chooser
+   *  option 2) rather than dealer onboarding. Routes to runCustomerTurn and
+   *  attributes the created lead to the house dealer (dealer@itarang.com). */
+  flow?: "customer";
   /** Active customer-lead being created in the post-approval dealer console
    *  (states prefixed DC_*). Independent of the onboarding fields above. */
   lead?: {
@@ -284,6 +296,14 @@ export async function runTurn(event: InboundEvent): Promise<void> {
     return await runConsoleTurn(session, event, dealer);
   }
 
+  // Customer self-onboarding (entry-chooser option 2): a non-dealer building a
+  // lead attributed to the house dealer. Runs its own thin dispatcher so it can
+  // never surface the dealer console menu (Drafts/Inventory/Help). Only reached
+  // for a non-approved sender (resolveActiveDealer returned null above).
+  if (((session.context ?? {}) as Ctx).flow === "customer") {
+    return await runCustomerTurn(session, event);
+  }
+
   try {
     // A greeting word (hi/hello/onboarding/start…) restarts the flow from the
     // welcome + company-type question — unless the dealer has already submitted
@@ -296,6 +316,8 @@ export async function runTurn(event: InboundEvent): Promise<void> {
     switch (session.current_state) {
       case "GREETING":
         return await onGreeting(session);
+      case "CHOOSE_FLOW":
+        return await onChooseFlow(session, event);
       case "ASK_COMPANY_TYPE":
         return await onCompanyType(session, event);
       case "ASK_UPLOAD_MODE":
@@ -341,11 +363,150 @@ export async function runTurn(event: InboundEvent): Promise<void> {
 // ── State handlers ──────────────────────────────────────────────────────────
 
 async function onGreeting(session: SessionRow): Promise<void> {
-  // Welcome + the company-type question in a SINGLE interactive message — one
-  // Meta round-trip instead of two, so the dealer's first reply is faster.
-  await askCompanyType(
+  // First contact: ask WHICH kind of onboarding before starting either flow.
+  // (1) Dealer Onboarding → the existing company-type document collection.
+  // (2) Customer (New Lead) → a customer self-registers a lead, attributed to
+  //     the house dealer (dealer@itarang.com).
+  await reply(
     session,
-    "👋 Welcome to *iTarang* dealer onboarding!\n\nWe'll collect your business documents right here on WhatsApp. It only takes a few minutes.",
+    "👋 Welcome to *iTarang*!\n\nWhich type of onboarding would you like? Tap an option below 👇",
+    FLOW_CHOICE_BUTTONS,
+  );
+  await setSession(session.id, { current_state: "CHOOSE_FLOW" });
+}
+
+// CHOOSE_FLOW — route the entry chooser. Dealer → existing onboarding starting
+// at the company-type question; Customer → new-lead capture attributed to the
+// house dealer. A button tap arrives as type "interactive" with the id in
+// event.text; typed words ("dealer" / "customer" / "lead") also work.
+async function onChooseFlow(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  const t = (event.text ?? "").trim().toLowerCase();
+  const wantsDealer = t === "flow_dealer" || /\bdealer\b/.test(t);
+  const wantsCustomer = t === "flow_customer" || /\b(customer|lead)\b/.test(t);
+
+  if (wantsDealer) {
+    // Reuse the exact original welcome prefix so dealer onboarding step 1 is
+    // unchanged from the dealer's perspective.
+    return await askCompanyType(
+      session,
+      "👋 Welcome to *iTarang* dealer onboarding!\n\nWe'll collect your business documents right here on WhatsApp. It only takes a few minutes.",
+    );
+  }
+
+  if (wantsCustomer) {
+    // Pre-check the house dealer so we don't strand the customer mid-flow.
+    const houseDealer = await resolveHouseDealer();
+    if (!houseDealer) {
+      console.error(
+        "[WhatsApp/customer] house dealer unresolved — cannot start customer lead flow",
+      );
+      await reply(
+        session,
+        "Sorry, we can't take new customer leads right now. Please try again later.",
+      );
+      return;
+    }
+    await mergeContext(session, (ctx) => {
+      ctx.flow = "customer";
+    });
+    return await startNewLead(await loadSession(session.id));
+  }
+
+  // Unrecognized reply — re-show the chooser.
+  await reply(
+    session,
+    "Please tap *Dealer Onboarding* or *Customer (New Lead)* 👇",
+    FLOW_CHOICE_BUTTONS,
+  );
+}
+
+// One turn for a CUSTOMER self-onboarding a lead (entry-chooser option 2). A
+// thin dispatcher over the DC_LEAD_* subset only — reuses the exact lead-capture
+// handlers the dealer console uses, but with the house dealer as the attributed
+// dealer and WITHOUT ever exposing the dealer menu (Drafts/Inventory/Help).
+async function runCustomerTurn(
+  session: SessionRow,
+  event: InboundEvent,
+): Promise<void> {
+  const houseDealer = await resolveHouseDealer();
+  if (!houseDealer) {
+    console.error(
+      "[WhatsApp/customer] house dealer unresolved mid-flow — resetting",
+    );
+    return await finishCustomerFlow(
+      session,
+      "Sorry, we can't continue right now. Please try again later.",
+    );
+  }
+
+  try {
+    const text = (event.text ?? "").trim();
+    // A typed greeting abandons the in-progress lead and returns to the chooser.
+    if (event.type === "text" && GREETING_TRIGGERS.test(text)) {
+      await mergeContext(session, (ctx) => {
+        ctx.flow = undefined;
+        ctx.lead = undefined;
+      });
+      await setSession(session.id, { current_state: "GREETING" });
+      return await onGreeting(await loadSession(session.id));
+    }
+
+    switch (session.current_state) {
+      case "DC_LEAD_MOBILE":
+        return await onLeadMobile(session, event);
+      case "DC_LEAD_INTEREST":
+        return await onLeadInterest(session, event);
+      case "DC_LEAD_PAYMENT":
+        return await onLeadPayment(session, event, houseDealer);
+      case "DC_LEAD_PRODUCT":
+        return await onLeadProduct(session, event, houseDealer);
+      case "DC_LEAD_CASH_RC":
+        return await onLeadCashRc(session, event, houseDealer);
+      case "DC_LEAD_CASH_DOCS":
+        return await onLeadCashDocs(session, event, houseDealer);
+      case "DC_LEAD_DOCS_MODE":
+        return await onLeadDocsMode(session, event, houseDealer);
+      case "DC_LEAD_DOCS":
+        return await onLeadDocs(session, event, houseDealer);
+      case "DC_LEAD_CONSENT_CHANNEL":
+        return await onConsentChannel(session, event, houseDealer);
+      case "DC_LEAD_CONSENT_WAIT":
+        return await onConsentWait(session, event);
+      case "DC_LEAD_FINANCE_Q":
+        return await onLeadFinanceQuestion(session, event);
+      case "DC_LEAD_CONSENT_REVIEW":
+        return await onConsentReview(session, event);
+      default:
+        // Completed or stale state → thank-you + reset to the chooser.
+        return await finishCustomerFlow(session);
+    }
+  } catch (err) {
+    console.error("[WhatsApp/customer] turn failed:", err);
+    await reply(
+      session,
+      "Sorry, something went wrong on our side. Please send *hi* to start again.",
+    );
+  }
+}
+
+// End a customer lead flow: clear the flow/lead context and reset to GREETING so
+// the next message re-shows the entry chooser.
+async function finishCustomerFlow(
+  session: SessionRow,
+  headline?: string,
+): Promise<void> {
+  await mergeContext(session, (ctx) => {
+    ctx.flow = undefined;
+    ctx.lead = undefined;
+  });
+  await setSession(session.id, { current_state: "GREETING" });
+  await reply(
+    session,
+    headline ??
+      "🎉 Thanks! Our team will review the details and contact the customer shortly.\n\nSend *hi* to start again.",
   );
 }
 
@@ -2789,10 +2950,15 @@ async function startProductStep(
 ): Promise<void> {
   const options = await getDealerProductOptions(dealer.dealerCode);
   if (options.length === 0) {
-    await reply(
-      session,
-      "_No available stock to attach right now — you can set the product on the dealer portal._",
-    );
+    // The house dealer (customer flow) never has stock, so skip the
+    // dealer-oriented "set it on the portal" note and just continue.
+    const fresh = await loadSession(session.id);
+    if (((fresh.context as Ctx)?.flow) !== "customer") {
+      await reply(
+        session,
+        "_No available stock to attach right now — you can set the product on the dealer portal._",
+      );
+    }
     return await afterProductStep(session, dealer);
   }
 
@@ -2878,7 +3044,18 @@ async function afterProductStep(
     return;
   }
 
-  // Warm / cold finance → save; finish on the portal.
+  // Warm / cold finance → save; finish on the portal (dealer) or thank the
+  // customer (customer flow).
+  if (((fresh.context as Ctx)?.flow) === "customer") {
+    return await finishCustomerFlow(
+      session,
+      `✅ *Thanks — we've saved your request!*\n\n` +
+        `Mobile: ${draft.mobile ?? "—"}\n` +
+        `Interest: ${interest}\n` +
+        `Payment: ${humanPayment(paymentMethod)}\n\n` +
+        `Our team will contact you shortly.`,
+    );
+  }
   await setSession(session.id, { current_state: "DC_MENU" });
   await reply(
     session,
@@ -3035,6 +3212,19 @@ async function finalizeCashLead(session: SessionRow): Promise<void> {
       rc: str(row?.rc) || "—",
       model: str(row?.model) || "—",
     };
+  }
+
+  if (((fresh.context as Ctx)?.flow) === "customer") {
+    return await finishCustomerFlow(
+      session,
+      `✅ *Thanks — your details have been saved!*\n\n` +
+        `Name: ${line.name}\n` +
+        `Mobile: ${draft.mobile ?? "—"}\n` +
+        `Vehicle: ${line.rc}\n` +
+        `Product: ${line.model}\n` +
+        `Payment: Cash\n\n` +
+        `Our team will contact you shortly.`,
+    );
   }
 
   await reply(
@@ -3538,6 +3728,49 @@ export async function pushSignedConsentToWhatsApp(
     );
   } catch (err) {
     console.error("[WhatsApp/console] pushSignedConsent failed:", err);
+  }
+}
+
+/**
+ * Push a consent FAILURE (Aadhaar mismatch / eSign failed / expired) into an
+ * active WhatsApp lead conversation. Called by the Digio webhook so the dealer
+ * isn't left waiting silently at the consent-wait step — it explains what went
+ * wrong and drops them back to the channel chooser to re-send. No-op if no
+ * console session is parked at the consent-wait step for this lead.
+ */
+export async function pushConsentFailureToWhatsApp(
+  leadId: string,
+  reason: string,
+): Promise<void> {
+  try {
+    const rows = await db
+      .select()
+      .from(whatsappOnboardingSessions)
+      .where(
+        and(
+          sql`${whatsappOnboardingSessions.context} -> 'lead' ->> 'leadId' = ${leadId}`,
+          eq(whatsappOnboardingSessions.current_state, "DC_LEAD_CONSENT_WAIT"),
+        ),
+      )
+      .orderBy(desc(whatsappOnboardingSessions.updated_at))
+      .limit(1);
+    const session = rows[0];
+    if (!session) return;
+
+    await reply(
+      session,
+      `⚠️ *Consent could not be completed.*\n\n${reason}\n\n` +
+        `Please re-send the consent so the customer can sign again with *their own Aadhaar*, ` +
+        `or choose *Manual* to collect a printed signature.`,
+    );
+    await setSession(session.id, { current_state: "DC_LEAD_CONSENT_CHANNEL" });
+    await reply(
+      session,
+      "How would you like to get the customer's *signature* on the consent?",
+      CONSENT_CHANNEL_BUTTONS,
+    );
+  } catch (err) {
+    console.error("[WhatsApp/console] pushConsentFailure failed:", err);
   }
 }
 
@@ -4325,6 +4558,15 @@ async function finalizeLead(session: SessionRow): Promise<void> {
     } catch (e) {
       console.error("[WhatsApp/console] admin KYC queue entry failed:", e);
     }
+  }
+
+  const fresh = await loadSession(session.id);
+  if (((fresh.context as Ctx)?.flow) === "customer") {
+    return await finishCustomerFlow(
+      session,
+      "🎉 *Thanks! Your details have been submitted to iTarang for review.*\n\n" +
+        "Your documents and signed consent have all been sent for verification. Our team will contact you shortly.",
+    );
   }
 
   await mergeContext(session, (ctx) => {

@@ -27,12 +27,12 @@ import {
   loanSanctions,
   leads,
   dealers,
-  borrowerRiskScores,
   nbfcRiskRules,
   nbfcBorrowerActions,
   inventory,
 } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
+import { computeLiveScores } from "@/lib/nbfc/cds/liveScores";
 import {
   getFleetSummary,
   getVehicleStates,
@@ -279,29 +279,19 @@ export default async function BatteryMonitoringView({
   const vehiclenos = portfolioRows.map((r) => r.vehicleno);
   const loanIds = portfolioRows.map((r) => r.loan_application_id);
 
-  const riskRows = await db
-    .select({
-      loan_sanction_id: borrowerRiskScores.loan_sanction_id,
-      cds_score: borrowerRiskScores.cds_score,
-      pci_score: borrowerRiskScores.pci_score,
-      confidence: borrowerRiskScores.confidence,
-      computed_at: borrowerRiskScores.computed_at,
-    })
-    .from(borrowerRiskScores)
-    .where(eq(borrowerRiskScores.tenant_id, tenant.id));
-
+  // CDS/PCI are computed LIVE from the current EMI window (not read from the
+  // nightly `borrower_risk_scores` snapshot) so the displayed score tracks EMI
+  // changes immediately — a payment landing or a status flip moves the number
+  // on the next load, with no manual re-score. Same engine helpers as the job,
+  // so the value matches the explainability drawer to the cent.
+  const liveScores = await computeLiveScores(tenant.id, loanIds);
   const riskByLoan = new Map<string, RiskScoreRow>();
-  for (const r of riskRows.sort(
-    (a, b) =>
-      (b.computed_at?.getTime() ?? 0) - (a.computed_at?.getTime() ?? 0),
-  )) {
-    const key = String(r.loan_sanction_id);
-    if (riskByLoan.has(key)) continue;
-    riskByLoan.set(key, {
-      cds_score: r.cds_score != null ? Number(r.cds_score) : null,
-      pci_score: r.pci_score != null ? Number(r.pci_score) : null,
-      confidence: r.confidence,
-      computed_at: r.computed_at,
+  for (const [loanId, s] of liveScores.entries()) {
+    riskByLoan.set(loanId, {
+      cds_score: s.cds_score,
+      pci_score: s.pci_score,
+      confidence: s.confidence,
+      computed_at: s.computed_at,
     });
   }
 

@@ -306,6 +306,12 @@ export async function GET(
             verifiedAt: c.verified_at,
             adminViewedBy: c.admin_viewed_by,
             adminViewedAt: c.admin_viewed_at,
+            // Surface which Aadhaar actually signed, Digio's name-match score, and
+            // any mismatch reason so the admin can see/act on a wrong-Aadhaar sign.
+            signerAadhaarMasked: c.signer_aadhaar_masked,
+            signerNameMatchScore: c.signer_name_match_score,
+            esignErrorMessage: c.esign_error_message,
+            deliveryChannel: c.consent_delivery_channel,
           };
         })),
         metadata: metadata
