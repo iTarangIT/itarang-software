@@ -17,6 +17,8 @@ export default async function AdminUploadPage() {
                 <p className="mt-1 text-sm text-ink-muted">
                     Upload a dealer-prospect CSV or Excel file (max 5 MB /
                     5000 rows). Required columns: phone, dealer_name, city, state.
+                    Optional: assignee (exact Inside Sales Rep or ASM name) to
+                    route each lead straight to that person.
                 </p>
             </header>
             <UploadWizard />

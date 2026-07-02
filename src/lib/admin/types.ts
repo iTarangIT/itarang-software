@@ -310,6 +310,7 @@ export type UploadParsedRow = {
     source_label?: string;
     preliminary_payment_intent?: string;
     prior_call_notes?: string;
+    assignee?: string;
 };
 
 // The cleaned, insertable payload for one valid row.
@@ -327,6 +328,10 @@ export type UploadInsertPayload = {
     preliminary_payment_intent: string | null;
     prior_call_notes: string | null;
     source_label: string | null;
+    // Resolved from the optional `assignee` column — the active
+    // inside_sales_rep / asm user this lead should land on. Null = unassigned.
+    assigned_owner_id: string | null;
+    assigned_owner_role: string | null;
 };
 
 export type UploadRowStatus =
@@ -347,7 +352,16 @@ export type UploadRowResult = {
     errors: string[];
     location_suggestion: string | null;
     duplicate_lead_id: string | null;
+    // Display name of the resolved assignee (Owner column in the preview).
+    assigned_owner_name: string | null;
     payload: UploadInsertPayload | null;
+};
+
+// Column-level validation of the uploaded sheet's header row.
+export type UploadHeaderReport = {
+    recognized: string[]; // canonical keys the sheet provides
+    ignored: string[]; // header cells that map to no known column
+    missing_required: string[]; // required columns absent from the sheet
 };
 
 export type UploadValidationResult = {
@@ -357,6 +371,7 @@ export type UploadValidationResult = {
     duplicate_rows: number;
     address_mismatch_rows: number;
     reactivate_rows: number;
+    headers: UploadHeaderReport;
     rows: UploadRowResult[];
 };
 
