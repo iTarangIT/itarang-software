@@ -43,6 +43,7 @@ dev.log
 
 # env files (can opt-in for committing if needed)
 .env*
+vps.env
 
 # vercel
 .vercel
