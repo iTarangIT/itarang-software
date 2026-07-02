@@ -8,6 +8,7 @@ import {
   ShoppingCart,
   Users,
   FileText,
+  Calculator,
   Phone,
   PieChart,
   Package,
@@ -376,6 +377,17 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    {
+      section: "CALCULATOR",
+      items: [
+        {
+          id: "sh-calculator",
+          label: "Loan Calculator",
+          icon: Calculator,
+          href: "/admin/calculator",
+        },
+      ],
+    },
   ],
 
   sales_manager: [
@@ -586,6 +598,17 @@ const roleNavigation: Record<string, any[]> = {
           label: "AI Expense Tracker",
           icon: Receipt,
           href: "/admin/expense-tracker",
+        },
+      ],
+    },
+    {
+      section: "CALCULATOR",
+      items: [
+        {
+          id: "admin-calculator",
+          label: "Loan Calculator",
+          icon: Calculator,
+          href: "/admin/calculator",
         },
       ],
     },
@@ -833,6 +856,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "My Drafts",
           icon: FileText,
           href: "/dealer-portal/leads/drafts",
+        },
+        {
+          id: "calculator",
+          label: "Calculator",
+          icon: Calculator,
+          href: "/dealer-portal/calculator",
         },
         {
           id: "loans",

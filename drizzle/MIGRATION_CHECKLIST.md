@@ -160,6 +160,7 @@ least trustworthy column (drift began ~E-145).
 | E-174_zoho_invoice_payment_reference | zoho invoice payment reference | ☐ | ☐ | ☐ | ☐ |
 | E-175_dealer_owner_aadhaar | dealer_onboarding_applications.owner_aadhaar_no + owner_aadhaar_verified (dealer agreement Aadhaar match) | ☐ | ☐ | ☐ | ☐ |
 | E-176_consent_signer_name_score | consent_records.signer_name_match_score (Aadhaar e-sign name-match signal) | ✅ | ☐ | ☐ | ☐ |
+| E-177_loan_calculator | dealer loan calculator: calc_* tables (nbfcs/schemes/model_caps/component_prices/coverage/settings/config_versions/audit_log/leads) + guard indexes & checks | ☐ | ☐ | ☐ | ☐ |
 
 > Add a new row whenever you create an `E-<n>_*.sql` file. When `DATABASE_URL`
 > points at a DB and you confirm a migration is present, tick that env's box.
