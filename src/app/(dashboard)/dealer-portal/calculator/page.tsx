@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Calculator, Phone, Mail, MessageCircle, AlertCircle } from "lucide-react";
+import {
+  Loader2,
+  Calculator,
+  Phone,
+  Mail,
+  MessageCircle,
+  AlertCircle,
+  ShieldCheck,
+  Send,
+} from "lucide-react";
 import { SchemeCardView } from "@/components/dealer-dashboard/calculator/SchemeCardView";
 import type { CalcResponse, ConfigMeta } from "@/components/dealer-dashboard/calculator/types";
 
@@ -25,6 +34,26 @@ const EMPTY: FormState = {
   upfrontAbility: "",
 };
 
+// Mirrors normalizeCalcPhone on the server — used only to decide when a phone
+// edit invalidates the current verification.
+function normalizePhone(raw: string): string | null {
+  const digits = (raw ?? "").replace(/\D/g, "");
+  if (digits.length === 10) return `91${digits}`;
+  if (digits.length === 11 && digits.startsWith("0")) return `91${digits.slice(1)}`;
+  if (digits.length === 12 && digits.startsWith("91")) return digits;
+  return null;
+}
+
+type OtpStage = "idle" | "sending" | "sent" | "verifying" | "verified";
+
+interface OtpInfo {
+  sentTo: string;
+  sendCount: number;
+  maxSends: number;
+}
+
+const RESEND_WAIT_MS = 30 * 1000;
+
 export default function LoanCalculatorPage() {
   const [meta, setMeta] = useState<ConfigMeta | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
@@ -32,6 +61,16 @@ export default function LoanCalculatorPage() {
   const [result, setResult] = useState<CalcResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // OTP gate — the customer's WhatsApp number must be verified before Calculate.
+  const [otpStage, setOtpStage] = useState<OtpStage>("idle");
+  const [otpInput, setOtpInput] = useState("");
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [otpInfo, setOtpInfo] = useState<OtpInfo | null>(null);
+  const [resendAvailableAt, setResendAvailableAt] = useState<number | null>(null);
+  const [verifiedPhone, setVerifiedPhone] = useState<string | null>(null);
+  const [waBanner, setWaBanner] = useState<"sent" | "failed" | "skipped" | null>(null);
+  const [tick, setTick] = useState(0); // drives the resend countdown
 
   useEffect(() => {
     (async () => {
@@ -46,14 +85,109 @@ export default function LoanCalculatorPage() {
     })();
   }, []);
 
-  const set = (k: keyof FormState, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  useEffect(() => {
+    if (otpStage !== "sent" || !resendAvailableAt) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [otpStage, resendAvailableAt]);
+  void tick;
+
+  const resetOtp = () => {
+    setOtpStage("idle");
+    setOtpInput("");
+    setOtpError(null);
+    setOtpInfo(null);
+    setResendAvailableAt(null);
+    setVerifiedPhone(null);
+  };
+
+  const set = (k: keyof FormState, v: string) => {
+    // Editing the phone invalidates the current OTP verification + results.
+    if (k === "phone" && normalizePhone(v) !== verifiedPhone && otpStage !== "idle") {
+      resetOtp();
+      setResult(null);
+      setWaBanner(null);
+    }
+    setForm((f) => ({ ...f, [k]: v }));
+  };
+
+  const canSendOtp = !!form.customerName && !!normalizePhone(form.phone);
+  const resendWaitSecs = resendAvailableAt
+    ? Math.max(0, Math.ceil((resendAvailableAt - Date.now()) / 1000))
+    : 0;
+
+  async function sendOtp() {
+    setOtpError(null);
+    if (!canSendOtp) {
+      setOtpError("Enter the customer's name and a valid 10-digit mobile number first.");
+      return;
+    }
+    const wasSent = otpStage === "sent";
+    setOtpStage("sending");
+    try {
+      const res = await fetch("/api/dealer/calculator/send-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customerName: form.customerName, phone: form.phone }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setOtpInfo({
+          sentTo: data.data.otpSentTo,
+          sendCount: data.data.sendCount,
+          maxSends: data.data.maxSends,
+        });
+        setOtpInput("");
+        setResendAvailableAt(Date.now() + RESEND_WAIT_MS);
+        setOtpStage("sent");
+      } else {
+        setOtpError(data.error?.message ?? "Failed to send OTP.");
+        setOtpStage(wasSent ? "sent" : "idle");
+      }
+    } catch {
+      setOtpError("Failed to send OTP. Please try again.");
+      setOtpStage(wasSent ? "sent" : "idle");
+    }
+  }
+
+  async function verifyOtp() {
+    setOtpError(null);
+    if (!/^\d{6}$/.test(otpInput)) {
+      setOtpError("Enter the 6-digit OTP.");
+      return;
+    }
+    setOtpStage("verifying");
+    try {
+      const res = await fetch("/api/dealer/calculator/verify-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: form.phone, otp: otpInput }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setVerifiedPhone(normalizePhone(form.phone));
+        setOtpStage("verified");
+      } else {
+        setOtpError(data.error?.message ?? "Verification failed.");
+        setOtpStage(data.error?.code === "no_active_otp" ? "idle" : "sent");
+      }
+    } catch {
+      setOtpError("Verification failed. Please try again.");
+      setOtpStage("sent");
+    }
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setResult(null);
+    setWaBanner(null);
     if (!form.customerName || !form.phone || !form.modelId || !form.tenure) {
       setError("Please fill customer name, phone, model, and tenure.");
+      return;
+    }
+    if (otpStage !== "verified") {
+      setError("Verify the customer's WhatsApp number first.");
       return;
     }
     setSubmitting(true);
@@ -72,8 +206,18 @@ export default function LoanCalculatorPage() {
         }),
       });
       const data = await res.json();
-      if (data.success) setResult(data.data as CalcResponse);
-      else setError(data.error?.message ?? "Calculation failed.");
+      if (data.success) {
+        setResult(data.data as CalcResponse);
+        setWaBanner(data.data.waResults?.status ?? null);
+        // The OTP is single-use — the server consumed it for this calculation,
+        // so a new search needs a fresh OTP sent to the customer.
+        resetOtp();
+      } else if (data.error?.code === "otp_required") {
+        resetOtp();
+        setError("Verification used or expired — send a new OTP to the customer.");
+      } else {
+        setError(data.error?.message ?? "Calculation failed.");
+      }
     } catch {
       setError("Calculation failed. Please try again.");
     } finally {
@@ -150,6 +294,79 @@ export default function LoanCalculatorPage() {
               </div>
             </div>
 
+            {/* Customer WhatsApp verification (OTP gate) */}
+            <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-3">
+              <p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-gray-500">
+                <ShieldCheck className="h-3.5 w-3.5" /> Customer verification
+              </p>
+
+              {otpStage === "verified" ? (
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
+                  <ShieldCheck className="h-4 w-4" /> Customer verified — valid for one calculation
+                </p>
+              ) : (
+                <>
+                  {(otpStage === "idle" || otpStage === "sending") && (
+                    <button
+                      type="button"
+                      onClick={sendOtp}
+                      disabled={!canSendOtp || otpStage === "sending"}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-bold text-gray-800 transition hover:border-gray-400 disabled:opacity-50"
+                    >
+                      {otpStage === "sending" ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Send className="h-3.5 w-3.5" />
+                      )}
+                      Send OTP on WhatsApp
+                    </button>
+                  )}
+
+                  {(otpStage === "sent" || otpStage === "verifying") && otpInfo && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-gray-600">
+                        OTP sent to <span className="font-semibold">{otpInfo.sentTo}</span> on WhatsApp.
+                      </p>
+                      <div className="flex gap-2">
+                        <input
+                          className={`${inputCls} tracking-[0.3em] text-center font-mono`}
+                          inputMode="numeric"
+                          maxLength={6}
+                          value={otpInput}
+                          onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, ""))}
+                          placeholder="••••••"
+                        />
+                        <button
+                          type="button"
+                          onClick={verifyOtp}
+                          disabled={otpStage === "verifying" || otpInput.length !== 6}
+                          className="flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-gray-800 disabled:opacity-50"
+                        >
+                          {otpStage === "verifying" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                          Verify
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={sendOtp}
+                        disabled={resendWaitSecs > 0 || otpInfo.sendCount >= otpInfo.maxSends}
+                        className="text-xs font-medium text-gray-500 underline-offset-2 hover:text-gray-800 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Resend OTP ({otpInfo.sendCount} of {otpInfo.maxSends})
+                        {resendWaitSecs > 0 ? ` — wait ${resendWaitSecs}s` : ""}
+                      </button>
+                    </div>
+                  )}
+
+                  {otpError && (
+                    <p className="mt-2 flex items-center gap-1.5 text-xs text-red-600">
+                      <AlertCircle className="h-3.5 w-3.5" /> {otpError}
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+
             {error && (
               <p className="mt-3 flex items-center gap-1.5 text-xs text-red-600">
                 <AlertCircle className="h-3.5 w-3.5" /> {error}
@@ -158,12 +375,18 @@ export default function LoanCalculatorPage() {
 
             <button
               type="submit"
-              disabled={submitting || !meta}
+              disabled={submitting || !meta || otpStage !== "verified"}
+              title={otpStage !== "verified" ? "Verify the customer's WhatsApp number first" : undefined}
               className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-3 text-sm font-bold text-white transition hover:bg-gray-800 disabled:opacity-50"
             >
               {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Calculator className="h-4 w-4" />}
               {submitting ? "Calculating…" : "Calculate schemes"}
             </button>
+            {otpStage !== "verified" && (
+              <p className="mt-2 text-center text-[11px] text-gray-400">
+                Verify the customer&apos;s WhatsApp number to calculate.
+              </p>
+            )}
           </form>
 
           {/* Card 2 — results */}
@@ -174,7 +397,22 @@ export default function LoanCalculatorPage() {
               </div>
             )}
 
-            {result && <Results result={result} />}
+            {result && (
+              <div className="space-y-4">
+                {waBanner === "sent" && (
+                  <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                    <MessageCircle className="h-4 w-4" /> Schemes sent to the customer&apos;s WhatsApp.
+                  </div>
+                )}
+                {waBanner === "failed" && (
+                  <div className="flex items-center gap-2 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    <AlertCircle className="h-4 w-4" /> Couldn&apos;t deliver the schemes to the customer&apos;s
+                    WhatsApp — please share them manually.
+                  </div>
+                )}
+                <Results result={result} />
+              </div>
+            )}
           </div>
         </div>
       </div>

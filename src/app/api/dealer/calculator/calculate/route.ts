@@ -1,13 +1,24 @@
 import { NextResponse } from "next/server";
+import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { withErrorHandler, successResponse } from "@/lib/api-utils";
 import { requireRole } from "@/lib/auth-utils";
 import { db } from "@/lib/db";
-import { calcLeads } from "@/lib/db/schema";
+import { calcLeads, calcOtpVerifications } from "@/lib/db/schema";
 import { resolveEngineContext } from "@/lib/calculator/config-resolver";
 import { calculate, ValidationError, rupeesToPaise } from "@/lib/calculator/engine";
+import {
+  normalizeCalcPhone,
+  sendCalcResultsWhatsApp,
+  type CalcResultForSummary,
+} from "@/lib/calculator/whatsapp";
 
 export const dynamic = "force-dynamic";
+
+// How long a verified-but-unused OTP stays valid before Calculate. Each OTP is
+// SINGLE-USE: the first successful calculation consumes it, and every new
+// search needs a fresh OTP sent to and verified by the customer.
+const VERIFICATION_WINDOW_MS = 30 * 60 * 1000;
 
 const bodySchema = z.object({
   customerName: z.string().min(1, "Customer name is required"),
@@ -23,6 +34,47 @@ const bodySchema = z.object({
 export const POST = withErrorHandler(async (req: Request) => {
   const user = await requireRole(["dealer"]);
   const body = bodySchema.parse(await req.json());
+
+  // OTP gate (E-178): the customer's WhatsApp number must have been verified
+  // by this dealer user within the last 30 minutes, and that verification must
+  // not already have been spent on a previous calculation (single-use).
+  const phone = normalizeCalcPhone(body.phone);
+  if (!phone) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: { message: "Enter a valid 10-digit Indian mobile number.", code: "invalid_phone" },
+        timestamp: new Date().toISOString(),
+      },
+      { status: 400 },
+    );
+  }
+  const [verification] = await db
+    .select()
+    .from(calcOtpVerifications)
+    .where(
+      and(
+        eq(calcOtpVerifications.createdBy, user.id),
+        eq(calcOtpVerifications.phone, phone),
+        gt(calcOtpVerifications.verifiedAt, new Date(Date.now() - VERIFICATION_WINDOW_MS)),
+        isNull(calcOtpVerifications.consumedAt),
+      ),
+    )
+    .orderBy(desc(calcOtpVerifications.verifiedAt))
+    .limit(1);
+  if (!verification) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          message: "Customer phone not verified. Send and verify the WhatsApp OTP first.",
+          code: "otp_required",
+        },
+        timestamp: new Date().toISOString(),
+      },
+      { status: 403 },
+    );
+  }
 
   const resolved = await resolveEngineContext({ modelId: body.modelId, city: body.city });
 
@@ -61,8 +113,38 @@ export const POST = withErrorHandler(async (req: Request) => {
       filterOutcome: result.outcome,
       configVersionId: resolved.configVersionId,
       resultSnapshot: result,
+      otpVerificationId: verification.id,
+      otpVerifiedAt: verification.verifiedAt,
     })
     .returning({ id: calcLeads.id });
+
+  // Consume the OTP — one verification = one calculation. Done after the lead
+  // insert so an engine ValidationError (400 above) doesn't burn the OTP.
+  await db
+    .update(calcOtpVerifications)
+    .set({ consumedAt: new Date() })
+    .where(eq(calcOtpVerifications.id, verification.id));
+
+  // Send the scheme summary to the customer's WhatsApp. Awaited (a detached
+  // promise may be frozen on serverless before it completes) but best-effort —
+  // a delivery failure never fails the calculation.
+  const waStatus = await sendCalcResultsWhatsApp(
+    phone,
+    body.customerName,
+    result as unknown as CalcResultForSummary,
+    resolved.model.displayName,
+  );
+  try {
+    await db
+      .update(calcLeads)
+      .set({
+        waResultsStatus: waStatus,
+        waResultsSentAt: waStatus === "sent" ? new Date() : null,
+      })
+      .where(eq(calcLeads.id, lead.id));
+  } catch (err) {
+    console.error("[Calculator] failed to stamp wa_results_status:", err);
+  }
 
   return successResponse({
     ...result,
@@ -71,5 +153,6 @@ export const POST = withErrorHandler(async (req: Request) => {
     footer: resolved.footer,
     cardDisclaimer: resolved.cardDisclaimer,
     leadId: lead.id,
+    waResults: { status: waStatus },
   });
 });
