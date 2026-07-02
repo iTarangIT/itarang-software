@@ -55,33 +55,67 @@ function main() {
     });
   }
 
-  const appManifestPath = path.join(NEXT_DIR, "app-build-manifest.json");
+  // Next 16 no longer writes app-build-manifest.json (and the build output's
+  // route table has no size columns). Instead, each route's client-module
+  // chunk list lives in .next/server/app/**/page_client-reference-manifest.js
+  // as `globalThis.__RSC_MANIFEST["<route>"]={...json...}`.
   const buildManifestPath = path.join(NEXT_DIR, "build-manifest.json");
-  if (!fs.existsSync(appManifestPath)) {
-    throw new Error(`[perf:bundle] ${appManifestPath} not found — did the build succeed?`);
+  const serverAppDir = path.join(NEXT_DIR, "server", "app");
+  if (!fs.existsSync(buildManifestPath) || !fs.existsSync(serverAppDir)) {
+    throw new Error(`[perf:bundle] ${NEXT_DIR} build artifacts missing — did the build succeed?`);
   }
-  const appManifest = JSON.parse(fs.readFileSync(appManifestPath, "utf8")) as {
-    pages: Record<string, string[]>;
-  };
   const buildManifest = JSON.parse(fs.readFileSync(buildManifestPath, "utf8")) as {
     rootMainFiles?: string[];
   };
+
+  function findRouteManifests(dir: string, acc: string[] = []): string[] {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) findRouteManifests(full, acc);
+      else if (entry.name === "page_client-reference-manifest.js") acc.push(full);
+    }
+    return acc;
+  }
+
+  function chunksForRoute(manifestFile: string): string[] {
+    const src = fs.readFileSync(manifestFile, "utf8");
+    const brace = src.indexOf("={");
+    if (brace === -1) return [];
+    const manifest = JSON.parse(src.slice(brace + 1)) as {
+      clientModules?: Record<string, { chunks?: string[] }>;
+    };
+    const chunks = new Set<string>();
+    for (const mod of Object.values(manifest.clientModules ?? {})) {
+      // chunks arrays alternate [numericId, "static/chunks/….js", …]
+      for (const c of mod.chunks ?? []) {
+        if (c.includes("static/chunks/")) chunks.add(c);
+      }
+    }
+    return [...chunks];
+  }
 
   const cache = new Map<string, number>();
   const sharedChunks = new Set(buildManifest.rootMainFiles ?? []);
   const sharedBytes = sizeOfChunks([...sharedChunks], cache);
 
-  const rows = Object.entries(appManifest.pages)
-    .filter(([route]) => route.endsWith("/page"))
-    .map(([route, chunks]) => {
-      const routeChunks = chunks.filter((c) => !sharedChunks.has(c));
+  const rows = findRouteManifests(serverAppDir)
+    .map((manifestFile) => {
+      const rel = path.relative(serverAppDir, path.dirname(manifestFile));
+      const route =
+        "/" +
+        rel
+          .split(path.sep)
+          .filter((s) => !(s.startsWith("(") && s.endsWith(")")))
+          .join("/");
+      const routeChunks = chunksForRoute(manifestFile).filter((c) => !sharedChunks.has(c));
       const routeBytes = sizeOfChunks(routeChunks, cache);
       return {
-        route: route.replace(/\/page$/, "") || "/",
+        route: route === "/" ? "/" : route.replace(/\/+$/, ""),
         routeKb: routeBytes / 1024,
         firstLoadKb: (routeBytes + sharedBytes) / 1024,
       };
     })
+    .filter((r) => !r.route.startsWith("/_"))
     .sort((a, b) => b.firstLoadKb - a.firstLoadKb);
 
   const commit = (() => {
