@@ -7,7 +7,7 @@
 // non-rep roles back to their own dashboard).
 
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     AlertTriangle,
     ChevronLeft,
@@ -26,6 +26,8 @@ import { IntentBadge } from "@/app/(dashboard)/inside-sales/_components/IntentBa
 import { LEAD_STATUS, type LeadStatus } from "@/lib/lifecycle/transitions";
 import { VISIT_OUTCOME_LABELS, type VisitOutcome } from "@/lib/asm/types";
 import type { LeadsInfoFacets, LeadsInfoRow } from "@/lib/admin/leadsInfoQuery";
+import { UNASSIGNED_FILTER } from "@/lib/admin/leadsInfoFilters";
+import { BulkActionBar } from "@/app/(dashboard)/admin/_components/BulkActionBar";
 import { ManageLeadDrawer } from "./ManageLeadDrawer";
 
 const PAGE_SIZE = 25;
@@ -96,20 +98,39 @@ function selectClass() {
 }
 
 export function LeadsInfoView() {
+    const queryClient = useQueryClient();
     const [draft, setDraft] = useState<Draft>(EMPTY);
     const [applied, setApplied] = useState<Draft>(EMPTY);
     const [page, setPage] = useState(1);
     const [selectedLead, setSelectedLead] = useState<LeadsInfoRow | null>(null);
+    // Bulk-action selection — lead ids ticked on the current page.
+    const [selected, setSelected] = useState<Set<string>>(new Set());
 
     // Debounce draft → applied so typing doesn't refetch on every keystroke.
-    // Any filter change snaps back to page 1.
+    // Any filter change snaps back to page 1 and drops the selection — acting on
+    // a stale id from another page/filter would silently hit the wrong lead.
     useEffect(() => {
         const t = window.setTimeout(() => {
             setApplied(draft);
             setPage(1);
+            setSelected(new Set());
         }, 350);
         return () => window.clearTimeout(t);
     }, [draft]);
+
+    // Changing page also clears the selection (see above).
+    const goToPage = (updater: (p: number) => number) => {
+        setPage(updater);
+        setSelected(new Set());
+    };
+
+    const toggle = (id: string) =>
+        setSelected((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
 
     const set = (key: keyof Draft, value: string) =>
         setDraft((d) => ({ ...d, [key]: value }));
@@ -135,6 +156,19 @@ export function LeadsInfoView() {
 
     const data = query.data?.data;
     const rows = data?.rows ?? [];
+    const allOnPageSelected =
+        rows.length > 0 && rows.every((r) => selected.has(r.id));
+    const toggleAllOnPage = () =>
+        setSelected((prev) => {
+            if (rows.length > 0 && rows.every((r) => prev.has(r.id))) {
+                const next = new Set(prev);
+                rows.forEach((r) => next.delete(r.id));
+                return next;
+            }
+            const next = new Set(prev);
+            rows.forEach((r) => next.add(r.id));
+            return next;
+        });
     const total = data?.total ?? 0;
     const facets = data?.facets;
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -161,6 +195,18 @@ export function LeadsInfoView() {
                     {query.isFetching && (
                         <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                     )}
+                    {selected.size > 0 && (
+                        <BulkActionBar
+                            selectedIds={[...selected]}
+                            onClear={() => setSelected(new Set())}
+                            onActionDone={() => {
+                                setSelected(new Set());
+                                queryClient.invalidateQueries({
+                                    queryKey: ["admin-leads-info"],
+                                });
+                            }}
+                        />
+                    )}
                     {hasFilters && (
                         <Button
                             type="button"
@@ -182,11 +228,16 @@ export function LeadsInfoView() {
                         onChange={(e) => set("status", e.target.value)}
                     >
                         <option value="">All statuses</option>
-                        {LEAD_STATUS.map((s) => (
-                            <option key={s} value={s}>
-                                {pretty(s)}
-                            </option>
-                        ))}
+                        {/* "Unassigned" = no current owner (any/no status), not
+                            just the New_Unassigned lead_status. */}
+                        <option value={UNASSIGNED_FILTER}>Unassigned</option>
+                        {LEAD_STATUS.filter((s) => s !== "New_Unassigned").map(
+                            (s) => (
+                                <option key={s} value={s}>
+                                    {pretty(s)}
+                                </option>
+                            ),
+                        )}
                     </select>
 
                     <select
@@ -254,6 +305,15 @@ export function LeadsInfoView() {
                 <table className="w-full text-sm">
                     <thead className="bg-gray-50/60 text-[11px] uppercase tracking-wide text-gray-500">
                         <tr className="align-middle">
+                            <th className="w-10 px-4 py-3 text-left font-semibold">
+                                <input
+                                    type="checkbox"
+                                    aria-label="Select all on this page"
+                                    checked={allOnPageSelected}
+                                    onChange={toggleAllOnPage}
+                                    className="cursor-pointer"
+                                />
+                            </th>
                             <th className="min-w-[220px] px-4 py-3 text-left font-semibold">
                                 Dealer / Shop
                             </th>
@@ -289,7 +349,7 @@ export function LeadsInfoView() {
                     <tbody className="divide-y divide-gray-100">
                         {query.isLoading && (
                             <tr>
-                                <td colSpan={10} className="px-4 py-12 text-center text-gray-400">
+                                <td colSpan={11} className="px-4 py-12 text-center text-gray-400">
                                     <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
                                     Loading leads…
                                 </td>
@@ -297,7 +357,7 @@ export function LeadsInfoView() {
                         )}
                         {!query.isLoading && rows.length === 0 && (
                             <tr>
-                                <td colSpan={10} className="px-4 py-16 text-center text-gray-400">
+                                <td colSpan={11} className="px-4 py-16 text-center text-gray-400">
                                     <Inbox className="mx-auto mb-2 h-8 w-8" />
                                     {hasFilters
                                         ? "No leads match these filters."
@@ -313,6 +373,18 @@ export function LeadsInfoView() {
                                     onClick={() => setSelectedLead(row)}
                                     className="cursor-pointer border-l-2 border-transparent align-middle transition hover:border-emerald-500 hover:bg-gray-50"
                                 >
+                                    <td
+                                        className="px-4 py-3 align-middle"
+                                        onClick={(e) => e.stopPropagation()}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            aria-label={`Select ${row.dealer_name || row.shop_name || "lead"}`}
+                                            checked={selected.has(row.id)}
+                                            onChange={() => toggle(row.id)}
+                                            className="cursor-pointer"
+                                        />
+                                    </td>
                                     <td className="px-4 py-3 align-middle">
                                         <div className="font-medium text-gray-900">
                                             {row.dealer_name || row.shop_name || "(unnamed dealer)"}
@@ -418,7 +490,7 @@ export function LeadsInfoView() {
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => setPage((p) => Math.max(1, p - 1))}
+                        onClick={() => goToPage((p) => Math.max(1, p - 1))}
                         disabled={page <= 1 || query.isFetching}
                     >
                         <ChevronLeft className="h-4 w-4" />
@@ -430,7 +502,7 @@ export function LeadsInfoView() {
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                        onClick={() => goToPage((p) => Math.min(totalPages, p + 1))}
                         disabled={page >= totalPages || query.isFetching}
                     >
                         <ChevronRight className="h-4 w-4" />
