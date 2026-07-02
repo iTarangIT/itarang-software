@@ -94,13 +94,13 @@ export function InterestLevelEditor({ leadId, value, editable, onUpdated }: Prop
                         Set temperature
                     </span>
                 )}
-                <Pencil className="h-3 w-3 text-gray-400 opacity-0 transition-opacity group-hover/edit:opacity-100" />
+                <Pencil className="h-3 w-3 text-gray-400 transition-colors hover:text-gray-600" />
             </button>
 
             {open && (
                 <div className="absolute left-0 top-7 z-50 w-56 rounded-lg border border-gray-200 bg-white p-3 shadow-lg">
                     <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-gray-500">
-                        Set temperature
+                        Update lead status
                     </p>
                     <input
                         value={reason}
