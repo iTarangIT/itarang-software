@@ -8,6 +8,7 @@ import {
   ShoppingCart,
   Users,
   FileText,
+  Calculator,
   Phone,
   PieChart,
   Package,
@@ -32,6 +33,7 @@ import {
   BarChart3,
   GitMerge,
   UserMinus,
+  History,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -376,6 +378,23 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    {
+      section: "CALCULATOR",
+      items: [
+        {
+          id: "sh-calculator",
+          label: "Loan Calculator",
+          icon: Calculator,
+          href: "/admin/calculator",
+        },
+        {
+          id: "sh-calculator-history",
+          label: "Search History",
+          icon: History,
+          href: "/admin/calculator/search-history",
+        },
+      ],
+    },
   ],
 
   sales_manager: [
@@ -586,6 +605,23 @@ const roleNavigation: Record<string, any[]> = {
           label: "AI Expense Tracker",
           icon: Receipt,
           href: "/admin/expense-tracker",
+        },
+      ],
+    },
+    {
+      section: "CALCULATOR",
+      items: [
+        {
+          id: "admin-calculator",
+          label: "Loan Calculator",
+          icon: Calculator,
+          href: "/admin/calculator",
+        },
+        {
+          id: "admin-calculator-history",
+          label: "Search History",
+          icon: History,
+          href: "/admin/calculator/search-history",
         },
       ],
     },
@@ -833,6 +869,12 @@ const roleNavigation: Record<string, any[]> = {
           label: "My Drafts",
           icon: FileText,
           href: "/dealer-portal/leads/drafts",
+        },
+        {
+          id: "calculator",
+          label: "Calculator",
+          icon: Calculator,
+          href: "/dealer-portal/calculator",
         },
         {
           id: "loans",
