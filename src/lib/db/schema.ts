@@ -7161,6 +7161,31 @@ export const calcNbfcCoverage = pgTable(
   }),
 );
 
+// E-178: WhatsApp OTP sessions for the calculator gate. Matched by
+// (created_by, phone) — users.dealer_id can be NULL, so the user id is the key.
+export const calcOtpVerifications = pgTable(
+  "calc_otp_verifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdBy: uuid("created_by").notNull(),
+    dealerId: varchar("dealer_id", { length: 255 }),
+    phone: text("phone").notNull(), // normalized digits: 91XXXXXXXXXX
+    customerName: text("customer_name"),
+    otpHash: text("otp_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    sendCount: integer("send_count").default(1).notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    waStatus: text("wa_status"), // 'sent' | 'dev_hardcoded' | 'failed'
+  },
+  (t) => ({
+    lookupIdx: index("calc_otp_verif_lookup_idx").on(t.createdBy, t.phone, t.createdAt),
+  }),
+);
+
 // Saved quotes - one row per dealer calculation. Stamped with the outcome, the
 // exact config version used, and a snapshot of the cards shown (dispute reproduction).
 export const calcLeads = pgTable(
@@ -7186,6 +7211,11 @@ export const calcLeads = pgTable(
     crmLeadId: text("crm_lead_id"),
     crmSyncedAt: timestamp("crm_synced_at", { withTimezone: true }),
     idempotencyKey: text("idempotency_key"),
+    // E-178: OTP gate + WhatsApp results delivery stamps
+    otpVerificationId: uuid("otp_verification_id").references(() => calcOtpVerifications.id),
+    otpVerifiedAt: timestamp("otp_verified_at", { withTimezone: true }),
+    waResultsStatus: text("wa_results_status"), // 'sent' | 'failed' | 'skipped'
+    waResultsSentAt: timestamp("wa_results_sent_at", { withTimezone: true }),
   },
   (t) => ({
     phoneIdx: index("calc_leads_phone_idx").on(t.phone),
