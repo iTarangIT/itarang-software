@@ -158,7 +158,7 @@ export default function LoginPage() {
                 <div className="relative w-full h-full flex items-end justify-center pb-0">
                     <div className="relative w-[90%] h-[80%]">
                         <Image
-                            src="/rickshaw-login.png"
+                            src="/rickshaw-login.webp"
                             alt="Rickshaw Driver and Battery"
                             fill
                             className="object-contain object-bottom"
