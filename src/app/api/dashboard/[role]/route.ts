@@ -107,7 +107,7 @@ export const GET = withErrorHandler(
 
       // Revenue MTD — sum totals from synced Zoho invoices for current month,
       // excluding only void (drafts are counted as revenue per CEO request).
-      const [zohoRevenue] = await db
+      const zohoRevenueQ = db
         .select({
           revenue_mtd: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)`,
         })
@@ -121,7 +121,7 @@ export const GET = withErrorHandler(
 
       // Void/draft MTD sub-totals — returned separately so the CEO can toggle
       // them into the Revenue card client-side without a refetch.
-      const [zohoBreakdown] = await db
+      const zohoBreakdownQ = db
         .select({
           void_mtd: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'void'), 0)`,
           draft_mtd: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'draft'), 0)`,
@@ -130,7 +130,7 @@ export const GET = withErrorHandler(
         .where(gte(zohoInvoices.invoice_date, startOfMonthDateStr));
 
       // Last-month revenue (same void-only exclusion) for the real MoM badge.
-      const [zohoRevenueLastMonth] = await db
+      const zohoRevenueLastMonthQ = db
         .select({
           revenue: sql<string>`COALESCE(SUM(${zohoInvoices.total}), 0)`,
         })
@@ -146,7 +146,7 @@ export const GET = withErrorHandler(
       // Financial-year-to-date revenue (since 1 April) — base excludes only
       // void (drafts counted); void returned separately so the void filter
       // toggle works in FY mode without a refetch.
-      const [zohoFy] = await db
+      const zohoFyQ = db
         .select({
           base: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} IS NULL OR ${zohoInvoices.status} NOT IN ('void')), 0)`,
           void_amt: sql<string>`COALESCE(SUM(${zohoInvoices.total}) FILTER (WHERE ${zohoInvoices.status} = 'void'), 0)`,
@@ -156,7 +156,7 @@ export const GET = withErrorHandler(
         .where(gte(zohoInvoices.invoice_date, fyStartStr));
 
       // Inventory value — total capital across all inventory rows.
-      const [inventoryAgg] = await db
+      const inventoryAggQ = db
         .select({
           inventory_value: sql<string>`COALESCE(SUM(${inventory.final_amount}), 0)`,
         })
@@ -168,7 +168,7 @@ export const GET = withErrorHandler(
       // too). Without the draft exclusion this over-reports by the full draft
       // total (e.g. ₹1.08Cr of drafts inflated the figure to ₹1.16Cr vs the
       // true ₹7.89L of overdue balances).
-      const [outstandingAgg] = await db
+      const outstandingAggQ = db
         .select({
           outstanding: sql<string>`COALESCE(SUM(${zohoInvoices.balance}), 0)`,
         })
@@ -181,7 +181,7 @@ export const GET = withErrorHandler(
       // final_amount. If the inventory table isn't being populated, this
       // tile falls back to ₹0 (see plan: open follow-up to sync the Google
       // Sheet stock ledger).
-      const [purchasesAgg] = await db
+      const purchasesAggQ = db
         .select({
           purchases_mtd: sql<string>`COALESCE(SUM(${inventory.final_amount}), 0)`,
         })
@@ -194,7 +194,7 @@ export const GET = withErrorHandler(
         gte(expenseSubmissions.approved_at, startOfMonthDate),
       );
 
-      const [expensesAgg] = await db
+      const expensesAggQ = db
         .select({
           other_expenses_mtd: sql<string>`COALESCE(SUM(${expenseSubmissions.amount}), 0)`,
         })
@@ -205,7 +205,7 @@ export const GET = withErrorHandler(
       const deptExpr = sql<string>`COALESCE(${expenseSubmissions.department}, 'unassigned')`;
       const projectExpr = sql<string>`COALESCE(${expenseSubmissions.project_tag}, 'Unassigned')`;
 
-      const expensesByDepartment = await db
+      const expensesByDepartmentQ = db
         .select({
           department: deptExpr,
           total: sql<string>`COALESCE(SUM(${expenseSubmissions.amount}), 0)`,
@@ -214,7 +214,7 @@ export const GET = withErrorHandler(
         .where(approvedThisMonth)
         .groupBy(deptExpr);
 
-      const expensesByProject = await db
+      const expensesByProjectQ = db
         .select({
           department: deptExpr,
           project_tag: projectExpr,
@@ -224,7 +224,7 @@ export const GET = withErrorHandler(
         .where(approvedThisMonth)
         .groupBy(deptExpr, projectExpr);
 
-      const recentInvoices = await db
+      const recentInvoicesQ = db
         .select({
           id: zohoInvoices.id,
           invoice_number: zohoInvoices.invoice_number,
@@ -237,7 +237,7 @@ export const GET = withErrorHandler(
         .orderBy(desc(zohoInvoices.invoice_date))
         .limit(5);
 
-      const recentExpenses = await db
+      const recentExpensesQ = db
         .select({
           id: expenseSubmissions.id,
           category: expenseSubmissions.category,
@@ -252,7 +252,7 @@ export const GET = withErrorHandler(
         .limit(5);
 
       // E-106 — full AI-tracked expense ledger for the CEO read-only view.
-      const aiExpenses = await db
+      const aiExpensesQ = db
         .select({
           id: expenseSubmissions.id,
           vendor: expenseSubmissions.vendor,
@@ -272,7 +272,7 @@ export const GET = withErrorHandler(
         .limit(200);
 
         // conversion rate
-      const [conversionResult] = await db
+      const conversionResultQ = db
         .select({
           total_leads: sql<number>`COUNT(*)`,
           conversions: sql<number>`COUNT(*) FILTER (WHERE current_status = 'qualified')`,
@@ -281,7 +281,7 @@ export const GET = withErrorHandler(
         .where(gte(dealerLeads.created_at, startOfMonthDate));
 
       // Last-month conversion rate — for the real MoM change badge.
-      const [conversionLastMonth] = await db
+      const conversionLastMonthQ = db
         .select({
           total_leads: sql<number>`COUNT(*)`,
           conversions: sql<number>`COUNT(*) FILTER (WHERE current_status = 'qualified')`,
@@ -295,7 +295,7 @@ export const GET = withErrorHandler(
         );
 
       // Procurement overview — pending approvals + active (in-flight) value.
-      const [procurementAgg] = await db
+      const procurementAggQ = db
         .select({
           pending_approvals: sql<number>`COUNT(*) FILTER (WHERE ${provisions.status} = 'pending')`,
           active_value: sql<string>`COALESCE(SUM(${provisions.amount}) FILTER (WHERE ${provisions.status} NOT IN ('cancelled', 'completed')), 0)`,
@@ -311,7 +311,7 @@ export const GET = withErrorHandler(
       const truncBucket = sql.raw(
         `date_trunc('${trendGranularity}', "zoho_invoices"."invoice_date")`,
       );
-      const revenueTrendRows = await db
+      const revenueTrendRowsQ = db
         .select({
           bucket: sql<string>`${truncBucket}`,
           name: sql<string>`to_char(${truncBucket}, ${trendLabelFmt})`,
@@ -329,7 +329,7 @@ export const GET = withErrorHandler(
         .orderBy(truncBucket);
 
       // Top sales managers — ranked by qualified conversions on owned leads.
-      const topManagerRows = await db
+      const topManagerRowsQ = db
         .select({
           id: users.id,
           name: users.name,
@@ -352,7 +352,7 @@ export const GET = withErrorHandler(
       // PDF and signers are working through the sequence. Surfaces on the CEO
       // landing card so Sanchit sees signing progress without navigating into
       // every NBFC's review page.
-      const inFlightAgreements = await db
+      const inFlightAgreementsQ = db
         .select({
           nbfcId: nbfc.id,
           nbfcShortId: nbfc.nbfc_id,
@@ -376,23 +376,79 @@ export const GET = withErrorHandler(
         )
         .limit(10);
 
-      const agreementIds = inFlightAgreements.map((a) => a.agreementId);
-      const signerCounts = agreementIds.length
-        ? await db
-            .select({
-              agreementId: nbfcLspAgreementSigners.nbfc_lsp_agreement_id,
-              total: sql<number>`COUNT(*)`,
-              signed: sql<number>`COUNT(*) FILTER (WHERE ${nbfcLspAgreementSigners.signing_status} = 'signed')`,
-            })
-            .from(nbfcLspAgreementSigners)
-            .where(
-              inArray(
-                nbfcLspAgreementSigners.nbfc_lsp_agreement_id,
-                agreementIds,
-              ),
-            )
-            .groupBy(nbfcLspAgreementSigners.nbfc_lsp_agreement_id)
-        : [];
+      // Signer counts depend on the agreements query — chained off it so the
+      // pair still runs inside the same Promise.all pass as everything else.
+      // Wrapped in a real Promise first: Drizzle builders re-execute on every
+      // .then(), and this one is consumed twice (here and in Promise.all).
+      const inFlightAgreementsP = Promise.resolve(inFlightAgreementsQ);
+      const signerCountsQ = inFlightAgreementsP.then((agreements) => {
+        const agreementIds = agreements.map((a) => a.agreementId);
+        return agreementIds.length
+          ? db
+              .select({
+                agreementId: nbfcLspAgreementSigners.nbfc_lsp_agreement_id,
+                total: sql<number>`COUNT(*)`,
+                signed: sql<number>`COUNT(*) FILTER (WHERE ${nbfcLspAgreementSigners.signing_status} = 'signed')`,
+              })
+              .from(nbfcLspAgreementSigners)
+              .where(
+                inArray(
+                  nbfcLspAgreementSigners.nbfc_lsp_agreement_id,
+                  agreementIds,
+                ),
+              )
+              .groupBy(nbfcLspAgreementSigners.nbfc_lsp_agreement_id)
+          : [];
+      });
+
+      // All CEO-dashboard queries fire together — they only depend on the
+      // date strings computed above, and the pooled connection (max 5)
+      // queues the overflow, so wall-clock is bounded by the slowest few
+      // round-trips instead of the sum of all ~20.
+      const [
+        [zohoRevenue],
+        [zohoBreakdown],
+        [zohoRevenueLastMonth],
+        [zohoFy],
+        [inventoryAgg],
+        [outstandingAgg],
+        [purchasesAgg],
+        [expensesAgg],
+        expensesByDepartment,
+        expensesByProject,
+        recentInvoices,
+        recentExpenses,
+        aiExpenses,
+        [conversionResult],
+        [conversionLastMonth],
+        [procurementAgg],
+        revenueTrendRows,
+        topManagerRows,
+        inFlightAgreements,
+        signerCounts,
+      ] = await Promise.all([
+        zohoRevenueQ,
+        zohoBreakdownQ,
+        zohoRevenueLastMonthQ,
+        zohoFyQ,
+        inventoryAggQ,
+        outstandingAggQ,
+        purchasesAggQ,
+        expensesAggQ,
+        expensesByDepartmentQ,
+        expensesByProjectQ,
+        recentInvoicesQ,
+        recentExpensesQ,
+        aiExpensesQ,
+        conversionResultQ,
+        conversionLastMonthQ,
+        procurementAggQ,
+        revenueTrendRowsQ,
+        topManagerRowsQ,
+        inFlightAgreementsP,
+        signerCountsQ,
+      ]);
+
       const countsByAgreement = new Map<
         number,
         { total: number; signed: number }
@@ -534,18 +590,19 @@ export const GET = withErrorHandler(
 
     // ================= SALES HEAD =================
     if (role === "sales_head") {
-      const [revenue] = await db
-        .select({
-          total: sql<number>`COALESCE(SUM(total_amount), 0)`,
-        })
-        .from(orders);
-
-      const [pipeline] = await db
-        .select({
-          total: sql<number>`COALESCE(SUM(total_payable), 0)`,
-        })
-        .from(deals)
-        .where(sql`deal_status NOT IN ('converted', 'rejected')`);
+      const [[revenue], [pipeline]] = await Promise.all([
+        db
+          .select({
+            total: sql<number>`COALESCE(SUM(total_amount), 0)`,
+          })
+          .from(orders),
+        db
+          .select({
+            total: sql<number>`COALESCE(SUM(total_payable), 0)`,
+          })
+          .from(deals)
+          .where(sql`deal_status NOT IN ('converted', 'rejected')`),
+      ]);
 
       return successResponse({
         pipelineRevenue: pipeline?.total || 0,
