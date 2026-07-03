@@ -7,6 +7,7 @@ import {
   productCategories,
   productSelections,
   products,
+  kycVerificationMetadata,
 } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 
@@ -56,7 +57,6 @@ export async function GET(
         product_category_id: leads.product_category_id,
         product_type_id: leads.product_type_id,
         primary_product_id: leads.primary_product_id,
-        final_decision: leads.final_decision,
       })
       .from(leads)
       .where(eq(leads.id, leadId))
@@ -69,9 +69,19 @@ export async function GET(
       );
     }
 
+    // final_decision lives on kyc_verification_metadata (NOT on leads). The
+    // admin "final decision" writes it there, and the Step-3 client already
+    // reads it to compute step3Cleared; fetch it so this gate honours the same
+    // signal instead of only leads.kyc_status.
+    const [kycMeta] = await db
+      .select({ final_decision: kycVerificationMetadata.final_decision })
+      .from(kycVerificationMetadata)
+      .where(eq(kycVerificationMetadata.lead_id, leadId))
+      .limit(1);
+
     const paymentMode = String(lead.payment_method || "").toLowerCase();
     const kycStatus = String(lead.kyc_status || "");
-    const finalDecision = String(lead.final_decision || "").toLowerCase();
+    const finalDecision = String(kycMeta?.final_decision || "").toLowerCase();
     const customerName = lead.full_name || null;
     const isHot = String(lead.interest_level || "").toLowerCase() === "hot";
 
