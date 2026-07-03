@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { isS3Backend, putObject, getObject, filesProxyPath } from "@/lib/storage/s3";
+import { readStoredDocument } from "@/lib/storage/readStoredDocument";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -113,20 +114,21 @@ export async function GET(_req: NextRequest, context: RouteContext) {
       }
     }
 
-    // 2. Fallback to signedAgreementUrl if present
+    // 2. Fallback to signedAgreementUrl if present. readStoredDocument handles
+    // the relative /api/files/... proxy paths stored on the S3 backend (a raw
+    // fetch() would throw on those and abort before the Digio fallback below).
     if (!pdfBuffer && application.signed_agreement_url) {
       console.log(
         "[DOWNLOAD SIGNED AGREEMENT] Trying signedAgreementUrl:",
         application.signed_agreement_url
       );
 
-      const fileRes = await fetch(application.signed_agreement_url, {
-        method: "GET",
-        cache: "no-store",
-      });
-
-      if (fileRes.ok) {
-        const candidate = await fileRes.arrayBuffer();
+      try {
+        const { buffer } = await readStoredDocument(application.signed_agreement_url);
+        const candidate = buffer.buffer.slice(
+          buffer.byteOffset,
+          buffer.byteOffset + buffer.byteLength
+        ) as ArrayBuffer;
         if (isValidPdfBuffer(candidate)) {
           pdfBuffer = candidate;
         } else {
@@ -136,11 +138,10 @@ export async function GET(_req: NextRequest, context: RouteContext) {
             "), will re-fetch from Digio"
           );
         }
-      } else {
+      } catch (err) {
         console.error(
-          "[DOWNLOAD SIGNED AGREEMENT] signedAgreementUrl fetch failed:",
-          fileRes.status,
-          fileRes.statusText
+          "[DOWNLOAD SIGNED AGREEMENT] signedAgreementUrl read failed:",
+          err instanceof Error ? err.message : err
         );
       }
     }
