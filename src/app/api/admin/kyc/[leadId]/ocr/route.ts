@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { supabaseAdmin } from '@/lib/supabase/admin';
-import { isS3Backend, signObject } from '@/lib/storage/s3';
+import { readStoredDocument, StoredDocumentError } from '@/lib/storage/readStoredDocument';
 import { db } from '@/lib/db';
 import { kycDocuments, personalDetails } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
@@ -9,37 +8,6 @@ import { extractDocumentOcr, type OcrDocType } from '@/lib/decentro';
 import { extractTextFromImageBuffer } from '@/lib/ocr/tesseractOcr';
 import { parseBankDocument } from '@/lib/ocr/bankDocParser';
 import { isPdf, rasterizePdfFirstPage } from '@/lib/ocr/pdfToImage';
-
-// Supabase signed URLs expire (default 1 hour). Old leads have stale URLs in
-// kyc_documents.file_url, so a direct fetch returns 403 → the catch block
-// previously surfaced an opaque "Server error". Detect signed URLs, parse the
-// bucket + object path, and re-sign right before fetching.
-async function resolveFetchableUrl(storedUrl: string): Promise<string> {
-    if (!storedUrl) return storedUrl;
-    try {
-        const u = new URL(storedUrl);
-        // Format: /storage/v1/object/sign/<bucket>/<path...>
-        const signMatch = u.pathname.match(/\/storage\/v1\/object\/sign\/([^/]+)\/(.+)$/);
-        if (signMatch) {
-            const [, bucket, objectPath] = signMatch;
-            if (isS3Backend) {
-                const signed = await signObject(bucket, decodeURIComponent(objectPath), 120);
-                if (signed) return signed;
-                // Fall back to Supabase for objects not yet migrated to S3.
-            }
-            const { data, error } = await supabaseAdmin.storage
-                .from(bucket)
-                .createSignedUrl(decodeURIComponent(objectPath), 120);
-            if (!error && data?.signedUrl) {
-                return data.signedUrl;
-            }
-            console.warn(`[OCR] re-sign failed for ${bucket}/${objectPath}: ${error?.message ?? 'no url'}`);
-        }
-    } catch (e) {
-        console.warn('[OCR] resolveFetchableUrl: not a URL, using as-is', e);
-    }
-    return storedUrl;
-}
 
 // Map internal doc types to Decentro OCR doc types.
 const DECENTRO_OCR_MAP: Record<string, OcrDocType> = {
@@ -258,12 +226,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             for (const candidate of allDocs) {
                 if (!candidate.fileUrl) continue;
                 try {
-                    const fetchUrl = await resolveFetchableUrl(candidate.fileUrl);
-                    const fileRes = await fetch(fetchUrl);
-                    if (!fileRes.ok) { console.log(`[OCR Fallback] Failed to fetch file for doc ${candidate.id}: ${fileRes.status}`); continue; }
-                    let buf = Buffer.from(await fileRes.arrayBuffer());
-                    let ct = fileRes.headers.get('content-type') || 'image/jpeg';
-                    let fname = candidate.fileName || 'doc.jpg';
+                    // Read straight from storage — stored URLs are relative
+                    // proxy paths on the S3 backend, which fetch() can't parse.
+                    const stored = await readStoredDocument(candidate.fileUrl);
+                    let buf = stored.buffer;
+                    let ct = stored.contentType;
+                    let fname = candidate.fileName || stored.filename;
 
                     // PDF candidates must be rasterized to PNG before any OCR
                     // strategy can identify them (mirrors the primary path).
@@ -416,22 +384,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             return NextResponse.json({ success: false, error: 'Document has no file URL' }, { status: 400 });
         }
 
-        const fetchUrl = await resolveFetchableUrl(doc.fileUrl);
-        const fileRes = await fetch(fetchUrl);
-        if (!fileRes.ok) {
-            const detail = `HTTP ${fileRes.status} ${fileRes.statusText || ''}`.trim();
-            console.error(`[Admin OCR] file fetch failed for doc ${doc.id}: ${detail}. URL host: ${(() => { try { return new URL(fetchUrl).host; } catch { return 'unknown'; } })()}`);
+        // Read straight from storage (S3/Supabase) — stored URLs are relative
+        // proxy paths on the S3 backend, which a server-side fetch() can't
+        // parse, and the proxy route requires a browser session anyway.
+        let stored;
+        try {
+            stored = await readStoredDocument(doc.fileUrl);
+        } catch (e) {
+            console.error(`[Admin OCR] file read failed for doc ${doc.id} on lead ${leadId}:`, e);
             return NextResponse.json({
                 success: false,
-                error: fileRes.status === 403 || fileRes.status === 401
-                    ? 'Document file URL has expired or is no longer accessible. Ask the dealer to re-upload.'
-                    : `Failed to fetch document file (${detail}).`,
-            }, { status: 500 });
+                error: e instanceof StoredDocumentError
+                    ? e.message
+                    : 'Could not read the document file from storage. Ask the dealer to re-upload it.',
+            }, { status: 502 });
         }
 
-        const fileBuffer = Buffer.from(await fileRes.arrayBuffer());
-        const contentType = fileRes.headers.get('content-type') || 'image/jpeg';
-        const fileName = doc.fileName || `${doc_type}.jpg`;
+        const fileBuffer = stored.buffer;
+        const contentType = stored.contentType;
+        const fileName = doc.fileName || stored.filename;
 
         // OCR (Decentro + Tesseract) only understands image bytes. Dealers can
         // upload KYC docs as PDFs, so rasterize page 1 → PNG before OCR.
