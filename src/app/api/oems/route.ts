@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { oems, oemContacts } from '@/lib/db/schema';
 import { requireRole } from '@/lib/auth-utils';
 import { successResponse, withErrorHandler, generateId } from '@/lib/api-utils';
+import { recordLeadCapture } from '@/lib/leads/lead-registry';
 import { triggerN8nWebhook } from '@/lib/n8n';
 
 const oemSchema = z.object({
@@ -63,6 +64,16 @@ export const POST = withErrorHandler(async (req: Request) => {
         console.log('[OEM API] Contacts inserted');
 
         return { oem, contacts };
+    });
+
+    // E-179 central registry — new OEM capture (primary phone = sales head's).
+    await recordLeadCapture({
+        leadType: 'oem',
+        name: validated.business_entity_name,
+        phone: validated.contacts.find(c => c.contact_role === 'sales_head')?.contact_phone,
+        sourceChannel: 'web',
+        sourceTable: 'oems',
+        sourceId: oemId,
     });
 
     console.log('[OEM API] Transaction completed. Triggering webhook...');

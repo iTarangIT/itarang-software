@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { db } from "@/lib/db";
 import { nbfc, nbfcDirectors, users } from "@/lib/db/schema";
+import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import { eq } from "drizzle-orm";
 import crypto from "node:crypto";
 
@@ -243,6 +244,16 @@ export async function POST(req: NextRequest) {
           phone: v.primaryContactPhone,
           pan_number: v.panNumber,
           kyc_status: "pending",
+        });
+
+        // E-179 central registry — new NBFC onboarding capture.
+        await recordLeadCapture({
+          leadType: "nbfc",
+          name: v.legalName,
+          phone: v.primaryContactPhone,
+          sourceChannel: "web",
+          sourceTable: "nbfc",
+          sourceId: row.id,
         });
 
         return NextResponse.json(
