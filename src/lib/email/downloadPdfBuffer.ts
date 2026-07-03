@@ -1,33 +1,5 @@
 import { isS3Backend, getObject } from "@/lib/storage/s3";
-
-/**
- * Resolve an internal files-proxy path (`/api/files/<bucket>/<key...>`) to a
- * logical bucket + key. Mirrors filesProxyPath() in lib/storage/s3.ts, which
- * URL-encodes each key segment. Returns null for anything that isn't a proxy
- * path (absolute http(s) URLs, supabase public URLs, etc.).
- */
-function parseFilesProxyPath(
-  url: string
-): { logicalBucket: string; key: string } | null {
-  // Tolerate an absolute origin in front of the proxy path.
-  const idx = url.indexOf("/api/files/");
-  if (idx === -1) return null;
-  const rest = url.slice(idx + "/api/files/".length).split("?")[0];
-  const segments = rest.split("/").filter(Boolean);
-  if (segments.length < 2) return null;
-  const [logicalBucket, ...keyParts] = segments;
-  const key = keyParts
-    .map((s) => {
-      try {
-        return decodeURIComponent(s);
-      } catch {
-        return s;
-      }
-    })
-    .join("/");
-  if (!logicalBucket || !key) return null;
-  return { logicalBucket, key };
-}
+import { parseFilesProxyPath } from "@/lib/storage/readStoredDocument";
 
 /**
  * Fetch a public URL into a Node Buffer suitable for use as an email
@@ -49,7 +21,7 @@ export async function downloadPdfBuffer(
     const parsed = parseFilesProxyPath(url);
     if (parsed) {
       try {
-        const buf = await getObject(parsed.logicalBucket, parsed.key);
+        const buf = await getObject(parsed.bucket, parsed.key);
         if (!buf || buf.byteLength < 100) {
           console.warn(
             `[downloadPdfBuffer] S3 object missing/too small for ${url}`

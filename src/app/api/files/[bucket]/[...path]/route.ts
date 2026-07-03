@@ -20,8 +20,7 @@ import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
-import { supabaseAdmin } from "@/lib/supabase/admin";
-import { isS3Backend, getObject } from "@/lib/storage/s3";
+import { readBucketObject, contentTypeForName } from "@/lib/storage/readStoredDocument";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,30 +40,6 @@ const ALLOWED_BUCKETS = new Set(["documents", "dealer-documents", "call-recordin
 // a public Supabase bucket before the S3 migration, so anonymous reads here just
 // restore the prior behavior. Keys are random UUIDs (not enumerable).
 const AUTH_REQUIRED_BUCKETS = new Set(["documents", "call-recordings"]);
-
-const CONTENT_TYPES: Record<string, string> = {
-  ".pdf": "application/pdf",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".png": "image/png",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".webm": "video/webm",
-  ".mp4": "video/mp4",
-  ".mp3": "audio/mpeg",
-  ".wav": "audio/wav",
-  ".m4a": "audio/mp4",
-  ".ogg": "audio/ogg",
-  ".csv": "text/csv",
-  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-};
-
-async function fromSupabase(bucket: string, key: string): Promise<Buffer | null> {
-  const { data, error } = await supabaseAdmin.storage.from(bucket).download(key);
-  if (error || !data) return null;
-  return Buffer.from(await data.arrayBuffer());
-}
 
 export async function GET(
   req: NextRequest,
@@ -97,17 +72,10 @@ export async function GET(
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
   const key = segments.join("/");
-  const ext = path.extname(key).toLowerCase();
-  const contentType = CONTENT_TYPES[ext] ?? "application/octet-stream";
+  const contentType = contentTypeForName(key);
 
   // Primary backend, then fall back to the other (migration safety).
-  let buf: Buffer | null = null;
-  try {
-    buf = isS3Backend ? await getObject(bucket, key) : await fromSupabase(bucket, key);
-    if (!buf) buf = isS3Backend ? await fromSupabase(bucket, key) : await getObject(bucket, key);
-  } catch {
-    buf = null;
-  }
+  const buf = await readBucketObject(bucket, key);
   if (!buf) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   return new NextResponse(new Uint8Array(buf), {

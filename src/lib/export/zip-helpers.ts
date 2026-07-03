@@ -5,6 +5,8 @@
  * export (and any future bundle) can reuse the same fetch/slug/ext utilities.
  */
 
+import { readStoredDocument } from "@/lib/storage/readStoredDocument";
+
 /** Lowercased file extension from a name, e.g. "INVOICE.PDF" -> "pdf". */
 export function extOf(
   fileName: string | null | undefined,
@@ -21,22 +23,18 @@ export function safeSlug(s: string): string {
 }
 
 /**
- * Fetch a public URL into a Buffer, returning null (with a warning) on any
- * failure or empty body so the caller can skip rather than abort the bundle.
+ * Load a stored document URL into a Buffer, returning null (with a warning) on
+ * any failure or empty body so the caller can skip rather than abort the
+ * bundle. Handles relative `/api/files/...` proxy paths (direct storage read),
+ * Supabase storage URLs, and plain absolute URLs.
  */
 export async function fetchAsBuffer(
   url: string,
   logPrefix = "[ZIP Export]",
 ): Promise<Buffer | null> {
   try {
-    const res = await fetch(url);
-    if (!res.ok) {
-      console.warn(`${logPrefix} fetch ${url} -> HTTP ${res.status}`);
-      return null;
-    }
-    const ab = await res.arrayBuffer();
-    if (ab.byteLength === 0) return null;
-    return Buffer.from(ab);
+    const { buffer } = await readStoredDocument(url);
+    return buffer.byteLength > 0 ? buffer : null;
   } catch (err) {
     console.warn(
       `${logPrefix} fetch ${url} failed:`,

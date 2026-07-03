@@ -7,6 +7,7 @@ import {
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
+import { readStoredDocument } from "@/lib/storage/readStoredDocument";
 import { readDocument } from "@/lib/whatsapp/extraction";
 import { buildGstAddresses } from "@/lib/onboarding/gst-addresses";
 
@@ -100,14 +101,14 @@ async function extractGstAddressesBestEffort(
   const url = cleanString(gstCert?.uploadedUrl);
   if (!url) return null;
   try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
+    // Direct storage read — uploadedUrl is a relative /api/files/... proxy
+    // path on the S3 backend, which a server-side fetch() can't parse.
+    const stored = await readStoredDocument(url);
     const mime =
-      res.headers.get("content-type") ||
+      (stored.contentType !== "application/octet-stream" && stored.contentType) ||
       cleanString(gstCert?.mimeType || gstCert?.type) ||
       "application/pdf";
-    const buffer = Buffer.from(await res.arrayBuffer());
-    const extracted = await readDocument(buffer, mime, "gst");
+    const extracted = await readDocument(stored.buffer, mime, "gst");
     if (!extracted.ok) return null;
     return buildGstAddresses(extracted.fields);
   } catch (err) {
