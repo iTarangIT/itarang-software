@@ -66,6 +66,7 @@ export async function GET(
         serial_number: inventory.serial_number,
         model_name: products.name,
         model_type: inventory.model_type,
+        product_id: inventory.product_id,
         asset_category: inventory.asset_category,
         invoice_date: inventory.oem_invoice_date,
         soc_percent: inventory.soc_percent,
