@@ -607,6 +607,7 @@ function ActionCard({
   financeEnabled, agreementStatus,
   duplicate,
   onboardingStatus,
+  branchAck, setBranchAck,
 }: {
   remarks: string;
   setRemarks: (value: string) => void;
@@ -619,6 +620,8 @@ function ActionCard({
   agreementStatus?: string | null;
   duplicate?: DuplicateCheckResult | null;
   onboardingStatus?: string;
+  branchAck: boolean;
+  setBranchAck: (value: boolean) => void;
 }) {
   const financeGateBlock =
     !!financeEnabled && (agreementStatus || "").toLowerCase() !== "completed";
@@ -629,8 +632,11 @@ function ActionCard({
   // Blocking the button locally turns an alert popup into clear inline state.
   const submissionGateBlock =
     !!onboardingStatus && onboardingStatus !== "submitted";
+  // Branch approvals must be explicitly acknowledged — the server rejects
+  // them with 409 otherwise.
+  const branchAckBlock = duplicate?.conflict === "branch" && !branchAck;
   const approvalBlocked =
-    financeGateBlock || duplicateBlock || submissionGateBlock;
+    financeGateBlock || duplicateBlock || submissionGateBlock || branchAckBlock;
 
   return (
     <motion.aside
@@ -701,6 +707,19 @@ function ActionCard({
                 approving will link this dealer as an additional location under the existing legal
                 entity. Shared fields (GSTIN, PAN, bank details) will be read-only for this dealer.
               </p>
+              <label className="mt-3 flex cursor-pointer items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={branchAck}
+                  onChange={(e) => setBranchAck(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-amber-300 accent-amber-600"
+                />
+                <span className="text-sm font-medium text-amber-900">
+                  I understand this dealer will NOT get its own account — it won&apos;t
+                  appear separately in inventory/dealer dropdowns and will operate under{" "}
+                  {duplicate.existing.companyName || duplicate.existing.dealerCode}.
+                </span>
+              </label>
             </div>
           </div>
         </div>
@@ -778,6 +797,9 @@ export default function DealerReviewPage() {
   const [remarks, setRemarks]   = useState("");
   const [loading, setLoading]   = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  // Explicit admin acknowledgement for branch-classified approvals — the
+  // approve endpoint returns 409 without it.
+  const [branchAck, setBranchAck] = useState(false);
 
   // ✅ NEW — edit state
   const [isEditing, setIsEditing]   = useState(false);
@@ -1381,7 +1403,11 @@ export default function DealerReviewPage() {
   const handleApprove = async () => {
     setSubmitting(true);
     try {
-      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/approve`, { method: "POST" });
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ acknowledgeBranch: branchAck }),
+      });
       let json: any = null;
       try { json = await res.json(); } catch { /* non-JSON body */ }
       if (!res.ok || !json?.success) {
@@ -2359,6 +2385,8 @@ export default function DealerReviewPage() {
           agreementStatus={agreementStatusForUi}
           duplicate={duplicate}
           onboardingStatus={data.onboardingStatus}
+          branchAck={branchAck}
+          setBranchAck={setBranchAck}
         />
       </div>
 
