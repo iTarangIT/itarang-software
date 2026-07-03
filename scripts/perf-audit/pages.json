@@ -1,0 +1,1631 @@
+[
+  {
+    "url": "/",
+    "sourceFile": "src/app/(dashboard)/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin",
+    "sourceFile": "src/app/(dashboard)/admin/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/calculator",
+    "sourceFile": "src/app/(dashboard)/admin/calculator/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/calculator/audit",
+    "sourceFile": "src/app/(dashboard)/admin/calculator/audit/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/calculator/eligibility",
+    "sourceFile": "src/app/(dashboard)/admin/calculator/eligibility/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/calculator/nbfc/:nbfcId",
+    "sourceFile": "src/app/(dashboard)/admin/calculator/nbfc/[nbfcId]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/calculator/prices",
+    "sourceFile": "src/app/(dashboard)/admin/calculator/prices/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/calculator/search-history",
+    "sourceFile": "src/app/(dashboard)/admin/calculator/search-history/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/calculator/settings",
+    "sourceFile": "src/app/(dashboard)/admin/calculator/settings/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/coupon-management",
+    "sourceFile": "src/app/(dashboard)/admin/coupon-management/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/coupon-management/:batchId",
+    "sourceFile": "src/app/(dashboard)/admin/coupon-management/[batchId]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/coupon-management/create",
+    "sourceFile": "src/app/(dashboard)/admin/coupon-management/create/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/dealer-verification",
+    "sourceFile": "src/app/(dashboard)/admin/dealer-verification/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/dealer-verification/:dealerId",
+    "sourceFile": "src/app/(dashboard)/admin/dealer-verification/[dealerId]/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/dealer-verification/:dealerId/nbfcs",
+    "sourceFile": "src/app/(dashboard)/admin/dealer-verification/[dealerId]/nbfcs/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/escalations",
+    "sourceFile": "src/app/(dashboard)/admin/escalations/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/escalations/:id",
+    "sourceFile": "src/app/(dashboard)/admin/escalations/[id]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/expense-tracker",
+    "sourceFile": "src/app/(dashboard)/admin/expense-tracker/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/inventory",
+    "sourceFile": "src/app/(dashboard)/admin/inventory/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/inventory/:itemId",
+    "sourceFile": "src/app/(dashboard)/admin/inventory/[itemId]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/inventory/:itemId/edit",
+    "sourceFile": "src/app/(dashboard)/admin/inventory/[itemId]/edit/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/inventory/add",
+    "sourceFile": "src/app/(dashboard)/admin/inventory/add/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/inventory/ageing-report",
+    "sourceFile": "src/app/(dashboard)/admin/inventory/ageing-report/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/inventory/transfer",
+    "sourceFile": "src/app/(dashboard)/admin/inventory/transfer/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/inventory/upload",
+    "sourceFile": "src/app/(dashboard)/admin/inventory/upload/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/inventory/upload-report/:reportId",
+    "sourceFile": "src/app/(dashboard)/admin/inventory/upload-report/[reportId]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/kyc-review",
+    "sourceFile": "src/app/(dashboard)/admin/kyc-review/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/kyc-review/:leadId",
+    "sourceFile": "src/app/(dashboard)/admin/kyc-review/[leadId]/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/lead/:id/manual-handoff",
+    "sourceFile": "src/app/(dashboard)/admin/lead/[id]/manual-handoff/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/leads-info",
+    "sourceFile": "src/app/(dashboard)/admin/leads-info/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/loan-products",
+    "sourceFile": "src/app/(dashboard)/admin/loan-products/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/loan-products/:productId/edit",
+    "sourceFile": "src/app/(dashboard)/admin/loan-products/[productId]/edit/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/merge-requests",
+    "sourceFile": "src/app/(dashboard)/admin/merge-requests/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/:nbfcId/approval",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/[nbfcId]/approval/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/:nbfcId/billing",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/[nbfcId]/billing/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/:nbfcId/documents",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/[nbfcId]/documents/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/:nbfcId/edit",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/[nbfcId]/edit/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/:nbfcId/kyc-review",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/[nbfcId]/kyc-review/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/:nbfcId/loan-products",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/[nbfcId]/loan-products/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/:nbfcId/lsp-agreement",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/[nbfcId]/lsp-agreement/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/:nbfcId/review",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/[nbfcId]/review/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/approvals",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/approvals/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/audit-log",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/audit-log/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/ecosystem-overview",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/ecosystem-overview/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/financing-offers/approvals",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/financing-offers/approvals/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/new",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/new/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/risk-rules",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/risk-rules/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/nbfc/risk-rules/approvals",
+    "sourceFile": "src/app/(dashboard)/admin/nbfc/risk-rules/approvals/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/onboarding-dropouts",
+    "sourceFile": "src/app/(dashboard)/admin/onboarding-dropouts/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/product-master",
+    "sourceFile": "src/app/(dashboard)/admin/product-master/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/product-review",
+    "sourceFile": "src/app/(dashboard)/admin/product-review/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/product-review/:leadId",
+    "sourceFile": "src/app/(dashboard)/admin/product-review/[leadId]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/reports",
+    "sourceFile": "src/app/(dashboard)/admin/reports/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/settings",
+    "sourceFile": "src/app/(dashboard)/admin/settings/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/admin/upload",
+    "sourceFile": "src/app/(dashboard)/admin/upload/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/api/scraper-leads/:id",
+    "sourceFile": "src/app/api/scraper-leads/[id]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null,
+    "skip": "page.tsx under /api — not a navigable CRM page"
+  },
+  {
+    "url": "/approvals",
+    "sourceFile": "src/app/(dashboard)/approvals/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/asm",
+    "sourceFile": "src/app/(dashboard)/asm/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/asm/lead/:id",
+    "sourceFile": "src/app/(dashboard)/asm/lead/[id]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/business-head",
+    "sourceFile": "src/app/(dashboard)/business-head/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/business-head/approvals",
+    "sourceFile": "src/app/(dashboard)/business-head/approvals/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/business-head/credits",
+    "sourceFile": "src/app/(dashboard)/business-head/credits/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/ceo",
+    "sourceFile": "src/app/(dashboard)/ceo/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/ceo/ai-dialer",
+    "sourceFile": "src/app/(dashboard)/ceo/ai-dialer/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/ceo/expenses",
+    "sourceFile": "src/app/(dashboard)/ceo/expenses/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/ceo/intellicar",
+    "sourceFile": "src/app/(dashboard)/ceo/intellicar/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/ceo/invoices",
+    "sourceFile": "src/app/(dashboard)/ceo/invoices/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/change-password",
+    "sourceFile": "src/app/change-password/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/coborrowerconsent/:leadId/:token",
+    "sourceFile": "src/app/coborrowerconsent/[leadId]/[token]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null,
+    "skip": "signed-token flow"
+  },
+  {
+    "url": "/dealer-onboarding",
+    "sourceFile": "src/app/dealer-onboarding/page.tsx",
+    "roles": [
+      "public"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/assets",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/assets/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/batteries",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/batteries/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/calculator",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/calculator/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/campaigns/new",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/campaigns/new/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/inventory",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/inventory/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/leads",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/leads/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/leads/:id",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/leads/[id]/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/leads/:id/borrower-consent",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/leads/[id]/borrower-consent/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/leads/:id/kyc",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/leads/[id]/kyc/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/leads/:id/options",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/leads/[id]/options/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/leads/:id/product-selection",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/leads/[id]/product-selection/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/leads/:id/step-5",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/leads/[id]/step-5/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/leads/drafts",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/leads/drafts/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/leads/new",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/leads/new/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/loans",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/loans/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/loans/facilitation",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/loans/facilitation/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/loans/facilitation/:id",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/loans/facilitation/[id]/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/loans/management",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/loans/management/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/onboarding-status",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/onboarding-status/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/orders",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/orders/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/dealer-portal/service",
+    "sourceFile": "src/app/(dashboard)/dealer-portal/service/page.tsx",
+    "roles": [
+      "dealer",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/deals",
+    "sourceFile": "src/app/(dashboard)/deals/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/deals/:id",
+    "sourceFile": "src/app/(dashboard)/deals/%5Bid%5D/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/deals/new",
+    "sourceFile": "src/app/(dashboard)/deals/new/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/disputes",
+    "sourceFile": "src/app/(dashboard)/disputes/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/disputes/:id",
+    "sourceFile": "src/app/(dashboard)/disputes/%5Bid%5D/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/disputes/new",
+    "sourceFile": "src/app/(dashboard)/disputes/new/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/expenses/submit",
+    "sourceFile": "src/app/(dashboard)/expenses/submit/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/fi/:token",
+    "sourceFile": "src/app/fi/[token]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null,
+    "skip": "signed-token flow"
+  },
+  {
+    "url": "/finance-controller",
+    "sourceFile": "src/app/(dashboard)/finance-controller/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/finance-controller/credits",
+    "sourceFile": "src/app/(dashboard)/finance-controller/credits/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/finance-controller/invoices",
+    "sourceFile": "src/app/(dashboard)/finance-controller/invoices/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/finance-controller/payments",
+    "sourceFile": "src/app/(dashboard)/finance-controller/payments/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/hr",
+    "sourceFile": "src/app/(dashboard)/hr/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/inside-sales",
+    "sourceFile": "src/app/(dashboard)/inside-sales/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/inside-sales/lead/:id",
+    "sourceFile": "src/app/(dashboard)/inside-sales/lead/[id]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/inside-sales/upload",
+    "sourceFile": "src/app/(dashboard)/inside-sales/upload/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/inventory",
+    "sourceFile": "src/app/(dashboard)/inventory/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/inventory-manager",
+    "sourceFile": "src/app/(dashboard)/inventory-manager/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/inventory/bulk-upload",
+    "sourceFile": "src/app/(dashboard)/inventory/bulk-upload/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/kyc/digilocker/failed",
+    "sourceFile": "src/app/kyc/digilocker/failed/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/kyc/digilocker/success",
+    "sourceFile": "src/app/kyc/digilocker/success/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/leads",
+    "sourceFile": "src/app/(dashboard)/leads/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/leads/:id",
+    "sourceFile": "src/app/(dashboard)/leads/[id]/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/leads/:id/edit",
+    "sourceFile": "src/app/(dashboard)/leads/[id]/edit/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/leads/campaigns/:id",
+    "sourceFile": "src/app/(dashboard)/leads/campaigns/[id]/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/leads/new",
+    "sourceFile": "src/app/(dashboard)/leads/new/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/leads/scrape-runs/:id",
+    "sourceFile": "src/app/(dashboard)/leads/scrape-runs/[id]/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/login",
+    "sourceFile": "src/app/(auth)/login/page.tsx",
+    "roles": [
+      "public"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/logout",
+    "sourceFile": "src/app/(auth)/logout/page.tsx",
+    "roles": [],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/loop-test/borrower-notice-preview",
+    "sourceFile": "src/app/loop-test/borrower-notice-preview/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null,
+    "skip": "internal test page"
+  },
+  {
+    "url": "/loop-test/freshness-badge",
+    "sourceFile": "src/app/loop-test/freshness-badge/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null,
+    "skip": "internal test page"
+  },
+  {
+    "url": "/nbfc",
+    "sourceFile": "src/app/(dashboard)/nbfc/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/nbfc/acquire",
+    "sourceFile": "src/app/(dashboard)/nbfc/acquire/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/nbfc/acquire/:leadId",
+    "sourceFile": "src/app/(dashboard)/nbfc/acquire/[leadId]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/nbfc/auction",
+    "sourceFile": "src/app/(dashboard)/nbfc/auction/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/nbfc/audit",
+    "sourceFile": "src/app/(dashboard)/nbfc/audit/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/nbfc/batteries",
+    "sourceFile": "src/app/(dashboard)/nbfc/batteries/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/nbfc/emi-tracker",
+    "sourceFile": "src/app/(dashboard)/nbfc/emi-tracker/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/nbfc/leads",
+    "sourceFile": "src/app/(dashboard)/nbfc/leads/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/nbfc/overview",
+    "sourceFile": "src/app/(dashboard)/nbfc/overview/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/nbfc/portfolio",
+    "sourceFile": "src/app/(dashboard)/nbfc/portfolio/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/nbfc/recovery",
+    "sourceFile": "src/app/(dashboard)/nbfc/recovery/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/nbfc/risk",
+    "sourceFile": "src/app/(dashboard)/nbfc/risk/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/nbfc/settings",
+    "sourceFile": "src/app/(dashboard)/nbfc/settings/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/oem-onboarding",
+    "sourceFile": "src/app/(dashboard)/oem-onboarding/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/onboarding/correct/:token",
+    "sourceFile": "src/app/onboarding/correct/[token]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null,
+    "skip": "signed-token flow"
+  },
+  {
+    "url": "/orders",
+    "sourceFile": "src/app/(dashboard)/orders/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/orders/:id",
+    "sourceFile": "src/app/(dashboard)/orders/[id]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/privacy",
+    "sourceFile": "src/app/privacy/page.tsx",
+    "roles": [
+      "public"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/procurement",
+    "sourceFile": "src/app/(dashboard)/procurement/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/product-catalog",
+    "sourceFile": "src/app/(dashboard)/product-catalog/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/profile",
+    "sourceFile": "src/app/(dashboard)/profile/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/provisions",
+    "sourceFile": "src/app/(dashboard)/provisions/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/provisions/:id/create-order",
+    "sourceFile": "src/app/(dashboard)/provisions/[id]/create-order/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/provisions/new",
+    "sourceFile": "src/app/(dashboard)/provisions/new/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/risk-head",
+    "sourceFile": "src/app/(dashboard)/risk-head/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/risk-head/approvals",
+    "sourceFile": "src/app/(dashboard)/risk-head/approvals/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/risk-head/batteries",
+    "sourceFile": "src/app/(dashboard)/risk-head/batteries/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-executive",
+    "sourceFile": "src/app/(dashboard)/sales-executive/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-head",
+    "sourceFile": "src/app/(dashboard)/sales-head/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-head/:id",
+    "sourceFile": "src/app/(dashboard)/sales-head/[id]/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-head/approvals",
+    "sourceFile": "src/app/(dashboard)/sales-head/approvals/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-head/approvals/nbfc",
+    "sourceFile": "src/app/(dashboard)/sales-head/approvals/nbfc/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-head/scraper",
+    "sourceFile": "src/app/(dashboard)/sales-head/scraper/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-head/scraper/runs/:id",
+    "sourceFile": "src/app/(dashboard)/sales-head/scraper/runs/[id]/page.tsx",
+    "roles": [
+      "sales_head",
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-insight",
+    "sourceFile": "src/app/(dashboard)/sales-insight/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-insight/upload",
+    "sourceFile": "src/app/(dashboard)/sales-insight/upload/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-manager",
+    "sourceFile": "src/app/(dashboard)/sales-manager/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-manager/ai-calls",
+    "sourceFile": "src/app/(dashboard)/sales-manager/ai-calls/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-manager/leads/:id/options",
+    "sourceFile": "src/app/(dashboard)/sales-manager/leads/[id]/options/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-manager/leads/:id/review",
+    "sourceFile": "src/app/(dashboard)/sales-manager/leads/[id]/review/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-manager/scraper-leads",
+    "sourceFile": "src/app/(dashboard)/sales-manager/scraper-leads/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-order-manager",
+    "sourceFile": "src/app/(dashboard)/sales-order-manager/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-order-manager/oem-onboarding",
+    "sourceFile": "src/app/(dashboard)/sales-order-manager/oem-onboarding/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-order-manager/orders",
+    "sourceFile": "src/app/(dashboard)/sales-order-manager/orders/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-order-manager/pi-invoices",
+    "sourceFile": "src/app/(dashboard)/sales-order-manager/pi-invoices/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/sales-order-manager/provisions",
+    "sourceFile": "src/app/(dashboard)/sales-order-manager/provisions/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/service-engineer",
+    "sourceFile": "src/app/(dashboard)/service-engineer/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/service-engineer/pdi-queue",
+    "sourceFile": "src/app/(dashboard)/service-engineer/pdi-queue/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/service-engineer/pdi/:id",
+    "sourceFile": "src/app/(dashboard)/service-engineer/pdi/[id]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null
+  },
+  {
+    "url": "/terms",
+    "sourceFile": "src/app/terms/page.tsx",
+    "roles": [
+      "public"
+    ],
+    "dynamic": false,
+    "idDiscovery": null
+  },
+  {
+    "url": "/upload-docs/:leadId/:requestId/:token",
+    "sourceFile": "src/app/upload-docs/[leadId]/[requestId]/[token]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null,
+    "skip": "signed-token flow"
+  },
+  {
+    "url": "/vkyc/:token",
+    "sourceFile": "src/app/vkyc/[token]/page.tsx",
+    "roles": [
+      "ceo"
+    ],
+    "dynamic": true,
+    "idDiscovery": null,
+    "skip": "signed-token flow"
+  }
+]

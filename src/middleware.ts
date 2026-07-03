@@ -93,6 +93,16 @@ export async function middleware(request: NextRequest) {
 
   const path = request.nextUrl.pathname;
 
+  // API and asset requests only need the session-cookie refresh that
+  // getUser() above already performed (see the matcher comment on why
+  // /api/files/* must keep it). Role resolution below is page-navigation
+  // logic — skipping it saves up to two Supabase `users` queries on every
+  // API call. Outcome is identical: these paths were public (unauthenticated)
+  // and fell through to finalize() (authenticated) before this early exit.
+  if (path.startsWith("/api") || path.startsWith("/_next") || path === "/favicon.ico") {
+    return finalize(response);
+  }
+
   const roleDashboards: Record<string, string> = {
     ceo: "/ceo",
     business_head: "/business-head",
@@ -111,12 +121,7 @@ export async function middleware(request: NextRequest) {
     nbfc_partner: "/nbfc",
   };
 
-  const isPublicRoute =
-    path === "/login" ||
-    path === "/logout" ||
-    path.startsWith("/api") ||
-    path.startsWith("/_next") ||
-    path === "/favicon.ico";
+  const isPublicRoute = path === "/login" || path === "/logout";
 
   const isProtectedRoute =
     Object.values(roleDashboards).some((dashboardPath) =>
@@ -177,13 +182,16 @@ export async function middleware(request: NextRequest) {
   const role = rawRole.toLowerCase();
   const myDashboard = roleDashboards[role] || "/";
 
-  console.log("[MIDDLEWARE] Auth user:", {
-    authUserId: user.id,
-    authEmail: user.email,
-    resolvedRole: role,
-    dashboard: myDashboard,
-    path,
-  });
+  // Per-navigation logging is hot-path cost in prod — opt in when debugging.
+  if (process.env.MIDDLEWARE_DEBUG === "1") {
+    console.log("[MIDDLEWARE] Auth user:", {
+      authUserId: user.id,
+      authEmail: user.email,
+      resolvedRole: role,
+      dashboard: myDashboard,
+      path,
+    });
+  }
 
   // First-login forced password reset for NBFC partners. Activation route sets
   // users.must_change_password=true; /api/auth/change-password clears it.
