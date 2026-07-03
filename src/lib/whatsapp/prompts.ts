@@ -279,6 +279,66 @@ export function buildExtractionPrompt(docType: string): string {
   ].join("\n");
 }
 
+// ── Entry-router intent classification (WhatsApp Hindi front door) ───────────
+// The greeting no longer shows tappable buttons; instead the user types what
+// they need (usually in Hindi) and this classifier routes them into one of the
+// three existing flows — or flags the message as too hard for the bot.
+export type IntentId =
+  | "dealer_onboarding"
+  | "customer_onboarding"
+  | "general_info"
+  | "too_hard";
+
+export const INTENT_IDS: readonly IntentId[] = [
+  "dealer_onboarding",
+  "customer_onboarding",
+  "general_info",
+  "too_hard",
+];
+
+// Each category with a short description used both in the prompt and as the
+// canonical routing key. Kept factual and bilingual-friendly since inbound
+// messages are typically Hindi (Devanagari or romanized) or English.
+const INTENT_CATEGORIES: Record<Exclude<IntentId, "too_hard">, string> = {
+  dealer_onboarding:
+    "the sender is a business owner / shopkeeper who wants to BECOME an iTarang dealer or partner (e.g. 'mujhe dealer banna hai', 'dealership chahiye', 'apni shop register karni hai')",
+  customer_onboarding:
+    "the sender is an end CUSTOMER interested in buying an EV battery / product or getting financing/EMI for one, or wants to register their enquiry (e.g. 'battery chahiye', 'loan chahiye', 'EMI par lena hai', 'main customer hoon')",
+  general_info:
+    "the sender is asking a general question ABOUT iTarang — what it is, how onboarding works, whether financing is available, support — without yet committing to dealer or customer signup (e.g. 'iTarang kya hai', 'ye kaise kaam karta hai')",
+};
+
+// Router prompt: classify ONE free-text WhatsApp message into exactly one
+// intent. Mirrors buildClassifyPrompt()'s strict-JSON contract. "too_hard" is
+// the safety valve for anything the three flows can't serve (complaints, order
+// status, price/EMI specifics, off-topic, gibberish) — the caller then replies
+// "our team will get back to you".
+export function buildIntentPrompt(): string {
+  const categoryLines = Object.entries(INTENT_CATEGORIES)
+    .map(([id, desc]) => `  - "${id}": ${desc}`)
+    .join("\n");
+
+  return [
+    "You are the router for iTarang's WhatsApp assistant. iTarang is an Indian EV-battery company with a dealer network and customer financing.",
+    "You are reading ONE message a person just sent. It is usually in Hindi (Devanagari or romanized/Hinglish) or English.",
+    "Decide which ONE of these the person wants:",
+    categoryLines,
+    '  - "too_hard": none of the above — e.g. a complaint, order/delivery status, a request for exact prices/interest/EMI numbers, an off-topic or unclear/gibberish message, or anything a simple router should hand to a human.',
+    "",
+    "Return ONLY a JSON object with EXACTLY this shape (no markdown, no commentary):",
+    "{",
+    '  "intent": <one of: "dealer_onboarding", "customer_onboarding", "general_info", "too_hard">,',
+    '  "confidence": <number 0 to 1 — how sure you are>',
+    "}",
+    "",
+    "Rules:",
+    "- Judge INTENT, not language. Understand Hindi and Hinglish.",
+    '- If the message plausibly fits a flow, prefer that flow over "too_hard".',
+    '- If it is a bare greeting with no request (just "hi"/"namaste"), return "too_hard" with low confidence.',
+    "- Never invent facts; you are only classifying.",
+  ].join("\n");
+}
+
 // Grounding prompt for the "General Information" entry-menu option — a small
 // facts block the Q&A model must stay inside. Keep this SHORT and factual;
 // anything not stated here the bot must decline to answer.
