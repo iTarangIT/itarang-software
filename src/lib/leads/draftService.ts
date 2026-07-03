@@ -22,6 +22,7 @@ import {
   personalDetails,
 } from "@/lib/db/schema";
 import { generateId } from "@/lib/api-utils";
+import { recordLeadCapture } from "@/lib/leads/lead-registry";
 
 export interface LeadActor {
   /** dealers.dealer_id → leads.dealer_id (E-105 gate value). */
@@ -296,6 +297,17 @@ export async function commitLeadDraft(
       performed_by: performedBy,
       timestamp: new Date(),
     });
+  });
+
+  // E-179 central registry — the draft became a real lead (name + phone
+  // validated above). Only caller is the WhatsApp dealer console.
+  await recordLeadCapture({
+    leadType: "customer",
+    name: fullName,
+    phone: lead.phone,
+    sourceChannel: "whatsapp",
+    sourceTable: "leads",
+    sourceId: leadId,
   });
 
   return { ok: true, leadId, isCashLike, isHot };

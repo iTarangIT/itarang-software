@@ -8,6 +8,7 @@ import {
 } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
 import { readStoredDocument } from "@/lib/storage/readStoredDocument";
+import { recordLeadCapture } from "@/lib/leads/lead-registry";
 import { readDocument } from "@/lib/whatsapp/extraction";
 import { buildGstAddresses } from "@/lib/onboarding/gst-addresses";
 
@@ -701,6 +702,17 @@ export async function POST(req: NextRequest) {
       if (documentRows.length > 0) {
         await tx.insert(dealerOnboardingDocuments).values(documentRows);
       }
+    });
+
+    // E-179 central registry. No-op if the save-route autosave already
+    // registered this application (unique on source_table + source_id).
+    await recordLeadCapture({
+      leadType: "dealer",
+      name: primaryOwner.ownerName || cleanString(company.companyName),
+      phone: primaryOwner.ownerPhone,
+      sourceChannel: "web",
+      sourceTable: "dealer_onboarding_applications",
+      sourceId: finalApplicationId!,
     });
 
     return NextResponse.json({

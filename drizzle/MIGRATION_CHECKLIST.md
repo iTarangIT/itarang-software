@@ -162,6 +162,7 @@ least trustworthy column (drift began ~E-145).
 | E-176_consent_signer_name_score | consent_records.signer_name_match_score (Aadhaar e-sign name-match signal) | ✅ | ☐ | ☐ | ☐ |
 | E-177_loan_calculator | dealer loan calculator: calc_* tables (nbfcs/schemes/model_caps/component_prices/coverage/settings/config_versions/audit_log/leads) + guard indexes & checks | ✅ | ☐ | ☐ | ☐ |
 | E-178_calc_otp_search_history | calc_otp_verifications + calc_leads otp/wa columns (OTP-gated calculator, WhatsApp results, admin search history) | ✅ | ☐ | ☐ | ☐ |
+| E-179_lead_registry | lead_registry — central capture of every new lead (dealer/customer/oem/nbfc, web+whatsapp) with name/phone + source link | ✅ | ☐ | ☐ | ☐ |
 
 > Add a new row whenever you create an `E-<n>_*.sql` file. When `DATABASE_URL`
 > points at a DB and you confirm a migration is present, tick that env's box.
