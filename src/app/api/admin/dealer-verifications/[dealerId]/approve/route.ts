@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { dealerOnboardingApplications, users, accounts, dealers } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword";
 import { hashPassword } from "@/lib/auth/hashPassword";
 import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
@@ -71,6 +71,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
+
+    // The approve button historically sent no body; parse defensively so a
+    // bodyless POST still works and simply counts as "not acknowledged".
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+    const acknowledgeBranch = body?.acknowledgeBranch === true;
 
     const resolvedLoginUrl = resolveDealerLoginUrl(req);
 
@@ -158,6 +163,25 @@ export async function POST(req: NextRequest, context: RouteContext) {
       );
     }
 
+    // Branch linkage is silent from the admin's POV otherwise: the dealer gets
+    // NO accounts row of its own, so it never appears in the inventory dealer
+    // dropdowns — it lives under the parent entity. Require the admin to
+    // explicitly acknowledge that before approving.
+    if (classification.conflict === "branch" && !acknowledgeBranch) {
+      return NextResponse.json(
+        {
+          success: false,
+          conflict: "branch",
+          requiresBranchAcknowledgement: true,
+          existing: classification.existing,
+          message:
+            classification.message ||
+            "This GSTIN already belongs to an existing dealer account. Confirm the branch linkage before approving.",
+        },
+        { status: 409 }
+      );
+    }
+
     const isBranchDealer = classification.conflict === "branch";
     const sharedAccountId =
       isBranchDealer && classification.existing
@@ -167,8 +191,17 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // For branch approvals, adopt the existing account's id as this dealer's
     // code so all downstream FK-style linkage (users.dealer_id, leads, etc.)
     // points at the shared legal entity.
+    //
+    // A dealer_code left over from a PREVIOUS branch approval is the parent's
+    // id, not this dealer's. If the application is no longer classified as a
+    // branch (e.g. GSTIN corrected after a request-correction cycle), reusing
+    // it would silently keep the wrong linkage — generate a fresh code instead.
+    const staleBranchCode =
+      Boolean(application.is_branch_dealer) && !isBranchDealer;
     const dealerCode =
-      sharedAccountId || application.dealer_code || generateDealerCode();
+      sharedAccountId ||
+      (staleBranchCode ? null : application.dealer_code) ||
+      generateDealerCode();
 
     // Pre-flight: for finance-enabled dealers, guarantee BOTH the signed
     // agreement PDF and the audit trail PDF are available before we create
@@ -411,6 +444,22 @@ export async function POST(req: NextRequest, context: RouteContext) {
             updated_at: new Date(),
           },
         });
+
+      // If this application was previously branch-linked, its old approval
+      // upserted the PARENT-keyed dealers row with this application_id.
+      // Detach that residue so the parent row no longer claims this
+      // application.
+      if (staleBranchCode && application.dealer_code) {
+        await tx
+          .update(dealers)
+          .set({ application_id: null, updated_at: new Date() })
+          .where(
+            and(
+              eq(dealers.dealer_id, application.dealer_code),
+              eq(dealers.application_id, application.id)
+            )
+          );
+      }
 
       // Branch dealers reuse the existing accounts row — skip the insert
       // entirely (a new insert would violate UNIQUE(gstin) + UNIQUE(id)).
