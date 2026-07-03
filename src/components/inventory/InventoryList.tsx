@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import * as XLSX from 'xlsx';
 import { DataTable } from '@/components/shared/data-table';
 import { Download, Loader2, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -47,8 +46,11 @@ export default function InventoryList() {
         }
     });
 
-    const handleExport = () => {
+    const handleExport = async () => {
         if (!data) return;
+
+        // xlsx is ~400 KB — load it only when the export button is clicked.
+        const XLSX = await import('xlsx');
 
         const exportData = data.map(item => ({
             'Serial Number': item.serial_number || 'N/A',
