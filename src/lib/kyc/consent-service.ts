@@ -272,23 +272,11 @@ export async function sendConsentForLead(opts: {
     };
   }
 
-  // Fail-closed: we're about to issue a NEW Aadhaar eSign link, and Digio will
-  // accept ANY Aadhaar. We can only catch a wrong-Aadhaar signature if we have
-  // the applicant's own Aadhaar on file to compare the signer's suffix against.
-  // So refuse to send an unverifiable link until that Aadhaar is captured.
-  // (Checked AFTER the active-reuse path so an already-sent/signed consent is
-  // still returned.)
-  const expectedAadhaar = await getExpectedConsentAadhaar(opts.leadId, role);
-  if (!expectedAadhaar || expectedAadhaar.replace(/\D/g, "").length !== 12) {
-    return {
-      ok: false,
-      status: 400,
-      error:
-        role === "co_borrower"
-          ? "Capture the co-borrower's 12-digit Aadhaar (upload the Aadhaar card) before sending the consent e-sign link, so the signing Aadhaar can be verified."
-          : "Capture the customer's 12-digit Aadhaar (upload the Aadhaar card) before sending the consent e-sign link, so the signing Aadhaar can be verified.",
-    };
-  }
+  // NOTE: no pre-send Aadhaar gate. Dealers can send the consent e-sign link
+  // without the applicant's Aadhaar on file. The signer-Aadhaar integrity check
+  // still runs at signing time (webhook + status-poll below), but it is
+  // best-effort — checkAadhaarMatch() treats a missing expected Aadhaar as
+  // "not comparable" and lets the e-sign complete rather than blocking.
   // Refreshable = any terminal-but-not-active state, including the Aadhaar
   // mismatch outcomes (esign_failed / esign_blocked) and an admin rejection — so
   // "Regenerate Consent" after a mismatch re-issues a fresh link in place.
