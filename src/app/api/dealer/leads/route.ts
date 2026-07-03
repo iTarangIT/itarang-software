@@ -7,6 +7,7 @@ import { leads, loanDetails, personalDetails, documents, auditLogs, accounts, de
 import { eq, and, desc, ilike, or, ne, isNull, inArray } from 'drizzle-orm';
 import { resolveDealerProfile } from '@/lib/supabase/identity';
 import { requireRole } from '@/lib/auth-utils';
+import { recordLeadCapture } from '@/lib/leads/lead-registry';
 
 
 // Extended Zod Schema
@@ -180,6 +181,15 @@ export const POST = withErrorHandler(async (req: Request) => {
                 performed_by: user.id,
                 timestamp: new Date()
             });
+        });
+
+        await recordLeadCapture({
+            leadType: "customer",
+            name: data.full_name,
+            phone: data.phone,
+            sourceChannel: "web",
+            sourceTable: "leads",
+            sourceId: leadId,
         });
 
         return successResponse({ id: leadId, message: 'Lead created successfully' }, 201);

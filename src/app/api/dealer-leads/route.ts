@@ -8,6 +8,7 @@ import {
   normalizeState,
   inferStateFromCity,
 } from "@/lib/scraper-enrichment";
+import { recordLeadCapture } from "@/lib/leads/lead-registry";
 
 export async function POST(req: NextRequest) {
   try {
@@ -74,6 +75,16 @@ export async function POST(req: NextRequest) {
       final_intent_score: 0,
       follow_up_history: [],
       created_at: new Date(),
+    });
+
+    // E-179 central registry — manually captured dealer prospect.
+    await recordLeadCapture({
+      leadType: "dealer",
+      name: dealer_name,
+      phone,
+      sourceChannel: "web",
+      sourceTable: "dealer_leads",
+      sourceId: id,
     });
 
     return NextResponse.json({ success: true, id });

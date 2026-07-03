@@ -7,6 +7,7 @@ import {
   dealerOnboardingApplications,
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
+import { recordLeadCapture } from "@/lib/leads/lead-registry";
 
 type NullableString = string | null;
 type SafeRecord = Record<string, unknown>;
@@ -416,6 +417,20 @@ export async function POST(req: NextRequest) {
       );
       mergeCookies(cookieCollector, res);
       return res;
+    }
+
+    // E-179 central registry. Autosave fires on every wizard step, so wait for
+    // the first save that actually carries an identity; the unique
+    // (source_table, source_id) index turns every later attempt into a no-op.
+    if (ownerName || companyName || ownerPhone) {
+      await recordLeadCapture({
+        leadType: "dealer",
+        name: ownerName || companyName,
+        phone: ownerPhone,
+        sourceChannel: "web",
+        sourceTable: "dealer_onboarding_applications",
+        sourceId: application.id,
+      });
     }
 
     // Only replace documents when the client explicitly sent a documents

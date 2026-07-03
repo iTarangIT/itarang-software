@@ -279,10 +279,12 @@ export function buildExtractionPrompt(docType: string): string {
   ].join("\n");
 }
 
-// ── Entry-router intent classification (WhatsApp Hindi front door) ───────────
+// ── Entry-router intent classification (WhatsApp free-text front door) ───────
 // The greeting no longer shows tappable buttons; instead the user types what
-// they need (usually in Hindi) and this classifier routes them into one of the
-// three existing flows — or flags the message as too hard for the bot.
+// they need (English or Hindi/Hinglish) and this classifier routes them into
+// one of the flows — or flags the message as too hard, in which case the caller
+// tells them the team will follow up and asks whether they're a customer or a
+// dealer.
 export type IntentId =
   | "dealer_onboarding"
   | "customer_onboarding"
@@ -298,21 +300,21 @@ export const INTENT_IDS: readonly IntentId[] = [
 
 // Each category with a short description used both in the prompt and as the
 // canonical routing key. Kept factual and bilingual-friendly since inbound
-// messages are typically Hindi (Devanagari or romanized) or English.
+// messages may be English or Hindi (Devanagari or romanized).
 const INTENT_CATEGORIES: Record<Exclude<IntentId, "too_hard">, string> = {
   dealer_onboarding:
-    "the sender is a business owner / shopkeeper who wants to BECOME an iTarang dealer or partner (e.g. 'mujhe dealer banna hai', 'dealership chahiye', 'apni shop register karni hai')",
+    "the sender is a business owner / shopkeeper who wants to BECOME an iTarang dealer or partner (e.g. 'I want to become a dealer', 'mujhe dealer banna hai', 'dealership chahiye', 'apni shop register karni hai')",
   customer_onboarding:
-    "the sender is an end CUSTOMER interested in buying an EV battery / product or getting financing/EMI for one, or wants to register their enquiry (e.g. 'battery chahiye', 'loan chahiye', 'EMI par lena hai', 'main customer hoon')",
+    "the sender is an end CUSTOMER interested in buying an EV battery / product or getting financing/EMI for one, or wants to register their enquiry AS A CUSTOMER (e.g. 'I want to buy a battery', 'battery chahiye', 'loan chahiye', 'EMI par lena hai', 'main customer hoon')",
   general_info:
-    "the sender is asking a general question ABOUT iTarang — what it is, how onboarding works, whether financing is available, support — without yet committing to dealer or customer signup (e.g. 'iTarang kya hai', 'ye kaise kaam karta hai')",
+    "the sender is asking a general question ABOUT iTarang or its products — what it is, how onboarding works, battery information, prices, whether financing is available, support — without clearly identifying as a dealer or a customer (e.g. 'what is iTarang', 'battery price kya hai', 'ye kaise kaam karta hai')",
 };
 
 // Router prompt: classify ONE free-text WhatsApp message into exactly one
 // intent. Mirrors buildClassifyPrompt()'s strict-JSON contract. "too_hard" is
-// the safety valve for anything the three flows can't serve (complaints, order
-// status, price/EMI specifics, off-topic, gibberish) — the caller then replies
-// "our team will get back to you".
+// the safety valve for anything the flows can't serve directly (complaints,
+// order status, off-topic, gibberish) — the caller then replies "our team will
+// get in touch" and asks whether they're a customer or a dealer.
 export function buildIntentPrompt(): string {
   const categoryLines = Object.entries(INTENT_CATEGORIES)
     .map(([id, desc]) => `  - "${id}": ${desc}`)
@@ -320,10 +322,10 @@ export function buildIntentPrompt(): string {
 
   return [
     "You are the router for iTarang's WhatsApp assistant. iTarang is an Indian EV-battery company with a dealer network and customer financing.",
-    "You are reading ONE message a person just sent. It is usually in Hindi (Devanagari or romanized/Hinglish) or English.",
+    "You are reading ONE message a person just sent. It may be in English or Hindi (Devanagari or romanized/Hinglish).",
     "Decide which ONE of these the person wants:",
     categoryLines,
-    '  - "too_hard": none of the above — e.g. a complaint, order/delivery status, a request for exact prices/interest/EMI numbers, an off-topic or unclear/gibberish message, or anything a simple router should hand to a human.',
+    '  - "too_hard": none of the above — e.g. a complaint, order/delivery status, an off-topic or unclear/gibberish message, or anything a simple router should hand to a human.',
     "",
     "Return ONLY a JSON object with EXACTLY this shape (no markdown, no commentary):",
     "{",
@@ -333,7 +335,7 @@ export function buildIntentPrompt(): string {
     "",
     "Rules:",
     "- Judge INTENT, not language. Understand Hindi and Hinglish.",
-    '- If the message plausibly fits a flow, prefer that flow over "too_hard".',
+    '- Only choose "dealer_onboarding" or "customer_onboarding" when the sender clearly identifies as one. A generic product/price/info question is "general_info".',
     '- If it is a bare greeting with no request (just "hi"/"namaste"), return "too_hard" with low confidence.',
     "- Never invent facts; you are only classifying.",
   ].join("\n");
