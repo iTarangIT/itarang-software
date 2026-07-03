@@ -12,6 +12,7 @@ import { db } from "@/lib/db";
 import { dealerLeads } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
+import { recordLeadCapture } from "@/lib/leads/lead-registry";
 
 const MUTATE_ROLES = ["inside_sales_rep", "asm", "admin"];
 
@@ -83,6 +84,16 @@ export const POST = withErrorHandler(async (req: Request) => {
         }
         throw err;
     }
+
+    // E-179 central registry — dealer prospect captured by Inside Sales / ASM.
+    await recordLeadCapture({
+        leadType: "dealer",
+        name: body.dealer_name,
+        phone: body.phone,
+        sourceChannel: "web",
+        sourceTable: "dealer_leads",
+        sourceId: id,
+    });
 
     return successResponse({ id });
 });

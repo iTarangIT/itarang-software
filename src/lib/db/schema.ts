@@ -7245,3 +7245,29 @@ export const calcComponentPricesRelations = relations(calcComponentPrices, ({ on
     references: [calcBatteryModels.id],
   }),
 }));
+
+// ── E-179 Central lead registry ──────────────────────────────────────────────
+// One append-only row for EVERY new lead-like capture across the platform —
+// customer leads (web + WhatsApp), dealer onboarding (web wizard + WhatsApp
+// bot), NBFC onboarding, OEM. The originating record lives in its own table;
+// source_table/source_id link back to it. Written best-effort via
+// recordLeadCapture() in src/lib/leads/lead-registry.ts — never blocks the
+// main flow. The partial unique index on (source_table, source_id) makes the
+// helper idempotent on retries/double-submits.
+export const leadRegistry = pgTable(
+  "lead_registry",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    leadType: varchar("lead_type", { length: 16 }).notNull(), // 'dealer' | 'customer' | 'oem' | 'nbfc'
+    name: text("name").notNull(),
+    phone: varchar("phone", { length: 20 }),
+    sourceChannel: varchar("source_channel", { length: 16 }).notNull(), // 'web' | 'whatsapp' | 'admin' | 'scraper'
+    sourceTable: text("source_table"),
+    sourceId: text("source_id"),
+  },
+  (t) => ({
+    typeCreatedIdx: index("lead_registry_type_created_idx").on(t.leadType, t.createdAt),
+    phoneIdx: index("lead_registry_phone_idx").on(t.phone),
+  }),
+);

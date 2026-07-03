@@ -105,17 +105,15 @@ const WANTS_TYPE_CHANGE = /\b(company\s*type|wrong|galat|change|update)\b/i;
 // who types any of these mid-flow is taken back to the company-type question; a
 // dealer who has already submitted keeps the "under review" reply instead.
 const GREETING_TRIGGERS =
-  /^(hi+|hey+|hello+|helo|hii+|onboard(ing)?|start|begin|restart|namaste|namaskar|menu|नमस्ते|नमस्कार|हाय|शुरू)$/i;
+  /^(hi+|hey+|hello+|helo|hii+|onboard(ing)?|start|begin|restart|namaste|menu)$/i;
 
-// Hindi front-door prompt (Devanagari). Shown on first contact and whenever we
-// need to re-ask what the sender wants. The sender types their need in free
-// text; classifyIntent() routes it. No tappable buttons (free-text entry).
-const HINDI_HELP_PROMPT =
-  "🙏 iTarang में आपका स्वागत है!\n\nमैं आपकी कैसे मदद कर सकता हूँ? आप अपनी बात यहीं हिंदी में लिख सकते हैं।";
+// Global "get me out of here" words. A dealer/customer who types any of these
+// ends the current flow and is returned to the start (see runTurn → handleStop).
+const STOP_TRIGGERS = /^(stop|end|exit)$/i;
 
-// Hindi line for a query the bot can't classify into one of the three flows.
-const HINDI_TEAM_FOLLOWUP =
-  "🙏 आपके संदेश के लिए धन्यवाद। हमारी टीम जल्द ही आपसे संपर्क करेगी।";
+// States that a stop word must NOT wipe: submitted / mid-correction / rejected
+// applications are admin-owned, so an "exit" there keeps the state's own reply.
+const STOP_EXCLUDED_STATES = new Set(["SUBMITTED", "CORRECTION", "REJECTED"]);
 
 // Upload-method choice shown after the document checklist. The dealer can drop
 // every document into one ZIP folder, or send them one at a time.
@@ -141,10 +139,36 @@ const COMPANY_TYPE_BUTTONS: ReplyButton[] = [
   { id: "private_limited_firm", title: "Private Limited" },
 ];
 
-// The entry chooser is now a Hindi free-text front door (see HINDI_HELP_PROMPT
-// + classifyIntent in onChooseFlow), not tappable buttons. The button IDs
-// "flow_dealer" / "flow_customer" / "flow_info" are still honoured in
-// onChooseFlow so any stale/known-contact button taps keep working.
+// The entry front door is now a free-text prompt, not a tappable menu. The user
+// types what they need and classifyIntent() (see onChooseFlow) routes them. The
+// button IDs "flow_dealer" / "flow_customer" / "flow_info" are still honoured in
+// onChooseFlow so stale-menu / known-contact button taps keep working.
+
+// Single welcome + open question shown on first contact (and whenever we re-ask
+// what the sender needs). No buttons — their typed reply is classified.
+const HELP_PROMPT =
+  "👋 Welcome to *iTarang*! How can I help you today?\n\nJust type your question or tell me what you'd like to do.";
+
+// Shown when the sender's message isn't a clear dealer/customer request (a
+// product/price question, something off-topic, etc.): acknowledge that a human
+// will follow up, then ask their role so we can still start the right flow.
+const TEAM_FOLLOWUP =
+  "🙏 Thanks for your message! Our iTarang team will get in touch with you shortly.";
+
+// Role ask shown after TEAM_FOLLOWUP. A tap routes straight into the matching
+// onboarding flow (handled in onChooseFlow); typed "customer"/"dealer" also work.
+const ROLE_BUTTONS: ReplyButton[] = [
+  { id: "role_customer", title: "Customer" },
+  { id: "role_dealer", title: "Dealer" },
+];
+
+// Lead-in acknowledgements shown the moment we route into each onboarding flow
+// (via a role-button tap OR a direct intent classification), just before the
+// flow's first question.
+const CUSTOMER_INTRO =
+  "👍 Great! You're here to *purchase a battery / charger*. For that we'll need a few details from you — please share the following 👇";
+const DEALER_INTRO =
+  "👍 Great! To become an *iTarang dealer*, we'll need some information from you, as follows 👇";
 
 const KNOWN_COMPANY_TYPES: readonly string[] = [
   "sole_proprietorship",
@@ -306,6 +330,15 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   const session = await getOrCreateSession(event);
   await setSession(session.id, { last_inbound_at: new Date() });
 
+  // Global stop word (stop / end / exit): bail out of whatever flow is active
+  // and return to the start. Runs BEFORE every other gate so it works from the
+  // dealer console, customer flow, onboarding and Q&A alike. Admin-owned states
+  // (submitted / mid-correction / rejected) are left untouched — an "exit"
+  // there keeps their status reply instead of wiping the application.
+  if (isStopWord(event) && !STOP_EXCLUDED_STATES.has(session.current_state)) {
+    return await handleStop(session);
+  }
+
   // Post-approval dealer console: once the dealer's onboarding application is
   // admin-approved, the SAME WhatsApp number switches from the onboarding state
   // machine to the lead-creation console. This must run BEFORE the greeting
@@ -417,23 +450,33 @@ export async function runTurn(event: InboundEvent): Promise<void> {
 // ── State handlers ──────────────────────────────────────────────────────────
 
 async function onGreeting(session: SessionRow): Promise<void> {
-  // First contact: ask (in Hindi) what the sender needs, as free text. Their
-  // reply is classified by classifyIntent() in onChooseFlow into one of:
-  // (1) Dealer Onboarding → the existing company-type document collection.
-  // (2) Customer Onboarding → a customer self-registers a lead, attributed to
-  //     the house dealer (dealer@itarang.com).
-  // (3) General Information → grounded AI Q&A about iTarang.
-  // Anything else → "our team will get back to you".
-  await reply(session, HINDI_HELP_PROMPT);
+  // First contact: send ONE welcome message and ask, as free text, what the
+  // sender needs. Their reply is classified by classifyIntent() in onChooseFlow:
+  //   • dealer intent   → dealer onboarding (company-type document collection)
+  //   • customer intent → customer self-onboarding a lead (house dealer)
+  //   • anything else   → "our team will get in touch" + a Customer/Dealer ask.
+  await reply(session, HELP_PROMPT);
   await setSession(session.id, { current_state: "CHOOSE_FLOW" });
 }
 
-// CHOOSE_FLOW — route the Hindi free-text front door. The sender types what
-// they need; classifyIntent() (Gemini) picks one of the three flows, or flags
-// the message as too hard → "our team will get back to you". A tapped button
-// id (from a known-contact greeting or a stale menu) is still honoured, and if
-// the LLM is unavailable we fall back to the original keyword regex so the bot
-// keeps working.
+// Ask whether an unclassified sender is a customer or a dealer, so we can still
+// start the right onboarding flow. Called after TEAM_FOLLOWUP. Stays in
+// CHOOSE_FLOW — a tap on role_customer / role_dealer comes back here and routes.
+async function askRole(session: SessionRow): Promise<void> {
+  await reply(session, TEAM_FOLLOWUP);
+  await reply(
+    session,
+    "Meanwhile, are you a *customer* or a *dealer*? Tap below 👇",
+    ROLE_BUTTONS,
+  );
+}
+
+// CHOOSE_FLOW — route the free-text front door. The sender types what they need
+// and classifyIntent() (Gemini) picks dealer / customer / general — or flags it
+// too hard, in which case we tell them the team will follow up and ask their
+// role (Customer/Dealer). Explicit button-id taps (known-contact greetings,
+// stale menus, and the role buttons) are honoured directly, and if the LLM is
+// unavailable we fall back to a keyword regex so the bot keeps working.
 async function onChooseFlow(
   session: SessionRow,
   event: InboundEvent,
@@ -443,12 +486,8 @@ async function onChooseFlow(
 
   // ── Branch targets (reused by the button, LLM and keyword paths) ──────────
   const goDealer = () =>
-    // Downstream dealer onboarding stays English (out of scope); only the
-    // handoff acknowledgement is Hindi to match the front door.
-    askCompanyType(
-      session,
-      "🙏 बढ़िया! चलिए आपका *डीलर ऑनबोर्डिंग* शुरू करते हैं। हम आपके व्यवसाय के दस्तावेज़ यहीं WhatsApp पर इकट्ठा करेंगे।",
-    );
+    // The dealer intro leads straight into the company-type question below.
+    askCompanyType(session, DEALER_INTRO);
 
   const goCustomer = async () => {
     // Pre-check the house dealer so we don't strand the customer mid-flow.
@@ -459,31 +498,33 @@ async function onChooseFlow(
       );
       await reply(
         session,
-        "🙏 क्षमा करें, अभी हम नए ग्राहक पंजीकरण नहीं ले पा रहे हैं। कृपया थोड़ी देर बाद पुनः प्रयास करें।",
+        "Sorry, we can't take new customer leads right now. Please try again later.",
       );
       return;
     }
     await mergeContext(session, (ctx) => {
       ctx.flow = "customer";
     });
+    // Acknowledge, then start the lead capture (asks for the mobile number).
+    await reply(session, CUSTOMER_INTRO);
     return await startNewLead(await loadSession(session.id));
   };
 
   const goInfo = () => startGeneralInfo(session);
 
-  // "Main Menu" button on the recognized-contact greetings → re-ask.
+  // "Main Menu" button on the recognized-contact greetings → re-ask (free text).
   if (t === "show_menu") {
-    await reply(session, HINDI_HELP_PROMPT);
+    await reply(session, HELP_PROMPT);
     return;
   }
 
-  // 1. Honour an explicit button-id tap (still arrives from known-contact
-  //    greetings / stale menus even though the front door is now buttonless).
-  if (t === "flow_dealer") return await goDealer();
-  if (t === "flow_customer") return await goCustomer();
+  // 1. Honour explicit button-id taps: the entry chooser / known-contact menus
+  //    (flow_*) and the Customer/Dealer role buttons (role_*).
+  if (t === "flow_dealer" || t === "role_dealer") return await goDealer();
+  if (t === "flow_customer" || t === "role_customer") return await goCustomer();
   if (t === "flow_info") return await goInfo();
 
-  // 2. Free text → classify with the LLM.
+  // 2. Free text → classify with the LLM and route.
   if (raw) {
     const res = await classifyIntent(raw);
     if (res.ok) {
@@ -492,32 +533,25 @@ async function onChooseFlow(
           return await goDealer();
         case "customer_onboarding":
           return await goCustomer();
-        case "general_info":
-          return await goInfo();
         default:
-          // too_hard (or low confidence) — hand off to the team, then re-ask.
-          await reply(session, HINDI_TEAM_FOLLOWUP);
-          await reply(session, HINDI_HELP_PROMPT);
-          return;
+          // general_info / too_hard / low confidence → the bot can't serve this
+          // request directly (e.g. "battery information and price"): tell them
+          // the team will follow up, then ask their role so we can still start
+          // the right onboarding flow.
+          return await askRole(session);
       }
     }
     // res.ok === false → LLM/key unavailable. Fall through to keyword routing.
   }
 
   // 3. Deterministic keyword fallback (LLM down or empty message).
-  const wantsDealer = /\bdealer\b/.test(t) || /डीलर/.test(raw);
-  const wantsCustomer =
-    /\b(customer|lead)\b/.test(t) || /(ग्राहक|कस्टमर|लोन|बैटरी)/.test(raw);
-  // Checked LAST so "dealer information" still routes to dealer onboarding.
-  const wantsInfo =
-    /\b(info|information|question|ask)\b/.test(t) || /(जानकारी|सवाल)/.test(raw);
-
+  const wantsDealer = /\bdealer\b/.test(t);
+  const wantsCustomer = /\b(customer|lead)\b/.test(t);
   if (wantsDealer) return await goDealer();
   if (wantsCustomer) return await goCustomer();
-  if (wantsInfo) return await goInfo();
 
-  // Nothing matched — re-ask in Hindi.
-  await reply(session, HINDI_HELP_PROMPT);
+  // Nothing matched → team follow-up + role ask.
+  return await askRole(session);
 }
 
 // ── GENERAL_INFO — grounded AI Q&A (entry-chooser option 3) ─────────────────
@@ -538,7 +572,7 @@ async function startGeneralInfo(session: SessionRow): Promise<void> {
   await setSession(session.id, { current_state: "GENERAL_INFO" });
   await reply(
     session,
-    "💬 ज़रूर! iTarang के बारे में कुछ भी पूछें — डीलर ऑनबोर्डिंग, ग्राहक पंजीकरण या फाइनेंसिंग।\n\n_कभी भी वापस जाने के लिए *menu* लिखें।_",
+    "💬 Sure! Ask me anything about iTarang — dealer onboarding, customer registration or financing.\n\n_Type *menu* anytime to go back to the main options._",
   );
 }
 
@@ -576,9 +610,9 @@ async function onGeneralInfo(
   if (info.turns >= INFO_MAX_TURNS) {
     await reply(
       session,
-      "🙏 हमने इस चैट में काफ़ी कुछ कवर कर लिया! और मदद के लिए हमारी टीम से *support@itarang.com* पर संपर्क करें।",
+      "We've covered a lot in this chat! For anything more, our team is happy to help — email *support@itarang.com*.",
     );
-    await reply(session, HINDI_HELP_PROMPT);
+    await reply(session, HELP_PROMPT);
     await setSession(session.id, { current_state: "CHOOSE_FLOW" });
     return;
   }
@@ -590,9 +624,9 @@ async function onGeneralInfo(
   if (!res.ok || !res.answer) {
     await reply(
       session,
-      "🙏 क्षमा करें, अभी यह जानकारी नहीं ला सका।",
+      "Sorry, I couldn't fetch that right now 🙏",
     );
-    await reply(session, HINDI_HELP_PROMPT);
+    await reply(session, HELP_PROMPT);
     await setSession(session.id, { current_state: "CHOOSE_FLOW" });
     return;
   }
@@ -706,6 +740,43 @@ async function finishCustomerFlow(
 function isGreetingWord(event: InboundEvent): boolean {
   return (
     event.type === "text" && GREETING_TRIGGERS.test((event.text ?? "").trim())
+  );
+}
+
+/** A typed stop word (stop/end/exit/quit/cancel). */
+function isStopWord(event: InboundEvent): boolean {
+  return (
+    event.type === "text" && STOP_TRIGGERS.test((event.text ?? "").trim())
+  );
+}
+
+// End whatever flow is active: clear the in-conversation context (onboarding
+// progress, customer lead, Q&A session) and return the session to GREETING so
+// the next message starts fresh. The application row + session are kept (same
+// sender); an approved dealer's next message re-enters the console via the gate
+// in runTurn. We confirm the stop rather than dumping the welcome, so the user
+// isn't nagged — they can send "hi" when they're ready.
+async function handleStop(session: SessionRow): Promise<void> {
+  await mergeContext(session, (ctx) => {
+    ctx.flow = undefined;
+    ctx.lead = undefined;
+    ctx.info = undefined;
+    ctx.resumeState = undefined;
+    ctx.docs = {};
+    ctx.answers = {};
+    ctx.fieldIndex = 0;
+    ctx.skipped = [];
+    ctx.attempts = {};
+  });
+  await setSession(session.id, {
+    current_state: "GREETING",
+    detected_company_type: null,
+    expected_document_type: null,
+    session_status: "active",
+  });
+  await reply(
+    session,
+    "👋 Okay, I've ended that for now. Send *hi* anytime to start again.",
   );
 }
 
