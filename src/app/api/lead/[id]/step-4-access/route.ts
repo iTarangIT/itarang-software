@@ -56,6 +56,7 @@ export async function GET(
         product_category_id: leads.product_category_id,
         product_type_id: leads.product_type_id,
         primary_product_id: leads.primary_product_id,
+        final_decision: leads.final_decision,
       })
       .from(leads)
       .where(eq(leads.id, leadId))
@@ -70,6 +71,7 @@ export async function GET(
 
     const paymentMode = String(lead.payment_method || "").toLowerCase();
     const kycStatus = String(lead.kyc_status || "");
+    const finalDecision = String(lead.final_decision || "").toLowerCase();
     const customerName = lead.full_name || null;
     const isHot = String(lead.interest_level || "").toLowerCase() === "hot";
 
@@ -192,8 +194,13 @@ export async function GET(
       });
     }
 
-    // Finance path — requires KYC cleared
-    if (FINANCE_UNLOCKED.has(kycStatus)) {
+    // Finance path — requires KYC cleared, OR an admin final approval on
+    // record. The Step-3 page unlocks "Next: Product Selection" when
+    // final_decision === 'approved' even if leads.kyc_status hasn't propagated
+    // from the admin's approval (see borrower-consent step3Cleared). Honour the
+    // same signal here so the dealer is never shown a Next button that this
+    // gate then rejects with a dead-end error.
+    if (FINANCE_UNLOCKED.has(kycStatus) || finalDecision === "approved") {
       return NextResponse.json({
         success: true,
         data: {
