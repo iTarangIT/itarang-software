@@ -3,7 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, X, AlertCircle, Scan, Info, ChevronDown, Loader2, ShieldCheck, UserPlus, ArrowRight } from 'lucide-react';
-import { State, City } from 'country-state-city';
+import { useIndiaLocationData } from '@/lib/location/useIndiaLocationData';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { DatePicker } from '@/components/ui/date-picker';
 import { confirmDialog } from '@/components/ui/confirm-dialog';
@@ -94,6 +94,8 @@ const normalizeLoadedPhones = (fd: any) => {
 };
 
 function NewLeadWizardContent() {
+    // Lazy-loaded ~MB-scale dataset; dropdowns render disabled until it lands.
+    const indiaLocations = useIndiaLocationData();
     const router = useRouter();
     const searchParams = useSearchParams();
     const fromScraped = searchParams.get('from_scraped');
@@ -711,25 +713,26 @@ function NewLeadWizardContent() {
                                     // Reset city when state changes — city list is state-scoped.
                                     if (v !== formData.state) updateField('city', '');
                                 }}
-                                options={State.getStatesOfCountry('IN').map((s) => ({
+                                options={indiaLocations.states.map((s) => ({
                                     value: s.name,
                                     label: s.name,
                                 }))}
                                 error={errors.state}
-                                placeholder="Select state"
+                                placeholder={indiaLocations.loaded ? 'Select state' : 'Loading states…'}
                                 required
+                                disabled={!indiaLocations.loaded}
                             />
                             <SelectField
                                 label="City"
                                 value={formData.city}
                                 onChange={(v) => updateField('city', v)}
                                 options={(() => {
-                                    const iso = State.getStatesOfCountry('IN').find(
+                                    const iso = indiaLocations.states.find(
                                         (s) => s.name === formData.state,
                                     )?.isoCode;
                                     if (!iso) return [];
                                     const seen = new Set<string>();
-                                    return City.getCitiesOfState('IN', iso)
+                                    return indiaLocations.getCitiesOfState(iso)
                                         .filter((c) => {
                                             if (seen.has(c.name)) return false;
                                             seen.add(c.name);

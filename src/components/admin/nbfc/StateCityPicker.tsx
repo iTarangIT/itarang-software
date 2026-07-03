@@ -8,8 +8,12 @@ import {
   type KeyboardEvent,
 } from "react";
 import { Plus, X, ChevronDown, Check, Upload, AlertTriangle } from "lucide-react";
-import { State, City } from "country-state-city";
+import type { IState } from "country-state-city";
 import { toast } from "sonner";
+import {
+  useIndiaLocationData,
+  type IndiaLocationData,
+} from "@/lib/location/useIndiaLocationData";
 
 export type LocationPair = { state: string; city: string };
 
@@ -27,8 +31,6 @@ type Props = {
   onChange: (next: LocationPair[]) => void;
 };
 
-const COUNTRY_ISO = "IN";
-
 // Case- and whitespace-insensitive key used to match uploaded names against the
 // country-state-city library.
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
@@ -40,10 +42,9 @@ type UploadReport = {
   unmatchedCities: string[];
 };
 
-function buildRowsFromValue(value: LocationPair[]): Row[] {
+function buildRowsFromValue(value: LocationPair[], states: IState[]): Row[] {
   // Group {state, city} pairs back into per-state rows. Preserves the order
   // that states first appeared in the incoming array.
-  const states = State.getStatesOfCountry(COUNTRY_ISO);
   const nameToIso = new Map(states.map((s) => [s.name, s.isoCode]));
   const grouped = new Map<string, Row>();
   for (const pair of value) {
@@ -74,21 +75,27 @@ function flattenRows(rows: Row[]): LocationPair[] {
 }
 
 export default function StateCityPicker({ value, onChange }: Props) {
-  const [rows, setRows] = useState<Row[]>(() => buildRowsFromValue(value));
+  // Location data loads lazily (~MB-scale dataset kept out of the page
+  // bundle) — rows are built once it lands, comboboxes disable until then.
+  const locations = useIndiaLocationData();
+  const [rows, setRows] = useState<Row[]>([]);
   const [uploadReport, setUploadReport] = useState<UploadReport | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Re-sync if parent resets value (e.g. form reset). Cheap deep-equal by JSON.
-  const lastEmittedRef = useRef<string>(JSON.stringify(value));
+  // Build rows on data arrival, and re-sync if parent resets value (e.g. form
+  // reset). Cheap deep-equal by JSON. Starts empty ("" ≠ any value) so the
+  // first pass after load always builds.
+  const lastEmittedRef = useRef<string>("");
   useEffect(() => {
+    if (!locations.loaded) return;
     const incoming = JSON.stringify(value);
     if (incoming === lastEmittedRef.current) return;
     lastEmittedRef.current = incoming;
-    setRows(buildRowsFromValue(value));
+    setRows(buildRowsFromValue(value, locations.states));
     // A parent reset (e.g. "Create another") clears the picker — drop any
     // stale upload report with it.
     setUploadReport(null);
-  }, [value]);
+  }, [value, locations.loaded, locations.states]);
 
   function emit(nextRows: Row[]) {
     setRows(nextRows);
@@ -133,9 +140,8 @@ export default function StateCityPicker({ value, onChange }: Props) {
   // merged into the current selection (stored under the library's canonical
   // spelling); anything not found is surfaced in the unmatched alert panel.
   function processPairs(pairs: { state: string; city: string }[]) {
-    const states = State.getStatesOfCountry(COUNTRY_ISO);
     const stateByNorm = new Map<string, { iso: string; name: string }>();
-    for (const s of states) {
+    for (const s of locations.states) {
       stateByNorm.set(norm(s.name), { iso: s.isoCode, name: s.name });
     }
 
@@ -145,7 +151,7 @@ export default function StateCityPicker({ value, onChange }: Props) {
       let m = cityCache.get(iso);
       if (!m) {
         m = new Map();
-        for (const c of City.getCitiesOfState(COUNTRY_ISO, iso)) {
+        for (const c of locations.getCitiesOfState(iso)) {
           const k = norm(c.name);
           if (!m.has(k)) m.set(k, c.name);
         }
@@ -239,6 +245,10 @@ export default function StateCityPicker({ value, onChange }: Props) {
   }
 
   async function handleFile(file: File) {
+    if (!locations.loaded) {
+      toast.error("Location data is still loading — try again in a moment.");
+      return;
+    }
     try {
       const XLSX = await import("xlsx");
       const buf = await file.arrayBuffer();
@@ -391,11 +401,13 @@ export default function StateCityPicker({ value, onChange }: Props) {
           className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)_auto] gap-3 items-start"
         >
           <StateCombobox
+            locations={locations}
             value={row.stateIso}
             valueLabel={row.stateName}
             onPick={(iso, name) => setRowState(row.rowId, iso, name)}
           />
           <CityMultiCombobox
+            locations={locations}
             stateIso={row.stateIso}
             value={row.cities}
             onChange={(next) => setRowCities(row.rowId, next)}
@@ -426,15 +438,17 @@ export default function StateCityPicker({ value, onChange }: Props) {
 /* ===================== State (single-select combobox) ===================== */
 
 function StateCombobox({
+  locations,
   value,
   valueLabel,
   onPick,
 }: {
+  locations: IndiaLocationData;
   value: string;
   valueLabel: string;
   onPick: (iso: string, name: string) => void;
 }) {
-  const states = useMemo(() => State.getStatesOfCountry(COUNTRY_ISO), []);
+  const states = locations.states;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
@@ -546,18 +560,20 @@ function StateCombobox({
 /* ===================== City (multi-select combobox) ===================== */
 
 function CityMultiCombobox({
+  locations,
   stateIso,
   value,
   onChange,
 }: {
+  locations: IndiaLocationData;
   stateIso: string;
   value: string[];
   onChange: (next: string[]) => void;
 }) {
   const cities = useMemo(() => {
     if (!stateIso) return [];
-    return City.getCitiesOfState(COUNTRY_ISO, stateIso);
-  }, [stateIso]);
+    return locations.getCitiesOfState(stateIso);
+  }, [stateIso, locations]);
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
