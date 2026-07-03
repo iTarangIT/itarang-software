@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { leads, personalDetails, auditLogs, accounts, leadProducts } from '@/lib/db/schema';
 import { successResponse, errorResponse, withErrorHandler, generateId } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
+import { recordLeadCapture } from '@/lib/leads/lead-registry';
 import { z } from 'zod';
 import { eq, and, sql, desc } from 'drizzle-orm';
 import {
@@ -632,6 +633,16 @@ export const POST = withErrorHandler(async (req: Request) => {
                     performed_by: user.id,
                     timestamp: new Date()
                 });
+            });
+
+            // E-179 — first moment this lead has a real name + phone (Step 1 commit).
+            await recordLeadCapture({
+                leadType: 'customer',
+                name: data.full_name,
+                phone: normPhone,
+                sourceChannel: 'web',
+                sourceTable: 'leads',
+                sourceId: data.leadId!,
             });
 
             return successResponse({ success: true, leadId: data.leadId });

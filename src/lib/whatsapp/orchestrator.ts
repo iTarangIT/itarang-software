@@ -60,6 +60,7 @@ import {
 import { resolveKnownContact, resolveWhatsAppDealer } from "./dealer-identity";
 import { classifyDocument } from "./extraction";
 import { answerGeneralQuestion } from "./general-info";
+import { classifyIntent } from "./intent";
 import {
   generateManualConsentPdf,
   getSignedConsentForLead,
@@ -106,6 +107,14 @@ const WANTS_TYPE_CHANGE = /\b(company\s*type|wrong|galat|change|update)\b/i;
 const GREETING_TRIGGERS =
   /^(hi+|hey+|hello+|helo|hii+|onboard(ing)?|start|begin|restart|namaste|menu)$/i;
 
+// Global "get me out of here" words. A dealer/customer who types any of these
+// ends the current flow and is returned to the start (see runTurn → handleStop).
+const STOP_TRIGGERS = /^(stop|end|exit)$/i;
+
+// States that a stop word must NOT wipe: submitted / mid-correction / rejected
+// applications are admin-owned, so an "exit" there keeps the state's own reply.
+const STOP_EXCLUDED_STATES = new Set(["SUBMITTED", "CORRECTION", "REJECTED"]);
+
 // Upload-method choice shown after the document checklist. The dealer can drop
 // every document into one ZIP folder, or send them one at a time.
 const UPLOAD_MODE_BUTTONS: ReplyButton[] = [
@@ -130,14 +139,36 @@ const COMPANY_TYPE_BUTTONS: ReplyButton[] = [
   { id: "private_limited_firm", title: "Private Limited" },
 ];
 
-// Entry chooser shown on the very first greeting: dealer onboarding, a customer
-// self-onboarding a new lead, or free-form Q&A. Exactly 3 reply buttons (Meta's
-// cap) with titles ≤20 chars.
-const FLOW_CHOICE_BUTTONS: ReplyButton[] = [
-  { id: "flow_dealer", title: "Dealer Onboarding" },
-  { id: "flow_customer", title: "Customer Onboarding" },
-  { id: "flow_info", title: "General Information" },
+// The entry front door is now a free-text prompt, not a tappable menu. The user
+// types what they need and classifyIntent() (see onChooseFlow) routes them. The
+// button IDs "flow_dealer" / "flow_customer" / "flow_info" are still honoured in
+// onChooseFlow so stale-menu / known-contact button taps keep working.
+
+// Single welcome + open question shown on first contact (and whenever we re-ask
+// what the sender needs). No buttons — their typed reply is classified.
+const HELP_PROMPT =
+  "👋 Welcome to *iTarang*! How can I help you today?\n\nJust type your question or tell me what you'd like to do.";
+
+// Shown when the sender's message isn't a clear dealer/customer request (a
+// product/price question, something off-topic, etc.): acknowledge that a human
+// will follow up, then ask their role so we can still start the right flow.
+const TEAM_FOLLOWUP =
+  "🙏 Thanks for your message! Our iTarang team will get in touch with you shortly.";
+
+// Role ask shown after TEAM_FOLLOWUP. A tap routes straight into the matching
+// onboarding flow (handled in onChooseFlow); typed "customer"/"dealer" also work.
+const ROLE_BUTTONS: ReplyButton[] = [
+  { id: "role_customer", title: "Customer" },
+  { id: "role_dealer", title: "Dealer" },
 ];
+
+// Lead-in acknowledgements shown the moment we route into each onboarding flow
+// (via a role-button tap OR a direct intent classification), just before the
+// flow's first question.
+const CUSTOMER_INTRO =
+  "👍 Great! You're here to *purchase a battery / charger*. For that we'll need a few details from you — please share the following 👇";
+const DEALER_INTRO =
+  "👍 Great! To become an *iTarang dealer*, we'll need some information from you, as follows 👇";
 
 const KNOWN_COMPANY_TYPES: readonly string[] = [
   "sole_proprietorship",
@@ -299,6 +330,15 @@ export async function runTurn(event: InboundEvent): Promise<void> {
   const session = await getOrCreateSession(event);
   await setSession(session.id, { last_inbound_at: new Date() });
 
+  // Global stop word (stop / end / exit): bail out of whatever flow is active
+  // and return to the start. Runs BEFORE every other gate so it works from the
+  // dealer console, customer flow, onboarding and Q&A alike. Admin-owned states
+  // (submitted / mid-correction / rejected) are left untouched — an "exit"
+  // there keeps their status reply instead of wiping the application.
+  if (isStopWord(event) && !STOP_EXCLUDED_STATES.has(session.current_state)) {
+    return await handleStop(session);
+  }
+
   // Post-approval dealer console: once the dealer's onboarding application is
   // admin-approved, the SAME WhatsApp number switches from the onboarding state
   // machine to the lead-creation console. This must run BEFORE the greeting
@@ -410,55 +450,46 @@ export async function runTurn(event: InboundEvent): Promise<void> {
 // ── State handlers ──────────────────────────────────────────────────────────
 
 async function onGreeting(session: SessionRow): Promise<void> {
-  // First contact: ask what the sender needs before starting any flow.
-  // (1) Dealer Onboarding → the existing company-type document collection.
-  // (2) Customer Onboarding → a customer self-registers a lead, attributed to
-  //     the house dealer (dealer@itarang.com).
-  // (3) General Information → grounded AI Q&A about iTarang.
-  await reply(
-    session,
-    "👋 Welcome to *iTarang*, how can I help?\n\nTap an option below 👇",
-    FLOW_CHOICE_BUTTONS,
-  );
+  // First contact: send ONE welcome message and ask, as free text, what the
+  // sender needs. Their reply is classified by classifyIntent() in onChooseFlow:
+  //   • dealer intent   → dealer onboarding (company-type document collection)
+  //   • customer intent → customer self-onboarding a lead (house dealer)
+  //   • anything else   → "our team will get in touch" + a Customer/Dealer ask.
+  await reply(session, HELP_PROMPT);
   await setSession(session.id, { current_state: "CHOOSE_FLOW" });
 }
 
-// CHOOSE_FLOW — route the entry chooser. Dealer → existing onboarding starting
-// at the company-type question; Customer → new-lead capture attributed to the
-// house dealer. A button tap arrives as type "interactive" with the id in
-// event.text; typed words ("dealer" / "customer" / "lead") also work.
+// Ask whether an unclassified sender is a customer or a dealer, so we can still
+// start the right onboarding flow. Called after TEAM_FOLLOWUP. Stays in
+// CHOOSE_FLOW — a tap on role_customer / role_dealer comes back here and routes.
+async function askRole(session: SessionRow): Promise<void> {
+  await reply(session, TEAM_FOLLOWUP);
+  await reply(
+    session,
+    "Meanwhile, are you a *customer* or a *dealer*? Tap below 👇",
+    ROLE_BUTTONS,
+  );
+}
+
+// CHOOSE_FLOW — route the free-text front door. The sender types what they need
+// and classifyIntent() (Gemini) picks dealer / customer / general — or flags it
+// too hard, in which case we tell them the team will follow up and ask their
+// role (Customer/Dealer). Explicit button-id taps (known-contact greetings,
+// stale menus, and the role buttons) are honoured directly, and if the LLM is
+// unavailable we fall back to a keyword regex so the bot keeps working.
 async function onChooseFlow(
   session: SessionRow,
   event: InboundEvent,
 ): Promise<void> {
-  const t = (event.text ?? "").trim().toLowerCase();
+  const raw = (event.text ?? "").trim();
+  const t = raw.toLowerCase();
 
-  // "Main Menu" button on the recognized-contact greetings → re-show the chooser.
-  if (t === "show_menu") {
-    await reply(
-      session,
-      "👋 Welcome to *iTarang*, how can I help?\n\nTap an option below 👇",
-      FLOW_CHOICE_BUTTONS,
-    );
-    return;
-  }
+  // ── Branch targets (reused by the button, LLM and keyword paths) ──────────
+  const goDealer = () =>
+    // The dealer intro leads straight into the company-type question below.
+    askCompanyType(session, DEALER_INTRO);
 
-  const wantsDealer = t === "flow_dealer" || /\bdealer\b/.test(t);
-  const wantsCustomer = t === "flow_customer" || /\b(customer|lead)\b/.test(t);
-  // Checked LAST so "dealer information" still routes to dealer onboarding.
-  const wantsInfo =
-    t === "flow_info" || /\b(info|information|question|ask)\b/.test(t);
-
-  if (wantsDealer) {
-    // Reuse the exact original welcome prefix so dealer onboarding step 1 is
-    // unchanged from the dealer's perspective.
-    return await askCompanyType(
-      session,
-      "👋 Welcome to *iTarang* dealer onboarding!\n\nWe'll collect your business documents right here on WhatsApp. It only takes a few minutes.",
-    );
-  }
-
-  if (wantsCustomer) {
+  const goCustomer = async () => {
     // Pre-check the house dealer so we don't strand the customer mid-flow.
     const houseDealer = await resolveHouseDealer();
     if (!houseDealer) {
@@ -474,19 +505,53 @@ async function onChooseFlow(
     await mergeContext(session, (ctx) => {
       ctx.flow = "customer";
     });
+    // Acknowledge, then start the lead capture (asks for the mobile number).
+    await reply(session, CUSTOMER_INTRO);
     return await startNewLead(await loadSession(session.id));
+  };
+
+  const goInfo = () => startGeneralInfo(session);
+
+  // "Main Menu" button on the recognized-contact greetings → re-ask (free text).
+  if (t === "show_menu") {
+    await reply(session, HELP_PROMPT);
+    return;
   }
 
-  if (wantsInfo) {
-    return await startGeneralInfo(session);
+  // 1. Honour explicit button-id taps: the entry chooser / known-contact menus
+  //    (flow_*) and the Customer/Dealer role buttons (role_*).
+  if (t === "flow_dealer" || t === "role_dealer") return await goDealer();
+  if (t === "flow_customer" || t === "role_customer") return await goCustomer();
+  if (t === "flow_info") return await goInfo();
+
+  // 2. Free text → classify with the LLM and route.
+  if (raw) {
+    const res = await classifyIntent(raw);
+    if (res.ok) {
+      switch (res.intent) {
+        case "dealer_onboarding":
+          return await goDealer();
+        case "customer_onboarding":
+          return await goCustomer();
+        default:
+          // general_info / too_hard / low confidence → the bot can't serve this
+          // request directly (e.g. "battery information and price"): tell them
+          // the team will follow up, then ask their role so we can still start
+          // the right onboarding flow.
+          return await askRole(session);
+      }
+    }
+    // res.ok === false → LLM/key unavailable. Fall through to keyword routing.
   }
 
-  // Unrecognized reply — re-show the chooser.
-  await reply(
-    session,
-    "Please tap *Dealer Onboarding*, *Customer Onboarding* or *General Information* 👇",
-    FLOW_CHOICE_BUTTONS,
-  );
+  // 3. Deterministic keyword fallback (LLM down or empty message).
+  const wantsDealer = /\bdealer\b/.test(t);
+  const wantsCustomer = /\b(customer|lead)\b/.test(t);
+  if (wantsDealer) return await goDealer();
+  if (wantsCustomer) return await goCustomer();
+
+  // Nothing matched → team follow-up + role ask.
+  return await askRole(session);
 }
 
 // ── GENERAL_INFO — grounded AI Q&A (entry-chooser option 3) ─────────────────
@@ -545,9 +610,9 @@ async function onGeneralInfo(
   if (info.turns >= INFO_MAX_TURNS) {
     await reply(
       session,
-      "We've covered a lot in this chat! For anything more, our team is happy to help — email *support@itarang.com*, or pick an option below 👇",
-      FLOW_CHOICE_BUTTONS,
+      "We've covered a lot in this chat! For anything more, our team is happy to help — email *support@itarang.com*.",
     );
+    await reply(session, HELP_PROMPT);
     await setSession(session.id, { current_state: "CHOOSE_FLOW" });
     return;
   }
@@ -559,9 +624,9 @@ async function onGeneralInfo(
   if (!res.ok || !res.answer) {
     await reply(
       session,
-      "Sorry, I couldn't fetch that right now 🙏 Here's what I can help with 👇",
-      FLOW_CHOICE_BUTTONS,
+      "Sorry, I couldn't fetch that right now 🙏",
     );
+    await reply(session, HELP_PROMPT);
     await setSession(session.id, { current_state: "CHOOSE_FLOW" });
     return;
   }
@@ -675,6 +740,43 @@ async function finishCustomerFlow(
 function isGreetingWord(event: InboundEvent): boolean {
   return (
     event.type === "text" && GREETING_TRIGGERS.test((event.text ?? "").trim())
+  );
+}
+
+/** A typed stop word (stop/end/exit/quit/cancel). */
+function isStopWord(event: InboundEvent): boolean {
+  return (
+    event.type === "text" && STOP_TRIGGERS.test((event.text ?? "").trim())
+  );
+}
+
+// End whatever flow is active: clear the in-conversation context (onboarding
+// progress, customer lead, Q&A session) and return the session to GREETING so
+// the next message starts fresh. The application row + session are kept (same
+// sender); an approved dealer's next message re-enters the console via the gate
+// in runTurn. We confirm the stop rather than dumping the welcome, so the user
+// isn't nagged — they can send "hi" when they're ready.
+async function handleStop(session: SessionRow): Promise<void> {
+  await mergeContext(session, (ctx) => {
+    ctx.flow = undefined;
+    ctx.lead = undefined;
+    ctx.info = undefined;
+    ctx.resumeState = undefined;
+    ctx.docs = {};
+    ctx.answers = {};
+    ctx.fieldIndex = 0;
+    ctx.skipped = [];
+    ctx.attempts = {};
+  });
+  await setSession(session.id, {
+    current_state: "GREETING",
+    detected_company_type: null,
+    expected_document_type: null,
+    session_status: "active",
+  });
+  await reply(
+    session,
+    "👋 Okay, I've ended that for now. Send *hi* anytime to start again.",
   );
 }
 
