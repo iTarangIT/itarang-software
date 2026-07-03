@@ -1547,8 +1547,14 @@ export default function ProductSelectionPage() {
               ) : batteries.length === 0 ? (
                 <EmptyState
                   icon={<BatteryIcon className="w-10 h-10 text-gray-300" />}
-                  title="No available batteries in this category"
-                  hint="Try refreshing or contact your inventory manager."
+                  title="No battery stock in this category"
+                  hint="Your dealership has no available batteries in this category yet. Ask your admin to add inventory (Inventory → Add Item / Bulk Upload) for this category, then refresh."
+                />
+              ) : scopedBatteries.length === 0 ? (
+                <EmptyState
+                  icon={<BatteryIcon className="w-10 h-10 text-gray-300" />}
+                  title="No batteries match the selected product type"
+                  hint="Your dealership has battery stock in this category, but none matches the Product Type chosen in Step 1. Change the Product Type above, or ask your admin to stock a matching battery."
                 />
               ) : (
                 <>
@@ -1665,6 +1671,12 @@ export default function ProductSelectionPage() {
                   icon={<Plug className="w-10 h-10 text-gray-300" />}
                   title="No chargers available in your inventory"
                   hint="Contact your inventory manager to add chargers for this category."
+                />
+              ) : scopedChargers.length === 0 ? (
+                <EmptyState
+                  icon={<Plug className="w-10 h-10 text-gray-300" />}
+                  title="No chargers match the selected product type"
+                  hint="Your dealership has charger stock in this category, but none matches the Product Type chosen in Step 1. Change the Product Type above, or ask your admin to stock a matching charger."
                 />
               ) : (
                 <>
