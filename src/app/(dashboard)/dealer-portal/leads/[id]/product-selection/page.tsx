@@ -59,6 +59,7 @@ interface BatteryRow {
   serial_number: string;
   model_name: string | null;
   model_type: string | null;
+  product_id?: string | null;
   invoice_date: string | null;
   inventory_age_days: number;
   age_badge: "fresh" | "ageing" | "old";
@@ -82,6 +83,7 @@ interface ChargerRow {
   serial_number: string;
   model_name: string | null;
   model_type: string | null;
+  product_id?: string | null;
   invoice_date?: string | null;
   inventory_age_days: number;
   age_badge: "fresh" | "ageing" | "old";
@@ -779,6 +781,29 @@ export default function ProductSelectionPage() {
       ),
     [selectedProducts],
   );
+  // Stable product-id scope keys. products.sku and inventory.model_type diverge
+  // in real data (sku is set on the products row, model_type on the inventory
+  // row), which silently emptied the scoped list. Matching inventory.product_id
+  // against the selected products' ids is exact; the SKU sets stay as a fallback
+  // for inventory rows that have no product_id (they were resolved by SKU).
+  const batteryProductIds = useMemo(
+    () =>
+      new Set(
+        selectedProducts
+          .filter((p) => productClass(p.asset_type) === "battery")
+          .map((p) => p.id),
+      ),
+    [selectedProducts],
+  );
+  const chargerProductIds = useMemo(
+    () =>
+      new Set(
+        selectedProducts
+          .filter((p) => productClass(p.asset_type) === "charger")
+          .map((p) => p.id),
+      ),
+    [selectedProducts],
+  );
   const paraTypes = useMemo(
     () =>
       new Set(
@@ -791,17 +816,25 @@ export default function ProductSelectionPage() {
 
   const scopedBatteries = useMemo(
     () =>
-      batterySkus.size === 0
+      batterySkus.size === 0 && batteryProductIds.size === 0
         ? batteries
-        : batteries.filter((b) => batterySkus.has(normKey(b.model_type))),
-    [batteries, batterySkus],
+        : batteries.filter(
+            (b) =>
+              (b.product_id != null && batteryProductIds.has(b.product_id)) ||
+              batterySkus.has(normKey(b.model_type)),
+          ),
+    [batteries, batterySkus, batteryProductIds],
   );
   const scopedChargers = useMemo(
     () =>
-      chargerSkus.size === 0
+      chargerSkus.size === 0 && chargerProductIds.size === 0
         ? chargers
-        : chargers.filter((c) => chargerSkus.has(normKey(c.model_type))),
-    [chargers, chargerSkus],
+        : chargers.filter(
+            (c) =>
+              (c.product_id != null && chargerProductIds.has(c.product_id)) ||
+              chargerSkus.has(normKey(c.model_type)),
+          ),
+    [chargers, chargerSkus, chargerProductIds],
   );
   const scopedParaphernalia = useMemo(
     () =>
@@ -902,24 +935,26 @@ export default function ProductSelectionPage() {
   }, [chargerFilter, deferredChargerSearch, scopedChargers.length]);
 
   // Drop a battery/charger pick that the active product-type scope excludes.
+  // The scope is active when either key set is non-empty (mirrors the
+  // scopedBatteries/scopedChargers guard above).
   useEffect(() => {
     if (
-      batterySkus.size > 0 &&
+      (batterySkus.size > 0 || batteryProductIds.size > 0) &&
       selectedBattery &&
       !scopedBatteries.some((b) => b.id === selectedBattery.id)
     ) {
       setSelectedBattery(null);
     }
-  }, [scopedBatteries, batterySkus, selectedBattery]);
+  }, [scopedBatteries, batterySkus, batteryProductIds, selectedBattery]);
   useEffect(() => {
     if (
-      chargerSkus.size > 0 &&
+      (chargerSkus.size > 0 || chargerProductIds.size > 0) &&
       selectedCharger &&
       !scopedChargers.some((c) => c.id === selectedCharger.id)
     ) {
       setSelectedCharger(null);
     }
-  }, [scopedChargers, chargerSkus, selectedCharger]);
+  }, [scopedChargers, chargerSkus, chargerProductIds, selectedCharger]);
 
   // ── Submit gating ───────────────────────────────────────────────────
   // Charger is optional — a battery-only sale (with or without paraphernalia)
