@@ -7,7 +7,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import * as XLSX from "xlsx";
 import {
     CheckCircle2,
     Loader2,
@@ -63,6 +62,9 @@ export function UploadWizard() {
         try {
             if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
                 // Excel — convert the first sheet to CSV in the browser.
+                // xlsx is ~400 KB of client JS; load it only when an Excel
+                // file is actually picked.
+                const XLSX = await import("xlsx");
                 const buf = await file.arrayBuffer();
                 const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
                 const sheetName = wb.SheetNames[0];

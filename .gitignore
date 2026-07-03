@@ -80,6 +80,9 @@ prod.txt
 env.txt
 /eval-reports
 
+# perf-audit harness output (scripts/perf-audit/)
+/perf-reports
+
 # /nbfc skill — runtime artifacts (committed: brd_extract/*.yaml, _audit_*.json)
 docs/nbfc/_preflight.json
 docs/nbfc/manifest.json
