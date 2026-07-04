@@ -6,6 +6,7 @@
  * resolve automatically via Decentro, so manual entry is for Own mode.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 
@@ -79,6 +80,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     return NextResponse.json({ ok: true });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

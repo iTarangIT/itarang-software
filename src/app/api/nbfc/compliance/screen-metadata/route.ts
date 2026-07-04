@@ -13,6 +13,7 @@
  * route family for the self-coding loop's API tests.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import {
   composeComplianceScreenMetadata,
@@ -79,6 +80,6 @@ export async function GET(req: NextRequest) {
       );
     }
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

@@ -16,6 +16,7 @@
  * AC1 / AC2 cover this endpoint in the loop tests.
  */
 import { NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import {
   resolveBatteryActor,
   getDeviceBySerial,
@@ -58,6 +59,6 @@ export async function GET(
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: errorToStatus(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: errorToStatus(msg) });
   }
 }

@@ -35,14 +35,25 @@ export function FlagForRecoveryDialog({
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // When the loan is already flagged (409 CONFLICT), we switch the dialog into a
+  // calm, informational state instead of showing a red error string.
+  const [alreadyFlagged, setAlreadyFlagged] = useState(false);
 
   if (!open) return null;
 
   const reasonTooShort = reason.trim().length < 20;
 
+  function handleClose() {
+    // Reset the transient states so re-opening the dialog starts clean.
+    setError(null);
+    setAlreadyFlagged(false);
+    onClose();
+  }
+
   async function submit() {
     setSubmitting(true);
     setError(null);
+    setAlreadyFlagged(false);
     try {
       const res = await fetch("/api/nbfc/actions/flag-for-recovery", {
         method: "POST",
@@ -56,13 +67,24 @@ export function FlagForRecoveryDialog({
       });
       const body = await res.json();
       if (!res.ok) {
-        setError(typeof body?.error === "string" ? body.error : `HTTP ${res.status}`);
+        const rawMsg =
+          typeof body?.error === "string" ? body.error : `HTTP ${res.status}`;
+        // A 409 (or an "already flagged" message) is an expected, benign outcome —
+        // surface it as information, not as a failure.
+        if (res.status === 409 || /already\s+flagged/i.test(rawMsg)) {
+          setAlreadyFlagged(true);
+          return;
+        }
+        // Strip the internal "CODE: " prefix from any other server error.
+        setError(rawMsg.replace(/^[A-Z_]+:\s*/, ""));
         return;
       }
       onFlagged?.(body);
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      handleClose();
+    } catch {
+      setError(
+        "Something went wrong while flagging this loan. Please check your connection and try again.",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -93,70 +115,138 @@ export function FlagForRecoveryDialog({
           boxShadow: "0 20px 25px -5px rgb(0 0 0 / 0.1)",
         }}
       >
-        <h2 id="flag-recovery-title" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-          Flag for Recovery
-        </h2>
-        <p style={{ color: "#374151", marginBottom: "1rem" }}>
-          This will permanently flag loan <code>{loanSanctionId}</code> for
-          recovery. <strong>This action is irreversible.</strong>
-        </p>
-        <label style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>
-          Reason (min 20 characters)
-        </label>
-        <textarea
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          rows={4}
-          style={{
-            width: "100%",
-            padding: 8,
-            borderRadius: 6,
-            border: "1px solid #d1d5db",
-            fontFamily: "inherit",
-          }}
-          placeholder="Document why this loan is being flagged for recovery"
-        />
-        {reasonTooShort && (
-          <p style={{ color: "#b91c1c", fontSize: 12, margin: "4px 0 0" }}>
-            {reason.length}/20 characters
-          </p>
+        {alreadyFlagged ? (
+          <>
+            <h2
+              id="flag-recovery-title"
+              style={{ margin: 0, marginBottom: "0.75rem", fontSize: 18 }}
+            >
+              Already flagged for recovery
+            </h2>
+            <div
+              role="status"
+              style={{
+                background: "#fffbeb",
+                border: "1px solid #fde68a",
+                borderRadius: 8,
+                padding: "0.875rem 1rem",
+                color: "#92400e",
+                lineHeight: 1.5,
+              }}
+            >
+              Loan <code>{loanSanctionId}</code> is already flagged for recovery,
+              so no further action is needed. You can track its progress in the{" "}
+              <strong>Recovery &amp; Auction</strong> queue and the audit log.
+            </div>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                marginTop: "1.25rem",
+              }}
+            >
+              <button
+                type="button"
+                onClick={handleClose}
+                style={{
+                  padding: "0.5rem 1.25rem",
+                  borderRadius: 6,
+                  background: "#111827",
+                  color: "#fff",
+                  border: "none",
+                  fontWeight: 600,
+                }}
+              >
+                Got it
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h2
+              id="flag-recovery-title"
+              style={{ marginTop: 0, marginBottom: "0.5rem" }}
+            >
+              Flag for Recovery
+            </h2>
+            <p style={{ color: "#374151", marginBottom: "1rem" }}>
+              This will permanently flag loan <code>{loanSanctionId}</code> for
+              recovery. <strong>This action is irreversible.</strong>
+            </p>
+            <label
+              style={{ display: "block", fontWeight: 600, marginBottom: 6 }}
+            >
+              Reason (min 20 characters)
+            </label>
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={4}
+              style={{
+                width: "100%",
+                padding: 8,
+                borderRadius: 6,
+                border: "1px solid #d1d5db",
+                fontFamily: "inherit",
+              }}
+              placeholder="Document why this loan is being flagged for recovery"
+            />
+            {reasonTooShort && (
+              <p style={{ color: "#b91c1c", fontSize: 12, margin: "4px 0 0" }}>
+                {reason.length}/20 characters
+              </p>
+            )}
+            {error && (
+              <div
+                role="alert"
+                style={{
+                  marginTop: 10,
+                  background: "#fef2f2",
+                  border: "1px solid #fecaca",
+                  borderRadius: 8,
+                  padding: "0.75rem 1rem",
+                  color: "#b91c1c",
+                  lineHeight: 1.5,
+                }}
+              >
+                {error}
+              </div>
+            )}
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+                marginTop: "1rem",
+              }}
+            >
+              <button
+                type="button"
+                onClick={handleClose}
+                disabled={submitting}
+                style={{ padding: "0.5rem 1rem", borderRadius: 6 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submit}
+                disabled={submitting || reasonTooShort}
+                style={{
+                  padding: "0.5rem 1rem",
+                  borderRadius: 6,
+                  background: "#b91c1c",
+                  color: "#fff",
+                  border: "none",
+                  fontWeight: 600,
+                  opacity: reasonTooShort || submitting ? 0.6 : 1,
+                }}
+              >
+                {submitting ? "Flagging…" : "Flag for Recovery"}
+              </button>
+            </div>
+          </>
         )}
-        {error && (
-          <p style={{ color: "#b91c1c", marginTop: 8 }}>Error: {error}</p>
-        )}
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            justifyContent: "flex-end",
-            marginTop: "1rem",
-          }}
-        >
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={submitting}
-            style={{ padding: "0.5rem 1rem", borderRadius: 6 }}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={submitting || reasonTooShort}
-            style={{
-              padding: "0.5rem 1rem",
-              borderRadius: 6,
-              background: "#b91c1c",
-              color: "#fff",
-              border: "none",
-              fontWeight: 600,
-              opacity: reasonTooShort || submitting ? 0.6 : 1,
-            }}
-          >
-            {submitting ? "Flagging…" : "Flag for Recovery"}
-          </button>
-        </div>
       </div>
     </div>
   );

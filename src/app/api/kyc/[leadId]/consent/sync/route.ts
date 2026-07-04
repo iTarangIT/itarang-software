@@ -5,6 +5,12 @@ import { and, desc, eq } from 'drizzle-orm';
 import { requireRole } from '@/lib/auth-utils';
 import { fetchAndStoreSignedConsent } from '@/lib/digio/fetch-signed-consent';
 import { createWorkflowId, ensureAdminKycQueueEntry } from '@/lib/kyc/admin-workflow';
+import { getConsentSignerIdentity } from '@/lib/digio/signer-aadhaar';
+import {
+    aadhaarMismatchMessage,
+    checkAadhaarMatch,
+    getExpectedConsentAadhaar,
+} from '@/lib/digio/aadhaar-match';
 
 type RouteContext = { params: Promise<{ leadId: string }> };
 
@@ -166,17 +172,48 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         const updates: any = { updated_at: now };
 
         if (signedStatuses.includes(rawStatus)) {
-            newStatus = 'esign_completed';
-            updates.consent_status = newStatus;
-            updates.signed_at = now;
-            updates.signer_aadhaar_masked = firstParty?.aadhaar_masked || firstParty?.signer_aadhaar || record.signer_aadhaar_masked;
+            // Pull the SIGNER'S Aadhaar suffix from pki_signature_details (the real
+            // field), then run the same integrity gate the webhook runs — this poll
+            // path is the fallback when the webhook can't land, and previously it
+            // promoted to completed WITHOUT any Aadhaar check (a bypass).
+            const signerIdentity = getConsentSignerIdentity(parsed);
+            const signerSuffix = signerIdentity.suffix
+                || firstParty?.aadhaar_masked
+                || firstParty?.signer_aadhaar
+                || record.signer_aadhaar_masked
+                || null;
 
-            // Fetch signed PDF bytes from Digio and upload to Supabase storage.
-            // This is the pull-based equivalent of the auto-upload branch in the Digio webhook.
-            if (!record.signed_consent_url) {
-                const stored = await fetchAndStoreSignedConsent(record.esign_transaction_id, leadId);
-                if (stored?.publicUrl) {
-                    updates.signed_consent_url = stored.publicUrl;
+            const expected = await getExpectedConsentAadhaar(leadId, consentForRole);
+            const check = checkAadhaarMatch(expected, signerSuffix);
+            if (check.comparable && !check.match) {
+                const retryCount = (record.esign_retry_count || 0) + 1;
+                newStatus = retryCount >= 3 ? 'esign_blocked' : 'esign_failed';
+                updates.consent_status = newStatus;
+                updates.signer_aadhaar_masked = signerSuffix;
+                updates.signer_name_match_score = signerIdentity.nameScore;
+                updates.esign_retry_count = retryCount;
+                updates.esign_error_message = aadhaarMismatchMessage(check);
+                console.warn('[Consent Sync] Aadhaar mismatch — rejecting consent', {
+                    documentId: record.esign_transaction_id,
+                    leadId,
+                    consentFor: consentForRole,
+                    signerLast4: check.signerLast4,
+                    expectedLast4: check.expectedLast4,
+                });
+            } else {
+                newStatus = 'esign_completed';
+                updates.consent_status = newStatus;
+                updates.signed_at = now;
+                updates.signer_aadhaar_masked = signerSuffix;
+                updates.signer_name_match_score = signerIdentity.nameScore;
+
+                // Fetch signed PDF bytes from Digio and upload to Supabase storage.
+                // This is the pull-based equivalent of the auto-upload branch in the Digio webhook.
+                if (!record.signed_consent_url) {
+                    const stored = await fetchAndStoreSignedConsent(record.esign_transaction_id, leadId);
+                    if (stored?.publicUrl) {
+                        updates.signed_consent_url = stored.publicUrl;
+                    }
                 }
             }
         } else if (viewedStatuses.includes(rawStatus)) {

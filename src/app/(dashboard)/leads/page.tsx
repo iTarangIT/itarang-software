@@ -28,6 +28,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { CallButton } from "@/components/leads/call-button";
+import { toast } from "sonner";
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
 import { ScraperDashboard } from "@/components/scraper/ScraperDashboard";
 import { DownloadConvertedLeadsButton } from "@/components/leads/DownloadButton";
@@ -1019,6 +1020,10 @@ export default function LeadsUnifiedPage() {
   const [leadsPage, setLeadsPage] = useState(1);
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadsError, setLeadsError] = useState<string | null>(null);
+  // Created-at date range filter for the Leads tab (cards + list). Empty =
+  // all-time (default). Both ends inclusive; sent to /api/dealer-leads.
+  const [leadsFrom, setLeadsFrom] = useState("");
+  const [leadsTo, setLeadsTo] = useState("");
 
   const [convertedLeads, setConvertedLeads] = useState<any[]>([]);
   const [convertedTotal, setConvertedTotal] = useState(0);
@@ -1103,6 +1108,12 @@ export default function LeadsUnifiedPage() {
   const [dialerCallsMade, setDialerCallsMade] = useState(0);
   const [countdown, setCountdown] = useState(COUNTDOWN_SECS);
 
+  // Guards against out-of-order lead fetches: rapid filter changes (e.g.
+  // setting the From then To date fires two requests near-simultaneously) can
+  // resolve out of order, letting a stale response overwrite the latest. Each
+  // fetch claims a sequence number and only applies its result if still newest.
+  const fetchSeqRef = useRef(0);
+
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
   const pollerRef = useRef<NodeJS.Timeout | null>(null);
   const stopRef = useRef(false);
@@ -1112,17 +1123,31 @@ export default function LeadsUnifiedPage() {
   const LIMIT = 10;
 
   const fetchLeads = useCallback(
-    async (page: number, q: string, opts?: { silent?: boolean }) => {
+    async (
+      page: number,
+      q: string,
+      fromDate: string,
+      toDate: string,
+      opts?: { silent?: boolean },
+    ) => {
       // When the dialer is running we re-fetch every 2s to surface lead
       // status transitions. `silent` skips the loading spinner so the
       // table doesn't flash during background refreshes.
       const silent = opts?.silent === true;
+      const seq = ++fetchSeqRef.current;
       if (!silent) setLeadsLoading(true);
       try {
-        const res = await fetch(
-          `/api/dealer-leads?page=${page}&limit=${LIMIT}&search=${encodeURIComponent(q)}`,
-        );
+        const params = new URLSearchParams();
+        params.set("page", String(page));
+        params.set("limit", String(LIMIT));
+        params.set("search", q);
+        if (fromDate) params.set("from", fromDate);
+        if (toDate) params.set("to", toDate);
+        const res = await fetch(`/api/dealer-leads?${params.toString()}`);
         const data = await res.json();
+        // A newer fetch superseded this one while it was in flight — drop the
+        // stale result so it can't clobber the latest filter's data.
+        if (seq !== fetchSeqRef.current) return;
         if (data.success) {
           setLeads(data.leads);
           setLeadsTotal(data.total);
@@ -1141,6 +1166,7 @@ export default function LeadsUnifiedPage() {
           setLeadsError(data.error?.message ?? data.error ?? "Failed to load leads");
         }
       } catch (err: any) {
+        if (seq !== fetchSeqRef.current) return;
         console.error("[leads] /api/dealer-leads network error:", err);
         if (!silent) {
           setLeads([]);
@@ -1148,7 +1174,7 @@ export default function LeadsUnifiedPage() {
         }
         setLeadsError(err?.message ?? "Network error loading leads");
       } finally {
-        if (!silent) setLeadsLoading(false);
+        if (!silent && seq === fetchSeqRef.current) setLeadsLoading(false);
       }
     },
     [],
@@ -1171,9 +1197,9 @@ export default function LeadsUnifiedPage() {
   }, []);
 
   useEffect(() => {
-    if (tab === "leads") fetchLeads(leadsPage, search);
+    if (tab === "leads") fetchLeads(leadsPage, search, leadsFrom, leadsTo);
     if (tab === "converted") fetchConvertedLeads(convertedPage, search);
-  }, [tab, leadsPage, convertedPage, search]);
+  }, [tab, leadsPage, convertedPage, search, leadsFrom, leadsTo]);
 
   // While the AI dialer is running, poll the leads list every 2s so the
   // `current_status` column reflects lead transitions (pending → calling
@@ -1183,15 +1209,39 @@ export default function LeadsUnifiedPage() {
   useEffect(() => {
     if (tab !== "leads" || !dialerOn) return;
     const id = setInterval(() => {
-      fetchLeads(leadsPage, search, { silent: true });
+      fetchLeads(leadsPage, search, leadsFrom, leadsTo, { silent: true });
     }, 2000);
     return () => clearInterval(id);
-  }, [tab, dialerOn, leadsPage, search, fetchLeads]);
+  }, [tab, dialerOn, leadsPage, search, leadsFrom, leadsTo, fetchLeads]);
 
   const handleSearch = (v: string) => {
     setSearch(v);
     setLeadsPage(1);
     setConvertedPage(1);
+  };
+
+  // Local YYYY-MM-DD (avoids UTC off-by-one from toISOString()).
+  const toISODate = (d: Date) => {
+    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 10);
+  };
+  // Quick date presets for month-wise filtering. offset 0 = current month
+  // (start → today), -1 = previous full calendar month.
+  const applyMonthPreset = (offset: number) => {
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    const last =
+      offset === 0
+        ? now
+        : new Date(now.getFullYear(), now.getMonth() + offset + 1, 0);
+    setLeadsFrom(toISODate(first));
+    setLeadsTo(toISODate(last));
+    setLeadsPage(1);
+  };
+  const clearDateRange = () => {
+    setLeadsFrom("");
+    setLeadsTo("");
+    setLeadsPage(1);
   };
 
   const triggerCall = useCallback(
@@ -1359,7 +1409,7 @@ export default function LeadsUnifiedPage() {
       });
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.success) {
-        alert(json?.error?.message ?? "Failed to start the campaign");
+        toast.error(json?.error?.message ?? "Failed to start the campaign");
         return;
       }
       stopRef.current = false;
@@ -1529,7 +1579,7 @@ export default function LeadsUnifiedPage() {
 
       {/* TABS + SEARCH */}
       <div className="flex items-center justify-between mb-4 gap-4">
-        <div className="flex items-center bg-white border border-gray-200 rounded-xl p-1 gap-1">
+        <div className="flex items-center bg-white border border-gray-200 rounded-xl p-1 gap-1 overflow-x-auto min-w-0">
           {(
             [
               { key: "scraper", label: "Scraper" },
@@ -1546,25 +1596,83 @@ export default function LeadsUnifiedPage() {
               onClick={() => {
                 setTab(key);
               }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${tab === key ? "bg-gray-900 text-white shadow-sm" : "text-gray-500 hover:text-gray-800"}`}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap shrink-0 ${tab === key ? "bg-gray-900 text-white shadow-sm" : "text-gray-500 hover:text-gray-800"}`}
             >
               {label}
             </button>
           ))}
         </div>
-        {tab !== "scraper" && tab !== "campaigns" && tab !== "cost-analytics" && (
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        {tab !== "scraper" &&
+          tab !== "campaigns" &&
+          tab !== "cost-analytics" && (
+            <div className="relative shrink-0">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => handleSearch(e.target.value)}
+                placeholder="Search by name, phone, city..."
+                className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl bg-white outline-none focus:border-gray-400 w-64"
+              />
+            </div>
+          )}
+      </div>
+
+      {/* DATE RANGE FILTER (Leads tab) — filters the stat cards AND the list
+          below by lead created date. Empty range = all-time. */}
+      {tab === "leads" && (
+        <div className="flex flex-wrap items-center gap-2 mb-5">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mr-0.5">
+            Created
+          </span>
+          <div className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-1.5 shadow-sm transition-colors focus-within:border-gray-400">
+            <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
             <input
-              type="text"
-              value={search}
-              onChange={(e) => handleSearch(e.target.value)}
-              placeholder="Search by name, phone, city..."
-              className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-xl bg-white outline-none focus:border-gray-400 w-64"
+              type="date"
+              value={leadsFrom}
+              max={leadsTo || undefined}
+              onChange={(e) => {
+                setLeadsFrom(e.target.value);
+                setLeadsPage(1);
+              }}
+              aria-label="From (lead created date)"
+              className="bg-transparent text-sm text-gray-700 outline-none"
+            />
+            <span className="text-gray-300">–</span>
+            <input
+              type="date"
+              value={leadsTo}
+              min={leadsFrom || undefined}
+              onChange={(e) => {
+                setLeadsTo(e.target.value);
+                setLeadsPage(1);
+              }}
+              aria-label="To (lead created date)"
+              className="bg-transparent text-sm text-gray-700 outline-none"
             />
           </div>
-        )}
-      </div>
+          <button
+            onClick={() => applyMonthPreset(0)}
+            className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-900"
+          >
+            This month
+          </button>
+          <button
+            onClick={() => applyMonthPreset(-1)}
+            className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-900"
+          >
+            Last month
+          </button>
+          {(leadsFrom || leadsTo) && (
+            <button
+              onClick={clearDateRange}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50"
+            >
+              <X className="w-3.5 h-3.5" /> Clear
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── TAB: SCRAPER ── */}
       {tab === "scraper" && (

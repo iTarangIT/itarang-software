@@ -10,6 +10,7 @@
  * Retries are unlimited (§9.4) — each call inserts a fresh row.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -24,7 +25,7 @@ import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { generateEnachRef, getWinningAssignment } from "@/lib/nbfc/enach";
 import { assertNotHaltedByFailure } from "@/lib/nbfc/track-gate";
 import { publicOrigin, PublicOriginError } from "@/lib/public-origin";
-import { createEmandateCustomer, createEmandateOrder } from "@/lib/razorpay";
+import { createEmandateCustomer, createEmandateOrder, razorpayErrorMessage } from "@/lib/razorpay";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -229,7 +230,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
           handoff: { method, checkout },
         });
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        // Razorpay rejects with a non-Error object — unwrap so the real reason
+        // (e.g. "Recurring payments are not enabled", "auth_type required")
+        // surfaces instead of "[object Object]".
+        const msg = razorpayErrorMessage(err);
+        console.error("[E-NACH register] Razorpay e-mandate creation failed:", msg, err);
         return NextResponse.json(
           { ok: false, error: `Razorpay e-mandate creation failed: ${msg}` },
           { status: 502 },
@@ -319,6 +324,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

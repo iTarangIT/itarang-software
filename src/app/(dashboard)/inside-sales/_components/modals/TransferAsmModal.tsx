@@ -29,24 +29,21 @@ const REASONS = [
 const VISIT_TYPES = ["Initial_Visit", "Demo", "Negotiation", "Closing"] as const;
 
 export function TransferAsmModal({ open, onClose, leadId, state, city, onSuccess }: Props) {
-    const [includeOutOfTerritory, setIncludeOutOfTerritory] = useState(false);
     const [asmId, setAsmId] = useState("");
     const [reason, setReason] = useState<(typeof REASONS)[number]>("Commercials_Finalised");
     const [visitType, setVisitType] = useState<(typeof VISIT_TYPES)[number]>("Initial_Visit");
     const [suggestedDate, setSuggestedDate] = useState("");
     const [preferredTime, setPreferredTime] = useState("");
     const [handoffNotes, setHandoffNotes] = useState("");
-    const [outOfTerritoryReason, setOutOfTerritoryReason] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
+    // Simple flow: always list every active ASM, no territory filtering.
     const asmQuery = useQuery<{ success: true; data: { asms: AsmOption[]; total_asms: number } }>({
-        queryKey: ["asm-options", state, city, includeOutOfTerritory],
+        queryKey: ["asm-options"],
         enabled: open,
         queryFn: async () => {
             const u = new URL("/api/inside-sales/asm-options", window.location.origin);
-            if (state) u.searchParams.set("state", state);
-            if (city) u.searchParams.set("city", city);
-            if (includeOutOfTerritory) u.searchParams.set("include_out_of_territory", "true");
+            u.searchParams.set("include_out_of_territory", "true");
             const res = await fetch(u.toString(), { cache: "no-store" });
             if (!res.ok) throw new Error("Failed to load ASMs");
             return res.json();
@@ -61,8 +58,6 @@ export function TransferAsmModal({ open, onClose, leadId, state, city, onSuccess
             setSuggestedDate("");
             setPreferredTime("");
             setHandoffNotes("");
-            setOutOfTerritoryReason("");
-            setIncludeOutOfTerritory(false);
         }
     }, [open]);
 
@@ -70,19 +65,6 @@ export function TransferAsmModal({ open, onClose, leadId, state, city, onSuccess
         e.preventDefault();
         if (!asmId) {
             toast.error("Pick an ASM.");
-            return;
-        }
-        if (!handoffNotes.trim()) {
-            toast.error("Handoff notes are required.");
-            return;
-        }
-        if (suggestedDate && !preferredTime.trim()) {
-            toast.error("Dealer's preferred time is required when a visit date is set.");
-            return;
-        }
-        const selected = asms.find((a) => a.user_id === asmId);
-        if (selected && !selected.in_territory && !outOfTerritoryReason.trim()) {
-            toast.error("Out-of-territory ASM requires an override reason.");
             return;
         }
         setSubmitting(true);
@@ -95,9 +77,6 @@ export function TransferAsmModal({ open, onClose, leadId, state, city, onSuccess
             };
             if (suggestedDate) body.suggested_visit_date = suggestedDate;
             if (preferredTime) body.dealer_preferred_time = preferredTime;
-            if (selected && !selected.in_territory) {
-                body.out_of_territory_reason = outOfTerritoryReason.trim();
-            }
             const res = await fetch(`/api/inside-sales/lead/${encodeURIComponent(leadId)}/transfer-asm`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -143,27 +122,14 @@ export function TransferAsmModal({ open, onClose, leadId, state, city, onSuccess
                         {asms.map((a) => (
                             <option key={a.user_id} value={a.user_id}>
                                 {a.name ?? a.email}
-                                {a.in_territory ? "" : "  · out of territory"}
                             </option>
                         ))}
                     </select>
-                    {asms.length === 0 && (
+                    {totalAsms === 0 && (
                         <p className="text-[11px] text-gray-500 mt-1">
-                            {totalAsms === 0
-                                ? "No ASM users seeded yet. Run scripts/seed-asm-user.js (Module 0) to add one."
-                                : includeOutOfTerritory
-                                    ? "No active ASMs."
-                                    : "No ASMs matched this dealer's state/city. Toggle below to see all."}
+                            No ASM users found. Run scripts/seed-asm-users.js to add them.
                         </p>
                     )}
-                    <label className="mt-2 inline-flex items-center gap-2 text-xs text-gray-600">
-                        <input
-                            type="checkbox"
-                            checked={includeOutOfTerritory}
-                            onChange={(e) => setIncludeOutOfTerritory(e.target.checked)}
-                        />
-                        Show all ASMs (out-of-territory)
-                    </label>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -192,13 +158,13 @@ export function TransferAsmModal({ open, onClose, leadId, state, city, onSuccess
                         <Input type="date" value={suggestedDate} onChange={(e) => setSuggestedDate(e.target.value)} className="mt-1" />
                     </div>
                     <div>
-                        <Label>Dealer&apos;s preferred time {suggestedDate && <span className="text-rose-600">*</span>}</Label>
+                        <Label>Dealer&apos;s preferred time</Label>
                         <Input value={preferredTime} onChange={(e) => setPreferredTime(e.target.value)} placeholder="e.g. weekday mornings" className="mt-1" />
                     </div>
                 </div>
 
                 <div>
-                    <Label>Handoff notes <span className="text-rose-600">*</span></Label>
+                    <Label>Handoff notes</Label>
                     <textarea
                         className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm min-h-[80px]"
                         value={handoffNotes}
@@ -206,17 +172,6 @@ export function TransferAsmModal({ open, onClose, leadId, state, city, onSuccess
                         placeholder="Context for the ASM — current commitments, dealer preferences, pending items"
                     />
                 </div>
-
-                {asmId && asms.find((a) => a.user_id === asmId && !a.in_territory) && (
-                    <div>
-                        <Label>Out-of-territory reason <span className="text-rose-600">*</span></Label>
-                        <Input
-                            value={outOfTerritoryReason}
-                            onChange={(e) => setOutOfTerritoryReason(e.target.value)}
-                            className="mt-1"
-                        />
-                    </div>
-                )}
             </form>
         </Modal>
     );

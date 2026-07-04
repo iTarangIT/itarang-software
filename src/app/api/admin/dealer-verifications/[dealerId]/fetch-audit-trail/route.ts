@@ -6,6 +6,7 @@ import { dealerOnboardingApplications } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -118,33 +119,41 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
     const bucketName = "dealer-documents";
     const filePath = `agreements/${dealerId}/audit-trail.pdf`;
 
-    const { error: uploadError } = await supabase.storage
-      .from(bucketName)
-      .upload(filePath, pdfBuffer, {
-        contentType: "application/pdf",
-        upsert: true,
-      });
+    let auditTrailUrl: string | undefined;
 
-    if (uploadError) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Failed to upload audit trail to Supabase",
-          raw: uploadError.message,
-        },
-        { status: 500 }
-      );
+    if (isS3Backend) {
+      await putObject(bucketName, filePath, Buffer.from(pdfBuffer), "application/pdf");
+      auditTrailUrl = filesProxyPath(bucketName, filePath);
+    } else {
+      const supabase = createClient(supabaseUrl, serviceRoleKey);
+
+      const { error: uploadError } = await supabase.storage
+        .from(bucketName)
+        .upload(filePath, pdfBuffer, {
+          contentType: "application/pdf",
+          upsert: true,
+        });
+
+      if (uploadError) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Failed to upload audit trail to Supabase",
+            raw: uploadError.message,
+          },
+          { status: 500 }
+        );
+      }
+
+      const { data: publicUrlData } = supabase.storage
+        .from(bucketName)
+        .getPublicUrl(filePath);
+
+      auditTrailUrl = publicUrlData?.publicUrl;
     }
-
-    const { data: publicUrlData } = supabase.storage
-      .from(bucketName)
-      .getPublicUrl(filePath);
-
-    const auditTrailUrl = publicUrlData?.publicUrl;
 
     if (!auditTrailUrl) {
       return NextResponse.json(

@@ -103,7 +103,14 @@ export function LeadDetailView({ leadId, viewerId, viewerRole }: Props) {
 
     return (
         <div className="flex flex-col h-[calc(100vh-68px)]">
-            <LeadDetailHeader bundle={bundle} viewerId={viewerId} />
+            <LeadDetailHeader
+                bundle={bundle}
+                viewerId={viewerId}
+                viewerRole={viewerRole}
+                onUpdated={invalidate}
+                statusModalActions={["mark_converted", "mark_lost", "transfer_asm"]}
+                onStatusModal={(a) => setActiveModal(a)}
+            />
 
             {staleInfo && (
                 <div className="px-6 pt-3">
@@ -119,7 +126,7 @@ export function LeadDetailView({ leadId, viewerId, viewerRole }: Props) {
             )}
 
             <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-0">
-                <TouchpointHistoryPane touchpoints={bundle.touchpoints} statusHistory={bundle.status_history} />
+                <TouchpointHistoryPane leadId={leadId} touchpoints={bundle.touchpoints} statusHistory={bundle.status_history} />
                 <LeadDetailRightPane bundle={bundle} />
             </div>
 
@@ -165,7 +172,6 @@ export function LeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 open={activeModal === "mark_converted"}
                 onClose={() => setActiveModal(null)}
                 leadId={leadId}
-                hasFinalPrice={Boolean(bundle.current_commercials?.final_price)}
                 onSuccess={onActionSuccess}
             />
             <ReassignLeadModal

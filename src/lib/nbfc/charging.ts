@@ -9,7 +9,7 @@
  */
 import { and, eq, isNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { nbfcChargeCatalogue, nbfcWalletLedger, nbfcWallets } from "@/lib/db/schema";
+import { nbfcChargeCatalogue, nbfcWalletInflows, nbfcWalletLedger, nbfcWallets } from "@/lib/db/schema";
 
 export type ChargeTrigger = "on_api_execution" | "on_vkyc_run" | "on_disbursal" | "monthly" | "manual";
 
@@ -192,6 +192,84 @@ export async function postTopup(args: { tenantId: string; amount: number; descri
       .returning({ id: nbfcWalletLedger.id });
     await tx.update(nbfcWallets).set({ balance: String(balance), updated_at: new Date() }).where(eq(nbfcWallets.tenant_id, args.tenantId));
     return led.id;
+  });
+}
+
+export interface CreditInflowArgs {
+  tenantId: string;
+  nbfcId?: number | null;
+  providerName: string;
+  /** Provider-stable id for this inflow (e.g. payment id) — the dedupe key. */
+  providerEventId: string;
+  /** Credit amount in rupees. */
+  amount: number;
+  rawStatus?: string | null;
+  raw?: unknown;
+  description?: string;
+}
+
+export type CreditInflowResult =
+  | { credited: true; ledgerId: string; idempotent: false }
+  | { credited: false; idempotent: true };
+
+/**
+ * §16.3 — idempotent wallet credit for provider money-in (VA top-up / recurring
+ * debit settlement). The UNIQUE (provider_name, provider_event_id) on
+ * nbfc_wallet_inflows is the dedupe guarantee: a re-delivered webhook inserts
+ * ON CONFLICT DO NOTHING and credits nothing. Only the first delivery posts a
+ * `topup` ledger line and increments the balance — all in one transaction.
+ */
+export async function creditInflow(args: CreditInflowArgs): Promise<CreditInflowResult> {
+  const month = monthKey();
+  return db.transaction(async (tx) => {
+    // 1) Claim the inflow. No row back ⇒ already processed ⇒ no double-credit.
+    const inserted = await tx
+      .insert(nbfcWalletInflows)
+      .values({
+        tenant_id: args.tenantId,
+        nbfc_id: args.nbfcId ?? null,
+        provider_name: args.providerName,
+        provider_event_id: args.providerEventId,
+        amount: String(Math.abs(args.amount)),
+        raw_status: args.rawStatus ?? null,
+        raw_payload: (args.raw ?? null) as Record<string, unknown> | null,
+      })
+      .onConflictDoNothing({
+        target: [nbfcWalletInflows.provider_name, nbfcWalletInflows.provider_event_id],
+      })
+      .returning({ id: nbfcWalletInflows.id });
+
+    if (inserted.length === 0) {
+      return { credited: false, idempotent: true } as const;
+    }
+    const inflowId = inserted[0].id;
+
+    // 2) Post the topup line + bump balance (append-only ledger).
+    const [wallet] = await tx.select().from(nbfcWallets).where(eq(nbfcWallets.tenant_id, args.tenantId)).limit(1).for("update");
+    let balance = wallet ? n(wallet.balance) : 0;
+    if (!wallet) {
+      await tx.insert(nbfcWallets).values({ tenant_id: args.tenantId }).onConflictDoNothing({ target: nbfcWallets.tenant_id });
+    }
+    balance += Math.abs(args.amount);
+    const [led] = await tx
+      .insert(nbfcWalletLedger)
+      .values({
+        tenant_id: args.tenantId,
+        kind: "topup",
+        description: args.description ?? "Wallet top-up (iTarang Virtual Account)",
+        amount: String(Math.abs(args.amount)),
+        balance_after: String(balance),
+        nbfc_id: args.nbfcId ?? null,
+        provider_event_id: args.providerEventId,
+        month,
+      })
+      .returning({ id: nbfcWalletLedger.id });
+    await tx.update(nbfcWallets).set({ balance: String(balance), updated_at: new Date() }).where(eq(nbfcWallets.tenant_id, args.tenantId));
+
+    // 3) Link the posted ledger line back onto the inflow for audit.
+    await tx.update(nbfcWalletInflows).set({ ledger_id: led.id }).where(eq(nbfcWalletInflows.id, inflowId));
+
+    return { credited: true, ledgerId: led.id, idempotent: false } as const;
   });
 }
 

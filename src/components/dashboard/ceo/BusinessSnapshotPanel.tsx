@@ -1,14 +1,21 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { AnimatePresence, motion } from "framer-motion";
+import { useQuery } from "@tanstack/react-query";
 import {
   TrendingDown,
   TrendingUp,
   Receipt,
   ArrowRight,
   ShoppingBag,
+  SlidersHorizontal,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { formatINRCompact } from "@/lib/format";
+import { ManualSalesUpload } from "./ManualSalesUpload";
+import { MonthCalendar } from "./MonthCalendar";
 
 interface RecentInvoice {
   id: string;
@@ -27,17 +34,34 @@ interface RecentExpense {
   submitter_name: string | null;
 }
 
+type SnapshotMetric = "purchases" | "sales" | "expenses";
+
+/** Active period for the whole snapshot. */
+type Selection = { kind: "mtd" } | { kind: "fy" } | { kind: "month"; value: string };
+
 interface Props {
   purchasesMtd: number;
   salesMtd: number;
   otherExpensesMtd: number;
   recentInvoices?: RecentInvoice[];
   recentExpenses?: RecentExpense[];
+  /**
+   * Open a drill-down for the clicked tile. `params` is the query string for the
+   * active window (e.g. "period=fy" / "month=2026-06") so the drill-down matches
+   * the filtered figure. When omitted, tiles are static.
+   */
+  onTileClick?: (metric: SnapshotMetric, title: string, params: string) => void;
 }
 
-function formatINR(n: number): string {
-  if (n >= 1_00_000) return `₹${(n / 1_00_000).toFixed(2)}L`;
-  return `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+const formatINR = (n: number) => formatINRCompact(n);
+
+interface SnapshotSummary {
+  purchases: number;
+  sales: number;
+  otherExpenses: number;
+  net: number;
+  period: string;
+  label: string;
 }
 
 export function BusinessSnapshotPanel({
@@ -46,53 +70,179 @@ export function BusinessSnapshotPanel({
   otherExpensesMtd,
   recentInvoices = [],
   recentExpenses = [],
+  onTileClick,
 }: Props) {
-  const netMtd = salesMtd - purchasesMtd - otherExpensesMtd;
+  const [open, setOpen] = useState(false);
+  const [selection, setSelection] = useState<Selection>({ kind: "mtd" });
+  const filterRef = useRef<HTMLDivElement>(null);
+
+  // Close the popover on outside-click / Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const isDefault = selection.kind === "mtd";
+  const queryParam =
+    selection.kind === "month"
+      ? `month=${selection.value}`
+      : `period=${selection.kind}`;
+
+  // Only a non-default window hits the API; "This month" uses the live props so
+  // it always matches the dashboard headline exactly.
+  const { data, isFetching } = useQuery({
+    queryKey: ["ceo-snapshot-summary", queryParam],
+    enabled: !isDefault,
+    queryFn: async () => {
+      const r = await fetch(`/api/dashboard/ceo/snapshot-summary?${queryParam}`, {
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error("Failed to load snapshot");
+      const j = await r.json();
+      return j.data as SnapshotSummary;
+    },
+    placeholderData: (prev) => prev,
+  });
+
+  const purchases = isDefault ? purchasesMtd : data?.purchases ?? purchasesMtd;
+  const sales = isDefault ? salesMtd : data?.sales ?? salesMtd;
+  const otherExpenses = isDefault
+    ? otherExpensesMtd
+    : data?.otherExpenses ?? otherExpensesMtd;
+  const netMtd = sales - purchases - otherExpenses;
+
+  const monthLabel =
+    selection.kind === "month"
+      ? new Date(`${selection.value}-01T00:00:00`).toLocaleDateString("en-IN", {
+          month: "short",
+          year: "numeric",
+        })
+      : "";
+  const label =
+    selection.kind === "fy"
+      ? "Financial year"
+      : selection.kind === "month"
+        ? data?.label ?? monthLabel
+        : "This month";
 
   return (
     <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
-      <div className="flex items-center justify-between mb-5">
-        <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-          <ShoppingBag className="w-4 h-4 text-brand-600" />
-          Business Snapshot (MTD)
-        </h3>
-        <Link href="/ceo/expenses">
-          <button className="text-[11px] font-semibold text-brand-700 hover:underline flex items-center gap-1">
-            Review Expenses <ArrowRight className="w-3 h-3" />
+      <div className="flex items-center justify-between gap-3 mb-5 flex-wrap">
+        <div ref={filterRef} className="relative flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+            <ShoppingBag className="w-4 h-4 text-brand-600" />
+            Business Snapshot
+            <span className="text-gray-300 font-normal">·</span>
+            <span className="text-brand-700">{label}</span>
+            {isFetching && !isDefault ? (
+              <span className="text-gray-400 font-normal">…</span>
+            ) : null}
+          </h3>
+          <button
+            type="button"
+            data-testid="snapshot-filter-trigger"
+            aria-label="Filter snapshot period"
+            aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}
+            className={cn(
+              "p-1.5 rounded-lg border transition-colors",
+              open || !isDefault
+                ? "bg-brand-50 border-brand-200 text-brand-600"
+                : "bg-white border-gray-200 text-gray-400 hover:text-brand-600 hover:border-brand-100",
+            )}
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5" />
           </button>
-        </Link>
+
+          <AnimatePresence>
+            {open && (
+              <motion.div
+                initial={{ opacity: 0, y: -6, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -6, scale: 0.97 }}
+                transition={{ duration: 0.16, ease: "easeOut" }}
+                data-testid="snapshot-filter-popover"
+                className="absolute left-0 top-9 z-50 w-72 origin-top-left rounded-2xl bg-white border border-gray-100 shadow-xl shadow-gray-200/60 p-4"
+              >
+                <p className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">
+                  Period
+                </p>
+                <div className="grid grid-cols-2 gap-1 p-1 bg-gray-100 rounded-xl mb-3">
+                  <PeriodButton
+                    label="This month"
+                    active={selection.kind === "mtd"}
+                    onClick={() => setSelection({ kind: "mtd" })}
+                  />
+                  <PeriodButton
+                    label="Financial year"
+                    active={selection.kind === "fy"}
+                    onClick={() => setSelection({ kind: "fy" })}
+                  />
+                </div>
+
+                <MonthCalendar
+                  value={selection.kind === "month" ? selection.value : null}
+                  onSelect={(value) => {
+                    setSelection({ kind: "month", value });
+                    setOpen(false);
+                  }}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+        <div className="flex items-center gap-2 text-[11px] font-semibold">
+          <ManualSalesUpload />
+          <span className="text-gray-200">|</span>
+          <Link
+            href="/ceo/expenses"
+            className="text-brand-700 hover:underline flex items-center gap-1"
+          >
+            Review Expenses <ArrowRight className="w-3 h-3" />
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-3">
-        <div data-testid="tile-oem-purchases" className="p-3 rounded-xl bg-rose-50/60 border border-rose-100/60">
-          <p className="text-[10px] uppercase tracking-wider font-bold text-rose-700/70">
-            Purchases from OEM
-          </p>
-          <p data-testid="tile-oem-purchases-value" className="text-lg font-bold text-rose-900 mt-1">
-            {formatINR(purchasesMtd)}
-          </p>
-        </div>
-        <div data-testid="tile-sales-to-dealer" className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-100/60">
-          <p className="text-[10px] uppercase tracking-wider font-bold text-emerald-700/70">
-            Sales to Dealer
-          </p>
-          <p data-testid="tile-sales-to-dealer-value" className="text-lg font-bold text-emerald-900 mt-1">
-            {formatINR(salesMtd)}
-          </p>
-        </div>
-        <div data-testid="tile-other-expenses" className="p-3 rounded-xl bg-amber-50/60 border border-amber-100/60">
-          <p className="text-[10px] uppercase tracking-wider font-bold text-amber-700/70">
-            Other Expenses
-          </p>
-          <p data-testid="tile-other-expenses-value" className="text-lg font-bold text-amber-900 mt-1">
-            {formatINR(otherExpensesMtd)}
-          </p>
-        </div>
+        <Tile
+          testid="tile-oem-purchases"
+          label="Purchases from OEM"
+          value={formatINR(purchases)}
+          tone="rose"
+          onClick={onTileClick ? () => onTileClick("purchases", `Purchases from OEM · ${label}`, queryParam) : undefined}
+        />
+        <Tile
+          testid="tile-sales-to-dealer"
+          label="Sales to Dealer"
+          value={formatINR(sales)}
+          tone="emerald"
+          onClick={onTileClick ? () => onTileClick("sales", `Sales to Dealer · ${label}`, queryParam) : undefined}
+        />
+        <Tile
+          testid="tile-other-expenses"
+          label="Other Expenses"
+          value={formatINR(otherExpenses)}
+          tone="amber"
+          onClick={onTileClick ? () => onTileClick("expenses", `Other Expenses · ${label}`, queryParam) : undefined}
+        />
       </div>
 
       <div data-testid="net-mtd" className="mt-4 p-3 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between">
         <span className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider">
-          Net (MTD)
+          Net · {label}
         </span>
         <span
           data-testid="net-mtd-value"
@@ -111,7 +261,7 @@ export function BusinessSnapshotPanel({
 
       <div className="mt-5 grid grid-cols-1 gap-4">
         <div>
-          <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 mb-2">
+          <p className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">
             Recent Zoho Invoices
           </p>
           {recentInvoices.length === 0 ? (
@@ -141,7 +291,7 @@ export function BusinessSnapshotPanel({
         </div>
 
         <div>
-          <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 mb-2 flex items-center gap-1">
+          <p className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2 flex items-center gap-1">
             <Receipt className="w-3 h-3" />
             Recent Approved Expenses
           </p>
@@ -171,6 +321,80 @@ export function BusinessSnapshotPanel({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function PeriodButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "py-1.5 px-2 rounded-lg text-xs font-semibold transition-colors",
+        active ? "bg-white text-brand-700 shadow-sm" : "text-gray-500 hover:text-gray-700",
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+const TILE_TONES = {
+  rose: { bg: "bg-rose-50/60 border-rose-100/60", label: "text-rose-700/70", value: "text-rose-900" },
+  emerald: {
+    bg: "bg-emerald-50/60 border-emerald-100/60",
+    label: "text-emerald-700/70",
+    value: "text-emerald-900",
+  },
+  amber: { bg: "bg-amber-50/60 border-amber-100/60", label: "text-amber-700/70", value: "text-amber-900" },
+} as const;
+
+function Tile({
+  testid,
+  label,
+  value,
+  tone,
+  onClick,
+}: {
+  testid: string;
+  label: string;
+  value: string;
+  tone: keyof typeof TILE_TONES;
+  onClick?: () => void;
+}) {
+  const t = TILE_TONES[tone];
+  const content = (
+    <>
+      <p className={`text-[11px] uppercase tracking-wider font-bold ${t.label}`}>{label}</p>
+      <p data-testid={`${testid}-value`} className={`text-lg font-bold ${t.value} mt-1`}>
+        {value}
+      </p>
+    </>
+  );
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        data-testid={testid}
+        onClick={onClick}
+        className={`text-left p-3 rounded-xl border ${t.bg} transition-all hover:shadow-sm hover:-translate-y-0.5 cursor-pointer`}
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <div data-testid={testid} className={`p-3 rounded-xl border ${t.bg}`}>
+      {content}
     </div>
   );
 }

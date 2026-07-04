@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { withErrorHandler, successResponse, errorResponse, generateId } from '@/lib/api-utils';
 import { requireRole } from '@/lib/auth-utils';
+import { recordLeadCapture } from '@/lib/leads/lead-registry';
 import { z } from 'zod';
 
 const leadSchema = z.object({
@@ -49,6 +50,17 @@ export const POST = withErrorHandler(async (req: Request) => {
         console.error('Supabase Lead Error:', leadError);
         return errorResponse(leadError.message, 500);
     }
+
+    // E-179 central registry. This endpoint doubles as dealer-prospect capture
+    // for the sales team — business fields present means the lead is a shop.
+    await recordLeadCapture({
+        leadType: data.business_name || data.business_type ? 'dealer' : 'customer',
+        name: data.owner_name,
+        phone: data.owner_contact,
+        sourceChannel: 'web',
+        sourceTable: 'leads',
+        sourceId: leadId,
+    });
 
     // Initialize SLA
     const deadline = new Date();

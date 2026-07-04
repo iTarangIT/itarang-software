@@ -42,6 +42,20 @@ export async function middleware(request: NextRequest) {
     );
   }
 
+  // App Router prefetches/navigations fetch an RSC payload (marked by the
+  // `RSC` header; prefetches also carry `Next-Router-Prefetch`). The no-store
+  // header below is only meant for full HTML document loads (anti-stale across
+  // deploys) — applying it to RSC responses tells the client router to treat
+  // every prefetched <Link> as immediately stale, killing prefetch and making
+  // navigations feel unresponsive (looks like the link needs multiple clicks).
+  // For those requests we return the response without the no-store headers so
+  // the router cache can keep the prefetch.
+  const isRscRequest =
+    request.headers.get("rsc") === "1" ||
+    request.headers.has("next-router-prefetch");
+  const finalize = (res: NextResponse): NextResponse =>
+    isRscRequest ? res : addNoStoreHeaders(res);
+
   let response = NextResponse.next({
     request: {
       headers: request.headers,
@@ -79,6 +93,16 @@ export async function middleware(request: NextRequest) {
 
   const path = request.nextUrl.pathname;
 
+  // API and asset requests only need the session-cookie refresh that
+  // getUser() above already performed (see the matcher comment on why
+  // /api/files/* must keep it). Role resolution below is page-navigation
+  // logic — skipping it saves up to two Supabase `users` queries on every
+  // API call. Outcome is identical: these paths were public (unauthenticated)
+  // and fell through to finalize() (authenticated) before this early exit.
+  if (path.startsWith("/api") || path.startsWith("/_next") || path === "/favicon.ico") {
+    return finalize(response);
+  }
+
   const roleDashboards: Record<string, string> = {
     ceo: "/ceo",
     business_head: "/business-head",
@@ -97,17 +121,13 @@ export async function middleware(request: NextRequest) {
     nbfc_partner: "/nbfc",
   };
 
-  const isPublicRoute =
-    path === "/login" ||
-    path === "/logout" ||
-    path.startsWith("/api") ||
-    path.startsWith("/_next") ||
-    path === "/favicon.ico";
+  const isPublicRoute = path === "/login" || path === "/logout";
 
   const isProtectedRoute =
     Object.values(roleDashboards).some((dashboardPath) =>
       path.startsWith(dashboardPath),
     ) ||
+    path.startsWith("/risk-head") ||
     path.startsWith("/inventory") ||
     path.startsWith("/product-catalog") ||
     path.startsWith("/oem-onboarding") ||
@@ -122,15 +142,15 @@ export async function middleware(request: NextRequest) {
     path === "/dashboard";
 
   if (!user) {
-    if (isPublicRoute) return addNoStoreHeaders(response);
+    if (isPublicRoute) return finalize(response);
 
     if (isProtectedRoute) {
       const url = request.nextUrl.clone();
       url.pathname = "/login";
-      return addNoStoreHeaders(NextResponse.redirect(url));
+      return finalize(NextResponse.redirect(url));
     }
 
-    return addNoStoreHeaders(response);
+    return finalize(response);
   }
 
   // Role lives on AWS RDS, not Supabase — read it from app_metadata (synced by
@@ -162,19 +182,22 @@ export async function middleware(request: NextRequest) {
   const role = rawRole.toLowerCase();
   const myDashboard = roleDashboards[role] || "/";
 
-  console.log("[MIDDLEWARE] Auth user:", {
-    authUserId: user.id,
-    authEmail: user.email,
-    resolvedRole: role,
-    dashboard: myDashboard,
-    path,
-  });
+  // Per-navigation logging is hot-path cost in prod — opt in when debugging.
+  if (process.env.MIDDLEWARE_DEBUG === "1") {
+    console.log("[MIDDLEWARE] Auth user:", {
+      authUserId: user.id,
+      authEmail: user.email,
+      resolvedRole: role,
+      dashboard: myDashboard,
+      path,
+    });
+  }
 
   // First-login forced password reset for NBFC partners. Activation route sets
   // users.must_change_password=true; /api/auth/change-password clears it.
   if (
     role === "nbfc_partner" &&
-    path.startsWith("/nbfc") &&
+    (path.startsWith("/nbfc") || path.startsWith("/risk-head")) &&
     path !== "/change-password"
   ) {
     const { data: mustChange } = await supabase
@@ -183,7 +206,7 @@ export async function middleware(request: NextRequest) {
       .eq("id", user.id)
       .maybeSingle();
     if (mustChange?.must_change_password) {
-      return addNoStoreHeaders(
+      return finalize(
         NextResponse.redirect(new URL("/change-password", request.url)),
       );
     }
@@ -191,15 +214,20 @@ export async function middleware(request: NextRequest) {
 
   if (path === "/login" || path === "/" || path === "/dashboard") {
     if (myDashboard !== "/") {
-      return addNoStoreHeaders(
+      return finalize(
         NextResponse.redirect(new URL(myDashboard, request.url)),
       );
     }
-    return addNoStoreHeaders(response);
+    return finalize(response);
   }
 
   // Shared access routes
   const sharedRouteAccess: Record<string, string[]> = {
+    // NBFC Risk Head dashboard — the second-approver surface of the
+    // battery-immobilisation gate. All NBFC users sign in as `nbfc_partner`;
+    // the layout does the fine-grained nbfc_users.role === 'nbfc_risk_head'
+    // gate. admin/ceo retain support access.
+    "/risk-head": ["nbfc_partner", "admin", "ceo"],
     "/admin/dealer-verification": ["sales_head"],
     "/admin/kyc-review": ["admin", "sales_head", "business_head", "ceo"],
     // NBFC onboarding (BRD §6.0): sales_head submits, CEO approves. Admin and
@@ -207,6 +235,9 @@ export async function middleware(request: NextRequest) {
     // /api/admin/nbfc/* routes still gate writes per role; this just allows
     // the dashboard pages to render.
     "/admin/nbfc": ["admin", "ceo", "business_head", "sales_head"],
+    // Global NBFC loan-product catalogue (view/search/edit). Same audience as
+    // the NBFC directory; writes are still admin-gated by the API.
+    "/admin/loan-products": ["admin", "ceo", "business_head", "sales_head"],
     "/admin/product-review": ["admin", "sales_head", "business_head", "ceo"],
     "/admin/inventory": [
       "admin",
@@ -236,7 +267,7 @@ export async function middleware(request: NextRequest) {
   )?.[1];
 
   if (allowedSharedRoles && allowedSharedRoles.includes(role)) {
-    return addNoStoreHeaders(response);
+    return finalize(response);
   }
 
   const matchedRole = Object.entries(roleDashboards).find(([, dashboardPath]) =>
@@ -247,20 +278,29 @@ export async function middleware(request: NextRequest) {
   // Admin can also see /nbfc/* for support/troubleshooting (Phase C addition).
   const isAdminViewingNbfc = role === "admin" && path.startsWith("/nbfc");
   if (matchedRole && matchedRole !== role && role !== "ceo" && !isAdminViewingNbfc) {
-    return addNoStoreHeaders(
+    return finalize(
       NextResponse.redirect(new URL(myDashboard, request.url)),
     );
   }
 
-  return addNoStoreHeaders(response);
+  return finalize(response);
 }
 
 export const config = {
   matcher: [
     // Skip Next internals, favicon, image assets, and uploaded PDFs served
-    // from public/nbfc-uploads/. Without `.pdf` in this list, PDF iframes
-    // hit the auth middleware and get redirected to the user's role
+    // statically (e.g. /nbfc-uploads/*.pdf). Without `.pdf` in this list, PDF
+    // iframes hit the auth middleware and get redirected to the user's role
     // dashboard instead of returning the file.
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf)$).*)",
+    //
+    // The `(?!api/)` guard keeps the extension-skip from also swallowing the
+    // AUTHENTICATED file proxy at /api/files/<bucket>/<key>.<ext>. Those URLs
+    // MUST run through middleware so the Supabase session cookie gets refreshed
+    // — otherwise, once the short-lived access token expires, every image/PDF
+    // document view 401s ("Unauthorized") even for a logged-in user, while the
+    // rest of the app (which is refreshed on each request) keeps working.
+    // Middleware passes /api/* through without a redirect (isPublicRoute), so
+    // this only adds the refresh, never a dashboard bounce.
+    "/((?!_next/static|_next/image|favicon.ico|(?!api/).*\\.(?:svg|png|jpg|jpeg|gif|webp|pdf)$).*)",
   ],
 };

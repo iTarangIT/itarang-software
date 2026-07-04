@@ -1,3 +1,6 @@
+import { isS3Backend, getObject } from "@/lib/storage/s3";
+import { parseFilesProxyPath } from "@/lib/storage/readStoredDocument";
+
 /**
  * Fetch a public URL into a Node Buffer suitable for use as an email
  * attachment. Returns null on any failure — callers should treat a null
@@ -8,6 +11,30 @@ export async function downloadPdfBuffer(
   url: string | null | undefined
 ): Promise<Buffer | null> {
   if (!url || typeof url !== "string") return null;
+
+  // On the S3 backend, newly-stored doc URLs are RELATIVE files-proxy paths
+  // (`/api/files/<bucket>/<key>`) — a server-side fetch() can't parse a
+  // relative URL and throws, which previously surfaced as "Signed agreement
+  // is not ready yet" during dealer approval. Read straight from storage
+  // instead: no HTTP round-trip, no relative-URL parse, no proxy auth.
+  if (isS3Backend) {
+    const parsed = parseFilesProxyPath(url);
+    if (parsed) {
+      try {
+        const buf = await getObject(parsed.bucket, parsed.key);
+        if (!buf || buf.byteLength < 100) {
+          console.warn(
+            `[downloadPdfBuffer] S3 object missing/too small for ${url}`
+          );
+          return null;
+        }
+        return buf;
+      } catch (err) {
+        console.error("[downloadPdfBuffer] S3 getObject failed:", err);
+        return null;
+      }
+    }
+  }
 
   try {
     // Bound the fetch so a slow/looping upstream (e.g. fetching our own

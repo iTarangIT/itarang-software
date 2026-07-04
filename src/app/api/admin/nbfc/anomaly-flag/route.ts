@@ -12,6 +12,7 @@
  * Auth: resolveAdminActor; non-admins -> 403.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { eq, isNull, sql, desc } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { nbfcAnomalyFlags, nbfcTenants } from "@/lib/db/schema";
@@ -26,7 +27,7 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { ok: false, error: msg },
+      { ok: false, error: clientError(msg) },
       { status: statusFromError(msg) },
     );
   }
@@ -83,6 +84,6 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[admin/nbfc/anomaly-flag GET] failed:", msg);
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: 500 });
   }
 }

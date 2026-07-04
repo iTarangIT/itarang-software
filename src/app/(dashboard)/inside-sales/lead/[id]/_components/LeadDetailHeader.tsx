@@ -3,14 +3,22 @@
 import Link from "next/link";
 import { ArrowLeft, Phone, MapPin, AlarmCheck, AlertCircle, RotateCcw, ShieldAlert, CheckCircle2 } from "lucide-react";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
-import { StatusChip } from "../../../_components/StatusChip";
 import { IntentBadge } from "../../../_components/IntentBadge";
-import { InterestChip } from "../../../_components/InterestChip";
+import { InterestLevelEditor } from "../../../_components/InterestLevelEditor";
+import { LeadStatusEditor, type StatusModalAction } from "../../../_components/LeadStatusEditor";
 import { OwnerIndicator } from "../../../_components/OwnerIndicator";
+
+// Roles permitted to override a lead's temperature (mirrors the PATCH route).
+const INTEREST_EDIT_ROLES = ["inside_sales_rep", "asm", "admin"];
 
 type Props = {
     bundle: LeadDetailBundle;
     viewerId: string;
+    viewerRole?: string;
+    onUpdated?: () => void;
+    // Dedicated-flow modals the parent view can open from the status editor.
+    statusModalActions?: StatusModalAction[];
+    onStatusModal?: (action: StatusModalAction) => void;
 };
 
 function daysAgo(iso: string | null): string {
@@ -43,8 +51,16 @@ function formatOnboardingStatus(s: string | null): string {
     return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ");
 }
 
-export function LeadDetailHeader({ bundle, viewerId }: Props) {
+export function LeadDetailHeader({
+    bundle,
+    viewerId,
+    viewerRole,
+    onUpdated,
+    statusModalActions,
+    onStatusModal,
+}: Props) {
     const lead = bundle.lead;
+    const canEditInterest = INTEREST_EDIT_ROLES.includes(viewerRole ?? "");
     const isOwner = lead.current_owner_id === viewerId;
     const isUnassigned = !lead.current_owner_id;
     const isEscalated = lead.escalation_status === "pending_review";
@@ -65,8 +81,20 @@ export function LeadDetailHeader({ bundle, viewerId }: Props) {
                         <h1 className="text-xl font-semibold text-gray-900 truncate">
                             {lead.dealer_name || lead.shop_name || "(unnamed dealer)"}
                         </h1>
-                        <StatusChip status={lead.lead_status} />
-                        <InterestChip level={lead.interest_level} />
+                        <LeadStatusEditor
+                            leadId={lead.id}
+                            status={lead.lead_status}
+                            editable={isOwner}
+                            modalActions={statusModalActions}
+                            onModalAction={onStatusModal}
+                            onUpdated={onUpdated}
+                        />
+                        <InterestLevelEditor
+                            leadId={lead.id}
+                            value={lead.interest_level}
+                            editable={canEditInterest}
+                            onUpdated={onUpdated}
+                        />
                         <IntentBadge score={lead.final_intent_score} />
                     </div>
                     {lead.shop_name && lead.dealer_name && (

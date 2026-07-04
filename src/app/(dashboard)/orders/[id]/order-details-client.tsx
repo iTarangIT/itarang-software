@@ -17,6 +17,7 @@ import {
     AlertTriangle,
     Truck
 } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface OrderDetailsClientProps {
     order: any;
@@ -50,13 +51,13 @@ export default function OrderDetailsClient({ order: initialOrder, approvals, use
                 body: JSON.stringify({ pi_url: piUrl, pi_amount: piAmount }),
             });
             if (res.ok) router.refresh();
-        } catch (err) { alert('Upload failed'); }
+        } catch (err) { toast.error('Upload failed'); }
         finally { setSubmitting(false); }
     };
 
     const handleDecision = async (decision: 'approved' | 'rejected') => {
         if (decision === 'rejected' && !rejectionReason) {
-            alert('Rejection reason is mandatory');
+            toast.error('Rejection reason is mandatory');
             return;
         }
         setSubmitting(true);
@@ -67,7 +68,7 @@ export default function OrderDetailsClient({ order: initialOrder, approvals, use
                 body: JSON.stringify({ decision, rejection_reason: rejectionReason }),
             });
             if (res.ok) router.refresh();
-        } catch (err) { alert('Decision failed'); }
+        } catch (err) { toast.error('Decision failed'); }
         finally { setSubmitting(false); }
     };
 

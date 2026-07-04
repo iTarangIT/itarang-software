@@ -154,7 +154,7 @@
 
 **Role:** `inside_sales_rep`   **Status today:** NEW   **BRD refs:** §0.3, §0.5, §0.7, §0.10
 
-> Day-to-day surface for Nidhi / Sweety. NOT the read-only `/sales-insight` dashboard — that one stays as-is.
+> Day-to-day surface for Nidhi. NOT the read-only `/sales-insight` dashboard — that one stays as-is.
 
 ### Scope
 

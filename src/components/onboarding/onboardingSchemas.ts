@@ -19,6 +19,19 @@ function validateAge(raw: string | undefined | null): string | null {
   return null;
 }
 
+// A document slot counts as satisfied when it carries an in-memory File (just
+// picked) OR a persisted reference (storagePath / uploadedUrl) restored from a
+// resumed draft. Validating on `.file` alone wrongly re-flagged already-uploaded
+// docs as missing after resume.
+function hasUploadedDoc(
+  item:
+    | { file?: File | null; storagePath?: string | null; uploadedUrl?: string | null }
+    | null
+    | undefined
+): boolean {
+  return Boolean(item?.file || item?.storagePath || item?.uploadedUrl);
+}
+
 export function validateStep(
   state: DealerOnboardingState
 ): Record<string, string> {
@@ -55,33 +68,33 @@ export function validateStep(
       errors.businessSummary = "Business details summary is required";
     }
 
-    if (!state.company.gstCertificate?.file) {
+    if (!hasUploadedDoc(state.company.gstCertificate)) {
       errors.gstCertificate = "Upload GST certificate";
     }
 
-    if (!state.company.companyPanFile?.file) {
+    if (!hasUploadedDoc(state.company.companyPanFile)) {
       errors.companyPanFile = "Upload company PAN";
     }
   }
 
   if (state.step === 2) {
-    if (!state.compliance.itr3Years?.file) {
+    if (!hasUploadedDoc(state.compliance.itr3Years)) {
       errors.itr3Years = "Upload last 3 years ITR";
     }
 
-    if (!state.compliance.bankStatement3Months?.file) {
+    if (!hasUploadedDoc(state.compliance.bankStatement3Months)) {
       errors.bankStatement3Months = "Upload last 3 months bank statement";
     }
 
-    if (!state.compliance.undatedCheques?.file) {
+    if (!hasUploadedDoc(state.compliance.undatedCheques)) {
       errors.undatedCheques = "Upload undated cheques";
     }
 
-    if (!state.compliance.passportPhoto?.file) {
+    if (!hasUploadedDoc(state.compliance.passportPhoto)) {
       errors.passportPhoto = "Upload passport size photograph";
     }
 
-    if (!state.compliance.udyamCertificate?.file) {
+    if (!hasUploadedDoc(state.compliance.udyamCertificate)) {
       errors.udyamCertificate = "Upload Udyam registration certificate";
     }
   }
@@ -105,7 +118,12 @@ export function validateStep(
         if (msg) errors.ownerAge = msg.replace("Age", "Owner age");
       }
 
-      if (!state.ownership.ownerPhoto?.file) {
+      // E-175 — owner Aadhaar (12 digits), matched against the agreement signer.
+      if (!/^\d{12}$/.test((state.ownership.ownerAadhaarNumber || "").trim())) {
+        errors.ownerAadhaarNumber = "Enter the owner's 12-digit Aadhaar number";
+      }
+
+      if (!hasUploadedDoc(state.ownership.ownerPhoto)) {
         errors.ownerPhoto = "Upload owner photograph";
       }
 
@@ -131,7 +149,7 @@ export function validateStep(
     }
 
     if (state.company.companyType === "partnership_firm") {
-      if (!state.ownership.partnershipDeed?.file) {
+      if (!hasUploadedDoc(state.ownership.partnershipDeed)) {
         errors.partnershipDeed = "Upload partnership deed";
       }
 
@@ -161,7 +179,7 @@ export function validateStep(
           if (msg) errors[`partner_age_${index}`] = msg.replace("Age", "Partner age");
         }
 
-        if (!partner.photo?.file) {
+        if (!hasUploadedDoc(partner.photo)) {
           errors[`partner_photo_${index}`] = "Partner photograph required";
         }
 
@@ -217,11 +235,11 @@ export function validateStep(
     }
 
     if (state.company.companyType === "private_limited_firm") {
-      if (!state.ownership.mouDocument?.file) {
+      if (!hasUploadedDoc(state.ownership.mouDocument)) {
         errors.mouDocument = "Upload MoU";
       }
 
-      if (!state.ownership.aoaDocument?.file) {
+      if (!hasUploadedDoc(state.ownership.aoaDocument)) {
         errors.aoaDocument = "Upload AoA";
       }
 
@@ -251,7 +269,7 @@ export function validateStep(
           if (msg) errors[`director_age_${index}`] = msg.replace("Age", "Director age");
         }
 
-        if (!director.photo?.file) {
+        if (!hasUploadedDoc(director.photo)) {
           errors[`director_photo_${index}`] = "Director photograph required";
         }
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
+import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -59,35 +60,43 @@ export async function POST(req: NextRequest) {
     const safeFileName = file.name.replace(/\s+/g, "-");
     const filePath = `${folder}/${Date.now()}-${randomUUID()}-${safeFileName}`;
 
-    const { error: uploadError } = await supabase.storage
-      .from(BUCKET_NAME)
-      .upload(filePath, buffer, {
-        contentType: file.type,
-        upsert: false,
-      });
+    let publicUrl: string;
 
-    if (uploadError) {
-      console.error("SUPABASE UPLOAD ERROR:", uploadError);
+    if (isS3Backend) {
+      await putObject(BUCKET_NAME, filePath, buffer, file.type);
+      publicUrl = filesProxyPath(BUCKET_NAME, filePath);
+    } else {
+      const { error: uploadError } = await supabase.storage
+        .from(BUCKET_NAME)
+        .upload(filePath, buffer, {
+          contentType: file.type,
+          upsert: false,
+        });
 
-      return NextResponse.json(
-        {
-          success: false,
-          message: uploadError.message || "Failed to upload file",
-        },
-        { status: 500 }
-      );
+      if (uploadError) {
+        console.error("SUPABASE UPLOAD ERROR:", uploadError);
+
+        return NextResponse.json(
+          {
+            success: false,
+            message: uploadError.message || "Failed to upload file",
+          },
+          { status: 500 }
+        );
+      }
+
+      const { data: publicUrlData } = supabase.storage
+        .from(BUCKET_NAME)
+        .getPublicUrl(filePath);
+      publicUrl = publicUrlData.publicUrl;
     }
-
-    const { data: publicUrlData } = supabase.storage
-      .from(BUCKET_NAME)
-      .getPublicUrl(filePath);
 
     return NextResponse.json({
       success: true,
       file: {
         name: file.name,
         path: filePath,
-        url: publicUrlData.publicUrl,
+        url: publicUrl,
         type: file.type,
         size: file.size,
         bucketName: BUCKET_NAME,

@@ -1,0 +1,9 @@
+{"type":"excalidraw","version":2,"source":"https://excalidraw.com","elements":[
+{"type":"rectangle","id":"b1","x":230,"y":70,"width":340,"height":60,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","strokeColor":"#4a9eed","label":{"text":"UI reads m.inventoryValue","fontSize":16}},
+{"type":"arrow","id":"a1","x":400,"y":130,"width":0,"height":30,"points":[[0,0],[0,30]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b2","x":230,"y":160,"width":340,"height":60,"roundness":{"type":3},"backgroundColor":"#ffc9c9","fillStyle":"solid","strokeColor":"#ef4444","strokeStyle":"dashed","label":{"text":"API does NOT provide it","fontSize":16}},
+{"type":"arrow","id":"a2","x":400,"y":220,"width":0,"height":30,"points":[[0,0],[0,30]],"endArrowhead":"arrow","strokeColor":"#ef4444","strokeStyle":"dashed"},
+{"type":"rectangle","id":"b3","x":280,"y":250,"width":240,"height":60,"roundness":{"type":3},"backgroundColor":"#ffd8a8","fillStyle":"solid","strokeColor":"#f59e0b","label":{"text":"Defaults to 0","fontSize":16}},
+{"type":"arrow","id":"a3","x":400,"y":310,"width":0,"height":30,"points":[[0,0],[0,30]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b4","x":210,"y":340,"width":380,"height":64,"roundness":{"type":3},"backgroundColor":"#ffc9c9","fillStyle":"solid","strokeColor":"#ef4444","label":{"text":"Card: Rs 0.0L (fake -4.2%)","fontSize":16}}
+],"appState":{"viewBackgroundColor":"#ffffff"},"files":{}}

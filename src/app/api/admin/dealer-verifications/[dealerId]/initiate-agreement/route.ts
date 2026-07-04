@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import {
   dealerAgreementSigners,
   dealerOnboardingApplications,
+  whatsappMessages,
 } from "@/lib/db/schema";
 import {
   insertAgreementEvent,
@@ -11,6 +12,7 @@ import {
 } from "@/lib/agreement/tracking";
 import { mergeProviderRawResponse } from "@/lib/agreement/providerRaw";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
+import { getAdapter } from "@/lib/whatsapp";
 import { POST as createDigioAgreement } from "@/app/api/integrations/digio/create-agreement/route";
 import { extractStampCertificateIds } from "@/lib/digio/parse-status";
 
@@ -227,6 +229,45 @@ function getSignerUrl(item: any) {
   );
 }
 
+type ExistingSignerRow = {
+  signer_name?: string | null;
+  signer_email?: string | null;
+  signer_mobile?: string | null;
+  signing_method?: string | null;
+  created_at?: Date | string;
+};
+
+// Fill a signer party's missing name/email/mobile from a previously-saved
+// dealer_agreement_signers row. Values present in the incoming config always
+// win; the existing row only backfills blanks.
+function hydrateParty(
+  party: AgreementParty | null | undefined,
+  existing: ExistingSignerRow | undefined
+): AgreementParty | null {
+  if (!existing) return party ?? null;
+  return {
+    ...(party || {}),
+    name: cleanString(party?.name) || existing.signer_name || "",
+    email: cleanString(party?.email) || existing.signer_email || "",
+    mobile: normalizePhone(party?.mobile) || existing.signer_mobile || "",
+    signingMethod:
+      cleanString(party?.signingMethod) ||
+      existing.signing_method ||
+      "aadhaar_esign",
+  };
+}
+
+// Same as hydrateParty but keeps the optional iTarang signer 2 null when there
+// is neither incoming data nor a saved row — so we don't fabricate a 3rd signer.
+function hydrateOptionalParty(
+  party: AgreementParty | null | undefined,
+  existing: ExistingSignerRow | undefined
+): AgreementParty | null {
+  const started = !!(party?.name || party?.email || party?.mobile);
+  if (!started && !existing) return null;
+  return hydrateParty(party, existing);
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ dealerId: string }> }
@@ -269,6 +310,9 @@ export async function POST(
       );
     }
 
+    const isWhatsappDealer =
+      String(application.source || "").toLowerCase() === "whatsapp";
+
     const currentAgreementStatus = String(
       application.agreement_status || ""
     ).toLowerCase();
@@ -299,28 +343,98 @@ export async function POST(
       );
     }
 
+    // Recover signer details from previously-saved agreement signers when the
+    // saved agreement config (provider_raw_response.agreement) is incomplete.
+    // The admin "Initiate / Re-initiate" button rebuilds the signer payload
+    // from that config; for some applications it's missing the dealer / iTarang
+    // signer fields even though a prior initiation already persisted full signer
+    // rows in dealer_agreement_signers (the Agreement Tracking Table). Without
+    // this fallback, re-initiation 400s with "Dealer and iTarang Signer 1 must
+    // have valid name, email, and phone" even though the data exists and the
+    // signers were already sent.
+    const existingSignerRows = await db
+      .select()
+      .from(dealerAgreementSigners)
+      .where(eq(dealerAgreementSigners.application_id, application.id));
+
+    const existingSignerByRole = new Map<
+      string,
+      (typeof existingSignerRows)[number]
+    >();
+    for (const rowSigner of existingSignerRows) {
+      const prior = existingSignerByRole.get(rowSigner.signer_role);
+      if (
+        !prior ||
+        new Date(rowSigner.created_at).getTime() >
+          new Date(prior.created_at).getTime()
+      ) {
+        existingSignerByRole.set(rowSigner.signer_role, rowSigner);
+      }
+    }
+
+    const dealerExisting = existingSignerByRole.get("dealer");
+    const itarang1Existing = existingSignerByRole.get("itarang_signatory_1");
+    const itarang2Existing = existingSignerByRole.get("itarang_signatory_2");
+
+    // For WhatsApp-onboarded dealers there is no web Step-5 agreement config, so
+    // the incoming dealerSigner* fields are blank. Fall back to the application's
+    // owner contact (owner_name/email/phone) — captured during the WhatsApp flow —
+    // so the dealer signer is always valid without forcing a manual re-entry.
+    const hydratedAgreement: AgreementConfig = {
+      ...agreement,
+      dealerSignerName:
+        cleanString(agreement.dealerSignerName) ||
+        dealerExisting?.signer_name ||
+        cleanString(application.owner_name) ||
+        "",
+      dealerSignerEmail:
+        cleanString(agreement.dealerSignerEmail) ||
+        dealerExisting?.signer_email ||
+        cleanString(application.owner_email) ||
+        "",
+      dealerSignerPhone:
+        normalizePhone(agreement.dealerSignerPhone) ||
+        dealerExisting?.signer_mobile ||
+        normalizePhone(application.owner_phone) ||
+        "",
+      dealerSigningMethod:
+        cleanString(agreement.dealerSigningMethod) ||
+        dealerExisting?.signing_method ||
+        "aadhaar_esign",
+      itarangSignatory1: hydrateParty(
+        agreement.itarangSignatory1,
+        itarang1Existing
+      ),
+      itarangSignatory2: hydrateOptionalParty(
+        agreement.itarangSignatory2,
+        itarang2Existing
+      ),
+    };
+
     const dealerSigner = buildSigner({
-      name: agreement.dealerSignerName,
-      email: agreement.dealerSignerEmail,
-      mobile: agreement.dealerSignerPhone,
+      name: hydratedAgreement.dealerSignerName,
+      email: hydratedAgreement.dealerSignerEmail,
+      mobile: hydratedAgreement.dealerSignerPhone,
       reason: "dealer signer",
-      signingMethod: agreement.dealerSigningMethod || "aadhaar_esign",
+      signingMethod: hydratedAgreement.dealerSigningMethod || "aadhaar_esign",
     });
 
     const itarangSigner1 = buildSigner({
-      name: agreement.itarangSignatory1?.name,
-      email: agreement.itarangSignatory1?.email,
-      mobile: agreement.itarangSignatory1?.mobile,
+      name: hydratedAgreement.itarangSignatory1?.name,
+      email: hydratedAgreement.itarangSignatory1?.email,
+      mobile: hydratedAgreement.itarangSignatory1?.mobile,
       reason: "iTarang signer 1",
-      signingMethod: agreement.itarangSignatory1?.signingMethod || "aadhaar_esign",
+      signingMethod:
+        hydratedAgreement.itarangSignatory1?.signingMethod || "aadhaar_esign",
     });
 
     const itarangSigner2 = buildSigner({
-      name: agreement.itarangSignatory2?.name,
-      email: agreement.itarangSignatory2?.email,
-      mobile: agreement.itarangSignatory2?.mobile,
+      name: hydratedAgreement.itarangSignatory2?.name,
+      email: hydratedAgreement.itarangSignatory2?.email,
+      mobile: hydratedAgreement.itarangSignatory2?.mobile,
       reason: "iTarang signer 2",
-      signingMethod: agreement.itarangSignatory2?.signingMethod || "aadhaar_esign",
+      signingMethod:
+        hydratedAgreement.itarangSignatory2?.signingMethod || "aadhaar_esign",
     });
 
     if (!dealerSigner || !itarangSigner1) {
@@ -338,10 +452,39 @@ export async function POST(
       );
     }
 
+    // E-175 — Aadhaar signer-match enforcement (no sign mismatch). When the
+    // dealer signs via Aadhaar eSign, the Aadhaar actually used to sign is
+    // matched (last 4 digits, all Digio exposes) against the owner's captured
+    // Aadhaar at signing time (lib/agreement/sync-signers.ts). That match is
+    // impossible when we never captured the owner's Aadhaar — the gate would
+    // silently pass ANY signer's Aadhaar. So block initiation until the owner's
+    // 12-digit Aadhaar is on file, guaranteeing every Aadhaar-eSigned dealer
+    // agreement can be verified against the owner's Aadhaar card.
+    const dealerOwnerAadhaar = String(application.owner_aadhaar_no || "").replace(
+      /\D/g,
+      ""
+    );
+    if (
+      dealerSigner.signingMethod === "aadhaar_esign" &&
+      dealerOwnerAadhaar.length !== 12
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "Owner Aadhaar is not on file, so the dealer's Aadhaar e-sign can't be " +
+            "matched against the Aadhaar card. Capture the owner's 12-digit Aadhaar " +
+            "(re-upload the Owner Aadhaar document) before initiating the agreement, " +
+            "or switch the dealer's signing method off Aadhaar eSign.",
+        },
+        { status: 400 }
+      );
+    }
+
     const signer2Started =
-      !!agreement.itarangSignatory2?.name ||
-      !!agreement.itarangSignatory2?.email ||
-      !!agreement.itarangSignatory2?.mobile;
+      !!hydratedAgreement.itarangSignatory2?.name ||
+      !!hydratedAgreement.itarangSignatory2?.email ||
+      !!hydratedAgreement.itarangSignatory2?.mobile;
 
     if (signer2Started && !itarangSigner2) {
       return NextResponse.json(
@@ -399,15 +542,17 @@ export async function POST(
         dateOfSigning: cleanString(agreement.dateOfSigning),
         mouDate: cleanString(agreement.mouDate),
         financierName: "",
-        dealerSignerName: cleanString(agreement.dealerSignerName),
+        dealerSignerName: cleanString(hydratedAgreement.dealerSignerName),
         dealerSignerDesignation: cleanString(agreement.dealerSignerDesignation),
-        dealerSignerEmail: cleanString(agreement.dealerSignerEmail),
-        dealerSignerPhone: normalizePhone(agreement.dealerSignerPhone),
+        dealerSignerEmail: cleanString(hydratedAgreement.dealerSignerEmail),
+        dealerSignerPhone: normalizePhone(hydratedAgreement.dealerSignerPhone),
         dealerSigningMethod:
-          cleanString(agreement.dealerSigningMethod) || "aadhaar_esign",
+          cleanString(hydratedAgreement.dealerSigningMethod) || "aadhaar_esign",
         financierSignatory: null,
-        itarangSignatory1: agreement.itarangSignatory1 || null,
-        itarangSignatory2: itarangSigner2 ? agreement.itarangSignatory2 || null : null,
+        itarangSignatory1: hydratedAgreement.itarangSignatory1 || null,
+        itarangSignatory2: itarangSigner2
+          ? hydratedAgreement.itarangSignatory2 || null
+          : null,
         signingOrder: finalSigningOrder,
         isOemFinancing: !!agreement.isOemFinancing,
         vehicleType: cleanString(agreement.vehicleType),
@@ -416,8 +561,17 @@ export async function POST(
         statePresence: cleanString(agreement.statePresence),
         signers,
         sequential: true,
-        expireInDays: 5,
+        expireInDays: 30,
+        // Keep Digio's email/SMS notifications ON so the iTarang signer is
+        // notified by email (requirement). Digio's notify flag is global — there
+        // is no per-signer suppression — so the dealer may also receive a Digio
+        // email, but their PRIMARY channel is the WhatsApp link we send below.
+        suppressSignerEmails: false,
       },
+      applicationId: dealerId,
+      // Persist the unsigned PDF only for WhatsApp dealers — we send it as a
+      // WhatsApp document below. Web dealers don't need the extra storage.
+      storeUnsignedCopy: isWhatsappDealer,
     };
 
     console.log(
@@ -475,6 +629,11 @@ export async function POST(
     const providerDocumentId =
       extractProviderDocumentId(responseData) || requestId || null;
     const signingUrl = extractSigningUrl(responseData);
+    // Public URL of the unsigned agreement PDF (set for WhatsApp dealers). It's
+    // also persisted into provider_raw_response via mergeProviderRawResponse, so
+    // a later resend can reuse it.
+    const unsignedAgreementUrl =
+      (responseData as any)?.unsignedAgreementUrl || null;
     const rawStampStatus = extractStampStatus(responseData);
     const stampCertificateIds = extractStampCertificateIds(responseData);
     const stampStatus =
@@ -629,9 +788,97 @@ export async function POST(
       eventPayload: responseData,
     });
 
+    // WhatsApp-onboarded dealers receive their sign link over WhatsApp (their
+    // primary channel); the iTarang signer is notified by Digio email. This is a
+    // best-effort send — a WhatsApp failure must not fail the whole initiation.
+    const whatsappDelivery: {
+      attempted: boolean;
+      ok: boolean;
+      error?: string | null;
+    } = { attempted: false, ok: false, error: null };
+
+    const dealerSigningUrl =
+      getSignerUrl(dealerSignerRaw) || signingUrl || null;
+
+    if (isWhatsappDealer && application.wa_phone && dealerSigningUrl) {
+      whatsappDelivery.attempted = true;
+      try {
+        const adapter = getAdapter();
+
+        // Log helper — append an outbound send to whatsapp_messages (best-effort).
+        const logSend = async (
+          messageType: "document" | "text",
+          textBody: string,
+          res: { ok: boolean; providerMessageId: string | null; raw?: unknown },
+        ) => {
+          if (!application.wa_session_id) return;
+          await db.insert(whatsappMessages).values({
+            session_id: application.wa_session_id,
+            provider_message_id: res.providerMessageId,
+            direction: "outbound",
+            message_type: messageType,
+            text_body: textBody,
+            delivery_status: res.ok ? "sent" : "failed",
+            raw_payload: (res.raw ?? null) as any,
+          });
+        };
+
+        const linkMessage =
+          `Hi ${dealerSigner.name}, please review your iTarang dealer agreement ` +
+          `above, then *tap the link below to e-sign* it:\n\n${dealerSigningUrl}\n\n` +
+          `This link is unique to you. Reply here if you need any help.`;
+
+        if (unsignedAgreementUrl) {
+          // Send the actual agreement PDF as a document, then the sign link as a
+          // follow-up message so it renders as a tappable link.
+          const docRes = await adapter.sendDocument(
+            application.wa_phone,
+            unsignedAgreementUrl,
+            "iTarang-Dealer-Agreement.pdf",
+            "📄 Your iTarang dealer agreement — please review it, then tap the link in the next message to e-sign.",
+          );
+          await logSend("document", "iTarang-Dealer-Agreement.pdf", docRes);
+
+          const linkRes = await adapter.sendText(application.wa_phone, linkMessage);
+          await logSend("text", linkMessage, linkRes);
+
+          whatsappDelivery.ok = docRes.ok && linkRes.ok;
+          whatsappDelivery.error = docRes.error ?? linkRes.error ?? null;
+          if (!whatsappDelivery.ok) {
+            console.error("[INITIATE] WhatsApp agreement doc/link send failed:", {
+              doc: docRes.error,
+              link: linkRes.error,
+            });
+          }
+        } else {
+          // Fallback (no stored PDF) — single link message, as before.
+          const message =
+            `📄 *Your dealer agreement is ready to sign.*\n\n` +
+            `Hi ${dealerSigner.name}, please review and sign your iTarang dealer ` +
+            `agreement using your secure link below:\n\n${dealerSigningUrl}\n\n` +
+            `This link is unique to you. Reply here if you need any help.`;
+          const sendRes = await adapter.sendText(application.wa_phone, message);
+          await logSend("text", message, sendRes);
+          whatsappDelivery.ok = sendRes.ok;
+          whatsappDelivery.error = sendRes.error ?? null;
+          if (!sendRes.ok) {
+            console.error("[INITIATE] WhatsApp agreement send failed:", sendRes.error);
+          }
+        }
+      } catch (waErr: any) {
+        whatsappDelivery.error = waErr?.message || "whatsapp_send_error";
+        console.error("[INITIATE] WhatsApp agreement send threw:", waErr);
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      message: "Agreement initiated successfully",
+      message: whatsappDelivery.attempted
+        ? whatsappDelivery.ok
+          ? "Agreement initiated. Sign link sent to the dealer on WhatsApp; the iTarang signer was notified by email."
+          : "Agreement initiated and the iTarang signer was emailed, but the dealer's WhatsApp sign link could not be delivered (their 24-hour window may be closed). Use the Open Link action to share it manually."
+        : "Agreement initiated successfully",
+      whatsappDelivery,
       data: {
         ...responseData,
         requestId,

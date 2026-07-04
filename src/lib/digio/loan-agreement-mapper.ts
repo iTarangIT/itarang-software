@@ -29,7 +29,10 @@ function loanAgreementWebhookUrl(): string {
   return `${base}/api/digio/webhook/loan-agreement`;
 }
 
-export function buildLoanAgreementUploadPayload(data: LoanAgreementUploadInput) {
+export function buildLoanAgreementUploadPayload(
+  data: LoanAgreementUploadInput,
+  opts?: { notifyUrl?: string },
+) {
   return {
     file_name: data.fileName,
     file_data: data.fileData,
@@ -41,7 +44,10 @@ export function buildLoanAgreementUploadPayload(data: LoanAgreementUploadInput) 
     include_authentication_url: true,
     generate_access_token: true,
     sequential: true, // customer signs first, then the NBFC signatory (§17.3)
-    notify_url: loanAgreementWebhookUrl(),
+    // E-166 — a per-tenant Digio adapter overrides this to its own webhook route
+    // (/api/esign/digio/webhook); global Digio keeps the default loan-agreement
+    // webhook so in-flight docs are unaffected.
+    notify_url: opts?.notifyUrl ?? loanAgreementWebhookUrl(),
     callback: `AGR_${data.agreementRef}`,
     signers: data.signers.map((signer) => {
       const coords: DigioSignCoordinates[] =

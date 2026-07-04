@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import FileUploadCard from "../FileUploadCard";
 import { useOnboardingStore } from "@/store/onboardingStore";
 
@@ -252,6 +253,15 @@ export default function StepOwnership() {
   const partners = (ownership.partners || []) as ContactRow[];
   const directors = (ownership.directors || []) as ContactRow[];
 
+  // A private limited firm always has at least one director. Seed a single
+  // fixed director card so the section is never empty; "+ Add Director" then
+  // appends further cards (and the Remove button only appears once 2+ exist).
+  useEffect(() => {
+    if (companyType === "private_limited_firm" && directors.length === 0) {
+      addDirector();
+    }
+  }, [companyType, directors.length, addDirector]);
+
   return (
     <div className="space-y-8 rounded-3xl border border-[#E3E8EF] bg-white p-6 shadow-sm md:p-8">
       <div>
@@ -337,6 +347,23 @@ export default function StepOwnership() {
                 }
                 placeholder="Age (18 – 90)"
                 error={errors.ownerAge}
+              />
+
+              {/* E-175 — owner Aadhaar; matched against the Aadhaar used to sign
+                  the onboarding agreement (Digio Aadhaar eSign). */}
+              <TextInput
+                label="Owner Aadhaar Number"
+                required
+                value={(ownership as any).ownerAadhaarNumber || ""}
+                onChange={(value) =>
+                  setField(
+                    "ownership",
+                    "ownerAadhaarNumber",
+                    value.replace(/[^0-9]/g, "").slice(0, 12)
+                  )
+                }
+                placeholder="12-digit Aadhaar number"
+                error={errors.ownerAadhaarNumber}
               />
             </div>
 

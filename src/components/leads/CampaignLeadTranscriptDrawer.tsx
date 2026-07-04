@@ -32,6 +32,8 @@ import {
 // bundle doesn't pull in zod / the scoring engine.
 import { INTENT_THRESHOLDS } from "@/lib/ai/scoring/thresholds";
 
+// Legacy 6-dimension analysis (pre-band rows). Kept only so old
+// follow_up_history rows still render their bars.
 type SubScores = {
   next_step_commitment: number;
   urgency_signals: number;
@@ -41,8 +43,7 @@ type SubScores = {
   engagement_depth: number;
 };
 
-// The truthful per-point breakdown from the deterministic scorer. Contributions
-// (positive signal points + any negative cap line) sum exactly to intentScore.
+// Old per-point breakdown (pre-band rows): contributions summed to the score.
 type ScoreBreakdownItem = {
   signal: string;
   label: string;
@@ -50,39 +51,62 @@ type ScoreBreakdownItem = {
   evidence: string;
 };
 
-// Raw extracted signals behind the score (ai_call_logs.signals). Only the
-// leveled signals drive the deep-mode correction dropdowns; the rest is carried
-// through untouched when a reviewer submits a per-signal correction. Levels are
-// declared locally (not imported from signals.ts) to keep zod / the scoring
-// engine out of the client bundle.
-type LeveledSignal = { level: string; evidence?: string };
+// Band model (E-168): one yes/no checklist row per decision-relevant signal.
+// `present` is the fact; `info` flags the five that feed info_signals_count.
+type BandSignalLine = {
+  signal: string;
+  label: string;
+  present: boolean;
+  info: boolean;
+  evidence: string;
+};
+
+// True when a stored score_breakdown is the new band shape (vs the old
+// additive {contribution} shape).
+function isBandBreakdown(
+  rows: ScoreBreakdownItem[] | BandSignalLine[] | null,
+): rows is BandSignalLine[] {
+  return Array.isArray(rows) && rows.length > 0 && "present" in rows[0];
+}
+
+// Raw extracted signals behind the band (ai_call_logs.signals) — the yes/no
+// facts a reviewer can correct in deep mode. Declared locally (no zod import on
+// the client); mirrors signals.ts QualificationSignals.
 type ClientSignals = {
-  budget?: LeveledSignal;
-  authority?: LeveledSignal;
-  need?: LeveledSignal;
-  timeline?: LeveledSignal;
-  engagement?: LeveledSignal;
-  curiosity?: LeveledSignal;
-  objection_quality?: LeveledSignal;
+  relevant_dealer?: string;
+  dealer_segment?: string;
+  dealer_role?: string;
+  battery_spec_shared?: string;
+  volume_shared?: string;
+  existing_financier_shared?: string;
+  financing_need_expressed?: string;
+  financing_value_acknowledged?: string;
+  pitch_heard?: string;
+  callback_agreed?: string;
+  disqualifier?: string;
+  evidence?: Record<string, string>;
   [k: string]: unknown;
 };
 
-const SIGNAL_LEVELS = ["unknown", "none", "weak", "moderate", "strong"];
-const AUTHORITY_LEVELS = ["unknown", "decision_maker", "influencer", "not_decision_maker"];
-const TIMELINE_LEVELS = ["unknown", "now", "this_week", "this_month", "later", "none"];
-const OBJECTION_LEVELS = ["unknown", "none", "low", "substantive"];
+const DISQUALIFIER_OPTIONS = [
+  "none",
+  "dont_call",
+  "hostile",
+  "not_interested",
+  "call_dropped",
+];
 
-// The seven leveled signals a reviewer can correct in deep mode, with their
-// allowed level sets. Mirrors signals.ts (kept in sync by hand to avoid the
-// zod import on the client).
-const CORRECTABLE_SIGNALS: Array<{ key: keyof ClientSignals; label: string; levels: string[] }> = [
-  { key: "need", label: "Need", levels: SIGNAL_LEVELS },
-  { key: "budget", label: "Budget / Financing", levels: SIGNAL_LEVELS },
-  { key: "engagement", label: "Engagement", levels: SIGNAL_LEVELS },
-  { key: "curiosity", label: "Curiosity", levels: SIGNAL_LEVELS },
-  { key: "timeline", label: "Timeline", levels: TIMELINE_LEVELS },
-  { key: "objection_quality", label: "Objection Quality", levels: OBJECTION_LEVELS },
-  { key: "authority", label: "Authority", levels: AUTHORITY_LEVELS },
+// The yes/no facts a reviewer can flip in deep mode. The five marked `info`
+// drive info_signals_count. Mirrors signals.ts (kept in sync by hand).
+const CORRECTABLE_FACTS: Array<{ key: keyof ClientSignals; label: string; info: boolean }> = [
+  { key: "relevant_dealer", label: "Relevant dealer", info: false },
+  { key: "battery_spec_shared", label: "Battery spec shared", info: true },
+  { key: "volume_shared", label: "Volume shared", info: true },
+  { key: "existing_financier_shared", label: "Existing financier shared", info: true },
+  { key: "financing_need_expressed", label: "Financing need expressed", info: true },
+  { key: "financing_value_acknowledged", label: "Financing value acknowledged", info: true },
+  { key: "pitch_heard", label: "Pitch heard", info: false },
+  { key: "callback_agreed", label: "Callback agreed", info: false },
 ];
 
 const LEAD_STATUS_OPTIONS = ["qualified", "warm", "cold", "disqualified"] as const;
@@ -117,6 +141,11 @@ type Attempt = {
   completedAt: string | null;
   converted: boolean;
   isCurrent: boolean;
+  // Provider call id + a playable recording URL for THIS attempt (stored Supabase
+  // link, or the self-healing /api/ai-dialer/recording proxy). null when the
+  // attempt has no call id (no-answer/failed) and thus no recording.
+  callId: string | null;
+  recordingUrl: string | null;
 };
 
 type TranscriptPayload = {
@@ -141,11 +170,22 @@ type TranscriptPayload = {
   provider: string | null;
   callStatus: string | null;
   nextAction: string | null;
+  // Band model (E-168). band is null on pre-band rows or a dropped_empty call.
+  band: string | null;
+  bandCallStatus: string | null;
+  infoSignalsCount: number | null;
   analysis: SubScores | null;
-  scoreBreakdown: ScoreBreakdownItem[] | null;
+  scoreBreakdown: ScoreBreakdownItem[] | BandSignalLine[] | null;
   scoringVersion: string | null;
   attempts: Attempt[] | null;
   convertedOnAttempt: number | null;
+  // Latest human correction for this lead (E-159), or null. Drives the
+  // "Corrected" flag in the header.
+  lastCorrection: {
+    correctedStatus: string;
+    correctedScore: number | null;
+    createdAt: string;
+  } | null;
 };
 
 type ChatTurn = {
@@ -299,6 +339,73 @@ function BreakdownRow({ item }: { item: ScoreBreakdownItem }) {
   );
 }
 
+// Band chip + N/5 disclosed-facts gauge, shown above the signal checklist.
+function BandHeader({
+  band,
+  infoCount,
+  callStatus,
+}: {
+  band: string | null;
+  infoCount: number | null;
+  callStatus: string | null;
+}) {
+  const tone: Record<string, string> = {
+    Qualified: "bg-emerald-100 text-emerald-700 border-emerald-300",
+    Warm: "bg-amber-100 text-amber-700 border-amber-300",
+    Cold: "bg-sky-100 text-sky-700 border-sky-300",
+    Disqualified: "bg-rose-100 text-rose-700 border-rose-300",
+  };
+  const cls = (band && tone[band]) || "bg-gray-100 text-gray-600 border-gray-300";
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <span className={`inline-flex items-center text-xs font-bold px-2.5 py-1 rounded-full border ${cls}`}>
+        {band ?? "No band"}
+      </span>
+      {infoCount != null && (
+        <span className="text-[11px] font-mono tabular-nums text-gray-500">
+          {infoCount}/5 facts disclosed
+        </span>
+      )}
+      {callStatus && callStatus !== "complete" && (
+        <span className="inline-flex items-center text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+          {callStatus === "dropped_partial" ? "resume — call cut off" : callStatus.replace(/_/g, " ")}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// One yes/no checklist row of the band breakdown.
+function BandSignalRow({ item }: { item: BandSignalLine }) {
+  const showEvidence = item.evidence && item.evidence !== "unknown";
+  return (
+    <div className="flex items-start gap-2">
+      {item.present ? (
+        <CheckCircle2 className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
+      ) : (
+        <X className="w-4 h-4 text-gray-300 mt-0.5 flex-shrink-0" />
+      )}
+      <div className="min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className={`text-xs font-medium ${item.present ? "text-gray-800" : "text-gray-400"}`}>
+            {item.label}
+          </span>
+          {item.info && (
+            <span className="text-[9px] uppercase tracking-wide text-gray-400 bg-gray-100 rounded px-1 py-px">
+              info
+            </span>
+          )}
+        </div>
+        {showEvidence && (
+          <p className="text-[10px] text-gray-400 leading-snug truncate" title={item.evidence}>
+            {item.evidence}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function StatusPill({ status }: { status: string }) {
   const m: Record<string, { label: string; cls: string }> = {
     pending: { label: "Pending", cls: "bg-gray-100 text-gray-700" },
@@ -415,6 +522,14 @@ export function CampaignLeadTranscriptDrawer({
                 {data?.leadName ?? "Lead"}
               </h2>
               <StatusPill status={status} />
+              {data?.lastCorrection && (
+                <span
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700"
+                  title={`Corrected to ${data.lastCorrection.correctedStatus}`}
+                >
+                  <CheckCircle2 className="w-3 h-3" /> Corrected
+                </span>
+              )}
             </div>
             <div className="mt-1 flex items-center gap-3 text-xs text-gray-500 flex-wrap">
               {data?.phone && (
@@ -544,12 +659,23 @@ export function CampaignLeadTranscriptDrawer({
   );
 }
 
-// Slim, always-visible audio player for the call recording. The URL is a
-// public Supabase Storage link (Bolna + ElevenLabs are re-hosted there), so it
-// plays in-page with a plain <audio> element — no proxy or auth needed.
+// Slim audio player for a call recording. `url` is either a public Supabase
+// Storage link (already re-hosted) or the self-healing
+// /api/ai-dialer/recording/[callId] proxy, which 302-redirects to that same
+// public link after re-hosting an ElevenLabs call's audio on first hit. Either
+// way it plays in-page with a plain <audio> element.
+// Two layouts: the default full-width top strip (latest call, on every tab) and
+// `compact` — an in-card variant rendered per attempt in the Attempts timeline.
 // Rendered with key={url} by the parent, so a new lead/recording remounts this
-// fresh — no reset effect needed, all transport state starts clean.
-function RecordingPlayer({ url }: { url: string }) {
+// fresh — no reset effect needed, all transport state starts clean. Each instance
+// owns its own <audio>, so per-attempt players play independently.
+function RecordingPlayer({
+  url,
+  compact = false,
+}: {
+  url: string;
+  compact?: boolean;
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
@@ -576,7 +702,13 @@ function RecordingPlayer({ url }: { url: string }) {
 
   if (errored) {
     return (
-      <div className="border-b border-gray-100 px-6 py-2.5 flex items-center gap-2 text-xs text-gray-400 bg-gray-50/60">
+      <div
+        className={
+          compact
+            ? "mt-2 rounded-lg border border-gray-200 bg-gray-50/80 px-3 py-2 flex items-center gap-2 text-xs text-gray-400"
+            : "border-b border-gray-100 px-6 py-2.5 flex items-center gap-2 text-xs text-gray-400 bg-gray-50/60"
+        }
+      >
         <AlertCircle className="w-3.5 h-3.5" />
         Recording unavailable
       </div>
@@ -584,7 +716,13 @@ function RecordingPlayer({ url }: { url: string }) {
   }
 
   return (
-    <div className="border-b border-gray-100 px-6 py-2.5 flex items-center gap-3 bg-gradient-to-r from-emerald-50/70 to-white">
+    <div
+      className={
+        compact
+          ? "mt-2 rounded-lg border border-emerald-100 bg-emerald-50/40 px-3 py-2 flex items-center gap-3"
+          : "border-b border-gray-100 px-6 py-2.5 flex items-center gap-3 bg-gradient-to-r from-emerald-50/70 to-white"
+      }
+    >
       <audio
         ref={audioRef}
         src={url}
@@ -608,7 +746,9 @@ function RecordingPlayer({ url }: { url: string }) {
         onClick={toggle}
         disabled={!ready}
         aria-label={playing ? "Pause recording" : "Play recording"}
-        className="flex-shrink-0 w-9 h-9 rounded-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white flex items-center justify-center shadow-sm transition-colors"
+        className={`flex-shrink-0 rounded-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white flex items-center justify-center shadow-sm transition-colors ${
+          compact ? "w-8 h-8" : "w-9 h-9"
+        }`}
       >
         {playing ? (
           <Pause className="w-4 h-4" />
@@ -616,9 +756,11 @@ function RecordingPlayer({ url }: { url: string }) {
           <Play className="w-4 h-4 ml-0.5" />
         )}
       </button>
-      <span className="hidden sm:inline text-[10px] uppercase tracking-wider text-emerald-700 font-semibold">
-        Recording
-      </span>
+      {!compact && (
+        <span className="hidden sm:inline text-[10px] uppercase tracking-wider text-emerald-700 font-semibold">
+          Recording
+        </span>
+      )}
       <input
         type="range"
         min={0}
@@ -754,6 +896,12 @@ function AttemptsTab({ data }: { data: TranscriptPayload }) {
                     </span>
                   )}
                 </div>
+                {/* This attempt's own recording — Bolna (stored URL) or
+                    ElevenLabs (via the self-healing proxy). Each player owns its
+                    own <audio>, so they play independently. */}
+                {a.recordingUrl && (
+                  <RecordingPlayer key={a.recordingUrl} url={a.recordingUrl} compact />
+                )}
               </div>
             </li>
           );
@@ -896,15 +1044,40 @@ function OverviewTab({
         </div>
       </div>
 
-      {data.scoreBreakdown && data.scoreBreakdown.length > 0 ? (
-        // Truthful breakdown — these contributions sum to the headline score.
+      {isBandBreakdown(data.scoreBreakdown) ? (
+        // Band model: a yes/no checklist of the signals that drove the band.
+        <section className="rounded-2xl border border-gray-200 bg-white p-4">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-3 flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
+            Qualification signals
+          </h3>
+          <div className="mb-3">
+            <BandHeader
+              band={data.band}
+              infoCount={data.infoSignalsCount}
+              callStatus={data.bandCallStatus}
+            />
+          </div>
+          <div className="space-y-2.5">
+            {data.scoreBreakdown.map((item, i) => (
+              <BandSignalRow key={`${item.signal}-${i}`} item={item} />
+            ))}
+          </div>
+          {data.intentReason && (
+            <p className="mt-3 text-xs text-gray-600 italic border-l-2 border-emerald-200 pl-3">
+              {data.intentReason}
+            </p>
+          )}
+        </section>
+      ) : data.scoreBreakdown && data.scoreBreakdown.length > 0 ? (
+        // Legacy additive breakdown (pre-band rows) — contributions sum to score.
         <section className="rounded-2xl border border-gray-200 bg-white p-4">
           <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-3 flex items-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
             Score breakdown
           </h3>
           <div className="space-y-3">
-            {data.scoreBreakdown.map((item, i) => (
+            {(data.scoreBreakdown as ScoreBreakdownItem[]).map((item, i) => (
               <BreakdownRow key={`${item.signal}-${i}`} item={item} />
             ))}
           </div>
@@ -993,14 +1166,18 @@ function CorrectScorePanel({
   const [scoreText, setScoreText] = useState<string>("");
   const [note, setNote] = useState("");
   const [deep, setDeep] = useState(false);
-  // Per-signal level overrides, seeded from the call's extracted signals.
-  const [levels, setLevels] = useState<Record<string, string>>(() => {
+  // Per-fact yes/no overrides + the disqualifier, seeded from the call's
+  // extracted signals.
+  const [facts, setFacts] = useState<Record<string, string>>(() => {
     const seed: Record<string, string> = {};
-    for (const { key } of CORRECTABLE_SIGNALS) {
-      seed[key as string] = (signals?.[key] as LeveledSignal | undefined)?.level ?? "unknown";
+    for (const { key } of CORRECTABLE_FACTS) {
+      seed[key as string] = (signals?.[key] as string | undefined) ?? "no";
     }
     return seed;
   });
+  const [disq, setDisq] = useState<string>(
+    (signals?.disqualifier as string | undefined) ?? "none",
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1032,14 +1209,14 @@ function CorrectScorePanel({
     }
     setSubmitting(true);
     setError(null);
-    // Deep mode: carry the original signals through, overriding edited levels.
+    // Deep mode: carry the original signals through, overriding edited facts.
     let correctedSignals: ClientSignals | null = null;
     if (deep) {
       const base: ClientSignals = signals ? { ...signals } : {};
-      for (const { key } of CORRECTABLE_SIGNALS) {
-        const prev = (base[key] as LeveledSignal | undefined) ?? { level: "unknown", evidence: "" };
-        base[key] = { ...prev, level: levels[key as string] };
+      for (const { key } of CORRECTABLE_FACTS) {
+        base[key] = facts[key as string];
       }
+      base.disqualifier = disq;
       correctedSignals = base;
     }
     const parsedScore = scoreText.trim() === "" ? null : Number(scoreText);
@@ -1062,6 +1239,12 @@ function CorrectScorePanel({
       const json = await res.json();
       if (!json.success) throw new Error(json.error?.message ?? "Save failed");
       await qc.invalidateQueries({ queryKey: feedbackKey });
+      // Refresh the drawer (header "Corrected" pill) and the campaign table
+      // (row "Corrected" pill) so the flag appears without a manual reload.
+      qc.invalidateQueries({
+        queryKey: ["campaign-lead-transcript", campaignId, leadId],
+      });
+      qc.invalidateQueries({ queryKey: ["dialer-campaign-leads", campaignId] });
       setOpenPanel(false);
       setNote("");
     } catch (e) {
@@ -1155,7 +1338,7 @@ function CorrectScorePanel({
             />
           </div>
 
-          {/* Deep mode — per-signal correction */}
+          {/* Deep mode — per-fact yes/no correction */}
           <button
             type="button"
             onClick={() => setDeep((d) => !d)}
@@ -1164,25 +1347,59 @@ function CorrectScorePanel({
             {deep ? "Hide signal details" : "Refine signals (advanced)"}
           </button>
           {deep && (
-            <div className="grid grid-cols-2 gap-2 rounded-xl border border-amber-100 bg-white p-3">
-              {CORRECTABLE_SIGNALS.map(({ key, label, levels: opts }) => (
-                <label key={key as string} className="text-[11px] text-gray-600">
-                  <span className="block font-semibold mb-0.5">{label}</span>
-                  <select
-                    value={levels[key as string] ?? "unknown"}
-                    onChange={(e) =>
-                      setLevels((prev) => ({ ...prev, [key as string]: e.target.value }))
-                    }
-                    className="w-full h-8 rounded-lg border border-gray-200 px-1 text-xs"
+            <div className="space-y-2 rounded-xl border border-amber-100 bg-white p-3">
+              {CORRECTABLE_FACTS.map(({ key, label, info }) => {
+                const val = facts[key as string] ?? "no";
+                return (
+                  <div
+                    key={key as string}
+                    className="flex items-center justify-between gap-2"
                   >
-                    {opts.map((lvl) => (
-                      <option key={lvl} value={lvl}>
-                        {lvl.replace(/_/g, " ")}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ))}
+                    <span className="text-[11px] text-gray-600 flex items-center gap-1">
+                      {label}
+                      {info && (
+                        <span className="text-[8px] uppercase tracking-wide text-gray-400 bg-gray-100 rounded px-1 py-px">
+                          info
+                        </span>
+                      )}
+                    </span>
+                    <div className="flex gap-1">
+                      {["yes", "no"].map((opt) => (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() =>
+                            setFacts((prev) => ({ ...prev, [key as string]: opt }))
+                          }
+                          className={`px-2 py-0.5 rounded text-[11px] font-semibold capitalize border ${
+                            val === opt
+                              ? opt === "yes"
+                                ? "bg-emerald-500 text-white border-emerald-500"
+                                : "bg-gray-400 text-white border-gray-400"
+                              : "bg-white text-gray-600 border-gray-200 hover:border-amber-300"
+                          }`}
+                        >
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+              <label className="flex items-center justify-between gap-2 pt-1 border-t border-gray-100">
+                <span className="text-[11px] text-gray-600">Disqualifier</span>
+                <select
+                  value={disq}
+                  onChange={(e) => setDisq(e.target.value)}
+                  className="h-8 rounded-lg border border-gray-200 px-1 text-xs"
+                >
+                  {DISQUALIFIER_OPTIONS.map((d) => (
+                    <option key={d} value={d}>
+                      {d.replace(/_/g, " ")}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
           )}
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { dealerOnboardingApplications, users, accounts, dealers } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { generateTemporaryPassword } from "@/lib/auth/generateTemporaryPassword";
 import { hashPassword } from "@/lib/auth/hashPassword";
 import { sendDealerWelcomeEmail } from "@/lib/email/sendDealerWelcomeEmail";
@@ -13,6 +13,7 @@ import { ensureDealerSignedAgreementUrl } from "@/lib/digio/ensure-signed-agreem
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireSalesHead } from "@/lib/auth/requireSalesHead";
 import { classifyGstinConflict } from "@/lib/dealer/duplicate-check";
+import { sendDealerWelcomeWhatsApp, type WhatsAppDelivery } from "@/lib/whatsapp/notifications";
 
 type RouteContext = {
   params: Promise<{ dealerId: string }>;
@@ -70,6 +71,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
   if (!auth.ok) return auth.response;
   try {
     const { dealerId } = await context.params;
+
+    // The approve button historically sent no body; parse defensively so a
+    // bodyless POST still works and simply counts as "not acknowledged".
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+    const acknowledgeBranch = body?.acknowledgeBranch === true;
 
     const resolvedLoginUrl = resolveDealerLoginUrl(req);
 
@@ -157,6 +163,25 @@ export async function POST(req: NextRequest, context: RouteContext) {
       );
     }
 
+    // Branch linkage is silent from the admin's POV otherwise: the dealer gets
+    // NO accounts row of its own, so it never appears in the inventory dealer
+    // dropdowns — it lives under the parent entity. Require the admin to
+    // explicitly acknowledge that before approving.
+    if (classification.conflict === "branch" && !acknowledgeBranch) {
+      return NextResponse.json(
+        {
+          success: false,
+          conflict: "branch",
+          requiresBranchAcknowledgement: true,
+          existing: classification.existing,
+          message:
+            classification.message ||
+            "This GSTIN already belongs to an existing dealer account. Confirm the branch linkage before approving.",
+        },
+        { status: 409 }
+      );
+    }
+
     const isBranchDealer = classification.conflict === "branch";
     const sharedAccountId =
       isBranchDealer && classification.existing
@@ -166,8 +191,17 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // For branch approvals, adopt the existing account's id as this dealer's
     // code so all downstream FK-style linkage (users.dealer_id, leads, etc.)
     // points at the shared legal entity.
+    //
+    // A dealer_code left over from a PREVIOUS branch approval is the parent's
+    // id, not this dealer's. If the application is no longer classified as a
+    // branch (e.g. GSTIN corrected after a request-correction cycle), reusing
+    // it would silently keep the wrong linkage — generate a fresh code instead.
+    const staleBranchCode =
+      Boolean(application.is_branch_dealer) && !isBranchDealer;
     const dealerCode =
-      sharedAccountId || application.dealer_code || generateDealerCode();
+      sharedAccountId ||
+      (staleBranchCode ? null : application.dealer_code) ||
+      generateDealerCode();
 
     // Pre-flight: for finance-enabled dealers, guarantee BOTH the signed
     // agreement PDF and the audit trail PDF are available before we create
@@ -176,6 +210,11 @@ export async function POST(req: NextRequest, context: RouteContext) {
     // with an empty welcome email.
     let signedAgreementPdf: Buffer | null = null;
     let auditTrailPdf: Buffer | null = null;
+    // Public Supabase URLs (cached by the ensure* helpers) — kept in outer
+    // scope so the WhatsApp welcome can attach them as document messages after
+    // the email send below.
+    let signedAgreementUrl: string | null = null;
+    let auditTrailUrl: string | null = null;
 
     if (application.finance_enabled) {
       const [signedUrl, auditUrl] = await Promise.all([
@@ -194,20 +233,28 @@ export async function POST(req: NextRequest, context: RouteContext) {
         downloadPdfBuffer(auditUrl),
       ]);
 
-      if (!signedBuf || !auditBuf) {
-        console.warn("APPROVE BLOCKED — agreement PDFs not ready", {
+      // The SIGNED agreement is the essential artifact — it proves signing is
+      // complete and is attached to the welcome email/WhatsApp. Block approval
+      // only if we can't obtain it.
+      //
+      // The AUDIT TRAIL is a supplementary compliance doc fetched live from
+      // Digio's download_audit_trail endpoint, which is flaky in practice
+      // (intermittent HTTP 500 "System error has occurred", even when the doc
+      // status is "completed"). A missing audit trail must NOT block dealer
+      // activation — it's attached when available and silently omitted
+      // otherwise (downloadPdfBuffer already returns null gracefully).
+      if (!signedBuf) {
+        console.warn("APPROVE BLOCKED — signed agreement PDF not ready", {
           applicationId: application.id,
           hasSignedUrl: Boolean(signedUrl),
-          hasAuditUrl: Boolean(auditUrl),
           hasSignedBuf: Boolean(signedBuf),
-          hasAuditBuf: Boolean(auditBuf),
         });
 
         return NextResponse.json(
           {
             success: false,
             message:
-              "Agreement PDFs are not ready yet — please retry once signing is fully complete.",
+              "Signed agreement is not ready yet — please retry once signing is fully complete.",
             details: {
               signedAgreementAvailable: Boolean(signedBuf),
               auditTrailAvailable: Boolean(auditBuf),
@@ -217,8 +264,20 @@ export async function POST(req: NextRequest, context: RouteContext) {
         );
       }
 
+      if (!auditBuf) {
+        console.warn(
+          "APPROVE — audit trail PDF unavailable; proceeding without it",
+          {
+            applicationId: application.id,
+            hasAuditUrl: Boolean(auditUrl),
+          }
+        );
+      }
+
       signedAgreementPdf = signedBuf;
       auditTrailPdf = auditBuf;
+      signedAgreementUrl = signedUrl;
+      auditTrailUrl = auditUrl;
     }
 
     const temporaryPassword = generateTemporaryPassword();
@@ -385,6 +444,22 @@ export async function POST(req: NextRequest, context: RouteContext) {
             updated_at: new Date(),
           },
         });
+
+      // If this application was previously branch-linked, its old approval
+      // upserted the PARENT-keyed dealers row with this application_id.
+      // Detach that residue so the parent row no longer claims this
+      // application.
+      if (staleBranchCode && application.dealer_code) {
+        await tx
+          .update(dealers)
+          .set({ application_id: null, updated_at: new Date() })
+          .where(
+            and(
+              eq(dealers.dealer_id, application.dealer_code),
+              eq(dealers.application_id, application.id)
+            )
+          );
+      }
 
       // Branch dealers reuse the existing accounts row — skip the insert
       // entirely (a new insert would violate UNIQUE(gstin) + UNIQUE(id)).
@@ -561,6 +636,34 @@ export async function POST(req: NextRequest, context: RouteContext) {
       });
     }
 
+    // WhatsApp-onboarded dealers also get their welcome + credentials and the
+    // agreement PDFs over WhatsApp (their primary channel). Additive — the
+    // welcome email above is unchanged. Best-effort: a WhatsApp failure (e.g.
+    // the 24h window is closed) must NOT fail an approval that already wrote the
+    // dealer/account/auth rows.
+    let whatsappDelivery: WhatsAppDelivery | null = null;
+    if (
+      (application.source || "web").toLowerCase() === "whatsapp" &&
+      application.wa_phone
+    ) {
+      whatsappDelivery = await sendDealerWelcomeWhatsApp({
+        waPhone: application.wa_phone,
+        waSessionId: application.wa_session_id ?? null,
+        dealerName: application.owner_name || application.company_name || "Dealer",
+        companyName: application.company_name || "iTarang Dealer",
+        dealerCode,
+        loginId: dealerLoginEmail,
+        password: temporaryPassword,
+        loginUrl: resolvedLoginUrl,
+        supportEmail: process.env.DEALER_SUPPORT_EMAIL || "care@itarang.com",
+        supportPhone: process.env.DEALER_SUPPORT_PHONE || "+91-8076841497",
+        financeEnabled: Boolean(application.finance_enabled),
+        signedAgreementUrl,
+        auditTrailUrl,
+      });
+      console.log("DEALER WELCOME WHATSAPP:", { dealerId, whatsappDelivery });
+    }
+
     console.log("DEALER APPROVED:", {
       dealerId,
       dealerCode,
@@ -584,6 +687,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       attachedSignedAgreement: Boolean(mailResult?.attachedSignedAgreement),
       attachedAuditTrail: Boolean(mailResult?.attachedAuditTrail),
       isBranchDealer,
+      whatsappDelivery,
     });
   } catch (error: any) {
     console.error("APPROVE DEALER ERROR:", error);

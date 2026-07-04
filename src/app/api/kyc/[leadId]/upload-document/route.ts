@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { kycDocuments } from '@/lib/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { createClient } from '@/lib/supabase/server';
+import { isS3Backend, putObject, filesProxyPath } from '@/lib/storage/s3';
 import {
     buildDealerEditLockMessage,
     isDealerKycEditsLocked,
@@ -45,19 +46,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
         const fileName = `kyc/${leadId}/${docType}_${Date.now()}.${ext}`;
         const buffer = Buffer.from(await file.arrayBuffer());
 
-        const { error: uploadError } = await supabase.storage
-            .from('documents')
-            .upload(fileName, buffer, { contentType: file.type, upsert: true });
+        let fileUrl: string;
+        if (isS3Backend) {
+            await putObject('documents', fileName, buffer, file.type);
+            fileUrl = filesProxyPath('documents', fileName);
+        } else {
+            const { error: uploadError } = await supabase.storage
+                .from('documents')
+                .upload(fileName, buffer, { contentType: file.type, upsert: true });
 
-        if (uploadError) {
-            return NextResponse.json(
-                { success: false, error: { message: `Upload failed: ${uploadError.message}` } },
-                { status: 500 }
-            );
+            if (uploadError) {
+                return NextResponse.json(
+                    { success: false, error: { message: `Upload failed: ${uploadError.message}` } },
+                    { status: 500 }
+                );
+            }
+
+            const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
+            fileUrl = urlData.publicUrl;
         }
-
-        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
-        const fileUrl = urlData.publicUrl;
 
         // Upsert document record — replace any prior upload of the same (doc_for, doc_type)
         const existing = await db
@@ -79,6 +86,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                     file_url: fileUrl,
                     file_name: file.name,
                     file_size: file.size,
+                    file_type: file.type,
                     verification_status: 'pending',
                     failed_reason: null,
                     updated_at: now,
@@ -95,6 +103,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
                 file_url: fileUrl,
                 file_name: file.name,
                 file_size: file.size,
+                file_type: file.type,
                 verification_status: 'pending',
             });
         }

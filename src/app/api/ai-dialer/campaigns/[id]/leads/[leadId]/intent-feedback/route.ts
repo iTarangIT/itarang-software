@@ -16,7 +16,7 @@ import { db } from "@/lib/db";
 import { aiCallLogs, intentScoreFeedback } from "@/lib/db/schema";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { createClient } from "@/lib/supabase/server";
-import { IntentSignalsSchema } from "@/lib/ai/scoring/signals";
+import { QualificationSignalsSchema } from "@/lib/ai/scoring/signals";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 
@@ -26,8 +26,10 @@ const FeedbackBody = z.object({
   callId: z.string().min(1, "callId required"),
   correctedStatus: z.enum(LEAD_STATUSES),
   correctedScore: z.number().int().min(0).max(100).nullable().optional(),
-  // Deep mode: a full IntentSignals shape. Forgiving parse (matches extraction).
-  correctedSignals: IntentSignalsSchema.nullable().optional(),
+  // Deep mode: a full QualificationSignals (yes/no facts) shape. Forgiving parse
+  // (matches extraction). Old BANT-shaped corrections stay readable in the DB —
+  // jsonb is untyped and rows are version-stamped.
+  correctedSignals: QualificationSignalsSchema.nullable().optional(),
   note: z.string().max(2000).nullable().optional(),
 });
 

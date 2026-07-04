@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Download, Loader2, Sheet } from "lucide-react";
+import { toast } from "sonner";
 
 export function DownloadConvertedLeadsButton() {
   const [loading, setLoading] = useState(false);
@@ -24,7 +25,7 @@ export function DownloadConvertedLeadsButton() {
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error("Download error:", err);
-      alert("Failed to download. Please try again.");
+      toast.error("Failed to download. Please try again.");
     } finally {
       setLoading(false);
     }

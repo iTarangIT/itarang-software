@@ -8,6 +8,7 @@ import {
   normalizeState,
   inferStateFromCity,
 } from "@/lib/scraper-enrichment";
+import { recordLeadCapture } from "@/lib/leads/lead-registry";
 
 export async function POST(req: NextRequest) {
   try {
@@ -76,6 +77,16 @@ export async function POST(req: NextRequest) {
       created_at: new Date(),
     });
 
+    // E-179 central registry — manually captured dealer prospect.
+    await recordLeadCapture({
+      leadType: "dealer",
+      name: dealer_name,
+      phone,
+      sourceChannel: "web",
+      sourceTable: "dealer_leads",
+      sourceId: id,
+    });
+
     return NextResponse.json({ success: true, id });
   } catch (err: any) {
     // Catch unique constraint violation from DB as a fallback
@@ -104,6 +115,14 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get("search")?.trim() ?? "";
     const offset = (page - 1) * limit;
 
+    // Optional created-at date range (YYYY-MM-DD). Inclusive on both ends —
+    // compared on the calendar date so a whole "to" day is included. Drives
+    // the Leads page month/range filter (cards, count, and list all share
+    // this where clause, so they stay consistent).
+    const fromDate = searchParams.get("from")?.trim() ?? "";
+    const toDate = searchParams.get("to")?.trim() ?? "";
+    const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
     // Only surface leads with a phone — the AI dialer can't do anything with
     // phoneless rows, and the Leads UI's Call button would be dead otherwise.
     const phonePresent = and(
@@ -111,17 +130,24 @@ export async function GET(req: NextRequest) {
       ne(dealerLeads.phone, ""),
     );
 
-    const where = search
-      ? and(
-          phonePresent,
-          or(
-            ilike(dealerLeads.dealer_name, `%${search}%`),
-            ilike(dealerLeads.phone, `%${search}%`),
-            ilike(dealerLeads.location, `%${search}%`),
-            ilike(dealerLeads.shop_name, `%${search}%`),
-          ),
-        )
-      : phonePresent;
+    const conds: any[] = [phonePresent];
+    if (search) {
+      conds.push(
+        or(
+          ilike(dealerLeads.dealer_name, `%${search}%`),
+          ilike(dealerLeads.phone, `%${search}%`),
+          ilike(dealerLeads.location, `%${search}%`),
+          ilike(dealerLeads.shop_name, `%${search}%`),
+        ),
+      );
+    }
+    if (ISO_DATE_RE.test(fromDate)) {
+      conds.push(sql`${dealerLeads.created_at}::date >= ${fromDate}`);
+    }
+    if (ISO_DATE_RE.test(toDate)) {
+      conds.push(sql`${dealerLeads.created_at}::date <= ${toDate}`);
+    }
+    const where = and(...conds);
 
     const [rows, countResult, statsResult] = await Promise.all([
       db

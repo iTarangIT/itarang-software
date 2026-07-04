@@ -1,0 +1,7 @@
+{"type":"excalidraw","version":2,"source":"https://excalidraw.com","elements":[
+{"type":"rectangle","id":"b1","x":230,"y":90,"width":340,"height":60,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","strokeColor":"#4a9eed","label":{"text":"revenue_mtd (from Card 1)","fontSize":16}},
+{"type":"arrow","id":"a1","x":400,"y":150,"width":0,"height":30,"points":[[0,0],[0,30]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b2","x":250,"y":180,"width":300,"height":60,"roundness":{"type":3},"backgroundColor":"#d0bfff","fillStyle":"solid","strokeColor":"#8b5cf6","label":{"text":"Passed in as salesMtd","fontSize":16}},
+{"type":"arrow","id":"a2","x":400,"y":240,"width":0,"height":30,"points":[[0,0],[0,30]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b3","x":260,"y":270,"width":280,"height":64,"roundness":{"type":3},"backgroundColor":"#b2f2bb","fillStyle":"solid","strokeColor":"#22c55e","label":{"text":"Card shows: Rs 12.50L","fontSize":18}}
+],"appState":{"viewBackgroundColor":"#ffffff"},"files":{}}

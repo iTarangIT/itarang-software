@@ -21,18 +21,26 @@ export type DualApprovalStatus =
 
 export const DUAL_APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 
-// Per BRD §6.4.3 / user direction (2026-05-04): NBFC creates the
-// battery_immobilisation request; the iTarang `sales_head` approves it.
-// (Was previously `nbfc_risk_head` — kept here for posterity in commit
-// history.)
+// E-161 — out-of-band financing-offer deviation, approved by the platform-level
+// iTarang CEO (§5.1, §13.3.4). The 4-hour SLA is a soft escalation target shown
+// in the CEO queue; the 24h TTL above remains the hard backstop.
+export const FINANCING_OFFER_DEVIATION_ACTION = "financing_offer_deviation";
+
+// Per the two-dashboard immobilisation design (2026-06-23): the whole flow is
+// NBFC-side. The NBFC `nbfc_risk_manager` creates the battery_immobilisation
+// request on the partner dashboard (/nbfc); the NBFC `nbfc_risk_head` approves
+// it on the dedicated Risk Head dashboard (/risk-head). (Previously routed to
+// the iTarang `sales_head` under the 2026-05-04 direction — reverted here so
+// approval stays within the NBFC partner's own roles.)
 const FALLBACK_APPROVER_ROLES: Record<string, string> = {
-  battery_immobilisation: "sales_head",
+  battery_immobilisation: "nbfc_risk_head",
   loan_restructuring: "nbfc_credit_manager",
   risk_rule_threshold_change: "itarang_risk_head",
   bulk_immobilisation: "itarang_admin",
   auction_lot_cancellation: "itarang_super_admin",
   audit_log_export: "itarang_compliance_officer",
   pii_data_access: "itarang_compliance_officer",
+  financing_offer_deviation: "itarang_ceo",
 };
 
 export async function resolveRequiredApproverRole(
@@ -218,6 +226,17 @@ async function dispatchOnApproved(
     // E-084 — apply the new EMI fields and append a restructure history row.
     const mod = await import("@/lib/nbfc/actions/loan-restructuring");
     await mod.applyLoanRestructuring(approved.id);
+    return;
+  }
+  if (approved.action_type === FINANCING_OFFER_DEVIATION_ACTION) {
+    // E-161 — release the held out-of-band offer to the dealer (entity_id = offer id).
+    const { applyFinancingOfferDeviationApproval } = await import(
+      "@/lib/nbfc/actions/financing-offer-deviation"
+    );
+    await applyFinancingOfferDeviationApproval({
+      offer_id: approved.entity_id,
+      approver_user_id,
+    });
     return;
   }
   // Other action_types (bulk_immobilisation, audit_log_export,

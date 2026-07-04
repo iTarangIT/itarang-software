@@ -17,7 +17,10 @@ import { db } from "@/lib/db";
 import { enachMandates, fieldInvestigations, leads, manualHandoffs, nbfcWallets, users } from "@/lib/db/schema";
 import { sendManualHandoffNudge } from "@/lib/email/sendManualHandoffEmail";
 import { ENACH_STALE_RISK_DAYS } from "@/lib/nbfc/enach";
-import { postTopup } from "@/lib/nbfc/charging";
+import { getWalletFundsProvider } from "@/lib/nbfc/wallet/provider";
+
+/** §16.3 lockout: once an auto-recharge fires, no re-fire for this many hours. */
+const WALLET_AUTORECHARGE_LOCKOUT_HOURS = Number(process.env.WALLET_AUTORECHARGE_LOCKOUT_HOURS ?? 6);
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -109,43 +112,86 @@ async function run() {
     )
     .returning({ id: fieldInvestigations.id });
 
-  // 4. Auto-NACH wallet recharge (§8.1). For wallets that opted into auto-NACH
-  //    and have fallen below their threshold, pull the configured recharge
-  //    amount via the NACH mandate. The NACH bank debit itself is owned
-  //    off-platform (Model 1 prepaid); here we record the resulting credit so
-  //    the prepaid balance reflects the top-up. Best-effort per wallet.
-  const lowWallets = await db
+  // 4. Auto-NACH wallet recharge (§16.1 / §16.4 capability 3). For wallets that
+  //    opted into auto-NACH, have a REGISTERED creditor-side mandate, and have
+  //    fallen below their threshold, fire one debit against the mandate token
+  //    via the WalletFundsProvider. The wallet is credited only when the matching
+  //    inflow webhook arrives — NOT here — so we do not postTopup. §16.3 controls:
+  //    a registered-mandate health check, and a lockout window so a fired
+  //    recharge cannot re-fire for N hours regardless of balance.
+  const lockoutCutoff = new Date(now - WALLET_AUTORECHARGE_LOCKOUT_HOURS * 60 * 60 * 1000);
+  const autoWallets = await db
     .select({
+      id: nbfcWallets.id,
       tenant_id: nbfcWallets.tenant_id,
       balance: nbfcWallets.balance,
       threshold: nbfcWallets.auto_nach_threshold,
       amount: nbfcWallets.auto_nach_recharge_amount,
+      status: nbfcWallets.auto_nach_status,
+      customer_id: nbfcWallets.auto_nach_customer_id,
+      token_id: nbfcWallets.auto_nach_token_id,
+      last_fired_at: nbfcWallets.auto_nach_last_fired_at,
     })
     .from(nbfcWallets)
     .where(eq(nbfcWallets.auto_nach_enabled, true));
 
   let recharged = 0;
-  for (const w of lowWallets) {
+  let recharge_failed = 0;
+  const provider = await getWalletFundsProvider();
+  for (const w of autoWallets) {
     const balance = Number(w.balance ?? 0);
     const threshold = w.threshold == null ? null : Number(w.threshold);
     const amount = w.amount == null ? 0 : Number(w.amount);
     if (threshold == null || amount <= 0 || balance >= threshold) continue;
+    // §16.3 mandate health check — only fire a registered mandate with a token.
+    if (w.status !== "registered" || !w.token_id || !w.customer_id) continue;
+    // §16.3 lockout window — skip if a recharge fired within the lockout period.
+    if (w.last_fired_at && w.last_fired_at > lockoutCutoff) continue;
+
+    // Idempotency key: stable per (tenant, day, threshold) so a retried tick
+    // reuses the same correlation and the inflow credit stays idempotent.
+    const day = new Date(now).toISOString().slice(0, 10);
+    const idempotencyKey = `${w.tenant_id}|${day}|${threshold}`;
     try {
-      // TODO(payments): trigger the actual NACH debit against
-      // auto_nach_mandate_ref. Until that integration lands, record the credit
-      // so the prepaid balance and ledger stay consistent.
-      await postTopup({
+      const res = await provider.executeAutoRechargeDebit({
         tenantId: w.tenant_id,
-        amount,
-        description: `Auto-NACH recharge (balance ${balance} < threshold ${threshold})`,
+        providerMandateRef: `${w.customer_id}|${w.token_id}`,
+        amount: Math.round(amount * 100), // rupees → paise
+        idempotencyKey,
+        description: `Auto-recharge (balance ${balance} < threshold ${threshold})`,
       });
-      recharged += 1;
+      // Mark fired regardless of submitted/failed — a fire attempt opens the
+      // lockout so a stuck mandate is not hammered every tick.
+      await db
+        .update(nbfcWallets)
+        .set({ auto_nach_last_fired_at: new Date(), updated_at: new Date() })
+        .where(eq(nbfcWallets.id, w.id));
+      if (res.status === "failed") {
+        recharge_failed += 1;
+        // §16.3 failure alert. A dedicated NBFC-admin + iTarang-admin notification
+        // belongs to the §16.5 notification surface (deferred); logged loudly here.
+        console.error(
+          "[origination-maintenance] AUTO-RECHARGE FAILED for tenant",
+          w.tenant_id,
+          "reason:",
+          res.rawStatus,
+        );
+      } else {
+        recharged += 1;
+      }
     } catch (e) {
-      console.error("[origination-maintenance] auto-NACH recharge failed for", w.tenant_id, e);
+      recharge_failed += 1;
+      console.error("[origination-maintenance] auto-recharge debit threw for", w.tenant_id, e);
     }
   }
 
-  return { nudged, stale_flagged: staleResult.length, fi_sla_breached: fiResult.length, recharged };
+  return {
+    nudged,
+    stale_flagged: staleResult.length,
+    fi_sla_breached: fiResult.length,
+    recharged,
+    recharge_failed,
+  };
 }
 
 export async function GET(req: NextRequest) {

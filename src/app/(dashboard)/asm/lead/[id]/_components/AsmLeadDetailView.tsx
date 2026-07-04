@@ -120,7 +120,16 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
 
     return (
         <div className="flex flex-col h-[calc(100vh-68px)]">
-            <LeadDetailHeader bundle={bundle} viewerId={viewerId} />
+            <LeadDetailHeader
+                bundle={bundle}
+                viewerId={viewerId}
+                viewerRole={viewerRole}
+                onUpdated={invalidate}
+                statusModalActions={["mark_converted", "mark_lost"]}
+                onStatusModal={(a) => {
+                    if (a !== "transfer_asm") setActiveModal(a);
+                }}
+            />
 
             {staleInfo && (
                 <div className="px-6 pt-3">
@@ -181,7 +190,6 @@ export function AsmLeadDetailView({ leadId, viewerId, viewerRole }: Props) {
                 open={activeModal === "mark_converted"}
                 onClose={() => setActiveModal(null)}
                 leadId={leadId}
-                hasFinalPrice={Boolean(bundle.current_commercials?.final_price)}
                 onSuccess={onActionSuccess}
             />
             <ReassignLeadModal
