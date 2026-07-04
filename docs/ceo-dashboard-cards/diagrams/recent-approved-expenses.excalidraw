@@ -1,0 +1,9 @@
+{"type":"excalidraw","version":2,"source":"https://excalidraw.com","elements":[
+{"type":"rectangle","id":"b1","x":220,"y":70,"width":360,"height":60,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","strokeColor":"#4a9eed","label":{"text":"Expense submissions (approved)","fontSize":16}},
+{"type":"arrow","id":"a1","x":400,"y":130,"width":0,"height":30,"points":[[0,0],[0,30]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b2","x":210,"y":160,"width":380,"height":60,"roundness":{"type":3},"backgroundColor":"#fff3bf","fillStyle":"solid","strokeColor":"#f59e0b","label":{"text":"Join users for submitter name","fontSize":16}},
+{"type":"arrow","id":"a2","x":400,"y":220,"width":0,"height":30,"points":[[0,0],[0,30]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b3","x":210,"y":250,"width":380,"height":60,"roundness":{"type":3},"backgroundColor":"#d0bfff","fillStyle":"solid","strokeColor":"#8b5cf6","label":{"text":"Order by approval date, top 5","fontSize":16}},
+{"type":"arrow","id":"a3","x":400,"y":310,"width":0,"height":30,"points":[[0,0],[0,30]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+{"type":"rectangle","id":"b4","x":220,"y":340,"width":360,"height":64,"roundness":{"type":3},"backgroundColor":"#b2f2bb","fillStyle":"solid","strokeColor":"#22c55e","label":{"text":"List: category, person, amount","fontSize":16}}
+],"appState":{"viewBackgroundColor":"#ffffff"},"files":{}}

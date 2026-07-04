@@ -13,6 +13,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
     UPLOAD_SEGMENTS,
+    type UploadHeaderReport,
     type UploadInsertPayload,
     type UploadParsedRow,
     type UploadRowResult,
@@ -91,14 +92,58 @@ const HEADER_MAP: Record<string, keyof UploadParsedRow> = {
     payment_intent: "preliminary_payment_intent",
     prior_call_notes: "prior_call_notes",
     notes: "prior_call_notes",
+    // Optional owner column — resolves to an inside_sales_rep / asm user by name.
+    assignee: "assignee",
+    assigned_to: "assignee",
+    assign_to: "assignee",
+    assigned: "assignee",
+    owner: "assignee",
+    sales_rep: "assignee",
+    rep: "assignee",
 };
+
+// Required columns — a sheet missing any of these can't produce a valid lead.
+const REQUIRED_COLUMNS: (keyof UploadParsedRow)[] = [
+    "phone",
+    "dealer_name",
+    "city",
+    "state",
+];
+
+// Same header normalisation parseCsv uses for its row mapping.
+function normalizeHeader(h: string): string {
+    return h.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+// Classify the sheet's header row: which columns are recognised, which are
+// ignored (map to nothing), and which required columns are absent.
+export function parseHeaders(text: string): UploadHeaderReport {
+    const grid = parseCsvGrid(text.trim());
+    if (grid.length < 1) {
+        return { recognized: [], ignored: [], missing_required: [...REQUIRED_COLUMNS] };
+    }
+    const recognized: string[] = [];
+    const ignored: string[] = [];
+    const present = new Set<keyof UploadParsedRow>();
+    for (const raw of grid[0]) {
+        const h = normalizeHeader(raw);
+        if (!h) continue;
+        const key = HEADER_MAP[h];
+        if (key) {
+            present.add(key);
+            if (!recognized.includes(key)) recognized.push(key);
+        } else if (!ignored.includes(raw.trim())) {
+            ignored.push(raw.trim());
+        }
+    }
+    const missing_required = REQUIRED_COLUMNS.filter((c) => !present.has(c));
+    return { recognized, ignored, missing_required };
+}
 
 export function parseCsv(text: string): UploadParsedRow[] {
     const grid = parseCsvGrid(text.trim());
     if (grid.length < 2) return [];
-    const header = grid[0].map((h) =>
-        h.trim().toLowerCase().replace(/[\s-]+/g, "_"),
-    );
+    const header = grid[0].map((h) => normalizeHeader(h));
     const out: UploadParsedRow[] = [];
     for (let i = 1; i < grid.length; i++) {
         const cells = grid[i];
@@ -141,10 +186,40 @@ function parseSegments(raw: string | undefined): string[] {
 
 export async function validateUpload(
     rows: UploadParsedRow[],
+    headers: UploadHeaderReport = { recognized: [], ignored: [], missing_required: [] },
 ): Promise<UploadValidationResult> {
     // 1. Resolve all phones once.
     const normByRow = rows.map((r) => normalizePhone(r.phone ?? ""));
     const validPhones = [...new Set(normByRow.filter((p): p is string => !!p))];
+
+    // Resolve assignee names → active inside_sales_rep / asm users. A name that
+    // matches zero or more than one active user blocks the row (see per-row
+    // classification below) so a lead never silently lands on the wrong person.
+    type AssigneeUser = { id: string; name: string | null; role: string };
+    const assigneeNames = [
+        ...new Set(
+            rows
+                .map((r) => (r.assignee ?? "").trim().toLowerCase())
+                .filter(Boolean),
+        ),
+    ];
+    const assigneeByName = new Map<string, AssigneeUser[]>();
+    if (assigneeNames.length > 0) {
+        const userRows = (await db.execute<AssigneeUser>(sql`
+            SELECT id::text AS id, name, role
+            FROM users
+            WHERE is_active = TRUE
+              AND lower(role) IN ('inside_sales_rep', 'asm')
+              AND lower(name) IN ${assigneeNames}
+        `)) as unknown as AssigneeUser[];
+        for (const u of userRows) {
+            const key = (u.name ?? "").trim().toLowerCase();
+            if (!key) continue;
+            const list = assigneeByName.get(key) ?? [];
+            list.push(u);
+            assigneeByName.set(key, list);
+        }
+    }
 
     // Existing dealer_leads matching any uploaded phone.
     type ExistingLead = {
@@ -213,6 +288,25 @@ export async function validateUpload(
         }
         if (phone) seenInBatch.add(phone);
 
+        // Resolve the optional assignee. Blank = leave unassigned; a name that
+        // resolves to != 1 active rep/ASM blocks the row.
+        const assigneeRaw = (r.assignee ?? "").trim();
+        let assignedOwner: AssigneeUser | null = null;
+        if (assigneeRaw) {
+            const matches = assigneeByName.get(assigneeRaw.toLowerCase()) ?? [];
+            if (matches.length === 0) {
+                errors.push(
+                    `Assignee "${assigneeRaw}" not found among active Inside Sales Reps / ASMs.`,
+                );
+            } else if (matches.length > 1) {
+                errors.push(
+                    `Assignee "${assigneeRaw}" is ambiguous — more than one active user has that name.`,
+                );
+            } else {
+                assignedOwner = matches[0];
+            }
+        }
+
         const suggestion = city
             ? (cityCanon.get(city.toLowerCase()) ?? null)
             : null;
@@ -232,6 +326,7 @@ export async function validateUpload(
                 errors,
                 location_suggestion: locationSuggestion,
                 duplicate_lead_id: null,
+                assigned_owner_name: null,
                 payload: null,
             };
         }
@@ -253,6 +348,8 @@ export async function validateUpload(
                 r.preliminary_payment_intent?.trim() || null,
             prior_call_notes: r.prior_call_notes?.trim() || null,
             source_label: r.source_label?.trim() || null,
+            assigned_owner_id: assignedOwner?.id ?? null,
+            assigned_owner_role: assignedOwner?.role ?? null,
         };
 
         // Dedupe against existing dealer_leads (BRD §0.4).
@@ -283,6 +380,7 @@ export async function validateUpload(
             errors: [],
             location_suggestion: locationSuggestion,
             duplicate_lead_id: duplicateLeadId,
+            assigned_owner_name: assignedOwner?.name ?? null,
             payload,
         };
     });
@@ -297,6 +395,7 @@ export async function validateUpload(
         duplicate_rows: count("duplicate_skip"),
         address_mismatch_rows: count("address_mismatch"),
         reactivate_rows: count("reactivate"),
+        headers,
         rows: out,
     };
 }

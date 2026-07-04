@@ -1,16 +1,64 @@
 import { NextRequest, NextResponse } from "next/server";
-import { launchBrowser } from "@/lib/pdf/launch-browser";
+import { createClient } from "@supabase/supabase-js";
+import { launchBrowser, resetBrowser } from "@/lib/pdf/launch-browser";
 import { buildTarangDealerAgreementHtml } from "@/lib/agreement/dealer-agreement-template";
 import {
   extractAttachedEstampDetails,
   extractStampCertificateIds,
 } from "@/lib/digio/parse-status";
+import { isS3Backend, putObject, filesProxyPath } from "@/lib/storage/s3";
 
 type AgreementPayload = {
   company?: any;
   ownership?: any;
   agreement?: any;
+  // Set by the admin initiate-agreement route for WhatsApp dealers: persist the
+  // generated (unsigned) PDF to storage so it can be sent as a WhatsApp document.
+  applicationId?: string;
+  storeUnsignedCopy?: boolean;
 };
+
+// Persist the freshly-generated (unsigned) agreement PDF to the public
+// dealer-documents bucket and return a public URL — mirrors the signed-agreement
+// upload in src/lib/digio/ensure-signed-agreement.ts. Best-effort: any failure
+// returns null and never blocks agreement creation.
+async function storeUnsignedAgreementPdf(
+  pdfBuffer: Buffer,
+  pathKey: string,
+): Promise<string | null> {
+  try {
+    const bucketName = "dealer-documents";
+    const filePath = `agreements/${pathKey}/unsigned-agreement.pdf`;
+    if (isS3Backend) {
+      await putObject(bucketName, filePath, pdfBuffer, "application/pdf");
+      return filesProxyPath(bucketName, filePath);
+    }
+    const supabaseUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
+    const serviceRoleKey = cleanEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
+    if (!supabaseUrl || !serviceRoleKey) {
+      console.warn("[create-agreement] supabase env missing — skip unsigned upload");
+      return null;
+    }
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    const { error: uploadError } = await supabase.storage
+      .from(bucketName)
+      .upload(filePath, pdfBuffer, {
+        contentType: "application/pdf",
+        upsert: true,
+      });
+    if (uploadError) {
+      console.error("[create-agreement] unsigned upload failed:", uploadError.message);
+      return null;
+    }
+    const { data: publicUrlData } = supabase.storage
+      .from(bucketName)
+      .getPublicUrl(filePath);
+    return publicUrlData?.publicUrl || null;
+  } catch (err: any) {
+    console.error("[create-agreement] unsigned upload threw:", err?.message || err);
+    return null;
+  }
+}
 
 type SignerItem = {
   identifier: string;
@@ -143,16 +191,33 @@ function buildSignerCoordinatesList(
   return coords;
 }
 
-async function renderPdfFromHtml(html: string) {
+// Per-step timeout for the Puppeteer render. The agreement template embeds NO
+// remote assets (system fonts only, no <img>/<link>), so a healthy render
+// finishes in well under a second. A long block here means the shared Chrome on
+// the VPS has gone unresponsive — we want to fail fast and relaunch, not sit on
+// the silent 30s default that produced "Navigation timeout of 30000 ms exceeded".
+const PDF_RENDER_TIMEOUT_MS = 15000;
+
+async function renderPdfOnce(html: string) {
   const browser = await launchBrowser();
   const page = await browser.newPage();
 
   try {
-    await page.setContent(html, { waitUntil: "networkidle0" });
+    page.setDefaultNavigationTimeout(PDF_RENDER_TIMEOUT_MS);
+    page.setDefaultTimeout(PDF_RENDER_TIMEOUT_MS);
+
+    // "domcontentloaded" (not "networkidle0"): the template has no external
+    // resources, so waiting for the network to go idle buys nothing and is the
+    // exact wait that hangs for the full timeout when Chrome is degraded.
+    await page.setContent(html, {
+      waitUntil: "domcontentloaded",
+      timeout: PDF_RENDER_TIMEOUT_MS,
+    });
 
     const pdf = await page.pdf({
       format: "A4",
       printBackground: true,
+      timeout: PDF_RENDER_TIMEOUT_MS,
       margin: {
         top: "14mm",
         right: "12mm",
@@ -163,12 +228,39 @@ async function renderPdfFromHtml(html: string) {
 
     return Buffer.from(pdf);
   } finally {
-    // Close only the PAGE. launchBrowser() returns a SHARED, long-lived browser
-    // reused across requests — closing it would break concurrent renders and
-    // force an expensive relaunch (and was a source of intermittent
-    // "Target closed" errors on the shared VPS).
+    // Close only the PAGE on success. launchBrowser() returns a SHARED,
+    // long-lived browser reused across requests — closing it on the happy path
+    // would break concurrent renders and force an expensive relaunch.
     await page.close().catch(() => {});
   }
+}
+
+async function renderPdfFromHtml(html: string) {
+  // Two attempts. The dominant VPS failure mode is a zombie shared Chrome
+  // (OOM-killed renderer / leaked pages) where isConnected() still reports true
+  // but every render hangs until the timeout. On the first failure we discard
+  // and relaunch the browser, then retry once with a clean Chrome — recovering
+  // automatically instead of surfacing a 30s timeout and needing a pm2 restart.
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await renderPdfOnce(html);
+    } catch (err) {
+      lastError = err;
+      console.warn(
+        `DIGIO DEBUG -> PDF render attempt ${attempt}/2 failed:`,
+        err instanceof Error ? err.message : err,
+      );
+      // Treat any render failure as a possibly-dead browser and force a fresh
+      // launch for the retry (and for subsequent requests).
+      await resetBrowser();
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("PDF render failed after retry");
 }
 
 function normalizeDigioAgreementStatus(parsed: any) {
@@ -212,6 +304,8 @@ export async function POST(req: NextRequest) {
     const agreement = body.agreement || {};
     const company = body.company || {};
     const ownership = body.ownership || {};
+    const storeUnsignedCopy = !!body.storeUnsignedCopy;
+    const applicationId = cleanString(body.applicationId);
 
     const dealerSigner = buildSigner(
       agreement.dealerSignerEmail,
@@ -391,12 +485,17 @@ export async function POST(req: NextRequest) {
       };
     });
 
+    // When the caller delivers the sign link itself (e.g. WhatsApp-only dealer
+    // onboarding), suppress Digio's own email/SMS notifications. We still pass
+    // include_authentication_url so the per-signer URLs come back in the response.
+    const suppressSignerEmails = !!agreement.suppressSignerEmails;
+
     const digioPayload: Record<string, unknown> = {
       file_name: `${cleanString(company.companyName) || "dealer"}-agreement.pdf`,
       file_data: agreementBase64,
-      expire_in_days: 5,
-      notify_signers: true,
-      send_sign_link: true,
+      expire_in_days: 30,
+      notify_signers: !suppressSignerEmails,
+      send_sign_link: !suppressSignerEmails,
       include_authentication_url: true,
       sequential: true,
       signers: digioSigners,
@@ -486,6 +585,17 @@ export async function POST(req: NextRequest) {
     const attachedEstampDetails = extractAttachedEstampDetails(parsed);
     const stampCertificateIds = extractStampCertificateIds(parsed);
 
+    const providerDocumentId = parsed?.document_id || parsed?.documentId || "";
+
+    // For WhatsApp dealers, persist the unsigned PDF so the initiate route can
+    // send the actual agreement document over WhatsApp (not just the link).
+    const unsignedAgreementUrl = storeUnsignedCopy
+      ? await storeUnsignedAgreementPdf(
+          pdfBuffer,
+          applicationId || providerDocumentId || `req-${parsed?.id || "unknown"}`,
+        )
+      : null;
+
     console.log(
       "DIGIO DEBUG -> ATTACHED ESTAMP DETAILS:",
       JSON.stringify(attachedEstampDetails),
@@ -499,8 +609,9 @@ export async function POST(req: NextRequest) {
       success: true,
       data: {
         requestId: parsed?.id || parsed?.request_id || "",
-        providerDocumentId: parsed?.document_id || parsed?.documentId || "",
+        providerDocumentId,
         signingUrl,
+        unsignedAgreementUrl,
         signerUrls: signingParties.map((party: any) => ({
           name: party?.name || "",
           reason: party?.reason || "",

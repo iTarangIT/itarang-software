@@ -7,7 +7,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import * as XLSX from "xlsx";
 import {
     CheckCircle2,
     Loader2,
@@ -63,6 +62,9 @@ export function UploadWizard() {
         try {
             if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
                 // Excel — convert the first sheet to CSV in the browser.
+                // xlsx is ~400 KB of client JS; load it only when an Excel
+                // file is actually picked.
+                const XLSX = await import("xlsx");
                 const buf = await file.arrayBuffer();
                 const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
                 const sheetName = wb.SheetNames[0];
@@ -198,6 +200,28 @@ export function UploadWizard() {
             {/* Step 2 — validation preview */}
             {validation && (
                 <>
+                    {validation.headers.missing_required.length > 0 && (
+                        <div className="rounded-lg border border-danger/30 bg-danger-bg px-3 py-2 text-xs text-danger">
+                            Missing required column
+                            {validation.headers.missing_required.length > 1
+                                ? "s"
+                                : ""}
+                            : {validation.headers.missing_required.join(", ")}.
+                            Add {validation.headers.missing_required.length > 1
+                                ? "them"
+                                : "it"}{" "}
+                            and re-upload.
+                        </div>
+                    )}
+                    {validation.headers.ignored.length > 0 && (
+                        <div className="rounded-lg border border-warning/30 bg-warning-bg px-3 py-2 text-xs text-warning">
+                            Ignored column
+                            {validation.headers.ignored.length > 1 ? "s" : ""}:{" "}
+                            {validation.headers.ignored.join(", ")} — not
+                            recognized, so skipped. The rest will still import.
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                         <Stat label="Total" value={validation.total_rows} />
                         <Stat label="New" value={validation.valid_rows} />
@@ -219,6 +243,7 @@ export function UploadWizard() {
                                     <th className="text-left px-3 py-2">Row</th>
                                     <th className="text-left px-3 py-2">Dealer</th>
                                     <th className="text-left px-3 py-2">Phone</th>
+                                    <th className="text-left px-3 py-2">Owner</th>
                                     <th className="text-left px-3 py-2">Status</th>
                                     <th className="text-left px-3 py-2">Notes</th>
                                 </tr>
@@ -234,6 +259,9 @@ export function UploadWizard() {
                                         </td>
                                         <td className="px-3 py-1.5 text-ink-muted tabular-nums">
                                             {r.normalized_phone || "—"}
+                                        </td>
+                                        <td className="px-3 py-1.5 text-ink">
+                                            {r.assigned_owner_name || "—"}
                                         </td>
                                         <td className="px-3 py-1.5">
                                             <span
@@ -270,6 +298,10 @@ export function UploadWizard() {
                             />
                             Route through AI dialer first
                         </label>
+                        <p className="w-full text-[11px] text-ink-muted">
+                            Rows with an <span className="font-medium">assignee</span> go
+                            straight to that rep/ASM&apos;s queue and skip the AI dialer.
+                        </p>
                         <div>
                             <label className="block text-[10px] font-medium uppercase tracking-wide text-ink-muted mb-1">
                                 Source label (optional)

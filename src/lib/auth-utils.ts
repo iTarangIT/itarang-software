@@ -4,7 +4,12 @@ import { eq } from "drizzle-orm";
 import { createClient } from "./supabase/server";
 import { redirect } from "next/navigation";
 
-export async function requireAuth() {
+/**
+ * Like requireAuth, but also returns the Supabase auth user so callers that
+ * need `app_metadata` (e.g. /api/user/profile's role sync) don't have to pay
+ * for a second `auth.getUser()` round-trip.
+ */
+export async function requireAuthWithSupabaseUser() {
   const supabase = await createClient();
   const {
     data: { user },
@@ -39,19 +44,27 @@ export async function requireAuth() {
     if (!dbUser) {
       console.log(`[Auth] No DB user found for auth user: ${user.id} / ${user.email}`);
       return {
-        id: user.id,
-        name: user.email?.split("@")[0] || "User",
-        email: user.email || "",
-        role: "user",
-        dealer_id: null,
+        dbUser: {
+          id: user.id,
+          name: user.email?.split("@")[0] || "User",
+          email: user.email || "",
+          role: "user",
+          dealer_id: null,
+        },
+        authUser: user,
       };
     }
 
-    return dbUser;
+    return { dbUser, authUser: user };
   } catch (dbErr) {
     console.error("[Auth] Database error in requireAuth:", dbErr);
     throw dbErr;
   }
+}
+
+export async function requireAuth() {
+  const { dbUser } = await requireAuthWithSupabaseUser();
+  return dbUser;
 }
 
 export async function requireRole(roles: string[]) {

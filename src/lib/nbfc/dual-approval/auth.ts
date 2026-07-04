@@ -17,16 +17,30 @@
  */
 import { db } from "@/lib/db";
 import { eq, and } from "drizzle-orm";
-import { nbfcUsers, nbfcTenants } from "@/lib/db/schema";
+import { nbfcUsers, nbfcTenants, nbfcRolePermissions } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess, getSessionUser } from "@/lib/nbfc/tenant";
 import { normalizeNbfcRole } from "@/lib/nbfc/origination-roles";
+import { defaultPermissionsForRole } from "@/lib/nbfc/permissions";
 
 export interface DualApprovalActor {
   user_id: string;
   tenant_id: string;
   tenant_slug: string;
   role: string;
+  /** E-162 — fine-grained permission keys (§15.8). */
+  permissions: Set<string>;
+  /** True if this actor holds the given permission key. */
+  can: (permission: string) => boolean;
   via: "session" | "test_bypass";
+}
+
+/** Attaches the permission set + can() helper to a resolved actor's base fields. */
+function withPermissions(
+  base: Omit<DualApprovalActor, "permissions" | "can">,
+  permissionKeys: string[],
+): DualApprovalActor {
+  const permissions = new Set(permissionKeys);
+  return { ...base, permissions, can: (p: string) => permissions.has(p) };
 }
 
 function isProd(): boolean {
@@ -61,13 +75,16 @@ export async function resolveActor(headers: Headers): Promise<DualApprovalActor>
     if (rows.length === 0) {
       throw new Error("FORBIDDEN: tenant not found for test bypass");
     }
-    return {
-      user_id: userId,
-      tenant_id: rows[0].id,
-      tenant_slug: rows[0].slug,
-      role,
-      via: "test_bypass",
-    };
+    return withPermissions(
+      {
+        user_id: userId,
+        tenant_id: rows[0].id,
+        tenant_slug: rows[0].slug,
+        role,
+        via: "test_bypass",
+      },
+      defaultPermissionsForRole(normalizeNbfcRole(role)),
+    );
   }
 
   // Production path: use the canonical tenant + access primitives.
@@ -77,9 +94,9 @@ export async function resolveActor(headers: Headers): Promise<DualApprovalActor>
   if (!session) {
     throw new Error("UNAUTHORIZED: no session user");
   }
-  // Look up the NBFC role for (user, tenant)
+  // Look up the NBFC role + optional custom role for (user, tenant)
   const rows = await db
-    .select({ role: nbfcUsers.role })
+    .select({ role: nbfcUsers.role, role_id: nbfcUsers.role_id })
     .from(nbfcUsers)
     .where(and(eq(nbfcUsers.user_id, session.id), eq(nbfcUsers.tenant_id, tenant.id)))
     .limit(1);
@@ -87,11 +104,29 @@ export async function resolveActor(headers: Headers): Promise<DualApprovalActor>
   // 'admin'; the origination RBAC layer (§7.2) uses 'nbfc_admin'. Normalise so
   // the account owner is recognised by every action gate (see normalizeNbfcRole).
   const role = normalizeNbfcRole(rows[0]?.role);
-  return {
-    user_id: session.id,
-    tenant_id: tenant.id,
-    tenant_slug: tenant.slug,
-    role,
-    via: "session",
-  };
+
+  // E-162 — fine-grained permissions: a custom role (role_id) supplies its own
+  // permission set; otherwise the system-role default (which reproduces the
+  // legacy behaviour exactly, so nothing changes for un-customised tenants).
+  let permissionKeys: string[];
+  if (rows[0]?.role_id) {
+    const perms = await db
+      .select({ key: nbfcRolePermissions.permission_key })
+      .from(nbfcRolePermissions)
+      .where(eq(nbfcRolePermissions.role_id, rows[0].role_id));
+    permissionKeys = perms.map((p) => p.key);
+  } else {
+    permissionKeys = defaultPermissionsForRole(role);
+  }
+
+  return withPermissions(
+    {
+      user_id: session.id,
+      tenant_id: tenant.id,
+      tenant_slug: tenant.slug,
+      role,
+      via: "session",
+    },
+    permissionKeys,
+  );
 }

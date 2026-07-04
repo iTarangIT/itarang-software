@@ -5,7 +5,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { inventory, leads, nbfc, nbfcLeadAssignments, nbfcServiceConfig, productSelections } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
-import { generateId } from "@/lib/api-utils";
+import { generateId, storedFileUrl } from "@/lib/api-utils";
 import { notifyProductSelectionSubmitted } from "@/lib/notifications";
 import { InventoryLifecycleError, reserveInventorySerial } from "@/lib/inventory/lifecycle";
 
@@ -60,8 +60,8 @@ const BodySchema = z.object({
   // the Section G picks. All four columns are nullable in DB; the API does
   // not enforce "photos required" at this stage (Phase 2 ships the plumbing;
   // a downstream phase can tighten validation per legal/ops review).
-  batteryPhotoUrls: z.array(z.string().url()).optional(),
-  chargerPhotoUrls: z.array(z.string().url()).optional(),
+  batteryPhotoUrls: z.array(storedFileUrl).optional(),
+  chargerPhotoUrls: z.array(storedFileUrl).optional(),
   selectedNbfcs: z.array(z.object({
     nbfc_id: z.string(),
     loan_product_id: z.union([z.string(), z.number()]).optional(),
@@ -84,6 +84,9 @@ function buildServiceSnapshot(cfg: ServiceConfigRow | undefined, capturedAt: Dat
     enach_enabled: cfg?.enach_enabled ?? false,
     enach_handoff_method: cfg?.enach_handoff_method ?? null,
     doc_agreement_method: cfg?.doc_agreement_method ?? null,
+    // E-166 — which e-sign provider this lead's agreement uses (snapshotted;
+    // credentials are read live). NULL ⇒ iTarang's global Digio account.
+    esign_provider: cfg?.esign_provider ?? null,
     store_sanction_letter: cfg?.store_sanction_letter ?? false,
     store_loan_agreement: cfg?.store_loan_agreement ?? false,
     track_completion_gate: cfg?.track_completion_gate ?? true,

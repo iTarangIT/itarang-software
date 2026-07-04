@@ -19,6 +19,12 @@
  * regardless of per-user RLS on a private bucket.
  */
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import {
+  isS3Backend,
+  putObject,
+  getObject,
+  signObject,
+} from "@/lib/storage/s3";
 
 export const NBFC_BUCKET = "nbfc-documents";
 const URL_PREFIX = "/nbfc-uploads";
@@ -51,6 +57,10 @@ export async function putNbfcObject(
   opts: { upsert?: boolean } = {},
 ): Promise<{ url: string; key: string }> {
   const k = normalizeNbfcKey(key);
+  if (isS3Backend) {
+    await putObject(NBFC_BUCKET, k, body, contentType);
+    return { url: nbfcPublicPath(k), key: k };
+  }
   const { error } = await supabaseAdmin.storage
     .from(NBFC_BUCKET)
     .upload(k, body, { contentType, upsert: opts.upsert ?? true });
@@ -61,6 +71,7 @@ export async function putNbfcObject(
 /** Download an object's bytes, or null if it doesn't exist. */
 export async function getNbfcObject(key: string): Promise<Buffer | null> {
   const k = normalizeNbfcKey(key);
+  if (isS3Backend) return getObject(NBFC_BUCKET, k);
   const { data, error } = await supabaseAdmin.storage.from(NBFC_BUCKET).download(k);
   if (error || !data) return null;
   return Buffer.from(await data.arrayBuffer());
@@ -69,6 +80,7 @@ export async function getNbfcObject(key: string): Promise<Buffer | null> {
 /** A short-lived signed URL for direct browser access, or null if missing. */
 export async function signNbfcObject(key: string, expiresSec = 120): Promise<string | null> {
   const k = normalizeNbfcKey(key);
+  if (isS3Backend) return signObject(NBFC_BUCKET, k, expiresSec);
   const { data, error } = await supabaseAdmin.storage.from(NBFC_BUCKET).createSignedUrl(k, expiresSec);
   if (error || !data?.signedUrl) return null;
   return data.signedUrl;

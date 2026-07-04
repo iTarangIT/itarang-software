@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 import type {
   CompanyStepData,
   ComplianceStepData,
@@ -70,6 +71,12 @@ type StoreActions = {
   setErrors: (errors: Record<string, string>) => void;
   clearError: (key: string) => void;
   saveDraft: () => void;
+  // Wipe the wizard back to a blank step-1 state for a brand-new dealer, so the
+  // next autosave creates a fresh draft row instead of editing the last one.
+  reset: () => void;
+  // Autosave the in-progress wizard to its dealer_onboarding_applications draft
+  // row (server side), so a closed laptop / switched dealer can be resumed.
+  persistDraft: () => Promise<void>;
   setUpload: (path: string, fileItem: UploadFileItem) => void;
   addPartner: () => void;
   updatePartner: (id: string, field: string, value: any) => void;
@@ -169,6 +176,7 @@ const initialState: DealerOnboardingState = {
   dealerId: "",
   dealerDisplayName: "",
   internalApplicationId: null,
+  draftApplicationId: null,
 
   company: {
     companyName: "",
@@ -195,6 +203,7 @@ const initialState: DealerOnboardingState = {
     ownerLandline: "",
     ownerEmail: "",
     ownerAge: "",
+    ownerAadhaarNumber: "",
     ownerPhoto: makeUploadItem("Owner Photograph"),
     ownerAddressLine1: "",
     ownerCity: "",
@@ -253,9 +262,198 @@ function removeStaleSubmitErrors(errors: Record<string, string>) {
   return nextErrors;
 }
 
-export const useOnboardingStore = create<
-  DealerOnboardingState & StoreActions
->((set, get) => ({
+// The wizard upload slots whose document_type strings round-trip through BOTH
+// the save route (dealerOnboardingDocuments) and hydrateFromApplication — i.e.
+// the documents that are actually re-attached on resume. Keep this list in sync
+// with the switch in hydrateFromApplication and buildDocument() in StepReview.
+const PERSISTED_DOC_SLOTS: Array<{
+  type: string;
+  pick: (s: DealerOnboardingState) => UploadFileItem | null | undefined;
+}> = [
+  { type: "gst_certificate", pick: (s) => s.company.gstCertificate },
+  { type: "pan_card", pick: (s) => s.company.companyPanFile },
+  { type: "itr_3_years", pick: (s) => s.compliance.itr3Years },
+  { type: "bank_statement_3_months", pick: (s) => s.compliance.bankStatement3Months },
+  { type: "undated_cheques", pick: (s) => s.compliance.undatedCheques },
+  { type: "passport_photo", pick: (s) => s.compliance.passportPhoto },
+  { type: "udyam_certificate", pick: (s) => s.compliance.udyamCertificate },
+];
+
+// Build the documents array for the save route from any upload slot that has a
+// storagePath (i.e. the file already landed in storage via FileUploadCard).
+// Gate on storagePath, NOT on `file` — a resumed draft restores storagePath but
+// not the in-memory File, and those restored docs must still persist.
+function collectUploadedDocuments(state: DealerOnboardingState) {
+  return PERSISTED_DOC_SLOTS.flatMap(({ type, pick }) => {
+    const item = pick(state);
+    if (!item?.storagePath) return [];
+    const fileName =
+      item.file?.name ||
+      item.storagePath.split("/").pop() ||
+      item.label ||
+      type;
+    return [
+      {
+        documentType: type,
+        bucketName: item.bucketName ?? "dealer-documents",
+        storagePath: item.storagePath,
+        fileName,
+        fileUrl: item.uploadedUrl ?? null,
+      },
+    ];
+  });
+}
+
+// Map the wizard state onto the body shape /api/dealer-onboarding/save expects.
+// Uploaded documents are included ONLY when at least one slot has a storagePath
+// — the save route treats a present `documents` array as a full replace, so we
+// must never send an empty list (it would delete the row's existing uploads).
+// Before any upload, or before hydrate populates the slots, the field is omitted
+// so existing document rows are left untouched.
+function buildSavePayload(state: DealerOnboardingState) {
+  const o = state.ownership;
+  const c = state.company;
+  const documents = collectUploadedDocuments(state);
+  return {
+    ...(documents.length > 0 ? { documents } : {}),
+    applicationId:
+      state.draftApplicationId ?? state.internalApplicationId ?? undefined,
+    draftStep: state.step,
+    dealerCode: state.dealerId || undefined,
+    companyName: c.companyName,
+    companyType: c.companyType,
+    gstNumber: c.gstNumber,
+    panNumber: c.companyPanNumber,
+    businessAddress: c.companyAddress
+      ? { address: c.companyAddress }
+      : undefined,
+    financeEnabled: state.finance.enableFinance === "yes",
+    ownerName: o.ownerName,
+    ownerPhone: o.ownerPhone,
+    ownerEmail: o.ownerEmail,
+    ownerLandline: o.ownerLandline,
+    bankName: o.bankName,
+    accountNumber: o.accountNumber,
+    beneficiaryName: o.beneficiaryName,
+    ifscCode: o.ifsc,
+    agreement: {
+      salesManager: state.agreement.salesManager,
+      itarangSignatory1: state.agreement.itarangSignatory1,
+      itarangSignatory2: state.agreement.itarangSignatory2,
+      agreementStatus: state.agreement.agreementStatus,
+    },
+  };
+}
+
+// ── localStorage safety net (zustand persist) ────────────────────────────────
+// Persist only serializable wizard content. File / Blob / object-URL fields on
+// the upload slots cannot survive a JSON round-trip (and a stale object URL is
+// useless after reload), so they are stripped here and rebuilt from a fresh
+// initialState on merge.
+function partializeOnboarding(state: DealerOnboardingState & StoreActions) {
+  const stripRow = (row: Record<string, unknown>) => {
+    const { photo, ...rest } = row;
+    void photo;
+    return rest;
+  };
+  const { signedAgreementFile, ...agreementRest } = state.agreement;
+  void signedAgreementFile;
+  return {
+    step: state.step,
+    status: state.status,
+    lastSavedAt: state.lastSavedAt,
+    dealerId: state.dealerId,
+    dealerDisplayName: state.dealerDisplayName,
+    internalApplicationId: state.internalApplicationId,
+    draftApplicationId: state.draftApplicationId,
+    company: {
+      companyName: state.company.companyName,
+      companyAddress: state.company.companyAddress,
+      companyType: state.company.companyType,
+      gstNumber: state.company.gstNumber,
+      companyPanNumber: state.company.companyPanNumber,
+      businessSummary: state.company.businessSummary,
+    },
+    ownership: {
+      ownerName: state.ownership.ownerName,
+      ownerPhone: state.ownership.ownerPhone,
+      ownerLandline: state.ownership.ownerLandline,
+      ownerEmail: state.ownership.ownerEmail,
+      ownerAge: state.ownership.ownerAge,
+      ownerAddressLine1: state.ownership.ownerAddressLine1,
+      ownerCity: state.ownership.ownerCity,
+      ownerDistrict: state.ownership.ownerDistrict,
+      ownerState: state.ownership.ownerState,
+      ownerPinCode: state.ownership.ownerPinCode,
+      bankName: state.ownership.bankName,
+      accountNumber: state.ownership.accountNumber,
+      ifsc: state.ownership.ifsc,
+      beneficiaryName: state.ownership.beneficiaryName,
+      branch: state.ownership.branch,
+      accountType: state.ownership.accountType,
+      partners: (state.ownership.partners as Record<string, unknown>[]).map(
+        stripRow
+      ),
+      directors: (state.ownership.directors as Record<string, unknown>[]).map(
+        stripRow
+      ),
+    },
+    finance: { ...state.finance },
+    agreement: agreementRest,
+    reviewChecks: { ...state.reviewChecks },
+  };
+}
+
+function mergeOnboarding(
+  persisted: unknown,
+  current: DealerOnboardingState & StoreActions
+): DealerOnboardingState & StoreActions {
+  if (!persisted || typeof persisted !== "object") return current;
+  const p = persisted as Record<string, any>;
+  return {
+    ...current,
+    step: p.step ?? current.step,
+    status: p.status ?? current.status,
+    lastSavedAt: p.lastSavedAt ?? current.lastSavedAt,
+    dealerId: p.dealerId ?? current.dealerId,
+    dealerDisplayName: p.dealerDisplayName ?? current.dealerDisplayName,
+    internalApplicationId:
+      p.internalApplicationId ?? current.internalApplicationId,
+    draftApplicationId: p.draftApplicationId ?? current.draftApplicationId,
+    // Overlay persisted text onto fresh sections so upload slots (File/preview)
+    // keep their valid runtime shape from initialState.
+    company: { ...current.company, ...(p.company ?? {}) },
+    compliance: current.compliance,
+    ownership: {
+      ...current.ownership,
+      ...(p.ownership ?? {}),
+      partners: Array.isArray(p.ownership?.partners)
+        ? p.ownership.partners.map((row: Record<string, unknown>) => ({
+            ...row,
+            photo: makeUploadItem("Partner Photograph"),
+          }))
+        : current.ownership.partners,
+      directors: Array.isArray(p.ownership?.directors)
+        ? p.ownership.directors.map((row: Record<string, unknown>) => ({
+            ...row,
+            photo: makeUploadItem("Director Photograph"),
+          }))
+        : current.ownership.directors,
+      // Upload-bearing slots are never persisted — keep the fresh ones.
+      ownerPhoto: current.ownership.ownerPhoto,
+      partnershipDeed: current.ownership.partnershipDeed,
+      mouDocument: current.ownership.mouDocument,
+      aoaDocument: current.ownership.aoaDocument,
+    },
+    finance: { ...current.finance, ...(p.finance ?? {}) },
+    agreement: { ...current.agreement, ...(p.agreement ?? {}) },
+    reviewChecks: { ...current.reviewChecks, ...(p.reviewChecks ?? {}) },
+  };
+}
+
+export const useOnboardingStore = create<DealerOnboardingState & StoreActions>()(
+  persist(
+    (set, get) => ({
   ...initialState,
 
   setStep: (step) => set({ step, errors: {} }),
@@ -329,11 +527,28 @@ export const useOnboardingStore = create<
             ? "no"
             : "";
 
+      // business_address is a text column but autosave stores a JSON-encoded
+      // { address } object, while older rows hold a plain string — handle both.
       const businessAddress = a.business_address;
-      const companyAddress =
-        typeof businessAddress === "string"
-          ? businessAddress
-          : str((businessAddress as Record<string, unknown> | null)?.address);
+      let companyAddress = "";
+      if (typeof businessAddress === "string") {
+        const trimmed = businessAddress.trim();
+        if (trimmed.startsWith("{")) {
+          try {
+            companyAddress =
+              str((JSON.parse(trimmed) as Record<string, unknown>)?.address) ||
+              "";
+          } catch {
+            companyAddress = trimmed;
+          }
+        } else {
+          companyAddress = trimmed;
+        }
+      } else {
+        companyAddress = str(
+          (businessAddress as Record<string, unknown> | null)?.address
+        );
+      }
 
       const company: CompanyStepData = {
         ...state.company,
@@ -374,10 +589,19 @@ export const useOnboardingStore = create<
         }
       }
 
+      // Resume on the step the draft was left on (E-160). Fall back to step 1
+      // for legacy rows that predate draft_step.
+      const savedStep = Number(a.draft_step);
+      const resumeStep =
+        Number.isFinite(savedStep) && savedStep >= 1 && savedStep <= 6
+          ? Math.floor(savedStep)
+          : 1;
+
       return {
         ...state,
         internalApplicationId: str(a.id) || null,
-        step: 1,
+        draftApplicationId: str(a.id) || null,
+        step: resumeStep,
         status: (str(a.onboarding_status) ||
           "draft") as DealerOnboardingState["status"],
         dealerId: str(a.dealer_code) || state.dealerId,
@@ -421,6 +645,88 @@ export const useOnboardingStore = create<
       status: "draft",
       lastSavedAt: new Date().toISOString(),
     }),
+
+  reset: () =>
+    set({
+      ...initialState,
+      // Rebuild every upload slot so a new dealer never inherits the previous
+      // dealer's file/preview references.
+      company: {
+        ...initialState.company,
+        gstCertificate: makeUploadItem("GST Certificate"),
+        companyPanFile: makeUploadItem("Company PAN"),
+      },
+      compliance: {
+        itr3Years: makeUploadItem(
+          "Last 3 Years Company Income Tax Returns"
+        ),
+        bankStatement3Months: makeUploadItem(
+          "Last 3 Months Company Bank Statement"
+        ),
+        undatedCheques: makeUploadItem("4 Undated Cheques"),
+        passportPhoto: makeUploadItem("Passport Size Photograph"),
+        udyamCertificate: makeUploadItem("Udyam Registration Certificate"),
+      },
+      ownership: {
+        ...initialState.ownership,
+        ownerPhoto: makeUploadItem("Owner Photograph"),
+        partnershipDeed: makeUploadItem("Partnership Deed"),
+        mouDocument: makeUploadItem("MoU"),
+        aoaDocument: makeUploadItem("AoA"),
+        partners: [],
+        directors: [],
+      },
+      agreement: createInitialAgreementState(),
+      internalApplicationId: null,
+      draftApplicationId: null,
+      step: 1,
+      status: "draft",
+      lastSavedAt: null,
+      dealerId: "",
+      dealerDisplayName: "",
+      errors: {},
+    }),
+
+  persistDraft: async () => {
+    if (typeof window === "undefined") return;
+    const state = get();
+    // The save route rejects a draft with no company name (its only hard
+    // requirement), so there is nothing to persist server-side until then —
+    // the localStorage layer already covers that earlier window.
+    if (!state.company.companyName?.trim()) return;
+    if (state.status === "approved") return;
+
+    try {
+      const res = await fetch("/api/dealer-onboarding/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildSavePayload(state)),
+      });
+      const json = await res.json().catch(() => null);
+      const savedId: string | null =
+        json?.application?.id ?? json?.data?.applicationId ?? null;
+
+      if (json?.success && savedId) {
+        if (savedId !== get().draftApplicationId) {
+          set({
+            draftApplicationId: savedId,
+            lastSavedAt: new Date().toISOString(),
+          });
+          // Reflect the draft id in the URL so a refresh / reopened tab resumes
+          // this exact dealer via OnboardingHydrator.
+          const url = new URL(window.location.href);
+          if (url.searchParams.get("applicationId") !== savedId) {
+            url.searchParams.set("applicationId", savedId);
+            window.history.replaceState(null, "", url.toString());
+          }
+        } else {
+          set({ lastSavedAt: new Date().toISOString() });
+        }
+      }
+    } catch (err) {
+      console.error("[onboarding] autosave failed:", err);
+    }
+  },
 
   setUpload: (path, fileItem) =>
     set((state) => {
@@ -631,4 +937,54 @@ export const useOnboardingStore = create<
 
     return generatedDealerId;
   },
-}));
+    }),
+    {
+      name: "dealer-onboarding-draft",
+      // SSR-safe storage: the thunk returns a no-op store on the server and the
+      // real localStorage in the browser, so importing this module never throws
+      // "localStorage is not defined" during a Next.js render.
+      storage: createJSONStorage(() =>
+        typeof window !== "undefined"
+          ? window.localStorage
+          : {
+              getItem: () => null,
+              setItem: () => {},
+              removeItem: () => {},
+            }
+      ),
+      version: 1,
+      partialize: (state) =>
+        partializeOnboarding(state) as unknown as DealerOnboardingState &
+          StoreActions,
+      merge: (persisted, current) =>
+        mergeOnboarding(
+          persisted,
+          current as DealerOnboardingState & StoreActions
+        ),
+    }
+  )
+);
+
+// ── Debounced autosave ───────────────────────────────────────────────────────
+// Push the in-progress wizard to its server draft whenever its savable content
+// changes. We diff the serialized save-payload so the store updates that
+// persistDraft itself makes (internalApplicationId / lastSavedAt) don't form a
+// feedback loop, and so noise like `errors` never triggers a network write.
+if (typeof window !== "undefined") {
+  let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastPayloadSig = "";
+
+  useOnboardingStore.subscribe((state) => {
+    if (!state.company.companyName?.trim()) return;
+    if (state.status === "approved") return;
+
+    const sig = JSON.stringify(buildSavePayload(state));
+    if (sig === lastPayloadSig) return;
+    lastPayloadSig = sig;
+
+    if (autosaveTimer) clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => {
+      void useOnboardingStore.getState().persistDraft();
+    }, 1200);
+  });
+}

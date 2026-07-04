@@ -6,6 +6,7 @@
  * Admin-only.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { desc, eq } from "drizzle-orm";
 
@@ -51,7 +52,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ nbfc
     return NextResponse.json({ ok: true, wallet, ledger });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }
 
@@ -80,6 +81,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ nbf
     return NextResponse.json({ ok: true, ledger_id: ledgerId });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

@@ -1,0 +1,32 @@
+7414810 fix(deploy): make prod archive snapshot truly non-fatal (set +e wrap)
+029ba44 fix(deploy): raise prod command_timeout to 45m + npm ci --prefer-offline
+33909be fix(deploy): auto-deploy prod from main + restore plain npm ci
+76c31c2 fix(deploy): guard prod npm-ci hash logic so it can't abort the deploy
+1ca1682 fix(deploy): make prod deploy survive a full disk + stop the 19-min npm ci
+4a184a0 Merge origin/main into Aditya — resolve sandbox upload conflict
+1a442ab fix(deploy): rsync delta upload for sandbox so the build stops timing out
+af68067 Merge pull request #225 from iTarangIT/Aditya
+efd607f fix(pdf): provision system Chrome in deploy so Initiate Agreement stops throwing ENOENT
+8747929 Merge pull request #224 from iTarangIT/production
+d73c9da Merge pull request #223 from iTarangIT/main
+ac92b78 Merge pull request #222 from iTarangIT/fix/prod-chromium-agreement
+===ORIGIN_MAIN===
+8cd372e Merge pull request #231 from iTarangIT/Aditya
+eaec231 Merge pull request #232 from iTarangIT/production
+76c31c2 fix(deploy): guard prod npm-ci hash logic so it can't abort the deploy
+f3efe13 Merge pull request #230 from iTarangIT/main
+b2ccef9 Merge pull request #229 from iTarangIT/Aditya
+1ca1682 fix(deploy): make prod deploy survive a full disk + stop the 19-min npm ci
+526e746 Merge pull request #228 from iTarangIT/production
+98a4014 Merge pull request #227 from iTarangIT/main
+3abf31d Merge pull request #226 from iTarangIT/Aditya
+4a184a0 Merge origin/main into Aditya — resolve sandbox upload conflict
+1a442ab fix(deploy): rsync delta upload for sandbox so the build stops timing out
+af68067 Merge pull request #225 from iTarangIT/Aditya
+===FAFD359===
+fatal: ambiguous argument 'fafd359': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+===CONTAINS_7414810===
+* Aditya
+  remotes/origin/Aditya

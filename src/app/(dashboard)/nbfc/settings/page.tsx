@@ -25,6 +25,8 @@ import {
   type NbfcOwnerStep,
 } from "@/lib/nbfc/origination-roles";
 import UsersSection from "./_components/UsersSection";
+import RolesSection from "./_components/RolesSection";
+import NotificationChannelsSection from "./_components/NotificationChannelsSection";
 import NotificationPrefsSection from "./_components/NotificationPrefsSection";
 import ServiceOptInSection, {
   type ServiceConfig,
@@ -38,14 +40,20 @@ const SERVICE_CONFIG_DEFAULTS: ServiceConfig = {
   fi_enabled: false,
   vkyc_enabled: false,
   vkyc_mode: null,
+  vkyc_endpoint_url: null,
   enach_enabled: false,
   enach_handoff_method: null,
   enach_endpoint_url: null,
   doc_agreement_method: null,
+  esign_endpoint_url: null,
+  esign_provider: null,
   store_sanction_letter: false,
   store_loan_agreement: false,
   track_completion_gate: true,
   track_failure_halts: false,
+  vkyc_webhook_secret: null,
+  enach_webhook_secret: null,
+  esign_webhook_secret: null,
 };
 
 export default async function SettingsPage() {
@@ -82,17 +90,23 @@ export default async function SettingsPage() {
         fi_enabled: serviceCfgRow.fi_enabled,
         vkyc_enabled: serviceCfgRow.vkyc_enabled,
         vkyc_mode: serviceCfgRow.vkyc_mode as ServiceConfig["vkyc_mode"],
+        vkyc_endpoint_url: serviceCfgRow.vkyc_endpoint_url,
         enach_enabled: serviceCfgRow.enach_enabled,
         enach_handoff_method:
           serviceCfgRow.enach_handoff_method as ServiceConfig["enach_handoff_method"],
         enach_endpoint_url: serviceCfgRow.enach_endpoint_url,
         doc_agreement_method:
           serviceCfgRow.doc_agreement_method as ServiceConfig["doc_agreement_method"],
+        esign_endpoint_url: serviceCfgRow.esign_endpoint_url,
+        esign_provider: serviceCfgRow.esign_provider,
         store_sanction_letter: serviceCfgRow.store_sanction_letter,
         store_loan_agreement: serviceCfgRow.store_loan_agreement,
         track_completion_gate: serviceCfgRow.track_completion_gate,
         track_failure_halts: serviceCfgRow.track_failure_halts,
         fi_config: (serviceCfgRow.fi_config as ServiceConfig["fi_config"]) ?? null,
+        vkyc_webhook_secret: serviceCfgRow.vkyc_webhook_secret,
+        enach_webhook_secret: serviceCfgRow.enach_webhook_secret,
+        esign_webhook_secret: serviceCfgRow.esign_webhook_secret,
       }
     : SERVICE_CONFIG_DEFAULTS;
 
@@ -158,6 +172,9 @@ export default async function SettingsPage() {
         }))}
       />
 
+      {/* Roles — custom RBAC (§15.8): system roles + clone-to-customise */}
+      <RolesSection />
+
       {/* Wallet — prepaid balance, auto-NACH config, transaction history (§8.1) */}
       <WalletSection canEdit={canEdit} />
 
@@ -167,6 +184,9 @@ export default async function SettingsPage() {
         canEdit={canEdit}
         callbackBase={callbackBase}
       />
+
+      {/* Notification Channels — per-NBFC Email/SMS/WhatsApp gateways (§15.5) */}
+      <NotificationChannelsSection />
 
       {/* Step owners (§7.2) */}
       <StepOwnersSection

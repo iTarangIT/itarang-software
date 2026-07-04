@@ -29,7 +29,7 @@ export default async function InsideSalesQueuePage() {
                     </p>
                 </div>
             </header>
-            <QueueView viewerId={user.id} />
+            <QueueView viewerId={user.id} viewerRole={user.role} />
         </div>
     );
 }

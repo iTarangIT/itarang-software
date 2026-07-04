@@ -11,6 +11,7 @@ import {
   Pencil,
   Check,
 } from "lucide-react";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 interface RegionGroupRow {
   id: string;
@@ -77,7 +78,12 @@ export function RegionGroupManager({
   if (!isOpen) return null;
 
   const remove = async (id: string) => {
-    if (!confirm("Delete this region group?")) return;
+    const ok = await confirmDialog({
+      title: "Delete region group?",
+      confirmText: "Delete",
+      variant: "danger",
+    });
+    if (!ok) return;
     await fetch(`/api/region-groups/${id}`, { method: "DELETE" });
     qc.invalidateQueries({ queryKey: ["region-groups"] });
   };

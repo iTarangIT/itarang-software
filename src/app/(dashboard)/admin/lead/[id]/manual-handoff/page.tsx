@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 type Handoff = {
   status: string;
@@ -74,12 +75,14 @@ export default function ManualHandoffPage() {
   }
 
   async function markFinancingUnavailable() {
-    if (
-      !confirm(
+    const ok = await confirmDialog({
+      title: "Mark financing unavailable",
+      message:
         "Confirm this lead's financing is UNAVAILABLE? This is terminal — finance-only sensitive data (bureau report, co-borrower KYC, NBFC offers) will be purged. The dealer can still convert it to a cash sale.",
-      )
-    )
-      return;
+      confirmText: "Mark Unavailable",
+      variant: "danger",
+    });
+    if (!ok) return;
     setBusy(true);
     setError(null);
     try {

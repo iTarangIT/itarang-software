@@ -1,38 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { supabaseAdmin } from '@/lib/supabase/admin';
+import { readStoredDocument, StoredDocumentError } from '@/lib/storage/readStoredDocument';
 import { db } from '@/lib/db';
 import { kycDocuments, personalDetails } from '@/lib/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { extractDocumentOcr, type OcrDocType } from '@/lib/decentro';
 import { extractTextFromImageBuffer } from '@/lib/ocr/tesseractOcr';
 import { parseBankDocument } from '@/lib/ocr/bankDocParser';
-
-// Supabase signed URLs expire (default 1 hour). Old leads have stale URLs in
-// kyc_documents.file_url, so a direct fetch returns 403 → the catch block
-// previously surfaced an opaque "Server error". Detect signed URLs, parse the
-// bucket + object path, and re-sign right before fetching.
-async function resolveFetchableUrl(storedUrl: string): Promise<string> {
-    if (!storedUrl) return storedUrl;
-    try {
-        const u = new URL(storedUrl);
-        // Format: /storage/v1/object/sign/<bucket>/<path...>
-        const signMatch = u.pathname.match(/\/storage\/v1\/object\/sign\/([^/]+)\/(.+)$/);
-        if (signMatch) {
-            const [, bucket, objectPath] = signMatch;
-            const { data, error } = await supabaseAdmin.storage
-                .from(bucket)
-                .createSignedUrl(decodeURIComponent(objectPath), 120);
-            if (!error && data?.signedUrl) {
-                return data.signedUrl;
-            }
-            console.warn(`[OCR] re-sign failed for ${bucket}/${objectPath}: ${error?.message ?? 'no url'}`);
-        }
-    } catch (e) {
-        console.warn('[OCR] resolveFetchableUrl: not a URL, using as-is', e);
-    }
-    return storedUrl;
-}
+import { isPdf, rasterizePdfFirstPage } from '@/lib/ocr/pdfToImage';
 
 // Map internal doc types to Decentro OCR doc types.
 const DECENTRO_OCR_MAP: Record<string, OcrDocType> = {
@@ -251,12 +226,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             for (const candidate of allDocs) {
                 if (!candidate.fileUrl) continue;
                 try {
-                    const fetchUrl = await resolveFetchableUrl(candidate.fileUrl);
-                    const fileRes = await fetch(fetchUrl);
-                    if (!fileRes.ok) { console.log(`[OCR Fallback] Failed to fetch file for doc ${candidate.id}: ${fileRes.status}`); continue; }
-                    const buf = Buffer.from(await fileRes.arrayBuffer());
-                    const ct = fileRes.headers.get('content-type') || 'image/jpeg';
-                    const fname = candidate.fileName || 'doc.jpg';
+                    // Read straight from storage — stored URLs are relative
+                    // proxy paths on the S3 backend, which fetch() can't parse.
+                    const stored = await readStoredDocument(candidate.fileUrl);
+                    let buf = stored.buffer;
+                    let ct = stored.contentType;
+                    let fname = candidate.fileName || stored.filename;
+
+                    // PDF candidates must be rasterized to PNG before any OCR
+                    // strategy can identify them (mirrors the primary path).
+                    if (isPdf(ct, candidate.fileName || candidate.fileUrl)) {
+                        try {
+                            buf = await rasterizePdfFirstPage(buf);
+                            ct = 'image/png';
+                            fname = fname.replace(/\.pdf($|\?)/i, '.png');
+                            if (!/\.png$/i.test(fname)) fname = 'doc.png';
+                        } catch (e) {
+                            console.log(`[OCR Fallback] PDF rasterization failed for doc ${candidate.id}:`, e);
+                            continue;
+                        }
+                    }
 
                     // Strategy 1: Try Decentro OCR directly with expected type — if extraction succeeds, it's the right doc
                     const decentroOcrType = DECENTRO_OCR_MAP[doc_type];
@@ -395,22 +384,46 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             return NextResponse.json({ success: false, error: 'Document has no file URL' }, { status: 400 });
         }
 
-        const fetchUrl = await resolveFetchableUrl(doc.fileUrl);
-        const fileRes = await fetch(fetchUrl);
-        if (!fileRes.ok) {
-            const detail = `HTTP ${fileRes.status} ${fileRes.statusText || ''}`.trim();
-            console.error(`[Admin OCR] file fetch failed for doc ${doc.id}: ${detail}. URL host: ${(() => { try { return new URL(fetchUrl).host; } catch { return 'unknown'; } })()}`);
+        // Read straight from storage (S3/Supabase) — stored URLs are relative
+        // proxy paths on the S3 backend, which a server-side fetch() can't
+        // parse, and the proxy route requires a browser session anyway.
+        let stored;
+        try {
+            stored = await readStoredDocument(doc.fileUrl);
+        } catch (e) {
+            console.error(`[Admin OCR] file read failed for doc ${doc.id} on lead ${leadId}:`, e);
             return NextResponse.json({
                 success: false,
-                error: fileRes.status === 403 || fileRes.status === 401
-                    ? 'Document file URL has expired or is no longer accessible. Ask the dealer to re-upload.'
-                    : `Failed to fetch document file (${detail}).`,
-            }, { status: 500 });
+                error: e instanceof StoredDocumentError
+                    ? e.message
+                    : 'Could not read the document file from storage. Ask the dealer to re-upload it.',
+            }, { status: 502 });
         }
 
-        const fileBuffer = Buffer.from(await fileRes.arrayBuffer());
-        const contentType = fileRes.headers.get('content-type') || 'image/jpeg';
-        const fileName = doc.fileName || `${doc_type}.jpg`;
+        const fileBuffer = stored.buffer;
+        const contentType = stored.contentType;
+        const fileName = doc.fileName || stored.filename;
+
+        // OCR (Decentro + Tesseract) only understands image bytes. Dealers can
+        // upload KYC docs as PDFs, so rasterize page 1 → PNG before OCR.
+        // Falls through unchanged for image uploads.
+        let ocrBuffer = fileBuffer;
+        let ocrContentType = contentType;
+        let ocrFileName = fileName;
+        if (isPdf(contentType, doc.fileName || doc.fileUrl)) {
+            try {
+                ocrBuffer = await rasterizePdfFirstPage(fileBuffer);
+                ocrContentType = 'image/png';
+                ocrFileName = fileName.replace(/\.pdf($|\?)/i, '.png');
+                if (!/\.png$/i.test(ocrFileName)) ocrFileName = `${doc_type}.png`;
+            } catch (pdfErr) {
+                console.error(`[Admin OCR] PDF rasterization failed for doc ${doc.id} on lead ${leadId}:`, pdfErr);
+                return NextResponse.json({
+                    success: false,
+                    error: "Couldn't read the PDF document. Ask the dealer to re-upload a clearer PDF or an image.",
+                }, { status: 422 });
+            }
+        }
 
         let ocrData: Record<string, unknown> = {};
         let source: 'decentro' | 'tesseract' = 'decentro';
@@ -424,7 +437,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
         if (decentroType) {
             // Use Decentro OCR for supported types
-            const blob = new Blob([fileBuffer], { type: contentType });
+            const blob = new Blob([ocrBuffer], { type: ocrContentType });
             const side: 'FRONT' | 'BACK' | undefined =
                 doc_type === 'aadhaar_front' ? 'FRONT'
                 : doc_type === 'aadhaar_back' ? 'BACK'
@@ -432,7 +445,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             const decentroRes = await extractDocumentOcr(
                 decentroType,
                 blob,
-                fileName,
+                ocrFileName,
                 side,
                 undefined,
                 undefined,
@@ -488,7 +501,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
 
                 // Fallback to Tesseract — and salvage what we can from the raw
                 // text so the admin still gets autofill in degraded mode.
-                const text = await extractTextFromImageBuffer(fileBuffer);
+                const text = await extractTextFromImageBuffer(ocrBuffer);
                 ocrData = { rawText: text, source: 'tesseract_fallback' };
                 source = 'tesseract';
 
@@ -502,7 +515,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             }
         } else if (TESSERACT_TYPES.includes(doc_type)) {
             // Use Tesseract for bank docs and RC
-            const text = await extractTextFromImageBuffer(fileBuffer);
+            const text = await extractTextFromImageBuffer(ocrBuffer);
             source = 'tesseract';
 
             if (doc_type === 'rc_copy') {

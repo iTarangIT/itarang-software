@@ -47,8 +47,6 @@ const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
 export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercials, onSuccess }: Props) {
     const [eventType, setEventType] = useState<EventType>("quote_issue");
-    const [priceQuoted, setPriceQuoted] = useState(currentCommercials?.price_quoted ?? "");
-    const [finalPrice, setFinalPrice] = useState(currentCommercials?.final_price ?? "");
     const [paymentMethod, setPaymentMethod] = useState<"cash" | "finance" | "">(
         (currentCommercials?.payment_method as "cash" | "finance" | null) ?? "",
     );
@@ -158,13 +156,26 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
         );
     };
 
+    // Per-product price override (E-168). The product master pre-fills unit_price,
+    // but the rep can adjust it per deal; the sum of (price × qty) is the total.
+    const setLinePrice = (assetType: AssetType, productId: string, raw: string) => {
+        const next = raw.trim() === "" ? null : Number(raw);
+        setLines((prev) =>
+            prev.map((l) =>
+                l.asset_type === assetType && l.product_id === productId
+                    ? { ...l, unit_price: next != null && Number.isFinite(next) ? next : null }
+                    : l,
+            ),
+        );
+    };
+
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
         setSubmitting(true);
         try {
             const body: Record<string, unknown> = { event_type: eventType };
-            if (priceQuoted) body.price_quoted = Number(priceQuoted);
-            if (finalPrice) body.final_price = Number(finalPrice);
+            // Final price is the product roll-up — no separate manual field.
+            if (linesSubtotal > 0) body.final_price = linesSubtotal;
             if (paymentMethod) body.payment_method = paymentMethod;
             if (creditTerms) body.credit_terms = creditTerms;
             if (deliveryTerms) body.delivery_terms = deliveryTerms;
@@ -223,42 +234,7 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                         {EVENT_TYPES.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}
                     </select>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                    <div>
-                        <Label>Price quoted (₹)</Label>
-                        <Input type="number" value={priceQuoted ?? ""} onChange={(e) => setPriceQuoted(e.target.value)} className="mt-1" />
-                    </div>
-                    <div>
-                        <Label>Final price (₹) — gate for Mark Converted</Label>
-                        <Input type="number" value={finalPrice ?? ""} onChange={(e) => setFinalPrice(e.target.value)} className="mt-1" />
-                    </div>
-                    <div>
-                        <Label>Payment method</Label>
-                        <select
-                            className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
-                            value={paymentMethod}
-                            onChange={(e) => setPaymentMethod(e.target.value as "cash" | "finance" | "")}
-                        >
-                            <option value="">—</option>
-                            <option value="cash">Cash</option>
-                            <option value="finance">Finance</option>
-                        </select>
-                    </div>
-                    <div>
-                        <Label>Credit terms</Label>
-                        <Input value={creditTerms ?? ""} onChange={(e) => setCreditTerms(e.target.value)} placeholder="e.g. 30 days" className="mt-1" />
-                    </div>
-                    <div>
-                        <Label>Delivery terms</Label>
-                        <Input value={deliveryTerms ?? ""} onChange={(e) => setDeliveryTerms(e.target.value)} placeholder="e.g. 15 days FOB Faridabad" className="mt-1" />
-                    </div>
-                    <div>
-                        <Label>Warranty</Label>
-                        <Input value={warrantyTerms ?? ""} onChange={(e) => setWarrantyTerms(e.target.value)} placeholder="e.g. 24 months" className="mt-1" />
-                    </div>
-                </div>
-
-                {/* ── Products (E-128) ─────────────────────────────────── */}
+                {/* ── Products (E-128/E-168) — the card drives the deal total ─ */}
                 <div className="rounded-lg border border-gray-200 bg-gray-50/60 p-3 space-y-3">
                     <div className="flex items-center justify-between">
                         <Label className="!mb-0">Products</Label>
@@ -350,7 +326,21 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                                         ) : null}
                                     </span>
                                     <span className="shrink-0 tabular-nums text-gray-700">× {ln.quantity}</span>
-                                    <span className="w-24 shrink-0 text-right tabular-nums text-gray-900">
+                                    <div className="flex shrink-0 items-center gap-1">
+                                        <span className="text-xs text-gray-400">₹</span>
+                                        <Input
+                                            type="number"
+                                            min={0}
+                                            value={ln.unit_price ?? ""}
+                                            onChange={(e) =>
+                                                setLinePrice(ln.asset_type, ln.product_id, e.target.value)
+                                            }
+                                            placeholder="price"
+                                            aria-label={`Unit price for ${ln.product_name}`}
+                                            className="h-8 w-24 text-right"
+                                        />
+                                    </div>
+                                    <span className="w-24 shrink-0 text-right tabular-nums font-medium text-gray-900">
                                         {ln.unit_price != null
                                             ? inr(ln.unit_price * ln.quantity)
                                             : "—"}
@@ -367,12 +357,39 @@ export function UpdateCommercialsModal({ open, onClose, leadId, currentCommercia
                             ))}
                         </ul>
                     )}
-                    {linesSubtotal > 0 && (
-                        <div className="flex items-center justify-end gap-2 text-sm">
-                            <span className="text-gray-500">Priced subtotal</span>
-                            <span className="font-semibold tabular-nums text-gray-900">{inr(linesSubtotal)}</span>
+                    {lines.length > 0 && (
+                        <div className="flex items-center justify-end gap-2 border-t border-gray-200 pt-2 text-sm">
+                            <span className="text-gray-500">Total (final price)</span>
+                            <span className="text-base font-semibold tabular-nums text-gray-900">{inr(linesSubtotal)}</span>
                         </div>
                     )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <Label>Payment method</Label>
+                        <select
+                            className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm bg-white"
+                            value={paymentMethod}
+                            onChange={(e) => setPaymentMethod(e.target.value as "cash" | "finance" | "")}
+                        >
+                            <option value="">—</option>
+                            <option value="cash">Cash</option>
+                            <option value="finance">Finance</option>
+                        </select>
+                    </div>
+                    <div>
+                        <Label>Credit terms</Label>
+                        <Input value={creditTerms ?? ""} onChange={(e) => setCreditTerms(e.target.value)} placeholder="e.g. 30 days" className="mt-1" />
+                    </div>
+                    <div>
+                        <Label>Delivery terms</Label>
+                        <Input value={deliveryTerms ?? ""} onChange={(e) => setDeliveryTerms(e.target.value)} placeholder="e.g. 15 days FOB Faridabad" className="mt-1" />
+                    </div>
+                    <div>
+                        <Label>Warranty</Label>
+                        <Input value={warrantyTerms ?? ""} onChange={(e) => setWarrantyTerms(e.target.value)} placeholder="e.g. 24 months" className="mt-1" />
+                    </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

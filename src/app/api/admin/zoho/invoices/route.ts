@@ -107,6 +107,7 @@ export async function GET(req: NextRequest) {
           currency_code: zohoInvoices.currency_code,
           total: zohoInvoices.total,
           balance: zohoInvoices.balance,
+          payment_reference: zohoInvoices.payment_reference,
         })
         .from(zohoInvoices)
         .where(where)
@@ -122,6 +123,7 @@ export async function GET(req: NextRequest) {
         "Currency",
         "Total",
         "Balance",
+        "Transaction ID",
       ];
       const lines: string[] = [header.join(",")];
       for (const r of rows) {
@@ -135,6 +137,7 @@ export async function GET(req: NextRequest) {
             r.currency_code,
             r.total,
             r.balance,
+            r.payment_reference,
           ]
             .map(csvEscape)
             .join(","),

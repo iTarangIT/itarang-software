@@ -10,7 +10,7 @@ import { leadVisits } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 import { errorResponse, successResponse, withErrorHandler } from "@/lib/api-utils";
 import { writeTouchpoint } from "@/lib/touchpoints/write";
-import { canTransition, type LeadStatus } from "@/lib/lifecycle/transitions";
+import { type LeadStatus } from "@/lib/lifecycle/transitions";
 import { assertOwner } from "@/lib/leads/ownership";
 
 const MUTATE_ROLES = ["inside_sales_rep", "admin"];
@@ -27,7 +27,7 @@ const BodySchema = z.object({
     visit_type: z.enum(["Initial_Visit", "Demo", "Negotiation", "Closing"]),
     suggested_visit_date: z.string().date().nullable().optional(),
     dealer_preferred_time: z.string().max(200).nullable().optional(),
-    handoff_notes: z.string().min(1).max(5000),
+    handoff_notes: z.string().max(5000).optional().default(""),
     pending_items: z.array(z.string()).max(10).optional(),
     out_of_territory_reason: z.string().max(1000).nullable().optional(),
 });
@@ -41,24 +41,15 @@ export const POST = withErrorHandler(
 
         await assertOwner(id, user.id);
 
-        // BRD §0.8: if Suggested Visit Date is provided, Dealer's Preferred Time is required.
-        if (body.suggested_visit_date && !body.dealer_preferred_time) {
-            return errorResponse(
-                "Dealer's preferred time window is required when a visit date is set.",
-                400,
-            );
-        }
-
         const stateRows = await db.execute<{ lead_status: string | null }>(sql`
             SELECT lead_status FROM dealer_leads WHERE id = ${id} LIMIT 1
         `);
         const fromStatus = stateRows[0]?.lead_status as LeadStatus | null;
         if (!fromStatus) return errorResponse("Lead not found", 404);
 
-        const t = canTransition(fromStatus, "Transferred_to_ASM", {
-            actorRole: user.role,
-        });
-        if (!t.ok) return errorResponse(t.reason, 400);
+        // Lifecycle transition gate intentionally removed: a transfer to a chosen
+        // ASM is always allowed regardless of current lead_status. writeTouchpoint
+        // below still flips lead_status to Transferred_to_ASM + records history.
 
         await db.transaction(async (tx) => {
             await tx.execute(sql`

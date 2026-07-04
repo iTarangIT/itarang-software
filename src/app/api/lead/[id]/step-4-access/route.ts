@@ -7,6 +7,7 @@ import {
   productCategories,
   productSelections,
   products,
+  kycVerificationMetadata,
 } from "@/lib/db/schema";
 import { requireRole } from "@/lib/auth-utils";
 
@@ -68,8 +69,19 @@ export async function GET(
       );
     }
 
+    // final_decision lives on kyc_verification_metadata (NOT on leads). The
+    // admin "final decision" writes it there, and the Step-3 client already
+    // reads it to compute step3Cleared; fetch it so this gate honours the same
+    // signal instead of only leads.kyc_status.
+    const [kycMeta] = await db
+      .select({ final_decision: kycVerificationMetadata.final_decision })
+      .from(kycVerificationMetadata)
+      .where(eq(kycVerificationMetadata.lead_id, leadId))
+      .limit(1);
+
     const paymentMode = String(lead.payment_method || "").toLowerCase();
     const kycStatus = String(lead.kyc_status || "");
+    const finalDecision = String(kycMeta?.final_decision || "").toLowerCase();
     const customerName = lead.full_name || null;
     const isHot = String(lead.interest_level || "").toLowerCase() === "hot";
 
@@ -192,8 +204,13 @@ export async function GET(
       });
     }
 
-    // Finance path — requires KYC cleared
-    if (FINANCE_UNLOCKED.has(kycStatus)) {
+    // Finance path — requires KYC cleared, OR an admin final approval on
+    // record. The Step-3 page unlocks "Next: Product Selection" when
+    // final_decision === 'approved' even if leads.kyc_status hasn't propagated
+    // from the admin's approval (see borrower-consent step3Cleared). Honour the
+    // same signal here so the dealer is never shown a Next button that this
+    // gate then rejects with a dead-end error.
+    if (FINANCE_UNLOCKED.has(kycStatus) || finalDecision === "approved") {
       return NextResponse.json({
         success: true,
         data: {

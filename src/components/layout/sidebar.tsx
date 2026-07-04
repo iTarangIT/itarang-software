@@ -8,6 +8,7 @@ import {
   ShoppingCart,
   Users,
   FileText,
+  Calculator,
   Phone,
   PieChart,
   Package,
@@ -32,9 +33,12 @@ import {
   BarChart3,
   GitMerge,
   UserMinus,
+  History,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { useUIStore } from "@/store/uiStore";
 
 // Items appended to every role's sidebar — universal actions any logged-in
 // user can take (currently: submit a business expense → CEO approves).
@@ -141,10 +145,22 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/nbfc/approvals",
         },
         {
+          id: "financing-offer-approvals",
+          label: "Financing Approvals",
+          icon: ClipboardCheck,
+          href: "/admin/nbfc/financing-offers/approvals",
+        },
+        {
           id: "nbfc-directory",
           label: "NBFC Directory",
           icon: Building,
           href: "/admin/nbfc",
+        },
+        {
+          id: "loan-products",
+          label: "Loan Products",
+          icon: Package,
+          href: "/admin/loan-products",
         },
         {
           id: "nbfc-ecosystem",
@@ -273,6 +289,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/admin/nbfc",
         },
         {
+          id: "loan-products",
+          label: "Loan Products",
+          icon: Package,
+          href: "/admin/loan-products",
+        },
+        {
           id: "nbfc-my-drafts",
           label: "My Submitted Drafts",
           icon: FileText,
@@ -342,6 +364,34 @@ const roleNavigation: Record<string, any[]> = {
           label: "Transfer",
           icon: ShoppingCart,
           href: "/admin/inventory/transfer",
+        },
+      ],
+    },
+    {
+      section: "EXPENSES",
+      items: [
+        {
+          id: "sh-ai-expense-tracker",
+          label: "AI Expense Tracker",
+          icon: Receipt,
+          href: "/admin/expense-tracker",
+        },
+      ],
+    },
+    {
+      section: "CALCULATOR",
+      items: [
+        {
+          id: "sh-calculator",
+          label: "Loan Calculator",
+          icon: Calculator,
+          href: "/admin/calculator",
+        },
+        {
+          id: "sh-calculator-history",
+          label: "Search History",
+          icon: History,
+          href: "/admin/calculator/search-history",
         },
       ],
     },
@@ -544,6 +594,34 @@ const roleNavigation: Record<string, any[]> = {
           label: "Transfer",
           icon: ShoppingCart,
           href: "/admin/inventory/transfer",
+        },
+      ],
+    },
+    {
+      section: "EXPENSES",
+      items: [
+        {
+          id: "admin-ai-expense-tracker",
+          label: "AI Expense Tracker",
+          icon: Receipt,
+          href: "/admin/expense-tracker",
+        },
+      ],
+    },
+    {
+      section: "CALCULATOR",
+      items: [
+        {
+          id: "admin-calculator",
+          label: "Loan Calculator",
+          icon: Calculator,
+          href: "/admin/calculator",
+        },
+        {
+          id: "admin-calculator-history",
+          label: "Search History",
+          icon: History,
+          href: "/admin/calculator/search-history",
         },
       ],
     },
@@ -793,6 +871,12 @@ const roleNavigation: Record<string, any[]> = {
           href: "/dealer-portal/leads/drafts",
         },
         {
+          id: "calculator",
+          label: "Calculator",
+          icon: Calculator,
+          href: "/dealer-portal/calculator",
+        },
+        {
           id: "loans",
           label: "Loan Processing",
           icon: Landmark,
@@ -864,9 +948,143 @@ const roleNavigation: Record<string, any[]> = {
   ],
 };
 
+// Shared inner content rendered by BOTH the desktop sidebar and the mobile
+// drawer. Receives the already-computed (role-aware, finance-gated, badged)
+// menuItems so all that logic stays in Sidebar(). `onNavigate` lets the drawer
+// close itself when a link is tapped.
+function SidebarNav({
+  menuItems,
+  pathname,
+  user,
+  loading,
+  inferredRole,
+  onNavigate,
+}: {
+  menuItems: any[];
+  pathname: string;
+  user: ReturnType<typeof useAuth>["user"];
+  loading: boolean;
+  inferredRole: string;
+  onNavigate?: () => void;
+}) {
+  return (
+    <>
+      {/* Logo lockup */}
+      <div className="px-5 h-[68px] flex items-center border-b border-white/[0.07]">
+        <img
+          src="/itarang-logo-white.png"
+          alt="iTarang"
+          className="h-7 w-auto object-contain select-none"
+          draggable={false}
+        />
+      </div>
+
+      <div className="flex-1 overflow-y-auto py-6 space-y-7">
+        {menuItems.map((group: any) => (
+          <div key={group.section}>
+            <h3 className="sidebar-section-label px-5 mb-2">
+              {group.section}
+            </h3>
+            <div>
+              {group.items.map((item: any) => {
+                // active = exact match OR active for `/admin/nbfc?owner=me` style hrefs
+                const itemPath = item.href.split("?")[0];
+                const isActive =
+                  pathname === itemPath ||
+                  (itemPath !== "/" && pathname.startsWith(itemPath + "/"));
+                return (
+                  <Link
+                    key={item.id}
+                    href={item.href}
+                    onClick={onNavigate}
+                    data-testid={`nav-${item.id}`}
+                    className={cn(
+                      isActive ? "sidebar-nav-item-active" : "sidebar-nav-item",
+                    )}
+                  >
+                    <item.icon
+                      className={cn(
+                        "w-[18px] h-[18px] shrink-0",
+                        isActive ? "text-white" : "text-white/55",
+                      )}
+                      strokeWidth={1.75}
+                    />
+                    <span className="truncate flex-1">{item.label}</span>
+                    {item.badge ? (
+                      <span
+                        className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold"
+                        style={{
+                          background: "var(--color-brand-sky)",
+                          color: "#fff",
+                        }}
+                      >
+                        {item.badge}
+                      </span>
+                    ) : null}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Profile mini-card — NOTE: `displayRole` is sourced from users.role
+          via /api/user/profile. The known "dealer for sales_head" data
+          glitch is upstream of the UI; see docs/nbfc/NOTES.md. */}
+      <div className="px-4 py-4 border-t border-white/[0.07]">
+        <div className="flex items-center gap-3">
+          {loading && !user ? (
+            <>
+              <div className="w-9 h-9 bg-white/10 rounded-full animate-pulse" />
+              <div className="flex-1 min-w-0 space-y-2">
+                <div className="h-3.5 w-24 bg-white/10 rounded animate-pulse" />
+                <div className="h-3 w-16 bg-white/10 rounded animate-pulse" />
+              </div>
+            </>
+          ) : (
+            <>
+              <div
+                className="w-9 h-9 rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm"
+                style={{ background: "var(--gradient-primary)" }}
+              >
+                {(user?.name?.[0] || user?.email?.[0] || "U").toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[13px] font-semibold text-white truncate">
+                  {user?.name || "User"}
+                </p>
+                <span
+                  className="inline-block mt-1 px-2 py-0.5 rounded text-[9px] font-bold tracking-[0.14em] uppercase"
+                  style={{
+                    background: "rgba(19,143,198,0.18)",
+                    color: "#9fcfe8",
+                  }}
+                >
+                  {user?.role || inferredRole}
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 export function Sidebar() {
   const pathname = usePathname();
   const { user, loading } = useAuth();
+  // Mobile drawer open/close (shared with the header hamburger). Only wired up
+  // for the dealer portal — see the `isDealerPortal` gate in the render below.
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
+  const closeSidebar = useUIStore((s) => s.closeSidebar);
+
+  // Belt-and-suspenders: close the drawer on any route change (link taps already
+  // call closeSidebar via onNavigate, but this also covers back/forward nav).
+  useEffect(() => {
+    closeSidebar();
+  }, [pathname, closeSidebar]);
 
   // Derive role from the current pathname so the sidebar renders immediately
   // even before the auth context resolves. This eliminates the "blank sidebar
@@ -960,110 +1178,75 @@ export function Sidebar() {
     }));
   }
 
+  // The mobile drawer shows on the dealer portal and on the shared /expenses
+  // pages (a common route reachable by any role — without this the user lands
+  // there on mobile with no way to open navigation). The desktop sidebar is
+  // unchanged for every role.
+  const showMobileDrawer =
+    pathname.startsWith("/dealer-portal") || pathname.startsWith("/expenses");
+
   // BRD §6.B sidebar — solid #02314e navy, 9px ALL CAPS section labels at
   // rgba(255,255,255,0.30), 13px DM Sans Medium nav items, 3px transparent
   // left border, active = `rgba(19,143,198,0.15)` bg + `#138fc6` left border
   // + white text. Width pinned at w-64 to keep LayoutWrapper margin (md:ml-64).
   return (
-    <div className="sidebar-shell w-64 h-screen flex-col fixed left-0 top-0 z-10 hidden md:flex">
-      {/* Logo lockup */}
-      <div className="px-5 h-[68px] flex items-center border-b border-white/[0.07]">
-        <img
-          src="/itarang-logo-white.png"
-          alt="iTarang"
-          className="h-7 w-auto object-contain select-none"
-          draggable={false}
+    <>
+      {/* Desktop sidebar — fixed 256px, visible from md up. Unchanged output. */}
+      <div className="sidebar-shell w-64 h-screen flex-col fixed left-0 top-0 z-10 hidden md:flex">
+        <SidebarNav
+          menuItems={menuItems}
+          pathname={pathname}
+          user={user}
+          loading={loading}
+          inferredRole={inferredRole}
         />
       </div>
 
-      <div className="flex-1 overflow-y-auto py-6 space-y-7">
-        {menuItems.map((group: any) => (
-          <div key={group.section}>
-            <h3 className="sidebar-section-label px-5 mb-2">
-              {group.section}
-            </h3>
-            <div>
-              {group.items.map((item: any) => {
-                // active = exact match OR active for `/admin/nbfc?owner=me` style hrefs
-                const itemPath = item.href.split("?")[0];
-                const isActive =
-                  pathname === itemPath ||
-                  (itemPath !== "/" && pathname.startsWith(itemPath + "/"));
-                return (
-                  <Link
-                    key={item.id}
-                    href={item.href}
-                    data-testid={`nav-${item.id}`}
-                    className={cn(
-                      isActive ? "sidebar-nav-item-active" : "sidebar-nav-item",
-                    )}
-                  >
-                    <item.icon
-                      className={cn(
-                        "w-[18px] h-[18px] shrink-0",
-                        isActive ? "text-white" : "text-white/55",
-                      )}
-                      strokeWidth={1.75}
-                    />
-                    <span className="truncate flex-1">{item.label}</span>
-                    {item.badge ? (
-                      <span
-                        className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold"
-                        style={{
-                          background: "var(--color-brand-sky)",
-                          color: "#fff",
-                        }}
-                      >
-                        {item.badge}
-                      </span>
-                    ) : null}
-                  </Link>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Profile mini-card — NOTE: `displayRole` is sourced from users.role
-          via /api/user/profile. The known "dealer for sales_head" data
-          glitch is upstream of the UI; see docs/nbfc/NOTES.md. */}
-      <div className="px-4 py-4 border-t border-white/[0.07]">
-        <div className="flex items-center gap-3">
-          {loading && !user ? (
-            <>
-              <div className="w-9 h-9 bg-white/10 rounded-full animate-pulse" />
-              <div className="flex-1 min-w-0 space-y-2">
-                <div className="h-3.5 w-24 bg-white/10 rounded animate-pulse" />
-                <div className="h-3 w-16 bg-white/10 rounded animate-pulse" />
-              </div>
-            </>
-          ) : (
-            <>
-              <div
-                className="w-9 h-9 rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm"
-                style={{ background: "var(--gradient-primary)" }}
-              >
-                {(user?.name?.[0] || user?.email?.[0] || "U").toUpperCase()}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-[13px] font-semibold text-white truncate">
-                  {user?.name || "User"}
-                </p>
-                <span
-                  className="inline-block mt-1 px-2 py-0.5 rounded text-[9px] font-bold tracking-[0.14em] uppercase"
-                  style={{
-                    background: "rgba(19,143,198,0.18)",
-                    color: "#9fcfe8",
-                  }}
-                >
-                  {user?.role || inferredRole}
-                </span>
-              </div>
-            </>
-          )}
+      {/* Mobile drawer — phone-only (md:hidden), shown on dealer portal + shared
+          /expenses pages. Mirrors the NbfcPortalSidebar pattern: backdrop + left
+          slide-in panel, driven by the shared uiStore and the header hamburger. */}
+      {showMobileDrawer && (
+        <div
+          className={`md:hidden fixed inset-0 z-50 ${
+            sidebarOpen ? "" : "pointer-events-none"
+          }`}
+          aria-hidden={!sidebarOpen}
+        >
+          {/* Backdrop */}
+          <div
+            onClick={closeSidebar}
+            className={`absolute inset-0 bg-black/50 transition-opacity duration-200 ${
+              sidebarOpen ? "opacity-100" : "opacity-0"
+            }`}
+          />
+          {/* Panel */}
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-label="Dealer portal navigation"
+            className={`sidebar-shell absolute left-0 top-0 h-full w-72 max-w-[85vw] flex flex-col transition-transform duration-200 ${
+              sidebarOpen ? "translate-x-0" : "-translate-x-full"
+            }`}
+          >
+            <button
+              type="button"
+              onClick={closeSidebar}
+              aria-label="Close navigation"
+              className="absolute right-3 top-4 z-10 p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <SidebarNav
+              menuItems={menuItems}
+              pathname={pathname}
+              user={user}
+              loading={loading}
+              inferredRole={inferredRole}
+              onNavigate={closeSidebar}
+            />
+          </aside>
         </div>
-      </div>
-    </div>
+      )}
+    </>
   );
 }

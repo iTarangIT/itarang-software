@@ -26,6 +26,7 @@
 import { runDialerPollOnce } from "@/lib/ai/pollCallStatus";
 import { sweepStalledCallingLeads } from "@/lib/queue/campaignTracker";
 import { advanceCampaign } from "@/lib/queue/advanceCampaign";
+import { syncInvoicesSinceLastRun } from "@/lib/zoho/sync";
 import { db } from "@/lib/db";
 import { dialerCampaigns } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -128,4 +129,71 @@ export async function startDialerTickers() {
   console.log(
     "[instrumentation] dialer-poll (30s) + dialer-watchdog (2m) started in-process",
   );
+}
+
+// Zoho Invoice sync — mirrors /api/cron/zoho-sync (vercel.json, hourly at :05).
+// Vercel crons don't fire on Hostinger PM2 (see docs/DEPLOY_RUNBOOK.md), so the
+// zoho_invoices table never populates there and the CEO Sales Invoices page
+// (/ceo/invoices) shows zeros. This in-process ticker keeps the table fresh in
+// the long-lived PM2 / `npm run start` process — full re-pull + upsert keyed on
+// zoho_invoice_id. On Vercel the cron entry owns this, so we short-circuit.
+export async function startZohoSyncTicker() {
+  // Skip on Vercel — let the cron handle it.
+  if (process.env.VERCEL === "1") return;
+
+  // Explicit opt-out (e.g. inside the BullMQ worker, which also boots
+  // instrumentation, to avoid two processes full-pulling in parallel).
+  if (process.env.ENABLE_ZOHO_SYNC === "0") return;
+
+  // No credentials → nothing to sync. Stay quiet rather than logging an
+  // auth error every hour on environments that don't use Zoho.
+  if (
+    !process.env.ZOHO_CLIENT_ID ||
+    !process.env.ZOHO_CLIENT_SECRET ||
+    !process.env.ZOHO_REFRESH_TOKEN ||
+    !process.env.ZOHO_ORGANIZATION_ID
+  ) {
+    console.log(
+      "[instrumentation:zoho-sync] Zoho credentials not configured — ticker disabled",
+    );
+    return;
+  }
+
+  const SYNC_INTERVAL_MS = 60 * 60_000; // hourly, matches vercel.json
+
+  let inFlight = false;
+  const syncTick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const r = await syncInvoicesSinceLastRun();
+      console.log(
+        `[instrumentation:zoho-sync] status=${r.status} upserted=${r.upserted} durationMs=${r.durationMs}`,
+      );
+      if (r.errors.length) {
+        console.error(
+          `[instrumentation:zoho-sync] partial run — ${r.errors.length} error(s): ${r.errors.join(" | ")}`,
+        );
+      }
+    } catch (err) {
+      // syncInvoicesSinceLastRun already records the failure to
+      // zoho_sync_state.last_error; just surface it in the logs.
+      console.error(
+        "[instrumentation:zoho-sync] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Kick off shortly after boot so a freshly-deployed server populates the
+  // table without waiting a full hour. Staggered behind the dialer kickoff.
+  const kickoff = setTimeout(syncTick, 20_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(syncTick, SYNC_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] zoho-sync (1h) started in-process");
 }

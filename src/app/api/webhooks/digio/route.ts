@@ -10,8 +10,21 @@ import {
 } from "@/lib/db/schema";
 import { and, eq } from "drizzle-orm";
 import { fetchAndStoreSignedConsent } from "@/lib/digio/fetch-signed-consent";
+import {
+  aadhaarMismatchMessage,
+  checkAadhaarMatch,
+  getExpectedConsentAadhaar,
+} from "@/lib/digio/aadhaar-match";
+import {
+  getConsentSignerIdentity,
+  normalizeDigioDoc,
+} from "@/lib/digio/signer-aadhaar";
 import { ensureAdminKycQueueEntry } from "@/lib/kyc/admin-workflow";
 import { fetchSignedLspPdfAndAuditTrail } from "@/lib/queue/jobs/fetchSignedLspPdfJob";
+import {
+  pushConsentFailureToWhatsApp,
+  pushSignedConsentToWhatsApp,
+} from "@/lib/whatsapp/orchestrator";
 
 /**
  * Map a raw Digio webhook status (case-insensitive) onto the shared 7-state
@@ -278,8 +291,14 @@ export async function POST(req: NextRequest) {
 
     console.log("[DigiO Webhook] Received:", JSON.stringify(body, null, 2));
 
-    const documentId = body.digio_doc_id || body.document_id || body.id;
-    const rawStatus = String(body.status || body.agreement_status || "").toLowerCase();
+    // Normalize across the documented prod envelope (payload.document.…) and the
+    // flat sandbox/legacy shape, so we find the document id + status regardless.
+    const normalized = normalizeDigioDoc(body);
+    const documentId =
+      normalized.documentId || body.digio_doc_id || body.document_id || body.id;
+    const rawStatus =
+      normalized.agreementStatus ||
+      String(body.status || body.agreement_status || "").toLowerCase();
 
     if (!documentId) {
       console.warn("[DigiO Webhook] No document_id in payload");
@@ -328,11 +347,68 @@ export async function POST(req: NextRequest) {
         updated_at: now,
       };
 
-      // Extract signer details from webhook payload
-      const signingParties = body.signing_parties || [];
-      const signer = signingParties[0];
-      if (signer?.aadhaar_masked || signer?.signer_aadhaar) {
-        updates.signer_aadhaar_masked = signer.aadhaar_masked || signer.signer_aadhaar;
+      // Extract the SIGNER'S Aadhaar from where Digio actually puts it:
+      // signing_parties[].pki_signature_details.aadhaar_suffix (+ real name &
+      // name_validation_score). See src/lib/digio/signer-aadhaar.ts.
+      const signerIdentity = getConsentSignerIdentity(body);
+      const signerAadhaarSuffix = signerIdentity.suffix;
+      if (signerAadhaarSuffix) {
+        updates.signer_aadhaar_masked = signerAadhaarSuffix;
+      }
+      if (signerIdentity.nameScore !== null) {
+        updates.signer_name_match_score = signerIdentity.nameScore;
+      }
+
+      // Integrity gate: the Aadhaar that SIGNED must match the captured Aadhaar
+      // (primary → customer's OCR Aadhaar, co-borrower → co-borrower's Aadhaar).
+      // Digio happily signs with any Aadhaar, so a consent signed with a
+      // different person's Aadhaar is rejected (hard block → force re-sign).
+      // We never block when we can't compare (missing OCR / suffix).
+      {
+        const expected = await getExpectedConsentAadhaar(
+          record.lead_id,
+          record.consent_for,
+        );
+        const check = checkAadhaarMatch(expected, signerAadhaarSuffix);
+        if (check.comparable && !check.match) {
+          const retryCount = (record.esign_retry_count || 0) + 1;
+          const newStatus = retryCount >= 3 ? "esign_blocked" : "esign_failed";
+          const reason = aadhaarMismatchMessage(check);
+          console.warn("[DigiO Webhook] Aadhaar mismatch — rejecting consent", {
+            documentId,
+            leadId: record.lead_id,
+            consentFor: record.consent_for,
+            signerLast4: check.signerLast4,
+            expectedLast4: check.expectedLast4,
+          });
+          await db
+            .update(consentRecords)
+            .set({
+              consent_status: newStatus,
+              signer_aadhaar_masked: signerAadhaarSuffix,
+              signer_name_match_score: signerIdentity.nameScore,
+              esign_retry_count: retryCount,
+              esign_error_message: reason,
+              updated_at: now,
+            })
+            .where(eq(consentRecords.id, record.id));
+          await syncApplicantConsentStatus(
+            record.consent_for,
+            record.lead_id,
+            newStatus,
+            now,
+          );
+          // Tell the WhatsApp dealer console (if parked here) it failed, so it
+          // doesn't sit silently — offer re-sign. Non-fatal.
+          if (record.consent_for === "primary") {
+            try {
+              await pushConsentFailureToWhatsApp(record.lead_id, reason);
+            } catch (e) {
+              console.error("[DigiO Webhook] WhatsApp failure push failed:", e);
+            }
+          }
+          return NextResponse.json({ received: true });
+        }
       }
 
       // Download signed PDF from DigiO and store in Supabase
@@ -357,20 +433,44 @@ export async function POST(req: NextRequest) {
       // — admin still needs to verify the consent before the dealer can submit.
       await ensureAdminKycQueueEntry(record.lead_id);
 
+      // If this lead was created over WhatsApp and the dealer is parked at the
+      // consent step, push "✅ Customer signed" + the signed PDF into the chat.
+      // No-op for web-portal leads. Non-fatal — never block the webhook ack.
+      if (record.consent_for === "primary") {
+        try {
+          await pushSignedConsentToWhatsApp(
+            record.lead_id,
+            updates.signed_consent_url ?? record.signed_consent_url ?? null,
+          );
+        } catch (e) {
+          console.error("[DigiO Webhook] WhatsApp push failed:", e);
+        }
+      }
+
     } else if (failedStatuses.includes(rawStatus)) {
       console.log("[DigiO Webhook] Document failed:", documentId, rawStatus);
 
       const retryCount = (record.esign_retry_count || 0) + 1;
       const newStatus = retryCount >= 3 ? "esign_blocked" : "esign_failed";
+      const failReason =
+        body.failure_reason || body.message || "eSign failed";
 
       await db.update(consentRecords).set({
         consent_status: newStatus,
         esign_retry_count: retryCount,
-        esign_error_message: body.failure_reason || body.message || "eSign failed",
+        esign_error_message: failReason,
         updated_at: now,
       }).where(eq(consentRecords.id, record.id));
 
       await syncApplicantConsentStatus(record.consent_for, record.lead_id, newStatus, now);
+
+      if (record.consent_for === "primary") {
+        try {
+          await pushConsentFailureToWhatsApp(record.lead_id, failReason);
+        } catch (e) {
+          console.error("[DigiO Webhook] WhatsApp failure push failed:", e);
+        }
+      }
 
     } else if (expiredStatuses.includes(rawStatus)) {
       console.log("[DigiO Webhook] Document expired:", documentId);
@@ -381,6 +481,17 @@ export async function POST(req: NextRequest) {
       }).where(eq(consentRecords.id, record.id));
 
       await syncApplicantConsentStatus(record.consent_for, record.lead_id, "expired", now);
+
+      if (record.consent_for === "primary") {
+        try {
+          await pushConsentFailureToWhatsApp(
+            record.lead_id,
+            "Your consent e-sign link expired before it was signed.",
+          );
+        } catch (e) {
+          console.error("[DigiO Webhook] WhatsApp expiry push failed:", e);
+        }
+      }
 
     } else {
       console.log("[DigiO Webhook] Unhandled status:", rawStatus, "for document:", documentId);

@@ -199,6 +199,10 @@ export async function GET(
             ? `${lead.city}${lead.state ? ", " + lead.state : ""}`
             : lead.shop_address || "",
           currentStatus: lead.status || lead.kyc_status || "",
+          // E-174 — origin channel ('whatsapp' for the WhatsApp dealer console).
+          // The admin gate unlocks documents for WhatsApp leads (no coupon step)
+          // once the consent is admin-verified.
+          sourceChannel: lead.source_channel || null,
         },
         personalDetails: personal
           ? {
@@ -302,6 +306,12 @@ export async function GET(
             verifiedAt: c.verified_at,
             adminViewedBy: c.admin_viewed_by,
             adminViewedAt: c.admin_viewed_at,
+            // Surface which Aadhaar actually signed, Digio's name-match score, and
+            // any mismatch reason so the admin can see/act on a wrong-Aadhaar sign.
+            signerAadhaarMasked: c.signer_aadhaar_masked,
+            signerNameMatchScore: c.signer_name_match_score,
+            esignErrorMessage: c.esign_error_message,
+            deliveryChannel: c.consent_delivery_channel,
           };
         })),
         metadata: metadata

@@ -9,7 +9,12 @@ import {
     successResponse,
     withErrorHandler,
 } from "@/lib/api-utils";
-import { MAX_UPLOAD_ROWS, parseCsv, validateUpload } from "@/lib/admin/csvUpload";
+import {
+    MAX_UPLOAD_ROWS,
+    parseCsv,
+    parseHeaders,
+    validateUpload,
+} from "@/lib/admin/csvUpload";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +24,7 @@ const BodySchema = z.object({
 });
 
 export const POST = withErrorHandler(async (req: Request) => {
-    await requireRole(["admin", "sales_head"]);
+    await requireRole(["admin", "sales_head", "sales_insight", "inside_sales_rep"]);
     const b = BodySchema.parse(await req.json());
 
     const parsed = parseCsv(b.csv_text);
@@ -33,6 +38,6 @@ export const POST = withErrorHandler(async (req: Request) => {
         );
     }
 
-    const result = await validateUpload(parsed);
+    const result = await validateUpload(parsed, parseHeaders(b.csv_text));
     return successResponse(result);
 });

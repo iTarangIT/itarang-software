@@ -7,8 +7,13 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
-import { Plus, X, ChevronDown, Check } from "lucide-react";
-import { State, City } from "country-state-city";
+import { Plus, X, ChevronDown, Check, Upload, AlertTriangle } from "lucide-react";
+import type { IState } from "country-state-city";
+import { toast } from "sonner";
+import {
+  useIndiaLocationData,
+  type IndiaLocationData,
+} from "@/lib/location/useIndiaLocationData";
 
 export type LocationPair = { state: string; city: string };
 
@@ -26,12 +31,20 @@ type Props = {
   onChange: (next: LocationPair[]) => void;
 };
 
-const COUNTRY_ISO = "IN";
+// Case- and whitespace-insensitive key used to match uploaded names against the
+// country-state-city library.
+const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 
-function buildRowsFromValue(value: LocationPair[]): Row[] {
+type UploadReport = {
+  addedCities: number;
+  addedStates: number;
+  unmatchedStates: string[];
+  unmatchedCities: string[];
+};
+
+function buildRowsFromValue(value: LocationPair[], states: IState[]): Row[] {
   // Group {state, city} pairs back into per-state rows. Preserves the order
   // that states first appeared in the incoming array.
-  const states = State.getStatesOfCountry(COUNTRY_ISO);
   const nameToIso = new Map(states.map((s) => [s.name, s.isoCode]));
   const grouped = new Map<string, Row>();
   for (const pair of value) {
@@ -62,16 +75,27 @@ function flattenRows(rows: Row[]): LocationPair[] {
 }
 
 export default function StateCityPicker({ value, onChange }: Props) {
-  const [rows, setRows] = useState<Row[]>(() => buildRowsFromValue(value));
+  // Location data loads lazily (~MB-scale dataset kept out of the page
+  // bundle) — rows are built once it lands, comboboxes disable until then.
+  const locations = useIndiaLocationData();
+  const [rows, setRows] = useState<Row[]>([]);
+  const [uploadReport, setUploadReport] = useState<UploadReport | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Re-sync if parent resets value (e.g. form reset). Cheap deep-equal by JSON.
-  const lastEmittedRef = useRef<string>(JSON.stringify(value));
+  // Build rows on data arrival, and re-sync if parent resets value (e.g. form
+  // reset). Cheap deep-equal by JSON. Starts empty ("" ≠ any value) so the
+  // first pass after load always builds.
+  const lastEmittedRef = useRef<string>("");
   useEffect(() => {
+    if (!locations.loaded) return;
     const incoming = JSON.stringify(value);
     if (incoming === lastEmittedRef.current) return;
     lastEmittedRef.current = incoming;
-    setRows(buildRowsFromValue(value));
-  }, [value]);
+    setRows(buildRowsFromValue(value, locations.states));
+    // A parent reset (e.g. "Create another") clears the picker — drop any
+    // stale upload report with it.
+    setUploadReport(null);
+  }, [value, locations.loaded, locations.states]);
 
   function emit(nextRows: Row[]) {
     setRows(nextRows);
@@ -111,8 +135,260 @@ export default function StateCityPicker({ value, onChange }: Props) {
     emit(rows.map((r) => (r.rowId === rowId ? { ...r, cities } : r)));
   }
 
+  // ── Bulk upload (Excel/CSV) ──────────────────────────────────────────────
+  // Validates each {state, city} against country-state-city. Matched rows are
+  // merged into the current selection (stored under the library's canonical
+  // spelling); anything not found is surfaced in the unmatched alert panel.
+  function processPairs(pairs: { state: string; city: string }[]) {
+    const stateByNorm = new Map<string, { iso: string; name: string }>();
+    for (const s of locations.states) {
+      stateByNorm.set(norm(s.name), { iso: s.isoCode, name: s.name });
+    }
+
+    // iso → (normalised city name → canonical city name), filled lazily.
+    const cityCache = new Map<string, Map<string, string>>();
+    function citiesFor(iso: string): Map<string, string> {
+      let m = cityCache.get(iso);
+      if (!m) {
+        m = new Map();
+        for (const c of locations.getCitiesOfState(iso)) {
+          const k = norm(c.name);
+          if (!m.has(k)) m.set(k, c.name);
+        }
+        cityCache.set(iso, m);
+      }
+      return m;
+    }
+
+    const unmatchedStates = new Set<string>();
+    const unmatchedCities: string[] = [];
+    // canonical state name → { iso, set of canonical city names }
+    const matched = new Map<string, { iso: string; cities: Set<string> }>();
+    const ensureState = (iso: string, name: string) => {
+      let e = matched.get(name);
+      if (!e) {
+        e = { iso, cities: new Set() };
+        matched.set(name, e);
+      }
+      return e;
+    };
+
+    for (const p of pairs) {
+      if (p.state === "") continue;
+      const st = stateByNorm.get(norm(p.state));
+      if (!st) {
+        unmatchedStates.add(p.state);
+        continue;
+      }
+      if (p.city === "") {
+        // Valid state, no city given — ensure the state row exists so the
+        // admin can fill it in manually. Doesn't count as a city.
+        ensureState(st.iso, st.name);
+        continue;
+      }
+      const canonCity = citiesFor(st.iso).get(norm(p.city));
+      if (!canonCity) {
+        unmatchedCities.push(`${p.city} — ${st.name}`);
+        continue;
+      }
+      ensureState(st.iso, st.name).cities.add(canonCity);
+    }
+
+    // Merge into current rows (decision: never wipe existing picks).
+    const nextRows: Row[] = rows.map((r) => ({ ...r, cities: [...r.cities] }));
+    let addedCities = 0;
+    const addedStateNames = new Set<string>();
+    for (const [stateName, info] of matched) {
+      let row = nextRows.find((r) => r.stateName === stateName);
+      if (!row) {
+        row = {
+          rowId: `upload-${norm(stateName)}-${nextRows.length}`,
+          stateIso: info.iso,
+          stateName,
+          cities: [],
+        };
+        nextRows.push(row);
+        addedStateNames.add(stateName);
+      }
+      for (const c of info.cities) {
+        if (!row.cities.includes(c)) {
+          row.cities.push(c);
+          addedCities++;
+        }
+      }
+    }
+
+    emit(nextRows);
+
+    const unmatchedStatesArr = Array.from(unmatchedStates);
+    const skipped = unmatchedStatesArr.length + unmatchedCities.length;
+    setUploadReport({
+      addedCities,
+      addedStates: addedStateNames.size,
+      unmatchedStates: unmatchedStatesArr,
+      unmatchedCities,
+    });
+
+    if (skipped > 0) {
+      toast.warning(
+        `Added ${addedCities} cit${addedCities === 1 ? "y" : "ies"}. ${skipped} entr${
+          skipped === 1 ? "y" : "ies"
+        } couldn't be matched — see details below.`,
+      );
+    } else if (addedCities > 0) {
+      toast.success(
+        `Added ${addedCities} cit${addedCities === 1 ? "y" : "ies"} from your file.`,
+      );
+    } else {
+      toast.message("Nothing new to add — those locations were already selected.");
+    }
+  }
+
+  async function handleFile(file: File) {
+    if (!locations.loaded) {
+      toast.error("Location data is still loading — try again in a moment.");
+      return;
+    }
+    try {
+      const XLSX = await import("xlsx");
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
+      const sheetName = wb.SheetNames[0];
+      const ws = sheetName ? wb.Sheets[sheetName] : undefined;
+      if (!ws) {
+        toast.error("That file has no readable sheet.");
+        return;
+      }
+      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, {
+        defval: "",
+      });
+      if (json.length === 0) {
+        toast.error("The sheet is empty.");
+        return;
+      }
+      // Header detection: prefer columns literally named State / City; else
+      // fall back to the first two columns in order.
+      const keys = Object.keys(json[0] ?? {});
+      const stateKey = keys.find((k) => /^\s*state\s*$/i.test(k)) ?? keys[0];
+      const cityKey = keys.find((k) => /^\s*city\s*$/i.test(k)) ?? keys[1];
+      const pairs = json
+        .map((r) => ({
+          state: String(r[stateKey] ?? "").trim(),
+          city: cityKey ? String(r[cityKey] ?? "").trim() : "",
+        }))
+        .filter((p) => p.state !== "" || p.city !== "");
+      if (pairs.length === 0) {
+        toast.error("No State/City rows found in the file.");
+        return;
+      }
+      processPairs(pairs);
+    } catch {
+      toast.error("Couldn't read that file. Use a .xlsx, .xls, or .csv file.");
+    }
+  }
+
+  async function downloadTemplate() {
+    try {
+      const XLSX = await import("xlsx");
+      const ws = XLSX.utils.aoa_to_sheet([
+        ["State", "City"],
+        ["Uttar Pradesh", "Agra"],
+        ["Uttar Pradesh", "Kanpur"],
+        ["Bihar", "Patna"],
+      ]);
+      ws["!cols"] = [{ wch: 24 }, { wch: 24 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Geography");
+      XLSX.writeFile(wb, "geography_template.xlsx");
+    } catch {
+      toast.error("Couldn't generate the template.");
+    }
+  }
+
   return (
     <div className="space-y-3">
+      {/* Bulk-upload toolbar — populate the picker from an Excel/CSV sheet. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) handleFile(f);
+            // Reset so re-selecting the same file fires onChange again.
+            e.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="inline-flex items-center gap-1.5 px-3 h-9 rounded-lg border border-[color:var(--color-border)] bg-white text-sm font-semibold text-[color:var(--color-brand-navy)] hover:bg-[color:var(--color-bg)] transition-colors"
+        >
+          <Upload className="w-4 h-4" />
+          Upload Excel/CSV
+        </button>
+        <button
+          type="button"
+          onClick={downloadTemplate}
+          className="text-sm font-semibold text-[color:var(--color-brand-sky)] hover:text-[color:var(--color-brand-navy)] transition-colors"
+        >
+          Download template
+        </button>
+        <span className="text-xs text-[color:var(--color-ink-muted)]">
+          Columns: State, City — one row per city.
+        </span>
+      </div>
+
+      {uploadReport &&
+        (uploadReport.unmatchedStates.length > 0 ||
+          uploadReport.unmatchedCities.length > 0) && (
+          <div
+            className="rounded-lg border px-3 py-2.5 flex items-start gap-2.5"
+            style={{
+              background: "rgba(245, 158, 11, 0.08)",
+              borderColor: "rgba(245, 158, 11, 0.4)",
+            }}
+            role="alert"
+          >
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0 text-amber-600" />
+            <div className="text-xs text-amber-800 flex-1 space-y-1">
+              <p className="font-semibold">
+                {uploadReport.unmatchedStates.length +
+                  uploadReport.unmatchedCities.length}{" "}
+                entr
+                {uploadReport.unmatchedStates.length +
+                  uploadReport.unmatchedCities.length ===
+                1
+                  ? "y"
+                  : "ies"}{" "}
+                from your file weren&apos;t added — fix the names and re-upload.
+              </p>
+              {uploadReport.unmatchedStates.length > 0 && (
+                <p>
+                  Unmatched states:{" "}
+                  <strong>{uploadReport.unmatchedStates.join(", ")}</strong>
+                </p>
+              )}
+              {uploadReport.unmatchedCities.length > 0 && (
+                <p>
+                  Unmatched cities:{" "}
+                  <strong>{uploadReport.unmatchedCities.join(", ")}</strong>
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setUploadReport(null)}
+              aria-label="Dismiss"
+              className="text-amber-700 hover:text-amber-900 shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
       {rows.length === 0 && (
         <p className="text-xs text-[color:var(--color-ink-muted)] italic">
           No states added. Click "Add state" to start.
@@ -125,11 +401,13 @@ export default function StateCityPicker({ value, onChange }: Props) {
           className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)_auto] gap-3 items-start"
         >
           <StateCombobox
+            locations={locations}
             value={row.stateIso}
             valueLabel={row.stateName}
             onPick={(iso, name) => setRowState(row.rowId, iso, name)}
           />
           <CityMultiCombobox
+            locations={locations}
             stateIso={row.stateIso}
             value={row.cities}
             onChange={(next) => setRowCities(row.rowId, next)}
@@ -160,15 +438,17 @@ export default function StateCityPicker({ value, onChange }: Props) {
 /* ===================== State (single-select combobox) ===================== */
 
 function StateCombobox({
+  locations,
   value,
   valueLabel,
   onPick,
 }: {
+  locations: IndiaLocationData;
   value: string;
   valueLabel: string;
   onPick: (iso: string, name: string) => void;
 }) {
-  const states = useMemo(() => State.getStatesOfCountry(COUNTRY_ISO), []);
+  const states = locations.states;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
@@ -280,18 +560,20 @@ function StateCombobox({
 /* ===================== City (multi-select combobox) ===================== */
 
 function CityMultiCombobox({
+  locations,
   stateIso,
   value,
   onChange,
 }: {
+  locations: IndiaLocationData;
   stateIso: string;
   value: string[];
   onChange: (next: string[]) => void;
 }) {
   const cities = useMemo(() => {
     if (!stateIso) return [];
-    return City.getCitiesOfState(COUNTRY_ISO, stateIso);
-  }, [stateIso]);
+    return locations.getCitiesOfState(stateIso);
+  }, [stateIso, locations]);
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -353,36 +635,45 @@ function CityMultiCombobox({
 
   return (
     <div ref={rootRef} className="relative">
+      {/* Auto-height container (NOT the fixed-height `input-itarang`, which is
+          h-11 and clips wrapped chips). Chips wrap freely; a tall selection
+          scrolls inside the box so it never overlaps neighbouring rows. The
+          search input sits on its own full-width line at the bottom so it is
+          always reachable no matter how many cities are picked. */}
       <div
         className={
-          "input-itarang flex flex-wrap items-center gap-1.5 min-h-11 cursor-text " +
-          (disabled ? "opacity-60 cursor-not-allowed" : "")
+          "w-full min-h-11 px-3 py-2 rounded-lg bg-white border border-[color:var(--color-border)] transition-shadow duration-150 focus-within:outline-none focus-within:border-brand-sky focus-within:ring-4 focus-within:ring-brand-sky/15 cursor-text " +
+          (disabled ? "opacity-60 cursor-not-allowed bg-[color:var(--color-bg)]" : "")
         }
         onClick={() => {
           if (disabled) return;
           setOpen(true);
         }}
       >
-        {value.map((city) => (
-          <span
-            key={city}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold text-white"
-            style={{ background: "var(--color-brand-sky)" }}
-          >
-            {city}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                removeChip(city);
-              }}
-              aria-label={`Remove ${city}`}
-              className="hover:opacity-80"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </span>
-        ))}
+        {value.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 max-h-32 overflow-y-auto mb-1.5">
+            {value.map((city) => (
+              <span
+                key={city}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold text-white"
+                style={{ background: "var(--color-brand-sky)" }}
+              >
+                {city}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeChip(city);
+                  }}
+                  aria-label={`Remove ${city}`}
+                  className="hover:opacity-80"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <input
           type="text"
           value={query}
@@ -401,9 +692,9 @@ function CityMultiCombobox({
               ? "Pick a state first"
               : value.length === 0
                 ? "Search cities…"
-                : ""
+                : "Search to add more cities…"
           }
-          className="flex-1 min-w-[120px] bg-transparent outline-none text-sm"
+          className="w-full bg-transparent outline-none text-sm"
           aria-expanded={open}
           aria-autocomplete="list"
           role="combobox"

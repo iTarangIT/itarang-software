@@ -4,6 +4,7 @@
  * mismatch; 409 if not pending or expired.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
 import { approveDualApprovalRequest } from "@/lib/nbfc/dual-approval/service";
@@ -143,7 +144,7 @@ export async function POST(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
-      { ok: false, error: msg },
+      { ok: false, error: clientError(msg) },
       { status: statusFromError(msg) },
     );
   }

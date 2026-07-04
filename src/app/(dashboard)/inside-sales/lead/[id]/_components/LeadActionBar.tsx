@@ -11,7 +11,7 @@ import {
     UserPlus2,
 } from "lucide-react";
 import type { LeadDetailBundle } from "@/lib/inside-sales/types";
-import { isOpen, type LeadStatus } from "@/lib/lifecycle/transitions";
+import { isOpen, isTerminal, type LeadStatus } from "@/lib/lifecycle/transitions";
 import type { ActiveModal } from "./LeadDetailView";
 
 type Props = {
@@ -24,10 +24,9 @@ type Props = {
 export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) {
     const lead = bundle.lead;
     const status = lead.lead_status as LeadStatus | null;
-    const isUnassigned = !lead.current_owner_id && status === "New_Unassigned";
+    const isUnassigned = !lead.current_owner_id && !(status && isTerminal(status));
     const open = status ? isOpen(status) : false;
     const isAdmin = viewerRole === "admin" || viewerRole === "ceo";
-    const hasFinalPrice = Boolean(bundle.current_commercials?.final_price);
 
     // Claim banner shows when lead is unassigned — visible to any IS rep + admin.
     if (isUnassigned) {
@@ -62,8 +61,8 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) 
 
     // Owner action bar.
     const canTransferAsm = open && status !== "Transferred_to_ASM";
-    const canMarkConverted =
-        status === "Commercials_Finalised" || status === "Transferred_to_ASM";
+    // A lead can be marked Converted from any open status (no funnel/price gate).
+    const canMarkConverted = open;
 
     return (
         <div className="sticky bottom-0 z-10 bg-white border-t border-gray-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center gap-2">
@@ -85,14 +84,8 @@ export function LeadActionBar({ bundle, isOwner, viewerRole, onAction }: Props) 
                 icon={CheckCircle2}
                 tone="emerald"
                 onClick={() => onAction("mark_converted")}
-                disabled={!canMarkConverted || !hasFinalPrice}
-                disabledReason={
-                    !canMarkConverted
-                        ? "Reach Commercials_Finalised or Transferred_to_ASM first"
-                        : !hasFinalPrice
-                            ? "Set final_price on the current commercials row first"
-                            : undefined
-                }
+                disabled={!canMarkConverted}
+                disabledReason={!canMarkConverted ? "Lead is already closed" : undefined}
             >
                 Mark Converted
             </ActionButton>

@@ -3,6 +3,7 @@
 
 import { useState, useRef } from 'react';
 import { Upload, FileDown, CheckCircle, XCircle, AlertCircle, FileSpreadsheet } from 'lucide-react';
+import { toast } from 'sonner';
 
 export default function BulkUploadPage() {
     const [file, setFile] = useState<File | null>(null);
@@ -34,11 +35,11 @@ export default function BulkUploadPage() {
             if (data.success) {
                 setResults(data.data);
             } else {
-                alert('Upload failed: ' + data.error?.message);
+                toast.error('Upload failed: ' + data.error?.message);
             }
         } catch (error) {
             console.error('Upload error:', error);
-            alert('An error occurred during upload.');
+            toast.error('An error occurred during upload.');
         } finally {
             setUploading(false);
         }

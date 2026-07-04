@@ -225,52 +225,94 @@ export default function SubmitExpensePage() {
         ) : mine.length === 0 ? (
           <p className="text-xs text-gray-400 italic">You haven't submitted any expenses yet.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
-                  <th className="py-2 font-semibold">Date</th>
-                  <th className="py-2 font-semibold">Category</th>
-                  <th className="py-2 font-semibold">Amount</th>
-                  <th className="py-2 font-semibold">Status</th>
-                  <th className="py-2 font-semibold">Bill</th>
-                </tr>
-              </thead>
-              <tbody>
-                {mine.map((s) => (
-                  <tr key={s.id} className="border-b border-gray-50">
-                    <td className="py-3 text-xs text-gray-600">
-                      {new Date(s.created_at).toLocaleDateString("en-IN")}
-                    </td>
-                    <td className="py-3 text-xs font-semibold text-gray-900">{s.category}</td>
-                    <td className="py-3 text-xs font-bold text-gray-900">
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
+                    <th className="py-2 pr-4 font-semibold">Date</th>
+                    <th className="py-2 pr-4 font-semibold">Category</th>
+                    <th className="py-2 pr-4 font-semibold">Amount</th>
+                    <th className="py-2 pr-4 font-semibold">Status</th>
+                    <th className="py-2 font-semibold">Bill</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mine.map((s) => (
+                    <tr key={s.id} className="border-b border-gray-50">
+                      <td className="py-3 pr-4 text-xs text-gray-600 whitespace-nowrap">
+                        {new Date(s.created_at).toLocaleDateString("en-IN")}
+                      </td>
+                      <td className="py-3 pr-4 text-xs font-semibold text-gray-900">{s.category}</td>
+                      <td className="py-3 pr-4 text-xs font-bold text-gray-900 whitespace-nowrap">
+                        ₹{Number(s.amount).toLocaleString("en-IN")}
+                      </td>
+                      <td className="py-3 pr-4">
+                        <StatusBadge status={s.status} />
+                        {s.status === "rejected" && s.rejection_reason && (
+                          <p className="text-[10px] text-rose-600 mt-1">{s.rejection_reason}</p>
+                        )}
+                      </td>
+                      <td className="py-3 text-xs">
+                        {s.bill_url ? (
+                          <a
+                            href={s.bill_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-brand-600 hover:underline font-semibold"
+                          >
+                            View
+                          </a>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile cards — separate each field so values don't collide */}
+            <div className="md:hidden divide-y divide-gray-100">
+              {mine.map((s) => (
+                <div key={s.id} className="py-3 first:pt-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{s.category}</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        {new Date(s.created_at).toLocaleDateString("en-IN")}
+                      </p>
+                    </div>
+                    <p className="text-sm font-bold text-gray-900 whitespace-nowrap">
                       ₹{Number(s.amount).toLocaleString("en-IN")}
-                    </td>
-                    <td className="py-3">
+                    </p>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <div>
                       <StatusBadge status={s.status} />
                       {s.status === "rejected" && s.rejection_reason && (
                         <p className="text-[10px] text-rose-600 mt-1">{s.rejection_reason}</p>
                       )}
-                    </td>
-                    <td className="py-3 text-xs">
-                      {s.bill_url ? (
-                        <a
-                          href={s.bill_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-brand-600 hover:underline font-semibold"
-                        >
-                          View
-                        </a>
-                      ) : (
-                        <span className="text-gray-300">—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </div>
+                    {s.bill_url ? (
+                      <a
+                        href={s.bill_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-brand-600 hover:underline font-semibold"
+                      >
+                        View bill
+                      </a>
+                    ) : (
+                      <span className="text-xs text-gray-300">No bill</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>

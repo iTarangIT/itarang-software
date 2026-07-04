@@ -59,6 +59,7 @@ interface BatteryRow {
   serial_number: string;
   model_name: string | null;
   model_type: string | null;
+  product_id?: string | null;
   invoice_date: string | null;
   inventory_age_days: number;
   age_badge: "fresh" | "ageing" | "old";
@@ -82,6 +83,7 @@ interface ChargerRow {
   serial_number: string;
   model_name: string | null;
   model_type: string | null;
+  product_id?: string | null;
   invoice_date?: string | null;
   inventory_age_days: number;
   age_badge: "fresh" | "ageing" | "old";
@@ -779,6 +781,29 @@ export default function ProductSelectionPage() {
       ),
     [selectedProducts],
   );
+  // Stable product-id scope keys. products.sku and inventory.model_type diverge
+  // in real data (sku is set on the products row, model_type on the inventory
+  // row), which silently emptied the scoped list. Matching inventory.product_id
+  // against the selected products' ids is exact; the SKU sets stay as a fallback
+  // for inventory rows that have no product_id (they were resolved by SKU).
+  const batteryProductIds = useMemo(
+    () =>
+      new Set(
+        selectedProducts
+          .filter((p) => productClass(p.asset_type) === "battery")
+          .map((p) => p.id),
+      ),
+    [selectedProducts],
+  );
+  const chargerProductIds = useMemo(
+    () =>
+      new Set(
+        selectedProducts
+          .filter((p) => productClass(p.asset_type) === "charger")
+          .map((p) => p.id),
+      ),
+    [selectedProducts],
+  );
   const paraTypes = useMemo(
     () =>
       new Set(
@@ -791,17 +816,25 @@ export default function ProductSelectionPage() {
 
   const scopedBatteries = useMemo(
     () =>
-      batterySkus.size === 0
+      batterySkus.size === 0 && batteryProductIds.size === 0
         ? batteries
-        : batteries.filter((b) => batterySkus.has(normKey(b.model_type))),
-    [batteries, batterySkus],
+        : batteries.filter(
+            (b) =>
+              (b.product_id != null && batteryProductIds.has(b.product_id)) ||
+              batterySkus.has(normKey(b.model_type)),
+          ),
+    [batteries, batterySkus, batteryProductIds],
   );
   const scopedChargers = useMemo(
     () =>
-      chargerSkus.size === 0
+      chargerSkus.size === 0 && chargerProductIds.size === 0
         ? chargers
-        : chargers.filter((c) => chargerSkus.has(normKey(c.model_type))),
-    [chargers, chargerSkus],
+        : chargers.filter(
+            (c) =>
+              (c.product_id != null && chargerProductIds.has(c.product_id)) ||
+              chargerSkus.has(normKey(c.model_type)),
+          ),
+    [chargers, chargerSkus, chargerProductIds],
   );
   const scopedParaphernalia = useMemo(
     () =>
@@ -902,24 +935,26 @@ export default function ProductSelectionPage() {
   }, [chargerFilter, deferredChargerSearch, scopedChargers.length]);
 
   // Drop a battery/charger pick that the active product-type scope excludes.
+  // The scope is active when either key set is non-empty (mirrors the
+  // scopedBatteries/scopedChargers guard above).
   useEffect(() => {
     if (
-      batterySkus.size > 0 &&
+      (batterySkus.size > 0 || batteryProductIds.size > 0) &&
       selectedBattery &&
       !scopedBatteries.some((b) => b.id === selectedBattery.id)
     ) {
       setSelectedBattery(null);
     }
-  }, [scopedBatteries, batterySkus, selectedBattery]);
+  }, [scopedBatteries, batterySkus, batteryProductIds, selectedBattery]);
   useEffect(() => {
     if (
-      chargerSkus.size > 0 &&
+      (chargerSkus.size > 0 || chargerProductIds.size > 0) &&
       selectedCharger &&
       !scopedChargers.some((c) => c.id === selectedCharger.id)
     ) {
       setSelectedCharger(null);
     }
-  }, [scopedChargers, chargerSkus, selectedCharger]);
+  }, [scopedChargers, chargerSkus, chargerProductIds, selectedCharger]);
 
   // ── Submit gating ───────────────────────────────────────────────────
   // Charger is optional — a battery-only sale (with or without paraphernalia)
@@ -995,11 +1030,20 @@ export default function ProductSelectionPage() {
         const idStr = String(nbfcId);
         const idx = prev.findIndex((p) => p.nbfc_id === idStr);
         if (idx >= 0) {
-          // Already picked — remove (toggle off).
-          return prev.filter((_, i) => i !== idx);
+          const existing = prev[idx];
+          if (existing.loan_product_id === loanProductId) {
+            // Same product re-clicked — toggle the NBFC off.
+            return prev.filter((_, i) => i !== idx);
+          }
+          // A different product of an already-picked NBFC — swap the product
+          // in place. One product per NBFC, so the pick count is unchanged.
+          const next = [...prev];
+          next[idx] = { nbfc_id: idStr, loan_product_id: loanProductId };
+          return next;
         }
         if (prev.length >= 2) {
-          // Cap at 2 per §6.2; replace the oldest pick so dealer can swap easily.
+          // Cap at 2 NBFCs per §6.2; replace the oldest pick so dealer can
+          // swap lenders easily.
           return [...prev.slice(1), { nbfc_id: idStr, loan_product_id: loanProductId }];
         }
         return [...prev, { nbfc_id: idStr, loan_product_id: loanProductId }];
@@ -1275,8 +1319,10 @@ export default function ProductSelectionPage() {
   if (access.customerName) subtitleParts.push(access.customerName);
 
   return (
-    <div className="min-h-screen bg-[#F8F9FB]">
-      <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
+    // -mx-6 cancels the dashboard layout's mobile p-6 so cards run edge-to-edge
+    // on phones; reverts at sm+ (desktop/tablet unchanged).
+    <div className="min-h-screen bg-[#F8F9FB] -mx-6 sm:mx-0">
+      <div className="max-w-[1200px] mx-auto px-0 sm:px-6 py-8 pb-40">
         <ProgressHeader
           title="Product Selection"
           subtitle={subtitleParts.join(" — ")}
@@ -1501,8 +1547,14 @@ export default function ProductSelectionPage() {
               ) : batteries.length === 0 ? (
                 <EmptyState
                   icon={<BatteryIcon className="w-10 h-10 text-gray-300" />}
-                  title="No available batteries in this category"
-                  hint="Try refreshing or contact your inventory manager."
+                  title="No battery stock in this category"
+                  hint="Your dealership has no available batteries in this category yet. Ask your admin to add inventory (Inventory → Add Item / Bulk Upload) for this category, then refresh."
+                />
+              ) : scopedBatteries.length === 0 ? (
+                <EmptyState
+                  icon={<BatteryIcon className="w-10 h-10 text-gray-300" />}
+                  title="No batteries match the selected product type"
+                  hint="Your dealership has battery stock in this category, but none matches the Product Type chosen in Step 1. Change the Product Type above, or ask your admin to stock a matching battery."
                 />
               ) : (
                 <>
@@ -1619,6 +1671,12 @@ export default function ProductSelectionPage() {
                   icon={<Plug className="w-10 h-10 text-gray-300" />}
                   title="No chargers available in your inventory"
                   hint="Contact your inventory manager to add chargers for this category."
+                />
+              ) : scopedChargers.length === 0 ? (
+                <EmptyState
+                  icon={<Plug className="w-10 h-10 text-gray-300" />}
+                  title="No chargers match the selected product type"
+                  hint="Your dealership has charger stock in this category, but none matches the Product Type chosen in Step 1. Change the Product Type above, or ask your admin to stock a matching charger."
                 />
               ) : (
                 <>
@@ -3303,8 +3361,12 @@ function SectionG({
   disclosureAck: boolean;
   onDisclosureChange: (next: boolean) => void;
 }) {
-  const isPicked = (nbfcId: number) =>
-    selected.some((s) => s.nbfc_id === String(nbfcId));
+  // Selection is keyed per product now (one card per loan product), while the
+  // cap is still on distinct NBFCs (max 2). pickedProductIds drives the card's
+  // selected state; pickedNbfcIds gates which NBFCs are still selectable.
+  const pickedProductIds = new Set(selected.map((s) => s.loan_product_id));
+  const pickedNbfcIds = new Set(selected.map((s) => s.nbfc_id));
+  const isNbfcPicked = (nbfcId: number) => pickedNbfcIds.has(String(nbfcId));
   const pickCount = selected.length;
 
   return (
@@ -3331,64 +3393,87 @@ function SectionG({
           lead will be routed to Manual Handoff after submit.
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-5">
           {options.map((opt, idx) => {
-            const picked = isPicked(opt.nbfcId);
-            // Phase 2 stub: use the first active product's bands as the
-            // indicative range. Phase 3 will pick the right product after
-            // amount-aware BRE re-evaluation.
-            const product = opt.activeLoanProducts[0];
-            const disablePick = !picked && pickCount >= 2;
+            const nbfcPicked = isNbfcPicked(opt.nbfcId);
+            // When two NBFCs are already chosen, every product of any other
+            // NBFC is locked (one product per NBFC, max two NBFCs).
+            const nbfcLocked = !nbfcPicked && pickCount >= 2;
             return (
-              <button
-                key={opt.nbfcId}
-                type="button"
-                onClick={() => product && onTogglePick(opt.nbfcId, product.id)}
-                disabled={!product || disablePick}
-                className={`w-full text-left p-4 rounded-2xl border-2 transition-all ${
-                  picked
-                    ? "border-[#0047AB] bg-blue-50/60 shadow-sm"
-                    : disablePick
-                      ? "border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed"
-                      : "border-gray-200 bg-white hover:border-[#0047AB] hover:shadow-sm"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-sm font-bold text-gray-900 truncate">
-                      {`iTarang Scheme ${idx + 1} (${opt.nbfcCode})`}
-                    </div>
-                    {product && (
-                      <div className="text-[11px] text-gray-500 mt-0.5 truncate">
-                        {product.productName}
-                      </div>
-                    )}
-                  </div>
-                  <div
-                    className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
-                      picked
-                        ? "border-[#0047AB] bg-[#0047AB]"
-                        : "border-gray-300"
-                    }`}
-                  >
-                    {picked && <CheckCircle2 className="w-3 h-3 text-white" />}
-                  </div>
+              <div key={opt.nbfcId} className="space-y-2">
+                <div className="flex items-center gap-2 px-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-gray-600">
+                    {`iTarang Scheme ${idx + 1} (${opt.nbfcCode})`}
+                  </span>
+                  {opt.activeLoanProducts.length > 1 && (
+                    <span className="text-[10px] text-gray-400">
+                      · pick one of {opt.activeLoanProducts.length}
+                    </span>
+                  )}
                 </div>
-                {product && (
-                  <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <RangeStat label="ROI" value={`${product.minRoiPct}% – ${product.maxRoiPct}%`} />
-                    <RangeStat
-                      label="Tenure"
-                      value={`${product.tenureMonthsMin} – ${product.tenureMonthsMax} mo`}
-                    />
-                    <RangeStat label="Down payment" value={`${product.downPaymentPct}%`} />
-                    <RangeStat
-                      label="Loan amount"
-                      value={`₹${product.loanAmountMin.toLocaleString("en-IN")} – ₹${product.loanAmountMax.toLocaleString("en-IN")}`}
-                    />
-                  </div>
+                {opt.activeLoanProducts.length === 0 ? (
+                  <p className="text-[11px] text-gray-400 px-1">
+                    No active products from this partner right now.
+                  </p>
+                ) : (
+                  opt.activeLoanProducts.map((product) => {
+                    const picked = pickedProductIds.has(product.id);
+                    const disablePick = !picked && nbfcLocked;
+                    return (
+                      <button
+                        key={product.id}
+                        type="button"
+                        onClick={() => onTogglePick(opt.nbfcId, product.id)}
+                        disabled={disablePick}
+                        className={`w-full text-left p-4 rounded-2xl border-2 transition-all ${
+                          picked
+                            ? "border-[#0047AB] bg-blue-50/60 shadow-sm"
+                            : disablePick
+                              ? "border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed"
+                              : "border-gray-200 bg-white hover:border-[#0047AB] hover:shadow-sm"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-bold text-gray-900 truncate">
+                              {product.productName}
+                            </div>
+                          </div>
+                          <div
+                            className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
+                              picked
+                                ? "border-[#0047AB] bg-[#0047AB]"
+                                : "border-gray-300"
+                            }`}
+                          >
+                            {picked && (
+                              <CheckCircle2 className="w-3 h-3 text-white" />
+                            )}
+                          </div>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+                          <RangeStat
+                            label="ROI"
+                            value={`${product.minRoiPct}% – ${product.maxRoiPct}%`}
+                          />
+                          <RangeStat
+                            label="Tenure"
+                            value={`${product.tenureMonthsMin} – ${product.tenureMonthsMax} mo`}
+                          />
+                          <RangeStat
+                            label="Down payment"
+                            value={`${product.downPaymentPct}%`}
+                          />
+                          <RangeStat
+                            label="Loan amount"
+                            value={`₹${product.loanAmountMin.toLocaleString("en-IN")} – ₹${product.loanAmountMax.toLocaleString("en-IN")}`}
+                          />
+                        </div>
+                      </button>
+                    );
+                  })
                 )}
-              </button>
+              </div>
             );
           })}
           <p className="text-[11px] text-gray-400 px-1">

@@ -12,12 +12,15 @@
  * Role: `credit_underwriting` (owns the offer/sanction terms, §7.2) or `nbfc_admin`.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { nbfcFinancingOffers, nbfcLeadAssignments } from "@/lib/db/schema";
+import { dualApprovalRequests, nbfcFinancingOffers, nbfcLeadAssignments, nbfcLoanProducts } from "@/lib/db/schema";
 import { resolveActor } from "@/lib/nbfc/dual-approval/auth";
+import { createDualApprovalRequest, FINANCING_OFFER_DEVIATION_ACTION } from "@/lib/nbfc/dual-approval/service";
+import { computeOfferDeviation, type DeviationResult } from "@/lib/nbfc/offer-deviation";
 import { getActiveAssignment } from "@/lib/nbfc/vkyc";
 
 export const runtime = "nodejs";
@@ -93,7 +96,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }
 
@@ -131,6 +134,47 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       );
     }
 
+    // §13.3.3 — deviation check. Compare the offer against the matched loan
+    // product's bands (pinned on the assignment). No product pinned (legacy
+    // rows) → no bands to violate → treated as in-band (not_required), so the
+    // existing flow is unchanged.
+    let deviation: DeviationResult = { detected: false, fields: [], reason: null };
+    if (assignment.loan_product_id != null) {
+      const [product] = await db
+        .select({
+          min_roi_pct: nbfcLoanProducts.min_roi_pct,
+          max_roi_pct: nbfcLoanProducts.max_roi_pct,
+          tenure_months_min: nbfcLoanProducts.tenure_months_min,
+          tenure_months_max: nbfcLoanProducts.tenure_months_max,
+          loan_amount_min: nbfcLoanProducts.loan_amount_min,
+          loan_amount_max: nbfcLoanProducts.loan_amount_max,
+        })
+        .from(nbfcLoanProducts)
+        .where(eq(nbfcLoanProducts.id, assignment.loan_product_id))
+        .limit(1);
+      if (product) {
+        deviation = computeOfferDeviation(
+          {
+            roi_pct: d.roi_pct == null ? null : Number(d.roi_pct),
+            tenure_months: d.tenure_months == null || d.tenure_months === "" ? null : Number(d.tenure_months),
+            loan_amount: d.loan_amount == null ? null : Number(d.loan_amount),
+          },
+          {
+            min_roi_pct: Number(product.min_roi_pct),
+            max_roi_pct: Number(product.max_roi_pct),
+            tenure_months_min: product.tenure_months_min,
+            tenure_months_max: product.tenure_months_max,
+            loan_amount_min: product.loan_amount_min,
+            loan_amount_max: product.loan_amount_max,
+          },
+        );
+      }
+    }
+    // An out-of-band offer is HELD (ceo_approval_status='pending') and not
+    // released to the dealer until the iTarang CEO approves; in-band releases
+    // immediately exactly as before.
+    const ceoStatus = deviation.detected ? "pending" : "not_required";
+
     const now = new Date();
     const values = {
       assignment_id: assignment.id,
@@ -146,13 +190,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
       conditions: d.conditions ?? null,
       valid_until: d.valid_until ? d.valid_until : null,
       status: "active" as const,
+      deviation_detected: deviation.detected,
+      deviation_fields: deviation.detected ? deviation.fields : null,
+      deviation_reason: deviation.reason,
+      ceo_approval_status: ceoStatus,
       submitted_by: actor.user_id,
       submitted_at: now,
       updated_at: now,
     };
 
-    await db.transaction(async (tx) => {
-      await tx
+    const [offerRow] = await db.transaction(async (tx) => {
+      const rows = await tx
         .insert(nbfcFinancingOffers)
         .values(values)
         .onConflictDoUpdate({
@@ -167,25 +215,97 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ lea
             conditions: values.conditions,
             valid_until: values.valid_until,
             status: "active",
+            deviation_detected: values.deviation_detected,
+            deviation_fields: values.deviation_fields,
+            deviation_reason: values.deviation_reason,
+            ceo_approval_status: ceoStatus,
             submitted_by: values.submitted_by,
             submitted_at: now,
             updated_at: now,
           },
-        });
+        })
+        .returning();
 
       // Advance the assignment so the dealer's winner-selection screen surfaces
-      // it. Don't downgrade a row already past offer_submitted.
-      if (assignment.status === "pending" || assignment.status === "in_progress") {
+      // it — but ONLY when released (not held for CEO approval). Don't downgrade
+      // a row already past offer_submitted.
+      if (ceoStatus !== "pending" && (assignment.status === "pending" || assignment.status === "in_progress")) {
         await tx
           .update(nbfcLeadAssignments)
           .set({ status: "offer_submitted", updated_at: now })
           .where(eq(nbfcLeadAssignments.id, assignment.id));
       }
+      return rows;
     });
 
-    return NextResponse.json({ ok: true, status: "offer_submitted" });
+    // Reconcile the CEO approval request to the offer's gate state.
+    if (ceoStatus === "pending") {
+      // Reuse an already-pending request (resubmit with still-out-of-band terms);
+      // otherwise open a fresh one (first submission, or re-deviating after a
+      // prior decision). §3.6 — surfaces for a human; never auto-decides.
+      const [existing] = await db
+        .select({ id: dualApprovalRequests.id })
+        .from(dualApprovalRequests)
+        .where(
+          and(
+            eq(dualApprovalRequests.action_type, FINANCING_OFFER_DEVIATION_ACTION),
+            eq(dualApprovalRequests.entity_id, offerRow.id),
+            eq(dualApprovalRequests.status, "pending_approval"),
+          ),
+        )
+        .limit(1);
+      let requestId = existing?.id ?? null;
+      if (!requestId) {
+        const created = await createDualApprovalRequest({
+          tenant_id: actor.tenant_id,
+          initiator_user_id: actor.user_id,
+          action_type: FINANCING_OFFER_DEVIATION_ACTION,
+          entity_id: offerRow.id,
+          reason_code: "out_of_band_financing_offer",
+          evidence_snapshot: {
+            lead_id: leadId,
+            nbfc_id: assignment.nbfc_id,
+            offer: {
+              roi_pct: values.roi_pct,
+              tenure_months: values.tenure_months,
+              loan_amount: values.loan_amount,
+              emi_amount: values.emi_amount,
+              down_payment: values.down_payment,
+            },
+            deviation_fields: deviation.fields,
+            deviation_reason: deviation.reason,
+          },
+        });
+        requestId = created.id;
+      }
+      await db
+        .update(nbfcFinancingOffers)
+        .set({ ceo_approval_request_id: requestId })
+        .where(eq(nbfcFinancingOffers.id, offerRow.id));
+    } else {
+      // Resubmitted back within band: retire any still-pending request so it
+      // doesn't linger in the CEO queue. (No-op for the common first-time
+      // in-band submission — matches zero rows.)
+      await db
+        .update(dualApprovalRequests)
+        .set({ status: "expired", expired_at: now })
+        .where(
+          and(
+            eq(dualApprovalRequests.action_type, FINANCING_OFFER_DEVIATION_ACTION),
+            eq(dualApprovalRequests.entity_id, offerRow.id),
+            eq(dualApprovalRequests.status, "pending_approval"),
+          ),
+        );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      status: ceoStatus === "pending" ? "pending_ceo_approval" : "offer_submitted",
+      ceo_approval_status: ceoStatus,
+      deviation: deviation.detected ? { fields: deviation.fields, reason: deviation.reason } : null,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: statusFromError(msg) });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: statusFromError(msg) });
   }
 }

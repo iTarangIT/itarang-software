@@ -13,6 +13,7 @@ import {
 } from "@/lib/kyc/aadhaarNormalize";
 import { extractWithTesseract } from "@/lib/ocr/aadhaarFallback";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { isS3Backend, getObject } from "@/lib/storage/s3";
 import { inArray } from "drizzle-orm";
 
 const BUCKET = "private-documents";
@@ -72,6 +73,13 @@ function isAccountConfigFailure(response: any): boolean {
 async function fetchDocumentBuffer(
   storagePath: string,
 ): Promise<{ buffer: Buffer; contentType: string }> {
+  if (isS3Backend) {
+    const buf = await getObject(BUCKET, storagePath);
+    // S3 doesn't return a content type here; default to image/jpeg (matches
+    // the Supabase fallback default below). Fall back to the Supabase read
+    // before erroring if S3 has no such object.
+    if (buf) return { buffer: buf, contentType: "image/jpeg" };
+  }
   const { data, error } = await supabaseAdmin.storage
     .from(BUCKET)
     .download(storagePath);

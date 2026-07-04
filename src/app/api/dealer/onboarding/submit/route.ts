@@ -7,6 +7,10 @@ import {
   dealerOnboardingDocuments,
 } from "@/lib/db/schema";
 import { createClient } from "@/lib/supabase/server";
+import { readStoredDocument } from "@/lib/storage/readStoredDocument";
+import { recordLeadCapture } from "@/lib/leads/lead-registry";
+import { readDocument } from "@/lib/whatsapp/extraction";
+import { buildGstAddresses } from "@/lib/onboarding/gst-addresses";
 
 type UploadLike = {
   id?: string;
@@ -85,6 +89,33 @@ function isUuid(value: string | null) {
 
 function isUploadedFile(file: UploadLike | null | undefined) {
   return Boolean(file?.uploadedUrl && file?.storagePath && file?.bucketName);
+}
+
+// Best-effort GST OCR for the web path: fetch the uploaded GST certificate and
+// run the SAME Gemini extractor the WhatsApp flow uses, so the admin sees the
+// principal + every Additional Place of Business (and can tag billing/dispatch).
+// Never throws — on any failure the submission proceeds without gstAddresses and
+// the admin can add/edit addresses manually on the verification page.
+async function extractGstAddressesBestEffort(
+  gstCert: UploadLike | null | undefined,
+): Promise<ReturnType<typeof buildGstAddresses> | null> {
+  const url = cleanString(gstCert?.uploadedUrl);
+  if (!url) return null;
+  try {
+    // Direct storage read — uploadedUrl is a relative /api/files/... proxy
+    // path on the S3 backend, which a server-side fetch() can't parse.
+    const stored = await readStoredDocument(url);
+    const mime =
+      (stored.contentType !== "application/octet-stream" && stored.contentType) ||
+      cleanString(gstCert?.mimeType || gstCert?.type) ||
+      "application/pdf";
+    const extracted = await readDocument(stored.buffer, mime, "gst");
+    if (!extracted.ok) return null;
+    return buildGstAddresses(extracted.fields);
+  } catch (err) {
+    console.error("[onboarding/submit] GST address extraction failed:", err);
+    return null;
+  }
 }
 
 function getFileName(file: UploadLike) {
@@ -536,6 +567,12 @@ export async function POST(req: NextRequest) {
       existingApplication = null;
     }
 
+    // Web path GST OCR — reuse the WhatsApp Gemini extractor. Best-effort: a
+    // failure leaves gstAddresses unset and the admin adds them manually.
+    const gstAddresses = await extractGstAddressesBestEffort(
+      company?.gstCertificate,
+    );
+
     const providerRawResponse = {
       ...parseProviderRawResponse(existingApplication?.provider_raw_response),
       agreement,
@@ -545,6 +582,7 @@ export async function POST(req: NextRequest) {
         ownership,
         finance,
         reviewChecks,
+        ...(gstAddresses ? { gstAddresses } : {}),
       },
       source: "dealer_onboarding_submit",
     };
@@ -577,6 +615,11 @@ export async function POST(req: NextRequest) {
       owner_phone: primaryOwner.ownerPhone,
       owner_landline: resolveOwnerLandline(body),
       owner_email: primaryOwner.ownerEmail,
+      // E-175 — owner Aadhaar (typed in the web wizard), normalized to 12 digits.
+      owner_aadhaar_no: (() => {
+        const d = (cleanString(ownership.ownerAadhaarNumber) || "").replace(/\D/g, "");
+        return d.length === 12 ? d : null;
+      })(),
 
       sales_manager_name: toNullable(agreement?.salesManager?.name),
       sales_manager_email: toNullableEmail(agreement?.salesManager?.email),
@@ -659,6 +702,17 @@ export async function POST(req: NextRequest) {
       if (documentRows.length > 0) {
         await tx.insert(dealerOnboardingDocuments).values(documentRows);
       }
+    });
+
+    // E-179 central registry. No-op if the save-route autosave already
+    // registered this application (unique on source_table + source_id).
+    await recordLeadCapture({
+      leadType: "dealer",
+      name: primaryOwner.ownerName || cleanString(company.companyName),
+      phone: primaryOwner.ownerPhone,
+      sourceChannel: "web",
+      sourceTable: "dealer_onboarding_applications",
+      sourceId: finalApplicationId!,
     });
 
     return NextResponse.json({

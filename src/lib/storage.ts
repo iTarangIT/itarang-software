@@ -1,4 +1,5 @@
 import { createClient } from "./supabase/server";
+import { isS3Backend, putObject, filesProxyPath } from "./storage/s3";
 
 type UploadParams = {
   fileBuffer: Buffer;
@@ -25,11 +26,17 @@ export async function uploadFileToStorage({
   contentType = "application/octet-stream",
   upsert = true,
 }: UploadParams): Promise<UploadResult> {
-  const supabase = await createClient();
-
   const cleanFolder = folder.replace(/^\/+|\/+$/g, "");
   const path = cleanFolder ? `${cleanFolder}/${fileName}` : fileName;
 
+  if (isS3Backend) {
+    await putObject(bucket, path, fileBuffer, contentType);
+    // Store the authenticated-proxy URL (relative) — Block Public Access means
+    // there is no public S3 URL. The /api/files route serves it.
+    return { url: filesProxyPath(bucket, path), path };
+  }
+
+  const supabase = await createClient();
   const { error } = await supabase.storage
     .from(bucket)
     .upload(path, fileBuffer, { contentType, upsert });

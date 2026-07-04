@@ -1,5 +1,6 @@
 import {
   pgTable,
+  pgEnum,
   text,
   timestamp,
   integer,
@@ -309,6 +310,10 @@ export const leads = pgTable("leads", {
   kyc_draft_data: jsonb("kyc_draft_data"),
   step_status: jsonb("step_status"),
   source: varchar({ length: 50 }),
+  // E-174 — channel the lead was CREATED through ('whatsapp' for the post-approval
+  // WhatsApp dealer console; NULL for web/other). Distinguishes WhatsApp leads,
+  // which share lead_source='dealer_referral' with web-dealer leads.
+  source_channel: varchar("source_channel", { length: 20 }),
   remarks: text(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -982,6 +987,14 @@ export const aiCallLogs = pgTable(
     scoring_version: varchar("scoring_version", { length: 20 }),
     signals: jsonb("signals"),
     score_breakdown: jsonb("score_breakdown"),
+    // E-168: intent-qualification band model (docs/intent_docs/intent_score.pdf).
+    // `band` is the computed qualification band (Qualified|Warm|Cold|Disqualified;
+    // null for a dropped_empty call). `call_status` is complete|dropped_partial|
+    // dropped_empty. `info_signals_count` (0–5) is the disclosed-facts count that
+    // both qualifies (≥3) and orders the Qualified inside-sales queue.
+    band: varchar("band", { length: 20 }),
+    call_status: varchar("call_status", { length: 20 }),
+    info_signals_count: integer("info_signals_count"),
   },
   (table) => {
     return {
@@ -1561,6 +1574,9 @@ export const consentRecords = pgTable("consent_records", {
   esign_error_code: varchar("esign_error_code", { length: 50 }),
   esign_error_message: text("esign_error_message"),
   signer_aadhaar_masked: varchar("signer_aadhaar_masked", { length: 20 }),
+  // Digio's name-match score (0-100) comparing the Aadhaar-holder name to the
+  // registered signer name — a secondary signal surfaced to admins (E-176).
+  signer_name_match_score: integer("signer_name_match_score"),
   rejected_by: uuid("rejected_by"),
   rejected_at: timestamp("rejected_at", { withTimezone: true }),
   rejection_reason: varchar("rejection_reason", { length: 255 }),
@@ -2541,6 +2557,9 @@ export const dealerOnboardingApplications = pgTable(
     finance_enabled: boolean("finance_enabled").default(false),
     onboarding_status: varchar("onboarding_status", { length: 30 }).default('draft').notNull(),
     review_status: varchar("review_status", { length: 30 }).default('pending'),
+    // Last wizard step a draft was left on, so a resumed onboarding reopens
+    // where the user stopped instead of restarting at step 1 (E-164).
+    draft_step: integer("draft_step").default(1),
     submitted_at: timestamp("submitted_at"),
     approved_at: timestamp("approved_at"),
     rejected_at: timestamp("rejected_at"),
@@ -2628,6 +2647,24 @@ export const dealerOnboardingApplications = pgTable(
     payment_method: varchar("payment_method", { length: 20 }),
     deal_notes: text("deal_notes"),
     quote_document_url: text("quote_document_url"),
+    // ---- E-167 WhatsApp onboarding ----
+    // source distinguishes web-wizard drafts from WhatsApp-bot-collected ones so
+    // the Sales Admin review list can badge/filter them; everything else is
+    // shared. verification_warnings / extraction_summary surface what the bot
+    // read + checked so no failed check passes silently (design §8, §16).
+    source: varchar("source", { length: 16 }).default('web').notNull(),
+    wa_phone: varchar("wa_phone", { length: 20 }),
+    wa_session_id: uuid("wa_session_id"),
+    verification_warnings: jsonb("verification_warnings").default([]).notNull(),
+    extraction_summary: jsonb("extraction_summary").default({}).notNull(),
+    dealer_confirmed_at: timestamp("dealer_confirmed_at"),
+    // ---- E-175 owner Aadhaar (for dealer-agreement signer verification) ----
+    // The owner's Aadhaar number, extracted from the Aadhaar uploaded during
+    // onboarding. At dealer-agreement signing (Aadhaar eSign) the signer's
+    // masked Aadhaar from Digio is matched against this so the agreement can't be
+    // signed with a different person's Aadhaar. Mirrors the customer-consent gate.
+    owner_aadhaar_no: varchar("owner_aadhaar_no", { length: 12 }),
+    owner_aadhaar_verified: boolean("owner_aadhaar_verified").default(false).notNull(),
   },
 );
 
@@ -2717,10 +2754,139 @@ export const dealerOnboardingDocuments = pgTable(
     created_at: timestamp("created_at").defaultNow().notNull(),
     updated_at: timestamp("updated_at").defaultNow().notNull(),
     admin_comment: text("admin_comment"),
+    // ---- E-167 WhatsApp onboarding (per-doc extraction/verification provenance) ----
+    source: varchar("source", { length: 16 }).default('web').notNull(),
+    extraction_engine: varchar("extraction_engine", { length: 24 }),
+    extraction_confidence: numeric("extraction_confidence"),
+    verification_provider: varchar("verification_provider", { length: 24 }),
   },
   (table) => ({
     applicationIdIdx: index("dealer_onboarding_documents_application_id_idx").on(
       table.application_id,
+    ),
+  }),
+);
+
+// ── E-167 WhatsApp dealer-onboarding chatbot ────────────────────────────────
+// One row per dealer conversation. Persists the conversation state machine so a
+// dropped chat resumes exactly where it left off (design §4). State values are
+// code-owned (src/lib/whatsapp/orchestrator.ts), not DB-constrained.
+export const whatsappOnboardingSessions = pgTable(
+  "whatsapp_onboarding_sessions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    wa_phone: varchar("wa_phone", { length: 20 }).notNull(),
+    wa_contact_name: text("wa_contact_name"),
+    provider: varchar("provider", { length: 16 }).default('meta').notNull(),
+    provider_conversation_id: text("provider_conversation_id"),
+    application_id: uuid("application_id"),
+    current_state: varchar("current_state", { length: 32 })
+      .default('GREETING')
+      .notNull(),
+    expected_document_type: varchar("expected_document_type", { length: 64 }),
+    detected_company_type: varchar("detected_company_type", { length: 48 }),
+    language: varchar("language", { length: 12 }).default('en').notNull(),
+    context: jsonb("context").default({}).notNull(),
+    reminder_count: integer("reminder_count").default(0).notNull(),
+    last_inbound_at: timestamp("last_inbound_at", { withTimezone: true }),
+    last_outbound_at: timestamp("last_outbound_at", { withTimezone: true }),
+    last_reminder_at: timestamp("last_reminder_at", { withTimezone: true }),
+    session_status: varchar("session_status", { length: 24 })
+      .default('active')
+      .notNull(),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    waPhoneIdx: index("whatsapp_onboarding_sessions_wa_phone_idx").on(
+      table.wa_phone,
+    ),
+    statusInboundIdx: index(
+      "whatsapp_onboarding_sessions_status_inbound_idx",
+    ).on(table.session_status, table.last_inbound_at),
+    applicationIdIdx: index(
+      "whatsapp_onboarding_sessions_application_id_idx",
+    ).on(table.application_id),
+  }),
+);
+
+// Append-only inbound/outbound log: audit trail, idempotency
+// (provider_message_id UNIQUE — duplicate webhook deliveries are no-ops), and
+// delivery-status tracking.
+export const whatsappMessages = pgTable(
+  "whatsapp_messages",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    session_id: uuid("session_id"),
+    provider_message_id: text("provider_message_id"),
+    direction: varchar("direction", { length: 12 }).notNull(),
+    message_type: varchar("message_type", { length: 24 }).notNull(),
+    text_body: text("text_body"),
+    media_provider_id: text("media_provider_id"),
+    storage_path: text("storage_path"),
+    template_name: text("template_name"),
+    delivery_status: varchar("delivery_status", { length: 16 }),
+    raw_payload: jsonb("raw_payload"),
+    // E-170: dealer self-service (post-approval) sessions. session_id FKs to the
+    // onboarding sessions table; this nullable column links dealer-mode messages.
+    dealer_session_id: uuid("dealer_session_id"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    providerMessageIdUnique: uniqueIndex(
+      "whatsapp_messages_provider_message_id_unique",
+    ).on(table.provider_message_id),
+    sessionIdIdx: index("whatsapp_messages_session_id_idx").on(
+      table.session_id,
+    ),
+    dealerSessionIdIdx: index("whatsapp_messages_dealer_session_id_idx").on(
+      table.dealer_session_id,
+    ),
+  }),
+);
+
+// E-170 — one row per APPROVED dealer's WhatsApp self-service conversation
+// (create leads, customer KYC, inventory, financing). Separate from
+// whatsapp_onboarding_sessions (E-167): onboarding is dealer-FIRST and ends at
+// approval; this picks up AFTER approval. Keyed by wa_phone. current_state /
+// session_status are code-owned (src/lib/whatsapp/dealer-orchestrator.ts) — no
+// migration needed to add a state.
+export const whatsappDealerSessions = pgTable(
+  "whatsapp_dealer_sessions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    wa_phone: varchar("wa_phone", { length: 20 }).notNull(),
+    dealer_code: varchar("dealer_code", { length: 50 }).notNull(),
+    dealer_user_id: uuid("dealer_user_id"),
+    current_state: varchar("current_state", { length: 32 })
+      .default("MENU")
+      .notNull(),
+    active_lead_id: varchar("active_lead_id", { length: 255 }),
+    context: jsonb("context").default({}).notNull(),
+    session_status: varchar("session_status", { length: 24 })
+      .default("active")
+      .notNull(),
+    last_inbound_at: timestamp("last_inbound_at", { withTimezone: true }),
+    last_outbound_at: timestamp("last_outbound_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    waPhoneIdx: index("whatsapp_dealer_sessions_wa_phone_idx").on(
+      table.wa_phone,
+    ),
+    dealerCodeIdx: index("whatsapp_dealer_sessions_dealer_code_idx").on(
+      table.dealer_code,
     ),
   }),
 );
@@ -2832,6 +2998,13 @@ export const dealerLeads = pgTable("dealer_leads", {
   onboarding_dropout_reason: varchar("onboarding_dropout_reason", { length: 50 }),
   onboarding_dropout_notes: text("onboarding_dropout_notes"),
   interest_level: varchar("interest_level", { length: 20 }),
+  // E-168: intent-qualification band model. `intent_band` is the latest call's
+  // band, `call_status` its complete|dropped_partial|dropped_empty status, and
+  // `info_signals_count` (0–5) the disclosed-facts count used to order the
+  // Qualified inside-sales queue (more facts disclosed = higher priority).
+  intent_band: varchar("intent_band", { length: 20 }),
+  call_status: varchar("call_status", { length: 20 }),
+  info_signals_count: integer("info_signals_count"),
   preliminary_payment_intent: text("preliminary_payment_intent"),
   pre_transfer_status: varchar("pre_transfer_status", { length: 50 }),
   brochure_sent_at: timestamp("brochure_sent_at", { withTimezone: true }),
@@ -3250,12 +3423,85 @@ export const nbfcUsers = pgTable(
     user_id: uuid("user_id").notNull(),
     tenant_id: uuid("tenant_id").notNull(),
     role: varchar({ length: 32 }).default('viewer').notNull(),
+    // E-162 — optional custom RBAC role. NULL ⇒ run on the `role` string
+    // default (every existing row); set ⇒ fine-grained permissions from
+    // nbfc_role_permissions. role still drives the legacy coarse checks.
+    role_id: uuid("role_id"),
     notification_prefs: jsonb("notification_prefs").default({}).notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     userTenantIdx: index("nbfc_users_user_tenant_idx").on(table.user_id, table.tenant_id),
     tenantIdx: index("nbfc_users_tenant_idx").on(table.tenant_id),
+  }),
+);
+
+// E-162 — NBFC Custom RBAC (§15.8). Tenant-scoped custom roles cloned from a
+// system role; the five system roles are CODE defaults (src/lib/nbfc/permissions.ts)
+// and are NOT stored here. base_role maps a custom role back to a system role
+// for the legacy coarse role checks; fine-grained access comes from
+// nbfcRolePermissions.
+export const nbfcRoles = pgTable(
+  "nbfc_roles",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    name: varchar("name", { length: 64 }).notNull(),
+    description: text("description"),
+    base_role: varchar("base_role", { length: 32 }).notNull(),
+    is_active: boolean("is_active").default(true).notNull(),
+    created_by: uuid("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdx: index("nbfc_roles_tenant_idx").on(table.tenant_id, table.is_active),
+  }),
+);
+
+export const nbfcRolePermissions = pgTable(
+  "nbfc_role_permissions",
+  {
+    role_id: uuid("role_id").notNull().references(() => nbfcRoles.id, { onDelete: "cascade" }),
+    permission_key: varchar("permission_key", { length: 64 }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.role_id, table.permission_key] }),
+  }),
+);
+
+// E-163 — Per-NBFC Notification Channels (§15.5). One row per tenant. The
+// channel resolver falls back to the platform-global env gateway when a row is
+// absent or a channel is left on its '*_default' mode, so existing sends are
+// unchanged until an NBFC opts in.
+export const nbfcNotificationChannels = pgTable(
+  "nbfc_notification_channels",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    email_mode: varchar("email_mode", { length: 16 }).default("itarang_default").notNull(),
+    email_from: text("email_from"),
+    email_from_name: text("email_from_name"),
+    smtp_host: text("smtp_host"),
+    smtp_port: integer("smtp_port"),
+    smtp_user: text("smtp_user"),
+    smtp_pass: text("smtp_pass"),
+    smtp_secure: boolean("smtp_secure").default(false).notNull(),
+    sms_provider: varchar("sms_provider", { length: 24 }).default("itarang_default").notNull(),
+    sms_api_key: text("sms_api_key"),
+    sms_source: text("sms_source"),
+    sms_dlt_template_id: text("sms_dlt_template_id"),
+    whatsapp_enabled: boolean("whatsapp_enabled").default(false).notNull(),
+    whatsapp_provider: varchar("whatsapp_provider", { length: 24 }),
+    whatsapp_waba_id: text("whatsapp_waba_id"),
+    whatsapp_api_key: text("whatsapp_api_key"),
+    whatsapp_from: text("whatsapp_from"),
+    whatsapp_templates: jsonb("whatsapp_templates"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantUnique: uniqueIndex("nbfc_notification_channels_tenant_unique").on(table.tenant_id),
   }),
 );
 
@@ -3323,6 +3569,17 @@ export const nbfcFinancingOffers = pgTable(
     conditions: text("conditions"),
     valid_until: date("valid_until"),
     status: varchar({ length: 16 }).default("active").notNull(), // 'active' | 'withdrawn'
+    // E-161 — iTarang CEO approval gate for out-of-band deviations (§13.3.4).
+    // ceo_approval_status: not_required | pending | approved | rejected. An offer
+    // is released to the dealer only when not_required or approved. deviation_*
+    // capture why it tripped the gate; ceo_* the platform-CEO decision.
+    deviation_detected: boolean("deviation_detected").default(false).notNull(),
+    deviation_fields: jsonb("deviation_fields"),
+    deviation_reason: text("deviation_reason"),
+    ceo_approval_status: varchar("ceo_approval_status", { length: 24 }).default("not_required").notNull(),
+    ceo_approval_request_id: uuid("ceo_approval_request_id"),
+    ceo_decided_by: uuid("ceo_decided_by"),
+    ceo_decided_at: timestamp("ceo_decided_at", { withTimezone: true }),
     submitted_by: uuid("submitted_by"),
     submitted_at: timestamp("submitted_at", { withTimezone: true }).defaultNow().notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -3332,6 +3589,7 @@ export const nbfcFinancingOffers = pgTable(
     assignmentUnique: uniqueIndex("nbfc_financing_offers_assignment_unique").on(table.assignment_id),
     leadIdx: index("nbfc_financing_offers_lead_idx").on(table.lead_id),
     tenantIdx: index("nbfc_financing_offers_tenant_idx").on(table.tenant_id),
+    ceoStatusIdx: index("nbfc_financing_offers_ceo_status_idx").on(table.ceo_approval_status),
   }),
 );
 
@@ -3351,7 +3609,22 @@ export const nbfcServiceConfig = pgTable(
     enach_enabled: boolean("enach_enabled").default(false).notNull(),
     enach_handoff_method: varchar("enach_handoff_method", { length: 16 }), // 'redirect' | 'webhook' | 'itarang_razorpay'
     enach_endpoint_url: text("enach_endpoint_url"),
-    doc_agreement_method: varchar("doc_agreement_method", { length: 24 }), // 'upload' | 'digio' | 'api_autofetch'
+    doc_agreement_method: varchar("doc_agreement_method", { length: 24 }), // 'upload' | 'digio' | 'api_autofetch' | 'own_esign' (E-165)
+    // E-165 — bring-your-own-provider handoff. Endpoint URLs the NBFC's OWN
+    // provider is reached at when a rail is in "own" mode (vkyc_mode='own' /
+    // doc_agreement_method='own_esign'); read live (NOT snapshotted). The
+    // *_webhook_secret are iTarang-minted HMAC secrets for signing outbound
+    // handoffs + verifying inbound result callbacks. NBFC API keys are NEVER
+    // stored — only these URLs + secrets.
+    vkyc_endpoint_url: text("vkyc_endpoint_url"),
+    esign_endpoint_url: text("esign_endpoint_url"),
+    vkyc_webhook_secret: text("vkyc_webhook_secret"),
+    enach_webhook_secret: text("enach_webhook_secret"),
+    esign_webhook_secret: text("esign_webhook_secret"),
+    // E-166 — which e-sign provider the NBFC's loan agreements use (their own
+    // Digio account / Leegality / …). NULL ⇒ 'digio' = iTarang's global account
+    // (today's behaviour). Only meaningful when doc_agreement_method='digio'.
+    esign_provider: varchar("esign_provider", { length: 24 }),
     store_sanction_letter: boolean("store_sanction_letter").default(false).notNull(),
     store_loan_agreement: boolean("store_loan_agreement").default(false).notNull(),
     track_completion_gate: boolean("track_completion_gate").default(true).notNull(),
@@ -3367,6 +3640,35 @@ export const nbfcServiceConfig = pgTable(
   },
   (table) => ({
     tenantUnique: uniqueIndex("nbfc_service_config_tenant_unique").on(table.tenant_id),
+  }),
+);
+
+// E-166 — per-tenant ENCRYPTED e-sign provider credentials (Model B). An NBFC's
+// own provider keys (Leegality token, own Digio client id/secret, …) stored as
+// an AES-256-GCM blob (see src/lib/nbfc/esign/crypto.ts); never plaintext.
+// Absence of a row ⇒ iTarang's global Digio account (the fallback).
+export const nbfcProviderCredentials = pgTable(
+  "nbfc_provider_credentials",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull().references(() => nbfcTenants.id),
+    provider_type: varchar("provider_type", { length: 24 }).notNull(), // 'digio' | 'leegality' | …
+    environment: varchar("environment", { length: 12 }).default("sandbox").notNull(),
+    ciphertext: text("ciphertext").notNull(),
+    iv: text("iv").notNull(),
+    auth_tag: text("auth_tag").notNull(),
+    key_version: integer("key_version").default(1).notNull(),
+    label: text("label"),
+    last_tested_at: timestamp("last_tested_at", { withTimezone: true }),
+    last_test_ok: boolean("last_test_ok"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantProviderUnique: uniqueIndex("nbfc_provider_credentials_tenant_provider_unique").on(
+      table.tenant_id,
+      table.provider_type,
+    ),
   }),
 );
 
@@ -3455,7 +3757,9 @@ export const nbfcLoanAgreements = pgTable(
     nbfc_id: integer("nbfc_id").notNull(),
     tenant_id: uuid("tenant_id").notNull(),
     agreement_ref: varchar("agreement_ref", { length: 64 }).notNull(),
-    method: varchar({ length: 16 }), // 'upload' | 'digio' | 'api_autofetch'
+    method: varchar({ length: 16 }), // 'upload' | 'digio' | 'api_autofetch' | 'own_esign' (E-165)
+    // E-166 — e-sign provider that owns this attempt (NULL ⇒ legacy 'digio').
+    provider_type: varchar("provider_type", { length: 24 }),
     // 'pending' | 'in_progress' | 'signed' | 'failed' | 'skipped'
     status: varchar({ length: 20 }).default("pending").notNull(),
     digio_document_id: varchar("digio_document_id", { length: 120 }),
@@ -3694,6 +3998,21 @@ export const nbfcWallets = pgTable(
     auto_nach_threshold: numeric("auto_nach_threshold", { precision: 14, scale: 2 }),
     auto_nach_recharge_amount: numeric("auto_nach_recharge_amount", { precision: 14, scale: 2 }),
     auto_nach_mandate_ref: varchar("auto_nach_mandate_ref", { length: 120 }),
+    // E-160 — §16.4 funds-provider handles. provider_name + the iTarang Virtual
+    // Account (Smart Collect) display fields + the creditor-side auto-recharge
+    // mandate handles. NBFC-facing UI must use "iTarang Virtual Account" /
+    // "iTarang Auto-Recharge Mandate", never the vendor name (§3.2).
+    provider_name: varchar("provider_name", { length: 40 }),
+    va_provider_account_id: varchar("va_provider_account_id", { length: 64 }),
+    va_upi_vpa: varchar("va_upi_vpa", { length: 120 }),
+    va_account_number: varchar("va_account_number", { length: 40 }),
+    va_ifsc: varchar("va_ifsc", { length: 20 }),
+    va_status: varchar("va_status", { length: 24 }),
+    auto_nach_customer_id: varchar("auto_nach_customer_id", { length: 64 }),
+    auto_nach_token_id: varchar("auto_nach_token_id", { length: 64 }),
+    auto_nach_order_id: varchar("auto_nach_order_id", { length: 64 }),
+    auto_nach_status: varchar("auto_nach_status", { length: 24 }).default("none"), // none | pending | registered | failed
+    auto_nach_last_fired_at: timestamp("auto_nach_last_fired_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -3743,11 +4062,38 @@ export const nbfcWalletLedger = pgTable(
     trigger_rule: varchar("trigger_rule", { length: 24 }),
     posted_by: uuid("posted_by"),
     month: varchar({ length: 7 }).notNull(),
+    // E-160 — provider inflow correlation handle on top-up lines (§16.3 audit).
+    provider_event_id: varchar("provider_event_id", { length: 120 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     tenantMonthIdx: index("nbfc_wallet_ledger_tenant_month_idx").on(table.tenant_id, table.month),
     leadIdx: index("nbfc_wallet_ledger_lead_idx").on(table.lead_id),
+  }),
+);
+
+// E-160 — Addendum V0.3.1 §16.3/§16.4. Idempotency + audit ledger for wallet
+// money-IN (VA credits + recurring-debit settlements). The UNIQUE on
+// (provider_name, provider_event_id) is the dedupe guarantee — a re-delivered
+// webhook inserts ON CONFLICT DO NOTHING, so it cannot double-credit the wallet.
+// ledger_id links to the topup line actually posted (NULL until posted).
+export const nbfcWalletInflows = pgTable(
+  "nbfc_wallet_inflows",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    nbfc_id: integer("nbfc_id"),
+    provider_name: varchar("provider_name", { length: 40 }).notNull(),
+    provider_event_id: varchar("provider_event_id", { length: 120 }).notNull(),
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+    raw_status: varchar("raw_status", { length: 40 }),
+    ledger_id: uuid("ledger_id"),
+    raw_payload: jsonb("raw_payload"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    eventUnique: uniqueIndex("nbfc_wallet_inflows_event_unique").on(table.provider_name, table.provider_event_id),
+    tenantIdx: index("nbfc_wallet_inflows_tenant_idx").on(table.tenant_id),
   }),
 );
 
@@ -4045,8 +4391,21 @@ export const emiSchedules = pgTable(
     loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
     due_date: date("due_date").notNull(),
     paid_at: timestamp("paid_at", { withTimezone: true }),
+    // Canonical set: scheduled | overdue | missed | paid | paid_late | failed
     status: varchar({ length: 16 }).notNull(),
     days_overdue: integer("days_overdue"),
+    // E-171 — EMI Tracker per-installment fields.
+    emi_seq: integer("emi_seq"),
+    amount: numeric("amount", { precision: 12, scale: 2 }),
+    // E-173 — cumulative amount collected against this installment (partial
+    // payments). Fully settled when amount_paid >= amount.
+    amount_paid: numeric("amount_paid", { precision: 12, scale: 2 }).default("0").notNull(),
+    principal_component: numeric("principal_component", { precision: 12, scale: 2 }),
+    interest_component: numeric("interest_component", { precision: 12, scale: 2 }),
+    attempt_count: integer("attempt_count").default(0).notNull(),
+    last_attempt_at: timestamp("last_attempt_at", { withTimezone: true }),
+    payment_ref: varchar("payment_ref", { length: 64 }),
+    collection_mode: varchar("collection_mode", { length: 16 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -4055,6 +4414,59 @@ export const emiSchedules = pgTable(
       table.loan_sanction_id,
       table.due_date,
     ),
+    statusDueIdx: index("emi_schedules_status_due_idx").on(
+      table.status,
+      table.due_date,
+    ),
+  }),
+);
+
+// -----------------------------------------------------------------------------
+// E-172 — EMI Tracker: per-attempt collection ledger.
+// -----------------------------------------------------------------------------
+// One row per auto-debit / collection attempt against an emi_schedules row.
+// emi_schedules holds installment STATE; this holds the EVENTS (every try, with
+// Razorpay correlation handles + raw payload). The UNIQUE index on
+// idempotency_key is the hard double-debit guard — the auto-debit cron inserts
+// ON CONFLICT DO NOTHING with a deterministic per-(emi, cycle) key.
+// -----------------------------------------------------------------------------
+export const emiPaymentAttempts = pgTable(
+  "emi_payment_attempts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    emi_schedule_id: uuid("emi_schedule_id").notNull(),
+    loan_sanction_id: varchar("loan_sanction_id", { length: 255 }).notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    idempotency_key: varchar("idempotency_key", { length: 80 }).notNull(),
+    // 'simulate' | 'live' | 'manual'
+    mode: varchar("mode", { length: 16 }).notNull(),
+    // 'enach' | 'upi_link' | 'cash' | 'upi' | 'bank_transfer' | 'cheque' | 'qr'
+    channel: varchar("channel", { length: 16 }).notNull(),
+    razorpay_order_id: varchar("razorpay_order_id", { length: 64 }),
+    razorpay_payment_id: varchar("razorpay_payment_id", { length: 64 }),
+    razorpay_customer_id: varchar("razorpay_customer_id", { length: 64 }),
+    razorpay_token_id: varchar("razorpay_token_id", { length: 64 }),
+    amount_paise: integer("amount_paise").notNull(),
+    // 'initiated' | 'submitted' | 'succeeded' | 'failed' | 'simulated'
+    status: varchar({ length: 20 }).notNull(),
+    provider_raw_status: varchar("provider_raw_status", { length: 120 }),
+    failure_reason: text("failure_reason"),
+    provider_raw_payload: jsonb("provider_raw_payload"),
+    // E-173 — manual-collection metadata.
+    reference_no: varchar("reference_no", { length: 80 }),
+    document_url: text("document_url"),
+    collected_at: timestamp("collected_at", { withTimezone: true }),
+    note: text("note"),
+    actor_user_id: uuid("actor_user_id"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    idemUnique: uniqueIndex("emi_payment_attempts_idem_uniq").on(table.idempotency_key),
+    tenantIdx: index("emi_payment_attempts_tenant_idx").on(table.tenant_id),
+    emiIdx: index("emi_payment_attempts_emi_idx").on(table.emi_schedule_id),
+    orderIdx: index("emi_payment_attempts_order_idx").on(table.razorpay_order_id),
+    paymentIdx: index("emi_payment_attempts_payment_idx").on(table.razorpay_payment_id),
   }),
 );
 
@@ -6023,6 +6435,9 @@ export const zohoInvoices = pgTable(
   {
     id: uuid().defaultRandom().primaryKey().notNull(),
     zoho_invoice_id: varchar("zoho_invoice_id", { length: 64 }).notNull(),
+    // E-171 — which Zoho organization (entity) this invoice belongs to. The
+    // sync pulls from multiple orgs (Haryana + Delhi) into this one table.
+    organization_id: varchar("organization_id", { length: 64 }),
     invoice_number: varchar("invoice_number", { length: 64 }),
     customer_id: varchar("customer_id", { length: 64 }),
     customer_name: text("customer_name"),
@@ -6032,6 +6447,12 @@ export const zohoInvoices = pgTable(
     total: numeric("total", { precision: 14, scale: 2 }),
     balance: numeric("balance", { precision: 14, scale: 2 }),
     status: varchar({ length: 32 }),
+    // E-174 — latest applied payment's reference (UTR / bank txn id), id and
+    // date, pulled from Zoho /customerpayments so the CEO can see the txn id
+    // behind a paid invoice.
+    payment_reference: text("payment_reference"),
+    payment_id: varchar("payment_id", { length: 64 }),
+    last_payment_date: date("last_payment_date"),
     raw_json: jsonb("raw_json"),
     synced_at: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -6045,6 +6466,9 @@ export const zohoInvoices = pgTable(
       table.invoice_date,
     ),
     zohoInvoicesStatusIdx: index("zoho_invoices_status_idx").on(table.status),
+    zohoInvoicesOrganizationIdIdx: index(
+      "zoho_invoices_organization_id_idx",
+    ).on(table.organization_id),
   }),
 );
 
@@ -6062,6 +6486,16 @@ export const expenseSubmissions = pgTable(
     approved_by: uuid("approved_by"),
     approved_at: timestamp("approved_at", { withTimezone: true }),
     rejection_reason: text("rejection_reason"),
+    // E-106 — AI invoice tracker fields
+    department: varchar("department", { length: 32 }),
+    project_tag: varchar("project_tag", { length: 80 }),
+    vendor: varchar("vendor", { length: 160 }),
+    expense_date: date("expense_date"),
+    source: varchar("source", { length: 16 }).default("manual"),
+    ai_raw: jsonb("ai_raw"),
+    // E-172 — invoice number (dedup key for AI rows) + original upload filename.
+    invoice_number: varchar("invoice_number", { length: 120 }),
+    file_name: varchar("file_name", { length: 255 }),
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -6075,6 +6509,17 @@ export const expenseSubmissions = pgTable(
     expenseSubmissionsApprovedAtIdx: index(
       "expense_submissions_approved_at_idx",
     ).on(table.approved_at),
+    expenseSubmissionsDepartmentIdx: index(
+      "expense_submissions_department_idx",
+    ).on(table.department),
+    expenseSubmissionsDepartmentProjectIdx: index(
+      "expense_submissions_department_project_idx",
+    ).on(table.department, table.project_tag),
+    // E-172 — case-insensitive lookup for invoice-number dedup. The partial
+    // unique index (AI rows, non-blank number) lives in the migration only.
+    expenseSubmissionsInvoiceNumberIdx: index(
+      "expense_submissions_invoice_number_idx",
+    ).on(sql`lower(${table.invoice_number})`),
   }),
 );
 
@@ -6087,6 +6532,28 @@ export const zohoSyncState = pgTable("zoho_sync_state", {
   last_status: varchar("last_status", { length: 16 }),
   last_error: text("last_error"),
 });
+
+// E-176 — Manual / offline dealer sales bulk-uploaded by the CEO, surfaced
+// alongside Zoho invoices in the "Sales to Dealer" drill-down.
+export const manualDealerSales = pgTable(
+  "manual_dealer_sales",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    sale_date: date("sale_date").notNull(),
+    customer_name: text("customer_name"),
+    product_name: text("product_name"),
+    quantity: numeric("quantity", { precision: 12, scale: 2 }),
+    amount: numeric("amount", { precision: 14, scale: 2 }).default("0").notNull(),
+    invoice_number: text("invoice_number"),
+    uploaded_by: text("uploaded_by"),
+    created_at: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => ({
+    saleDateIdx: index("manual_dealer_sales_sale_date_idx").on(t.sale_date),
+  }),
+);
 
 // ─────────────────────────────────────────────────────────────────────────
 // Part 0 BRD support tables (E-113 .. E-124).
@@ -6435,5 +6902,372 @@ export const userPreferences = pgTable(
       t.user_id,
       t.pref_key,
     ),
+  }),
+);
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * LOAN CALCULATOR (dealer-portal EMI calculator + admin console)
+ * Ported from the verified handoff schema. All tables prefixed calc_ to avoid
+ * collision with existing project tables (leads/settings/schemes/nbfcs/...).
+ * Money in PAISE (1 rupee = 100); rates as numeric. Config is effective-dated
+ * (valid_from/valid_to) + versioned (calc_config_versions) for quote reproduction.
+ * Guard constraints (partial-unique "one current row", checks) live in migration
+ * drizzle/E-177_loan_calculator.sql. Engine: src/lib/calculator/engine.ts.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+export const calcEngineVariant = pgEnum("calc_engine_variant", ["A", "B"]);
+export const calcRecordStatus = pgEnum("calc_record_status", ["active", "disabled"]);
+export const calcAuditAction = pgEnum("calc_audit_action", ["create", "update", "delete"]);
+export const calcCoverageType = pgEnum("calc_coverage_type", ["CITY", "PAN_INDIA"]);
+export const calcComponentKind = pgEnum("calc_component_kind", [
+  "battery",
+  "charger",
+  "harness",
+  "soc",
+  "iot",
+]);
+export const calcLeadFilterOutcome = pgEnum("calc_lead_filter_outcome", [
+  "qualified",
+  "stretch_only",
+  "none",
+]);
+
+// One row per published state of config. Every admin save inserts a new version
+// and stamps the changed rows' valid_from with it (config-as-of-version resolution).
+export const calcConfigVersions = pgTable(
+  "calc_config_versions",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdBy: uuid("created_by").notNull(),
+    note: text("note"),
+    changeSummary: jsonb("change_summary"),
+  },
+  (t) => ({
+    createdAtIdx: index("calc_config_versions_created_at_idx").on(t.createdAt),
+  }),
+);
+
+// One row per mutation on any config table (who/what/before->after) for the
+// version-history & rollback screen.
+export const calcAuditLog = pgTable(
+  "calc_audit_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+    actorId: uuid("actor_id").notNull(),
+    action: calcAuditAction("action").notNull(),
+    entity: text("entity").notNull(),
+    entityId: text("entity_id").notNull(),
+    before: jsonb("before"),
+    after: jsonb("after"),
+    configVersionId: bigint("config_version_id", { mode: "number" }).references(
+      () => calcConfigVersions.id,
+    ),
+  },
+  (t) => ({
+    entityIdx: index("calc_audit_log_entity_idx").on(t.entity, t.entityId),
+    atIdx: index("calc_audit_log_at_idx").on(t.at),
+    actorIdx: index("calc_audit_log_actor_idx").on(t.actorId),
+  }),
+);
+
+// Global settings (effective-dated, single current row). dealer margin, near-best
+// window, disclaimer, filter-required toggles, Card-2 footer contacts.
+export const calcSettings = pgTable(
+  "calc_settings",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    dealerMarginPaise: bigint("dealer_margin_paise", { mode: "number" }).notNull(),
+    nearBestWindowPct: numeric("near_best_window_pct", { precision: 5, scale: 2 })
+      .default("25")
+      .notNull(),
+    expectedEmiFilterRequired: boolean("expected_emi_filter_required").default(false).notNull(),
+    upfrontFilterRequired: boolean("upfront_filter_required").default(false).notNull(),
+    disclaimerText: text("disclaimer_text").notNull(),
+    cardFooterDisclaimer: text("card_footer_disclaimer").notNull(),
+    contactPhone: text("contact_phone").notNull(),
+    contactEmail: text("contact_email").notNull(),
+    contactWhatsapp: text("contact_whatsapp").notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    currentIdx: index("calc_settings_valid_to_idx").on(t.validTo),
+  }),
+);
+
+export const calcBatteryModels = pgTable(
+  "calc_battery_models",
+  {
+    id: serial("id").primaryKey(),
+    skuCode: text("sku_code").notNull(),
+    displayName: text("display_name").notNull(),
+    voltage: numeric("voltage", { precision: 5, scale: 1 }),
+    capacityAh: integer("capacity_ah"),
+    chargerSku: text("charger_sku"),
+    status: calcRecordStatus("status").default("active").notNull(),
+  },
+  (t) => ({
+    skuUq: uniqueIndex("calc_battery_models_sku_uq").on(t.skuCode),
+  }),
+);
+
+// price_with_gst = (battery+harness+soc+iot)*1.18 + charger*1.05 (per-component gst stored).
+export const calcComponentPrices = pgTable(
+  "calc_component_prices",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    modelId: integer("model_id")
+      .references(() => calcBatteryModels.id)
+      .notNull(),
+    component: calcComponentKind("component").notNull(),
+    amountPaise: bigint("amount_paise", { mode: "number" }).notNull(),
+    gstMultiplier: numeric("gst_multiplier", { precision: 5, scale: 4 }).notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    lookupIdx: index("calc_component_prices_lookup_idx").on(t.modelId, t.component, t.validTo),
+  }),
+);
+
+// Optional per-model dealer-margin override. Precedence: model override -> settings.
+export const calcDealerMarginOverrides = pgTable(
+  "calc_dealer_margin_overrides",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    modelId: integer("model_id")
+      .references(() => calcBatteryModels.id)
+      .notNull(),
+    dealerMarginPaise: bigint("dealer_margin_paise", { mode: "number" }).notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    lookupIdx: index("calc_dealer_margin_overrides_lookup_idx").on(t.modelId, t.validTo),
+  }),
+);
+
+// Variant A: flatMaxLoan + flatInterestRate used. Variant B: those are null; cap is
+// per-model (calc_nbfc_model_caps), rate is per-scheme (calc_schemes).
+export const calcNbfcs = pgTable(
+  "calc_nbfcs",
+  {
+    id: serial("id").primaryKey(),
+    nbfcCode: text("nbfc_code").notNull(),
+    name: text("name").notNull(),
+    variant: calcEngineVariant("variant").notNull(),
+    maxLoanCapPaise: bigint("max_loan_cap_paise", { mode: "number" }),
+    flatInterestRate: numeric("flat_interest_rate", { precision: 10, scale: 7 }),
+    fileFeePaise: bigint("file_fee_paise", { mode: "number" }).notNull(),
+    defaultProcessingFeePaise: bigint("default_processing_fee_paise", {
+      mode: "number",
+    }).notNull(),
+    status: calcRecordStatus("status").default("active").notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    nameUq: uniqueIndex("calc_nbfcs_name_uq").on(t.name, t.validTo),
+    statusIdx: index("calc_nbfcs_status_idx").on(t.status, t.validTo),
+  }),
+);
+
+export const calcNbfcModelCaps = pgTable(
+  "calc_nbfc_model_caps",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    nbfcId: integer("nbfc_id")
+      .references(() => calcNbfcs.id)
+      .notNull(),
+    modelId: integer("model_id")
+      .references(() => calcBatteryModels.id)
+      .notNull(),
+    maxLoanCapPaise: bigint("max_loan_cap_paise", { mode: "number" }).notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    lookupIdx: index("calc_nbfc_model_caps_lookup_idx").on(t.nbfcId, t.modelId, t.validTo),
+  }),
+);
+
+// code "XbyY" derived from (tenure, advance). appliedInterestRate = the rate actually
+// used in interest = loan*rate*tenure/12 (NOT a display/MBD rate). advance < tenure.
+export const calcSchemes = pgTable(
+  "calc_schemes",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    nbfcId: integer("nbfc_id")
+      .references(() => calcNbfcs.id)
+      .notNull(),
+    tenureMonths: integer("tenure_months").notNull(),
+    advanceMonths: integer("advance_months").notNull(),
+    code: text("code").notNull(),
+    appliedInterestRate: numeric("applied_interest_rate", { precision: 10, scale: 7 }),
+    processingFeePaise: bigint("processing_fee_paise", { mode: "number" }),
+    advanceInterestRate: numeric("advance_interest_rate", { precision: 10, scale: 7 }),
+    status: calcRecordStatus("status").default("active").notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    nbfcIdx: index("calc_schemes_nbfc_idx").on(t.nbfcId, t.status, t.validTo),
+    codeIdx: index("calc_schemes_code_idx").on(t.nbfcId, t.code),
+  }),
+);
+
+// An NBFC is either PAN_INDIA (city_normalized NULL) or has explicit CITY rows.
+// A city may map to multiple NBFCs (intended).
+export const calcNbfcCoverage = pgTable(
+  "calc_nbfc_coverage",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    nbfcId: integer("nbfc_id")
+      .references(() => calcNbfcs.id)
+      .notNull(),
+    coverageType: calcCoverageType("coverage_type").notNull(),
+    cityNormalized: text("city_normalized"),
+    stateCode: text("state_code"),
+    cityDisplay: text("city_display"),
+    validFrom: timestamp("valid_from", { withTimezone: true }).defaultNow().notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    configVersionId: bigint("config_version_id", { mode: "number" })
+      .references(() => calcConfigVersions.id)
+      .notNull(),
+  },
+  (t) => ({
+    cityIdx: index("calc_nbfc_coverage_city_idx").on(t.cityNormalized, t.validTo),
+    nbfcIdx: index("calc_nbfc_coverage_nbfc_idx").on(t.nbfcId, t.validTo),
+  }),
+);
+
+// E-178: WhatsApp OTP sessions for the calculator gate. Matched by
+// (created_by, phone) — users.dealer_id can be NULL, so the user id is the key.
+export const calcOtpVerifications = pgTable(
+  "calc_otp_verifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdBy: uuid("created_by").notNull(),
+    dealerId: varchar("dealer_id", { length: 255 }),
+    phone: text("phone").notNull(), // normalized digits: 91XXXXXXXXXX
+    customerName: text("customer_name"),
+    otpHash: text("otp_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    sendCount: integer("send_count").default(1).notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    waStatus: text("wa_status"), // 'sent' | 'dev_hardcoded' | 'failed'
+  },
+  (t) => ({
+    lookupIdx: index("calc_otp_verif_lookup_idx").on(t.createdBy, t.phone, t.createdAt),
+  }),
+);
+
+// Saved quotes - one row per dealer calculation. Stamped with the outcome, the
+// exact config version used, and a snapshot of the cards shown (dispute reproduction).
+export const calcLeads = pgTable(
+  "calc_leads",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    dealerId: varchar("dealer_id", { length: 255 }),
+    customerName: text("customer_name").notNull(),
+    phone: text("phone").notNull(),
+    pincode: text("pincode"),
+    city: text("city"),
+    state: text("state"),
+    expectedEmiPaise: bigint("expected_emi_paise", { mode: "number" }),
+    upfrontAbilityPaise: bigint("upfront_ability_paise", { mode: "number" }),
+    tenureMonths: integer("tenure_months"),
+    modelId: integer("model_id").references(() => calcBatteryModels.id),
+    filterOutcome: calcLeadFilterOutcome("filter_outcome"),
+    configVersionId: bigint("config_version_id", { mode: "number" }).references(
+      () => calcConfigVersions.id,
+    ),
+    resultSnapshot: jsonb("result_snapshot"),
+    crmLeadId: text("crm_lead_id"),
+    crmSyncedAt: timestamp("crm_synced_at", { withTimezone: true }),
+    idempotencyKey: text("idempotency_key"),
+    // E-178: OTP gate + WhatsApp results delivery stamps
+    otpVerificationId: uuid("otp_verification_id").references(() => calcOtpVerifications.id),
+    otpVerifiedAt: timestamp("otp_verified_at", { withTimezone: true }),
+    waResultsStatus: text("wa_results_status"), // 'sent' | 'failed' | 'skipped'
+    waResultsSentAt: timestamp("wa_results_sent_at", { withTimezone: true }),
+  },
+  (t) => ({
+    phoneIdx: index("calc_leads_phone_idx").on(t.phone),
+    createdAtIdx: index("calc_leads_created_at_idx").on(t.createdAt),
+    dealerIdx: index("calc_leads_dealer_idx").on(t.dealerId),
+  }),
+);
+
+export const calcNbfcsRelations = relations(calcNbfcs, ({ many }) => ({
+  schemes: many(calcSchemes),
+  modelCaps: many(calcNbfcModelCaps),
+  coverage: many(calcNbfcCoverage),
+}));
+
+export const calcSchemesRelations = relations(calcSchemes, ({ one }) => ({
+  nbfc: one(calcNbfcs, { fields: [calcSchemes.nbfcId], references: [calcNbfcs.id] }),
+}));
+
+export const calcBatteryModelsRelations = relations(calcBatteryModels, ({ many }) => ({
+  componentPrices: many(calcComponentPrices),
+  modelCaps: many(calcNbfcModelCaps),
+}));
+
+export const calcComponentPricesRelations = relations(calcComponentPrices, ({ one }) => ({
+  model: one(calcBatteryModels, {
+    fields: [calcComponentPrices.modelId],
+    references: [calcBatteryModels.id],
+  }),
+}));
+
+// ── E-179 Central lead registry ──────────────────────────────────────────────
+// One append-only row for EVERY new lead-like capture across the platform —
+// customer leads (web + WhatsApp), dealer onboarding (web wizard + WhatsApp
+// bot), NBFC onboarding, OEM. The originating record lives in its own table;
+// source_table/source_id link back to it. Written best-effort via
+// recordLeadCapture() in src/lib/leads/lead-registry.ts — never blocks the
+// main flow. The partial unique index on (source_table, source_id) makes the
+// helper idempotent on retries/double-submits.
+export const leadRegistry = pgTable(
+  "lead_registry",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    leadType: varchar("lead_type", { length: 16 }).notNull(), // 'dealer' | 'customer' | 'oem' | 'nbfc'
+    name: text("name").notNull(),
+    phone: varchar("phone", { length: 20 }),
+    sourceChannel: varchar("source_channel", { length: 16 }).notNull(), // 'web' | 'whatsapp' | 'admin' | 'scraper'
+    sourceTable: text("source_table"),
+    sourceId: text("source_id"),
+  },
+  (t) => ({
+    typeCreatedIdx: index("lead_registry_type_created_idx").on(t.leadType, t.createdAt),
+    phoneIdx: index("lead_registry_phone_idx").on(t.phone),
   }),
 );

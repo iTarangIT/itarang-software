@@ -2,14 +2,15 @@
 
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Plus, X, AlertCircle, Scan, Info, ChevronRight, ChevronDown, Loader2, ShieldCheck, UserPlus, ArrowRight } from 'lucide-react';
-import { State, City } from 'country-state-city';
+import { Plus, X, AlertCircle, Scan, Info, ChevronDown, Loader2, ShieldCheck, UserPlus, ArrowRight } from 'lucide-react';
+import { useIndiaLocationData } from '@/lib/location/useIndiaLocationData';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { DatePicker } from '@/components/ui/date-picker';
+import { confirmDialog } from '@/components/ui/confirm-dialog';
 import {
     SectionCard, InputField, SelectField, TextAreaField,
     ProgressHeader, StickyBottomBar, ErrorBanner,
-    PrimaryButton, SecondaryButton, OutlineButton, OCRModal, FullPageLoader,
+    PrimaryButton, SecondaryButton, OCRModal, FullPageLoader,
     DigilockerKycButton,
 } from '@/components/dealer-portal/lead-wizard/shared';
 import {
@@ -56,7 +57,45 @@ const emptyFormData = {
     has_life_insurance: null,      // boolean | null
 };
 
+// Human labels for the validation summary, in visual (top-to-bottom) order so
+// the "missing fields" message reads the same way the form is laid out.
+const FIELD_LABELS: Record<string, string> = {
+    full_name: 'Full Name',
+    father_or_husband_name: 'Father/Husband Name',
+    dob: 'Date of Birth',
+    phone: 'Phone Number',
+    email: 'Email Address',
+    current_address: 'Current Address',
+    state: 'State',
+    city: 'City',
+    permanent_address: 'Permanent Address',
+    product_category_id: 'Product Category',
+    primary_product_id: 'Product',
+    vehicle_rc: 'Vehicle Reg. Number',
+    vehicle_ownership: 'Vehicle Ownership',
+    vehicle_owner_name: 'Vehicle Owner Name',
+    vehicle_owner_phone: 'Vehicle Owner Phone',
+    resident_status: 'Residence Status',
+    has_health_insurance: 'Health Insurance',
+    has_life_insurance: 'Life Insurance',
+};
+
+// Phone fields are stored E.164 (+91…) in the DB, but the Step-1 inputs expect
+// the bare 10-digit national number (validated as exactly 10 digits). Strip any
+// country code / formatting to the last 10 digits when loading a saved lead, so
+// a resumed/edited draft doesn't show "+918208677782" and fail validation.
+const to10Digits = (p?: string | null) => (p ?? '').replace(/\D/g, '').slice(-10);
+const normalizeLoadedPhones = (fd: any) => {
+    if (!fd) return fd;
+    const out = { ...fd };
+    if (out.phone != null) out.phone = to10Digits(out.phone);
+    if (out.vehicle_owner_phone != null) out.vehicle_owner_phone = to10Digits(out.vehicle_owner_phone);
+    return out;
+};
+
 function NewLeadWizardContent() {
+    // Lazy-loaded ~MB-scale dataset; dropdowns render disabled until it lands.
+    const indiaLocations = useIndiaLocationData();
     const router = useRouter();
     const searchParams = useSearchParams();
     const fromScraped = searchParams.get('from_scraped');
@@ -112,7 +151,7 @@ function NewLeadWizardContent() {
                 setLeadId(result.data.leadId);
                 setReferenceId(result.data.referenceId);
                 if (result.data.formData && !fresh) {
-                    const fd = result.data.formData;
+                    const fd = normalizeLoadedPhones(result.data.formData);
                     const hasData = fd.full_name || fd.phone || fd.dob || fd.father_or_husband_name;
                     if (hasData && result.data.resumed) {
                         setHasDraft(true);
@@ -153,7 +192,7 @@ function NewLeadWizardContent() {
             if (result.success) {
                 setLeadId(result.data.leadId);
                 setReferenceId(result.data.referenceId);
-                setFormData((prev: any) => ({ ...prev, ...result.data.formData }));
+                setFormData((prev: any) => ({ ...prev, ...normalizeLoadedPhones(result.data.formData) }));
                 setAdditionalProducts(result.data.additional_products ?? []);
                 setLastSaved('Loaded for editing');
             } else {
@@ -292,6 +331,7 @@ function NewLeadWizardContent() {
         }
 
         const isVehicle = formData.is_vehicle_category;
+        if (isVehicle && !formData.vehicle_rc?.trim()) e.vehicle_rc = 'Required';
         if (isVehicle && formData.vehicle_rc?.trim()) {
             if (!formData.vehicle_ownership) e.vehicle_ownership = 'Required';
             if (!formData.vehicle_owner_name?.trim()) e.vehicle_owner_name = 'Required';
@@ -301,14 +341,35 @@ function NewLeadWizardContent() {
         }
 
         setErrors(e);
-        return Object.keys(e).length === 0;
+        return e;
     };
 
     // ─── Submit ─────────────────────────────────────────────────────────────
 
     const commitStep = () => {
         if (!leadId) { setApiError('Lead draft not initialized. Please refresh.'); return; }
-        if (!validate()) return;
+        const errs = validate();
+        if (Object.keys(errs).length > 0) {
+            // Popup: name the missing/invalid fields in form order.
+            const missing = Object.keys(FIELD_LABELS).filter((k) => errs[k]);
+            const labels = missing.map((k) => FIELD_LABELS[k]);
+            setApiError(
+                labels.length
+                    ? `Please complete ${labels.length} required field${labels.length > 1 ? 's' : ''}: ${labels.join(', ')}.`
+                    : 'Please fix the highlighted fields before creating the lead.',
+            );
+            // Direction: jump to the first field with an error. The inline error
+            // markers (`p.text-red-500.font-bold`) render in DOM = visual order,
+            // so the first match is the topmost missing field. Defer one tick so
+            // the just-set errors have painted before we query for them.
+            setTimeout(() => {
+                const marker = document.querySelector('main p.font-bold.text-red-500');
+                const box = marker?.closest('div');
+                box?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                (box?.querySelector('input, select, textarea') as HTMLElement | null)?.focus({ preventScroll: true });
+            }, 60);
+            return;
+        }
         setShowConfirm(true);
     };
 
@@ -400,7 +461,13 @@ function NewLeadWizardContent() {
 
     const handleCancel = async () => {
         if (!isModified) { router.push('/dealer-portal'); return; }
-        if (confirm('Discard draft?')) {
+        const ok = await confirmDialog({
+            title: 'Discard draft?',
+            message: 'Your unsaved changes to this lead will be lost.',
+            confirmText: 'Discard',
+            variant: 'danger',
+        });
+        if (ok) {
             if (leadId) await fetch(`/api/leads/draft/${leadId}`, { method: 'DELETE' }).catch(() => {});
             router.push('/dealer-portal');
         }
@@ -431,7 +498,9 @@ function NewLeadWizardContent() {
     const willStayAtStep1 = !isHotLead;                // Warm/Cold — parked at Step 1
 
     return (
-        <div className="min-h-screen bg-[#F8F9FB]">
+        // -mx-6 cancels the dashboard layout's mobile p-6 so cards run edge-to-edge
+        // on phones; reverts at sm+ (desktop/tablet unchanged).
+        <div className="min-h-screen bg-[#F8F9FB] -mx-6 sm:mx-0">
             {/* Draft Resume Modal */}
             {showDraftPrompt && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
@@ -558,7 +627,7 @@ function NewLeadWizardContent() {
             {/* OCR Modal */}
             <OCRModal open={showOCR} onClose={() => setShowOCR(false)} onResult={handleOCRResult} />
 
-            <div className="max-w-[1200px] mx-auto px-6 py-8 pb-40">
+            <div className="max-w-[1600px] mx-auto px-0 sm:px-6 lg:px-10 py-8 pb-28">
                 {/* Header */}
                 <ProgressHeader
                     title="Create New Lead"
@@ -566,21 +635,27 @@ function NewLeadWizardContent() {
                     step={1}
                     onBack={() => router.back()}
                     rightAction={
-                        <div className="flex items-center gap-3">
-                            <button onClick={() => setShowHelp(true)} className="p-2 text-gray-400 hover:text-gray-600">
+                        // On mobile these stack full-width below the step row (per
+                        // the mockup); on desktop they sit inline as before. The Info
+                        // icon is desktop-only to keep the mobile header to two clean
+                        // action buttons. Colors unchanged.
+                        <div className="flex flex-col w-full gap-2 sm:flex-row sm:w-auto sm:items-center sm:gap-3">
+                            <button onClick={() => setShowHelp(true)} className="hidden sm:block p-2 text-gray-400 hover:text-gray-600">
                                 <Info className="w-5 h-5" />
                             </button>
                             <button
                                 onClick={() => setShowOCR(true)}
-                                className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 rounded-xl font-bold text-sm text-gray-800 shadow-sm hover:border-[#1D4ED8] hover:text-[#1D4ED8] transition-all"
+                                className="w-full justify-center sm:w-auto flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 rounded-xl font-bold text-sm text-gray-800 shadow-sm hover:border-[#1D4ED8] hover:text-[#1D4ED8] transition-all"
                             >
                                 <Scan className="w-4 h-4" /> Auto-fill from ID
                             </button>
-                            <DigilockerKycButton
-                                leadId={leadId}
-                                phone={formData.phone}
-                                onResult={handleOCRResult}
-                            />
+                            <div className="w-full sm:w-auto [&>div]:w-full sm:[&>div]:w-auto [&_button]:w-full [&_button]:justify-center sm:[&_button]:w-auto">
+                                <DigilockerKycButton
+                                    leadId={leadId}
+                                    phone={formData.phone}
+                                    onResult={handleOCRResult}
+                                />
+                            </div>
                         </div>
                     }
                 />
@@ -602,10 +677,10 @@ function NewLeadWizardContent() {
                     </div>
                 )}
 
-                <main className="grid grid-cols-1 gap-6">
+                <main className="grid grid-cols-1 gap-4 sm:gap-6">
                     {/* ─── Personal Information ──────────────────────────── */}
                     <SectionCard title="Personal Information">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-4 sm:gap-y-6">
                             <InputField label="Full Name" value={formData.full_name} onChange={v => updateField('full_name', v)} error={errors.full_name} placeholder="Vijay Sharma" required />
                             <InputField label={`Father/Husband Name${finFlow ? '' : ''}`} value={formData.father_or_husband_name} onChange={v => updateField('father_or_husband_name', v)} error={errors.father_or_husband_name} placeholder="Richard Doe" required={finFlow} />
 
@@ -638,25 +713,26 @@ function NewLeadWizardContent() {
                                     // Reset city when state changes — city list is state-scoped.
                                     if (v !== formData.state) updateField('city', '');
                                 }}
-                                options={State.getStatesOfCountry('IN').map((s) => ({
+                                options={indiaLocations.states.map((s) => ({
                                     value: s.name,
                                     label: s.name,
                                 }))}
                                 error={errors.state}
-                                placeholder="Select state"
+                                placeholder={indiaLocations.loaded ? 'Select state' : 'Loading states…'}
                                 required
+                                disabled={!indiaLocations.loaded}
                             />
                             <SelectField
                                 label="City"
                                 value={formData.city}
                                 onChange={(v) => updateField('city', v)}
                                 options={(() => {
-                                    const iso = State.getStatesOfCountry('IN').find(
+                                    const iso = indiaLocations.states.find(
                                         (s) => s.name === formData.state,
                                     )?.isoCode;
                                     if (!iso) return [];
                                     const seen = new Set<string>();
-                                    return City.getCitiesOfState('IN', iso)
+                                    return indiaLocations.getCitiesOfState(iso)
                                         .filter((c) => {
                                             if (seen.has(c.name)) return false;
                                             seen.add(c.name);
@@ -778,8 +854,8 @@ function NewLeadWizardContent() {
                                 {!isVehicleCategory && (
                                     <p className="text-sm text-gray-400 font-medium px-1 mb-4">Vehicle details are only applicable for 2W/3W/4W categories.</p>
                                 )}
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-6">
-                                    <InputField label="Vehicle Reg. Number" value={formData.vehicle_rc} onChange={v => updateField('vehicle_rc', v)} placeholder="HR 35 A 78989" />
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 sm:gap-y-6">
+                                    <InputField label={`Vehicle Reg. Number${isVehicleCategory ? ' *' : ''}`} value={formData.vehicle_rc} onChange={v => updateField('vehicle_rc', v)} placeholder="HR 35 A 78989" error={errors.vehicle_rc} />
                                     <SelectField
                                         label={`Vehicle Ownership${formData.vehicle_rc?.trim() ? ' *' : ''}`}
                                         value={formData.vehicle_ownership}
@@ -891,7 +967,7 @@ function NewLeadWizardContent() {
                         BRE's Owned/Rented housing-variant match at Product Selection. */}
                     {finFlow && (
                         <SectionCard title="Additional Finance Details">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-4 sm:gap-y-6">
                                 <div className="md:col-span-2 space-y-2">
                                     <label className="text-sm font-bold text-gray-900 px-1 block">
                                         Resident Status <span className="text-red-500">*</span>
@@ -980,12 +1056,19 @@ function NewLeadWizardContent() {
                 {/* ─── Bottom Bar ────────────────────────────────────────── */}
                 {!showConfirm && (
                     <StickyBottomBar lastSaved={lastSaved}>
-                        <OutlineButton onClick={handleCancel}>Cancel</OutlineButton>
+                        {/* Cancel is a plain text link (per the mockup) so the two
+                            real actions read as the primary buttons. */}
+                        <button
+                            onClick={handleCancel}
+                            className="px-3 py-2 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors"
+                        >
+                            Cancel
+                        </button>
                         <SecondaryButton onClick={handleSaveDraft} loading={savingDraft} disabled={loading}>
                             Save Draft
                         </SecondaryButton>
                         <PrimaryButton onClick={commitStep} loading={loading} disabled={savingDraft}>
-                            <ChevronRight className="w-4 h-4" /> Create Lead
+                            <ArrowRight className="w-4 h-4" /> Create Lead
                         </PrimaryButton>
                     </StickyBottomBar>
                 )}

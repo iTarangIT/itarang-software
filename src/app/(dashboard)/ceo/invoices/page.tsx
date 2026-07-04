@@ -4,6 +4,7 @@ import React, { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Receipt, Download, Search, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 const STATUS_OPTIONS = [
   "draft",
@@ -25,6 +26,7 @@ interface InvoiceRow {
   total: string | null;
   balance: string | null;
   status: string | null;
+  payment_reference: string | null;
 }
 
 interface ApiResponse {
@@ -102,11 +104,11 @@ export default function CEOInvoicesPage() {
     mutationFn: async () => {
       const r = await fetch("/api/admin/zoho/sync", { method: "POST" });
       const json = (await r.json()) as {
-        ok: boolean;
+        success: boolean;
         upserted?: number;
         error?: { message: string };
       };
-      if (!r.ok || !json.ok) {
+      if (!r.ok || !json.success) {
         throw new Error(json?.error?.message || "Sync failed");
       }
       return json;
@@ -256,7 +258,7 @@ export default function CEOInvoicesPage() {
               className="flex items-center gap-2 border-brand-200 text-brand-700 hover:bg-brand-50 disabled:opacity-60"
             >
               <RefreshCw
-                className={`w-4 h-4 ${refresh.isPending ? "animate-spin" : ""}`}
+                className={cn("w-4 h-4", refresh.isPending && "animate-spin")}
               />
               {refresh.isPending ? "Refreshing…" : "Refresh from Zoho"}
             </Button>
@@ -334,6 +336,7 @@ export default function CEOInvoicesPage() {
                     <th className="py-2 font-semibold">Date</th>
                     <th className="py-2 font-semibold">Customer</th>
                     <th className="py-2 font-semibold">Status</th>
+                    <th className="py-2 font-semibold">Transaction ID</th>
                     <th className="py-2 font-semibold text-right">Total</th>
                     <th className="py-2 font-semibold text-right">Balance</th>
                   </tr>
@@ -352,6 +355,9 @@ export default function CEOInvoicesPage() {
                       </td>
                       <td className="py-3">
                         <StatusBadge status={r.status} />
+                      </td>
+                      <td className="py-3 text-xs text-gray-600 font-mono">
+                        {r.payment_reference || "—"}
                       </td>
                       <td className="py-3 text-xs font-bold text-gray-900 text-right">
                         {formatINR(Number(r.total || 0))}

@@ -16,6 +16,7 @@ import {
   UserCog,
   AlertTriangle,
   GitBranch,
+  MessageCircle,
 } from "lucide-react";
 
 type DuplicateFlag = "none" | "branch" | "duplicate" | "pan-mismatch";
@@ -65,8 +66,17 @@ type DealerVerificationItem = {
   companyName: string;
   documents: string;
   agreement: string;
+  agreementStatus?: string | null;
   status: string;
+  dealerAccountStatus?: string | null;
   submittedAt?: string | null;
+  approvedAt?: string | null;
+  city?: string | null;
+  state?: string | null;
+  pincode?: string | null;
+  // Combined location text (structured columns + free-text address) used by the
+  // state/city/pincode filters, since the flat columns are usually empty.
+  location?: string | null;
   gstNumber?: string | null;
   financeEnabled?: boolean | null;
   companyType?: string | null;
@@ -75,7 +85,25 @@ type DealerVerificationItem = {
   salesManagerMobile?: string | null;
   duplicateFlag?: DuplicateFlag | null;
   isBranchDealer?: boolean | null;
+  // E-167: where the application was collected, and how many bot checks flagged.
+  source?: string | null;
+  warningCount?: number | null;
 };
+
+// E-167: badge dealers collected over the WhatsApp bot so admins know the data
+// was machine-extracted (Gemini) and may carry verification warnings.
+function SourceBadge({ source }: { source?: string | null }) {
+  if ((source || "web").toLowerCase() !== "whatsapp") return null;
+  return (
+    <span
+      title="Collected via the WhatsApp onboarding bot — fields were auto-extracted; review the verification warnings."
+      className="ml-2 inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700"
+    >
+      <MessageCircle className="h-3 w-3" />
+      WhatsApp
+    </span>
+  );
+}
 
 function StatCard({
   title,
@@ -208,8 +236,29 @@ export default function DealerVerificationPage() {
   const [query, setQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [agreementFilter, setAgreementFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [companyTypeFilter, setCompanyTypeFilter] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("");
+  const [stateFilter, setStateFilter] = useState("");
+  const [cityFilter, setCityFilter] = useState("");
+  const [pincodeFilter, setPincodeFilter] = useState("");
 
-  const isFilterActive = dateFrom !== "" || dateTo !== "";
+  const isFilterActive =
+    dateFrom !== "" ||
+    dateTo !== "" ||
+    agreementFilter !== "" ||
+    statusFilter !== "" ||
+    companyTypeFilter !== "" ||
+    sourceFilter !== "" ||
+    stateFilter !== "" ||
+    cityFilter !== "" ||
+    pincodeFilter !== "";
+
+  // "pending" = finance agreement initiated but not yet completed.
+  const isAgreementPending = (item: DealerVerificationItem) =>
+    item.financeEnabled &&
+    ["sent_for_signature", "partially_signed"].includes(item.agreementStatus || "");
 
   useEffect(() => {
     const loadApplications = async () => {
@@ -262,6 +311,45 @@ export default function DealerVerificationPage() {
       });
     }
 
+    if (agreementFilter) {
+      result =
+        agreementFilter === "pending"
+          ? result.filter(isAgreementPending)
+          : result.filter((item) => (item.agreementStatus || "") === agreementFilter);
+    }
+
+    if (statusFilter) {
+      result = result.filter((item) => (item.status || "") === statusFilter);
+    }
+
+    if (companyTypeFilter) {
+      result = result.filter(
+        (item) => (item.companyType || "").toLowerCase() === companyTypeFilter.toLowerCase(),
+      );
+    }
+
+    if (sourceFilter) {
+      result = result.filter(
+        (item) => (item.source || "web").toLowerCase() === sourceFilter,
+      );
+    }
+
+    // State/city/pincode match the combined location haystack (structured
+    // columns + free-text address). The flat city/state columns are empty for
+    // most rows, so matching the address text is what actually filters.
+    const locationOf = (item: DealerVerificationItem) =>
+      (item.location || [item.city, item.state, item.pincode].filter(Boolean).join(" "))
+        .toLowerCase();
+
+    const sf = stateFilter.trim().toLowerCase();
+    if (sf) result = result.filter((item) => locationOf(item).includes(sf));
+
+    const cf = cityFilter.trim().toLowerCase();
+    if (cf) result = result.filter((item) => locationOf(item).includes(cf));
+
+    const pf = pincodeFilter.trim().toLowerCase();
+    if (pf) result = result.filter((item) => locationOf(item).includes(pf));
+
     const q = query.trim().toLowerCase();
     if (q) {
       result = result.filter((item) =>
@@ -281,7 +369,30 @@ export default function DealerVerificationPage() {
     }
 
     return result;
-  }, [applications, query, dateFrom, dateTo]);
+  }, [
+    applications,
+    query,
+    dateFrom,
+    dateTo,
+    agreementFilter,
+    statusFilter,
+    companyTypeFilter,
+    sourceFilter,
+    stateFilter,
+    cityFilter,
+    pincodeFilter,
+  ]);
+
+  // Company-type options derived from the loaded applications, so the dropdown
+  // always reflects the values actually present in the queue.
+  const companyTypeOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of applications) {
+      const t = (a.companyType || "").trim();
+      if (t) set.add(t);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [applications]);
 
   const stats = useMemo(() => {
     const total = applications.length;
@@ -323,11 +434,29 @@ export default function DealerVerificationPage() {
     if (dateTo) params.set("dateTo", dateTo);
     const trimmedQuery = query.trim();
     if (trimmedQuery) params.set("q", trimmedQuery);
+    if (agreementFilter) params.set("agreementStatus", agreementFilter);
+    if (statusFilter) params.set("status", statusFilter);
+    if (companyTypeFilter) params.set("companyType", companyTypeFilter);
+    if (sourceFilter) params.set("source", sourceFilter);
+    if (stateFilter.trim()) params.set("state", stateFilter.trim());
+    if (cityFilter.trim()) params.set("city", cityFilter.trim());
+    if (pincodeFilter.trim()) params.set("pincode", pincodeFilter.trim());
     const qs = params.toString();
     return qs
       ? `/api/admin/dealer-verifications/export?${qs}`
       : `/api/admin/dealer-verifications/export`;
-  }, [dateFrom, dateTo, query]);
+  }, [
+    dateFrom,
+    dateTo,
+    query,
+    agreementFilter,
+    statusFilter,
+    companyTypeFilter,
+    sourceFilter,
+    stateFilter,
+    cityFilter,
+    pincodeFilter,
+  ]);
 
   const exportDisabled = loading || filtered.length === 0;
 
@@ -418,7 +547,12 @@ export default function DealerVerificationPage() {
 
               {isFilterActive && (
                 <button
-                  onClick={() => { setDateFrom(""); setDateTo(""); }}
+                  onClick={() => {
+                    setDateFrom(""); setDateTo("");
+                    setAgreementFilter(""); setStatusFilter("");
+                    setCompanyTypeFilter(""); setSourceFilter("");
+                    setStateFilter(""); setCityFilter(""); setPincodeFilter("");
+                  }}
                   className="flex items-center gap-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-500 transition hover:bg-slate-50"
                 >
                   <X className="h-3 w-3" />
@@ -432,7 +566,7 @@ export default function DealerVerificationPage() {
                 title={
                   exportDisabled
                     ? "No applications to export"
-                    : "Download the current queue as CSV"
+                    : "Download the current queue as a formatted Excel sheet"
                 }
                 className={`flex items-center gap-1.5 rounded-2xl border px-3 py-2 text-xs font-semibold transition ${
                   exportDisabled
@@ -441,9 +575,89 @@ export default function DealerVerificationPage() {
                 }`}
               >
                 <Download className="h-3.5 w-3.5" />
-                Export CSV
+                Export Excel
               </a>
             </div>
+          </div>
+
+          {/* Filter row — agreement / status / location */}
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <select
+              value={agreementFilter}
+              onChange={(e) => setAgreementFilter(e.target.value)}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="">Agreement: all</option>
+              <option value="pending">Agreement: pending</option>
+              <option value="not_generated">Not generated</option>
+              <option value="sent_for_signature">Sent for signature</option>
+              <option value="partially_signed">Partially signed</option>
+              <option value="completed">Completed</option>
+              <option value="failed">Failed</option>
+              <option value="expired">Expired</option>
+            </select>
+
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="">Status: all</option>
+              <option value="submitted">Submitted</option>
+              <option value="pending_admin_review">Pending admin review</option>
+              <option value="under_review">Under review</option>
+              <option value="agreement_in_progress">Agreement in progress</option>
+              <option value="agreement_completed">Agreement completed</option>
+              <option value="correction_requested">Correction requested</option>
+              <option value="under_correction">Under correction</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+            </select>
+
+            <select
+              value={companyTypeFilter}
+              onChange={(e) => setCompanyTypeFilter(e.target.value)}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs capitalize text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="">Company type: all</option>
+              {companyTypeOptions.map((t) => (
+                <option key={t} value={t} className="capitalize">
+                  {t.replaceAll("_", " ")}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="">Source: all</option>
+              <option value="web">Web</option>
+              <option value="whatsapp">WhatsApp</option>
+            </select>
+
+            <input
+              type="text"
+              value={stateFilter}
+              onChange={(e) => setStateFilter(e.target.value)}
+              placeholder="State"
+              className="w-28 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            />
+            <input
+              type="text"
+              value={cityFilter}
+              onChange={(e) => setCityFilter(e.target.value)}
+              placeholder="City"
+              className="w-28 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            />
+            <input
+              type="text"
+              value={pincodeFilter}
+              onChange={(e) => setPincodeFilter(e.target.value)}
+              placeholder="Pincode"
+              className="w-28 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            />
           </div>
 
           {/* Active filter summary badge */}
@@ -497,8 +711,21 @@ export default function DealerVerificationPage() {
                     className="border-b border-slate-100 transition hover:bg-slate-50/70"
                   >
                     <td className="px-6 py-5 align-top">
-                      <p className="font-semibold text-slate-900">{item.dealerName}</p>
+                      <p className="font-semibold text-slate-900">
+                        {item.dealerName}
+                        <SourceBadge source={item.source} />
+                      </p>
                       <p className="mt-1 text-sm text-slate-500">ID: {item.dealerId.slice(0, 8)}...</p>
+                      {!!item.warningCount && item.warningCount > 0 && (
+                        <p
+                          title="The WhatsApp bot flagged document checks that need admin attention."
+                          className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-rose-600"
+                        >
+                          <AlertTriangle className="h-3 w-3" />
+                          {item.warningCount} verification warning
+                          {item.warningCount !== 1 ? "s" : ""}
+                        </p>
+                      )}
                       {item.submittedAt && (
                         <p className="mt-1 text-xs text-slate-400">
                           Submitted:{" "}

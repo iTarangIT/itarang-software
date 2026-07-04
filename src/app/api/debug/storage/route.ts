@@ -1,9 +1,16 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
+import { isS3Backend } from '@/lib/storage/s3';
 
 export async function GET() {
     try {
+        if (isS3Backend) {
+            // No S3 equivalent of listBuckets() in our storage abstraction — return
+            // a simple note identifying the active backend + physical bucket.
+            return NextResponse.json({ backend: 's3', bucket: process.env.AWS_S3_BUCKET });
+        }
+
         console.log('GET /api/debug/storage: Checking Supabase connection...');
         const supabase = await createClient();
 

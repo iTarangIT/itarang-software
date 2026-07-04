@@ -11,6 +11,7 @@
  * JSON + extracted URL. Role: operations or nbfc_admin (tenant-scoped).
  */
 import { NextRequest, NextResponse } from "next/server";
+import { clientError } from "@/lib/nbfc/http-error";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/lib/db";
@@ -136,6 +137,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ lead
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const code = msg.startsWith("UNAUTHORIZED") ? 401 : msg.startsWith("FORBIDDEN") ? 403 : 500;
-    return NextResponse.json({ ok: false, error: msg }, { status: code });
+    return NextResponse.json({ ok: false, error: clientError(msg) }, { status: code });
   }
 }

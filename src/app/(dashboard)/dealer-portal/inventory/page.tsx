@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import {
     Package, Search, Filter, Plus, AlertTriangle,
     BarChart3, Truck, Bell,
-    QrCode, Download,
+    QrCode, Download, ChevronRight,
 } from 'lucide-react';
 import DealerInventoryDetailModal from '@/components/dealer-dashboard/DealerInventoryDetailModal';
 
@@ -351,7 +351,7 @@ export default function InventoryPage() {
 
             {/* Inventory Table */}
             <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
-                <div className="overflow-x-auto">
+                <div className="hidden md:block overflow-x-auto">
                     <table className="w-full text-sm">
                         <thead>
                             <tr className="border-b border-gray-100 bg-gray-50">
@@ -402,6 +402,35 @@ export default function InventoryPage() {
                             ))}
                         </tbody>
                     </table>
+                </div>
+
+                {/* Mobile rows — compact single line per item; tap a row to open
+                    the full detail modal (same handler as the desktop table). */}
+                <div className="md:hidden divide-y divide-gray-100">
+                    {items.map(item => (
+                        <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setActiveItem(item)}
+                            className="flex w-full items-center gap-3 p-4 text-left hover:bg-gray-50 active:bg-gray-100 transition-colors"
+                        >
+                            <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                    <span className="font-semibold text-gray-900 truncate">{item.product_name}</span>
+                                    {item.is_new && <NewBadge />}
+                                </div>
+                                <div className="mt-0.5 text-xs text-gray-400 truncate">{item.warehouse_location || categoryLabel(item.category)}</div>
+                            </div>
+                            <span className="shrink-0 text-right">
+                                <span className="block text-[11px] uppercase tracking-wide text-gray-400">Available</span>
+                                <span className="block font-bold text-gray-900 leading-none">{item.quantity_available}</span>
+                            </span>
+                            <span className="shrink-0">
+                                <StockBadge status={item.status} />
+                            </span>
+                            <ChevronRight className="h-4 w-4 shrink-0 text-gray-300" />
+                        </button>
+                    ))}
                 </div>
                 {loadingInventory ? (
                     <div className="p-8 text-center text-sm text-gray-500">Loading inventory…</div>
