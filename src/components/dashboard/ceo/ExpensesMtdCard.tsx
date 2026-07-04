@@ -15,7 +15,10 @@ interface ExpensesMtdCardProps {
   onClick?: (period: string) => void;
 }
 
-type Selection = { kind: "mtd" } | { kind: "fy" } | { kind: "month"; value: string };
+type Selection =
+  | { kind: "mtd" }
+  | { kind: "year"; value: string }
+  | { kind: "month"; value: string };
 
 export function ExpensesMtdCard({ defaultMtd, onClick }: ExpensesMtdCardProps) {
   const [open, setOpen] = useState(false);
@@ -43,7 +46,9 @@ export function ExpensesMtdCard({ defaultMtd, onClick }: ExpensesMtdCardProps) {
   const queryParam =
     selection.kind === "month"
       ? `month=${selection.value}`
-      : `period=${selection.kind}`;
+      : selection.kind === "year"
+        ? `year=${selection.value}`
+        : "period=mtd";
   const isDefault = selection.kind === "mtd";
 
   const { data, isFetching } = useQuery({
@@ -64,8 +69,8 @@ export function ExpensesMtdCard({ defaultMtd, onClick }: ExpensesMtdCardProps) {
 
   const total = data?.total ?? defaultMtd;
   const label =
-    selection.kind === "fy"
-      ? "Financial year"
+    selection.kind === "year"
+      ? data?.label ?? `Year ${selection.value}`
       : data?.label ?? "This month";
 
   return (
@@ -130,26 +135,31 @@ export function ExpensesMtdCard({ defaultMtd, onClick }: ExpensesMtdCardProps) {
             <p className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">
               Period
             </p>
-            <div className="grid grid-cols-2 gap-1 p-1 bg-gray-100 rounded-xl mb-3">
+            <div className="grid grid-cols-1 gap-1 p-1 bg-gray-100 rounded-xl mb-3">
               <PeriodButton
                 label="This month"
                 active={selection.kind === "mtd"}
                 onClick={() => setSelection({ kind: "mtd" })}
               />
-              <PeriodButton
-                label="Financial year"
-                active={selection.kind === "fy"}
-                onClick={() => setSelection({ kind: "fy" })}
-              />
             </div>
 
             <MonthCalendar
               value={selection.kind === "month" ? selection.value : null}
+              selectedYear={
+                selection.kind === "year" ? Number(selection.value) : null
+              }
               onSelect={(value) => {
                 setSelection({ kind: "month", value });
                 setOpen(false);
               }}
+              onSelectYear={(year) => {
+                setSelection({ kind: "year", value: String(year) });
+                setOpen(false);
+              }}
             />
+            <p className="text-[10px] text-gray-400 mt-2">
+              Tip: tap the year for its total of all months.
+            </p>
           </motion.div>
         )}
       </AnimatePresence>

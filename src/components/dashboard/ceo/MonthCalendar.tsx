@@ -19,6 +19,13 @@ interface MonthCalendarProps {
   yearsBack?: number;
   /** Caption above the grid. Default "Pick a month". */
   label?: string;
+  /**
+   * When provided, the year label becomes a clickable button that selects the
+   * whole calendar year (total of all its months).
+   */
+  onSelectYear?: (year: number) => void;
+  /** The selected full year — highlights the year label when it matches. */
+  selectedYear?: number | null;
 }
 
 /**
@@ -31,18 +38,23 @@ export function MonthCalendar({
   onSelect,
   yearsBack = 5,
   label = "Pick a month",
+  onSelectYear,
+  selectedYear = null,
 }: MonthCalendarProps) {
   const { curYear, curMonth } = useMemo(() => {
     const n = new Date();
     return { curYear: n.getFullYear(), curMonth: n.getMonth() };
   }, []);
 
-  const selectedYear = value ? Number(value.slice(0, 4)) : curYear;
-  const [viewYear, setViewYear] = useState(selectedYear);
-  // Follow the selected month's year (also resets when the value is cleared).
+  // Show the year of whatever is active (a picked month, a picked full year),
+  // falling back to the current year.
+  const activeYear = value ? Number(value.slice(0, 4)) : selectedYear ?? curYear;
+  const [viewYear, setViewYear] = useState(activeYear);
   useEffect(() => {
-    setViewYear(selectedYear);
-  }, [selectedYear]);
+    setViewYear(activeYear);
+  }, [activeYear]);
+
+  const yearSelected = selectedYear === viewYear;
 
   return (
     <div>
@@ -60,12 +72,29 @@ export function MonthCalendar({
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
-          <span
-            data-testid="month-calendar-year"
-            className="text-sm font-bold text-gray-800 tabular-nums w-11 text-center"
-          >
-            {viewYear}
-          </span>
+          {onSelectYear ? (
+            <button
+              type="button"
+              data-testid="month-calendar-year"
+              onClick={() => onSelectYear(viewYear)}
+              title="Show the whole year's total"
+              className={cn(
+                "text-sm font-bold tabular-nums w-11 text-center rounded-md py-0.5 transition-colors",
+                yearSelected
+                  ? "bg-brand-600 text-white shadow-sm"
+                  : "text-gray-800 hover:bg-gray-100 hover:text-brand-700",
+              )}
+            >
+              {viewYear}
+            </button>
+          ) : (
+            <span
+              data-testid="month-calendar-year"
+              className="text-sm font-bold text-gray-800 tabular-nums w-11 text-center"
+            >
+              {viewYear}
+            </span>
+          )}
           <button
             type="button"
             aria-label="Next year"
