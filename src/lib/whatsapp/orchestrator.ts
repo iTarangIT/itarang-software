@@ -144,6 +144,21 @@ const COMPANY_TYPE_BUTTONS: ReplyButton[] = [
 // button IDs "flow_dealer" / "flow_customer" / "flow_info" are still honoured in
 // onChooseFlow so stale-menu / known-contact button taps keep working.
 
+// The website loan-calculator sends this interactive reply-button id ("Start
+// application") under a customer's EMI schemes. A tap means a CUSTOMER wants to
+// buy the battery they were quoted, so we skip the free-text classify + the
+// Customer/Dealer role ask and start customer new-lead onboarding straight away
+// (see the intercept in runTurn). Kept in sync with the website's
+// ONBOARDING_START_ID in src/lib/whatsapp/otp-delivery.ts.
+const WEBSITE_APPLY_BUTTON_ID = "onboarding_start";
+
+function isWebsiteApplyButton(event: InboundEvent): boolean {
+  return (
+    event.type === "interactive" &&
+    (event.text ?? "").trim() === WEBSITE_APPLY_BUTTON_ID
+  );
+}
+
 // Single welcome + open question shown on first contact (and whenever we re-ask
 // what the sender needs). No buttons — their typed reply is classified.
 const HELP_PROMPT =
@@ -339,6 +354,20 @@ export async function runTurn(event: InboundEvent): Promise<void> {
     return await handleStop(session);
   }
 
+  // Website loan-calculator "Start application" button: the sender tapped Apply
+  // under the EMI schemes they were quoted, so they are a CUSTOMER wanting to
+  // buy the battery. Start customer new-lead onboarding directly — skip the
+  // free-text classify and the "are you a customer or a dealer?" role ask.
+  //
+  // This runs BEFORE the approved-dealer console gates on purpose: the loan
+  // calculator is a customer-facing surface, so even a sender whose number is a
+  // registered dealer is acting as a customer here and must get the new-lead
+  // flow (they can still type "hi" to reach their dealer console). Only the
+  // global stop word takes precedence.
+  if (isWebsiteApplyButton(event)) {
+    return await enterCustomerFlow(session);
+  }
+
   // Post-approval dealer console: once the dealer's onboarding application is
   // admin-approved, the SAME WhatsApp number switches from the onboarding state
   // machine to the lead-creation console. This must run BEFORE the greeting
@@ -471,6 +500,31 @@ async function askRole(session: SessionRow): Promise<void> {
   );
 }
 
+// Enter the CUSTOMER self-onboarding (new-lead) flow: attribute the lead to the
+// house dealer and start lead capture (asks for the customer's mobile number).
+// Shared by the free-text / role-button routing in onChooseFlow AND the website
+// "Start application" button intercept in runTurn, so both reach the exact same
+// flow. Pre-checks the house dealer so we never strand the customer mid-flow.
+async function enterCustomerFlow(session: SessionRow): Promise<void> {
+  const houseDealer = await resolveHouseDealer();
+  if (!houseDealer) {
+    console.error(
+      "[WhatsApp/customer] house dealer unresolved — cannot start customer lead flow",
+    );
+    await reply(
+      session,
+      "Sorry, we can't take new customer leads right now. Please try again later.",
+    );
+    return;
+  }
+  await mergeContext(session, (ctx) => {
+    ctx.flow = "customer";
+  });
+  // Acknowledge, then start the lead capture (asks for the mobile number).
+  await reply(session, CUSTOMER_INTRO);
+  return await startNewLead(await loadSession(session.id));
+}
+
 // CHOOSE_FLOW — route the free-text front door. The sender types what they need
 // and classifyIntent() (Gemini) picks dealer / customer / general — or flags it
 // too hard, in which case we tell them the team will follow up and ask their
@@ -489,26 +543,7 @@ async function onChooseFlow(
     // The dealer intro leads straight into the company-type question below.
     askCompanyType(session, DEALER_INTRO);
 
-  const goCustomer = async () => {
-    // Pre-check the house dealer so we don't strand the customer mid-flow.
-    const houseDealer = await resolveHouseDealer();
-    if (!houseDealer) {
-      console.error(
-        "[WhatsApp/customer] house dealer unresolved — cannot start customer lead flow",
-      );
-      await reply(
-        session,
-        "Sorry, we can't take new customer leads right now. Please try again later.",
-      );
-      return;
-    }
-    await mergeContext(session, (ctx) => {
-      ctx.flow = "customer";
-    });
-    // Acknowledge, then start the lead capture (asks for the mobile number).
-    await reply(session, CUSTOMER_INTRO);
-    return await startNewLead(await loadSession(session.id));
-  };
+  const goCustomer = () => enterCustomerFlow(session);
 
   const goInfo = () => startGeneralInfo(session);
 
