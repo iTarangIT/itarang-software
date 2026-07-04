@@ -65,6 +65,7 @@ export async function GET(
 
     const sp = req.nextUrl.searchParams;
     const monthParam = sp.get("month");
+    const yearParam = sp.get("year");
     const period = sp.get("period") || "mtd";
 
     // Resolve the [start, end) window as local date strings.
@@ -76,6 +77,7 @@ export async function GET(
     let startStr: string;
     let endStr: string | null = null;
     const monthMatch = monthParam?.match(/^(\d{4})-(\d{2})$/);
+    const yearMatch = yearParam?.match(/^(\d{4})$/);
     if (monthMatch) {
       const y = Number(monthMatch[1]);
       const mo = Number(monthMatch[2]);
@@ -83,6 +85,11 @@ export async function GET(
       const ey = mo === 12 ? y + 1 : y;
       const em = mo === 12 ? 1 : mo + 1;
       endStr = `${ey}-${pad2(em)}-01`;
+    } else if (yearMatch) {
+      // Whole calendar year — total of all its months (Jan–Dec).
+      const y = Number(yearMatch[1]);
+      startStr = `${y}-01-01`;
+      endStr = `${y + 1}-01-01`;
     } else if (period === "fy") {
       const fyStartYear = curMonth >= 3 ? curYear : curYear - 1;
       startStr = `${fyStartYear}-04-01`;
