@@ -342,8 +342,8 @@ export default function CEODashboard() {
               otherExpensesMtd={Number(m.other_expenses_mtd ?? 0)}
               recentInvoices={m.recent_invoices || []}
               recentExpenses={m.recent_expenses || []}
-              onTileClick={(metric, title) =>
-                setDrill({ metric, title, params: "period=mtd" })
+              onTileClick={(metric, title, params) =>
+                setDrill({ metric, title, params })
               }
             />
           </div>

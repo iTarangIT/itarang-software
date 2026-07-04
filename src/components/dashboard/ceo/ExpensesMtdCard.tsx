@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
 import { Receipt, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatINRCompact, formatINRExact } from "@/lib/format";
+import { MonthCalendar } from "./MonthCalendar";
 
 interface ExpensesMtdCardProps {
   /** Current-month approved-expense total, used as the instant default. */
@@ -16,24 +17,10 @@ interface ExpensesMtdCardProps {
 
 type Selection = { kind: "mtd" } | { kind: "fy" } | { kind: "month"; value: string };
 
-function lastMonths(count: number): { value: string; label: string }[] {
-  const out: { value: string; label: string }[] = [];
-  const now = new Date();
-  for (let i = 0; i < count; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    const label = d.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
-    out.push({ value, label });
-  }
-  return out;
-}
-
 export function ExpensesMtdCard({ defaultMtd, onClick }: ExpensesMtdCardProps) {
   const [open, setOpen] = useState(false);
   const [selection, setSelection] = useState<Selection>({ kind: "mtd" });
   const containerRef = useRef<HTMLDivElement>(null);
-
-  const months = useMemo(() => lastMonths(24), []);
 
   useEffect(() => {
     if (!open) return;
@@ -156,25 +143,13 @@ export function ExpensesMtdCard({ defaultMtd, onClick }: ExpensesMtdCardProps) {
               />
             </div>
 
-            <p className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">
-              Pick a month
-            </p>
-            <select
-              className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm font-medium text-gray-700 bg-white focus:outline-none focus:border-brand-500"
-              value={selection.kind === "month" ? selection.value : ""}
-              onChange={(e) =>
-                e.target.value
-                  ? setSelection({ kind: "month", value: e.target.value })
-                  : setSelection({ kind: "mtd" })
-              }
-            >
-              <option value="">— select —</option>
-              {months.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
+            <MonthCalendar
+              value={selection.kind === "month" ? selection.value : null}
+              onSelect={(value) => {
+                setSelection({ kind: "month", value });
+                setOpen(false);
+              }}
+            />
           </motion.div>
         )}
       </AnimatePresence>

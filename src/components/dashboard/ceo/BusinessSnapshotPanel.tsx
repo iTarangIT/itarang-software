@@ -1,16 +1,21 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { AnimatePresence, motion } from "framer-motion";
+import { useQuery } from "@tanstack/react-query";
 import {
   TrendingDown,
   TrendingUp,
   Receipt,
   ArrowRight,
   ShoppingBag,
+  SlidersHorizontal,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { formatINRCompact } from "@/lib/format";
 import { ManualSalesUpload } from "./ManualSalesUpload";
+import { MonthCalendar } from "./MonthCalendar";
 
 interface RecentInvoice {
   id: string;
@@ -31,17 +36,33 @@ interface RecentExpense {
 
 type SnapshotMetric = "purchases" | "sales" | "expenses";
 
+/** Active period for the whole snapshot. */
+type Selection = { kind: "mtd" } | { kind: "fy" } | { kind: "month"; value: string };
+
 interface Props {
   purchasesMtd: number;
   salesMtd: number;
   otherExpensesMtd: number;
   recentInvoices?: RecentInvoice[];
   recentExpenses?: RecentExpense[];
-  /** Open a drill-down for the clicked tile. When omitted, tiles are static. */
-  onTileClick?: (metric: SnapshotMetric, title: string) => void;
+  /**
+   * Open a drill-down for the clicked tile. `params` is the query string for the
+   * active window (e.g. "period=fy" / "month=2026-06") so the drill-down matches
+   * the filtered figure. When omitted, tiles are static.
+   */
+  onTileClick?: (metric: SnapshotMetric, title: string, params: string) => void;
 }
 
 const formatINR = (n: number) => formatINRCompact(n);
+
+interface SnapshotSummary {
+  purchases: number;
+  sales: number;
+  otherExpenses: number;
+  net: number;
+  period: string;
+  label: string;
+}
 
 export function BusinessSnapshotPanel({
   purchasesMtd,
@@ -51,15 +72,138 @@ export function BusinessSnapshotPanel({
   recentExpenses = [],
   onTileClick,
 }: Props) {
-  const netMtd = salesMtd - purchasesMtd - otherExpensesMtd;
+  const [open, setOpen] = useState(false);
+  const [selection, setSelection] = useState<Selection>({ kind: "mtd" });
+  const filterRef = useRef<HTMLDivElement>(null);
+
+  // Close the popover on outside-click / Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const isDefault = selection.kind === "mtd";
+  const queryParam =
+    selection.kind === "month"
+      ? `month=${selection.value}`
+      : `period=${selection.kind}`;
+
+  // Only a non-default window hits the API; "This month" uses the live props so
+  // it always matches the dashboard headline exactly.
+  const { data, isFetching } = useQuery({
+    queryKey: ["ceo-snapshot-summary", queryParam],
+    enabled: !isDefault,
+    queryFn: async () => {
+      const r = await fetch(`/api/dashboard/ceo/snapshot-summary?${queryParam}`, {
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error("Failed to load snapshot");
+      const j = await r.json();
+      return j.data as SnapshotSummary;
+    },
+    placeholderData: (prev) => prev,
+  });
+
+  const purchases = isDefault ? purchasesMtd : data?.purchases ?? purchasesMtd;
+  const sales = isDefault ? salesMtd : data?.sales ?? salesMtd;
+  const otherExpenses = isDefault
+    ? otherExpensesMtd
+    : data?.otherExpenses ?? otherExpensesMtd;
+  const netMtd = sales - purchases - otherExpenses;
+
+  const monthLabel =
+    selection.kind === "month"
+      ? new Date(`${selection.value}-01T00:00:00`).toLocaleDateString("en-IN", {
+          month: "short",
+          year: "numeric",
+        })
+      : "";
+  const label =
+    selection.kind === "fy"
+      ? "Financial year"
+      : selection.kind === "month"
+        ? data?.label ?? monthLabel
+        : "This month";
 
   return (
     <div className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
       <div className="flex items-center justify-between gap-3 mb-5 flex-wrap">
-        <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-          <ShoppingBag className="w-4 h-4 text-brand-600" />
-          Business Snapshot (MTD)
-        </h3>
+        <div ref={filterRef} className="relative flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+            <ShoppingBag className="w-4 h-4 text-brand-600" />
+            Business Snapshot
+            <span className="text-gray-300 font-normal">·</span>
+            <span className="text-brand-700">{label}</span>
+            {isFetching && !isDefault ? (
+              <span className="text-gray-400 font-normal">…</span>
+            ) : null}
+          </h3>
+          <button
+            type="button"
+            data-testid="snapshot-filter-trigger"
+            aria-label="Filter snapshot period"
+            aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}
+            className={cn(
+              "p-1.5 rounded-lg border transition-colors",
+              open || !isDefault
+                ? "bg-brand-50 border-brand-200 text-brand-600"
+                : "bg-white border-gray-200 text-gray-400 hover:text-brand-600 hover:border-brand-100",
+            )}
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+          </button>
+
+          <AnimatePresence>
+            {open && (
+              <motion.div
+                initial={{ opacity: 0, y: -6, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -6, scale: 0.97 }}
+                transition={{ duration: 0.16, ease: "easeOut" }}
+                data-testid="snapshot-filter-popover"
+                className="absolute left-0 top-9 z-50 w-72 origin-top-left rounded-2xl bg-white border border-gray-100 shadow-xl shadow-gray-200/60 p-4"
+              >
+                <p className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">
+                  Period
+                </p>
+                <div className="grid grid-cols-2 gap-1 p-1 bg-gray-100 rounded-xl mb-3">
+                  <PeriodButton
+                    label="This month"
+                    active={selection.kind === "mtd"}
+                    onClick={() => setSelection({ kind: "mtd" })}
+                  />
+                  <PeriodButton
+                    label="Financial year"
+                    active={selection.kind === "fy"}
+                    onClick={() => setSelection({ kind: "fy" })}
+                  />
+                </div>
+
+                <MonthCalendar
+                  value={selection.kind === "month" ? selection.value : null}
+                  onSelect={(value) => {
+                    setSelection({ kind: "month", value });
+                    setOpen(false);
+                  }}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
         <div className="flex items-center gap-2 text-[11px] font-semibold">
           <ManualSalesUpload />
           <span className="text-gray-200">|</span>
@@ -76,29 +220,29 @@ export function BusinessSnapshotPanel({
         <Tile
           testid="tile-oem-purchases"
           label="Purchases from OEM"
-          value={formatINR(purchasesMtd)}
+          value={formatINR(purchases)}
           tone="rose"
-          onClick={onTileClick ? () => onTileClick("purchases", "Purchases from OEM (MTD)") : undefined}
+          onClick={onTileClick ? () => onTileClick("purchases", `Purchases from OEM · ${label}`, queryParam) : undefined}
         />
         <Tile
           testid="tile-sales-to-dealer"
           label="Sales to Dealer"
-          value={formatINR(salesMtd)}
+          value={formatINR(sales)}
           tone="emerald"
-          onClick={onTileClick ? () => onTileClick("sales", "Sales to Dealer (MTD)") : undefined}
+          onClick={onTileClick ? () => onTileClick("sales", `Sales to Dealer · ${label}`, queryParam) : undefined}
         />
         <Tile
           testid="tile-other-expenses"
           label="Other Expenses"
-          value={formatINR(otherExpensesMtd)}
+          value={formatINR(otherExpenses)}
           tone="amber"
-          onClick={onTileClick ? () => onTileClick("expenses", "Other Expenses (MTD)") : undefined}
+          onClick={onTileClick ? () => onTileClick("expenses", `Other Expenses · ${label}`, queryParam) : undefined}
         />
       </div>
 
       <div data-testid="net-mtd" className="mt-4 p-3 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-between">
         <span className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider">
-          Net (MTD)
+          Net · {label}
         </span>
         <span
           data-testid="net-mtd-value"
@@ -178,6 +322,29 @@ export function BusinessSnapshotPanel({
         </div>
       </div>
     </div>
+  );
+}
+
+function PeriodButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "py-1.5 px-2 rounded-lg text-xs font-semibold transition-colors",
+        active ? "bg-white text-brand-700 shadow-sm" : "text-gray-500 hover:text-gray-700",
+      )}
+    >
+      {label}
+    </button>
   );
 }
 
