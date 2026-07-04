@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Loader2, Receipt, Download, Search } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Loader2, Receipt, Download, Search, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const STATUS_OPTIONS = [
@@ -92,6 +92,30 @@ export default function CEOInvoicesPage() {
       });
       if (!r.ok) throw new Error("Failed to load invoices");
       return (await r.json()) as ApiResponse;
+    },
+  });
+
+  const queryClient = useQueryClient();
+  const [lastSynced, setLastSynced] = useState<string | null>(null);
+
+  const refresh = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/admin/zoho/sync", { method: "POST" });
+      const json = (await r.json()) as {
+        ok: boolean;
+        upserted?: number;
+        error?: { message: string };
+      };
+      if (!r.ok || !json.ok) {
+        throw new Error(json?.error?.message || "Sync failed");
+      }
+      return json;
+    },
+    onSuccess: (json) => {
+      setLastSynced(
+        `Synced ${json.upserted ?? 0} invoice${json.upserted === 1 ? "" : "s"} just now`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["ceo-invoices"] });
     },
   });
 
@@ -223,16 +247,41 @@ export default function CEOInvoicesPage() {
             )}
           </div>
 
-          <Button
-            data-testid="export-csv"
-            variant="outline"
-            onClick={exportCsv}
-            className="flex items-center gap-2 border-brand-200 text-brand-700 hover:bg-brand-50"
-          >
-            <Download className="w-4 h-4" />
-            Export CSV
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              data-testid="refresh-zoho"
+              variant="outline"
+              onClick={() => refresh.mutate()}
+              disabled={refresh.isPending}
+              className="flex items-center gap-2 border-brand-200 text-brand-700 hover:bg-brand-50 disabled:opacity-60"
+            >
+              <RefreshCw
+                className={`w-4 h-4 ${refresh.isPending ? "animate-spin" : ""}`}
+              />
+              {refresh.isPending ? "Refreshing…" : "Refresh from Zoho"}
+            </Button>
+            <Button
+              data-testid="export-csv"
+              variant="outline"
+              onClick={exportCsv}
+              className="flex items-center gap-2 border-brand-200 text-brand-700 hover:bg-brand-50"
+            >
+              <Download className="w-4 h-4" />
+              Export CSV
+            </Button>
+          </div>
         </div>
+
+        {(lastSynced || refresh.isError) && (
+          <p
+            data-testid="sync-status"
+            className={`text-xs ${refresh.isError ? "text-rose-600" : "text-gray-500"}`}
+          >
+            {refresh.isError
+              ? `Refresh failed: ${(refresh.error as Error).message}`
+              : lastSynced}
+          </p>
+        )}
       </div>
 
       {/* Summary tiles */}

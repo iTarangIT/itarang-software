@@ -19,6 +19,7 @@ import { and, desc, gte, ilike, inArray, lte, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { zohoInvoices } from "@/lib/db/schema";
 import { requireAuth } from "@/lib/auth-utils";
+import { isCeo } from "@/lib/zoho/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,12 +33,6 @@ const KNOWN_STATUSES = new Set([
   "void",
 ]);
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function isCeo(user: { role?: string; email?: string }): boolean {
-  const role = (user.role || "").toLowerCase();
-  const email = (user.email || "").toLowerCase();
-  return role === "ceo" || email === "sanchit@itarang.com";
-}
 
 function startOfMonthISO(): string {
   const d = new Date();
