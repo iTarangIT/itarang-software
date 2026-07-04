@@ -34,6 +34,7 @@ export async function GET(req: NextRequest) {
 
     const sp = req.nextUrl.searchParams;
     const monthParam = sp.get("month");
+    const yearParam = sp.get("year");
     const period = sp.get("period") || "mtd";
 
     const now = new Date();
@@ -65,6 +66,19 @@ export async function GET(req: NextRequest) {
         month: "short",
         year: "numeric",
       });
+    } else if (yearParam) {
+      // Whole calendar year — total of all its months (Jan–Dec).
+      const y = Number(yearParam);
+      if (!/^\d{4}$/.test(yearParam) || y < 2000 || y > 2100) {
+        return NextResponse.json(
+          { success: false, error: { message: "invalid year" } },
+          { status: 400 },
+        );
+      }
+      startStr = `${y}-01-01`;
+      endStr = `${y + 1}-01-01`;
+      resolvedPeriod = `year-${y}`;
+      label = `Year ${y}`;
     } else if (period === "fy") {
       const fyStartYear = curMonth >= 3 ? curYear : curYear - 1;
       startStr = `${fyStartYear}-04-01`;
