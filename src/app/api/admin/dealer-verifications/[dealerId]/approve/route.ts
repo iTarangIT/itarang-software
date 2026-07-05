@@ -77,6 +77,13 @@ export async function POST(req: NextRequest, context: RouteContext) {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const acknowledgeBranch = body?.acknowledgeBranch === true;
 
+    // TEST-ONLY: developer "Direct Approve" path. When true, skip the Digio
+    // agreement/signing gates (finance gate + signed-PDF pre-flight) so a
+    // finance dealer can be approved without going through initiate → sign →
+    // refresh. Everything else (credentials, DB writes, welcome email/WhatsApp)
+    // runs identically. Absent/false → byte-for-byte the normal production flow.
+    const devBypassAgreement = body?.devBypassAgreement === true;
+
     const resolvedLoginUrl = resolveDealerLoginUrl(req);
 
     const existing = await db
@@ -122,7 +129,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
       );
     }
 
-    if (application.finance_enabled) {
+    if (application.finance_enabled && !devBypassAgreement) {
       if (
         application.agreement_status !== "completed" ||
         application.review_status !== "agreement_completed" ||
@@ -216,7 +223,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
     let signedAgreementUrl: string | null = null;
     let auditTrailUrl: string | null = null;
 
-    if (application.finance_enabled) {
+    if (application.finance_enabled && !devBypassAgreement) {
       const [signedUrl, auditUrl] = await Promise.all([
         ensureDealerSignedAgreementUrl(application).catch((err) => {
           console.error("ENSURE SIGNED AGREEMENT ERROR:", err);

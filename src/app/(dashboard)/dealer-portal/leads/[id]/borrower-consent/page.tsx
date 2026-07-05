@@ -15,6 +15,7 @@ import {
 import { DatePicker } from '@/components/ui/date-picker';
 import { FINANCE_DOCUMENTS } from '@/components/dealer-portal/lead-wizard/constants';
 import OtherDocumentsSection, { type RequestedDoc as OtherRequestedDoc } from '@/components/dealer-portal/lead-wizard/OtherDocumentsSection';
+import ConsentOtpCard from '@/components/dealer-portal/lead-wizard/ConsentOtpCard';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -423,6 +424,11 @@ export default function BorrowerConsentPage() {
                 if (consentJson?.success && consentJson.data) {
                     setConsentRecord(consentJson.data);
                     if (consentJson.data.consent_status) setConsentStatus(consentJson.data.consent_status);
+                    // Restore the generated/signed PDF URL so the "View / Download
+                    // Consent PDF" link survives a page reload (the manual-consent
+                    // auto-download only fires once, on the original generate call).
+                    const pdf = consentJson.data.signed_consent_url || consentJson.data.generated_pdf_url;
+                    if (pdf) setConsentPdfUrl(pdf);
                 }
             }
 
@@ -1445,60 +1451,29 @@ export default function BorrowerConsentPage() {
                                 </div>
                             </div>
                         ) : (
-                            /* ── Choose Consent Path ──────────────────────── */
+                            /* ── Choose Consent Path: Digital (OTP via call) + Manual ── */
                             <div className="space-y-4">
-                                <p className="text-sm text-gray-500">Choose one method to obtain co-borrower consent. Both options are mutually exclusive.</p>
+                                <p className="text-sm text-gray-500">Choose one method to obtain co-borrower consent.</p>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {/* Digital Consent Card */}
-                                    <div className={`relative p-5 rounded-2xl border-2 transition-all ${
-                                        consentPath === 'digital'
-                                            ? 'border-[#0047AB] bg-blue-50/50 shadow-md'
-                                            : consentPath === 'manual'
-                                                ? 'border-gray-100 bg-gray-50 opacity-50 pointer-events-none'
-                                                : 'border-gray-200 bg-white hover:border-[#0047AB] hover:shadow-md cursor-pointer'
-                                    }`}>
+                                    {/* Digital Consent Card — OTP via call */}
+                                    <div className="relative p-5 rounded-2xl border-2 border-gray-200 bg-white">
                                         <div className="flex items-start gap-3 mb-3">
                                             <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
-                                                <Send className="w-5 h-5 text-[#0047AB]" />
+                                                <Phone className="w-5 h-5 text-[#0047AB]" />
                                             </div>
                                             <div>
-                                                <h4 className="text-sm font-bold text-gray-900">Digital Consent (Aadhaar eSign)</h4>
-                                                <p className="text-xs text-gray-500 mt-0.5">Send consent link via SMS/WhatsApp. Co-borrower signs digitally with Aadhaar OTP.</p>
+                                                <h4 className="text-sm font-bold text-gray-900">Digital Consent (OTP)</h4>
+                                                <p className="text-xs text-gray-500 mt-0.5">Verify the co-borrower with a 6-digit OTP delivered by an automated call.</p>
                                             </div>
                                         </div>
-                                        {consentPath !== 'manual' && (
-                                            <div className="flex gap-2 items-start">
-                                                <div className="flex-1 flex flex-col">
-                                                    <button
-                                                        onClick={() => handleSendConsent('whatsapp')}
-                                                        disabled={true}
-                                                        className="w-full px-3 py-2 bg-[#25D366] text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-                                                    >
-                                                        <Send className="w-3 h-3" />
-                                                        WhatsApp
-                                                    </button>
-                                                    <span className="text-[10px] text-gray-500 font-medium text-center mt-1">Coming Soon</span>
-                                                </div>
-                                                <button onClick={() => handleSendConsent('sms')} disabled={consentLoading || consentPath === 'digital'}
-                                                    className="flex-1 px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5">
-                                                    {consentLoading && consentPath === 'digital' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                                                    SMS
-                                                </button>
-                                            </div>
-                                        )}
-                                        {(consentStatus === 'link_sent' || consentStatus === 'link_opened') && (
-                                            <div className="mt-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2">
-                                                <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
-                                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
-                                                </span>
-                                                <p className="text-xs font-medium text-amber-700">
-                                                    {consentStatus === 'link_opened' ? 'Co-borrower opened the link. Waiting for signature...' : 'Consent link sent. Waiting for co-borrower to sign...'}
-                                                    <span className="text-amber-500 ml-1">(auto-updating)</span>
-                                                </p>
-                                            </div>
-                                        )}
+                                        <ConsentOtpCard
+                                            leadId={leadId}
+                                            consentFor="borrower"
+                                            phone={borrowerForm?.phone || undefined}
+                                            beforeSend={persistBorrowerToCoBorrowers}
+                                            onVerified={() => { setConsentStatus('verified'); loadPageData(true); }}
+                                        />
                                     </div>
 
                                     {/* Manual Consent Card */}
@@ -1527,13 +1502,17 @@ export default function BorrowerConsentPage() {
                                                     {consentStatus === 'consent_generated' ? 'PDF Generated' : 'Generate Consent PDF'}
                                                 </button>
 
-                                                {(consentStatus === 'consent_generated' || consentPdfUrl) && (
+                                                {(consentStatus === 'consent_generated' || consentStatus === 'consent_uploaded' || consentPdfUrl) && (
                                                     <>
                                                         {consentPdfUrl && (
-                                                            <div className="p-2.5 bg-green-50 border border-green-200 rounded-lg">
-                                                                <p className="text-xs text-green-700 font-medium"><CheckCircle2 className="w-3 h-3 inline mr-1" />PDF downloaded. Print, get signature, then upload scanned copy below.</p>
-                                                            </div>
+                                                            <a href={consentPdfUrl} target="_blank" rel="noopener noreferrer"
+                                                                className="w-full px-3 py-2 bg-white border border-teal-300 text-teal-700 rounded-lg text-xs font-bold hover:bg-teal-50 transition-all flex items-center justify-center gap-1.5">
+                                                                <Eye className="w-3 h-3" /> View / Download Consent PDF
+                                                            </a>
                                                         )}
+                                                        <div className="p-2.5 bg-green-50 border border-green-200 rounded-lg">
+                                                            <p className="text-xs text-green-700 font-medium"><CheckCircle2 className="w-3 h-3 inline mr-1" />Print the PDF, get the co-borrower's signature, scan it, then upload below.</p>
+                                                        </div>
                                                         <label className="w-full px-3 py-2 bg-[#0047AB] text-white rounded-lg text-xs font-bold hover:bg-[#003580] transition-all cursor-pointer flex items-center justify-center gap-1.5">
                                                             <Upload className="w-3 h-3" /> Upload Signed Consent PDF
                                                             <input type="file" className="hidden" accept="application/pdf"
