@@ -65,8 +65,9 @@ import {
   generateManualConsentPdf,
   getSignedConsentForLead,
   renderConsentPreviewPdf,
-  sendConsentForLead,
+  sendConsentOtp,
   storeSignedConsent,
+  verifyConsentOtp,
 } from "@/lib/kyc/consent-service";
 import { ensureAdminKycQueueEntry } from "@/lib/kyc/admin-workflow";
 import {
@@ -283,6 +284,10 @@ type Ctx = {
     /** Index into ADDITIONAL_FINANCE_QUESTIONS while collecting the post-consent
      *  resident-status / health- / life-insurance answers (DC_LEAD_FINANCE_Q). */
     financeQIndex?: number;
+    /** Wrong-OTP attempts on the current consent OTP session (DC_LEAD_CONSENT_OTP_WAIT). */
+    consentOtpAttempts?: number;
+    /** Channel the consent OTP was sent over, so Resend uses the same one. */
+    consentOtpChannel?: "call" | "sms" | "whatsapp";
   };
 };
 
@@ -734,6 +739,8 @@ async function runCustomerTurn(
         return await onConsentChannel(session, event, houseDealer);
       case "DC_LEAD_CONSENT_WAIT":
         return await onConsentWait(session, event);
+      case "DC_LEAD_CONSENT_OTP_WAIT":
+        return await onConsentOtpWait(session, event, houseDealer);
       case "DC_LEAD_FINANCE_Q":
         return await onLeadFinanceQuestion(session, event);
       case "DC_LEAD_CONSENT_REVIEW":
@@ -2966,6 +2973,8 @@ async function runConsoleTurn(
         return await onConsentChannel(session, event, dealer);
       case "DC_LEAD_CONSENT_WAIT":
         return await onConsentWait(session, event);
+      case "DC_LEAD_CONSENT_OTP_WAIT":
+        return await onConsentOtpWait(session, event, dealer);
       case "DC_LEAD_FINANCE_Q":
         return await onLeadFinanceQuestion(session, event);
       case "DC_LEAD_CONSENT_REVIEW":
@@ -3706,7 +3715,7 @@ async function finalizeCashLead(session: SessionRow): Promise<void> {
 // ── Console: customer KYC consent (Hot + finance leads) ──────────────────────
 
 const CONSENT_CHANNEL_BUTTONS: ReplyButton[] = [
-  { id: "consent_sms", title: "📩 SMS" },
+  { id: "consent_call", title: "📞 Call" },
   { id: "consent_whatsapp", title: "💬 WhatsApp" },
   { id: "consent_manual", title: "✍ Manual" },
 ];
@@ -3717,10 +3726,16 @@ const CONSENT_SEND_BUTTON: ReplyButton = {
 };
 
 // At the digital-consent wait step the dealer can pull the latest signing status
-// (so they aren't stranded if the async Digio webhook is delayed).
+// (so they aren't stranded if the async Digio webhook is delayed). Manual path only.
 const CONSENT_CHECK_BUTTON: ReplyButton = {
   id: "consent_check",
   title: "✅ Check if signed",
+};
+
+// At the OTP-wait step the dealer can send the customer a fresh OTP.
+const CONSENT_RESEND_OTP_BUTTON: ReplyButton = {
+  id: "consent_resend_otp",
+  title: "🔁 Resend OTP",
 };
 
 /** Read the active lead context off the (freshly loaded) session. */
@@ -3826,7 +3841,7 @@ async function onConsentChannel(
 
   const isManual = id === "consent_manual" || /manual/.test(id);
   const isWhatsapp = id === "consent_whatsapp" || /whatsapp/.test(id);
-  const isSms = id === "consent_sms" || /\bsms\b/.test(id);
+  const isCall = id === "consent_call" || /\bcall\b/.test(id);
 
   if (isManual) {
     const gen = await generateManualConsentPdf({
@@ -3852,9 +3867,9 @@ async function onConsentChannel(
     return;
   }
 
-  if (isSms || isWhatsapp) {
-    const channel = isWhatsapp ? "whatsapp" : "sms";
-    const res = await sendConsentForLead({
+  if (isCall || isWhatsapp) {
+    const channel = isWhatsapp ? "whatsapp" : "call";
+    const res = await sendConsentOtp({
       leadId: lead.leadId,
       channel,
       dealerName: dealer.dealerName,
@@ -3862,25 +3877,28 @@ async function onConsentChannel(
     if (!res.ok) {
       await reply(
         session,
-        `Couldn't send the consent: ${res.error}. Please try again, or pick *Manual*.`,
+        `Couldn't send the consent OTP: ${res.error}. Please try again, or pick *Manual*.`,
         CONSENT_CHANNEL_BUTTONS,
       );
       return;
     }
-    await setSession(session.id, { current_state: "DC_LEAD_CONSENT_WAIT" });
+    await mergeContext(session, (ctx) => {
+      ctx.lead = { ...(ctx.lead ?? {}), consentOtpAttempts: 0, consentOtpChannel: channel };
+    });
+    await setSession(session.id, { current_state: "DC_LEAD_CONSENT_OTP_WAIT" });
     await reply(
       session,
-      `📨 Consent link sent to the customer via *${isWhatsapp ? "WhatsApp" : "SMS"}* on ${res.phone}.\n\n` +
-        `I'll notify you here as soon as they sign — or tap *Check if signed* once the customer has signed. ` +
-        `(Collecting the signature manually instead? Just upload the signed PDF here.)`,
-      [CONSENT_CHECK_BUTTON],
+      `🔐 A 6-digit OTP was sent to the customer via *${isWhatsapp ? "WhatsApp" : "Call"}* on ${res.otpSentTo}.\n\n` +
+        `Ask the customer to read it out, then *type the 6 digits here* to record their consent.` +
+        (res.devOtp ? `\n\n_(dev/test: OTP is ${res.devOtp})_` : ""),
+      [CONSENT_RESEND_OTP_BUTTON],
     );
     return;
   }
 
   await reply(
     session,
-    "Please tap *SMS*, *WhatsApp* or *Manual*.",
+    "Please tap *Call*, *WhatsApp* or *Manual*.",
     CONSENT_CHANNEL_BUTTONS,
   );
 }
@@ -3989,6 +4007,90 @@ async function presentSignedConsent(
   // insurance) AFTER the signed consent, before the dealer submits to iTarang.
   // Any other combination (shouldn't normally reach here, since consent is only
   // taken for those) skips straight to the submit step.
+  const lead = await getLeadCtx(session);
+  if (
+    lead.interest &&
+    lead.paymentMethod &&
+    requiresConsent(lead.interest, lead.paymentMethod)
+  ) {
+    await startFinanceQuestions(session);
+    return;
+  }
+  await promptSubmitToITarang(session);
+}
+
+/** Capture the 6-digit consent OTP the customer reads out, typed back into the
+ *  chat (or a Resend tap). Verifies it (auto-completing the consent) and
+ *  advances the flow; relays the server's wrong/expired/locked message. E-180. */
+async function onConsentOtpWait(
+  session: SessionRow,
+  event: InboundEvent,
+  dealer: ActiveDealer,
+): Promise<void> {
+  const lead = await getLeadCtx(session);
+  if (!lead.leadId) {
+    await reply(session, "Send *menu* to start again.");
+    return;
+  }
+
+  const raw = (event.text ?? "").trim();
+  const channel = lead.consentOtpChannel ?? "call";
+
+  // Resend button / typed "resend".
+  if (
+    (event.type === "interactive" && raw.toLowerCase() === "consent_resend_otp") ||
+    /^resend\b/i.test(raw)
+  ) {
+    const res = await sendConsentOtp({
+      leadId: lead.leadId,
+      channel,
+      dealerName: dealer.dealerName,
+    });
+    if (!res.ok) {
+      await reply(session, `Couldn't resend the OTP: ${res.error}.`, [CONSENT_RESEND_OTP_BUTTON]);
+      return;
+    }
+    await mergeContext(session, (ctx) => {
+      ctx.lead = { ...(ctx.lead ?? {}), consentOtpAttempts: 0 };
+    });
+    await reply(
+      session,
+      `🔁 A fresh OTP was sent to the customer on ${res.otpSentTo}. Ask them to read it out and type the 6 digits here.` +
+        (res.devOtp ? `\n\n_(dev/test: OTP is ${res.devOtp})_` : ""),
+      [CONSENT_RESEND_OTP_BUTTON],
+    );
+    return;
+  }
+
+  const otp = raw.replace(/\D/g, "").slice(0, 6);
+  if (otp.length !== 6) {
+    await reply(
+      session,
+      "Please type the *6-digit OTP* the customer received, or tap *Resend OTP*.",
+      [CONSENT_RESEND_OTP_BUTTON],
+    );
+    return;
+  }
+
+  const res = await verifyConsentOtp({ leadId: lead.leadId, otp });
+  if (res.ok) {
+    await reply(session, "✅ *Consent recorded.* Thank you!");
+    await afterConsentCaptured(session);
+    return;
+  }
+
+  // Wrong / expired / locked — verifyConsentOtp returns the exact message
+  // (attempts remaining / lockout) and tracks attempts server-side.
+  await mergeContext(session, (ctx) => {
+    ctx.lead = { ...(ctx.lead ?? {}), consentOtpAttempts: (lead.consentOtpAttempts ?? 0) + 1 };
+  });
+  await reply(session, `❌ ${res.error}`, [CONSENT_RESEND_OTP_BUTTON]);
+}
+
+/** After consent is captured (OTP verified), continue the lead flow exactly as
+ *  the signed-consent path does: finance questions for finance leads, else the
+ *  submit-to-iTarang review step. */
+async function afterConsentCaptured(session: SessionRow): Promise<void> {
   const lead = await getLeadCtx(session);
   if (
     lead.interest &&
