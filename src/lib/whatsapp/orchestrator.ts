@@ -3291,6 +3291,27 @@ async function onLeadMobile(
   // NOTE: the "number already used for finance" check is NOT done here — at this
   // point we don't yet know if the lead is cash or finance, and cash leads have
   // no such restriction. It runs in onLeadPayment, gated on finance methods.
+  // Customer self-onboarding (a new number onboarding itself, flow === "customer")
+  // does NOT get asked to classify the lead — it defaults to "hot" and skips
+  // straight to payment. The onboarded-dealer console (flow undefined) still asks
+  // the Hot/Warm/Cold classification, since the dealer is qualifying the lead.
+  const isCustomerFlow = ((session.context ?? {}) as Ctx).flow === "customer";
+  if (isCustomerFlow) {
+    await mergeContext(session, (ctx) => {
+      ctx.lead = { ...(ctx.lead ?? {}), mobile, interest: "hot" };
+    });
+    // We deliberately don't ask the customer to type their name — it's extracted
+    // from the PAN / Aadhaar in the documents step (fillCustomerLeadFromDoc), so
+    // we go straight to the payment method.
+    await setSession(session.id, { current_state: "DC_LEAD_PAYMENT" });
+    await reply(
+      session,
+      "Got it ✅\n\n*Payment method*\n\nHow will the customer pay? Tap an option 👇",
+      PAYMENT_BUTTONS,
+    );
+    return;
+  }
+
   await mergeContext(session, (ctx) => {
     ctx.lead = { ...(ctx.lead ?? {}), mobile };
   });
@@ -3716,7 +3737,6 @@ async function finalizeCashLead(session: SessionRow): Promise<void> {
 
 const CONSENT_CHANNEL_BUTTONS: ReplyButton[] = [
   { id: "consent_call", title: "📞 Call" },
-  { id: "consent_whatsapp", title: "💬 WhatsApp" },
   { id: "consent_manual", title: "✍ Manual" },
 ];
 
@@ -3840,7 +3860,6 @@ async function onConsentChannel(
   }
 
   const isManual = id === "consent_manual" || /manual/.test(id);
-  const isWhatsapp = id === "consent_whatsapp" || /whatsapp/.test(id);
   const isCall = id === "consent_call" || /\bcall\b/.test(id);
 
   if (isManual) {
@@ -3867,8 +3886,8 @@ async function onConsentChannel(
     return;
   }
 
-  if (isCall || isWhatsapp) {
-    const channel = isWhatsapp ? "whatsapp" : "call";
+  if (isCall) {
+    const channel = "call";
     const res = await sendConsentOtp({
       leadId: lead.leadId,
       channel,
@@ -3888,7 +3907,7 @@ async function onConsentChannel(
     await setSession(session.id, { current_state: "DC_LEAD_CONSENT_OTP_WAIT" });
     await reply(
       session,
-      `🔐 A 6-digit OTP was sent to the customer via *${isWhatsapp ? "WhatsApp" : "Call"}* on ${res.otpSentTo}.\n\n` +
+      `🔐 A 6-digit OTP was sent to the customer via *Call* on ${res.otpSentTo}.\n\n` +
         `Ask the customer to read it out, then *type the 6 digits here* to record their consent.` +
         (res.devOtp ? `\n\n_(dev/test: OTP is ${res.devOtp})_` : ""),
       [CONSENT_RESEND_OTP_BUTTON],
@@ -3898,7 +3917,7 @@ async function onConsentChannel(
 
   await reply(
     session,
-    "Please tap *Call*, *WhatsApp* or *Manual*.",
+    "Please tap *Call* or *Manual*.",
     CONSENT_CHANNEL_BUTTONS,
   );
 }
