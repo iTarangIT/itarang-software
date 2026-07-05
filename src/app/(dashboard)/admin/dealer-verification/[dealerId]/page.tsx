@@ -32,6 +32,7 @@ import {
   MessageCircle,
   UploadCloud,
   Loader2,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -1420,6 +1421,33 @@ export default function DealerReviewPage() {
     } finally { setSubmitting(false); }
   };
 
+  // TEST-ONLY: skip the Digio agreement + signing flow and approve the dealer
+  // directly. Hits the same /approve endpoint with devBypassAgreement so the
+  // dealer still gets real credentials + welcome email/WhatsApp, just without
+  // the signing round-trip. Not part of the normal production path.
+  const handleDevApprove = async () => {
+    if (data?.onboardingStatus === "rejected") { toast.error("This application is rejected and locked."); return; }
+    if (!window.confirm("Testing only: approve this dealer directly, skipping the agreement & signing flow? They will receive login credentials and a welcome message.")) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/admin/dealer-verifications/${dealerId}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ acknowledgeBranch: true, devBypassAgreement: true }),
+      });
+      let json: any = null;
+      try { json = await res.json(); } catch { /* non-JSON body */ }
+      if (!res.ok || !json?.success) {
+        toast.error(json?.message || `Direct approve failed (HTTP ${res.status})`);
+        return;
+      }
+      toast.success(json?.emailSent ? "Dealer approved — welcome credentials sent." : "Dealer approved.");
+      router.push("/admin/dealer-verification");
+    } catch (err: any) {
+      toast.error(err?.message || "Something went wrong while approving");
+    } finally { setSubmitting(false); }
+  };
+
   const handleCorrection = () => {
     setCorrectionDialogOpen(true);
   };
@@ -2247,7 +2275,18 @@ export default function DealerReviewPage() {
                     {agreementActionLoading === "retry" ? "Retrying…" : "Retry Download Signed Copy"}
                   </button>
                 )}
+
+                {/* TEST-ONLY: skip agreement + signing, approve dealer directly. */}
+                <button onClick={handleDevApprove}
+                  disabled={submitting || isRejected}
+                  className="inline-flex items-center gap-2 rounded-2xl border-2 border-dashed border-purple-400 bg-purple-50 px-4 py-2 text-sm font-semibold text-purple-700 hover:bg-purple-100 disabled:opacity-50">
+                  <Zap className="h-4 w-4" />
+                  {submitting ? "Approving…" : "⚡ Direct Approve (Test)"}
+                </button>
               </div>
+              <p className="mt-2 text-xs text-purple-600">
+                Testing only — skips the agreement &amp; signing flow and approves the dealer directly, sending login credentials + welcome message.
+              </p>
 
               {/* Tracking table */}
               <div className="mt-8 rounded-[24px] border border-slate-200 bg-white shadow-sm">
