@@ -14,16 +14,26 @@
 // See the originating routes for the inline rationale on idempotency, the
 // duplicate-record guard, and the admin-queue chicken-and-egg.
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
+import crypto from "crypto";
 
 import { db } from "@/lib/db";
 import {
   coBorrowers,
+  consentOtpVerifications,
   consentRecords,
   kycVerifications,
   leads,
 } from "@/lib/db/schema";
 import { generateConsentHtml } from "@/lib/consent/consent-pdf-template";
+import { sendMsg91Otp } from "@/lib/msg91";
+import { sendTwoFactorVoiceOtp, twoFactorConfigured } from "@/lib/twofactor";
+import {
+  maskCalcPhone,
+  metaWhatsAppConfigured,
+  normalizeCalcPhone,
+  sendCalcOtpWhatsApp,
+} from "@/lib/calculator/whatsapp";
 import {
   createDigioAgreement,
   downloadDigioSignedDocument,
@@ -634,6 +644,429 @@ export async function renderConsentPreviewPdf(opts: {
     console.error("[consent-service] preview upload failed:", e);
     return { ok: false, error: "Failed to render consent preview" };
   }
+}
+
+// ── OTP-based consent (E-180) ────────────────────────────────────────────────
+//
+// Replaces Digio Aadhaar e-sign as the active consent mechanism (gated by
+// CONSENT_OTP_ENABLED at the route/orchestrator layer). The customer receives a
+// 6-digit OTP (SMS via MSG91 / WhatsApp via Meta) and consent is recorded once
+// the OTP is verified. Mechanics mirror the Step 5 dispatch OTP + calculator OTP
+// gate verbatim: SHA-256 hash, 10-min expiry, 3 sends / 30-min cooldown, 3
+// attempts / 5-min lock. Unlike Digio, a verified OTP AUTO-COMPLETES the consent
+// (consent_status='verified') — no admin consent-review step (mirrors exactly
+// what admin/kyc/.../consent/.../verify writes). It does NOT touch
+// kyc_status/final_decision, so the separate admin KYC decision gating Step 4 is
+// unchanged. OTP consents carry no Aadhaar, so the E-175/E-176 signer-match gate
+// never applies (getSignedConsentForLead skips it when esign_transaction_id is null).
+
+const OTP_LIFETIME_MS = 10 * 60 * 1000; // 10 minutes
+const OTP_MAX_SENDS = 3;
+const OTP_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes after max sends
+const OTP_MAX_ATTEMPTS = 3;
+const OTP_LOCK_MS = 5 * 60 * 1000; // 5 minutes
+
+function hashOtp(otp: string): string {
+  return crypto.createHash("sha256").update(otp).digest("hex");
+}
+
+function smsOtpConfigured(): boolean {
+  return !!(
+    (process.env.MSG91_AUTH_KEY?.trim()?.length ?? 0) > 5 &&
+    (process.env.MSG91_TEMPLATE_ID?.trim()?.length ?? 0) > 5
+  );
+}
+
+/** OTP delivery channel. 'call' = 2Factor automated voice call (primary);
+ *  'whatsapp' = Meta (currently "coming soon" in the UI); 'sms' = MSG91 (legacy). */
+export type ConsentOtpChannel = "call" | "sms" | "whatsapp";
+
+export type SendConsentOtpResult =
+  | {
+      ok: true;
+      consentId: string;
+      consentFor: ConsentRole;
+      channel: ConsentOtpChannel;
+      phone: string;
+      otpSentTo: string;
+      previewUrl: string | null;
+      /** Rendered consent PDF bytes — so the WhatsApp caller can send by upload. */
+      pdfBuffer: Buffer | null;
+      expiresInSeconds: number;
+      sendCount: number;
+      maxSends: number;
+      deliveryStatus: "sent" | "dev_hardcoded" | "failed";
+      /** Present only in dev / hardcoded mode so the flow is testable end-to-end. */
+      devOtp?: string;
+    }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Send an OTP to capture customer (or co-borrower) consent. Renders + stores the
+ * consent PDF so the customer can see what they're consenting to, generates a
+ * 6-digit OTP, delivers it over the chosen channel, and flips the consent_records
+ * row to 'otp_sent'. Idempotent per (lead, consent_for): reuses the open OTP
+ * session (bumping send_count) until the cooldown, then starts fresh.
+ */
+export async function sendConsentOtp(opts: {
+  leadId: string;
+  channel: ConsentOtpChannel;
+  consentFor?: ConsentFor;
+  dealerName?: string;
+  requestedBy?: string | null;
+}): Promise<SendConsentOtpResult> {
+  const role = toRole(opts.consentFor);
+  const channel: ConsentOtpChannel =
+    opts.channel === "whatsapp" ? "whatsapp" : opts.channel === "sms" ? "sms" : "call";
+
+  const resolved = await resolveSigner(opts.leadId, role);
+  if (!resolved) {
+    return { ok: false, status: 404, error: "Lead or co-borrower not found" };
+  }
+  const { signer } = resolved;
+  if (!signer.phone) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        role === "co_borrower"
+          ? "Co-borrower phone number not available"
+          : "Customer phone number not available",
+    };
+  }
+
+  const tenDigit = signer.phone.replace(/\D/g, "").slice(-10);
+  const normalized = normalizeCalcPhone(signer.phone); // "91XXXXXXXXXX" or null
+  const storedPhone = normalized || tenDigit;
+  const masked = normalized ? maskCalcPhone(normalized) : `XXXXXX${tenDigit.slice(-4)}`;
+
+  // Latest open OTP session for (lead, consent_for) — reused (send_count bumped)
+  // until OTP_MAX_SENDS, then a cooldown before a fresh session is allowed.
+  const [existingSession] = await db
+    .select()
+    .from(consentOtpVerifications)
+    .where(
+      and(
+        eq(consentOtpVerifications.leadId, opts.leadId),
+        eq(consentOtpVerifications.consentFor, role),
+        isNull(consentOtpVerifications.verifiedAt),
+        isNull(consentOtpVerifications.consumedAt),
+      ),
+    )
+    .orderBy(desc(consentOtpVerifications.createdAt))
+    .limit(1);
+
+  const now = new Date();
+  let session = existingSession;
+  if (session && session.sendCount >= OTP_MAX_SENDS) {
+    const cutoff = new Date(session.createdAt.getTime() + OTP_COOLDOWN_MS);
+    if (now < cutoff) {
+      const waitMins = Math.ceil((cutoff.getTime() - now.getTime()) / 60000);
+      return {
+        ok: false,
+        status: 429,
+        error: `Max OTP resends reached. Please wait ${waitMins} min before trying again.`,
+      };
+    }
+    await db
+      .update(consentOtpVerifications)
+      .set({ consumedAt: now })
+      .where(eq(consentOtpVerifications.id, session.id));
+    session = undefined;
+  }
+
+  // Render + store the consent PDF (best-effort — never blocks the OTP).
+  let previewUrl: string | null = null;
+  let pdfBuffer: Buffer | null = null;
+  const preview = await renderConsentPreviewPdf({
+    leadId: opts.leadId,
+    consentFor: opts.consentFor,
+    dealerName: opts.dealerName,
+  });
+  if (preview.ok) {
+    previewUrl = preview.url;
+    pdfBuffer = preview.pdfBuffer;
+  }
+
+  // Dev shortcut mirrors Step 5 / calculator: without live provider creds we use
+  // a hardcoded OTP so the flow is testable; verification still hash-compares
+  // through the exact production path.
+  const configured =
+    channel === "whatsapp"
+      ? metaWhatsAppConfigured()
+      : channel === "sms"
+        ? smsOtpConfigured()
+        : twoFactorConfigured();
+  const otp = configured
+    ? Math.floor(100000 + Math.random() * 900000).toString()
+    : "123456";
+  const otpHash = hashOtp(otp);
+  const expiresAt = new Date(now.getTime() + OTP_LIFETIME_MS);
+
+  let deliveryStatus: "sent" | "dev_hardcoded" | "failed" = "dev_hardcoded";
+  if (configured) {
+    const delivered =
+      channel === "whatsapp"
+        ? (await sendCalcOtpWhatsApp(normalized || `91${tenDigit}`, otp, signer.name)).ok
+        : channel === "sms"
+          ? (await sendMsg91Otp({ mobile_number: signer.phone, otp, otp_expiry_minutes: 10 })).success
+          : (await sendTwoFactorVoiceOtp({ mobile_number: signer.phone, otp })).success;
+    if (!delivered) {
+      // Record the failed attempt so send_count still counts against the cap.
+      if (session) {
+        await db
+          .update(consentOtpVerifications)
+          .set({ sendCount: session.sendCount + 1, deliveryStatus: "failed" })
+          .where(eq(consentOtpVerifications.id, session.id));
+      }
+      return {
+        ok: false,
+        status: 502,
+        error: `Failed to deliver consent OTP over ${channel}. Please try again.`,
+      };
+    }
+    deliveryStatus = "sent";
+  } else {
+    console.log(
+      `[consent-service] OTP provider (${channel}) not configured — using hardcoded OTP ${otp} for ${masked}.`,
+    );
+  }
+
+  // Reuse-or-create the consent_records row for this (lead, consent_for).
+  const [existingRec] = await db
+    .select()
+    .from(consentRecords)
+    .where(
+      and(
+        eq(consentRecords.lead_id, opts.leadId),
+        eq(consentRecords.consent_for, role),
+      ),
+    )
+    .orderBy(desc(consentRecords.created_at))
+    .limit(1);
+  const consentId = existingRec?.id || newConsentId(now);
+
+  const recordFields = {
+    consent_type: "digital",
+    sign_method: "otp",
+    consent_status: "otp_sent",
+    consent_delivery_channel: channel,
+    consent_link_sent_at: now,
+    generated_pdf_url: previewUrl,
+    // Fresh OTP cycle — clear any stale Digio/signed state.
+    esign_transaction_id: null,
+    signer_aadhaar_masked: null,
+    signer_name_match_score: null,
+    esign_error_message: null,
+    signed_at: null,
+    signed_consent_url: null,
+    verified_by: null,
+    verified_at: null,
+    otp_verified_at: null,
+    otp_verification_id: null,
+    updated_at: now,
+  };
+  if (existingRec) {
+    await db
+      .update(consentRecords)
+      .set(recordFields)
+      .where(eq(consentRecords.id, existingRec.id));
+  } else {
+    await db.insert(consentRecords).values({
+      id: consentId,
+      lead_id: opts.leadId,
+      consent_for: role,
+      created_at: now,
+      ...recordFields,
+    });
+  }
+
+  // Persist / refresh the OTP session.
+  if (session) {
+    await db
+      .update(consentOtpVerifications)
+      .set({
+        otpHash,
+        expiresAt,
+        sendCount: session.sendCount + 1,
+        attemptCount: 0,
+        lockedUntil: null,
+        deliveryChannel: channel,
+        deliveryStatus,
+        consentRecordId: consentId,
+        phone: storedPhone,
+      })
+      .where(eq(consentOtpVerifications.id, session.id));
+  } else {
+    await db.insert(consentOtpVerifications).values({
+      leadId: opts.leadId,
+      consentFor: role,
+      consentRecordId: consentId,
+      requestedBy: opts.requestedBy ?? null,
+      phone: storedPhone,
+      deliveryChannel: channel,
+      otpHash,
+      expiresAt,
+      sendCount: 1,
+      attemptCount: 0,
+      deliveryStatus,
+    });
+  }
+
+  await syncApplicantStatus(role, opts.leadId, "otp_sent", now);
+
+  const nextSendCount = session ? session.sendCount + 1 : 1;
+  const isDev = process.env.NODE_ENV !== "production";
+  return {
+    ok: true,
+    consentId,
+    consentFor: role,
+    channel,
+    phone: storedPhone,
+    otpSentTo: masked,
+    previewUrl,
+    pdfBuffer,
+    expiresInSeconds: Math.floor(OTP_LIFETIME_MS / 1000),
+    sendCount: nextSendCount,
+    maxSends: OTP_MAX_SENDS,
+    deliveryStatus,
+    ...(deliveryStatus === "dev_hardcoded" || isDev ? { devOtp: otp } : {}),
+  };
+}
+
+export type VerifyConsentOtpResult =
+  | {
+      ok: true;
+      consentId: string;
+      consentFor: ConsentRole;
+      verifiedAt: string;
+      consentStatus: "verified";
+    }
+  | { ok: false; status: number; error: string; attemptsRemaining?: number };
+
+/**
+ * Verify a consent OTP. On success the consent AUTO-COMPLETES to 'verified'
+ * (no admin review) and the applicant-level status is propagated exactly as the
+ * admin verify route does. Deliberately does not touch kyc_status/final_decision.
+ */
+export async function verifyConsentOtp(opts: {
+  leadId: string;
+  otp: string;
+  consentFor?: ConsentFor;
+  verifiedBy?: string | null;
+}): Promise<VerifyConsentOtpResult> {
+  const role = toRole(opts.consentFor);
+
+  const [session] = await db
+    .select()
+    .from(consentOtpVerifications)
+    .where(
+      and(
+        eq(consentOtpVerifications.leadId, opts.leadId),
+        eq(consentOtpVerifications.consentFor, role),
+        isNull(consentOtpVerifications.verifiedAt),
+        isNull(consentOtpVerifications.consumedAt),
+      ),
+    )
+    .orderBy(desc(consentOtpVerifications.createdAt))
+    .limit(1);
+
+  if (!session) {
+    return { ok: false, status: 400, error: "No active OTP. Please request a new one." };
+  }
+
+  const now = new Date();
+  if (session.lockedUntil && now < session.lockedUntil) {
+    const mins = Math.ceil((session.lockedUntil.getTime() - now.getTime()) / 60000);
+    return { ok: false, status: 429, error: `Too many attempts. Locked for ${mins} more minute(s).` };
+  }
+  if (now >= session.expiresAt) {
+    return { ok: false, status: 400, error: "OTP expired. Please resend." };
+  }
+
+  if (session.otpHash !== hashOtp(opts.otp)) {
+    const attempts = session.attemptCount + 1;
+    await db
+      .update(consentOtpVerifications)
+      .set({
+        attemptCount: attempts,
+        ...(attempts >= OTP_MAX_ATTEMPTS
+          ? { lockedUntil: new Date(now.getTime() + OTP_LOCK_MS) }
+          : {}),
+      })
+      .where(eq(consentOtpVerifications.id, session.id));
+    return {
+      ok: false,
+      status: 400,
+      error:
+        attempts >= OTP_MAX_ATTEMPTS
+          ? "Incorrect OTP. Too many attempts — locked for 5 minutes."
+          : `Incorrect OTP. ${OTP_MAX_ATTEMPTS - attempts} attempt(s) remaining.`,
+      attemptsRemaining: Math.max(0, OTP_MAX_ATTEMPTS - attempts),
+    };
+  }
+
+  await db
+    .update(consentOtpVerifications)
+    .set({ verifiedAt: now })
+    .where(eq(consentOtpVerifications.id, session.id));
+
+  // Auto-complete the consent (mirror of admin/kyc/.../consent/.../verify).
+  const [record] = await db
+    .select()
+    .from(consentRecords)
+    .where(
+      and(
+        eq(consentRecords.lead_id, opts.leadId),
+        eq(consentRecords.consent_for, role),
+      ),
+    )
+    .orderBy(desc(consentRecords.created_at))
+    .limit(1);
+
+  const consentId = record?.id || session.consentRecordId || newConsentId(now);
+  if (record) {
+    await db
+      .update(consentRecords)
+      .set({
+        consent_status: "verified",
+        sign_method: "otp",
+        signed_at: now,
+        verified_at: now,
+        verified_by: opts.verifiedBy ?? null,
+        otp_verified_at: now,
+        otp_verification_id: session.id,
+        signed_consent_url: record.signed_consent_url ?? record.generated_pdf_url ?? null,
+        updated_at: now,
+      })
+      .where(eq(consentRecords.id, record.id));
+  } else {
+    await db.insert(consentRecords).values({
+      id: consentId,
+      lead_id: opts.leadId,
+      consent_for: role,
+      consent_type: "digital",
+      consent_status: "verified",
+      sign_method: "otp",
+      signed_at: now,
+      verified_at: now,
+      verified_by: opts.verifiedBy ?? null,
+      otp_verified_at: now,
+      otp_verification_id: session.id,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  await syncApplicantStatus(role, opts.leadId, "verified", now);
+
+  return {
+    ok: true,
+    consentId,
+    consentFor: role,
+    verifiedAt: now.toISOString(),
+    consentStatus: "verified",
+  };
 }
 
 export type SignedConsentLookup =
