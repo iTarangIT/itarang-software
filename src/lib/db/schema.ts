@@ -1585,7 +1585,38 @@ export const consentRecords = pgTable("consent_records", {
   esign_retry_count: integer("esign_retry_count").default(0),
   admin_viewed_by: uuid("admin_viewed_by"),
   admin_viewed_at: timestamp("admin_viewed_at", { withTimezone: true }),
+  // E-180: OTP-based consent audit pointers (the OTP session itself lives in
+  // consent_otp_verifications). Set when a consent is captured via OTP.
+  otp_verification_id: uuid("otp_verification_id"),
+  otp_verified_at: timestamp("otp_verified_at", { withTimezone: true }),
 });
+
+// E-180: OTP sessions for OTP-based customer consent (replaces Digio Aadhaar
+// e-sign). Matched by (lead_id, consent_for); mirrors calc_otp_verifications.
+export const consentOtpVerifications = pgTable(
+  "consent_otp_verifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    leadId: varchar("lead_id", { length: 255 }).notNull(),
+    consentFor: varchar("consent_for", { length: 20 }).default('primary').notNull(), // 'primary' | 'co_borrower'
+    consentRecordId: varchar("consent_record_id", { length: 255 }),
+    requestedBy: uuid("requested_by"),
+    phone: text("phone").notNull(), // normalized digits: 91XXXXXXXXXX
+    deliveryChannel: varchar("delivery_channel", { length: 20 }), // 'sms' | 'whatsapp'
+    otpHash: text("otp_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    sendCount: integer("send_count").default(1).notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    deliveryStatus: text("delivery_status"), // 'sent' | 'dev_hardcoded' | 'failed'
+  },
+  (t) => ({
+    lookupIdx: index("consent_otp_verif_lookup_idx").on(t.leadId, t.consentFor, t.createdAt),
+  }),
+);
 
 export const couponCodes = pgTable("coupon_codes", {
   id: varchar({ length: 255 }).primaryKey().notNull(),
