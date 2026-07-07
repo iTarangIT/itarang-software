@@ -5,11 +5,11 @@ const env = readFileSync(".env.local", "utf8");
 const m = env.match(/^DATABASE_URL=(.*)$/m);
 const url = m[1].trim().replace(/^["']|["']$/g, "");
 
-const refs = ["#IT-2026-0000046"];
+const refs = ["LEAD-20260705-c11c6dfe"];
 const sql = postgres(url, { ssl: "require", prepare: false, max: 1, connect_timeout: 15 });
 try {
   console.log("HOST:", new URL(url).hostname);
-  const leadRows = await sql`SELECT id, reference_id FROM leads WHERE reference_id = ANY(${refs})`;
+  const leadRows = await sql`SELECT id, reference_id FROM leads WHERE id = ANY(${refs})`;
   const ids = leadRows.map(r => r.id);
   console.log("Deleting leads:", leadRows.map(r => `${r.reference_id} (${r.id})`).join(", "));
 
@@ -37,8 +37,8 @@ try {
     console.log(`  leads: ${dl.count}`);
   });
 
-  const remain = await sql`SELECT reference_id FROM leads WHERE reference_id = ANY(${refs})`;
-  console.log("\nRemaining after delete:", remain.length ? remain.map(r => r.reference_id).join(", ") : "(none — success)");
+  const remain = await sql`SELECT id FROM leads WHERE id = ANY(${refs})`;
+  console.log("\nRemaining after delete:", remain.length ? remain.map(r => r.id).join(", ") : "(none — success)");
 } finally {
   await sql.end();
 }

@@ -6,30 +6,9 @@
  *  sendManualHandoffNudge   — the 24-hour recurring reminder to the admin to
  *                              chase the off-platform NBFC(s) (MH-4).
  *
- * Mirrors sendNbfcWelcomeEmail's nodemailer/getMailer pattern.
+ * Uses the shared mailer transport (see mailer.ts).
  */
-import nodemailer from "nodemailer";
-
-let transporterVerified = false;
-
-async function getMailer() {
-  const host = process.env.SMTP_HOST;
-  const portRaw = process.env.SMTP_PORT;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  if (!host || !portRaw || !user || !pass) {
-    throw new Error(
-      `Missing SMTP configuration (host=${Boolean(host)}, port=${Boolean(portRaw)}, user=${Boolean(user)}, pass=${Boolean(pass)})`,
-    );
-  }
-  const port = Number(portRaw);
-  const transporter = nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass } });
-  if (!transporterVerified) {
-    await transporter.verify();
-    transporterVerified = true;
-  }
-  return transporter;
-}
+import { getMailer } from "./mailer";
 
 function esc(v: unknown): string {
   const s = v == null ? "" : String(v);

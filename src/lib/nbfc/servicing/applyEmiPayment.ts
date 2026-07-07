@@ -30,6 +30,7 @@ import {
   nbfcLoans,
   nbfcTenants,
 } from "@/lib/db/schema";
+import { recomputeLoanDpd } from "./recomputeLoanDpd";
 
 /** A live db handle OR an open transaction — same shape for our writes. */
 type TxLike = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -250,6 +251,14 @@ export async function applyEmiPayment(
         .where(eq(nbfcTenants.id, loanRow.tenant_id));
     }
     loanClosed = true;
+  } else {
+    // Loan stays open: re-derive current_dpd from the (now-changed)
+    // emi_schedules window. A collection that cleared an overdue/missed
+    // installment must drop the loan's DPD immediately — otherwise the DPD
+    // column + DPD-based status/filters on the EMI Tracker, Lead Intelligence
+    // and Battery Monitoring would lag until the nightly aging sweep. (The
+    // close branch above already zeroes current_dpd directly.)
+    await recomputeLoanDpd(tx, loanId);
   }
 
   // 5. Immutable audit row (best-effort tenant — skip if loan is unmapped).

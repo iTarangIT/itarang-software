@@ -356,7 +356,10 @@ export default async function BatteryMonitoringView({
       freshness: freshness.freshness,
       freshness_badge: freshness.badge,
       open_alerts: alertsByVehicle.get(p.vehicleno) ?? 0,
-      cds_score: risk?.cds_score ?? null,
+      // Round to the integer the UI displays, so the risk band, the CDS cell
+      // colour, the severity tiles and the risk filters all agree with the
+      // number shown — a battery reading "40" is Medium everywhere, never Low.
+      cds_score: risk?.cds_score != null ? Math.round(risk.cds_score) : null,
       pci_score: risk?.pci_score ?? null,
       confidence: risk?.confidence ?? null,
       risk_computed_at: risk?.computed_at ?? null,
