@@ -1,8 +1,8 @@
-import nodemailer from "nodemailer";
+import { getMailer } from "./mailer";
 
 // Reminder email to a dealer-agreement signer who hasn't signed yet, sent in the
-// final days before the agreement expires. Mirrors the SMTP transport used by
-// the other dealer emails (sendDealerWelcomeEmail.ts).
+// final days before the agreement expires. Uses the shared mailer transport (see
+// sendDealerWelcomeEmail.ts / mailer.ts).
 
 export type AgreementExpiryReminderPayload = {
   toEmail: string;
@@ -14,23 +14,6 @@ export type AgreementExpiryReminderPayload = {
   supportEmail: string;
   supportPhone: string;
 };
-
-function getMailer() {
-  const host = process.env.SMTP_HOST;
-  const portRaw = process.env.SMTP_PORT;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  if (!host || !portRaw || !user || !pass) {
-    throw new Error("Missing SMTP configuration (SMTP_HOST/PORT/USER/PASS)");
-  }
-  const port = Number(portRaw);
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
-}
 
 function escapeHtml(s: string): string {
   return s

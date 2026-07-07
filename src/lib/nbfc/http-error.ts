@@ -22,10 +22,58 @@ const SAFE_PREFIXES =
  * Controlled, prefix-tagged messages pass through unchanged; any other (i.e. a
  * genuine 500) is logged server-side and replaced with a generic message so no
  * internal/SQL detail reaches the browser.
+ *
+ * Accepts either the error's `.message` string (legacy callers) or the whole
+ * caught value. Pass the whole error when you can: Drizzle wraps DB failures in
+ * a `DrizzleQueryError` whose `.message` is only "Failed query: …" — the real
+ * Postgres reason (code/detail/constraint/column) sits on `.cause`. Passing the
+ * error object lets us unwind that chain into the server log.
  */
-export function clientError(msg: string): string {
+export function clientError(errOrMsg: unknown): string {
+  const msg = errOrMsg instanceof Error ? errOrMsg.message : String(errOrMsg);
   if (SAFE_PREFIXES.test(msg)) return msg;
   // Real cause stays in the server logs; never on the wire.
   console.error("[nbfc] unhandled route error:", msg);
+  logCauseChain(errOrMsg);
   return "Something went wrong on our end. Please try again, or contact support if it persists.";
+}
+
+/**
+ * Walk the `.cause` chain of a thrown value and log any Postgres error fields we
+ * find. Drizzle wraps DB failures in a `DrizzleQueryError` whose `.cause` is the
+ * driver error. Field names differ by driver — postgres.js uses
+ * `constraint_name`/`table_name`/`column_name`/`schema_name`, node-postgres uses
+ * `constraint`/`table`/`column`/`schema` — so we read both. These fields
+ * pinpoint the failure (missing column, NOT-NULL/CHECK/FK violation, type
+ * mismatch) that the wrapper's "Failed query: …" message hides.
+ */
+function logCauseChain(err: unknown): void {
+  let cur: unknown = err;
+  let depth = 0;
+  while (cur instanceof Error && depth < 5) {
+    const pg = cur as Error & Record<string, unknown>;
+    const pick = (...keys: string[]) => {
+      for (const k of keys) if (pg[k] != null) return pg[k];
+      return undefined;
+    };
+    const fields = {
+      message: pg.message,
+      code: pick("code"),
+      detail: pick("detail"),
+      hint: pick("hint"),
+      constraint: pick("constraint_name", "constraint"),
+      column: pick("column_name", "column"),
+      table: pick("table_name", "table"),
+      schema: pick("schema_name", "schema"),
+      where: pick("where"),
+      routine: pick("routine"),
+    };
+    if (fields.code || fields.detail || fields.constraint || fields.column || fields.table) {
+      console.error("[nbfc]   ↳ cause:", fields);
+    } else if (depth > 0) {
+      console.error("[nbfc]   ↳ cause:", pg.message);
+    }
+    cur = (cur as { cause?: unknown }).cause;
+    depth += 1;
+  }
 }

@@ -22,6 +22,8 @@ type AssetType = "battery" | "charger" | "paraphernalia";
 interface DealerOption {
   id: string;
   business_entity_name: string;
+  dealer_code?: string | null;
+  has_login?: boolean;
 }
 
 interface BatteryMasterRow {
@@ -387,12 +389,23 @@ export default function AddInventoryItemPage() {
               className={INPUT}
             >
               <option value="">— Choose —</option>
-              {dealers.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.business_entity_name}
-                </option>
-              ))}
+              {dealers.map((d) => {
+                const noLogin = d.has_login === false;
+                const label =
+                  `${d.business_entity_name}${d.dealer_code ? ` — ${d.dealer_code}` : ""}` +
+                  (noLogin ? " ⚠ no dealer login" : "");
+                return (
+                  <option key={d.id} value={d.id} disabled={noLogin}>
+                    {label}
+                  </option>
+                );
+              })}
             </select>
+            {dealers.find((d) => d.id === dealerId)?.has_login === false && (
+              <p className="mt-1 text-xs text-amber-600">
+                This account has no dealer login — allocated stock would be invisible in the dealer portal.
+              </p>
+            )}
           </div>
           <div>
             <label className={FIELD_LABEL}>Asset type</label>

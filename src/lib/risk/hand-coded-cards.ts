@@ -217,17 +217,28 @@ async function evalLowUtilizationActiveLoan(loans: TenantLoanSlice[]): Promise<C
   const activeWithEmi = loans.filter((l) => l.emi_amount && Number(l.emi_amount) > 0);
   const vehiclenos = vnos(activeWithEmi);
   const daily = await getDailyKm(vehiclenos, 14);
+  // A vehicle only enters totalsByVno if daily_distance_per_vehicle returned at
+  // least one row for it. Absence therefore means "no telemetry", which must be
+  // treated separately from a genuine 0 km/day — otherwise a missing tracker
+  // masquerades as an idle (risky) vehicle and inflates the alert.
   const totalsByVno = new Map<string, number>();
   for (const r of daily) totalsByVno.set(r.vehicleno, (totalsByVno.get(r.vehicleno) ?? 0) + r.km);
+
   const concerning: Array<{
     vehicleno: string;
     avg_km_per_day: number;
     emi_amount: number | null;
   }> = [];
+  const noTelemetry: string[] = [];
   for (const loan of activeWithEmi) {
     if (!loan.vehicleno) continue;
-    const total = totalsByVno.get(loan.vehicleno) ?? 0;
-    const avgPerDay = total / 14;
+    // No row in the 14-day window → coverage gap, not a measurement. Skip it
+    // from the low-utilisation verdict and record it as an observability note.
+    if (!totalsByVno.has(loan.vehicleno)) {
+      noTelemetry.push(loan.vehicleno);
+      continue;
+    }
+    const avgPerDay = totalsByVno.get(loan.vehicleno)! / 14;
     if (avgPerDay < 20) {
       concerning.push({
         vehicleno: loan.vehicleno,
@@ -237,20 +248,35 @@ async function evalLowUtilizationActiveLoan(loans: TenantLoanSlice[]): Promise<C
     }
   }
   concerning.sort((a, b) => a.avg_km_per_day - b.avg_km_per_day);
-  const severity = pickSeverity(concerning.length / Math.max(activeWithEmi.length, 1), 0.1, 0.04);
+
+  // Denominator is the observable population — vehicles that actually reported
+  // telemetry — not every active-EMI loan. Judging coverage-gap vehicles as
+  // "low utilisation" is what produced the false 7/7 High Alert on seed data.
+  const observable = activeWithEmi.length - noTelemetry.length;
+  const severity = pickSeverity(concerning.length / Math.max(observable, 1), 0.1, 0.04);
+
+  const gapNote =
+    noTelemetry.length > 0
+      ? `${noTelemetry.length} of ${activeWithEmi.length} active-EMI vehicles had NO telemetry in the last 14 days — excluded from this metric (see "Past-due + telemetry silent" for the coverage signal).`
+      : null;
+
   return {
     slug: "low-utilization-active-loan",
     severity,
     finding_summary:
-      concerning.length === 0
-        ? "No active-loan vehicles below 20 km/day average."
-        : `${concerning.length} vehicles with active EMI averaged <20 km/day in the last 14 days.`,
+      observable === 0
+        ? `No telemetry for any of ${activeWithEmi.length} active-EMI vehicles — utilisation cannot be assessed.`
+        : concerning.length === 0
+          ? `No telemetry-reporting active-loan vehicles below 20 km/day (${observable} assessed).`
+          : `${concerning.length} of ${observable} telemetry-reporting vehicles averaged <20 km/day in the last 14 days.`,
     affected_count: concerning.length,
-    total_count: activeWithEmi.length,
+    total_count: observable,
     evidence: {
       sample_rows: concerning.slice(0, 10),
       notes: [
         "Threshold: <20 km/day average over 14 days.",
+        "Only vehicles with ≥1 telemetry row in the window are assessed; missing telemetry is not counted as 0 km.",
+        ...(gapNote ? [gapNote] : []),
         "Phase B: tier this by region (rural vs urban have different utilisation norms).",
       ],
     },

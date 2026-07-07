@@ -4502,6 +4502,55 @@ export const emiPaymentAttempts = pgTable(
 );
 
 // -----------------------------------------------------------------------------
+// E-181 — EMI Tracker per-loan display overrides.
+// -----------------------------------------------------------------------------
+// Manual override layer for the EMI Tracker portfolio table. Keyed by
+// (tenant, loan_application_id). Every column is nullable — NULL means "no
+// override, show the computed/stored value". The page query COALESCEs
+// override → computed, so canonical records are never mutated and clearing an
+// override reverts to the live value. See drizzle/E-181_*.sql.
+// -----------------------------------------------------------------------------
+export const nbfcEmiTrackerOverrides = pgTable(
+  "nbfc_emi_tracker_overrides",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    tenant_id: uuid("tenant_id").notNull(),
+    // E-183 — nullable: a STANDALONE row (is_standalone=true) has no loan.
+    loan_application_id: varchar("loan_application_id", { length: 255 }),
+    // E-183 — true for a force-imported row with no matching loan; the row
+    // carries all its own display values (no computed fallback) and the EMI
+    // Tracker page UNIONs it in. Edited/deleted by id, never feeds CDS/PCI/DPD.
+    is_standalone: boolean("is_standalone").default(false).notNull(),
+    borrower: text("borrower"),
+    vehicleno: text("vehicleno"),
+    emi: numeric("emi", { precision: 12, scale: 2 }),
+    next_due: date("next_due"),
+    last_paid: date("last_paid"),
+    progress_paid: integer("progress_paid"),
+    progress_total: integer("progress_total"),
+    status: varchar("status", { length: 16 }),
+    dpd: integer("dpd"),
+    mandate: varchar("mandate", { length: 30 }),
+    next_auto_debit: date("next_auto_debit"),
+    // E-182 — free-text financier label (no computed fallback; NULL → "—").
+    financier: text("financier"),
+    updated_by: uuid("updated_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantLoanUniq: uniqueIndex("nbfc_emi_tracker_overrides_tenant_loan_uidx").on(
+      table.tenant_id,
+      table.loan_application_id,
+    ),
+    // E-183 — one standalone row per (tenant, battery serial).
+    standaloneSerialUniq: uniqueIndex("nbfc_emi_tracker_overrides_standalone_serial_uidx")
+      .on(table.tenant_id, sql`lower(vehicleno)`)
+      .where(sql`is_standalone`),
+  }),
+);
+
+// -----------------------------------------------------------------------------
 // E-067 — Risk Rule Engine threshold configuration (Section 6.3.3)
 // -----------------------------------------------------------------------------
 // Single canonical platform-wide table that holds the eight tunable risk

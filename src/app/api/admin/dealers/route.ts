@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { accounts, inventory } from "@/lib/db/schema";
+import { accounts, inventory, users } from "@/lib/db/schema";
 import { and, eq, ilike, ne, or, sql, type SQL } from "drizzle-orm";
 import { successResponse, withErrorHandler } from "@/lib/api-utils";
 import { requireInventoryAdmin } from "@/lib/auth-utils";
@@ -64,6 +64,12 @@ export const GET = withErrorHandler(async (req: Request) => {
       onboarding_status: accounts.onboarding_status,
       status: accounts.status,
       created_at: accounts.created_at,
+      // Number of login users bound to this account (users.dealer_id = accounts.id).
+      // Inventory allocated to an account with zero users is invisible to every
+      // dealer portal — the upload UI uses this to flag/disable such accounts.
+      user_count: sql<number>`(
+        SELECT count(*)::int FROM ${users} u WHERE u.${sql.raw("dealer_id")} = ${accounts.id}
+      )`,
     })
     .from(accounts)
     .where(conditions.length ? and(...conditions) : undefined)
@@ -136,6 +142,8 @@ export const GET = withErrorHandler(async (req: Request) => {
     onboarding_status: r.onboarding_status,
     status: r.status,
     created_at: r.created_at,
+    user_count: r.user_count,
+    has_login: (r.user_count ?? 0) > 0,
     ...(includeStock
       ? {
           currentStock: stockByDealer.get(r.id) ?? {
