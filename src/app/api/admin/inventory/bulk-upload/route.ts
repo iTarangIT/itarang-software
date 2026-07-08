@@ -5,6 +5,7 @@ import {
   inventoryUploadReports,
   paraphernaliaStock,
   products,
+  users,
 } from "@/lib/db/schema";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -107,6 +108,19 @@ export const POST = withErrorHandler(async (req: Request) => {
 
   if (!dealer || dealer.status !== "active") {
     return errorResponse(`Dealer '${dealerId}' not found or inactive`, 400);
+  }
+
+  // Inventory allocated to an account with no login user (users.dealer_id =
+  // accounts.id) is invisible in every dealer portal. Reject rather than strand it.
+  const [{ n: loginCount }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(users)
+    .where(eq(users.dealer_id, dealerId));
+  if (!loginCount) {
+    return errorResponse(
+      `Dealer '${dealer.name || dealerId}' has no dealer login — inventory would be invisible in the dealer portal. Link a login user before allocating stock.`,
+      400,
+    );
   }
 
   const incomingSerials =

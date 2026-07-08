@@ -72,21 +72,25 @@ function RiskBadge({ cds, bands }: { cds: number | null; bands: Bands }) {
       </span>
     );
   }
-  if (cds >= 85) {
+  // Band on the ROUNDED score — the same integer the CDS cell displays — so a
+  // battery shown as "40" always reads Medium, never Low (a raw 39.53 that
+  // rounds up to 40 must land in the band its number implies).
+  const v = Math.round(cds);
+  if (v >= 85) {
     return (
       <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold uppercase text-red-700">
         Very High
       </span>
     );
   }
-  if (cds >= bands.mid_high) {
+  if (v >= bands.mid_high) {
     return (
       <span className="rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-bold uppercase text-orange-700">
         High
       </span>
     );
   }
-  if (cds >= bands.low_mid) {
+  if (v >= bands.low_mid) {
     return (
       <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-700">
         Medium

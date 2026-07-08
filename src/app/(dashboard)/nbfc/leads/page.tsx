@@ -7,7 +7,8 @@
  *   - leads (reference, customer, geography)
  *   - product_selections (financed product model)
  *   - loan_files (legacy EMI-status columns, optional)
- *   - borrower_risk_scores (latest cds_score per loan, best-effort)
+ *   - CDS computed live from emi_schedules (computeLiveScores), matching the
+ *     Battery Monitoring page and the explainability drawer
  * with URL-driven filters: status, q, band, state, product, from/to, sort,
  * page, page_size. The list + read-only detail drawer render through the
  * responsive `LeadsTable` client component.
@@ -25,6 +26,7 @@ import {
   productSelections,
 } from "@/lib/db/schema";
 import { getCurrentTenant, requireNbfcAccess } from "@/lib/nbfc/tenant";
+import { computeLiveScores } from "@/lib/nbfc/cds/liveScores";
 import LeadsTable, { type LeadRow } from "./_components/LeadsTable";
 import LeadsCsvButton from "./_components/LeadsCsvButton";
 
@@ -252,30 +254,33 @@ export default async function NbfcLeadsPage({
     loan_files_status: string | null;
   }>;
 
-  // Latest CDS per loan_sanction_id (BRD §6.1.4 — "computed nightly").
-  // borrower_risk_scores.loan_sanction_id is uuid; cast to text so it matches
-  // the varchar loan_sanctions.id. Degrades cleanly to "—" when a loan has no
-  // computed score yet.
-  const cdsRows = (await db.execute(sql`
-    SELECT DISTINCT ON (loan_sanction_id) loan_sanction_id::text AS loan_sanction_id, cds_score::float AS cds_score
-    FROM borrower_risk_scores
-    WHERE tenant_id = ${tenant.id}
-    ORDER BY loan_sanction_id, computed_at DESC
-  `)) as unknown as Array<{
-    loan_sanction_id: string;
-    cds_score: number | null;
-  }>;
+  // CDS is computed LIVE from the current EMI window (not read from the nightly
+  // `borrower_risk_scores` snapshot) so the score tracks EMI changes as soon as
+  // a due/paid date moves, and always agrees with Battery Monitoring and the
+  // explainability drawer — same engine helper (`computeLiveScores`). Loans
+  // with no elapsed EMIs are omitted and render as "—". BRD §6.1.4.
+  const loanIds = allRows
+    .map((r) => r.sanction_id)
+    .filter((id): id is string => !!id);
+  const liveScores = await computeLiveScores(tenant.id, loanIds);
   const cdsBySanction = new Map(
-    cdsRows.map((r) => [r.loan_sanction_id, r.cds_score]),
+    Array.from(liveScores.entries()).map(([loanId, s]) => [
+      loanId,
+      Math.round(s.cds_score),
+    ]),
   );
 
   // EMI status per loan, derived from the emi_schedules ledger:
-  // overdue_days = worst overdue/missed instalment; next_emi_date = the
-  // earliest upcoming scheduled instalment. emi_schedules.loan_sanction_id is
-  // varchar = loan_sanctions.id — a clean join, no cast.
+  // overdue_days = age of the MOST RECENT overdue/missed instalment (today −
+  //   latest such due_date), the SAME formula runEmiAging uses for
+  //   nbfc_loans.current_dpd, so this column matches the EMI Tracker's DPD to
+  //   the day (a long-passed missed EMI no longer inflates it). Computed live
+  //   from due_date, so it never lags a stale days_overdue stamp.
+  // next_emi_date = the earliest upcoming scheduled instalment.
+  // emi_schedules.loan_sanction_id is varchar = loan_sanctions.id — clean join.
   const emiRows = (await db.execute(sql`
     SELECT es.loan_sanction_id AS loan_sanction_id,
-           MAX(es.days_overdue) FILTER (WHERE es.status IN ('overdue', 'missed'))::int AS overdue_days,
+           MIN(LEAST(720, GREATEST(0, CURRENT_DATE - es.due_date))) FILTER (WHERE es.status IN ('overdue', 'missed'))::int AS overdue_days,
            MIN(es.due_date) FILTER (WHERE es.status = 'scheduled' AND es.due_date >= CURRENT_DATE)::text AS next_emi_date
     FROM emi_schedules es
     JOIN loan_sanctions ls ON ls.id = es.loan_sanction_id
