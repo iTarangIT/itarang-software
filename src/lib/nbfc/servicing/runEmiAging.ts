@@ -9,8 +9,11 @@
  *   1. scheduled → overdue once due_date has passed; stamp days_overdue.
  *   2. recompute days_overdue for every still-overdue row.
  *   3. overdue → missed past EMI_MISSED_DPD_THRESHOLD days (default 90, ~NPA).
- *   4. nbfc_loans.current_dpd = max days_overdue across the loan's unpaid
- *      (overdue/missed) installments, clamped [0, 720]; 0 when none remain.
+ *   4. nbfc_loans.current_dpd = age of the MOST RECENT overdue/missed
+ *      installment (today − latest such due_date), clamped [0, 720]; 0 when
+ *      none remain. Uses the MOST RECENT (not oldest) so a long-passed missed
+ *      EMI doesn't inflate DPD, and the same {overdue,missed} set as the EMI
+ *      Tracker's "Overdue" badge so an Overdue loan always shows a DPD.
  *
  * Used by the daily cron (/api/cron/nbfc/run-emi-aging) and the manual
  * /api/nbfc/loans/refresh-dpd trigger.
@@ -24,8 +27,11 @@ export const EMI_MISSED_DPD_THRESHOLD = Number(
 );
 
 function rowsAffected(result: unknown): number {
-  const r = result as { rowCount?: number; rows?: unknown[] };
-  return r.rowCount ?? r.rows?.length ?? 0;
+  // postgres-js (our driver) puts affected-row count on `.count`; an UPDATE
+  // without RETURNING has 0 *returned* rows, so `.rows.length` reads 0. Prefer
+  // `.count`, then fall back to the node-postgres shape (`.rowCount`).
+  const r = result as { count?: number; rowCount?: number; rows?: unknown[] };
+  return r.count ?? r.rowCount ?? r.rows?.length ?? 0;
 }
 
 export interface EmiAgingResult {
@@ -61,11 +67,15 @@ export async function runEmiAging(): Promise<EmiAgingResult> {
       AND (CURRENT_DATE - due_date) > ${EMI_MISSED_DPD_THRESHOLD}
   `);
 
-  // 4a. current_dpd = oldest unpaid installment's age (clamped), per loan.
+  // 4a. current_dpd = age of the MOST RECENT overdue/missed installment
+  //     (today − latest such due_date), clamped, per loan. MIN age = latest
+  //     due_date. Driven by the SAME {overdue,missed} set as the EMI Tracker's
+  //     "Overdue" status badge, so a loan flagged Overdue always shows a DPD —
+  //     the two columns can't disagree.
   const dpdUpdated = await db.execute(sql`
     WITH dpd AS (
       SELECT loan_sanction_id,
-             COALESCE(MAX(GREATEST(0, (CURRENT_DATE - due_date))), 0) AS dpd
+             COALESCE(MIN(GREATEST(0, (CURRENT_DATE - due_date))), 0) AS dpd
       FROM ${emiSchedules}
       WHERE status IN ('overdue', 'missed')
       GROUP BY loan_sanction_id
@@ -78,7 +88,8 @@ export async function runEmiAging(): Promise<EmiAgingResult> {
       AND nl.current_dpd IS DISTINCT FROM LEAST(720, dpd.dpd)
   `);
 
-  // 4b. Clear DPD on loans with no unpaid-overdue installments left.
+  // 4b. Clear DPD on loans with no overdue/missed installments left (same set as
+  //     4a — a loan with no overdue/missed rows reads as current, DPD 0).
   const dpdCleared = await db.execute(sql`
     UPDATE ${nbfcLoans} nl
     SET current_dpd = 0,

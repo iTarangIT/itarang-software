@@ -14,7 +14,9 @@
  *   telemetry_battery(time, vehicleno, soc_pct, soh_pct, pack_voltage, ...)
  *   telemetry_can(time, vehicleno, payload jsonb)
  *   alerts(time, vehicleno, alert_type, severity, message, resolved_at)
- *   daily_distance_per_vehicle(day, vehicleno, km, kwh, trips)
+ *   distance_rollup(time, vehicleno, bucket_size, distance_km, energy_kwh, ...)
+ *     — daily km lives here (bucket_size='day'); see getDailyKm. The legacy
+ *       daily_distance_per_vehicle table exists but is unpopulated.
  */
 import { getIotSql } from "./iot";
 import { db } from "./index";
@@ -180,17 +182,61 @@ export async function getVehicleStates(vehiclenos: string[]): Promise<VehicleSta
 }
 
 /**
+ * Freshest telemetry contact time across the given vehicles, read from the LIVE
+ * VPS `vehicle_state` row. Returns null when none of the vehicles has ever
+ * reported, or when the input set is empty.
+ *
+ * "Freshest contact" is GREATEST(last_seen, last_gps_at, last_battery_at) — the
+ * most recent sign of life of ANY kind, then MAX'd across the fleet. Using the
+ * any-contact timestamp (rather than last_gps_at alone) avoids a false "stale"
+ * reading for a vehicle that is actively reporting battery telemetry but has no
+ * current GPS fix (e.g. parked indoors). GREATEST ignores NULL columns.
+ *
+ * This is the live-VPS replacement for the CRM-side `telemetry_ingestion_log`
+ * freshness signal. Battery Monitoring reads telemetry straight from the VPS, so
+ * the portfolio data-freshness badge must read the SAME source rather than the
+ * device-push ingestion ledger — which stays empty unless devices POST to
+ * /api/iot/ingest, producing a false "IoT sync issue" badge even while the VPS
+ * is connected and serving live data.
+ */
+export async function getFleetLatestTelemetryAt(
+  vehiclenos: string[],
+): Promise<Date | null> {
+  if (vehiclenos.length === 0) return null;
+  const iotSql = getIotSql();
+  const rows = await iotSql<Array<{ latest: string | null }>>`
+    SELECT MAX(GREATEST(last_seen, last_gps_at, last_battery_at)) AS latest
+    FROM vehicle_state
+    WHERE vehicleno = ANY(${vehiclenos})
+  `;
+  const latest = rows[0]?.latest ?? null;
+  return latest ? new Date(latest) : null;
+}
+
+/**
  * Daily km totals per vehicle for the last `days` days.
- * Used for the 7-day usage cliff hypothesis.
+ * Used for the 7-day usage cliff and low-utilisation hypotheses.
+ *
+ * Source: distance_rollup (bucket_size='day') — the populated TimescaleDB
+ * rollup that the Intellicar dashboard (src/lib/telemetry/queries.ts) also
+ * reads. The legacy `daily_distance_per_vehicle` table is UNPOPULATED on the
+ * VPS (its aggregator job never ran — aggregator_runs is empty), so querying it
+ * returned zero rows for every vehicle and made the low-utilisation card fire a
+ * false "N/N vehicles idle" High Alert. distance_rollup exposes the same daily
+ * distance as `distance_km` keyed on `time`.
  */
 export async function getDailyKm(vehiclenos: string[], days: number): Promise<DailyKmRow[]> {
   if (vehiclenos.length === 0) return [];
   const iotSql = getIotSql();
   const rows = await iotSql<Array<{ day: string; vehicleno: string; km: string }>>`
-    SELECT day, vehicleno, km
-    FROM daily_distance_per_vehicle
+    SELECT date_trunc('day', time)::date AS day,
+           vehicleno,
+           SUM(distance_km)::float       AS km
+    FROM distance_rollup
     WHERE vehicleno = ANY(${vehiclenos})
-      AND day >= NOW() - (${days}::int || ' days')::interval
+      AND bucket_size = 'day'
+      AND time >= NOW() - (${days}::int || ' days')::interval
+    GROUP BY 1, 2
     ORDER BY vehicleno, day
   `;
   return rows.map((r) => ({

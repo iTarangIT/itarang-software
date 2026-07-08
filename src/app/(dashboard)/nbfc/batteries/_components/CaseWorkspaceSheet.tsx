@@ -101,8 +101,10 @@ export function CaseWorkspaceSheet({
     if (!detail) return null;
     const cds = detail.flagged.cds_score;
     if (cds == null) return null;
-    if (cds >= bands.mid_high) return { label: "Very High Risk", tone: "red" };
-    if (cds >= bands.low_mid) return { label: "Medium Risk", tone: "amber" };
+    // Band on the rounded score so the drawer matches the CDS number shown.
+    const v = Math.round(cds);
+    if (v >= bands.mid_high) return { label: "Very High Risk", tone: "red" };
+    if (v >= bands.low_mid) return { label: "Medium Risk", tone: "amber" };
     return { label: "Low Risk", tone: "green" };
   }, [detail, bands]);
 

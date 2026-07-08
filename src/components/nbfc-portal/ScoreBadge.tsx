@@ -67,8 +67,12 @@ export default function ScoreBadge({
 
   const warning = thresholds?.cdsWarning ?? 40;
   const high = thresholds?.cdsHigh ?? 70;
-  const tone = type === "cds" ? cdsTone(num, warning, high) : pciTone(num);
-  const label = type === "cds" ? num.toFixed(0) : num.toFixed(2);
+  // Band on the DISPLAYED value (CDS → nearest integer, PCI → 2 dp) so the
+  // pill's colour always matches the number shown. Otherwise a raw 39.53 shows
+  // "40" but stays green — the score and its colour disagree at the boundary.
+  const display = type === "cds" ? Math.round(num) : Math.round(num * 100) / 100;
+  const tone = type === "cds" ? cdsTone(display, warning, high) : pciTone(display);
+  const label = type === "cds" ? display.toFixed(0) : display.toFixed(2);
 
   return (
     <>
