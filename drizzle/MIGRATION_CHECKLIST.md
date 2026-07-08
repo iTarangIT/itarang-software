@@ -164,6 +164,9 @@ least trustworthy column (drift began ~E-145).
 | E-178_calc_otp_search_history | calc_otp_verifications + calc_leads otp/wa columns (OTP-gated calculator, WhatsApp results, admin search history) | ✅ | ☐ | ☐ | ☐ |
 | E-179_lead_registry | lead_registry — central capture of every new lead (dealer/customer/oem/nbfc, web+whatsapp) with name/phone + source link | ✅ | ☐ | ☐ | ☐ |
 | E-180_consent_otp_verifications | consent_otp_verifications + consent_records otp_verification_id/otp_verified_at (OTP-based customer consent, replaces Digio Aadhaar e-sign) | ✅ | ☐ | ☐ | ☐ |
+| E-181_nbfc_emi_tracker_overrides | nbfc_emi_tracker_overrides — per-loan display overrides for the EMI Tracker table (borrower/serial/emi/next_due/last_paid/progress/status/dpd/mandate/next_auto_debit) | ✅ | ☐ | ☐ | ☐ |
+| E-182_emi_tracker_financier | nbfc_emi_tracker_overrides.financier — free-text financier label shown in a new Finance column on the EMI Tracker | ✅ | ☐ | ☐ | ☐ |
+| E-183_emi_tracker_standalone | nbfc_emi_tracker_overrides.is_standalone + loan_application_id made nullable + partial unique index on (tenant, lower(vehicleno)) WHERE is_standalone — force-import bulk-upload rows with no matching loan as display-only tracker entries | ✅ | ☐ | ☐ | ☐ |
 
 > Add a new row whenever you create an `E-<n>_*.sql` file. When `DATABASE_URL`
 > points at a DB and you confirm a migration is present, tick that env's box.

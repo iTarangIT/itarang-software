@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import { getMailer } from "./mailer";
 
 export type DealerWelcomeEmailPayload = {
   toEmail: string;
@@ -13,37 +13,6 @@ export type DealerWelcomeEmailPayload = {
   signedAgreementPdf?: Buffer | null;
   auditTrailPdf?: Buffer | null;
 };
-
-let transporterVerified = false;
-
-async function getMailer() {
-  const host = process.env.SMTP_HOST;
-  const portRaw = process.env.SMTP_PORT;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-
-  if (!host || !portRaw || !user || !pass) {
-    throw new Error(
-      `Missing SMTP configuration in environment variables (host=${Boolean(host)}, port=${Boolean(portRaw)}, user=${Boolean(user)}, pass=${Boolean(pass)})`
-    );
-  }
-
-  const port = Number(portRaw);
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
-
-  if (!transporterVerified) {
-    await transporter.verify();
-    transporterVerified = true;
-    console.log("[WELCOME-MAIL] SMTP connection verified", { host, port, user });
-  }
-
-  return transporter;
-}
 
 function escapeHtml(value: unknown): string {
   const s = value == null ? "" : String(value);

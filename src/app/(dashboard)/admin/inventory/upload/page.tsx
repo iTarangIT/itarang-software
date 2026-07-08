@@ -34,6 +34,7 @@ interface DealerOption {
   address_line1?: string | null;
   pincode?: string | null;
   created_at?: string | null;
+  has_login?: boolean;
   currentStock?: {
     batteries: number;
     chargers: number;
@@ -861,23 +862,34 @@ function DealerStep({
         />
         {open && filtered.length > 0 && (
           <div className="absolute z-20 left-0 right-0 mt-1 max-h-72 overflow-auto bg-white border border-gray-200 rounded-xl shadow-lg">
-            {filtered.map((d) => (
+            {filtered.map((d) => {
+              const noLogin = d.has_login === false;
+              return (
               <button
                 key={d.id}
                 type="button"
+                disabled={noLogin}
                 onClick={() => {
+                  if (noLogin) return;
                   setDealerId(d.id);
                   setQuery(d.business_entity_name);
                   setOpen(false);
                 }}
-                className={`w-full text-left px-4 py-2.5 hover:bg-blue-50 border-b border-gray-50 last:border-b-0 ${
-                  d.id === dealerId ? "bg-blue-50/60" : ""
-                }`}
+                className={`w-full text-left px-4 py-2.5 border-b border-gray-50 last:border-b-0 ${
+                  noLogin
+                    ? "opacity-60 cursor-not-allowed bg-amber-50/40"
+                    : "hover:bg-blue-50"
+                } ${d.id === dealerId ? "bg-blue-50/60" : ""}`}
               >
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="font-bold text-gray-900 text-sm">
                       {d.business_entity_name}
+                      {noLogin && (
+                        <span className="ml-2 text-[10px] font-bold text-amber-600">
+                          ⚠ no dealer login
+                        </span>
+                      )}
                     </div>
                     <div className="text-[11px] text-gray-500 mt-0.5">
                       {[d.dealer_code, d.city, d.state]
@@ -894,7 +906,8 @@ function DealerStep({
                   )}
                 </div>
               </button>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -965,9 +978,16 @@ function DealerStep({
         </div>
       )}
 
+      {selected?.has_login === false && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-700 rounded-xl px-4 py-2.5 text-xs">
+          ⚠ This account has no dealer login. Inventory allocated to it would be
+          invisible in the dealer portal — pick an account with an active login.
+        </div>
+      )}
+
       <div className="flex justify-end pt-2">
         <button
-          disabled={!dealerId}
+          disabled={!dealerId || selected?.has_login === false}
           onClick={onContinue}
           className="inline-flex items-center gap-1.5 px-6 py-2.5 bg-gradient-to-r from-[#0047AB] to-blue-600 hover:from-[#003580] hover:to-blue-700 text-white rounded-xl text-sm font-bold transition-all shadow-md shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
         >

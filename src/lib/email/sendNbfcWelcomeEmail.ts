@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import { getMailer } from "./mailer";
 
 export type NbfcWelcomeEmailPayload = {
   toEmail: string;
@@ -14,43 +14,6 @@ export type NbfcWelcomeEmailPayload = {
   auditTrailPdf?: Buffer | null;
 };
 
-let transporterVerified = false;
-
-async function getMailer() {
-  const host = process.env.SMTP_HOST;
-  const portRaw = process.env.SMTP_PORT;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-
-  if (!host || !portRaw || !user || !pass) {
-    throw new Error(
-      `Missing SMTP configuration in environment variables (host=${Boolean(host)}, port=${Boolean(portRaw)}, user=${Boolean(user)}, pass=${Boolean(pass)})`
-    );
-  }
-
-  const port = Number(portRaw);
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-    // Bound every network phase so a blocked outbound SMTP port (a common VPS
-    // firewall default) fails fast with a real error instead of hanging the
-    // whole HTTP request until the reverse proxy times out — which surfaced
-    // in the admin UI as "Unexpected end of JSON input" (empty 502 body).
-    connectionTimeout: 15_000,
-    greetingTimeout: 15_000,
-    socketTimeout: 20_000,
-  });
-
-  if (!transporterVerified) {
-    await transporter.verify();
-    transporterVerified = true;
-    console.log("[NBFC-WELCOME-MAIL] SMTP connection verified", { host, port, user });
-  }
-
-  return transporter;
-}
 
 function escapeHtml(value: unknown): string {
   const s = value == null ? "" : String(value);
