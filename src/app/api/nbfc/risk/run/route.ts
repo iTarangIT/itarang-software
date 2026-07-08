@@ -32,6 +32,6 @@ export async function POST() {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const status = msg.startsWith("UNAUTHORIZED") ? 401 : msg.startsWith("FORBIDDEN") ? 403 : 500;
-    return NextResponse.json({ ok: false, error: clientError(msg) }, { status });
+    return NextResponse.json({ ok: false, error: clientError(e) }, { status });
   }
 }

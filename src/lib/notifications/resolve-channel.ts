@@ -10,18 +10,33 @@
  * v1 stores gateway secrets as-is (encryption is a backlog item). Vendor names
  * stay out of NBFC-facing copy (§3.2); this module is server-only plumbing.
  */
-import nodemailer, { type Transporter } from "nodemailer";
+import nodemailer from "nodemailer";
 
 import { db } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { nbfcNotificationChannels } from "@/lib/db/schema";
 import { sendKycSms } from "@/lib/sms";
 import type { SendSmsResult } from "@/lib/sms-types";
+import { getMailer, type Mailer } from "@/lib/email/mailer";
 
 export interface ResolvedEmail {
-  transporter: Transporter;
+  transporter: Mailer;
   from: string;
   source: "tenant" | "global";
+}
+
+/** Wrap a raw nodemailer transporter in the shared Mailer shape. */
+function wrapNodemailer(transporter: nodemailer.Transporter): Mailer {
+  return {
+    async sendMail(opts) {
+      const info = await transporter.sendMail(opts as nodemailer.SendMailOptions);
+      return { messageId: info.messageId };
+    },
+    async verify() {
+      await transporter.verify();
+      return true as const;
+    },
+  };
 }
 
 type ChannelRow = typeof nbfcNotificationChannels.$inferSelect;
@@ -37,17 +52,11 @@ async function loadConfig(tenantId?: string | null): Promise<ChannelRow | null> 
 }
 
 function globalTransport(): ResolvedEmail {
-  const host = process.env.SMTP_HOST;
-  const portRaw = process.env.SMTP_PORT;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  if (!host || !portRaw || !user || !pass) {
-    throw new Error("Missing global SMTP configuration (SMTP_HOST/PORT/USER/PASS)");
-  }
-  const port = Number(portRaw);
+  // Platform-global gateway: AgentMail when configured, else SMTP — resolved by
+  // the shared mailer so provider selection lives in one place.
   return {
-    transporter: nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass } }),
-    from: process.env.MAIL_FROM || user,
+    transporter: getMailer(),
+    from: process.env.MAIL_FROM || process.env.SMTP_USER || process.env.AGENTMAIL_INBOX || "",
     source: "global",
   };
 }
@@ -63,12 +72,14 @@ export async function getEmailTransport(tenantId?: string | null): Promise<Resol
     const fromAddr = cfg.email_from || cfg.smtp_user;
     const from = cfg.email_from_name ? `"${cfg.email_from_name}" <${fromAddr}>` : fromAddr;
     return {
-      transporter: nodemailer.createTransport({
-        host: cfg.smtp_host,
-        port: cfg.smtp_port,
-        secure: cfg.smtp_secure,
-        auth: { user: cfg.smtp_user, pass: cfg.smtp_pass },
-      }),
+      transporter: wrapNodemailer(
+        nodemailer.createTransport({
+          host: cfg.smtp_host,
+          port: cfg.smtp_port,
+          secure: cfg.smtp_secure,
+          auth: { user: cfg.smtp_user, pass: cfg.smtp_pass },
+        }),
+      ),
       from,
       source: "tenant",
     };

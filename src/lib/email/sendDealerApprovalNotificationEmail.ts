@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import { getMailer } from "./mailer";
 
 export type DealerApprovalNotificationPayload = {
   toEmails: string[];
@@ -7,24 +7,6 @@ export type DealerApprovalNotificationPayload = {
   dealerName: string;
   approvedAt: string;
 };
-
-function getMailer() {
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-
-  if (!host || !user || !pass) {
-    throw new Error("Missing SMTP configuration in environment variables");
-  }
-
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
-}
 
 function escapeHtml(value: unknown): string {
   const s = value == null ? "" : String(value);

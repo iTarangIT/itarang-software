@@ -6,28 +6,7 @@
  * is scored by Decentro's passive liveness engine. Mirrors
  * sendFiAgentLinkEmail's nodemailer/getMailer pattern. Minimal context only.
  */
-import nodemailer from "nodemailer";
-
-let transporterVerified = false;
-
-async function getMailer() {
-  const host = process.env.SMTP_HOST;
-  const portRaw = process.env.SMTP_PORT;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  if (!host || !portRaw || !user || !pass) {
-    throw new Error(
-      `Missing SMTP configuration (host=${Boolean(host)}, port=${Boolean(portRaw)}, user=${Boolean(user)}, pass=${Boolean(pass)})`,
-    );
-  }
-  const port = Number(portRaw);
-  const transporter = nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass } });
-  if (!transporterVerified) {
-    await transporter.verify();
-    transporterVerified = true;
-  }
-  return transporter;
-}
+import { getMailer } from "./mailer";
 
 function esc(v: unknown): string {
   const s = v == null ? "" : String(v);
