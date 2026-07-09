@@ -1,9 +1,9 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth-utils';
 import { fetchFleetDashboardCEO, fetchFleetDashboardDealer } from '@/lib/telemetry/queries';
 import { isVpsUnreachable, vpsDegradedReason } from '@/lib/telemetry/vps-status';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
     let user;
     try {
         user = await requireRole(['ceo', 'dealer']);
@@ -15,8 +15,11 @@ export async function GET() {
     }
 
     try {
+        const { searchParams } = new URL(req.url);
+        const state = searchParams.get('state')?.trim() || undefined;
+        const city = searchParams.get('city')?.trim() || undefined;
         const data = user.role === 'ceo'
-            ? await fetchFleetDashboardCEO()
+            ? await fetchFleetDashboardCEO({ state, city })
             : await fetchFleetDashboardDealer(user.dealer_id || '');
         return NextResponse.json({ success: true, data });
     } catch (error) {

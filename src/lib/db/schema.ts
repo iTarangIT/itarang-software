@@ -2330,6 +2330,9 @@ export const deviceBatteryMap = pgTable("device_battery_map", {
   customer_name: text("customer_name"),
   customer_phone: varchar("customer_phone", { length: 20 }),
   dealer_id: varchar("dealer_id", { length: 255 }),
+  // E-184 — deployment location for the Intellicar Fleet Overview State/City filters.
+  state: text("state"),
+  city: text("city"),
   status: varchar({ length: 20 }).default('active'),
   installed_at: timestamp("installed_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
