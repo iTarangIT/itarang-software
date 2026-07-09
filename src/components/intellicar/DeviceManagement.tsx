@@ -122,7 +122,7 @@ function CommStatusBadge({ status }: { status: string }) {
 
 function AddDeviceForm({ onClose }: { onClose: () => void }) {
     const queryClient = useQueryClient();
-    const [form, setForm] = useState({ device_id: '', battery_serial: '', vehicle_number: '', customer_name: '', dealer_id: '' });
+    const [form, setForm] = useState({ device_id: '', battery_serial: '', vehicle_number: '', customer_name: '', dealer_id: '', state: '', city: '' });
 
     const mutation = useMutation({
         mutationFn: async () => {
@@ -143,7 +143,7 @@ function AddDeviceForm({ onClose }: { onClose: () => void }) {
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
             <h4 className="text-sm font-semibold text-gray-900 mb-3">Add Device Mapping</h4>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                {(['device_id', 'battery_serial', 'vehicle_number', 'customer_name', 'dealer_id'] as const).map((f) => (
+                {(['device_id', 'battery_serial', 'vehicle_number', 'customer_name', 'dealer_id', 'state', 'city'] as const).map((f) => (
                     <input
                         key={f}
                         placeholder={f.replace(/_/g, ' ')}

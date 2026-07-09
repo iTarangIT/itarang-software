@@ -1,9 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Battery, Activity, AlertTriangle, Wifi, WifiOff, Loader2 } from 'lucide-react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { Battery, Activity, AlertTriangle, Wifi, WifiOff, Loader2, MapPin } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+interface FleetLocations {
+    states: string[];
+    citiesByState: Record<string, string[]>;
+}
 
 const PAGE_SIZE = 50;
 
@@ -21,34 +26,69 @@ interface FleetEnvelope<T> {
 }
 
 export function FleetOverview() {
-    const { data: envelope, isLoading, error } = useQuery<FleetEnvelope<unknown>>({
-        queryKey: ['intellicar-fleet-dashboard'],
+    const [selectedState, setSelectedState] = useState('');
+    const [selectedCity, setSelectedCity] = useState('');
+    const [page, setPage] = useState(1);
+
+    const { data: locations } = useQuery<FleetLocations>({
+        queryKey: ['intellicar-fleet-locations'],
         queryFn: async () => {
-            const res = await fetch('/api/telemetry/fleet/dashboard');
+            const res = await fetch('/api/telemetry/fleet/locations');
+            if (!res.ok) throw new Error('Failed to fetch locations');
+            return (await res.json()).data as FleetLocations;
+        },
+    });
+
+    const filterQs = new URLSearchParams();
+    if (selectedState) filterQs.set('state', selectedState);
+    if (selectedCity) filterQs.set('city', selectedCity);
+    const suffix = filterQs.toString() ? `?${filterQs.toString()}` : '';
+
+    const { data: envelope, isLoading, error } = useQuery<FleetEnvelope<unknown>>({
+        queryKey: ['intellicar-fleet-dashboard', selectedState, selectedCity],
+        queryFn: async () => {
+            const res = await fetch(`/api/telemetry/fleet/dashboard${suffix}`);
             if (!res.ok) throw new Error('Failed to fetch fleet data');
             const json = await res.json();
             return { data: json.data, degraded: json.degraded, reason: json.reason };
         },
         refetchInterval: 60000,
+        placeholderData: keepPreviousData,
     });
 
     const { data: mapEnvelope } = useQuery<FleetEnvelope<unknown[]>>({
-        queryKey: ['intellicar-fleet-map'],
+        queryKey: ['intellicar-fleet-map', selectedState, selectedCity],
         queryFn: async () => {
-            const res = await fetch('/api/telemetry/fleet/map');
+            const res = await fetch(`/api/telemetry/fleet/map${suffix}`);
             if (!res.ok) throw new Error('Failed to fetch map data');
             const json = await res.json();
             return { data: json.data, degraded: json.degraded, reason: json.reason };
         },
         refetchInterval: 30000,
+        placeholderData: keepPreviousData,
     });
 
-    const data = envelope?.data as { kpis?: Record<string, number> } | undefined;
+    const data = envelope?.data as {
+        kpis?: Record<string, number>;
+        dealerPerformance?: Array<Record<string, unknown>>;
+        serviceMetrics?: { fleetUptime: number; avgDailyDistance: number; offlineDevices: number };
+    } | undefined;
     const mapData = mapEnvelope?.data;
     const degraded = Boolean(envelope?.degraded || mapEnvelope?.degraded);
     const degradedReason = envelope?.reason ?? mapEnvelope?.reason ?? '';
 
-    const [page, setPage] = useState(1);
+    const stateOptions = locations?.states ?? [];
+    const cityOptions = selectedState ? locations?.citiesByState[selectedState] ?? [] : [];
+
+    const changeState = (value: string) => {
+        setSelectedState(value);
+        setSelectedCity('');
+        setPage(1);
+    };
+    const changeCity = (value: string) => {
+        setSelectedCity(value);
+        setPage(1);
+    };
 
     if (isLoading) {
         return (
@@ -85,6 +125,43 @@ export function FleetOverview() {
 
     return (
         <div className="space-y-6">
+            {/* State / City filters */}
+            <div className="flex flex-wrap items-center gap-3">
+                <span className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-500">
+                    <MapPin className="w-4 h-4 text-gray-400" /> Filter
+                </span>
+                <select
+                    value={selectedState}
+                    onChange={(e) => changeState(e.target.value)}
+                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                >
+                    <option value="">All States</option>
+                    {stateOptions.map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                    ))}
+                </select>
+                <select
+                    value={selectedCity}
+                    onChange={(e) => changeCity(e.target.value)}
+                    disabled={!selectedState || cityOptions.length === 0}
+                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <option value="">All Cities</option>
+                    {cityOptions.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                    ))}
+                </select>
+                {(selectedState || selectedCity) && (
+                    <button
+                        type="button"
+                        onClick={() => changeState('')}
+                        className="text-xs font-medium text-brand-600 hover:underline"
+                    >
+                        Clear
+                    </button>
+                )}
+            </div>
+
             {degraded ? (
                 <div className="flex items-start gap-2 p-3 rounded-lg border border-amber-200 bg-amber-50 text-amber-900 text-sm">
                     <AlertTriangle className="w-4 h-4 mt-0.5 flex-none text-amber-600" />
@@ -231,6 +308,7 @@ export function FleetOverview() {
 function StatusBadge({ status }: { status: string }) {
     const config: Record<string, { label: string; color: string; icon: React.ElementType }> = {
         healthy: { label: 'Healthy', color: 'bg-green-100 text-green-700', icon: Wifi },
+        disconnected: { label: 'Battery Offline', color: 'bg-orange-100 text-orange-700', icon: WifiOff },
         warning: { label: 'Warning', color: 'bg-amber-100 text-amber-700', icon: AlertTriangle },
         critical: { label: 'Critical', color: 'bg-red-100 text-red-700', icon: AlertTriangle },
         offline: { label: 'Offline', color: 'bg-gray-100 text-gray-600', icon: WifiOff },
