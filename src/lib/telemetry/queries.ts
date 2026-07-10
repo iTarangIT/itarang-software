@@ -20,6 +20,8 @@ import { getIotSql } from "@/lib/db/iot";
 import { db } from "@/lib/db";
 import { deviceBatteryMap } from "@/lib/db/schema";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { extrapolateCapacity } from "@/lib/telemetry/charging-math";
+import { buildTimeWindow, cycleCTEs } from "@/lib/telemetry/charging-sql";
 
 // ─── Fleet Dashboard ─────────────────────────────────────────────────────────
 
@@ -559,68 +561,44 @@ export async function fetchSOCTrends(days = 30) {
  *   4. Keep sessions with net SOC gain ≥ 5 and AH > 0. start/end SOC = min/max.
  *   5. Extrapolate full (100%) capacity: ah_charged ÷ (Δsoc/100).
  */
-export async function fetchBatteryAhAnalytics(
+export interface ChargingCycleAggregate {
+    /** Groups this cycle's samples in fetchChargingCycleDetail. */
+    break_id: number;
+    start_time: Date;
+    end_time: Date;
+    duration_s: number;
+    ah_charged: number;
+    start_soc: number | null;
+    end_soc: number | null;
+    /** SOC gained over only the steps that had a current reading — drives the >= 50 gate. */
+    soc_measured: number | null;
+    estimated_capacity_ah: number | null;
+}
+
+/**
+ * Per-cycle aggregates — the authoritative numbers. Anything that needs a cycle's
+ * AH / duration / SOC / capacity must read them from here rather than re-summing
+ * the raw samples: Postgres `round(numeric, 2)` is half-away-from-zero while JS
+ * `Math.round` is half-up, `end_time` is the last *rising* sample (not the last
+ * row), and `duration_s` deliberately excludes the first attributed interval.
+ */
+export async function fetchChargingCycleAggregate(
     vehicleno: string,
     opts: { months?: number; month?: string },
-) {
+): Promise<{
+    vehicleno: string;
+    months: number | null;
+    month: string | null;
+    cycles: ChargingCycleAggregate[];
+}> {
     const iot = getIotSql();
+    const { timePredicate, months, month } = buildTimeWindow(iot, opts);
+    const cte = cycleCTEs(iot, vehicleno, timePredicate);
 
-    // Time window: a specific calendar month (YYYY-MM) when `month` is given,
-    // otherwise the last N months relative to now (1 / 3 / 6).
-    let timePredicate;
-    let months: number | null = null;
-    let month: string | null = null;
-    if (opts.month && /^\d{4}-\d{2}$/.test(opts.month)) {
-        month = opts.month;
-        const [y, mo] = opts.month.split("-").map(Number);
-        const start = `${opts.month}-01`;
-        const next =
-            mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, "0")}`;
-        timePredicate = iot`AND time >= ${start} AND time < ${`${next}-01`}`;
-    } else {
-        months = [1, 3, 6].includes(opts.months ?? 3) ? (opts.months ?? 3) : 3;
-        timePredicate = iot`AND time > now() - (interval '1 month' * ${months})`;
-    }
-
-    // Battery telemetry lives in telemetry_can as a JSONB `payload` — the AWS poller
-    // writes SOC / current / voltage there, NOT into the legacy telemetry_battery table
-    // (which is frozen at the VPS-migration cutover). Extract soc + pack current from the
-    // payload, then coulomb-count exactly as before. Payload keys of interest:
-    //   payload->'soc'->>'value'      integer %  (0..100)
-    //   payload->'current'->>'value'  pack current in A (sign varies; ABS used below)
-    //   payload->'rated_capacity'->>'value'  nameplate Ah (e.g. 105)
     const rows = (await iot`
-        WITH raw AS (
-            SELECT
-                time,
-                (payload->'soc'->>'value')::float      AS soc_pct,
-                (payload->'current'->>'value')::float  AS pack_current
-            FROM telemetry_can
-            WHERE vehicleno = ${vehicleno}
-              AND payload->'soc'->>'value' IS NOT NULL
-              ${timePredicate}
-        ),
-        samples AS (
-            SELECT
-                time,
-                soc_pct,
-                pack_current,
-                soc_pct - LAG(soc_pct) OVER w                          AS dsoc,
-                EXTRACT(EPOCH FROM (time - LAG(time) OVER w))          AS dt_s
-            FROM raw
-            WINDOW w AS (ORDER BY time)
-        ),
-        flagged AS (
-            SELECT *,
-                CASE WHEN dsoc >= 0 AND dt_s IS NOT NULL AND dt_s <= 1200 THEN 1 ELSE 0 END AS in_sess
-            FROM samples
-        ),
-        grouped AS (
-            SELECT *,
-                SUM(CASE WHEN in_sess = 0 THEN 1 ELSE 0 END) OVER (ORDER BY time) AS break_id
-            FROM flagged
-        )
+        ${cte}
         SELECT
+            break_id::int                                                    AS break_id,
             min(time)                                                        AS start_time,
             max(time) FILTER (WHERE dsoc > 0)                                AS end_time,
             EXTRACT(EPOCH FROM (max(time) FILTER (WHERE dsoc > 0) - min(time)))::int AS duration_s,
@@ -642,6 +620,7 @@ export async function fetchBatteryAhAnalytics(
                         ELSE 0 END) > 0
         ORDER BY start_time ASC
     `) as Array<{
+        break_id: number;
         start_time: Date;
         end_time: Date;
         duration_s: number | null;
@@ -651,31 +630,43 @@ export async function fetchBatteryAhAnalytics(
         soc_measured: number | null;
     }>;
 
-    const sessions = rows.map((r) => {
-        const startSoc = r.start_soc != null ? Number(r.start_soc) : null;
-        const endSoc = r.end_soc != null ? Number(r.end_soc) : null;
+    const cycles = rows.map((r) => {
         const ah = Number(r.ah_charged) || 0;
-        // Extrapolate full (100%) capacity from the AH added over the measured SOC gain:
-        //   capacity = ah / (ΔSOC/100).
-        // Only trust this when the coulomb-counted current spans a LARGE swing (>= 50%
-        // SOC). A small top-up (e.g. 5%) extrapolated x20 amplifies noise; a >= 50% swing
-        // is at most a x2 extrapolation, so the estimate is reliable. Cycles below the
-        // threshold still appear in the AH trend but contribute no capacity point.
         const socMeasured = r.soc_measured != null ? Number(r.soc_measured) : null;
-        const capacity =
-            socMeasured != null && socMeasured >= 50
-                ? Math.round((ah / (socMeasured / 100)) * 10) / 10
-                : null;
         return {
+            break_id: Number(r.break_id),
             start_time: r.start_time,
             end_time: r.end_time,
             duration_s: Number(r.duration_s) || 0,
             ah_charged: Math.round(ah * 100) / 100,
-            start_soc: startSoc,
-            end_soc: endSoc,
-            estimated_capacity_ah: capacity,
+            start_soc: r.start_soc != null ? Number(r.start_soc) : null,
+            end_soc: r.end_soc != null ? Number(r.end_soc) : null,
+            soc_measured: socMeasured,
+            estimated_capacity_ah: extrapolateCapacity(ah, socMeasured),
         };
     });
+
+    return { vehicleno, months, month, cycles };
+}
+
+export async function fetchBatteryAhAnalytics(
+    vehicleno: string,
+    opts: { months?: number; month?: string },
+) {
+    const { months, month, cycles: aggregates } =
+        await fetchChargingCycleAggregate(vehicleno, opts);
+
+    // Shape preserved for the Trip Analytics UI: break_id and soc_measured are
+    // export-only concerns and stay out of this payload.
+    const sessions = aggregates.map((r) => ({
+        start_time: r.start_time,
+        end_time: r.end_time,
+        duration_s: r.duration_s,
+        ah_charged: r.ah_charged,
+        start_soc: r.start_soc,
+        end_soc: r.end_soc,
+        estimated_capacity_ah: r.estimated_capacity_ah,
+    }));
 
     const cycles = sessions.length;
     const totalAh = sessions.reduce((s, r) => s + r.ah_charged, 0);
@@ -707,6 +698,99 @@ export async function fetchBatteryAhAnalytics(
             avgSocGained: Math.round(avg(socGains) * 10) / 10,
         },
     };
+}
+
+export interface ChargingSample {
+    time: Date;
+    soc_pct: number | null;
+    pack_current: number | null;
+    pack_voltage: number | null;
+    /** SOC change over the interval *ending* at this sample. */
+    dsoc: number | null;
+    /** Seconds since the previous sample — the interval *ending* at this sample. */
+    dt_s: number | null;
+    /** 1 when this sample's interval qualifies as charging (dsoc >= 0, dt_s <= 1200). */
+    in_sess: number;
+    break_id: number;
+    /** True when in_sess AND this sample's cycle survived the >= 5% swing / AH > 0 filter. */
+    in_valid_cycle: boolean;
+}
+
+/**
+ * Every telemetry sample in the window, tagged with the cycle it belongs to.
+ *
+ * Display-only. These rows let an engineer see the raw telemetry behind each
+ * cycle, but the cycle's headline numbers must come from
+ * fetchChargingCycleAggregate — see the note there on why re-summing drifts.
+ *
+ * Note on the first row of a cycle: `dsoc`/`dt_s` describe the interval *ending*
+ * at each sample, so a cycle's first sample carries the gap from the preceding
+ * (non-charging) sample. That interval's energy IS counted in `ah_charged`, and
+ * `start_time` is this first *rising* sample — not the interval's start.
+ */
+export async function fetchChargingCycleDetail(
+    vehicleno: string,
+    opts: { months?: number; month?: string },
+): Promise<{
+    vehicleno: string;
+    months: number | null;
+    month: string | null;
+    samples: ChargingSample[];
+}> {
+    const iot = getIotSql();
+    const { timePredicate, months, month } = buildTimeWindow(iot, opts);
+    const cte = cycleCTEs(iot, vehicleno, timePredicate);
+
+    const samples = (await iot`
+        ${cte}, cycle_stats AS (
+            SELECT
+                break_id,
+                (max(soc_pct) - min(soc_pct)) AS swing,
+                sum(CASE WHEN dsoc > 0 AND pack_current IS NOT NULL
+                         THEN ABS(pack_current) * (dt_s / 3600.0)
+                         ELSE 0 END) AS ah
+            FROM grouped
+            WHERE in_sess = 1
+            GROUP BY break_id
+        )
+        SELECT
+            g.time,
+            g.soc_pct,
+            g.pack_current,
+            g.pack_voltage,
+            g.dsoc,
+            g.dt_s::float   AS dt_s,
+            g.in_sess,
+            g.break_id::int AS break_id,
+            -- FALSE AND NULL = FALSE, so non-charging rows (no cycle_stats match)
+            -- correctly resolve to false rather than null.
+            (g.in_sess = 1 AND cs.swing >= 5 AND cs.ah > 0) AS in_valid_cycle
+        FROM grouped g
+        LEFT JOIN cycle_stats cs ON cs.break_id = g.break_id
+        ORDER BY g.time ASC
+    `) as unknown as ChargingSample[];
+
+    return { vehicleno, months, month, samples };
+}
+
+/**
+ * Pre-flight row count for the export cap, so an oversized range is rejected
+ * before any rows cross the wire. Mirrors the `raw` CTE's filter exactly.
+ */
+export async function countChargingSamples(
+    vehicleno: string,
+    opts: { months?: number; month?: string },
+): Promise<number> {
+    const iot = getIotSql();
+    const { timePredicate } = buildTimeWindow(iot, opts);
+    const [row] = (await iot`
+        SELECT count(*)::int AS n
+        FROM telemetry_can
+        WHERE vehicleno = ${vehicleno}
+          AND payload->'soc'->>'value' IS NOT NULL
+          ${timePredicate}
+    `) as unknown as Array<{ n: number }>;
+    return Number(row?.n ?? 0);
 }
 
 export async function fetchWarrantyRisk() {
