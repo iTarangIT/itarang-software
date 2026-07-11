@@ -20,8 +20,16 @@ import { getIotSql } from "@/lib/db/iot";
 import { db } from "@/lib/db";
 import { deviceBatteryMap } from "@/lib/db/schema";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
-import { extrapolateCapacity } from "@/lib/telemetry/charging-math";
-import { buildTimeWindow, cycleCTEs } from "@/lib/telemetry/charging-sql";
+import {
+    capacityGates,
+    capacityPlausible,
+    extrapolateCapacity,
+} from "@/lib/telemetry/charging-math";
+import {
+    buildTimeWindow,
+    cycleCTEs,
+    type ChargingWindowOpts,
+} from "@/lib/telemetry/charging-sql";
 
 // ─── Fleet Dashboard ─────────────────────────────────────────────────────────
 
@@ -551,15 +559,19 @@ export async function fetchSOCTrends(days = 30) {
  * instead — the reliable available signal (soc_pct + pack_current + time).
  *
  * Method (coulomb counting):
- *   1. Order samples by time; compute Δsoc and Δt against the previous sample.
+ *   1. Dedupe by timestamp, then order by time; compute Δsoc and Δt against the
+ *      previous distinct sample. See cycleCTEs for why the dedupe is load-bearing.
  *   2. A charging session = a contiguous run where SOC is non-decreasing
- *      (Δsoc ≥ 0) and the gap is ≤ 20 min. Any SOC drop (discharge/drive) or a
- *      longer gap ends the session.
- *   3. AH is integrated only over the rising steps: Σ |pack_current| × Δt(h).
- *      |·| guards the unknown charge-current sign convention; current is present
- *      in ~97% of rising steps.
- *   4. Keep sessions with net SOC gain ≥ 5 and AH > 0. start/end SOC = min/max.
- *   5. Extrapolate full (100%) capacity: ah_charged ÷ (Δsoc/100).
+ *      (Δsoc ≥ 0) and the gap is ≤ SESSION_GAP_MAX_S. Any SOC drop (discharge/
+ *      drive) or a longer gap ends the session. The session is then trimmed to the
+ *      first and last samples carrying current, so idle time at either end is not
+ *      counted as charging.
+ *   3. AH is the trapezoidal integral of |pack_current| over the cycle's *actual*
+ *      elapsed time — every interval inside the cycle, not only the rising steps.
+ *      |·| guards the unsigned pack-current convention.
+ *   4. Keep cycles with net SOC gain ≥ MIN_CYCLE_SOC_GAIN and AH > 0.
+ *   5. Extrapolate full (100%) capacity: ah_charged ÷ (Δsoc/100), gated on a large
+ *      enough swing and on the cycle's time coverage.
  */
 export interface ChargingCycleAggregate {
     /** Groups this cycle's samples in fetchChargingCycleDetail. */
@@ -570,9 +582,24 @@ export interface ChargingCycleAggregate {
     ah_charged: number;
     start_soc: number | null;
     end_soc: number | null;
-    /** SOC gained over only the steps that had a current reading — drives the >= 50 gate. */
-    soc_measured: number | null;
+    /** end_soc − start_soc: the swing the capacity extrapolation divides by. */
+    soc_difference: number | null;
+    /** Mean current over the samples that were actually carrying current. */
+    avg_charging_current: number | null;
+    max_charging_current: number | null;
+    /**
+     * Percentage of the cycle's elapsed time covered by intervals short enough to
+     * trust (≤ COVERAGE_TRUST_GAP_S). Low coverage means the Ah total leans on
+     * interpolation across long gaps, so it must not be extrapolated to a capacity.
+     */
+    coverage_pct: number | null;
+    /** Samples the coulomb count integrated over. */
+    n_samples: number;
+    /** BMS nameplate, for the plausibility check. */
+    rated_capacity_ah: number | null;
     estimated_capacity_ah: number | null;
+    /** False when the estimate is physically incredible against the nameplate. */
+    capacity_plausible: boolean;
 }
 
 /**
@@ -584,40 +611,37 @@ export interface ChargingCycleAggregate {
  */
 export async function fetchChargingCycleAggregate(
     vehicleno: string,
-    opts: { months?: number; month?: string },
+    opts: ChargingWindowOpts,
 ): Promise<{
     vehicleno: string;
     months: number | null;
     month: string | null;
+    from: string | null;
+    to: string | null;
     cycles: ChargingCycleAggregate[];
 }> {
     const iot = getIotSql();
-    const { timePredicate, months, month } = buildTimeWindow(iot, opts);
+    const { timePredicate, months, month, from, to } = buildTimeWindow(iot, opts);
     const cte = cycleCTEs(iot, vehicleno, timePredicate);
 
     const rows = (await iot`
         ${cte}
         SELECT
-            break_id::int                                                    AS break_id,
-            min(time)                                                        AS start_time,
-            max(time) FILTER (WHERE dsoc > 0)                                AS end_time,
-            EXTRACT(EPOCH FROM (max(time) FILTER (WHERE dsoc > 0) - min(time)))::int AS duration_s,
-            round(sum(CASE WHEN dsoc > 0 AND pack_current IS NOT NULL
-                           THEN ABS(pack_current) * (dt_s / 3600.0)
-                           ELSE 0 END)::numeric, 2)::float                   AS ah_charged,
-            min(soc_pct)::float                                              AS start_soc,
-            max(soc_pct)::float                                              AS end_soc,
-            -- SOC gained specifically over the steps that had a current reading;
-            -- pairing this with ah_charged makes the capacity estimate robust to
-            -- sparse current coverage within a session.
-            round(sum(dsoc) FILTER (WHERE dsoc > 0 AND pack_current IS NOT NULL)::numeric, 1)::float AS soc_measured
-        FROM grouped
-        WHERE in_sess = 1
-        GROUP BY break_id
-        HAVING (max(soc_pct) - min(soc_pct)) >= 5
-           AND sum(CASE WHEN dsoc > 0 AND pack_current IS NOT NULL
-                        THEN ABS(pack_current) * (dt_s / 3600.0)
-                        ELSE 0 END) > 0
+            break_id,
+            start_time,
+            end_time,
+            duration_s,
+            round(ah_charged::numeric, 2)::float            AS ah_charged,
+            start_soc::float                                AS start_soc,
+            end_soc::float                                  AS end_soc,
+            round((end_soc - start_soc)::numeric, 1)::float AS soc_difference,
+            round(avg_charging_current::numeric, 1)::float   AS avg_charging_current,
+            round(max_charging_current::numeric, 1)::float   AS max_charging_current,
+            coverage_pct,
+            n_samples,
+            rated_capacity_ah
+        FROM cycle_valid
+        WHERE is_valid
         ORDER BY start_time ASC
     `) as Array<{
         break_id: number;
@@ -627,37 +651,53 @@ export async function fetchChargingCycleAggregate(
         ah_charged: number | null;
         start_soc: number | null;
         end_soc: number | null;
-        soc_measured: number | null;
+        soc_difference: number | null;
+        avg_charging_current: number | null;
+        max_charging_current: number | null;
+        coverage_pct: number | null;
+        n_samples: number;
+        rated_capacity_ah: number | null;
     }>;
+
+    const num = (v: number | null | undefined) => (v != null ? Number(v) : null);
 
     const cycles = rows.map((r) => {
         const ah = Number(r.ah_charged) || 0;
-        const socMeasured = r.soc_measured != null ? Number(r.soc_measured) : null;
+        const socDifference = num(r.soc_difference);
+        const coveragePct = num(r.coverage_pct);
+        const ratedAh = num(r.rated_capacity_ah);
+        const estimate = extrapolateCapacity(ah, socDifference, coveragePct);
         return {
             break_id: Number(r.break_id),
             start_time: r.start_time,
             end_time: r.end_time,
             duration_s: Number(r.duration_s) || 0,
             ah_charged: Math.round(ah * 100) / 100,
-            start_soc: r.start_soc != null ? Number(r.start_soc) : null,
-            end_soc: r.end_soc != null ? Number(r.end_soc) : null,
-            soc_measured: socMeasured,
-            estimated_capacity_ah: extrapolateCapacity(ah, socMeasured),
+            start_soc: num(r.start_soc),
+            end_soc: num(r.end_soc),
+            soc_difference: socDifference,
+            avg_charging_current: num(r.avg_charging_current),
+            max_charging_current: num(r.max_charging_current),
+            coverage_pct: coveragePct,
+            n_samples: Number(r.n_samples) || 0,
+            rated_capacity_ah: ratedAh,
+            estimated_capacity_ah: estimate,
+            capacity_plausible: capacityPlausible(estimate, ratedAh),
         };
     });
 
-    return { vehicleno, months, month, cycles };
+    return { vehicleno, months, month, from, to, cycles };
 }
 
 export async function fetchBatteryAhAnalytics(
     vehicleno: string,
-    opts: { months?: number; month?: string },
+    opts: ChargingWindowOpts,
 ) {
-    const { months, month, cycles: aggregates } =
+    const { months, month, from, to, cycles: aggregates } =
         await fetchChargingCycleAggregate(vehicleno, opts);
 
-    // Shape preserved for the Trip Analytics UI: break_id and soc_measured are
-    // export-only concerns and stay out of this payload.
+    // Shape for the Trip Analytics UI: break_id is an export-only concern and stays
+    // out of this payload.
     const sessions = aggregates.map((r) => ({
         start_time: r.start_time,
         end_time: r.end_time,
@@ -665,20 +705,25 @@ export async function fetchBatteryAhAnalytics(
         ah_charged: r.ah_charged,
         start_soc: r.start_soc,
         end_soc: r.end_soc,
+        soc_difference: r.soc_difference,
+        avg_charging_current: r.avg_charging_current,
+        max_charging_current: r.max_charging_current,
+        coverage_pct: r.coverage_pct,
+        n_samples: r.n_samples,
+        rated_capacity_ah: r.rated_capacity_ah,
         estimated_capacity_ah: r.estimated_capacity_ah,
+        capacity_plausible: r.capacity_plausible,
     }));
 
     const cycles = sessions.length;
     const totalAh = sessions.reduce((s, r) => s + r.ah_charged, 0);
+    // Only cycles that survived the swing + coverage gates carry an estimate, so
+    // this average is over the trustworthy ones by construction.
     const caps = sessions
         .map((r) => r.estimated_capacity_ah)
         .filter((v): v is number => v != null);
     const socGains = sessions
-        .map((r) =>
-            r.start_soc != null && r.end_soc != null
-                ? r.end_soc - r.start_soc
-                : null,
-        )
+        .map((r) => r.soc_difference)
         .filter((v): v is number => v != null);
     const avg = (arr: number[]) =>
         arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
@@ -687,6 +732,8 @@ export async function fetchBatteryAhAnalytics(
         vehicleno,
         months,
         month,
+        from,
+        to,
         sessions,
         summary: {
             chargingCycles: cycles,
@@ -696,6 +743,16 @@ export async function fetchBatteryAhAnalytics(
             avgSessionDurationMin:
                 Math.round(avg(sessions.map((r) => r.duration_s)) / 60 * 10) / 10,
             avgSocGained: Math.round(avg(socGains) * 10) / 10,
+            /** Nameplate, so the UI can show the estimate against what it should be. */
+            ratedCapacityAh:
+                sessions.find((s) => s.rated_capacity_ah != null)?.rated_capacity_ah ??
+                null,
+            /** Cycles whose estimate contradicts the nameplate — a measurement fault. */
+            implausibleCycles: sessions.filter(
+                (s) => s.estimated_capacity_ah != null && !s.capacity_plausible,
+            ).length,
+            /** The thresholds in force, so the UI can say what it filtered and why. */
+            gates: capacityGates(),
         },
     };
 }
@@ -709,10 +766,14 @@ export interface ChargingSample {
     dsoc: number | null;
     /** Seconds since the previous sample — the interval *ending* at this sample. */
     dt_s: number | null;
-    /** 1 when this sample's interval qualifies as charging (dsoc >= 0, dt_s <= 1200). */
+    /** Pack current at the previous sample — the other end of the AH trapezoid. */
+    prev_current: number | null;
+    /** 1 when this sample's interval qualifies as charging (dsoc >= 0, gap within bounds). */
     in_sess: number;
     break_id: number;
-    /** True when in_sess AND this sample's cycle survived the >= 5% swing / AH > 0 filter. */
+    /** True when this sample lies within its session's trimmed charging boundaries. */
+    in_cycle: boolean;
+    /** True when in_cycle AND this sample's cycle survived the SOC-swing / AH > 0 filter. */
     in_valid_cycle: boolean;
 }
 
@@ -730,47 +791,97 @@ export interface ChargingSample {
  */
 export async function fetchChargingCycleDetail(
     vehicleno: string,
-    opts: { months?: number; month?: string },
+    opts: ChargingWindowOpts,
 ): Promise<{
     vehicleno: string;
     months: number | null;
     month: string | null;
+    from: string | null;
+    to: string | null;
     samples: ChargingSample[];
 }> {
     const iot = getIotSql();
-    const { timePredicate, months, month } = buildTimeWindow(iot, opts);
+    const { timePredicate, months, month, from, to } = buildTimeWindow(iot, opts);
     const cte = cycleCTEs(iot, vehicleno, timePredicate);
 
     const samples = (await iot`
-        ${cte}, cycle_stats AS (
-            SELECT
-                break_id,
-                (max(soc_pct) - min(soc_pct)) AS swing,
-                sum(CASE WHEN dsoc > 0 AND pack_current IS NOT NULL
-                         THEN ABS(pack_current) * (dt_s / 3600.0)
-                         ELSE 0 END) AS ah
-            FROM grouped
-            WHERE in_sess = 1
-            GROUP BY break_id
-        )
+        ${cte}
         SELECT
             g.time,
             g.soc_pct,
             g.pack_current,
             g.pack_voltage,
             g.dsoc,
-            g.dt_s::float   AS dt_s,
+            g.dt_s::float        AS dt_s,
+            g.prev_current::float AS prev_current,
             g.in_sess,
-            g.break_id::int AS break_id,
-            -- FALSE AND NULL = FALSE, so non-charging rows (no cycle_stats match)
-            -- correctly resolve to false rather than null.
-            (g.in_sess = 1 AND cs.swing >= 5 AND cs.ah > 0) AS in_valid_cycle
-        FROM grouped g
-        LEFT JOIN cycle_stats cs ON cs.break_id = g.break_id
+            g.break_id::int      AS break_id,
+            g.in_cycle,
+            -- FALSE AND NULL = FALSE, so rows outside any cycle (no cycle_valid
+            -- match) correctly resolve to false rather than null.
+            (g.in_cycle AND cv.is_valid) AS in_valid_cycle
+        FROM cycled g
+        LEFT JOIN cycle_valid cv ON cv.break_id = g.break_id
         ORDER BY g.time ASC
     `) as unknown as ChargingSample[];
 
-    return { vehicleno, months, month, samples };
+    return { vehicleno, months, month, from, to, samples };
+}
+
+/** Enough points to read the shape of a 6-month window without shipping 20k rows. */
+export const MAX_TIMELINE_POINTS = 4000;
+
+export interface SocTimelinePoint {
+    time: Date;
+    soc_pct: number | null;
+    /** True when this sample sits inside a detected charging cycle. */
+    in_cycle: boolean;
+}
+
+/**
+ * SOC against time, tagged with cycle membership — the validation chart.
+ *
+ * Its whole job is to make charging-cycle *detection* falsifiable by eye: the
+ * charge → discharge → charge alternation should be obvious, and every rising
+ * limb should be shaded as charging. A cycle boundary drawn in the wrong place
+ * shows up here immediately, where no aggregate number would reveal it.
+ *
+ * Evenly strided down to MAX_TIMELINE_POINTS. Striding (rather than time-bucket
+ * averaging) is deliberate: averaging would smooth away exactly the sharp SOC
+ * transitions this chart exists to expose.
+ */
+export async function fetchSocTimeline(
+    vehicleno: string,
+    opts: ChargingWindowOpts,
+): Promise<{
+    vehicleno: string;
+    months: number | null;
+    month: string | null;
+    from: string | null;
+    to: string | null;
+    points: SocTimelinePoint[];
+}> {
+    const iot = getIotSql();
+    const { timePredicate, months, month, from, to } = buildTimeWindow(iot, opts);
+    const cte = cycleCTEs(iot, vehicleno, timePredicate);
+
+    const points = (await iot`
+        ${cte}, numbered AS (
+            SELECT
+                time,
+                soc_pct,
+                in_cycle,
+                row_number() OVER (ORDER BY time) AS rn,
+                count(*) OVER ()                  AS total
+            FROM cycled
+        )
+        SELECT time, soc_pct, in_cycle
+        FROM numbered
+        WHERE rn % GREATEST(1, (total / ${MAX_TIMELINE_POINTS})::int) = 0
+        ORDER BY time ASC
+    `) as unknown as SocTimelinePoint[];
+
+    return { vehicleno, months, month, from, to, points };
 }
 
 /**
@@ -779,7 +890,7 @@ export async function fetchChargingCycleDetail(
  */
 export async function countChargingSamples(
     vehicleno: string,
-    opts: { months?: number; month?: string },
+    opts: ChargingWindowOpts,
 ): Promise<number> {
     const iot = getIotSql();
     const { timePredicate } = buildTimeWindow(iot, opts);

@@ -30,7 +30,13 @@ function badRequest(message: string) {
     );
 }
 
-function periodLabel(months: number | null, month: string | null): string {
+function periodLabel(
+    months: number | null,
+    month: string | null,
+    from: string | null,
+    to: string | null,
+): string {
+    if (from && to) return `${from} to ${to}`;
     if (month) {
         return new Date(`${month}-01T00:00:00Z`).toLocaleString('en-US', {
             month: 'long',
@@ -53,8 +59,17 @@ export async function GET(req: NextRequest) {
         if (month && !/^\d{4}-\d{2}$/.test(month)) {
             return badRequest('month must be in YYYY-MM format');
         }
+        const from = searchParams.get('from')?.trim() || undefined;
+        const to = searchParams.get('to')?.trim() || undefined;
+        const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+        if ((from || to) && !(from && to && ISO_DATE.test(from) && ISO_DATE.test(to))) {
+            return badRequest('from and to must both be supplied, in YYYY-MM-DD format');
+        }
+        if (from && to && from > to) {
+            return badRequest('from must not be after to');
+        }
         const months = parseInt(searchParams.get('months') || '3', 10);
-        const opts = { months, month };
+        const opts = { months, month, from, to };
 
         // Reject an oversized window before any rows cross the wire. ExcelJS cells
         // cost a few hundred bytes each, and sandbox shares its 8 GB box with prod.
@@ -106,14 +121,22 @@ export async function GET(req: NextRequest) {
 
         const buffer = await buildChargingAnalysisWorkbook({
             vehicleno,
-            periodLabel: periodLabel(aggregate.months, aggregate.month),
+            periodLabel: periodLabel(
+                aggregate.months,
+                aggregate.month,
+                aggregate.from,
+                aggregate.to,
+            ),
             generatedAt: new Date(),
             cycles,
             samples: detail.samples,
         });
 
         const safeName = vehicleno.replace(/[^a-zA-Z0-9_-]/g, '_');
-        const suffix = aggregate.month ?? `${aggregate.months}m`;
+        const suffix =
+            aggregate.from && aggregate.to
+                ? `${aggregate.from}_to_${aggregate.to}`
+                : (aggregate.month ?? `${aggregate.months}m`);
         const filename = `charging-analysis_${safeName}_${suffix}.xlsx`;
 
         return new Response(new Uint8Array(buffer), {

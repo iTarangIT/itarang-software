@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/auth-utils';
-import { fetchBatteryAhAnalytics } from '@/lib/telemetry/queries';
+import { fetchSocTimeline } from '@/lib/telemetry/queries';
 
-// Per-battery Amp-Hour analytics (AH trend, capacity trend, charging stats) for
-// the Trip Analytics tab. months ∈ {1,3,6}; vehicleno is required.
+// SOC-against-time for one battery, tagged with charging-cycle membership. Feeds
+// the Charging Timeline chart on Trip Analytics, which exists so cycle detection
+// can be checked by eye. months ∈ {1,3,6}; vehicleno is required.
 export async function GET(req: NextRequest) {
     try {
         await requireRole(['ceo']);
@@ -19,10 +20,10 @@ export async function GET(req: NextRequest) {
         const month = searchParams.get('month')?.trim() || undefined; // YYYY-MM
         const from = searchParams.get('from')?.trim() || undefined;   // YYYY-MM-DD
         const to = searchParams.get('to')?.trim() || undefined;       // YYYY-MM-DD
-        const data = await fetchBatteryAhAnalytics(vehicleno, { months, month, from, to });
+        const data = await fetchSocTimeline(vehicleno, { months, month, from, to });
         return NextResponse.json({ success: true, data });
     } catch (error) {
-        console.error('[AH Trend] Error:', error);
+        console.error('[SOC Timeline] Error:', error);
         const message = error instanceof Error ? error.message : 'Server error';
         return NextResponse.json({ success: false, error: { message } }, { status: 500 });
     }
