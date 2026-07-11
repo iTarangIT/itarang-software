@@ -24,7 +24,12 @@
  */
 import ExcelJS from "exceljs";
 import { PassThrough } from "node:stream";
-import { ahIncrement } from "./charging-math";
+import {
+    CAPACITY_SOC_THRESHOLD,
+    COVERAGE_TRUST_GAP_S,
+    MIN_COVERAGE_PCT,
+    ahIncrement,
+} from "./charging-math";
 import type { ChargingCycleAggregate, ChargingSample } from "./queries";
 
 /**
@@ -208,7 +213,7 @@ function writeSummarySheet(
 
     // Before any row is committed, or the widths never reach the file: WorksheetWriter
     // emits <cols> when it writes the first row.
-    setWidths(sheet, [18, 21, 21, 11, 10, 13, 17, 18, 11, 34]);
+    setWidths(sheet, [18, 21, 21, 11, 10, 15, 17, 13, 13, 11, 13, 34, 13]);
 
     const title = sheet.getRow(1);
     title.values = ["Charging Cycle Summary"];
@@ -234,20 +239,19 @@ function writeSummarySheet(
             "End Timestamp",
             "Start SOC",
             "End SOC",
-            "SOC Gain (%)",
-            "SOC Measured (%)",
+            "SOC Difference (%)",
             "Charging Duration",
+            "Avg Current (A)",
+            "Max Current (A)",
             "Total AH",
-            "Extrapolated Battery Capacity (100%)",
+            "Data Coverage (%)",
+            "Estimated Battery Capacity (100%)",
+            "Rated (A)",
         ],
         HEADER_ROW,
     );
 
     cycles.forEach((cycle, i) => {
-        const socGain =
-            cycle.start_soc != null && cycle.end_soc != null
-                ? round(cycle.end_soc - cycle.start_soc, 1)
-                : null;
         const row = sheet.getRow(HEADER_ROW + 1 + i);
         row.values = [
             cycleSheetName(i + 1),
@@ -255,21 +259,38 @@ function writeSummarySheet(
             formatIst(cycle.end_time),
             cycle.start_soc,
             cycle.end_soc,
-            socGain,
-            cycle.soc_measured,
+            cycle.soc_difference,
             formatDuration(cycle.duration_s),
+            cycle.avg_charging_current,
+            cycle.max_charging_current,
             cycle.ah_charged,
-            // Blank, not zero: a sub-50% swing means we decline to estimate.
+            cycle.coverage_pct,
+            // Blank, not zero: too small a swing or too little coverage means we
+            // decline to estimate rather than publish a number we don't believe.
             cycle.estimated_capacity_ah,
+            cycle.rated_capacity_ah,
         ];
+        // An estimate that contradicts the nameplate is a measurement fault. Make it
+        // impossible to read past.
+        if (cycle.estimated_capacity_ah != null && !cycle.capacity_plausible) {
+            row.getCell(12).font = { bold: true, color: { argb: "FFC00000" } };
+        }
         row.commit();
     });
 
+    const coverageRule =
+        MIN_COVERAGE_PCT > 0
+            ? ` and Data Coverage is ≥ ${MIN_COVERAGE_PCT}%`
+            : "";
     const footnote = sheet.getRow(HEADER_ROW + cycles.length + 2);
     footnote.values = [
-        "Extrapolated capacity = Total AH ÷ (SOC Measured / 100), and is only calculated when SOC Measured ≥ 50%. " +
-            "Below that threshold the extrapolation amplifies noise too much to be trusted, so the cell is left blank. " +
-            "SOC Measured counts only the steps that had a current reading, so it can be lower than SOC Gain.",
+        `Estimated capacity = Total AH ÷ (SOC Difference / 100). It is only calculated when the swing is ≥ ${CAPACITY_SOC_THRESHOLD}%` +
+            `${coverageRule}; otherwise the cell is left blank. The division amplifies any error in Total AH by 100/SOC Difference, ` +
+            "so below that threshold the result is noise rather than a measurement. " +
+            `Data Coverage is the share of the cycle's elapsed time spanned by intervals of ${COVERAGE_TRUST_GAP_S}s or less — ` +
+            "a low value means the AH total leans on interpolation across gaps between samples, so treat that cycle's estimate as indicative. " +
+            "Total AH is the trapezoidal integral of |current| over the cycle's real elapsed time. " +
+            "An estimate shown in red contradicts the battery's rated capacity and indicates a measurement fault, not a degraded pack.",
     ];
     footnote.font = { italic: true, size: 9 };
     footnote.commit();
@@ -299,8 +320,11 @@ function writeCycleSheet(
 
     let runningAh = 0;
     let rowNo = 2;
-    for (const sample of cycleSamples) {
-        const increment = ahIncrement(sample);
+    cycleSamples.forEach((sample, i) => {
+        // The first sample's interval reaches back into the idle period before the
+        // charger was plugged in — it is not part of the charge and SQL excludes it
+        // from Total AH, so it must read 0 here too or the sheet won't reconcile.
+        const increment = i === 0 ? 0 : ahIncrement(sample);
         runningAh += increment;
         const row = sheet.getRow(rowNo++);
         row.values = [
@@ -308,17 +332,12 @@ function writeCycleSheet(
             sample.soc_pct,
             sample.pack_current,
             sample.pack_voltage,
-            sample.dt_s != null ? round(sample.dt_s, 1) : null,
+            i === 0 ? null : sample.dt_s != null ? round(sample.dt_s, 1) : null,
             round(increment, 4),
             round(runningAh, 3),
         ];
         row.commit();
-    }
-
-    const socIncrease =
-        cycle.start_soc != null && cycle.end_soc != null
-            ? round(cycle.end_soc - cycle.start_soc, 1)
-            : null;
+    });
 
     // Footer values are the aggregate's, not the running totals above: the raw
     // rows are evidence, the aggregate is the number the dashboard shows.
@@ -326,12 +345,16 @@ function writeCycleSheet(
     for (const [label, value] of [
         ["Total Charging Duration", formatDuration(cycle.duration_s)],
         ["Total AH", cycle.ah_charged],
-        ["SOC Increase", socIncrease],
-        ["SOC Measured (%)", cycle.soc_measured],
+        ["SOC Difference (%)", cycle.soc_difference],
+        ["Avg Charging Current (A)", cycle.avg_charging_current],
+        ["Max Charging Current (A)", cycle.max_charging_current],
+        ["Data Coverage (%)", cycle.coverage_pct],
         [
-            "Extrapolated Battery Capacity",
-            cycle.estimated_capacity_ah ?? "N/A (SOC Measured < 50%)",
+            "Estimated Battery Capacity",
+            cycle.estimated_capacity_ah ??
+                `N/A (needs a SOC swing of at least ${CAPACITY_SOC_THRESHOLD}%)`,
         ],
+        ["Rated Capacity (A)", cycle.rated_capacity_ah],
     ] as Array<[string, string | number | null]>) {
         const row = sheet.getRow(rowNo++);
         row.values = [label, value];
@@ -341,9 +364,12 @@ function writeCycleSheet(
 
     const note = sheet.getRow(rowNo + 1);
     note.values = [
-        "The first row's Time Difference and AH Increment are measured against the sample immediately before the cycle " +
-            "began; that interval's energy is included in Total AH. Start Timestamp is the first rising sample, so " +
-            "Total Charging Duration does not cover that first interval.",
+        "AH Increment is the trapezoidal integral over the interval ENDING at each row: " +
+            "(|previous current| + |this current|) / 2 × Time Difference / 3600. Summing the column reproduces Total AH. " +
+            "The first row carries no increment: its interval spans the idle time before charging began, so the cycle's " +
+            "AH is integrated over [Start Timestamp, End Timestamp] exactly. " +
+            "Rows with a flat SOC, and interior pauses where current drops to 0, remain part of the cycle — SOC is " +
+            "quantised to whole percent and current keeps flowing between ticks, so skipping them would under-count the charge.",
     ];
     note.font = { italic: true, size: 9 };
     note.commit();
@@ -373,9 +399,9 @@ function writeMasterSheet(
 
     let rowNo = 2;
     for (const sample of samples) {
-        // A sample can read "Charging" with no cycle ID: its run was rejected by
-        // the >= 5% swing / AH > 0 filter. That is exactly the case an engineer
-        // checking cycle detection wants to be able to spot.
+        // A sample can read "Charging" with no cycle ID: its run was rejected by the
+        // SOC-swing / AH > 0 filter. That is exactly the case an engineer checking
+        // cycle detection wants to be able to spot.
         const cycleNo = sample.in_valid_cycle
             ? cycleNoByBreakId.get(sample.break_id)
             : undefined;
@@ -387,7 +413,7 @@ function writeMasterSheet(
             sample.soc_pct,
             sample.pack_current,
             sample.pack_voltage,
-            sample.in_sess === 1 ? "Charging" : "Not Charging",
+            sample.in_cycle ? "Charging" : "Not Charging",
         ];
         row.commit();
     }

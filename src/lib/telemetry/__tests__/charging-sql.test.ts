@@ -3,6 +3,13 @@ import { pathToFileURL } from "node:url";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
 import {
+    COVERAGE_TRUST_GAP_S,
+    MAX_VALID_CURRENT_A,
+    MIN_CYCLE_SAMPLES,
+    MIN_CYCLE_SOC_GAIN,
+    SESSION_GAP_MAX_S,
+} from "@/lib/telemetry/charging-math";
+import {
     buildTimeWindow,
     cycleCTEs,
     type IotSql,
@@ -72,6 +79,37 @@ describe("buildTimeWindow", () => {
         expect(render(timePredicate).params).toEqual(["2026-12-01", "2027-01-01"]);
     });
 
+    it("includes the whole of the `to` day in a custom range", () => {
+        // Half-open upper bound, so `to` is advanced by a day: a user picking 01→05
+        // June expects the 5th included, not truncated at its first instant.
+        const { timePredicate, months, month, from, to } = buildTimeWindow(sql, {
+            from: "2026-06-01",
+            to: "2026-06-05",
+        });
+        expect([months, month]).toEqual([null, null]);
+        expect([from, to]).toEqual(["2026-06-01", "2026-06-05"]);
+        const { text, params } = render(timePredicate);
+        expect(flat(text)).toBe("AND time >= $1 AND time < $2");
+        expect(params).toEqual(["2026-06-01", "2026-06-06"]);
+    });
+
+    it("rolls a custom range over a month and year boundary", () => {
+        expect(render(buildTimeWindow(sql, { from: "2026-06-28", to: "2026-06-30" }).timePredicate).params)
+            .toEqual(["2026-06-28", "2026-07-01"]);
+        expect(render(buildTimeWindow(sql, { from: "2026-12-30", to: "2026-12-31" }).timePredicate).params)
+            .toEqual(["2026-12-30", "2027-01-01"]);
+    });
+
+    it("takes a custom range ahead of a month, and ignores a half-filled one", () => {
+        // Precedence must match the UI, or the caption describes a period the query
+        // never ran. A lone `from` is not a range and must not silently win.
+        expect(buildTimeWindow(sql, { from: "2026-06-01", to: "2026-06-05", month: "2026-03" }).month)
+            .toBeNull();
+        expect(buildTimeWindow(sql, { from: "2026-06-01", month: "2026-03" }).month).toBe("2026-03");
+        expect(buildTimeWindow(sql, { to: "2026-06-05" }).months).toBe(3);
+        expect(buildTimeWindow(sql, { from: "01-06-2026", to: "05-06-2026" }).months).toBe(3);
+    });
+
     it("falls back to a rolling window, defaulting and clamping to 1/3/6 months", () => {
         expect(buildTimeWindow(sql, {}).months).toBe(3);
         expect(buildTimeWindow(sql, { months: 6 }).months).toBe(6);
@@ -88,10 +126,37 @@ describe("buildTimeWindow", () => {
 describe("cycleCTEs", () => {
     it("inlines the time-window fragment and orders parameters after vehicleno", () => {
         const { text, params } = render(cteFor("BAT-1001", { months: 6 }));
-        // vehicleno binds first because it appears before the predicate.
-        expect(params).toEqual(["BAT-1001", 6]);
+        // Parameters bind in source order: vehicleno and the corrupt-frame bound sit in
+        // the `raw` CTE ahead of the time predicate, then each tuning constant as its
+        // CTE appears.
+        expect(params).toEqual([
+            "BAT-1001",
+            MAX_VALID_CURRENT_A,
+            6,
+            SESSION_GAP_MAX_S,
+            COVERAGE_TRUST_GAP_S,
+            MIN_CYCLE_SOC_GAIN,
+            MIN_CYCLE_SAMPLES,
+        ]);
         expect(text).toContain("WHERE vehicleno = $1");
-        expect(flat(text)).toContain("AND time > now() - (interval '1 month' * $2)");
+        expect(flat(text)).toContain("AND time > now() - (interval '1 month' * $3)");
+    });
+
+    it("rejects corrupt CAN frames but keeps a missing current reading", () => {
+        const { text } = render(cteFor("BAT-1001", { months: 3 }));
+        const one = flat(text);
+        expect(one).toContain("payload->'current'->>'value' IS NULL OR ABS((payload->'current'->>'value')::float) <= $2");
+    });
+
+    it("requires enough samples and some current before a cycle counts", () => {
+        // Two samples describe one straight line through a whole charge — not an integral.
+        const { text } = render(cteFor("BAT-1001", { months: 3 }));
+        const one = flat(text);
+        expect(one).toContain("count(*)::int AS n_samples");
+        expect(one).toContain("count(*) FILTER (WHERE pack_current > 0)::int AS n_current_samples");
+        expect(one).toContain("AND end_soc > start_soc");
+        expect(one).toContain(`AND n_samples >= $${7}`);
+        expect(one).toContain("AND n_current_samples > 0");
     });
 
     it("emits exactly one WITH, opening the chain", () => {
@@ -100,19 +165,36 @@ describe("cycleCTEs", () => {
         expect(text.match(/\bWITH\b/g)).toHaveLength(1);
     });
 
-    it("ends at `grouped AS (…)` so a caller can append SELECT or another CTE", () => {
+    it("ends at `cycle_valid AS (…)` so a caller can append SELECT or another CTE", () => {
         const { text } = render(cteFor("BAT-1001", { months: 3 }));
-        expect(flat(text).endsWith("FROM flagged )")).toBe(true);
-        expect(flat(text)).not.toContain("SELECT * FROM grouped");
+        expect(flat(text).endsWith("FROM cycle_stats )")).toBe(true);
+        expect(flat(text)).not.toContain("SELECT * FROM cycle_valid");
     });
 
-    it("keeps the 20-minute session gap and the payload keys the poller writes", () => {
+    it("dedupes on time, so duplicate poller rows cannot zero out the interval", () => {
+        // ~96% of telemetry_can rows repeat a timestamp. Without DISTINCT ON, every
+        // one of them gets dt_s = 0 and contributes no AH, and LAG over the ties is
+        // non-deterministic. This is the single most load-bearing line in the file.
         const { text } = render(cteFor("BAT-1001", { months: 3 }));
-        // A literal, not a bound parameter — this is the SQL that runs today.
-        expect(flat(text)).toContain("dsoc >= 0 AND dt_s IS NOT NULL AND dt_s <= 1200");
+        expect(flat(text)).toContain("SELECT DISTINCT ON (time)");
+    });
+
+    it("integrates AH as a trapezoid over the real elapsed interval", () => {
+        const { text } = render(cteFor("BAT-1001", { months: 3 }));
+        expect(flat(text)).toContain(
+            "((ABS(pack_current) + ABS(COALESCE(prev_current, pack_current))) / 2.0) * (dt_s / 3600.0)",
+        );
+        // Not gated on a rising SOC: current flows between whole-percent SOC ticks.
+        expect(flat(text)).not.toContain("dsoc > 0 AND pack_current IS NOT NULL");
+    });
+
+    it("breaks a session on the configured gap and reads the payload keys the poller writes", () => {
+        const { text } = render(cteFor("BAT-1001", { months: 3 }));
+        expect(flat(text)).toContain("dsoc >= 0 AND dt_s IS NOT NULL AND dt_s <= $4");
         expect(text).toContain("payload->'soc'->>'value'");
         expect(text).toContain("payload->'current'->>'value'");
         expect(text).toContain("payload->'battery_voltage'->>'value'");
+        expect(text).toContain("payload->'rated_capacity'->>'value'");
     });
 
     it("counts session breaks to group contiguous charging runs", () => {
@@ -122,34 +204,59 @@ describe("cycleCTEs", () => {
         );
     });
 
+    it("trims a cycle to the first current-carrying and last rising sample", () => {
+        const { text } = render(cteFor("BAT-1001", { months: 3 }));
+        const one = flat(text);
+        expect(one).toContain(
+            "min(time) FILTER (WHERE in_sess = 1 AND pack_current > 0) OVER (PARTITION BY break_id) AS cyc_first",
+        );
+        // Last *rising* sample, not last current-carrying one: that keeps the CV
+        // taper up to 100% inside the cycle, and the idle at 100% out of it.
+        expect(one).toContain(
+            "max(time) FILTER (WHERE in_sess = 1 AND dsoc > 0) OVER (PARTITION BY break_id) AS cyc_last",
+        );
+    });
+
+    it("excludes the first in-cycle interval from AH, so the intervals tile the cycle", () => {
+        const { text } = render(cteFor("BAT-1001", { months: 3 }));
+        expect(flat(text)).toContain("sum(ah_term) FILTER (WHERE time > cyc_first)");
+    });
+
     it("composes into the aggregate query the dashboard runs", () => {
         const cte = cteFor("BAT-1001", { month: "2026-03" });
         const { text, params } = render(sql`
             ${cte}
-            SELECT break_id::int AS break_id, min(time) AS start_time
-            FROM grouped
-            WHERE in_sess = 1
-            GROUP BY break_id
-            HAVING (max(soc_pct) - min(soc_pct)) >= 5
+            SELECT break_id, start_time, ah_charged
+            FROM cycle_valid
+            WHERE is_valid
         `);
         const one = flat(text);
         expect(one.startsWith("WITH raw AS (")).toBe(true);
-        expect(one).toContain(") SELECT break_id::int AS break_id");
-        expect(params).toEqual(["BAT-1001", "2026-03-01", "2026-04-01"]);
+        expect(one).toContain(") SELECT break_id, start_time, ah_charged");
+        expect(params).toEqual([
+            "BAT-1001",
+            MAX_VALID_CURRENT_A,
+            "2026-03-01",
+            "2026-04-01",
+            SESSION_GAP_MAX_S,
+            COVERAGE_TRUST_GAP_S,
+            MIN_CYCLE_SOC_GAIN,
+            MIN_CYCLE_SAMPLES,
+        ]);
     });
 
-    it("composes into the detail query by appending a second CTE after a comma", () => {
+    it("composes into the detail query, which joins the same cycle_valid CTE", () => {
+        // Both consumers read the cycle definition from one place, so the exported
+        // workbook can never disagree with the dashboard it exists to check.
         const cte = cteFor("BAT-1001", { months: 1 });
         const { text } = render(sql`
-            ${cte}, cycle_stats AS (
-                SELECT break_id FROM grouped WHERE in_sess = 1 GROUP BY break_id
-            )
-            SELECT g.time FROM grouped g
-            LEFT JOIN cycle_stats cs ON cs.break_id = g.break_id
+            ${cte}
+            SELECT g.time, (g.in_cycle AND cv.is_valid) AS in_valid_cycle
+            FROM cycled g
+            LEFT JOIN cycle_valid cv ON cv.break_id = g.break_id
         `);
         const one = flat(text);
-        // The comma must land directly after the fragment's closing paren.
-        expect(one).toContain("FROM flagged ), cycle_stats AS (");
+        expect(one).toContain("FROM cycle_stats ) SELECT g.time");
         expect(one.match(/\bWITH\b/g)).toHaveLength(1);
     });
 
