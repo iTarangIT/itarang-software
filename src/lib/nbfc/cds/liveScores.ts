@@ -18,13 +18,10 @@
  * explainability route): the most recent 6 ELAPSED installments
  * (due on/before today), newest first — the borrower's trailing record.
  */
-import { and, desc, eq, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, lte } from "drizzle-orm";
 import { db as defaultDb } from "@/lib/db";
-import {
-  emiSchedules,
-  nbfcLoanRestructures,
-  telemetryIngestionLog,
-} from "@/lib/db/schema";
+import { emiSchedules, nbfcLoanRestructures, nbfcLoans } from "@/lib/db/schema";
+import { getVehicleStates } from "@/lib/db/iot-queries";
 import {
   CDS_EMI_HISTORY_DEPTH,
   computeCdsForLoan,
@@ -33,6 +30,76 @@ import {
 import { pciFromEmis } from "../pci/computePci";
 
 type DbLike = typeof defaultDb;
+
+/**
+ * Most recent telemetry contact per loan, read from the LIVE IoT `vehicle_state`
+ * (each loan's own battery, via `nbfc_loans.vehicleno`).
+ *
+ * NOT `telemetry_ingestion_log`: that ledger is only written by the device-push
+ * `/api/iot/ingest` path, which is unused in this deployment (telemetry is read
+ * live from the IoT DB). It is empty, so every loan saw `telemetryIngestedAt =
+ * null` — which pinned CDS confidence at MEDIUM for every borrower (the HIGH
+ * branch requires fresh telemetry) and silently zeroed the stale-telemetry risk
+ * term. `computePortfolioFreshness` was repointed off the same dead ledger for
+ * the same reason; this is that fix applied to scoring.
+ *
+ * We use `last_gps_at` specifically — the same field the Battery Monitoring
+ * freshness badge classifies — so a row's Conf. and Freshness columns agree.
+ * GPS is streamed live; `telemetry_battery` is backfilled in daily batches and
+ * would read ~12h stale even on a healthy device.
+ *
+ * If the IoT DB is unreachable we return nulls rather than throwing: scoring
+ * degrades to MEDIUM confidence with no telemetry penalty, which is honest — we
+ * cannot confirm the battery is reporting.
+ */
+export async function resolveLoanTelemetryAt(
+  tenantId: string,
+  loanIds: string[],
+  opts?: { db?: DbLike },
+): Promise<Map<string, Date | null>> {
+  const dbi = opts?.db ?? defaultDb;
+  const byLoan = new Map<string, Date | null>();
+  if (loanIds.length === 0) return byLoan;
+
+  const loanRows = await dbi
+    .select({
+      loan_application_id: nbfcLoans.loan_application_id,
+      vehicleno: nbfcLoans.vehicleno,
+    })
+    .from(nbfcLoans)
+    .where(
+      and(
+        eq(nbfcLoans.tenant_id, tenantId),
+        inArray(nbfcLoans.loan_application_id, loanIds),
+        isNotNull(nbfcLoans.vehicleno),
+      ),
+    );
+  if (loanRows.length === 0) return byLoan;
+
+  const vehiclenos = [
+    ...new Set(
+      loanRows.map((r) => r.vehicleno).filter((v): v is string => !!v),
+    ),
+  ];
+
+  const lastSeenByVehicle = new Map<string, Date | null>();
+  try {
+    for (const s of await getVehicleStates(vehiclenos)) {
+      lastSeenByVehicle.set(s.vehicleno, s.last_gps_at ?? null);
+    }
+  } catch {
+    // IoT DB unreachable / tunnel down — leave the map empty (all null).
+    return byLoan;
+  }
+
+  for (const r of loanRows) {
+    byLoan.set(
+      String(r.loan_application_id),
+      lastSeenByVehicle.get(r.vehicleno!) ?? null,
+    );
+  }
+  return byLoan;
+}
 
 export interface LiveScore {
   cds_score: number;
@@ -92,15 +159,10 @@ export async function computeLiveScores(
     }
   }
 
-  // Freshest telemetry ingestion for the tenant — one query, shared across all
-  // loans (the CDS telemetry term is tenant-level staleness, per the job).
-  const [tel] = await dbi
-    .select({ ingested_at: telemetryIngestionLog.ingested_at })
-    .from(telemetryIngestionLog)
-    .where(eq(telemetryIngestionLog.tenant_id, tenantId))
-    .orderBy(desc(telemetryIngestionLog.ingested_at))
-    .limit(1);
-  const telemetryIngestedAt = tel?.ingested_at ?? null;
+  // Freshest telemetry contact per loan, from that loan's own battery.
+  const telemetryByLoan = await resolveLoanTelemetryAt(tenantId, loanIds, {
+    db: dbi,
+  });
 
   // Loans with any restructuring/force-majeure row drop to LOW confidence.
   const restructuredLoans = new Set<string>();
@@ -118,7 +180,7 @@ export async function computeLiveScores(
         status: e.status,
         days_overdue: e.days_overdue ?? null,
       })),
-      telemetryIngestedAt,
+      telemetryIngestedAt: telemetryByLoan.get(loanId) ?? null,
       restructuringFlag: restructuredLoans.has(loanId),
       now,
     });
