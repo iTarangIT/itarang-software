@@ -158,7 +158,7 @@ Constraints:
 - Keep code under 60 lines.
 `;
 
-async function proposeHypotheses(state: State): Promise<Partial<State>> {
+async function proposeHypotheses(state: State): Promise<Partial<State>> {// graph signature
   const model = makeModel();
   const all: HypothesisDraft[] = [];
   let promptTok = 0;
@@ -404,7 +404,7 @@ async function runHandCodedCards(state: State): Promise<Partial<State>> {
   const loans = await getTenantLoanSlice(state.tenantId);
   const hyps = await db.select().from(riskHypotheses).where(eq(riskHypotheses.source, "human"));
   for (const h of hyps) {
-    const evaluator = HAND_CODED_CARDS[h.slug];
+    const evaluator = HAND_CODED_CARDS[h.slug];                    
     if (!evaluator) continue;
     const ev = await evaluator(loans);
     await db.insert(riskCardRuns).values({

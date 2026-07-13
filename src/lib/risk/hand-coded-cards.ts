@@ -213,51 +213,89 @@ async function evalBatterySohDecay(loans: TenantLoanSlice[]): Promise<CardEvalua
 
 // ─── 5. Active loan, low utilization ────────────────────────────────────────
 
+const UTILISATION_WINDOW_DAYS = 14;
+/** Km/day below which an active-EMI vehicle counts as under-utilised. */
+const LOW_UTILISATION_KM_PER_DAY = 20;
+/**
+ * Reporting days a vehicle needs inside the window before its average is a
+ * measurement rather than a guess. Below this we exclude it instead of scoring
+ * it — an unmeasurable vehicle is a coverage problem, not a credit signal.
+ */
+const MIN_ASSESSABLE_DAYS = 7;
+
 async function evalLowUtilizationActiveLoan(loans: TenantLoanSlice[]): Promise<CardEvaluation> {
   const activeWithEmi = loans.filter((l) => l.emi_amount && Number(l.emi_amount) > 0);
   const vehiclenos = vnos(activeWithEmi);
-  const daily = await getDailyKm(vehiclenos, 14);
-  // A vehicle only enters totalsByVno if daily_distance_per_vehicle returned at
-  // least one row for it. Absence therefore means "no telemetry", which must be
-  // treated separately from a genuine 0 km/day — otherwise a missing tracker
-  // masquerades as an idle (risky) vehicle and inflates the alert.
-  const totalsByVno = new Map<string, number>();
-  for (const r of daily) totalsByVno.set(r.vehicleno, (totalsByVno.get(r.vehicleno) ?? 0) + r.km);
+  const daily = await getDailyKm(vehiclenos, UTILISATION_WINDOW_DAYS);
+
+  // Average over the days a vehicle ACTUALLY reported — never over a fixed 14.
+  // distance_rollup emits a row (often ~0.01 km) for a parked-but-powered
+  // vehicle, so a genuinely idle day still lands in the denominator and a truly
+  // idle vehicle still trips the threshold. A MISSING day means the pipeline had
+  // no contact at all; treating those as zero-km days is what let a 10-day
+  // ingestion outage deflate every vehicle's average by 3.5x and fire a false
+  // "2 of 5 under 20 km/day" High Alert while the fleet was doing 50-93 km/day.
+  const statsByVno = new Map<string, { km: number; days: number }>();
+  for (const r of daily) {
+    const s = statsByVno.get(r.vehicleno) ?? { km: 0, days: 0 };
+    s.km += r.km;
+    s.days += 1; // getDailyKm returns exactly one row per (vehicle, day) bucket
+    statsByVno.set(r.vehicleno, s);
+  }
 
   const concerning: Array<{
     vehicleno: string;
     avg_km_per_day: number;
+    days_reported: number;
     emi_amount: number | null;
   }> = [];
   const noTelemetry: string[] = [];
+  const thinCoverage: Array<{ vehicleno: string; days_reported: number }> = [];
+
   for (const loan of activeWithEmi) {
     if (!loan.vehicleno) continue;
-    // No row in the 14-day window → coverage gap, not a measurement. Skip it
-    // from the low-utilisation verdict and record it as an observability note.
-    if (!totalsByVno.has(loan.vehicleno)) {
+    const s = statsByVno.get(loan.vehicleno);
+    // No row at all in the window → no telemetry contact, not a measurement.
+    if (!s || s.days === 0) {
       noTelemetry.push(loan.vehicleno);
       continue;
     }
-    const avgPerDay = totalsByVno.get(loan.vehicleno)! / 14;
-    if (avgPerDay < 20) {
+    // Some rows, but too few days to average over honestly.
+    if (s.days < MIN_ASSESSABLE_DAYS) {
+      thinCoverage.push({ vehicleno: loan.vehicleno, days_reported: s.days });
+      continue;
+    }
+    const avgPerDay = s.km / s.days;
+    if (avgPerDay < LOW_UTILISATION_KM_PER_DAY) {
       concerning.push({
         vehicleno: loan.vehicleno,
         avg_km_per_day: avgPerDay,
+        days_reported: s.days,
         emi_amount: loan.emi_amount,
       });
     }
   }
   concerning.sort((a, b) => a.avg_km_per_day - b.avg_km_per_day);
 
-  // Denominator is the observable population — vehicles that actually reported
-  // telemetry — not every active-EMI loan. Judging coverage-gap vehicles as
-  // "low utilisation" is what produced the false 7/7 High Alert on seed data.
-  const observable = activeWithEmi.length - noTelemetry.length;
+  // Denominator is the ASSESSABLE population — vehicles with enough reporting
+  // days to have a real average. Vehicles with no telemetry, or too thin a
+  // window to judge, are excluded and surfaced as coverage notes rather than
+  // scored as idle.
+  const observable = activeWithEmi.length - noTelemetry.length - thinCoverage.length;
   const severity = pickSeverity(concerning.length / Math.max(observable, 1), 0.1, 0.04);
 
-  const gapNote =
+  const noTelemetryNote =
     noTelemetry.length > 0
-      ? `${noTelemetry.length} of ${activeWithEmi.length} active-EMI vehicles had NO telemetry in the last 14 days — excluded from this metric (see "Past-due + telemetry silent" for the coverage signal).`
+      ? `${noTelemetry.length} of ${activeWithEmi.length} active-EMI vehicles had NO telemetry in the last ${UTILISATION_WINDOW_DAYS} days — excluded (see "Past-due + telemetry silent" for the coverage signal).`
+      : null;
+  const thinCoverageNote =
+    thinCoverage.length > 0
+      ? `${thinCoverage.length} of ${activeWithEmi.length} active-EMI vehicles reported on fewer than ${MIN_ASSESSABLE_DAYS} of the last ${UTILISATION_WINDOW_DAYS} days (${thinCoverage
+          .slice(0, 10)
+          .map((t) => `${t.vehicleno}: ${t.days_reported}d`)
+          .join(
+            ", ",
+          )}) — excluded as unmeasurable. A fleet-wide shortfall here means the telemetry pipeline has a gap, not that borrowers stopped driving.`
       : null;
 
   return {
@@ -265,18 +303,19 @@ async function evalLowUtilizationActiveLoan(loans: TenantLoanSlice[]): Promise<C
     severity,
     finding_summary:
       observable === 0
-        ? `No telemetry for any of ${activeWithEmi.length} active-EMI vehicles — utilisation cannot be assessed.`
+        ? `Utilisation not assessable — none of the ${activeWithEmi.length} active-EMI vehicles reported on at least ${MIN_ASSESSABLE_DAYS} of the last ${UTILISATION_WINDOW_DAYS} days.`
         : concerning.length === 0
-          ? `No telemetry-reporting active-loan vehicles below 20 km/day (${observable} assessed).`
-          : `${concerning.length} of ${observable} telemetry-reporting vehicles averaged <20 km/day in the last 14 days.`,
+          ? `No assessable active-loan vehicles below ${LOW_UTILISATION_KM_PER_DAY} km/day (${observable} assessed).`
+          : `${concerning.length} of ${observable} assessable vehicles averaged <${LOW_UTILISATION_KM_PER_DAY} km/day across the days they reported.`,
     affected_count: concerning.length,
     total_count: observable,
     evidence: {
       sample_rows: concerning.slice(0, 10),
       notes: [
-        "Threshold: <20 km/day average over 14 days.",
-        "Only vehicles with ≥1 telemetry row in the window are assessed; missing telemetry is not counted as 0 km.",
-        ...(gapNote ? [gapNote] : []),
+        `Threshold: <${LOW_UTILISATION_KM_PER_DAY} km/day, averaged over the days each vehicle actually reported inside a ${UTILISATION_WINDOW_DAYS}-day window.`,
+        `Vehicles with fewer than ${MIN_ASSESSABLE_DAYS} reporting days are excluded — a missing day is a pipeline gap, not a zero-km day.`,
+        ...(noTelemetryNote ? [noTelemetryNote] : []),
+        ...(thinCoverageNote ? [thinCoverageNote] : []),
         "Phase B: tier this by region (rural vs urban have different utilisation norms).",
       ],
     },

@@ -17,7 +17,7 @@
  * (E-029 normally seeds it; this is a fallback so the PCI job is independently
  * runnable in tests and in environments where CDS hasn't run yet).
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lte } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   borrowerRiskScores,
@@ -26,6 +26,7 @@ import {
 } from "@/lib/db/schema";
 
 export const PCI_LOW_THRESHOLD = 0.4;
+export const PCI_HEALTHY_THRESHOLD = 0.75;
 export const EMI_HISTORY_DEPTH = 6; // last N EMIs considered
 
 export interface PciRunResult {
@@ -58,27 +59,125 @@ export function emiScore(row: EmiRow): number {
   return 0.0;
 }
 
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
+/** Per-EMI line of the PCI math, in display order (newest first). */
+export type PciEmiBreakdown = {
+  position: number; // 0 = newest
+  status: string | null;
+  days_overdue: number | null;
+  emi_score: number; // 1.0 on time / 0.5 late / 0.0 missed
+  weight: number; // n - position (newest carries the most)
+  weighted: number; // emi_score × weight
+  contribution: number; // weighted ÷ total_weight (sums to pci_score)
+};
+
 /**
- * Compute PCI from a list of EMIs ordered most-recent-first. The weight schema
- * is linear-by-rank so the most recent EMI carries the highest weight without
- * starving older history.
+ * Every intermediate term behind a PCI number — the single source of truth for
+ * both the nightly job (which only needs the final score) and the
+ * explainability surface (which needs the whole derivation). Mirrors
+ * `CdsBreakdown`; keeping the math here means the drawer can never drift from
+ * the score it explains.
+ */
+export type PciBreakdown = {
+  per_emi: PciEmiBreakdown[];
+  emi_count: number; // n, the EMIs in the window (≤ EMI_HISTORY_DEPTH)
+  weighted_sum: number; // Σ (emi_score × weight)
+  total_weight: number; // Σ weight = n(n+1)/2
+  raw_score: number; // weighted_sum ÷ total_weight, pre-clamp
+  pci_score: number; // clamped 0..1, rounded to 3 decimals
+  band: "healthy" | "monitoring" | "high_concern";
+};
+
+/**
+ * Compute the full PCI derivation for a single loan from EMIs ordered
+ * most-recent-first. The weight schema is linear-by-rank so the most recent
+ * EMI carries the highest weight without starving older history.
+ */
+export function computePciBreakdown(rowsRecentFirst: EmiRow[]): PciBreakdown {
+  const window = rowsRecentFirst.slice(0, EMI_HISTORY_DEPTH);
+  const n = window.length;
+  const total_weight = (n * (n + 1)) / 2;
+
+  const per_emi: PciEmiBreakdown[] = [];
+  let weighted_sum = 0;
+  window.forEach((row, idx) => {
+    const score = emiScore(row);
+    const weight = n - idx; // most recent gets weight n, oldest gets 1
+    const weighted = score * weight;
+    weighted_sum += weighted;
+    per_emi.push({
+      position: idx,
+      status: row.status ?? null,
+      days_overdue: row.days_overdue ?? null,
+      emi_score: score,
+      weight,
+      weighted: round3(weighted),
+      contribution: total_weight > 0 ? round3(weighted / total_weight) : 0,
+    });
+  });
+
+  const raw = total_weight > 0 ? weighted_sum / total_weight : 0;
+  const pci_score = round3(Math.max(0, Math.min(1, raw)));
+
+  return {
+    per_emi,
+    emi_count: n,
+    weighted_sum: round3(weighted_sum),
+    total_weight,
+    raw_score: round3(raw),
+    pci_score,
+    band:
+      pci_score < PCI_LOW_THRESHOLD
+        ? "high_concern"
+        : pci_score > PCI_HEALTHY_THRESHOLD
+          ? "healthy"
+          : "monitoring",
+  };
+}
+
+/**
+ * Compute PCI from a list of EMIs ordered most-recent-first. Thin wrapper over
+ * `computePciBreakdown` so the score and its explanation are produced by the
+ * exact same arithmetic.
  */
 export function pciFromEmis(rowsRecentFirst: EmiRow[]): number {
   if (rowsRecentFirst.length === 0) return 0;
-  const n = Math.min(rowsRecentFirst.length, EMI_HISTORY_DEPTH);
-  let weighted = 0;
-  let totalWeight = 0;
-  for (let i = 0; i < n; i++) {
-    const weight = n - i; // most recent gets weight n, oldest gets 1
-    weighted += emiScore(rowsRecentFirst[i]) * weight;
-    totalWeight += weight;
-  }
-  if (totalWeight === 0) return 0;
-  const pci = weighted / totalWeight;
-  // Clamp + round to 3 decimals.
-  const clamped = Math.max(0, Math.min(1, pci));
-  return Math.round(clamped * 1000) / 1000;
+  return computePciBreakdown(rowsRecentFirst).pci_score;
 }
+
+/**
+ * Plain-language reference for the PCI inputs — surfaced in the explainability
+ * drawer so an NBFC partner unfamiliar with the fields can read the rules
+ * behind each number. Mirrors CDS_EMI_WEIGHT_RULES.
+ */
+export const PCI_EMI_SCORE_RULES: {
+  label: string;
+  condition: string;
+  score: number;
+}[] = [
+  {
+    label: "Paid on time",
+    condition: "status = paid, or paid on/before the due date",
+    score: 1.0,
+  },
+  {
+    label: "Paid late (< 7 days)",
+    condition: "status = paid_late, or paid 1–6 days after the due date",
+    score: 0.5,
+  },
+  {
+    label: "Missed / overdue",
+    condition: "anything else — missed, overdue, still unpaid past due",
+    score: 0.0,
+  },
+];
+
+export const PCI_WEIGHT_RULE = `The newest elapsed EMI carries weight n, the next n−1, down to 1 for the oldest — where n is the number of EMIs in the window (at most ${EMI_HISTORY_DEPTH}). Weights are normalised by their sum, n(n+1)÷2.`;
+
+export const PCI_BAND_RULE = `PCI above ${PCI_HEALTHY_THRESHOLD} is healthy; ${PCI_LOW_THRESHOLD}–${PCI_HEALTHY_THRESHOLD} is monitoring; below ${PCI_LOW_THRESHOLD} is high concern and fires a pci_low risk alert.`;
 
 /**
  * Group EMI rows by loan_sanction_id (string keys to avoid uuid/string type
@@ -103,9 +202,16 @@ export async function computePciForAllLoans(opts?: {
   tenantId?: string;
 }): Promise<PciRunResult> {
   const runAt = new Date();
-  // Pull all EMIs ordered most-recent-first per loan. We do the grouping in JS
-  // because the dataset is small (only active loans, ≤6 per loan) and Drizzle
-  // doesn't have a portable LATERAL JOIN abstraction.
+  // Pull the ELAPSED EMIs (due on/before today) ordered most-recent-first per
+  // loan. We do the grouping in JS because the dataset is small (only active
+  // loans, ≤6 per loan) and Drizzle doesn't have a portable LATERAL JOIN
+  // abstraction.
+  //
+  // The `due_date <= today` filter is load-bearing: without it the newest-first
+  // ordering puts the furthest-FUTURE installments first, all status='scheduled'
+  // and therefore emiScore 0, so every loan scored a flat PCI of 0.000. Matches
+  // the window used by liveScores.ts and the explainability route.
+  const today = runAt.toISOString().slice(0, 10);
   const allEmis = await db
     .select({
       loan_sanction_id: emiSchedules.loan_sanction_id,
@@ -115,6 +221,7 @@ export async function computePciForAllLoans(opts?: {
       days_overdue: emiSchedules.days_overdue,
     })
     .from(emiSchedules)
+    .where(lte(emiSchedules.due_date, today))
     .orderBy(desc(emiSchedules.due_date));
 
   const grouped = groupByLoan(
@@ -145,7 +252,7 @@ export async function computePciForAllLoans(opts?: {
       .orderBy(desc(borrowerRiskScores.computed_at))
       .limit(1);
 
-    let row = latestRows[0];
+    const row = latestRows[0];
     if (!row) {
       // No prior CDS run for this loan — skip silently rather than fabricate
       // a tenant_id/borrower_id we don't have. The CDS job (E-029) is the
