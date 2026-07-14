@@ -1,13 +1,24 @@
 'use client';
 
 import { cn } from '@/lib/utils';
-import { LayoutDashboard, Map, Heart, Bell, Wrench, Database } from 'lucide-react';
+import { LayoutDashboard, Map, Heart, Bell, Wrench, Database, BatteryCharging } from 'lucide-react';
 
-export type IntellicarTab = 'fleet' | 'trips' | 'health' | 'alerts' | 'devices' | 'database';
+export type IntellicarTab =
+    | 'fleet'
+    | 'battery'
+    | 'trips'
+    | 'health'
+    | 'alerts'
+    | 'devices'
+    | 'database';
 
 const tabs: { id: IntellicarTab; label: string; icon: React.ElementType }[] = [
     { id: 'fleet', label: 'Fleet Overview', icon: LayoutDashboard },
-    { id: 'trips', label: 'Trip Analytics', icon: Map },
+    { id: 'battery', label: 'Battery Analytics', icon: BatteryCharging },
+    // Named for what it can actually show. The `trips` table is empty fleet-wide (the iot_stack
+    // segmentation job has never run), so there is no per-trip detail to analyse — only daily
+    // distance per vehicle, which is real and populated.
+    { id: 'trips', label: 'Fleet Activity', icon: Map },
     { id: 'health', label: 'Health & Analytics', icon: Heart },
     { id: 'alerts', label: 'Alerts & Rules', icon: Bell },
     { id: 'devices', label: 'Device Management', icon: Wrench },

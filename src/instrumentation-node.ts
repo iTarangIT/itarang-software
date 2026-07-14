@@ -197,3 +197,169 @@ export async function startZohoSyncTicker() {
 
   console.log("[instrumentation] zoho-sync (1h) started in-process");
 }
+
+// ---------------------------------------------------------------------------
+// peakAmp buyback — notification dispatch (M20).
+//
+// BRD §6 says "notifications via BullMQ, never inline". BullMQ is dead code in
+// this repo: production declares no worker process at all, the sandbox worker is
+// deliberately dormant (autorestart: false, no ENABLE_CALL_WORKER — it logs
+// "disabled" and exits), and callQueue.add() is never called anywhere. Vercel
+// crons do not fire on the pm2 VPS either. An in-process ticker is the only
+// mechanism that demonstrably runs in BOTH sandbox and production — it is how
+// the dialer above and the Zoho sync actually work.
+//
+// "Never inline" is still honoured, and that is the part that matters: a route
+// COMMITS the event inside its transaction and returns. The send happens out
+// here, so a slow mail provider can never make an admin's click hang, and a
+// bounced email can never roll back a state change that really happened.
+//
+// dispatchPending() is the unit of work. Swapping this ticker for a real queue
+// consumer later changes the caller, not the logic.
+// ---------------------------------------------------------------------------
+export async function startBuybackDispatchTicker() {
+  const DISPATCH_INTERVAL_MS = 30_000;
+  const BATCH = 20;
+
+  let inFlight = false;
+
+  const tick = async () => {
+    if (inFlight) return; // a slow provider must not stack ticks
+    inFlight = true;
+    try {
+      const { dispatchPending } = await import("@/lib/buyback/dispatch");
+      const r = await dispatchPending(BATCH);
+
+      if (r.claimed > 0) {
+        console.log(
+          `[instrumentation:buyback-dispatch] claimed=${r.claimed} sent=${r.sent} ` +
+            `failed=${r.failed} exhausted=${r.exhausted}`,
+        );
+      }
+      if (r.exhausted > 0) {
+        console.error(
+          `[instrumentation:buyback-dispatch] ${r.exhausted} event(s) hit the retry ceiling ` +
+            `and are marked FAILED — a dealer or vendor was NOT told something. Investigate.`,
+        );
+      }
+    } catch (err) {
+      // Never let a dispatch failure kill the ticker: the events are durable and
+      // still PENDING, so the next tick retries them.
+      console.error(
+        "[instrumentation:buyback-dispatch] tick failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  // Staggered behind the dialer (5s) and Zoho (20s) kickoffs.
+  const kickoff = setTimeout(tick, 35_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const interval = setInterval(tick, DISPATCH_INTERVAL_MS);
+  if (typeof interval.unref === "function") interval.unref();
+
+  console.log("[instrumentation] buyback-dispatch (30s) started in-process");
+}
+
+// ---------------------------------------------------------------------------
+// peakAmp buyback — nightly photo dedup + the weekly price-review nudge (M03/M16).
+//
+// Same runtime argument as the dispatcher above: BullMQ is dead code here and
+// Vercel crons do not fire on pm2, so an in-process ticker is the only mechanism
+// that demonstrably runs in both sandbox and production.
+//
+// The dedup sweep is the one that earns its keep. It hashes new photos and flags
+// any whose hash matches an EARLIER photo — and when the two photos belong to
+// DIFFERENT DEALERS, that is the same battery being sold to iTarang twice. That
+// flag goes straight to the admins' bell (M03 AC).
+// ---------------------------------------------------------------------------
+export async function startBuybackDedupTicker() {
+  const SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000; // 4× a day; "nightly" with a margin
+  const NUDGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+  let inFlight = false;
+
+  const sweep = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const { runDedupSweep } = await import("@/lib/buyback/dedup");
+      const r = await runDedupSweep(200);
+
+      if (r.hashed || r.flagged) {
+        console.log(
+          `[instrumentation:buyback-dedup] hashed=${r.hashed} failed=${r.hashFailed} ` +
+            `flagged=${r.flagged} crossDealer=${r.crossDealer}`,
+        );
+      }
+      if (r.crossDealer > 0) {
+        console.warn(
+          `[instrumentation:buyback-dedup] ${r.crossDealer} photo(s) matched an upload by a ` +
+            `DIFFERENT dealer — the same battery may be being sold twice. Admins notified.`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:buyback-dedup] sweep failed:",
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const nudge = async () => {
+    try {
+      const { checkPriceReviewDue } = await import("@/lib/buyback/catalog");
+      await checkPriceReviewDue();
+    } catch (err) {
+      console.error(
+        "[instrumentation:buyback-price-nudge] failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  };
+
+  // M19 — poll Digio for agreements out for signature, and ACTIVATE the role of
+  // anyone who has signed. This is what actually lets an entity trade: a vendor
+  // whose business_entity_roles row is not ACTIVE is invisible to the routing
+  // query. Polled rather than webhook-driven — see src/lib/buyback/agreement.ts
+  // for why, but the short version is that a webhook which is never delivered
+  // fails silently forever, and a poller catches up on its next tick.
+  const AGREEMENT_INTERVAL_MS = 2 * 60 * 1000;
+
+  const syncTick = async () => {
+    try {
+      const { syncAgreements } = await import("@/lib/buyback/agreement");
+      const r = await syncAgreements();
+      if (r.signed || r.declined) {
+        console.log(
+          `[instrumentation:buyback-agreements] checked=${r.checked} signed=${r.signed} declined=${r.declined}`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[instrumentation:buyback-agreements] sync failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  };
+
+  const agreementInterval = setInterval(syncTick, AGREEMENT_INTERVAL_MS);
+  if (typeof agreementInterval.unref === "function") agreementInterval.unref();
+
+  // Staggered behind the dialer (5s), Zoho (20s) and dispatch (35s) kickoffs.
+  const kickoff = setTimeout(sweep, 60_000);
+  if (typeof kickoff.unref === "function") kickoff.unref();
+
+  const sweepInterval = setInterval(sweep, SWEEP_INTERVAL_MS);
+  if (typeof sweepInterval.unref === "function") sweepInterval.unref();
+
+  const nudgeInterval = setInterval(nudge, NUDGE_INTERVAL_MS);
+  if (typeof nudgeInterval.unref === "function") nudgeInterval.unref();
+
+  console.log("[instrumentation] buyback-dedup (6h) + price-review nudge (24h) started in-process");
+}

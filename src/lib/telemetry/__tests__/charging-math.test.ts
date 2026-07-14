@@ -4,6 +4,8 @@ import {
     COVERAGE_TRUST_GAP_S,
     MIN_COVERAGE_PCT,
     ahIncrement,
+    avgSamplingIntervalS,
+    capacityConfidence,
     capacityPlausible,
     extrapolateCapacity,
 } from "@/lib/telemetry/charging-math";
@@ -46,42 +48,96 @@ describe("ahIncrement", () => {
 describe("extrapolateCapacity", () => {
     it("extrapolates a well-covered, large swing to 100%", () => {
         // 78.2 Ah added over 74% of the pack → 105.7 Ah full capacity.
-        expect(extrapolateCapacity(78.2, 74, 100)).toBe(105.7);
+        expect(extrapolateCapacity(78.2, 74)).toBe(105.7);
     });
 
     it("estimates at exactly the swing threshold", () => {
         expect(CAPACITY_SOC_THRESHOLD).toBe(20);
-        expect(extrapolateCapacity(21, 20, 100)).toBe(105);
+        expect(extrapolateCapacity(21, 20)).toBe(105);
     });
 
-    it("declines to estimate a small top-up rather than amplifying its noise", () => {
-        // Dividing by ΔSOC/100 multiplies any error in the AH total by 100/ΔSOC. At a
-        // 5% swing that is x20 — and against real fleet data, ungated cycles produced a
-        // 191 Ah estimate on a 105 Ah pack. That is the whole reason for the gate.
-        expect(extrapolateCapacity(5.2, 5, 100)).toBeNull();
-        expect(extrapolateCapacity(52.5, 19.9, 100)).toBeNull();
+    it("estimates a small top-up rather than withholding the number", () => {
+        // This REVERSES the old behaviour, deliberately. Dividing by ΔSOC/100 multiplies any
+        // error in the Ah total by 100/ΔSOC, so a small swing is genuinely untrustworthy — but
+        // the answer to an untrustworthy number is a confidence grade, not silence. Withholding
+        // it told the reader nothing; the number plus its grade tells them what to do with it.
+        expect(extrapolateCapacity(5.2, 5)).toBe(104);
+        expect(extrapolateCapacity(52.5, 19.9)).toBe(263.8);
+
+        // ...and both are graded honestly.
+        expect(capacityConfidence(5, 100, 30)).toBe("low");
+        expect(capacityConfidence(19.9, 100, 30)).toBe("medium");
+    });
+
+    it("refuses only when the arithmetic itself is impossible", () => {
+        // A non-positive swing has no capacity to extrapolate. That is the ONLY refusal left.
+        expect(extrapolateCapacity(10, 0)).toBeNull();
+        expect(extrapolateCapacity(10, -5)).toBeNull();
+        expect(extrapolateCapacity(10, null)).toBeNull();
     });
 
     it("keeps a sub-50% cycle, which the old threshold threw away", () => {
         // The regression this change exists to prevent: a 37% swing is a perfectly good
         // charge. Under the old 50% gate only 2 of 34 detected cycles survived.
-        expect(extrapolateCapacity(36.76, 37, 100)).toBe(99.4);
-        expect(extrapolateCapacity(23.17, 22, 8)).toBe(105.3);
+        expect(extrapolateCapacity(36.76, 37)).toBe(99.4);
+        expect(extrapolateCapacity(23.17, 22)).toBe(105.3);
     });
 
-    it("plots a low-coverage cycle by default rather than dropping it", () => {
-        // Coverage is a confidence signal, not a filter: MIN_COVERAGE_PCT defaults to 0.
-        // A 70% floor cut 13 usable cycles down to 2 without removing a single
-        // implausible estimate, so it is reported on the point instead of hiding it.
-        expect(MIN_COVERAGE_PCT).toBe(0);
-        expect(extrapolateCapacity(78.2, 74, 3)).toBe(105.7);
-        expect(extrapolateCapacity(78.2, 74, null)).toBe(105.7);
+    it("grades a cycle integrated across too little real data, rather than deleting it", () => {
+        // The estimate now stands whatever the coverage — coverage decides how far to TRUST it,
+        // not whether it exists. A 40 Ah reading on a 105 Ah pack is still wrong; the difference
+        // is that it now arrives labelled low instead of vanishing without explanation.
+        expect(MIN_COVERAGE_PCT).toBe(15);
+
+        // The arithmetic does not know about coverage, and must not: the SAME swing and the SAME
+        // Ah give the SAME number every time. Only the grade beside it moves.
+        expect(extrapolateCapacity(78.2, 74)).toBe(105.7);
+        expect(capacityConfidence(74, 90, 30)).toBe("high");
+        expect(capacityConfidence(74, 10, 30)).toBe("medium");
+        expect(capacityConfidence(74, 3, 30)).toBe("low");
+        // Unknown coverage is not evidence of good coverage.
+        expect(capacityConfidence(74, null, 30)).toBe("low");
+    });
+});
+
+describe("capacityConfidence — the grade that replaced the gates", () => {
+    it("needs the swing, the coverage AND the samples to call an estimate solid", () => {
+        // A cycle is only as good as its worst evidence: each of the three independently wrecks
+        // the extrapolation, so `high` requires all three.
+        expect(capacityConfidence(74, 90, 30)).toBe("high");
+        expect(capacityConfidence(2, 90, 30)).toBe("low"); // swing amplifies error x50
+        expect(capacityConfidence(74, 1, 30)).toBe("low"); // current was interpolated, not seen
+        // Two samples describe ONE interval — a straight line through an entire charge. A perfect
+        // swing and perfect coverage cannot rescue an integral that has nothing to integrate.
+        expect(capacityConfidence(74, 90, 2)).toBe("low");
+        expect(capacityConfidence(74, 90, 3)).toBe("medium");
     });
 
-    it("declines to estimate when the swing is unknown or did not rise", () => {
-        expect(extrapolateCapacity(0, null, 100)).toBeNull();
-        expect(extrapolateCapacity(10, 0, 100)).toBeNull();
-        expect(extrapolateCapacity(10, -5, 100)).toBeNull();
+    it("never returns high for a swing below the amplification threshold", () => {
+        expect(CAPACITY_SOC_THRESHOLD).toBe(20);
+        expect(capacityConfidence(CAPACITY_SOC_THRESHOLD - 0.1, 100, 50)).not.toBe("high");
+        expect(capacityConfidence(CAPACITY_SOC_THRESHOLD, 100, 50)).toBe("high");
+    });
+
+    it("is low when there is nothing to extrapolate at all", () => {
+        expect(capacityConfidence(0, 100, 50)).toBe("low");
+        expect(capacityConfidence(null, 100, 50)).toBe("low");
+    });
+});
+
+describe("avgSamplingIntervalS", () => {
+    it("divides by n-1 intervals, not n samples", () => {
+        // 5 samples bound FOUR intervals. Dividing by 5 understates the spacing by a whole
+        // interval — a 25% error in the very number a reader uses to judge every other number.
+        expect(avgSamplingIntervalS(4000, 5)).toBe(1000);
+        expect(avgSamplingIntervalS(3600, 2)).toBe(3600);
+    });
+
+    it("declines when there is no interval to measure", () => {
+        // One sample bounds no interval at all — there is nothing to average.
+        expect(avgSamplingIntervalS(3600, 1)).toBeNull();
+        expect(avgSamplingIntervalS(0, 10)).toBeNull();
+        expect(avgSamplingIntervalS(null, 10)).toBeNull();
     });
 });
 
@@ -173,7 +229,7 @@ describe("the reference cycle from CAN Data.xlsx", () => {
     });
 
     it("estimates 94.0 Ah — consistent with the 105 Ah nameplate, not the sheet's 19.26", () => {
-        const capacity = extrapolateCapacity(totalAh, socChange, coveragePct);
+        const capacity = extrapolateCapacity(totalAh, socChange);
         expect(capacity).toBe(94);
         expect(capacity).not.toBe(19.26);
         expect(capacityPlausible(capacity, 105)).toBe(true);

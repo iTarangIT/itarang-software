@@ -21,6 +21,16 @@ if (process.env.EXCEL_REPORT === '1') {
   ]);
 }
 
+// Single business-facing Excel deliverable → reports/. Always emitted (even on
+// failures) because the reporter writes in onEnd. Enabled by the
+// `test:e2e:workflows` npm script.
+if (process.env.WORKFLOW_REPORT === '1') {
+  reporters.push([
+    './tests/reporters/workflow-report.ts',
+    { outputDir: 'reports' },
+  ]);
+}
+
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 300_000,

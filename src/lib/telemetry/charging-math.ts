@@ -42,12 +42,35 @@ export interface AhStep {
 }
 
 /**
- * A gap longer than this ends the charging session. Sized to the real sample
- * cadence of telemetry_can (median 510 s, p90 ~2,010 s, max ~3,900 s), not to the
- * device's nominal 30 s stream. The previous value of 1200 s split genuine
- * sessions in half, because it sat below the p90 gap between stored samples.
+ * A gap longer than this ends the charging session. Sized to the real sample cadence
+ * of telemetry_can, not to the device's nominal 30 s stream. An earlier value of
+ * 1200 s split genuine sessions in half because it sat below the p90 gap between
+ * stored samples.
+ *
+ * Declared after envNumber() rather than beside the other timing constants because it
+ * is tuned against a cadence that keeps moving: the poller's spacing has drifted from
+ * a p90 of ~2,010 s to ~3,720 s, which is *above* the old hardcoded 3,600 s — so the
+ * gap rule alone was cutting real charges in two. Override with
+ * TELEMETRY_SESSION_GAP_MAX_S and re-run scripts/diagnose-charging-cycles.ts, which
+ * reports both the valid-cycle count and the interior-idle merges the value trades
+ * against.
+ *
+ * 7200 is where the count stops being wrong. Measured against a limb scan of the raw
+ * SOC series on the reference battery (62 real charges over 6 months):
+ *
+ *   gap    cycles counted   verdict
+ *   3600      40            under-count by 22 (35% of real charges missed)
+ *   5400      63            over-count by 1
+ *   7200      62            exact match
+ *   10800     62            exact match
+ *
+ * 7200 rather than 10800 because both land on the ground truth and the smaller value
+ * has less room to stitch two charges together across an idle. It is not free: two of
+ * the 62 runs merge a charge -> long flat idle -> charge into one. SOC alone cannot
+ * separate those, and neither can the limb scan, so the count agrees with the yardstick
+ * while both share that blind spot. See docs/intellicar-calculations.md §2.
  */
-export const SESSION_GAP_MAX_S = 3600;
+export const SESSION_GAP_MAX_S = envNumber("TELEMETRY_SESSION_GAP_MAX_S", 7200);
 
 /**
  * An interval longer than this is not evidence, it is a guess: we are interpolating
@@ -83,16 +106,35 @@ function envNumber(name: string, fallback: number): number {
 export const CAPACITY_SOC_THRESHOLD = envNumber("TELEMETRY_MIN_SOC_DIFFERENCE", 20);
 
 /**
- * Minimum data coverage before a capacity is extrapolated. **Off by default.**
+ * Minimum data coverage before a capacity is extrapolated. **On, at 15%.**
  *
- * Coverage turned out to be nearly redundant once the SOC gate is sane: at a 20%
- * swing, no cycle produces an implausible estimate regardless of coverage, while a
- * 70% coverage floor cut 13 usable cycles down to 2. So it is reported as a
- * confidence signal on every point rather than used to silently drop cycles.
- * Raise it with TELEMETRY_MIN_COVERAGE_PCT if the poller is ever fixed and dense
- * data makes a stricter floor affordable.
+ * This used to be off, on the finding that the SOC gate alone kept every estimate
+ * plausible. That finding was an artefact of the old session rule: it cut charges at
+ * every gap over an hour, so the fragments that survived were, by construction, the
+ * densely-sampled ones. Widening SESSION_GAP_MAX_S to 7200 (see above) keeps whole
+ * charges — including charges integrated across hours of interpolated current — and
+ * the capacity estimates immediately spread out.
+ *
+ * Swept at the 20% SOC gate on the reference battery, after the session fix:
+ *
+ *   coverage   plotted   capacity range   sd
+ *      0%        44       40-148 Ah      17.4     <- a 40 Ah reading on a 105 Ah pack
+ *      5%        27       82-142 Ah      12.1
+ *     10%        16       90-142 Ah      12.3
+ *     15%        12       90-122 Ah       9.7     <- the knee
+ *     20%         7       93-119 Ah       8.8
+ *     40%         3       98-119 Ah       9.9
+ *
+ * 15 is the knee: it halves the scatter and removes the physically impossible
+ * estimates while keeping a 12-point trend. 20 buys another 0.9 of standard deviation
+ * for five of the twelve points, which is a bad trade on a chart that already cannot
+ * resolve year-on-year degradation.
+ *
+ * Coverage is still reported on every point that clears the floor, and the UI still
+ * marks anything under LOW_CONFIDENCE_COVERAGE as indicative. The floor only removes
+ * the estimates that are not measurements at all.
  */
-export const MIN_COVERAGE_PCT = envNumber("TELEMETRY_MIN_COVERAGE_PCT", 0);
+export const MIN_COVERAGE_PCT = envNumber("TELEMETRY_MIN_COVERAGE_PCT", 15);
 
 /**
  * Fewest samples a cycle may have and still be coulomb-counted. Two samples describe
@@ -101,7 +143,27 @@ export const MIN_COVERAGE_PCT = envNumber("TELEMETRY_MIN_COVERAGE_PCT", 0);
  */
 export const MIN_CYCLE_SAMPLES = envNumber("TELEMETRY_MIN_CYCLE_SAMPLES", 5);
 
-/** A cycle smaller than this is a top-up, not a charge worth reporting. */
+/**
+ * A charge must last at least this long to be a charge.
+ *
+ * This **replaces the old `SOC gain >= 5` rejection**, which threw away real top-ups solely
+ * because they were small — and a small charge is still a charge. Duration is the honest test of
+ * whether something physically happened: a 1% SOC tick over two minutes is quantisation noise or
+ * a BMS re-estimate; a 3% gain over twenty minutes, carrying current the whole way, is a driver
+ * topping up at a tea stall.
+ *
+ * Small cycles now survive detection and are graded by capacityConfidence() instead of being
+ * silently deleted. See docs/intellicar-calculations.md §2.
+ */
+export const MIN_CYCLE_DURATION_S = envNumber("TELEMETRY_MIN_CYCLE_DURATION_S", 300);
+
+/**
+ * Retained for the *quality* assessment and for reporting only — **no longer a rejection gate.**
+ *
+ * A cycle below this is a top-up rather than a full charge, which is worth saying on the row. It
+ * is not worth deleting the row over: capacity from a small swing is untrustworthy, not absent,
+ * and withholding the number tells the reader less than the number plus its grade.
+ */
 export const MIN_CYCLE_SOC_GAIN = envNumber("TELEMETRY_MIN_CYCLE_SOC_GAIN", 5);
 
 /**
@@ -151,25 +213,85 @@ export function ahIncrement(step: AhStep): number {
  *
  *     capacity = Ah ÷ (ΔSOC / 100)        where ΔSOC = endSOC − startSOC
  *
- * Declines to estimate only when the arithmetic itself would not survive it — a wrong
- * number here is worse than no number, because it lands on a battery-health chart and
- * gets believed. The division amplifies the Ah total's error by 100/ΔSOC, so below
- * CAPACITY_SOC_THRESHOLD the result is noise wearing a decimal point.
+ * **Computed for EVERY cycle whose SOC actually rose.** The only refusal is arithmetic:
+ * a non-positive ΔSOC has nothing to extrapolate, and dividing by it would be a
+ * divide-by-zero wearing a battery-health label.
  *
- * Coverage is a *second*, optional floor (off by default — see MIN_COVERAGE_PCT). It
- * is reported on every point either way, so a reader can weigh a dip in the trend.
+ * This used to refuse below CAPACITY_SOC_THRESHOLD and below MIN_COVERAGE_PCT, dropping the
+ * cycle from the trend entirely. That is the wrong shape of answer: withholding a number tells
+ * the reader nothing, while a number carrying its own confidence tells them everything they
+ * need to weigh it. The amplification is real — the division multiplies the Ah total's error by
+ * 100/ΔSOC, so a 1% swing amplifies it ×100 — but that is precisely what capacityConfidence()
+ * exists to say.
+ *
+ * **Carry the grade wherever you carry the number.** A `low` estimate must never be plotted on a
+ * degradation trend as though it were a `high` one.
+ *
+ * Coverage is deliberately NOT a parameter here. It decides how far to *trust* the answer, not
+ * what the answer is — that is capacityConfidence()'s job, and taking it as an argument this
+ * function then ignored would be a signature that lies about what it uses.
  */
 export function extrapolateCapacity(
     ahCharged: number,
     socChange: number | null,
-    coveragePct: number | null,
 ): number | null {
     if (socChange == null || socChange <= 0) return null;
-    if (socChange < CAPACITY_SOC_THRESHOLD) return null;
-    if (MIN_COVERAGE_PCT > 0 && (coveragePct == null || coveragePct < MIN_COVERAGE_PCT)) {
-        return null;
-    }
     return Math.round((ahCharged / (socChange / 100)) * 10) / 10;
+}
+
+/** How far a capacity estimate can be trusted. Always travels with the estimate. */
+export type Confidence = "high" | "medium" | "low";
+
+/**
+ * How far can this cycle's capacity be trusted?
+ *
+ * Three things independently wreck the extrapolation, and a cycle is only as good as its worst:
+ *
+ * - **SOC swing.** capacity = Ah ÷ (ΔSOC/100), so error is amplified ×(100/ΔSOC). At 20% that is
+ *   ×5 and the estimates land in a credible band. At 5% it is ×20. At 1% it is ×100, and the
+ *   answer is noise wearing a decimal point.
+ * - **Coverage.** The share of the charge actually observed. Below the floor, the current between
+ *   samples is interpolated, not measured — a straight line drawn through a curve nobody saw.
+ * - **Sample count.** Two samples describe a single interval: one straight line through an entire
+ *   charge. That is not an integral, it is a guess with a slope.
+ *
+ * Graded rather than gated. A cycle we rejected and a cycle we do not trust are different facts,
+ * and the reader is owed the difference.
+ */
+export function capacityConfidence(
+    socChange: number | null,
+    coveragePct: number | null,
+    nSamples: number,
+): Confidence {
+    if (socChange == null || socChange <= 0) return "low";
+
+    const socStrong = socChange >= CAPACITY_SOC_THRESHOLD;
+    const socUsable = socChange >= CAPACITY_SOC_THRESHOLD / 2;
+    const covStrong = (coveragePct ?? 0) >= MIN_COVERAGE_PCT;
+    const covUsable = (coveragePct ?? 0) >= MIN_COVERAGE_PCT / 2;
+    const samplesStrong = nSamples >= MIN_CYCLE_SAMPLES;
+
+    if (socStrong && covStrong && samplesStrong) return "high";
+    if (socUsable && covUsable && nSamples >= 3) return "medium";
+    return "low";
+}
+
+/**
+ * Mean gap between stored samples inside the cycle, in seconds.
+ *
+ * n samples bound **n − 1** intervals, not n. Dividing the duration by the sample count
+ * understates the spacing by a whole interval — on a 5-sample cycle that is a 25% error in the
+ * very number a reader uses to judge how much to trust every other number.
+ *
+ * Reported, never a gate: it says how finely the charge was observed, which is exactly what is
+ * needed to weigh the Ah integral behind it.
+ */
+export function avgSamplingIntervalS(
+    durationS: number | null,
+    nSamples: number,
+): number | null {
+    if (durationS == null || durationS <= 0 || nSamples < 2) return null;
+    return Math.round((durationS / (nSamples - 1)) * 10) / 10;
 }
 
 /**

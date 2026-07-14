@@ -67,11 +67,21 @@ export async function requireAuth() {
   return dbUser;
 }
 
+/**
+ * A role violation is a 403, not a server bug. withErrorHandler honours
+ * `.status` on a thrown error (src/lib/api-utils.ts); without it every
+ * wrong-role call surfaced as a 500 "Internal error" and was indistinguishable
+ * from an outage in the client's error banner.
+ */
+class ForbiddenError extends Error {
+  readonly status = 403;
+}
+
 export async function requireRole(roles: string[]) {
   const user = await requireAuth();
 
   if (!roles.includes(user.role)) {
-    throw new Error("Forbidden: Insufficient permissions");
+    throw new ForbiddenError("Forbidden: Insufficient permissions");
   }
 
   return user;
@@ -93,7 +103,7 @@ export async function requireInventoryAdmin() {
   const user = await requireAuth();
 
   if (!INVENTORY_ADMIN_ROLES.has(user.role)) {
-    throw new Error("Forbidden: Inventory admin role required");
+    throw new ForbiddenError("Forbidden: Inventory admin role required");
   }
 
   return user;

@@ -35,10 +35,59 @@ import {
   UserMinus,
   History,
   X,
+  Recycle,
+  Coins,
+  Truck,
+  BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useUIStore } from "@/store/uiStore";
+
+/**
+ * peakAmp Battery Buyback — the iTarang-staff side.
+ *
+ * Shown to exactly the roles that BUYBACK_ADMIN_ROLES allows
+ * (src/lib/buyback/auth.ts: admin, ceo, business_head). Kept as one shared const
+ * rather than copy-pasted into three role arrays, so the menu cannot drift out of
+ * step with who the API actually lets in — a link a role can see but not open is
+ * worse than no link.
+ */
+const BUYBACK_ADMIN_SECTION = {
+  section: "BATTERY BUYBACK",
+  items: [
+    {
+      id: "buyback-queue",
+      label: "Buyback Requests",
+      icon: Recycle,
+      href: "/admin/buyback",
+    },
+    {
+      id: "buyback-vendors",
+      label: "Scrap Vendors",
+      icon: Truck,
+      href: "/admin/buyback/vendors",
+    },
+    {
+      id: "buyback-catalog",
+      label: "Battery Catalogue",
+      icon: BookOpen,
+      href: "/admin/buyback/catalog",
+    },
+    {
+      id: "buyback-ledger",
+      label: "Transaction History",
+      icon: Coins,
+      href: "/admin/buyback/ledger",
+    },
+    {
+      id: "buyback-statements",
+      label: "Bank Reconciliation",
+      icon: Receipt,
+      href: "/admin/buyback/statements",
+    },
+  ],
+};
 
 // Items appended to every role's sidebar — universal actions any logged-in
 // user can take (currently: submit a business expense → CEO approves).
@@ -193,6 +242,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    BUYBACK_ADMIN_SECTION,
   ],
 
   sales_head: [
@@ -395,6 +445,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    BUYBACK_ADMIN_SECTION,
   ],
 
   sales_manager: [
@@ -625,6 +676,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    BUYBACK_ADMIN_SECTION,
   ],
 
   service_engineer: [
@@ -698,6 +750,7 @@ const roleNavigation: Record<string, any[]> = {
         },
       ],
     },
+    BUYBACK_ADMIN_SECTION,
   ],
 
   finance_controller: [
@@ -928,6 +981,27 @@ const roleNavigation: Record<string, any[]> = {
           label: "Campaigns",
           icon: Megaphone,
           href: "/dealer-portal/campaigns/new",
+        },
+      ],
+    },
+    {
+      // peakAmp — the dealer sells their end-of-life batteries back to iTarang.
+      // Its own section rather than an item under OPERATIONS: this is the dealer
+      // SELLING to iTarang, the opposite direction to everything above it, and
+      // burying it in a list of buying tools is how it goes unnoticed.
+      section: "BATTERY BUYBACK",
+      items: [
+        {
+          id: "buyback",
+          label: "My Buyback Requests",
+          icon: Recycle,
+          href: "/dealer-portal/buyback",
+        },
+        {
+          id: "buyback-new",
+          label: "Sell Batteries",
+          icon: Coins,
+          href: "/dealer-portal/buyback/new",
         },
       ],
     },
