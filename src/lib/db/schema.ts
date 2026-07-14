@@ -2333,8 +2333,27 @@ export const deviceBatteryMap = pgTable("device_battery_map", {
   // E-184 — deployment location for the Intellicar Fleet Overview State/City filters.
   state: text("state"),
   city: text("city"),
+  // E-189 — logical FK to battery_spec_models.model_name; the pack model deployed here.
+  battery_model: varchar("battery_model", { length: 100 }),
   status: varchar({ length: 20 }).default('active'),
   installed_at: timestamp("installed_at", { withTimezone: true }),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+// E-189 — per-model battery spec catalog for Intellicar electrical analytics.
+// One row per pack model; device_battery_map.battery_model maps deployments to it.
+// NULL threshold columns mean "no manufacturer limit recorded" and fall through to
+// the fleet-wide app_settings/env/default resolution (src/lib/telemetry/thresholds.ts).
+export const batterySpecModels = pgTable("battery_spec_models", {
+  model_name: varchar("model_name", { length: 100 }).primaryKey().notNull(),
+  rated_voltage_v: numeric("rated_voltage_v", { precision: 6, scale: 2 }),
+  rated_capacity_ah: numeric("rated_capacity_ah", { precision: 7, scale: 2 }),
+  under_voltage_v: numeric("under_voltage_v", { precision: 6, scale: 2 }),
+  over_voltage_v: numeric("over_voltage_v", { precision: 6, scale: 2 }),
+  over_current_a: numeric("over_current_a", { precision: 6, scale: 2 }),
+  over_temperature_c: numeric("over_temperature_c", { precision: 5, scale: 2 }),
+  notes: text(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });

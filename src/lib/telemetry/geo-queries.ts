@@ -7,6 +7,7 @@
  */
 import { getIotSql } from "@/lib/db/iot";
 import { buildTimeWindow, type ChargingWindowOpts } from "@/lib/telemetry/charging-sql";
+import { windowsCTE } from "@/lib/telemetry/cycle-distance";
 import { gpsCTEs } from "@/lib/telemetry/geo-sql";
 import {
     DWELL_RADIUS_M,
@@ -16,7 +17,10 @@ import {
     NIGHT_END_HOUR,
     NIGHT_START_HOUR,
     geoGates,
+    pickChargingCluster,
+    pickSecondaryOvernight,
 } from "@/lib/telemetry/geo-math";
+import { fetchChargingCycleAggregate } from "@/lib/telemetry/queries";
 
 const num = (v: unknown): number | null =>
     v == null || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null;
@@ -43,6 +47,16 @@ export interface DwellCluster {
     nightHours: number;
     /** Distinct calendar nights it was here overnight. */
     nights: number;
+    /** Most recent IST date it spent night hours here — popup evidence. */
+    lastNight: string | null;
+}
+
+/** The charging spot: a dwell cluster plus its charge-window evidence. */
+export interface ChargingSpot extends DwellCluster {
+    /** Stationary hours inside detected charge-cycle windows at this cell. */
+    chargeHours: number;
+    /** Distinct charge sessions seen at this cell. */
+    chargeSessions: number;
 }
 
 export interface BatteryGeo {
@@ -66,6 +80,17 @@ export interface BatteryGeo {
      * fact, and it is deliberately NOT reverse-geocoded to a street address here.
      */
     home: DwellCluster | null;
+    /**
+     * Where it charges — the grid cell with the most stationary time inside detected
+     * charge-cycle windows, needing ≥ CHARGING_SPOT_MIN_SESSIONS distinct sessions.
+     * Charge windows come from rising-SOC detection; the remote `charging` flag is NULL.
+     */
+    charging: ChargingSpot | null;
+    /**
+     * The SECONDARY overnight place — ranked next by night hours after home, excluding
+     * home's cell. Null when the vehicle only ever sleeps in one place.
+     */
+    overnightSecondary: DwellCluster | null;
     bbox: { minLat: number; maxLat: number; minLon: number; maxLon: number } | null;
     summary: {
         /**
@@ -104,9 +129,10 @@ export async function fetchBatteryGeo(
     const { timePredicate, months, month, from, to } = buildTimeWindow(iot, opts);
     const cte = () => gpsCTEs(iot, vehicleno, timePredicate);
 
-    // Three aggregations over the same chain. Run together — they are independent, and the
-    // chain is cheap next to the round trip.
-    const [heatRows, dwellRows, statRows] = await Promise.all([
+    // Three aggregations over the same chain, plus the charge-cycle aggregate (needed for
+    // the charging-spot windows). Run together — they are independent, and the chain is
+    // cheap next to the round trip.
+    const [heatRows, dwellRows, statRows, charge] = await Promise.all([
         // ── Kilometre heat map ────────────────────────────────────────────────
         // Weighted by DISTANCE, not by fix count. A point-density heat map lights up brightest
         // wherever the vehicle sat longest — which is precisely where it travelled least — and
@@ -164,7 +190,10 @@ export async function fetchBatteryGeo(
                 ) / 3600.0)::numeric, 2)::float                AS night_hours,
                 count(DISTINCT ist_date) FILTER (
                     WHERE hour_ist >= ${NIGHT_START_HOUR} OR hour_ist < ${NIGHT_END_HOUR}
-                )::int                                         AS nights
+                )::int                                         AS nights,
+                max(ist_date) FILTER (
+                    WHERE hour_ist >= ${NIGHT_START_HOUR} OR hour_ist < ${NIGHT_END_HOUR}
+                )::text                                        AS last_night
             FROM dwell
             GROUP BY 1, 2
             ORDER BY hours DESC
@@ -187,7 +216,46 @@ export async function fetchBatteryGeo(
                 min(lon)::float AS min_lon, max(lon)::float AS max_lon
             FROM seg
         `,
+
+        // ── Charge cycles (for the charging-spot windows) ─────────────────────
+        fetchChargingCycleAggregate(vehicleno, opts),
     ]);
+
+    // ── Charging spot ─────────────────────────────────────────────────────────
+    // Stationary time per grid cell INSIDE the detected charge windows, plus how many
+    // distinct sessions each cell hosted. A second wave, because the windows come from
+    // the aggregate above; skipped entirely when no cycle was detected.
+    const chargeWindows = charge.cycles.map((c, i) => ({
+        id: i + 1,
+        start: new Date(c.start_time),
+        end: new Date(c.end_time),
+    }));
+    const chargeCellRows =
+        chargeWindows.length === 0
+            ? []
+            : ((await iot`
+                ${cte()},
+                ${windowsCTE(iot, chargeWindows)},
+                charge_dwell AS (
+                    SELECT
+                        round((s.lat / ${GRID_DEG})::numeric) * ${GRID_DEG} AS glat,
+                        round((s.lon / ${GRID_DEG})::numeric) * ${GRID_DEG} AS glon,
+                        s.dt_s,
+                        w.win_id
+                    FROM seg s
+                    JOIN windows w ON s.time > w.start_time AND s.time <= w.end_time
+                    WHERE s.move_m < ${DWELL_RADIUS_M}
+                      AND s.dt_s IS NOT NULL
+                      AND s.dt_s > 0
+                )
+                SELECT glat, glon,
+                       round((sum(dt_s) / 3600.0)::numeric, 2)::float AS charge_hours,
+                       count(DISTINCT win_id)::int                    AS charge_sessions
+                FROM charge_dwell
+                GROUP BY 1, 2
+                ORDER BY charge_hours DESC
+                LIMIT ${MAX_DWELL_CLUSTERS}
+            `) as unknown as Array<Record<string, unknown>>);
 
     const heat: HeatCell[] = (heatRows as unknown as Array<Record<string, unknown>>).map((r) => ({
         lat: n0(r.glat),
@@ -204,6 +272,7 @@ export async function fetchBatteryGeo(
             visits: n0(r.visits),
             nightHours: n0(r.night_hours),
             nights: n0(r.nights),
+            lastNight: r.last_night != null ? String(r.last_night).slice(0, 10) : null,
         }),
     );
 
@@ -219,6 +288,36 @@ export async function fetchBatteryGeo(
         .filter((d) => d.nights > 0)
         .sort((a, b) => b.nightHours - a.nightHours);
     const home = nightRanked.length > 0 ? nightRanked[0] : null;
+
+    // Charging spot: the winning charge cell, hydrated from the matching dwell cluster
+    // when the cell coincides with one (it usually does — vehicles charge where they sit).
+    const chargeCells = chargeCellRows.map((r) => ({
+        lat: n0(r.glat),
+        lon: n0(r.glon),
+        chargeHours: n0(r.charge_hours),
+        chargeSessions: n0(r.charge_sessions),
+    }));
+    const chargeCell = pickChargingCluster(chargeCells);
+    const chargingDwell = chargeCell
+        ? dwell.find((d) => d.lat === chargeCell.lat && d.lon === chargeCell.lon)
+        : undefined;
+    const charging: ChargingSpot | null = chargeCell
+        ? {
+              // Fall back to the cell's own evidence when it did not crack the dwell top-25.
+              lat: chargeCell.lat,
+              lon: chargeCell.lon,
+              hours: chargingDwell?.hours ?? chargeCell.chargeHours,
+              observedHours: chargingDwell?.observedHours ?? 0,
+              visits: chargingDwell?.visits ?? chargeCell.chargeSessions,
+              nightHours: chargingDwell?.nightHours ?? 0,
+              nights: chargingDwell?.nights ?? 0,
+              lastNight: chargingDwell?.lastNight ?? null,
+              chargeHours: chargeCell.chargeHours,
+              chargeSessions: chargeCell.chargeSessions,
+          }
+        : null;
+
+    const overnightSecondary = pickSecondaryOvernight(dwell, home);
 
     const minLat = num(s.min_lat);
     const bbox =
@@ -241,6 +340,8 @@ export async function fetchBatteryGeo(
         dwell,
         parking,
         home,
+        charging,
+        overnightSecondary,
         bbox,
         summary: {
             gpsChordKm: n0(s.total_km),

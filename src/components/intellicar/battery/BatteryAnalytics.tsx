@@ -9,6 +9,7 @@ import { BatteryPicker } from './BatteryPicker';
 import { PeriodFilterBar } from './PeriodFilterBar';
 import { ExportChargingAnalysis } from './ExportChargingAnalysis';
 import { BatteryStatCards } from './BatteryStatCards';
+import { DriverBehaviourCards } from './DriverBehaviourCards';
 import { usePeriod } from './usePeriod';
 import type {
     AhAnalytics,
@@ -41,8 +42,8 @@ const CapacityByPeriodChart = dynamic(
     () => import('./charts/CapacityByPeriodChart').then((m) => m.CapacityByPeriodChart),
     { ssr: false, loading: ChartFallback },
 );
-const CumulativeEnergyChart = dynamic(
-    () => import('./charts/EnergyCharts').then((m) => m.CumulativeEnergyChart),
+const MonthlyEnergyDistanceChart = dynamic(
+    () => import('./charts/EnergyCharts').then((m) => m.MonthlyEnergyDistanceChart),
     { ssr: false, loading: ChartFallback },
 );
 const DeepDischargeChart = dynamic(
@@ -53,8 +54,8 @@ const DistanceTrendChart = dynamic(
     () => import('./charts/DistanceCharts').then((m) => m.DistanceTrendChart),
     { ssr: false, loading: ChartFallback },
 );
-const CumulativeDistanceChart = dynamic(
-    () => import('./charts/DistanceCharts').then((m) => m.CumulativeDistanceChart),
+const MileageTrendChart = dynamic(
+    () => import('./charts/DistanceCharts').then((m) => m.MileageTrendChart),
     { ssr: false, loading: ChartFallback },
 );
 const DischargeVsKmChart = dynamic(
@@ -96,9 +97,9 @@ const SUB_TABS: { id: SubTab; label: string }[] = [
 ];
 
 /** Which endpoints each sub-tab actually needs. Nothing else is fetched. */
-const NEEDS: Record<SubTab, { ah?: true; discharge?: true; deep?: true; distance?: true; energy?: true; km?: true; electrical?: true; timeline?: true; geo?: true }> = {
+const NEEDS: Record<SubTab, { ah?: true; discharge?: true; deep?: true; distance?: true; monthly?: true; km?: true; electrical?: true; timeline?: true; geo?: true }> = {
     capacity: { ah: true },
-    energy: { energy: true, deep: true },
+    energy: { monthly: true, deep: true },
     usage: { distance: true, km: true },
     location: { geo: true },
     electrical: { electrical: true },
@@ -136,9 +137,14 @@ export function BatteryAnalytics() {
     });
     const batteries = Array.isArray(devicesData) ? devicesData : [];
 
+    // E-189: keyed by battery so a vehicle mapped to a spec model gets its model's
+    // limits on the capacity bands and red flags, not the fleet-wide placeholders.
     const { data: thresholds } = useQuery<BatteryThresholds>({
-        queryKey: ['intellicar-thresholds'],
-        queryFn: () => getJson<BatteryThresholds>('/api/telemetry/analytics/thresholds'),
+        queryKey: ['intellicar-thresholds', battery],
+        queryFn: () =>
+            getJson<BatteryThresholds>(
+                `/api/telemetry/analytics/thresholds${battery ? `?vehicleno=${encodeURIComponent(battery)}` : ''}`,
+            ),
         staleTime: 5 * 60_000,
     });
 
@@ -165,11 +171,26 @@ export function BatteryAnalytics() {
         queryFn: () => getJson<DeepDischargeData>(`/api/telemetry/analytics/deep-discharge?vehicleno=${v}&${qp}`),
     });
 
-    const { data: energy } = useQuery<EnergyDataT>({
-        queryKey: ['intellicar-energy', battery, qp],
-        enabled: on(needs.energy),
+    // The monthly overview is pinned to granularity=month whatever the pill says, and keyed
+    // by the granularity-free windowParam so flipping the pill cannot refetch it.
+    const wp = period.windowParam;
+    const { data: energyMonthly } = useQuery<EnergyDataT>({
+        queryKey: ['intellicar-energy-monthly', battery, wp],
+        enabled: on(needs.monthly),
         placeholderData: keepPreviousData,
-        queryFn: () => getJson<EnergyDataT>(`/api/telemetry/analytics/energy-trend?vehicleno=${v}&${qp}`),
+        queryFn: () =>
+            getJson<EnergyDataT>(
+                `/api/telemetry/analytics/energy-trend?vehicleno=${v}&${wp}&granularity=month`,
+            ),
+    });
+    const { data: distanceMonthly } = useQuery<DistanceData>({
+        queryKey: ['intellicar-distance-monthly', battery, wp],
+        enabled: on(needs.monthly),
+        placeholderData: keepPreviousData,
+        queryFn: () =>
+            getJson<DistanceData>(
+                `/api/telemetry/analytics/distance-trend?vehicleno=${v}&${wp}&granularity=month`,
+            ),
     });
 
     const { data: distance } = useQuery<DistanceData>({
@@ -211,8 +232,9 @@ export function BatteryAnalytics() {
     const plottedCycles = sessions.filter((s) => s.estimated_capacity_ah != null).length;
 
     // Only the time-bucketed charts have a grain to choose. Showing the toggle on the capacity
-    // tab, where every point is one cycle, would be a control that does nothing.
-    const showGranularity = tab === 'energy' || tab === 'usage' || tab === 'electrical';
+    // tab, where every point is one cycle, would be a control that does nothing — and the
+    // energy tab is all-monthly now, so it lost the pill too.
+    const showGranularity = tab === 'usage' || tab === 'electrical';
 
     return (
         <div className="space-y-6">
@@ -282,7 +304,7 @@ export function BatteryAnalytics() {
 
                     {tab === 'energy' && (
                         <div className="space-y-6">
-                            <CumulativeEnergyChart data={energy} granularity={period.granularity} />
+                            <MonthlyEnergyDistanceChart energy={energyMonthly} distance={distanceMonthly} />
                             <DeepDischargeChart
                                 byMonth={deep?.byMonth ?? []}
                                 enterPct={deep?.gates.deepEnterPct ?? 20}
@@ -294,9 +316,10 @@ export function BatteryAnalytics() {
 
                     {tab === 'usage' && (
                         <div className="space-y-6">
+                            <DriverBehaviourCards data={distance} />
                             <DistanceTrendChart data={distance} granularity={period.granularity} />
-                            <CumulativeDistanceChart data={distance} granularity={period.granularity} />
                             <DischargeVsKmChart data={km} />
+                            <MileageTrendChart data={km} />
                         </div>
                     )}
 

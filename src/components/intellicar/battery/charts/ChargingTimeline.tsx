@@ -107,6 +107,13 @@ export function ChargingTimeline({
                     ['Duration', formatDuration(d.duration_s)],
                     ['SOC', d.start_soc != null && d.end_soc != null ? `${d.start_soc}% → ${d.end_soc}%` : '—'],
                     ['Depth of discharge', d.dod_pct != null ? `${d.dod_pct}%` : '—'],
+                    // Discharge only: a charge cycle happens parked, and a fake-precise
+                    // "0.2 km" of GPS jitter on it would invite misreading.
+                    [
+                        'Distance covered',
+                        d.km != null ? `${d.km} km${d.km_source === 'gps' ? ' (GPS lower bound)' : ''}` : '—',
+                    ],
+                    ['Mileage', d.km_per_ah != null ? `${d.km_per_ah} km/Ah` : '—'],
                     ['Discharged (from SOC)', d.ah_discharged_soc != null ? `${d.ah_discharged_soc} Ah` : '—'],
                     [
                         'Discharged (coulomb)',
