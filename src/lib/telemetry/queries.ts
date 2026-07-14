@@ -21,12 +21,16 @@ import { db } from "@/lib/db";
 import { deviceBatteryMap } from "@/lib/db/schema";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import {
+    avgSamplingIntervalS,
+    capacityConfidence,
     capacityGates,
     capacityPlausible,
     extrapolateCapacity,
+    type Confidence,
 } from "@/lib/telemetry/charging-math";
 import {
     buildTimeWindow,
+    countSamplesQuery,
     cycleCTEs,
     type ChargingWindowOpts,
 } from "@/lib/telemetry/charging-sql";
@@ -573,7 +577,17 @@ export async function fetchSOCTrends(days = 30) {
  *   5. Extrapolate full (100%) capacity: ah_charged ÷ (Δsoc/100), gated on a large
  *      enough swing and on the cycle's time coverage.
  */
+/**
+ * The complete record of one validated charging cycle.
+ *
+ * Every field the charging-cycle spec requires is here, and none of them is ever withheld:
+ * detection decides whether a charge happened, `capacity_confidence` decides how far to trust
+ * the numbers that describe it. A cycle we rejected and a cycle we do not trust are different
+ * facts, and this type keeps them different.
+ */
 export interface ChargingCycleAggregate {
+    /** 1-based, chronological — the "Charging Cycle Number". */
+    cycle_no: number;
     /** Groups this cycle's samples in fetchChargingCycleDetail. */
     break_id: number;
     start_time: Date;
@@ -586,20 +600,34 @@ export interface ChargingCycleAggregate {
     soc_difference: number | null;
     /** Mean current over the samples that were actually carrying current. */
     avg_charging_current: number | null;
+    /** Peak charging current. */
     max_charging_current: number | null;
     /**
-     * Percentage of the cycle's elapsed time covered by intervals short enough to
-     * trust (≤ COVERAGE_TRUST_GAP_S). Low coverage means the Ah total leans on
-     * interpolation across long gaps, so it must not be extrapolated to a capacity.
+     * Percentage of the cycle's elapsed time covered by intervals short enough to trust
+     * (≤ COVERAGE_TRUST_GAP_S). Low coverage means the Ah total leans on interpolation across
+     * long gaps — which lowers the confidence grade rather than deleting the estimate.
      */
     coverage_pct: number | null;
-    /** Samples the coulomb count integrated over. */
+    /** Total CAN samples the coulomb count integrated over. */
     n_samples: number;
+    /** Of those, how many actually carried a current reading. */
+    n_current_samples: number;
+    /** Mean seconds between stored samples — duration ÷ (n_samples − 1). */
+    avg_sampling_interval_s: number | null;
+    /** The widest silence inside the charge. */
+    max_gap_s: number | null;
     /** BMS nameplate, for the plausibility check. */
     rated_capacity_ah: number | null;
+    /** Estimated for EVERY cycle whose SOC rose. Null only when ΔSOC ≤ 0. */
     estimated_capacity_ah: number | null;
+    /** How far the estimate can be trusted. Carry it wherever you carry the number. */
+    capacity_confidence: Confidence;
     /** False when the estimate is physically incredible against the nameplate. */
     capacity_plausible: boolean;
+    /** Gained less than MIN_CYCLE_SOC_GAIN — a real charge, just a small one. */
+    is_topup: boolean;
+    /** Had enough samples for the integral to mean anything. */
+    enough_samples: boolean;
 }
 
 /**
@@ -639,6 +667,10 @@ export async function fetchChargingCycleAggregate(
             round(max_charging_current::numeric, 1)::float   AS max_charging_current,
             coverage_pct,
             n_samples,
+            n_current_samples,
+            enough_samples,
+            is_topup,
+            max_gap_s,
             rated_capacity_ah
         FROM cycle_valid
         WHERE is_valid
@@ -656,22 +688,38 @@ export async function fetchChargingCycleAggregate(
         max_charging_current: number | null;
         coverage_pct: number | null;
         n_samples: number;
+        n_current_samples: number;
+        enough_samples: boolean;
+        is_topup: boolean;
+        max_gap_s: number | null;
         rated_capacity_ah: number | null;
     }>;
 
     const num = (v: number | null | undefined) => (v != null ? Number(v) : null);
 
-    const cycles = rows.map((r) => {
+    const cycles = rows.map((r, i) => {
         const ah = Number(r.ah_charged) || 0;
         const socDifference = num(r.soc_difference);
         const coveragePct = num(r.coverage_pct);
         const ratedAh = num(r.rated_capacity_ah);
-        const estimate = extrapolateCapacity(ah, socDifference, coveragePct);
+        const nSamples = Number(r.n_samples) || 0;
+        const durationS = Number(r.duration_s) || 0;
+
+        // Capacity is now estimated for EVERY cycle whose SOC rose — never withheld. What
+        // travels with it is a grade: `high` means the swing, the coverage and the sample count
+        // all support the number; `low` means it is arithmetically valid and epistemically
+        // worthless. Withholding it told the reader nothing; the number plus its grade tells
+        // them everything. See docs/intellicar-calculations.md §5.
+        const estimate = extrapolateCapacity(ah, socDifference);
+        const confidence = capacityConfidence(socDifference, coveragePct, nSamples);
+
         return {
+            /** 1-based, in chronological order — the "Charging Cycle Number". */
+            cycle_no: i + 1,
             break_id: Number(r.break_id),
             start_time: r.start_time,
             end_time: r.end_time,
-            duration_s: Number(r.duration_s) || 0,
+            duration_s: durationS,
             ah_charged: Math.round(ah * 100) / 100,
             start_soc: num(r.start_soc),
             end_soc: num(r.end_soc),
@@ -679,10 +727,19 @@ export async function fetchChargingCycleAggregate(
             avg_charging_current: num(r.avg_charging_current),
             max_charging_current: num(r.max_charging_current),
             coverage_pct: coveragePct,
-            n_samples: Number(r.n_samples) || 0,
+            n_samples: nSamples,
+            n_current_samples: Number(r.n_current_samples) || 0,
+            /** Mean seconds between stored samples — n−1 intervals, not n. */
+            avg_sampling_interval_s: avgSamplingIntervalS(durationS, nSamples),
+            /** Widest silence inside the charge. */
+            max_gap_s: num(r.max_gap_s),
             rated_capacity_ah: ratedAh,
             estimated_capacity_ah: estimate,
+            capacity_confidence: confidence,
             capacity_plausible: capacityPlausible(estimate, ratedAh),
+            /** Gained less than MIN_CYCLE_SOC_GAIN — a top-up, still a real charge. */
+            is_topup: r.is_topup === true,
+            enough_samples: r.enough_samples === true,
         };
     });
 
@@ -696,9 +753,10 @@ export async function fetchBatteryAhAnalytics(
     const { months, month, from, to, cycles: aggregates } =
         await fetchChargingCycleAggregate(vehicleno, opts);
 
-    // Shape for the Trip Analytics UI: break_id is an export-only concern and stays
-    // out of this payload.
+    // Shape for the Battery Analytics UI: break_id is an export-only concern and stays out of
+    // this payload. Everything else the spec requires per cycle travels through.
     const sessions = aggregates.map((r) => ({
+        cycle_no: r.cycle_no,
         start_time: r.start_time,
         end_time: r.end_time,
         duration_s: r.duration_s,
@@ -710,16 +768,29 @@ export async function fetchBatteryAhAnalytics(
         max_charging_current: r.max_charging_current,
         coverage_pct: r.coverage_pct,
         n_samples: r.n_samples,
+        n_current_samples: r.n_current_samples,
+        avg_sampling_interval_s: r.avg_sampling_interval_s,
+        max_gap_s: r.max_gap_s,
         rated_capacity_ah: r.rated_capacity_ah,
         estimated_capacity_ah: r.estimated_capacity_ah,
+        capacity_confidence: r.capacity_confidence,
         capacity_plausible: r.capacity_plausible,
+        is_topup: r.is_topup,
+        enough_samples: r.enough_samples,
     }));
 
     const cycles = sessions.length;
     const totalAh = sessions.reduce((s, r) => s + r.ah_charged, 0);
-    // Only cycles that survived the swing + coverage gates carry an estimate, so
-    // this average is over the trustworthy ones by construction.
+
+    // The headline "Avg Capacity" averages only the HIGH-confidence estimates.
+    //
+    // Every cycle now carries an estimate, including the ones extrapolated from a 2% swing where
+    // the error is amplified ×50. Averaging those in would drag the fleet's headline capacity
+    // number toward noise — the estimate is reported per cycle so it can be inspected, not so it
+    // can be averaged. The count of what was excluded is returned alongside, so the smaller
+    // denominator is never a mystery.
     const caps = sessions
+        .filter((r) => r.capacity_confidence === "high")
         .map((r) => r.estimated_capacity_ah)
         .filter((v): v is number => v != null);
     const socGains = sessions
@@ -739,10 +810,26 @@ export async function fetchBatteryAhAnalytics(
             chargingCycles: cycles,
             totalAhCharged: Math.round(totalAh * 10) / 10,
             avgAhPerSession: Math.round(avg(sessions.map((r) => r.ah_charged)) * 10) / 10,
+            /** Averaged over HIGH-confidence estimates only — see the note above `caps`. */
             avgCapacityAh: caps.length ? Math.round(avg(caps) * 10) / 10 : null,
             avgSessionDurationMin:
                 Math.round(avg(sessions.map((r) => r.duration_s)) / 60 * 10) / 10,
             avgSocGained: Math.round(avg(socGains) * 10) / 10,
+            /** Mean seconds between stored samples across every cycle. */
+            avgSamplingIntervalS: (() => {
+                const xs = sessions
+                    .map((r) => r.avg_sampling_interval_s)
+                    .filter((v): v is number => v != null);
+                return xs.length ? Math.round(avg(xs) * 10) / 10 : null;
+            })(),
+            /** How many cycles' capacity estimates can actually be trusted. */
+            capacityConfidence: {
+                high: sessions.filter((s) => s.capacity_confidence === "high").length,
+                medium: sessions.filter((s) => s.capacity_confidence === "medium").length,
+                low: sessions.filter((s) => s.capacity_confidence === "low").length,
+            },
+            /** Real charges that gained less than MIN_CYCLE_SOC_GAIN — counted, not discarded. */
+            topUpCycles: sessions.filter((s) => s.is_topup).length,
             /** Nameplate, so the UI can show the estimate against what it should be. */
             ratedCapacityAh:
                 sessions.find((s) => s.rated_capacity_ah != null)?.rated_capacity_ah ??
@@ -751,7 +838,7 @@ export async function fetchBatteryAhAnalytics(
             implausibleCycles: sessions.filter(
                 (s) => s.estimated_capacity_ah != null && !s.capacity_plausible,
             ).length,
-            /** The thresholds in force, so the UI can say what it filtered and why. */
+            /** The thresholds in force, so the UI can say what it graded and why. */
             gates: capacityGates(),
         },
     };
@@ -868,16 +955,26 @@ export async function fetchSocTimeline(
     const points = (await iot`
         ${cte}, numbered AS (
             SELECT
-                time,
-                soc_pct,
-                in_cycle,
-                row_number() OVER (ORDER BY time) AS rn,
-                count(*) OVER ()                  AS total
-            FROM cycled
+                c.time,
+                c.soc_pct,
+                -- Shade what the dashboard actually COUNTS. This used to read in_cycle
+                -- straight off the cycled CTE, which is pre-is_valid, so the chart shaded
+                -- runs the cards had thrown away — and the chart whose whole job is to make
+                -- cycle detection falsifiable was disagreeing with the number beside it.
+                (c.in_cycle AND COALESCE(cv.is_valid, false)) AS in_cycle,
+                row_number() OVER (ORDER BY c.time) AS rn,
+                count(*) OVER ()                    AS total
+            FROM cycled c
+            LEFT JOIN cycle_valid cv USING (break_id)
         )
         SELECT time, soc_pct, in_cycle
         FROM numbered
+        -- Never stride an in-cycle sample away: a short charge can hold as few as two
+        -- stored samples, and dropping either would erase a real cycle from the chart
+        -- while it still counts on the cards. In-cycle rows are a small minority of a
+        -- 6-month window, so the point budget survives keeping all of them.
         WHERE rn % GREATEST(1, (total / ${MAX_TIMELINE_POINTS})::int) = 0
+           OR in_cycle
         ORDER BY time ASC
     `) as unknown as SocTimelinePoint[];
 
@@ -894,13 +991,11 @@ export async function countChargingSamples(
 ): Promise<number> {
     const iot = getIotSql();
     const { timePredicate } = buildTimeWindow(iot, opts);
-    const [row] = (await iot`
-        SELECT count(*)::int AS n
-        FROM telemetry_can
-        WHERE vehicleno = ${vehicleno}
-          AND payload->'soc'->>'value' IS NOT NULL
-          ${timePredicate}
-    `) as unknown as Array<{ n: number }>;
+    const [row] = (await countSamplesQuery(
+        iot,
+        vehicleno,
+        timePredicate,
+    )) as unknown as Array<{ n: number }>;
     return Number(row?.n ?? 0);
 }
 
@@ -1048,29 +1143,97 @@ async function fetchDealerPerformanceInner(filter?: { state?: string; city?: str
         .sort((a, b) => b.devices - a.devices);
 }
 
-export async function fetchTripsOverview(limit = 50) {
+/**
+ * Fleet activity — per vehicle, per day, from `distance_rollup`.
+ *
+ * ## Why this does not read the `trips` table
+ *
+ * **`trips` is empty. Zero rows, across the whole fleet.** The per-trip segmentation job in
+ * `iot_stack` has never run, so every query against it returns nothing — which is why this
+ * panel showed "No trips found" while the same vehicles were demonstrably driving 873,715 km.
+ *
+ * A panel that renders an empty table over a live fleet is worse than a broken one: it reports
+ * "no activity" as a fact. `distance_rollup` (daily buckets, 297 vehicles) is populated and
+ * says exactly what the vehicles did, so that is what we show.
+ *
+ * The cost is honest and stated in the UI: a **day** is the finest grain available. Start/end
+ * points, trip duration and average speed live only in `trips`, and they are simply not
+ * computed. Restoring them is an `iot_stack` job, not a query fix.
+ *
+ * `tripsTableRows` is returned so the UI can explain itself rather than silently substituting
+ * one thing for another — and so the day the aggregator starts running, it stops explaining.
+ */
+export async function fetchVehicleActivity(limit = 100) {
     const iot = getIotSql();
-    return iot`
-        SELECT
-            t.vehicleno    AS device_id,
-            t.vehicleno    AS vehicle_number,
-            v.owner        AS customer_name,
-            t.trip_id,
-            t.time         AS start_time,
-            t.end_time,
-            t.start_lat,
-            t.start_lon,
-            t.end_lat,
-            t.end_lon,
-            t.distance_km,
-            t.duration_s,
-            t.energy_kwh,
-            t.avg_speed_kph
-        FROM trips t
-        LEFT JOIN vehicles v USING (vehicleno)
-        ORDER BY t.time DESC
-        LIMIT ${limit}
-    `;
+
+    const [rows, tripCount, totals] = await Promise.all([
+        iot`
+            SELECT
+                d.vehicleno                              AS vehicle_number,
+                v.owner                                  AS customer_name,
+                d.time                                   AS day,
+                round(d.distance_km::numeric, 1)::float  AS distance_km
+            FROM distance_rollup d
+            LEFT JOIN vehicles v USING (vehicleno)
+            WHERE d.bucket_size = 'day'
+              AND d.distance_km > 0
+            ORDER BY d.time DESC, d.distance_km DESC
+            LIMIT ${limit}
+        `,
+        iot`SELECT count(*)::int AS n FROM trips`,
+        iot`
+            SELECT
+                count(DISTINCT vehicleno)::int              AS vehicles,
+                round(sum(distance_km)::numeric)::int       AS total_km,
+                round(avg(distance_km)::numeric, 1)::float  AS avg_km_per_day
+            FROM distance_rollup
+            WHERE bucket_size = 'day'
+              AND distance_km > 0
+              AND time > now() - interval '30 days'
+        `,
+    ]);
+
+    const t = (totals as unknown as Array<Record<string, unknown>>)[0] ?? {};
+    const activity = rows as unknown as Array<Record<string, unknown>>;
+
+    // The IoT-side `vehicles.owner` is blank across this fleet, so the customer name comes from
+    // the CRM's device_battery_map over the usual VPS↔RDS bridge — the two databases are not
+    // federated, so the join happens here. Only the vehicles on this page are looked up.
+    const vehicleNos = Array.from(
+        new Set(activity.map((r) => String(r.vehicle_number)).filter(Boolean)),
+    );
+    const byVehicle = new Map<string, string>();
+    if (vehicleNos.length > 0) {
+        const mappings = await db
+            .select({
+                vehicle_number: deviceBatteryMap.vehicle_number,
+                customer_name: deviceBatteryMap.customer_name,
+            })
+            .from(deviceBatteryMap)
+            .where(inArray(deviceBatteryMap.vehicle_number, vehicleNos));
+        for (const m of mappings) {
+            if (m.vehicle_number && m.customer_name) {
+                byVehicle.set(m.vehicle_number, m.customer_name);
+            }
+        }
+    }
+
+    return {
+        rows: activity.map((r) => ({
+            ...r,
+            customer_name:
+                byVehicle.get(String(r.vehicle_number)) ?? r.customer_name ?? null,
+        })),
+        /** 0 means the per-trip aggregator still has not run. */
+        tripsTableRows: Number(
+            (tripCount as unknown as Array<{ n: number }>)[0]?.n ?? 0,
+        ),
+        summary: {
+            vehicles: Number(t.vehicles) || 0,
+            totalKm: Number(t.total_km) || 0,
+            avgKmPerDay: Number(t.avg_km_per_day) || 0,
+        },
+    };
 }
 
 // ─── Device Mapping (RDS-side, dealer onboarding) ────────────────────────────

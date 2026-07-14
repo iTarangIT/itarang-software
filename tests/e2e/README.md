@@ -29,6 +29,34 @@ npm run test:e2e:live     # hits real Decentro/Digio — costs money
 npm run test:e2e:manual   # requires human Aadhaar OTP entry
 ```
 
+## All-workflows run + single Excel report
+
+```bash
+# Runs the broad smoke sweep (every role's dashboard, read-only) + the deep
+# stubbed flows (onboarding / leads / kyc), continues past failures, and writes
+# ONE Excel file to reports/ at the end — even if some tests fail.
+npm run test:e2e:workflows
+# → reports/crm-workflow-report-YYYYMMDD-HHmmss.xlsx
+```
+
+The report (`tests/reporters/workflow-report.ts`) has one **Test Results** sheet
+with exactly: `Workflow/Module`, `Test Case Name`, `Status` (Pass/Fail/Skipped),
+`Execution Time (s)`, `Error Message`, `Execution Date & Time`.
+
+**No paid APIs.** The sweep is read-only and every spec installs
+`installAllStubs()`, which now also `blockPaidHosts()` (aborts any browser call
+to Razorpay/Bolna/Firecrawl/Apify/Places/Gemini/OpenAI/ElevenLabs/Gupshup/
+Decentro/DigiO) and `stubPaidTriggers()` (fulfils the app's own trigger
+endpoints before they reach the server). `*.api.spec.ts` files — which POST
+straight to endpoints — are intentionally excluded from this run.
+
+**Breadth coverage** is driven from the **CEO session** (middleware lets CEO
+reach every dashboard) over `coverage/route-manifest.ts`; the dealer portal is
+swept under the dealer session. Roles/pages a session can't reach report as
+**Skipped**, never a false failure. To include more role-native sessions, set
+`E2E_<ROLE>_EMAIL` / `E2E_<ROLE>_PASSWORD` in `.env.test.local` (see
+`coverage/roles.ts`).
+
 ## Folder layout
 
 ```
