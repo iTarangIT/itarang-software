@@ -497,7 +497,7 @@ export async function fetchElectricalTrend(
 ) {
     const iot = getIotSql();
     const { timePredicate, months, month, from, to } = buildTimeWindow(iot, opts);
-    // E-189: fields defined by this vehicle's battery_spec_models row override the
+    // E-190: fields defined by this vehicle's battery_spec_models row override the
     // fleet-wide settings, so the bands and breach counts judge the pack by its model.
     const t = await getBatteryThresholds(vehicleno);
 

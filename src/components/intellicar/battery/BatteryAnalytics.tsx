@@ -137,7 +137,7 @@ export function BatteryAnalytics() {
     });
     const batteries = Array.isArray(devicesData) ? devicesData : [];
 
-    // E-189: keyed by battery so a vehicle mapped to a spec model gets its model's
+    // E-190: keyed by battery so a vehicle mapped to a spec model gets its model's
     // limits on the capacity bands and red flags, not the fleet-wide placeholders.
     const { data: thresholds } = useQuery<BatteryThresholds>({
         queryKey: ['intellicar-thresholds', battery],
