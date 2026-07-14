@@ -11,7 +11,7 @@
  * it does **not** change what the poller alerts on. The settings UI says so out loud, because
  * a control that looks like it arms an alarm and doesn't is worse than no control at all.
  *
- * Resolution order (E-189): battery model spec > `app_settings` row > env var > hardcoded
+ * Resolution order (E-190): battery model spec > `app_settings` row > env var > hardcoded
  * default — per field, resolved by the pure `resolveThresholds` in thresholds-math.ts.
  * The model spec comes from `battery_spec_models` via `device_battery_map.battery_model`,
  * so it only applies when a vehicleno is given; fleet-wide callers resolve as before.

@@ -2333,7 +2333,7 @@ export const deviceBatteryMap = pgTable("device_battery_map", {
   // E-184 — deployment location for the Intellicar Fleet Overview State/City filters.
   state: text("state"),
   city: text("city"),
-  // E-189 — logical FK to battery_spec_models.model_name; the pack model deployed here.
+  // E-190 — logical FK to battery_spec_models.model_name; the pack model deployed here.
   battery_model: varchar("battery_model", { length: 100 }),
   status: varchar({ length: 20 }).default('active'),
   installed_at: timestamp("installed_at", { withTimezone: true }),
@@ -2341,7 +2341,7 @@ export const deviceBatteryMap = pgTable("device_battery_map", {
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
-// E-189 — per-model battery spec catalog for Intellicar electrical analytics.
+// E-190 — per-model battery spec catalog for Intellicar electrical analytics.
 // One row per pack model; device_battery_map.battery_model maps deployments to it.
 // NULL threshold columns mean "no manufacturer limit recorded" and fall through to
 // the fleet-wide app_settings/env/default resolution (src/lib/telemetry/thresholds.ts).

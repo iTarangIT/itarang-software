@@ -14,7 +14,7 @@ import { analyticsError } from '../_params';
 export async function GET(req: NextRequest) {
     try {
         await requireRole(['ceo']);
-        // E-189: with a vehicleno, fields the vehicle's battery_spec_models row defines
+        // E-190: with a vehicleno, fields the vehicle's battery_spec_models row defines
         // override the fleet-wide settings; the response says which via modelName/specKeys.
         const vehicleno = req.nextUrl.searchParams.get('vehicleno')?.trim() || undefined;
         return NextResponse.json({ success: true, data: await getBatteryThresholds(vehicleno) });

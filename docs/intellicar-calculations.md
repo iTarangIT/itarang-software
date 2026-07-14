@@ -903,7 +903,7 @@
 
   ---
 
-  ## 24. Battery spec models, and threshold resolution (E-189)
+  ## 24. Battery spec models, and threshold resolution (E-190)
 
   `battery_spec_models` (CRM RDS, **not** the read-only IoT DB) holds one row per pack model:
   rated voltage/capacity plus under-voltage, over-voltage, over-current and over-temperature
@@ -918,7 +918,7 @@
 
   A NULL spec column means "no manufacturer limit recorded" and falls through — a sparse spec
   row never blanks the fields it omits. With no spec row the resolution is byte-for-byte the
-  pre-E-189 behaviour (there is a test that pins this). `weakChargeCurrentA` and the capacity
+  pre-E-190 behaviour (there is a test that pins this). `weakChargeCurrentA` and the capacity
   fractions stay fleet-wide: they describe how this dashboard judges, not what a pack is rated
   for. The response carries `modelName` and `specKeys` so the UI can attribute a band to the
   spec rather than the fleet settings.

@@ -21,7 +21,7 @@ describe("resolveThresholds", () => {
     it("matches the legacy settings merge exactly when no spec is present", () => {
         const patch = { underVoltageV: 46, weakChargeCurrentA: 6 };
         const { thresholds, specKeys } = resolveThresholds(defaults, patch, null);
-        // Pre-E-189 behaviour was `{ ...defaults, ...settingsRow }`; a fleet with no
+        // Pre-E-190 behaviour was `{ ...defaults, ...settingsRow }`; a fleet with no
         // spec rows must resolve byte-for-byte the same as before.
         expect(thresholds).toEqual({ ...defaults, ...patch });
         expect(specKeys).toEqual([]);

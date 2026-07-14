@@ -63,7 +63,7 @@ export function defaultThresholds(): BatteryThresholds {
 /**
  * Per-field threshold precedence: model spec > app_settings row > env/defaults.
  *
- * The settings patch is applied as a spread — exactly the pre-E-189 merge — so a fleet
+ * The settings patch is applied as a spread — exactly the pre-E-190 merge — so a fleet
  * with no spec rows resolves byte-for-byte as before. Spec fields are stricter: a spec
  * row is expected to be sparse (NULL columns mean "no manufacturer limit recorded"), so
  * only finite numbers override, and the keys that did are reported so the UI can say
