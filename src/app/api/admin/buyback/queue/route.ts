@@ -23,8 +23,17 @@ import { requireBuybackAdmin } from "@/lib/buyback/auth";
 
 export const runtime = "nodejs";
 
-export const GET = withErrorHandler(async () => {
+export const GET = withErrorHandler(async (request: Request) => {
   await requireBuybackAdmin();
+
+  const { searchParams } = new URL(request.url);
+  const scope = searchParams.get("scope");
+
+  // Documents picker uses scope=all to reach CLOSED/SETTLED deals for audit
+  const statusFilter =
+    scope === "all"
+      ? sql`bd.status NOT IN ('DRAFT')`
+      : sql`bd.status NOT IN ('DRAFT', 'CLOSED', 'SETTLED', 'REJECTED', 'CANCELLED')`;
 
   const rows = await db.execute(sql`
     SELECT
@@ -92,7 +101,7 @@ export const GET = withErrorHandler(async () => {
     FROM buyback_requests br
     JOIN buyback_deals bd ON bd.request_id = br.id
     LEFT JOIN accounts a  ON a.id = br.dealer_entity_id
-    WHERE bd.status NOT IN ('DRAFT', 'CLOSED', 'SETTLED', 'REJECTED', 'CANCELLED')
+    WHERE ${statusFilter}
     ORDER BY br.submitted_at ASC NULLS LAST, br.created_at ASC
   `);
 

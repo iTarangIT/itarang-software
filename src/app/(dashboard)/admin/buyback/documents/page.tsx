@@ -70,7 +70,7 @@ export default function AdminBuybackDocumentsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/admin/buyback/queue")
+    fetch("/api/admin/buyback/queue?scope=all")
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
