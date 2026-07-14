@@ -1,8 +1,14 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { CardForUi } from "./SeverityTabs";
-import { SEVERITY_COLOR_TOKENS, SEVERITY_LABELS } from "@/lib/risk/severity";
+import {
+  SEVERITY_COLOR_TOKENS,
+  SEVERITY_LABELS,
+  VERDICT_SOURCE_LABELS,
+  isComputed,
+} from "@/lib/risk/severity";
 
 export default function RiskCardDrawer({
   card,
@@ -20,6 +26,7 @@ export default function RiskCardDrawer({
   }, [onClose]);
 
   const tone = SEVERITY_COLOR_TOKENS[card.severity];
+  const computed = isComputed(card.verdict_source);
   const sample = card.evidence?.sample_rows ?? [];
   const notes = card.evidence?.notes ?? [];
 
@@ -58,18 +65,55 @@ export default function RiskCardDrawer({
             </p>
           </section>
 
-          <section className="grid grid-cols-3 gap-3">
-            <Stat label="Affected" value={card.affected_count.toLocaleString("en-IN")} />
-            <Stat label="Total" value={card.total_count.toLocaleString("en-IN")} />
-            <Stat
-              label="Share"
-              value={
-                card.total_count > 0
-                  ? ((100 * card.affected_count) / card.total_count).toFixed(1) + "%"
-                  : "—"
-              }
-            />
-          </section>
+          {computed ? (
+            <section className="grid grid-cols-3 gap-3">
+              <Stat label="Affected" value={card.affected_count.toLocaleString("en-IN")} />
+              <Stat label="Total" value={card.total_count.toLocaleString("en-IN")} />
+              <Stat
+                label="Share"
+                value={
+                  card.total_count > 0
+                    ? ((100 * card.affected_count) / card.total_count).toFixed(1) + "%"
+                    : "—"
+                }
+              />
+            </section>
+          ) : (
+            <section className="rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-4 py-3 text-sm text-slate-600 dark:text-slate-400">
+              No counts are shown because no verdict was computed for this hypothesis. This is a gap
+              in coverage, not a finding about the portfolio.
+            </section>
+          )}
+
+          {card.source !== "human" && !card.promoted && (
+            <section className="rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-4 py-3">
+              <p className="text-sm text-slate-700 dark:text-slate-300">
+                <strong className="font-semibold">Unvetted hypothesis.</strong> The agent wrote both
+                the question and the code that answers it, and no human has reviewed either. Its
+                severity is capped at <strong>Warning</strong> — it can raise a concern, but it
+                cannot declare a High Alert until someone promotes it.
+                {card.evidence?.severity_capped ? (
+                  <>
+                    {" "}
+                    <span className="text-amber-700 dark:text-amber-400">
+                      This run computed HIGH and was capped to Warning.
+                    </span>
+                  </>
+                ) : null}
+              </p>
+              <PromoteControls hypothesisId={card.hypothesis_id} />
+            </section>
+          )}
+
+          {card.verdict_source === "legacy_llm" && (
+            <section className="rounded-md border border-violet-200 dark:border-violet-900 bg-violet-50 dark:bg-violet-950/30 px-4 py-3 text-sm text-violet-900 dark:text-violet-300">
+              <strong className="font-semibold">Unverified.</strong> This card was written before
+              verdict provenance was tracked (E-185). At the time, the engine fell back to asking a
+              language model to state the severity and counts whenever the Python sandbox was
+              unavailable — so these numbers may never have been computed from data. Re-run the
+              analysis to replace it.
+            </section>
+          )}
 
           {sample.length > 0 && (
             <section>
@@ -119,17 +163,92 @@ export default function RiskCardDrawer({
             </section>
           )}
 
+          {card.critique ? (
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Caveats
+              </h3>
+              <p className="mt-2 text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+                {card.critique}
+              </p>
+            </section>
+          ) : null}
+
           <section className="text-xs text-slate-500">
             {card.run_at ? (
-              <>Last computed {new Date(card.run_at).toLocaleString()}</>
+              <>Last run {new Date(card.run_at).toLocaleString()}</>
             ) : (
-              <>Live computation — not yet persisted to risk_card_runs.</>
+              <>Live evaluation — not yet persisted to risk_card_runs.</>
             )}
             {" · "}
-            Source: {card.source}
+            Verdict: {VERDICT_SOURCE_LABELS[card.verdict_source]}
+            {" · "}
+            Hypothesis author: {card.source === "human" ? "hand-coded" : card.source}
           </section>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Promote (trust it enough to let it raise a High Alert) or retire (stop running
+ * it). Both act on the HYPOTHESIS, not on today's card — the judgement is about
+ * the question and the code, and it persists across runs.
+ */
+function PromoteControls({ hypothesisId }: { hypothesisId: string }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState<"promote" | "retire" | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const act = async (kind: "promote" | "retire") => {
+    setBusy(kind);
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/nbfc/risk/hypotheses/${hypothesisId}/promote`, {
+        method: kind === "promote" ? "POST" : "DELETE",
+      });
+      const data = (await r.json()) as { ok?: boolean; error?: string };
+      if (!r.ok || data.ok === false) {
+        setMsg(`Error: ${data.error ?? r.statusText}`);
+        return;
+      }
+      setMsg(
+        kind === "promote"
+          ? "Promoted — it can raise a High Alert from the next run."
+          : "Retired — it will no longer be run.",
+      );
+      router.refresh();
+    } catch (e) {
+      setMsg(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="mt-3 flex items-center gap-2 flex-wrap">
+      <button
+        type="button"
+        onClick={() => act("promote")}
+        disabled={busy !== null}
+        className="px-3 py-1.5 text-xs font-medium rounded-md bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60"
+      >
+        {busy === "promote" ? "Promoting…" : "Promote"}
+      </button>
+      <button
+        type="button"
+        onClick={() => act("retire")}
+        disabled={busy !== null}
+        className="px-3 py-1.5 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-60"
+      >
+        {busy === "retire" ? "Retiring…" : "Retire"}
+      </button>
+      {msg && (
+        <span className={`text-xs ${msg.startsWith("Error") ? "text-red-600" : "text-emerald-600"}`}>
+          {msg}
+        </span>
+      )}
     </div>
   );
 }

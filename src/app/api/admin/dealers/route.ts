@@ -67,8 +67,13 @@ export const GET = withErrorHandler(async (req: Request) => {
       // Number of login users bound to this account (users.dealer_id = accounts.id).
       // Inventory allocated to an account with zero users is invisible to every
       // dealer portal — the upload UI uses this to flag/disable such accounts.
+      //
+      // The outer column must stay table-qualified: unqualified "id" inside the
+      // subquery binds to users.id (uuid), not accounts.id (varchar), and the
+      // correlation silently becomes `users.dealer_id = users.id` — a
+      // varchar-vs-uuid comparison that Postgres rejects with 42883.
       user_count: sql<number>`(
-        SELECT count(*)::int FROM ${users} u WHERE u.${sql.raw("dealer_id")} = ${accounts.id}
+        SELECT count(*)::int FROM ${users} u WHERE u.dealer_id = ${sql.raw('"accounts"."id"')}
       )`,
     })
     .from(accounts)

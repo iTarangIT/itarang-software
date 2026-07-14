@@ -200,6 +200,36 @@ step).
   base64-bundled `phase*.sh` scripts. Phase 2 of CI/CD: create
   `iTarangIT/itarang-iot-stack` repo and add `.github/workflows/deploy-iot.yml`.
 - **Schema migrations on the VPS Postgres** (telemetry DB) — manual.
-- **Daily DPD refresh / risk-card refresh** — implemented as API routes,
-  but Vercel cron isn't set up because we're on Hostinger PM2. To schedule:
-  add `crontab -e` entries that `curl http://127.0.0.1:3002/api/nbfc/loans/refresh-dpd`.
+- **Risk-sandbox** — now versioned at `services/risk-sandbox/` (was an
+  unversioned `phase6_risk_sandbox.sh` on the box). See its README to deploy.
+
+## Cron — `vercel.json` does NOT fire on the VPS
+
+⚠️ **The `crons` block in `vercel.json` is inert here.** We deploy on Hostinger
+via PM2; Vercel cron only exists on Vercel. Every route listed there — including
+`compute-cds` and `compute-pci`, which are documented as "nightly" — runs only if
+something on the VPS actually calls it.
+
+Evidence this bit us: on 2026-07-13, `borrower_risk_scores.computed_at` was last
+written **2026-07-08**. The nightly CDS job had not run in five days.
+
+The real mechanism is a crontab on the VPS. `crontab -e` as root, using the
+same `CRON_SECRET` that is in the app's env (prod is port 3002, sandbox 3003):
+
+```cron
+CRON_SECRET=<same value as the app's env>
+
+# NBFC risk + scoring. CDS first, then PCI (which reads the rows CDS writes),
+# then the hypothesis engine.
+0  0 * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3002/api/cron/nbfc/compute-cds       >> /var/log/itarang-cron.log 2>&1
+15 0 * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3002/api/cron/nbfc/compute-pci       >> /var/log/itarang-cron.log 2>&1
+30 1 * * * curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3002/api/cron/nbfc/risk-analysis     >> /var/log/itarang-cron.log 2>&1
+```
+
+`risk-analysis` (E-187) sweeps every active tenant sequentially. It is safe to
+run while someone is using the "Re-run analysis" button: the per-tenant lock
+means that tenant is skipped rather than run twice. The whole sweep is
+idempotent — re-running it just writes a fresher set of cards.
+
+Check it landed: `tail -f /var/log/itarang-cron.log`, or query
+`SELECT tenant_id, status, started_at, cards_computed FROM risk_runs ORDER BY started_at DESC LIMIT 5;`
